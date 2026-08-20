@@ -1,0 +1,35 @@
+# SDD · {{ assistant_name }}
+
+> Documento VIVO generado por `agent-core`. No editar a mano: `agent-core sdd update`.
+> Última actualización: {{ updated_at | default('') }}
+
+## Identidad
+
+| Campo | Valor |
+|---|---|
+| **Asistente** | {{ assistant_name }} |
+| **Negocio** | {{ business_description or '(pendiente)' }} |
+| **Idioma** | {{ language }} |
+| **Tono** | {{ tone }} |
+| **Canal** | {{ channel }} ({{ channel_provider }}) |
+| **LLM** | {{ llm_provider }} · {{ llm_model }} |
+| **Embeddings** | {{ embedding_provider }} |
+| **Velocidad de respuesta** | {{ debounce_mode }} |
+
+## Plugins instalados
+
+{% if installed_plugins %}
+| Plugin | Versión | Descripción |
+|---|---|---|
+{% for p in installed_plugins -%}
+| {{ p.name }} (`{{ p.id }}`) | {{ p.version }} | {{ p.description }} |
+{% endfor %}
+{% else %}
+_Sin plugins instalados. Usa `agent-core plugin install <nombre>`._
+{% endif %}
+
+## Referencias del framework
+
+- Arquitectura del core: `docs/ARCHITECTURE.md`
+- Contrato de plugins: `docs/PLUGIN-CONTRACT.md`
+- Guía de customización con IA: `sdd/skills-config.md`

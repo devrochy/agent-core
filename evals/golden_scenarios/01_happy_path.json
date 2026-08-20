@@ -1,0 +1,12 @@
+{
+  "name": "camino_feliz_saludo",
+  "description": "El cliente saluda; el asistente responde en el idioma configurado, se presenta y no inventa capacidades.",
+  "conversation": [
+    { "role": "user", "content": "Hola, buenas tardes" }
+  ],
+  "assertions": {
+    "must_not_contain": ["modelo de lenguaje", "inteligencia artificial", "OpenAI", "DeepSeek", "Anthropic"],
+    "must_not_call_tools": true,
+    "max_response_chars": 600
+  }
+}

@@ -1,0 +1,30 @@
+# Skills y Tools · {{ assistant_name }}
+
+> Documento VIVO. Las skills son agrupaciones semánticas de tools que el
+> SkillRouter activa según el contexto de cada turno.
+
+{% if installed_plugins %}
+{% for p in installed_plugins %}
+## {{ p.name }} (`{{ p.id }}`)
+
+{% if p.skills %}
+{% for s in p.skills %}
+### Skill: `{{ s.name }}`
+{{ s.description }}
+
+Tools: {% for t in s.tools %}`{{ t }}`{% if not loop.last %}, {% endif %}{% endfor %}
+
+{% endfor %}
+{% else %}
+_Las skills se registran al activar el plugin. Ver el panel: /admin/plugins._
+{% endif %}
+{% endfor %}
+{% else %}
+_Sin plugins instalados: el asistente solo conversa (sin tools)._
+{% endif %}
+
+## Cómo funciona la selección de skills
+
+1. Skill **sin** keywords → siempre activa.
+2. Skill **con** keywords → activa si el mensaje o el contexto reciente las menciona.
+3. Si ninguna matchea → se activan todas (el error es hacia capacidad, no silencio).

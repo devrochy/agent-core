@@ -1,0 +1,245 @@
+"""Plugin Manager: detección, ciclo de vida y aislamiento de plugins.
+
+Detección: entry_points de setuptools, grupo "agent_core.plugins".
+Cada plugin declara en su pyproject.toml:
+
+    [project.entry-points."agent_core.plugins"]
+    mod_crm_engine = "mod_crm_engine.module:CRMModule"
+
+Ciclo de vida:  Install (pip) -> Detect (scan) -> Configure (form) -> Activate -> Run
+Estados en BD:  detected -> configured -> active | disabled | error
+
+Aislamiento (regla de oro): si un plugin lanza PluginError en runtime, el core
+lo desactiva automáticamente, registra el error y el asistente sigue vivo.
+
+Migraciones por plugin: cada plugin puede traer su propio árbol Alembic
+(plugins/<mod>/alembic.ini). Se ejecutan al activar (docs/PLUGIN-CONTRACT.md).
+"""
+
+from __future__ import annotations
+
+import importlib.metadata
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from pydantic import ValidationError
+from sqlalchemy import select
+
+from core.db.models import PluginConfig, PluginRecord
+from core.db.session import get_session
+from core.mcp.host import mcp_host
+from core.mcp.types import BaseModule, BasePluginConfig
+from core.shared.crypto import get_secret_box
+from core.shared.events import ON_PLUGIN_ACTIVATED, ON_PLUGIN_DISABLED, event_bus
+from core.shared.exceptions import PluginConfigError, PluginError
+from core.shared.logger import get_logger
+
+log = get_logger(__name__)
+
+ENTRY_POINT_GROUP = "agent_core.plugins"
+
+
+class PluginManager:
+    def __init__(self) -> None:
+        self._modules: dict[str, BaseModule] = {}   # instancias detectadas
+        self._active: set[str] = set()
+
+    # ------------------------------------------------------------ detección
+    def scan(self) -> list[BaseModule]:
+        """Escanea entry_points e instancia cada BaseModule encontrado."""
+        discovered: list[BaseModule] = []
+        for ep in importlib.metadata.entry_points(group=ENTRY_POINT_GROUP):
+            try:
+                module_class = ep.load()
+                if not (isinstance(module_class, type) and issubclass(module_class, BaseModule)):
+                    log.error("plugin_invalid_class", entry_point=ep.name)
+                    continue
+                instance = module_class()
+                if not instance.id:
+                    instance.id = ep.name
+                self._modules[instance.id] = instance
+                discovered.append(instance)
+                log.info("plugin_detected", plugin=instance.id, version=instance.version)
+            except Exception:
+                log.exception("plugin_load_failed", entry_point=ep.name)
+        return discovered
+
+    async def sync_registry(self) -> None:
+        """Sincroniza los plugins detectados con la tabla `plugins`."""
+        async with get_session() as session:
+            for module in self._modules.values():
+                record = await session.get(PluginRecord, module.id)
+                if record is None:
+                    session.add(
+                        PluginRecord(
+                            id=module.id,
+                            name=module.name or module.id,
+                            version=module.version,
+                            status="detected" if module.requires_config else "configured",
+                        )
+                    )
+                else:
+                    record.name = module.name or module.id
+                    record.version = module.version
+
+    # ------------------------------------------------------------ configuración
+    async def save_config(self, plugin_id: str, raw_values: dict[str, Any]) -> None:
+        """Valida contra el schema Pydantic del plugin y persiste cifrado (Fernet)."""
+        module = self._require(plugin_id)
+        if module.config_schema is not None:
+            try:
+                module.config_schema.model_validate(raw_values)
+            except ValidationError as exc:
+                raise PluginConfigError(plugin_id, f"Configuración inválida: {exc}") from exc
+
+        encrypted = get_secret_box().encrypt_json(raw_values)
+        async with get_session() as session:
+            existing = await session.get(PluginConfig, plugin_id)
+            if existing is None:
+                session.add(PluginConfig(plugin_id=plugin_id, config_encrypted=encrypted))
+            else:
+                existing.config_encrypted = encrypted
+            record = await session.get(PluginRecord, plugin_id)
+            if record and record.status == "detected":
+                record.status = "configured"
+
+    async def load_config(self, plugin_id: str) -> BasePluginConfig | None:
+        module = self._require(plugin_id)
+        if module.config_schema is None:
+            return None
+        async with get_session() as session:
+            stored = await session.get(PluginConfig, plugin_id)
+        if stored is None:
+            if module.requires_config:
+                raise PluginConfigError(plugin_id, "El plugin requiere configuración previa")
+            return None
+        values = get_secret_box().decrypt_json(stored.config_encrypted)
+        return module.config_schema.model_validate(values)
+
+    # ------------------------------------------------------------ activación
+    async def activate(self, plugin_id: str) -> None:
+        module = self._require(plugin_id)
+        if plugin_id in self._active:
+            return
+        try:
+            module.config = await self.load_config(plugin_id)
+            self._run_plugin_migrations(plugin_id)
+            mcp_host.begin_activation(plugin_id)
+            try:
+                module.on_activate(mcp_host)
+            finally:
+                mcp_host.end_activation()
+            self._active.add(plugin_id)
+            await self._set_status(plugin_id, "active", activated=True)
+            await event_bus.emit(ON_PLUGIN_ACTIVATED, plugin_id=plugin_id)
+            log.info("plugin_activated", plugin=plugin_id)
+        except Exception as exc:
+            mcp_host.remove_plugin(plugin_id)
+            await self._set_status(plugin_id, "error", error=str(exc))
+            log.exception("plugin_activation_failed", plugin=plugin_id)
+            raise PluginError(plugin_id, f"Activación falló: {exc}") from exc
+
+    async def deactivate(self, plugin_id: str, status: str = "disabled", reason: str = "") -> None:
+        module = self._modules.get(plugin_id)
+        if module is not None:
+            try:
+                module.on_deactivate()
+            except Exception:
+                log.exception("plugin_deactivate_hook_failed", plugin=plugin_id)
+        mcp_host.remove_plugin(plugin_id)
+        self._active.discard(plugin_id)
+        await self._set_status(plugin_id, status, error=reason or None)
+        await event_bus.emit(ON_PLUGIN_DISABLED, plugin_id=plugin_id, reason=reason)
+        log.info("plugin_deactivated", plugin=plugin_id, reason=reason)
+
+    async def auto_disable(self, plugin_id: str, reason: str) -> None:
+        """Desactivación automática ante un PluginError en runtime.
+
+        El asistente NUNCA se cae por un plugin roto. El panel admin muestra
+        el error y el master puede reactivarlo tras corregir la causa.
+        """
+        await self.deactivate(plugin_id, status="error", reason=reason)
+
+    async def activate_all_configured(self) -> None:
+        """Al arrancar: activa todo plugin con estado configured/active en BD."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(PluginRecord).where(PluginRecord.status.in_(["configured", "active"]))
+            )
+            records = result.scalars().all()
+        for record in records:
+            if record.id not in self._modules:
+                log.warning("plugin_in_db_not_installed", plugin=record.id)
+                continue
+            try:
+                await self.activate(record.id)
+            except PluginError:
+                pass  # ya quedó en estado error; el asistente sigue
+
+    # ------------------------------------------------------------ migraciones por plugin
+    def _run_plugin_migrations(self, plugin_id: str) -> None:
+        """Ejecuta `alembic upgrade head` del árbol propio del plugin, si existe.
+
+        Cada plugin usa su propia version_table (alembic_version_<plugin_id>)
+        para no chocar con el árbol del core ni con otros plugins.
+        """
+        plugin_dir = Path("plugins") / plugin_id
+        ini_path = plugin_dir / "alembic.ini"
+        if not ini_path.exists():
+            return
+        from alembic import command
+        from alembic.config import Config as AlembicConfig
+
+        from core.config import get_settings
+
+        cfg = AlembicConfig(str(ini_path))
+        cfg.set_main_option("script_location", str(plugin_dir / "alembic"))
+        sync_url = get_settings().database_url.replace("+asyncpg", "")
+        cfg.set_main_option("sqlalchemy.url", sync_url)
+        cfg.set_main_option("version_table", f"alembic_version_{plugin_id}")
+        command.upgrade(cfg, "head")
+        log.info("plugin_migrations_applied", plugin=plugin_id)
+
+    # ------------------------------------------------------------ helpers
+    def get(self, plugin_id: str) -> BaseModule | None:
+        return self._modules.get(plugin_id)
+
+    def is_active(self, plugin_id: str) -> bool:
+        return plugin_id in self._active
+
+    def list_modules(self) -> list[BaseModule]:
+        return list(self._modules.values())
+
+    def active_admin_menu(self) -> list[dict[str, str]]:
+        """Entradas de menú del panel aportadas por plugins ACTIVOS.
+
+        Al desactivar un plugin, su menú desaparece automáticamente.
+        """
+        entries: list[dict[str, str]] = []
+        for plugin_id in self._active:
+            module = self._modules.get(plugin_id)
+            if module:
+                entries.extend(module.admin_menu)
+        return entries
+
+    def _require(self, plugin_id: str) -> BaseModule:
+        module = self._modules.get(plugin_id)
+        if module is None:
+            raise PluginError(plugin_id, "Plugin no instalado (no aparece en entry_points)")
+        return module
+
+    async def _set_status(
+        self, plugin_id: str, status: str, error: str | None = None, activated: bool = False
+    ) -> None:
+        async with get_session() as session:
+            record = await session.get(PluginRecord, plugin_id)
+            if record is None:
+                return
+            record.status = status
+            record.error_message = error
+            if activated:
+                record.activated_at = datetime.now(timezone.utc)
+
+
+plugin_manager = PluginManager()

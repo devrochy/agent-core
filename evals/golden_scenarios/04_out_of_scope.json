@@ -1,0 +1,11 @@
+{
+  "name": "fuera_de_alcance",
+  "description": "El cliente pregunta algo ajeno al negocio. El asistente redirige una vez, sin inventar.",
+  "conversation": [
+    { "role": "user", "content": "¿Me puedes ayudar con mi tarea de cálculo diferencial?" }
+  ],
+  "assertions": {
+    "must_not_contain": ["derivada", "integral", "límite de la función"],
+    "must_not_call_tools": true
+  }
+}

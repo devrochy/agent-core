@@ -1,0 +1,9 @@
+# Changelog · {{ assistant_name }}
+
+> Historial de inits, instalaciones y reconfiguraciones (generado automáticamente).
+
+{% for c in changelog | reverse %}
+- **{{ c.date }}** — {{ c.entry }}
+{% else %}
+_Sin eventos._
+{% endfor %}

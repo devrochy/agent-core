@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Costos LLM{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4">Costos LLM</h1>
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="card kpi-card"><div class="card-body">
+      <div class="text-secondary small">Hoy</div>
+      <div class="value">${{ "%.4f"|format(today) }}</div>
+    </div></div>
+  </div>
+  <div class="col-md-4">
+    <div class="card kpi-card"><div class="card-body">
+      <div class="text-secondary small">Últimos 30 días</div>
+      <div class="value">${{ "%.4f"|format(month) }}</div>
+    </div></div>
+  </div>
+  <div class="col-md-4">
+    <div class="card kpi-card"><div class="card-body">
+      <div class="text-secondary small">Llamadas totales</div>
+      <div class="value">{{ total_calls }}</div>
+    </div></div>
+  </div>
+</div>
+<div class="card">
+  <div class="card-header fw-semibold">Por modelo (30 días)</div>
+  <table class="table mb-0">
+    <thead><tr><th>Modelo</th><th>Llamadas</th><th>Tokens in</th><th>Tokens out</th><th>Latencia prom.</th><th>Costo</th></tr></thead>
+    <tbody>
+      {% for row in by_model %}
+      <tr>
+        <td>{{ row.model }}</td>
+        <td>{{ row.calls }}</td>
+        <td>{{ row.tokens_in }}</td>
+        <td>{{ row.tokens_out }}</td>
+        <td>{{ row.avg_latency }} ms</td>
+        <td>${{ "%.4f"|format(row.cost) }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="text-secondary text-center py-4">Sin uso registrado.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

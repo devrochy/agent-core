@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Conversación{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h1 class="fs-3 mb-0">{{ customer_name or external_id }}</h1>
+  <a href="/admin/conversaciones" class="btn btn-outline-secondary btn-sm">← Volver</a>
+</div>
+<div class="row g-3">
+  <div class="col-md-8">
+    <div class="card">
+      <div class="card-body" style="max-height: 60vh; overflow-y: auto">
+        {% for m in messages %}
+        <div class="d-flex mb-3 {{ 'justify-content-end' if m.direction == 'outbound' else '' }}">
+          <div class="p-2 px-3 rounded-3 {{ 'bg-primary text-white' if m.direction == 'outbound' else 'bg-light border' }}" style="max-width: 75%">
+            <div style="white-space: pre-wrap">{{ m.content }}</div>
+            {% if m.media_transcription %}
+            <div class="small fst-italic mt-1 opacity-75">🎙 {{ m.media_transcription }}</div>
+            {% endif %}
+            <div class="small opacity-75 mt-1">{{ m.sender_type }} · {{ m.created_at.strftime('%H:%M') }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="card-footer">
+        <form method="post" action="/admin/conversaciones/{{ conversation_id }}/mensaje" class="d-flex gap-2">
+          <input type="text" name="content" class="form-control" placeholder="Responder como humano..." required>
+          <button class="btn btn-primary">Enviar</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card mb-3">
+      <div class="card-header fw-semibold">Estado</div>
+      <ul class="list-group list-group-flush">
+        <li class="list-group-item d-flex justify-content-between">Estado <span class="badge bg-secondary">{{ status }}</span></li>
+        <li class="list-group-item d-flex justify-content-between">Bot <span class="badge bg-{{ 'danger' if bot_paused else 'success' }}">{{ 'pausado' if bot_paused else 'activo' }}</span></li>
+        <li class="list-group-item d-flex justify-content-between">Canal <span>{{ channel }}</span></li>
+      </ul>
+    </div>
+    {% if status == 'escalated' %}
+    <form method="post" action="/admin/conversaciones/{{ conversation_id }}/resolver">
+      <button class="btn btn-success w-100">Marcar resuelta y reanudar bot</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

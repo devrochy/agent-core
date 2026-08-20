@@ -1,0 +1,33 @@
+# Entidades · {{ assistant_name }}
+
+> Documento VIVO. Crece con cada `agent-core plugin install`.
+
+## Tablas del core
+
+| Tabla | Propósito |
+|---|---|
+| `app_settings` | Configuración del asistente (singleton) |
+| `customers` | Clientes — identidad por (canal, external_id) |
+| `conversations` | Hilos de conversación con estado JSONB |
+| `messages` | Historial completo (texto + medios + tool_calls) |
+| `channel_connections` | Conexiones canal × proveedor (credenciales cifradas) |
+| `plugins` / `plugin_configs` | Registro y configuración (cifrada) de plugins |
+| `admins` / `admin_sessions` | Usuarios del panel |
+| `escalations` | Handoff a humano |
+| `llm_usage` | Tokens, costo y latencia por llamada |
+| `audit_log` | Auditoría inmutable de tools |
+| `memory_vectors` | Memoria semántica (pgvector) |
+
+{% if entities %}
+## Entidades de plugins
+
+| Entidad | Plugin | Exposición |
+|---|---|---|
+{% for e in entities -%}
+| `{{ e.name }}` | {{ e.plugin }} | {% if e.exposure.get('admin_panel') %}panel{% endif %}{% if e.exposure.get('agent_tool') %} + tools{% endif %} |
+{% endfor %}
+{% else %}
+## Entidades de plugins
+
+_Ninguna todavía._
+{% endif %}

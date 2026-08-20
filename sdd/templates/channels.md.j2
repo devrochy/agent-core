@@ -1,0 +1,24 @@
+# Canales · {{ assistant_name }}
+
+> Documento VIVO.
+
+## Canal activo
+
+| Canal | Proveedor | Estado |
+|---|---|---|
+| {{ channel }} | {{ channel_provider }} | configurado |
+
+## Endpoints
+
+| Endpoint | Uso |
+|---|---|
+| `GET /webhooks/whatsapp` | Handshake de verificación de Meta |
+| `POST /webhooks/whatsapp` | Mensajes entrantes (firma HMAC-SHA256) |
+
+## Cómo agregar otro canal (Telegram, Instagram...)
+
+1. Implementar `InboundAdapter` y `OutboundAdapter` (`core/gateway/channels/base.py`).
+2. Registrar el proveedor en `core/gateway/channels/registry.py`.
+3. Crear la conexión en el panel (credenciales cifradas en `channel_connections`).
+
+El orchestrator NO cambia: es agnóstico al canal.

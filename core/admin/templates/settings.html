@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Configuración{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4">Configuración</h1>
+<div class="row g-3">
+  <div class="col-md-6">
+    <div class="card mb-3">
+      <div class="card-header fw-semibold">Asistente</div>
+      <div class="card-body">
+        <form method="post" action="/admin/configuracion/asistente">
+          <div class="mb-3">
+            <label class="form-label">Nombre del asistente</label>
+            <input type="text" name="assistant_name" class="form-control" value="{{ s.assistant_name }}" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Descripción del negocio</label>
+            <textarea name="business_description" class="form-control" rows="3">{{ s.business_description }}</textarea>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Voz de marca (opcional)</label>
+            <textarea name="brand_voice" class="form-control" rows="3"
+              placeholder="Misión, valores, frases características...">{{ s.brand_voice }}</textarea>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Tono</label>
+            <select name="tono" class="form-select">
+              {% for t in ['calido', 'formal', 'divertido'] %}
+              <option value="{{ t }}" {{ 'selected' if behavior.tono == t }}>{{ t }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Velocidad de respuesta</label>
+            <select name="debounce_mode" class="form-select">
+              {% for m in ['inmediato', 'rapido', 'natural', 'pausado'] %}
+              <option value="{{ m }}" {{ 'selected' if behavior.debounce_mode == m }}>{{ m }}</option>
+              {% endfor %}
+            </select>
+            <div class="form-text">Cuánto espera el bot a que el cliente termine de escribir.</div>
+          </div>
+          <button class="btn btn-primary">Guardar</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card mb-3">
+      <div class="card-header fw-semibold">Kill-switch global</div>
+      <div class="card-body">
+        <p class="text-secondary small">Si pausas el bot, los mensajes se guardan pero nadie recibe respuesta automática.</p>
+        <form method="post" action="/admin/configuracion/toggle-bot">
+          <button class="btn btn-{{ 'success' if s.bot_paused else 'danger' }}">
+            {{ 'Reanudar bot' if s.bot_paused else 'Pausar bot globalmente' }}
+          </button>
+        </form>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header fw-semibold">LLM (BYOK)</div>
+      <div class="card-body">
+        <form method="post" action="/admin/configuracion/llm">
+          <div class="mb-3">
+            <label class="form-label">Proveedor</label>
+            <select name="llm_provider" class="form-select">
+              <option value="">(usar .env)</option>
+              {% for p in ['deepseek', 'openai', 'anthropic'] %}
+              <option value="{{ p }}" {{ 'selected' if s.llm_provider == p }}>{{ p }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Modelo</label>
+            <input type="text" name="llm_model" class="form-control" value="{{ s.llm_model or '' }}"
+                   placeholder="deepseek-chat">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">API Key</label>
+            <input type="password" name="llm_api_key" class="form-control"
+                   placeholder="{{ '••••••••' if s.llm_api_key_encrypted else 'sk-...' }}">
+            <div class="form-text">Se guarda cifrada (Fernet). Vacío = conservar la actual.</div>
+          </div>
+          <button class="btn btn-primary">Guardar LLM</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

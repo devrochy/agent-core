@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Escalaciones{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4">Escalaciones</h1>
+<div class="card">
+  <table class="table table-hover align-middle mb-0">
+    <thead><tr><th>Cliente</th><th>Razón</th><th>Resumen</th><th>Estado</th><th>Fecha</th><th></th></tr></thead>
+    <tbody>
+      {% for e in escalations %}
+      <tr>
+        <td>{{ e.customer_name or e.external_id }}</td>
+        <td><span class="badge bg-warning text-dark">{{ e.reason }}</span></td>
+        <td class="small">{{ e.summary[:80] }}</td>
+        <td><span class="badge bg-{{ 'success' if e.status == 'resuelta' else 'danger' }}">{{ e.status }}</span></td>
+        <td class="small text-secondary">{{ e.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td><a href="/admin/conversaciones/{{ e.conversation_id }}" class="btn btn-sm btn-outline-primary">Atender</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="text-secondary text-center py-4">Sin escalaciones. 🎉</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

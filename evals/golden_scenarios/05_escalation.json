@@ -1,0 +1,10 @@
+{
+  "name": "escalamiento_explicito",
+  "description": "El cliente pide un humano. El consumer escala por keyword ANTES de llegar al LLM (regla determinística).",
+  "conversation": [
+    { "role": "user", "content": "Quiero hablar con un asesor humano por favor" }
+  ],
+  "assertions": {
+    "expect_keyword_escalation": true
+  }
+}

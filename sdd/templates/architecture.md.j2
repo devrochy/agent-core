@@ -1,0 +1,50 @@
+# Arquitectura · {{ assistant_name }}
+
+> Documento VIVO. Regenerar con `agent-core sdd update`.
+
+## Flujo de un mensaje
+
+```mermaid
+flowchart LR
+    U[Cliente<br/>{{ channel }}] --> W[Webhook<br/>firma HMAC + dedup]
+    W --> Q[(Redis Stream)]
+    Q --> C[Consumer<br/>kill-switch + keywords]
+    C --> D{Debounce<br/>{{ debounce_mode }}}
+    D --> O[Agentic Loop]
+    O <--> M1[(L1 Redis<br/>working)]
+    O <--> M2[(L2 Postgres<br/>entity)]
+    O <--> M3[(L3 pgvector<br/>semántica)]
+    O <--> H[MCP Host<br/>tools in-process]
+    H <--> P[Plugins embebidos]
+    O <--> L[{{ llm_provider }}<br/>{{ llm_model }}]
+    O --> G[Guardrails + SafeRenderer]
+    G --> S[Splitter<br/>burbujas] --> U
+```
+
+## Este asistente es UN monolito
+
+- Todos los plugins corren **en el mismo proceso** (código embebido vía pip).
+- Ejecutar una tool = llamada de función Python. Cero red entre core y plugins.
+- Un despliegue = un negocio (single-tenant).
+
+## Componentes activos
+
+| Componente | Tecnología |
+|---|---|
+| LLM | {{ llm_provider }} · {{ llm_model }} |
+| Memoria L1 (working) | Redis, últimos 30 turnos, TTL 24h |
+| Memoria L2 (entity) | PostgreSQL `customers.attributes` |
+| Memoria L3 (semántica) | {{ 'pgvector + ' + embedding_provider if embedding_provider != 'none' else 'desactivada' }} |
+| Cola de mensajes | Redis Stream + consumer group |
+| Cron de plugins | Celery Beat |
+| Panel admin | FastAPI + Jinja2 + Bootstrap 5 (SSR) |
+
+{% if entities %}
+## Entidades del dominio (aportadas por plugins)
+
+| Entidad | Plugin | Panel admin | Tool del agente |
+|---|---|---|---|
+{% for e in entities -%}
+| {{ e.name }} | {{ e.plugin }} | {{ '✓' if e.exposure.get('admin_panel') else '—' }} | {{ '✓' if e.exposure.get('agent_tool') else '—' }} |
+{% endfor %}
+{% endif %}

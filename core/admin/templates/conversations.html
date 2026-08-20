@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Conversaciones{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4">Conversaciones</h1>
+<div class="card">
+  <table class="table table-hover align-middle mb-0">
+    <thead><tr><th>Cliente</th><th>Canal</th><th>Estado</th><th>Bot</th><th>Inicio</th><th></th></tr></thead>
+    <tbody>
+      {% for c in conversations %}
+      <tr>
+        <td>{{ c.customer_name or c.external_id }}</td>
+        <td><span class="badge bg-secondary">{{ c.channel }}</span></td>
+        <td><span class="badge bg-{{ 'warning' if c.status == 'escalated' else ('success' if c.status == 'open' else 'secondary') }}">{{ c.status }}</span></td>
+        <td>
+          <form method="post" action="/admin/conversaciones/{{ c.id }}/toggle-bot" class="d-inline">
+            <button class="btn btn-sm btn-outline-{{ 'danger' if not c.bot_paused else 'success' }}">
+              {{ 'Pausar bot' if not c.bot_paused else 'Reanudar bot' }}
+            </button>
+          </form>
+        </td>
+        <td class="small text-secondary">{{ c.started_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td><a href="/admin/conversaciones/{{ c.id }}" class="btn btn-sm btn-outline-primary">Ver</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="text-secondary text-center py-4">Sin conversaciones todavía.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

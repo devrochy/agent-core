@@ -1,0 +1,85 @@
+"""CLI de agent-core.
+
+Comandos:
+  agent-core init                      Wizard de nuevo asistente (.env + sdd/ + BD + admin)
+  agent-core status                    Estado del sistema
+  agent-core configure [tone|llm]      Reconfiguración puntual
+  agent-core plugin list|install|remove|scaffold
+  agent-core db migrate|seed
+  agent-core sdd update|show
+"""
+
+from __future__ import annotations
+
+import typer
+
+from cli.commands.configure import app as configure_app
+from cli.commands.db import app as db_app
+from cli.commands.init import init_command
+from cli.commands.plugin import app as plugin_app
+from cli.commands.sdd import app as sdd_app
+
+app = typer.Typer(
+    name="agent-core",
+    help="Framework de asistentes IA: monolito modular con plugins embebidos.",
+    no_args_is_help=True,
+)
+
+app.command(name="init")(init_command)
+app.add_typer(plugin_app, name="plugin", help="Gestión de plugins")
+app.add_typer(configure_app, name="configure", help="Reconfiguración del asistente")
+app.add_typer(db_app, name="db", help="Base de datos")
+app.add_typer(sdd_app, name="sdd", help="System Design Document vivo")
+
+
+@app.command()
+def status() -> None:
+    """Estado del sistema: BD, Redis, plugins."""
+    import asyncio
+
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+
+    async def _check() -> None:
+        table = Table(title="agent-core · estado")
+        table.add_column("Componente")
+        table.add_column("Estado")
+
+        # BD
+        try:
+            from sqlalchemy import text
+
+            from core.db.session import get_session
+
+            async with get_session() as session:
+                await session.execute(text("SELECT 1"))
+            table.add_row("PostgreSQL", "[green]OK[/green]")
+        except Exception as exc:
+            table.add_row("PostgreSQL", f"[red]ERROR: {str(exc)[:60]}[/red]")
+
+        # Redis
+        try:
+            from core.memory.working import get_redis
+
+            await get_redis().ping()
+            table.add_row("Redis", "[green]OK[/green]")
+        except Exception as exc:
+            table.add_row("Redis", f"[red]ERROR: {str(exc)[:60]}[/red]")
+
+        # Plugins
+        from core.plugin_manager import plugin_manager
+
+        modules = plugin_manager.scan()
+        table.add_row("Plugins detectados", str(len(modules)))
+        for module in modules:
+            table.add_row(f"  · {module.id}", module.version)
+
+        console.print(table)
+
+    asyncio.run(_check())
+
+
+if __name__ == "__main__":
+    app()

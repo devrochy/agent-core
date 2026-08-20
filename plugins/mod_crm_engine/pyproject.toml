@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mod-crm-engine"
+version = "1.0.0"
+description = "CRM para agent-core: leads, deals y seguimiento automático"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.entry-points."agent_core.plugins"]
+mod_crm_engine = "mod_crm_engine.module:CRMModule"
+
+[tool.setuptools.packages.find]
+include = ["mod_crm_engine*"]
+
+[tool.agent_core.plugin]
+# Entidades para el wizard de importación (agent-core plugin install)
+[tool.agent_core.plugin.entities]
+crm_leads = ["name", "phone", "email", "interest", "score", "status"]
+crm_deals = ["title", "amount", "stage", "notes"]

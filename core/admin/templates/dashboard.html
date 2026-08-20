@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4">Dashboard</h1>
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="card kpi-card"><div class="card-body">
+      <div class="text-secondary small">Conversaciones (7 días)</div>
+      <div class="value">{{ kpi.conversations_7d }}</div>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card kpi-card"><div class="card-body">
+      <div class="text-secondary small">Mensajes (7 días)</div>
+      <div class="value">{{ kpi.messages_7d }}</div>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card kpi-card"><div class="card-body">
+      <div class="text-secondary small">Escalaciones pendientes</div>
+      <div class="value">{{ kpi.pending_escalations }}</div>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card kpi-card"><div class="card-body">
+      <div class="text-secondary small">Costo LLM (30 días)</div>
+      <div class="value">${{ "%.4f"|format(kpi.cost_30d) }}</div>
+    </div></div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header fw-semibold">Estado del sistema</div>
+      <ul class="list-group list-group-flush">
+        <li class="list-group-item d-flex justify-content-between">
+          Bot global
+          <span class="badge bg-{{ 'danger' if bot_paused else 'success' }}">{{ 'PAUSADO' if bot_paused else 'ACTIVO' }}</span>
+        </li>
+        <li class="list-group-item d-flex justify-content-between">
+          Proveedor LLM <span class="badge bg-secondary">{{ llm_label }}</span>
+        </li>
+        <li class="list-group-item d-flex justify-content-between">
+          Plugins activos <span class="badge bg-primary">{{ kpi.active_plugins }}</span>
+        </li>
+      </ul>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header fw-semibold">Conversaciones recientes</div>
+      <ul class="list-group list-group-flush">
+        {% for conv in recent %}
+        <li class="list-group-item">
+          <a href="/admin/conversaciones/{{ conv.id }}" class="text-decoration-none">{{ conv.customer_name or conv.external_id }}</a>
+          <span class="badge bg-{{ 'warning' if conv.status == 'escalated' else 'success' }} float-end">{{ conv.status }}</span>
+        </li>
+        {% else %}
+        <li class="list-group-item text-secondary">Aún no hay conversaciones.</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</div>
+{% endblock %}

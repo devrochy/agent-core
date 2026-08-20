@@ -1,0 +1,91 @@
+# Guía de Customización con IA · {{ assistant_name }}
+
+> Documento VIVO generado por `agent-core`. Este archivo es CONTEXTO COMPLETO
+> para cualquier LLM (Claude, DeepSeek, OpenCode) que vaya a modificar este asistente.
+> Léelo completo antes de tocar código.
+
+## 1. Identidad del asistente
+
+- **Negocio**: {{ business_description or '(pendiente de definir)' }}
+- **Canal**: {{ channel }} ({{ channel_provider }})
+- **LLM activo**: {{ llm_provider }} — {{ llm_model }}
+- **Idioma**: {{ language }} · **Tono**: {{ tone }}
+- **Embeddings**: {{ embedding_provider }}
+
+## 2. Cómo funciona (resumen técnico)
+
+```
+WhatsApp -> POST /webhooks/whatsapp (firma HMAC + dedup Redis NX)
+         -> Redis Stream -> Consumer (kill-switch 3 niveles + keywords escalación)
+         -> Debounce ({{ debounce_mode }}) -> Agentic Loop (máx 6 iteraciones)
+         -> MCP Host ejecuta tools de plugins IN-PROCESS (cero red)
+         -> Guardrails -> SafeRenderer -> Splitter (burbujas) -> WhatsApp
+```
+
+Memoria: L1 Redis (últimos turnos) · L2 Postgres (perfil del cliente) · L3 pgvector (RAG).
+
+## 3. Reglas INVIOLABLES al modificar este asistente
+
+1. **Datos sensibles nunca por el LLM**: precios finales, cuentas bancarias, links de pago
+   se adjuntan con `_safe_append` en el resultado de la tool (ver docs/SAFE-RENDERER.md).
+2. **Nada dinámico en los bloques 1-3 del system prompt** (fecha/hora rompe el prompt
+   caching silenciosamente — ver docs/PROMPT-CACHING-GUIDE.md).
+3. **Los plugins NO importan del orchestrator**: solo usan lo que el MCPHost inyecta
+   (`host.register_skill`, `host.subscribe`, `host.trigger_escalation`).
+4. **Toda operación de negocio es idempotente**: usa `context.idempotency_key`.
+5. **El LLM propone, la tool decide**: validación siempre contra la BD, nunca contra
+   lo que dice el modelo.
+
+## 4. Tareas comunes de customización
+
+### Cambiar el tono / voz de marca
+- Panel: /admin/configuracion → Tono y Voz de marca.
+- CLI: `agent-core configure tone`
+
+### Agregar una tool nueva al agente
+1. `agent-core plugin scaffold mod-mi-plugin`
+2. Edita `plugins/mod_mi_plugin/mod_mi_plugin/skills.py` (tools con JSON Schema)
+3. `pip install -e plugins/mod_mi_plugin`
+4. Activa en /admin/plugins
+
+### Modificar el prompt base
+- `core/llm/prompt_builder.py` → `BASE_RULES` (afecta a TODOS los turnos).
+- Preferir SIEMPRE la voz de marca (BD) antes que tocar el código.
+
+### Agregar un cron job
+```python
+from core.tasks.decorators import register_cron
+
+@register_cron("{{ installed_plugins[0].id if installed_plugins else 'mod_mi_plugin' }}", "0 9 * * *")
+async def mi_job() -> None: ...
+```
+
+## 5. Plugins instalados y sus capacidades
+
+{% if installed_plugins %}
+{% for p in installed_plugins %}
+- **{{ p.name }}** (`{{ p.id }}` v{{ p.version }}): {{ p.description }}
+{% endfor %}
+{% else %}
+- (ninguno)
+{% endif %}
+
+## 6. Agentes de IA disponibles (.opencode/agents/)
+
+| Agente | Cuándo usarlo |
+|---|---|
+| `customizer` | Personalizar prompt, tono, comportamiento del asistente |
+| `plugin-dev` | Crear un plugin nuevo desde cero |
+| `migrator` | Importar datos de otro sistema |
+| `optimizer` | Reducir costo LLM / mejorar precisión de tools |
+
+## 7. Dónde está cada cosa
+
+| Necesito tocar... | Archivo |
+|---|---|
+| Prompt base | `core/llm/prompt_builder.py` |
+| Agentic loop | `core/orchestrator/loop.py` |
+| Envío WhatsApp | `core/gateway/channels/whatsapp/outbound.py` |
+| Contrato de plugins | `core/mcp/types.py` |
+| Panel admin | `core/admin/views.py` + `core/admin/templates/` |
+| Config del asistente | Tabla `app_settings` (BD, no .env) |
