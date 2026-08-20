@@ -21,7 +21,7 @@ from __future__ import annotations
 import importlib
 import importlib.metadata
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -210,9 +210,9 @@ class PluginManager:
         ini_path = plugin_dir / "alembic.ini"
         if not ini_path.exists():
             return
-        from alembic import command
         from alembic.config import Config as AlembicConfig
 
+        from alembic import command
         from core.config import get_settings
 
         cfg = AlembicConfig(str(ini_path))
@@ -233,17 +233,25 @@ class PluginManager:
     def list_modules(self) -> list[BaseModule]:
         return list(self._modules.values())
 
-    def active_admin_menu(self) -> list[dict[str, str]]:
-        """Entradas de menú del panel aportadas por plugins ACTIVOS.
+    def active_admin_menu(self) -> list[dict[str, Any]]:
+        """Entradas de menú del panel agrupadas por plugin ACTIVO.
 
-        Al desactivar un plugin, su menú desaparece automáticamente.
+        Devuelve una lista de grupos:
+            [{"name": "CRM", "items": [{"label": "Leads", "path": "..."}, ...]}]
+
+        Al desactivar un plugin, su grupo desaparece automáticamente.
         """
-        entries: list[dict[str, str]] = []
+        groups: list[dict[str, Any]] = []
         for plugin_id in self._active:
             module = self._modules.get(plugin_id)
-            if module:
-                entries.extend(module.admin_menu)
-        return entries
+            if module and module.admin_menu:
+                groups.append(
+                    {
+                        "name": module.name or plugin_id,
+                        "items": list(module.admin_menu),
+                    }
+                )
+        return groups
 
     def _require(self, plugin_id: str) -> BaseModule:
         module = self._modules.get(plugin_id)
@@ -261,7 +269,7 @@ class PluginManager:
             record.status = status
             record.error_message = error
             if activated:
-                record.activated_at = datetime.now(timezone.utc)
+                record.activated_at = datetime.now(UTC)
 
 
 plugin_manager = PluginManager()

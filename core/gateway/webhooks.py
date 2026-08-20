@@ -19,6 +19,7 @@ from fastapi import APIRouter, Query, Request, Response
 
 from core.config import get_settings
 from core.gateway.channels.registry import inbound_adapter_for
+from core.gateway.connections import effective_credentials
 from core.gateway.idempotency import claim_message_once
 from core.memory.working import get_redis
 from core.shared.logger import get_logger
@@ -37,7 +38,9 @@ async def verify_webhook(
 ) -> Response:
     """Handshake de verificación de Meta."""
     settings = get_settings()
-    if hub_mode == "subscribe" and hub_verify_token == settings.whatsapp_verify_token:
+    creds = await effective_credentials()
+    verify_token = creds.get("verify_token") or settings.whatsapp_verify_token
+    if hub_mode == "subscribe" and verify_token and hub_verify_token == verify_token:
         return Response(content=hub_challenge, media_type="text/plain")
     return Response(status_code=403)
 
@@ -48,16 +51,21 @@ async def receive_whatsapp(request: Request) -> dict[str, Any]:
     raw_body = await request.body()
     adapter = inbound_adapter_for("meta")
 
-    if settings.whatsapp_app_secret:
-        headers = {k.lower(): v for k, v in request.headers.items()}
-        if not adapter.verify_request(raw_body, headers, settings.whatsapp_app_secret):
-            log.warning("webhook_signature_invalid")
-            return {"status": "ignored"}
-
     try:
         payload = json.loads(raw_body)
     except json.JSONDecodeError:
         return {"status": "ignored"}
+
+    # La firma se valida con el app_secret de la conexión que matchea el
+    # phone_number_id del payload (fallback: primaria activa -> .env).
+    phone_ids = _payload_phone_number_ids(payload)
+    creds = await effective_credentials(phone_ids[0] if phone_ids else "")
+    app_secret = creds.get("app_secret") or settings.whatsapp_app_secret
+    if app_secret:
+        headers = {k.lower(): v for k, v in request.headers.items()}
+        if not adapter.verify_request(raw_body, headers, app_secret):
+            log.warning("webhook_signature_invalid")
+            return {"status": "ignored"}
 
     messages = adapter.parse_inbound(payload)
     enqueued = 0
@@ -92,7 +100,19 @@ async def receive_whatsapp(request: Request) -> dict[str, Any]:
     return {"status": "ok", "enqueued": enqueued, "duplicates": duplicates}
 
 
-async def _try_process_media(message):  # type: ignore[no-untyped-def]
+def _payload_phone_number_ids(payload: dict[str, Any]) -> list[str]:
+    """Extrae los phone_number_id (clave de ruteo) del payload de Meta."""
+    ids: list[str] = []
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            value = change.get("value", {})
+            phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
+            if phone_number_id and phone_number_id not in ids:
+                ids.append(phone_number_id)
+    return ids
+
+
+async def _try_process_media(message: Any) -> Any:
     """Si mod-media-processor está activo, transforma audio/imagen a texto ANTES de encolar.
 
     Llamada de función Python en el mismo proceso — cero red (docs/MONOLITH-MODEL.md).

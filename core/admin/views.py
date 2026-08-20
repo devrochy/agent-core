@@ -8,7 +8,7 @@ al desactivar un plugin su UI desaparece sola.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +30,13 @@ from core.db.models import (
     PluginRecord,
 )
 from core.db.session import get_session
+from core.gateway.connections import (
+    delete_connection,
+    list_connections,
+    set_active,
+    set_primary,
+    verify_meta_credentials,
+)
 from core.plugin_manager import plugin_manager
 from core.shared.crypto import get_secret_box
 from core.shared.logger import get_logger
@@ -115,8 +122,8 @@ async def dashboard(request: Request):
     if ctx is None:
         return _login_redirect()
 
-    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
-    month_ago = datetime.now(timezone.utc) - timedelta(days=30)
+    week_ago = datetime.now(UTC) - timedelta(days=7)
+    month_ago = datetime.now(UTC) - timedelta(days=30)
 
     async with get_session() as session:
         conversations_7d = (
@@ -286,7 +293,7 @@ async def resolve_conversation(request: Request, conversation_id: uuid.UUID):
         )
         for escalation in escalations:
             escalation.status = "resuelta"
-            escalation.resolved_at = datetime.now(timezone.utc)
+            escalation.resolved_at = datetime.now(UTC)
     return RedirectResponse(f"/admin/conversaciones/{conversation_id}?flash=Conversación resuelta", status_code=303)
 
 
@@ -442,13 +449,118 @@ async def plugin_deactivate(request: Request, plugin_id: str):
     return RedirectResponse("/admin/plugins?flash=Plugin desactivado", status_code=303)
 
 
+# ------------------------------------------------------------------ conexiones
+@router.get("/conexiones", response_class=HTMLResponse)
+async def connections_page(request: Request):
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+    connections = await list_connections()
+    ctx.update(
+        connections=[
+            {
+                "id": c.id,
+                "channel": c.channel,
+                "provider": c.provider,
+                "label": c.label or c.external_id,
+                "active": c.active,
+                "is_primary": c.is_primary,
+                "external_id": c.external_id,
+                "created_at": c.created_at,
+            }
+            for c in connections
+        ],
+        has_connection=bool(connections),
+    )
+    return _render("conexiones.html", ctx)
+
+
+@router.post("/conexiones/guardar")
+async def connection_save(
+    request: Request,
+    connection_id: str = Form(default=""),
+    label: str = Form(default=""),
+    phone_number_id: str = Form(default=""),
+    app_secret: str = Form(default=""),
+    access_token: str = Form(default=""),
+    verify_token: str = Form(default=""),
+):
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    connection_id_uuid = uuid.UUID(connection_id) if connection_id else None
+
+    # Verificar contra Meta ANTES de persistir (ag-sale: una credencial mala
+    # guardada rompe el canal y el síntoma aparece recién en un mensaje que
+    # no llega).
+    ok, msg, info = await verify_meta_credentials(phone_number_id, access_token)
+    if not ok:
+        return RedirectResponse(
+            f"/admin/conexiones?flash={msg[:140]}&flash_type=danger", status_code=303
+        )
+
+    try:
+        from core.gateway.connections import save_connection
+
+        credentials = {
+            "phone_number_id": phone_number_id,
+            "app_secret": app_secret,
+            "access_token": access_token,
+            "verify_token": verify_token,
+        }
+        _connection, _created = await save_connection(label, credentials, connection_id_uuid)
+        meta_name = info.get("verified_name") or info.get("display_phone_number") or ""
+        flash = f"Conectado con Meta ✓ {meta_name}".strip()
+        return RedirectResponse(
+            f"/admin/conexiones?flash={flash}", status_code=303
+        )
+    except Exception as exc:
+        log.exception("connection_save_failed")
+        return RedirectResponse(
+            f"/admin/conexiones?flash=Error al guardar: {str(exc)[:120]}&flash_type=danger",
+            status_code=303,
+        )
+
+
+@router.post("/conexiones/{connection_id}/activar")
+async def connection_activate(request: Request, connection_id: uuid.UUID):
+    if await current_admin(request) is None:
+        return _login_redirect()
+    await set_active(connection_id, True)
+    return RedirectResponse("/admin/conexiones?flash=Conexión activada", status_code=303)
+
+
+@router.post("/conexiones/{connection_id}/desactivar")
+async def connection_deactivate(request: Request, connection_id: uuid.UUID):
+    if await current_admin(request) is None:
+        return _login_redirect()
+    await set_active(connection_id, False)
+    return RedirectResponse("/admin/conexiones?flash=Conexión desactivada", status_code=303)
+
+
+@router.post("/conexiones/{connection_id}/primaria")
+async def connection_set_primary(request: Request, connection_id: uuid.UUID):
+    if await current_admin(request) is None:
+        return _login_redirect()
+    await set_primary(connection_id)
+    return RedirectResponse("/admin/conexiones?flash=Se marcó como conexión principal", status_code=303)
+
+
+@router.post("/conexiones/{connection_id}/eliminar")
+async def connection_delete(request: Request, connection_id: uuid.UUID):
+    if await current_admin(request) is None:
+        return _login_redirect()
+    await delete_connection(connection_id)
+    return RedirectResponse("/admin/conexiones?flash=Conexión eliminada", status_code=303)
+
+
 # ------------------------------------------------------------------ costos
 @router.get("/costos", response_class=HTMLResponse)
 async def costs_page(request: Request):
     ctx = await _base_context(request, "costs")
     if ctx is None:
         return _login_redirect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     month_ago = now - timedelta(days=30)
 

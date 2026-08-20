@@ -21,18 +21,24 @@
       <li><a class="nav-link {% if section == 'dashboard' %}active{% endif %}" href="/admin">Dashboard</a></li>
       <li><a class="nav-link {% if section == 'conversations' %}active{% endif %}" href="/admin/conversaciones">Conversaciones</a></li>
       <li><a class="nav-link {% if section == 'escalations' %}active{% endif %}" href="/admin/escalaciones">Escalaciones</a></li>
+      <li><a class="nav-link {% if section == 'connections' %}active{% endif %}" href="/admin/conexiones">Conexiones</a></li>
       <li><a class="nav-link {% if section == 'plugins' %}active{% endif %}" href="/admin/plugins">Plugins</a></li>
       <li><a class="nav-link {% if section == 'costs' %}active{% endif %}" href="/admin/costos">Costos LLM</a></li>
       <li><a class="nav-link {% if section == 'settings' %}active{% endif %}" href="/admin/configuracion">Configuración</a></li>
     </ul>
     {% if plugin_menu %}
     <hr class="text-secondary">
-    <div class="text-secondary text-uppercase small px-2 mb-1">Módulos</div>
-    <ul class="nav nav-pills flex-column gap-1">
-      {% for item in plugin_menu %}
-      <li><a class="nav-link" href="{{ item.path }}">{{ item.label }}</a></li>
+    {% for group in plugin_menu %}
+    <div class="text-secondary text-uppercase small px-2 mb-1">{{ group['name'] }}</div>
+    <ul class="nav nav-pills flex-column gap-1 mb-2">
+      {% for item in group['items'] %}
+      {% set current = request.url.path %}
+      {% set item_base = item['path'].rstrip('/') %}
+      {% set is_active = current == item['path'] or current == item_base or (current.startswith(item_base + '/') and item_base.count('/') >= 2) %}
+      <li><a class="nav-link {% if is_active %}active{% endif %}" href="{{ item['path'] }}">{{ item['label'] }}</a></li>
       {% endfor %}
     </ul>
+    {% endfor %}
     {% endif %}
     <div class="mt-auto pt-3">
       <form method="post" action="/admin/logout">

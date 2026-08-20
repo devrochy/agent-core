@@ -94,10 +94,12 @@ async def run_scenario(path: Path) -> tuple[str, bool, str]:
 async def main() -> int:
     pattern = sys.argv[1] if len(sys.argv) > 1 else ""
 
-    # Cargar plugins para escenarios que los requieran
+    # Cargar y ACTIVAR plugins para escenarios que los requieran (los tools
+    # solo se registran en el MCPHost al activar el plugin).
     from core.plugin_manager import plugin_manager
 
     plugin_manager.scan()
+    await plugin_manager.activate_all_configured()
 
     paths = sorted(p for p in SCENARIOS_DIR.glob("*.json") if pattern in p.name)
     if not paths:

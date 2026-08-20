@@ -21,8 +21,9 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
@@ -116,13 +117,13 @@ class BaseModule(ABC):
 
     # Rutas del panel admin que el plugin aporta (aparecen en el menú lateral al activarse)
     admin_menu: list[dict[str, str]] = []
-    # [{"label": "Leads", "path": "/admin/plugins/mod_crm_engine/leads"}]
+    # [{"label": "Leads", "path": "/crm/leads"}]
 
     def __init__(self) -> None:
         self.config: BasePluginConfig | None = None
 
     @abstractmethod
-    def on_activate(self, host: "MCPHost") -> None:
+    def on_activate(self, host: MCPHost) -> None:
         """Registra skills, guardrails y suscripciones. Llamado al activar el plugin."""
 
     def on_deactivate(self) -> None:
