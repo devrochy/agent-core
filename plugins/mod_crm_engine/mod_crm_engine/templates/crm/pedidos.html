@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Pedidos{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4">Pedidos</h1>
+<div class="table-responsive">
+  <table class="table table-striped table-hover align-middle">
+    <thead>
+      <tr>
+        <th>N°</th><th>Total</th><th>Items</th><th>Pago</th><th>Entrega</th><th>Estado</th><th>Fecha</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for o in orders %}
+      <tr>
+        <td class="fw-semibold">{{ o.public_order_number }}</td>
+        <td>{{ o.total }}</td>
+        <td>
+          <details>
+            <summary class="small text-primary">{{ o.items|length }} items</summary>
+            <ul class="list-unstyled mt-1 mb-0 small">
+              {% for i in o.items %}
+              <li>{{ i.quantity }}× {{ i.name }} ({{ i.unit_price }})</li>
+              {% endfor %}
+            </ul>
+          </details>
+        </td>
+        <td>
+          <div>{{ o.payment_method }}</div>
+          <small class="text-secondary">{{ o.payment_status }}</small>
+        </td>
+        <td>
+          <div>{{ o.delivery_method }}</div>
+          <small class="text-secondary">{{ o.delivery_address or '' }} {{ o.delivery_full_name or '' }}</small>
+        </td>
+        <td>
+          <span class="badge text-bg-{{ 'success' if o.status == 'entregado' else ('danger' if o.status in ('cancelado','expirado') else 'primary') }}">{{ o.status }}</span>
+        </td>
+        <td>{{ o.created_at }}</td>
+        <td>
+          <details>
+            <summary class="small text-primary">cambiar estado</summary>
+            <form method="post" action="/crm/pedidos/{{ o.id }}/estado" class="mt-2 d-flex gap-2">
+              <select name="status" class="form-select form-select-sm" style="width:140px">
+                {% for s in ['abierto','despachado','entregado','cancelado','expirado'] %}
+                <option value="{{ s }}" {{ 'selected' if o.status == s }}>{{ s }}</option>
+                {% endfor %}
+              </select>
+              <button class="btn btn-sm btn-outline-primary">Guardar</button>
+            </form>
+          </details>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="text-center text-secondary">Sin pedidos registrados</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

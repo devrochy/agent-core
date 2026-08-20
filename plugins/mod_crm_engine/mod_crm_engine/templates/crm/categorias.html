@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Categorías{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4">Categorías</h1>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-5">
+    <div class="card">
+      <div class="card-header fw-semibold">Nueva categoría</div>
+      <div class="card-body">
+        <form method="post" action="/crm/categorias/guardar">
+          <div class="mb-2"><label class="form-label">Nombre</label><input name="name" class="form-control" required></div>
+          <div class="mb-2">
+            <label class="form-label">Categoría padre</label>
+            <select name="parent_id" class="form-select">
+              <option value="">(raíz)</option>
+              {% for c in categories %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="mb-2"><label class="form-label">Orden</label><input name="sort_order" type="number" value="0" class="form-control"></div>
+          <div class="mb-2">
+            <label class="form-label">Complementarias (IDs separados por coma)</label>
+            <input name="complements" class="form-control" placeholder="id1, id2">
+            <div class="form-text">Categorías que se sugieren como venta cruzada con esta.</div>
+          </div>
+          <button class="btn btn-primary">Guardar categoría</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-7">
+    <div class="card">
+      <div class="card-header fw-semibold">Árbol de categorías</div>
+      <div class="card-body">
+        <ul class="list-unstyled mb-0">
+          {% for node in tree %}
+          {% include "crm/_category_node.html" %}
+          {% else %}
+          <li class="text-secondary">Sin categorías. Crea una en el formulario.</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

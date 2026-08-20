@@ -1,0 +1,33 @@
+<li>
+  <div class="d-flex align-items-center gap-2 py-1">
+    <span class="fw-semibold">{{ node.name }}</span>
+    {% if node.complements %}
+      <span class="text-secondary small">complementarias:
+        {% for c in node.complements %}<span class="badge text-bg-light border me-1">{{ c }}</span>{% endfor %}
+      </span>
+    {% endif %}
+    <span class="ms-auto">
+      <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#cat-edit-{{ node.id }}">editar</button>
+    </span>
+  </div>
+  <div class="collapse ms-4 mb-2" id="cat-edit-{{ node.id }}">
+    <form method="post" action="/crm/categorias/guardar" class="border rounded p-2 bg-light">
+      <input type="hidden" name="category_id" value="{{ node.id }}">
+      <div class="row g-2">
+        <div class="col-5"><input name="name" value="{{ node.name }}" class="form-control form-control-sm"></div>
+        <div class="col-4">
+          <select name="parent_id" class="form-select form-select-sm">
+            <option value="">(raíz)</option>
+            {% for c in categories %}<option value="{{ c.id }}" {{ 'selected' if c.id == node.id }}>{{ c.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="col-3"><input name="sort_order" type="number" value="{{ node.sort_order }}" class="form-control form-control-sm"></div>
+        <div class="col-12"><input name="complements" class="form-control form-control-sm" placeholder="IDs complementarias separadas por coma"></div>
+        <div class="col-12"><button class="btn btn-sm btn-outline-primary">Guardar</button></div>
+      </div>
+    </form>
+  </div>
+  {% if node.children %}
+  <ul class="list-unstyled ms-4">{% for child in node.children %}{% include "crm/_category_node.html" %}{% endfor %}</ul>
+  {% endif %}
+</li>

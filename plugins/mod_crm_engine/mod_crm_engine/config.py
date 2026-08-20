@@ -23,3 +23,32 @@ class CRMConfig(BasePluginConfig):
     scoring_mode: Literal["manual", "auto"] = Field(
         default="auto", description="Cómo se puntúan los leads (auto = el agente pregunta y califica)"
     )
+
+    # ---------------------------------------------------------------- segmentación de clientes
+    customer_frecuente_min_pedidos: int = Field(
+        default=2, description="Mínimo de pedidos para considerarse 'frecuente'"
+    )
+    customer_frecuente_intervalo_max_dias: int = Field(
+        default=45, description="Días máximos entre pedidos para mantenerse 'frecuente'"
+    )
+    customer_fiel_min_pedidos: int = Field(
+        default=5, description="Mínimo de pedidos para considerarse 'fiel'"
+    )
+    customer_inactivo_dias_sin_comprar: int = Field(
+        default=120, description="Días sin comprar para marcar al cliente como 'inactivo'"
+    )
+
+    # ---------------------------------------------------------------- montos y pagos
+    monto_alto_threshold: float = Field(
+        default=1_000_000, description="Monto en COP que dispara escalamiento a humano"
+    )
+    # Cuentas de transferencia visibles al cliente (nunca pasan por el LLM).
+    # Formato: [{"entity","accountType","accountNumber","holderName","holderDocument"}]
+    transfer_accounts: list[dict] = Field(
+        default_factory=list,
+        description="Cuentas para transferencia (Nequi, Bancolombia...). Se envían por _safe_append.",
+    )
+
+    # ---------------------------------------------------------------- moneda
+    currency_symbol: str = Field(default="$", description="Símbolo de moneda para precios")
+    currency_code: str = Field(default="COP", description="Código de moneda (COP, USD)")

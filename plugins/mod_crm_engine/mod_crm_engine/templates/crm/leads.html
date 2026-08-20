@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Leads{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4">Leads</h1>
+<div class="table-responsive">
+  <table class="table table-striped table-hover align-middle">
+    <thead>
+      <tr>
+        <th>Lead</th><th>Interés</th><th>Score</th><th>Estado</th><th>Última actividad</th><th>Creado</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for l in leads %}
+      <tr>
+        <td>
+          <div class="fw-semibold">{{ l.name or 'Sin nombre' }}</div>
+          <small class="text-secondary">{{ l.email or l.phone or '' }}</small>
+        </td>
+        <td>{{ l.interest }}</td>
+        <td>
+          <form method="post" action="/crm/leads/{{ l.id }}/guardar" class="d-flex gap-2">
+            <input type="number" name="score" value="{{ l.score }}" min="0" max="10" class="form-control form-control-sm" style="width:70px">
+            <select name="status" class="form-select form-select-sm" style="width:130px">
+              {% for s in ['nuevo','calificado','contactado','convertido','perdido'] %}
+              <option value="{{ s }}" {{ 'selected' if l.status == s }}>{{ s }}</option>
+              {% endfor %}
+            </select>
+            <button class="btn btn-sm btn-outline-primary">Guardar</button>
+          </form>
+        </td>
+        <td>{{ l.status }}</td>
+        <td>{{ _iso(l.last_activity_at) }}</td>
+        <td>{{ _iso(l.created_at) }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="text-center text-secondary">Sin leads registrados</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

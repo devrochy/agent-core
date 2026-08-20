@@ -6,10 +6,10 @@ core ni con otros plugins. El plugin_manager ejecuta esto al activar el plugin.
 
 from __future__ import annotations
 
-from alembic import context
+from mod_crm_engine.models import Base
 from sqlalchemy import engine_from_config, pool
 
-from mod_crm_engine.models import Base
+from alembic import context
 
 config = context.config
 
