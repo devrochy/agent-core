@@ -26,7 +26,8 @@ agent-core plugin install mod-crm-engine # descarga, migra, expone en el panel
 | Plugins | Paquetes pip detectados por `entry_points`, ciclo de vida completo, auto-disable en error |
 | MCP Host interno | Los plugins exponen tools estilo MCP; el core las traduce al function calling del LLM activo |
 | Canales | WhatsApp (Meta Cloud API) incluido; adaptadores por proveedor para Telegram/Instagram futuros |
-| Panel admin | SSR Jinja2 + Bootstrap 5; formularios auto-generados desde los schemas Pydantic de cada plugin |
+| Conexiones de canal | Credenciales gestionadas en el panel (`/admin/conexiones`), cifradas con Fernet y verificadas contra Meta antes de guardar; webhook y envío resuelven desde BD con fallback al `.env` |
+| Panel admin | SSR Jinja2 + Bootstrap 5; formularios auto-generados desde los schemas Pydantic de cada plugin; el menú de cada plugin se agrupa bajo el nombre del módulo |
 | Colas y cron | Redis Stream (mensajes) + Celery/Beat (`@register_cron`) |
 | Robustez | Idempotencia 3 capas · debounce · guardrails · kill-switch 3 niveles · escalamiento a humano |
 

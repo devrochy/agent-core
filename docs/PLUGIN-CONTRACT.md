@@ -1,8 +1,12 @@
 # PLUGIN-CONTRACT · La Biblia del desarrollador de plugins
 
 Todo lo que necesitas para construir un plugin de agent-core. Si algo no está aquí,
-está en el código de referencia: `plugins/mod_crm_engine/` (completo) y
-`plugins/mod_google_calendar/` (OAuth + rutas admin propias).
+está en el código de referencia:
+
+- `plugins/mod_crm_engine/` — el plugin **completo**: 3 skills (leads, catálogo y
+  ventas), esquema de datos grande (13 tablas), cron jobs, guardrail de montos y un
+  **panel admin propio** con plantillas (`mod_crm_engine/templates/crm/`).
+- `plugins/mod_google_calendar/` — el plugin mínimo con OAuth2 y rutas admin propias.
 
 ## 1. Qué es un plugin
 
@@ -60,7 +64,10 @@ mi_tabla = ["campo1", "campo2"]
 ## 5. BaseModule (el contrato obligatorio)
 
 ```python
+from fastapi import APIRouter
 from core.mcp.types import BaseModule
+
+admin_router = APIRouter(prefix="/mi-plugin", tags=["mi_plugin"])  # rutas admin propias
 
 class Module(BaseModule):
     id = "mod_mi_plugin"          # DEBE coincidir con el entry_point
@@ -70,9 +77,9 @@ class Module(BaseModule):
     requires_config = True        # False = se activa sin formulario
     config_schema = MiConfig      # None si no hay configuración
     admin_menu = [                # entradas del menú lateral (solo mientras esté activo)
-        {"label": "Mi Sección", "path": "/admin/plugins/mod_mi_plugin/vista"},
+        {"label": "Mi Sección", "path": "/mi-plugin/vista"},
     ]
-    admin_router = mi_router      # APIRouter propio (opcional)
+    admin_router = admin_router   # APIRouter propio (opcional)
     declared_skills = [MiSkill]   # para documentación SDD sin activar
 
     def on_activate(self, host) -> None:
@@ -84,6 +91,31 @@ class Module(BaseModule):
     def on_deactivate(self) -> None:
         ...  # limpieza opcional; el host retira skills/guardrails/eventos solo
 ```
+
+### 5.1 Panel admin propio (rutas + plantillas)
+
+Si el plugin aporta UI, define un `APIRouter` con un prefijo limpio (ej. `/crm`) y
+guarda tus plantillas en `<plugin>/<plugin>/templates/`. Para extender el layout del
+core (menú lateral, flash), apunta Jinja2 a ambas carpetas:
+
+```python
+from pathlib import Path
+from fastapi.templating import Jinja2Templates
+
+TEMPLATES = Path(__file__).parent / "templates"
+CORE_TEMPLATES = Path(__file__).resolve().parents[3] / "core" / "admin" / "templates"
+templates = Jinja2Templates(directory=[str(TEMPLATES), str(CORE_TEMPLATES)])
+```
+
+Así tus plantillas pueden hacer `{% extends "base.html" %}` y reutilizar el menú.
+
+**Menú agrupado por plugin**: el core agrupa las entradas de `admin_menu` de cada
+plugin activo bajo el nombre del módulo (`plugin_manager.active_admin_menu()`), y
+resalta la sección activa comparando el path de la petición con cada entrada. No hace
+falta lógica extra en el plugin para eso: solo define bien `admin_menu` y las rutas.
+
+Referencia completa de UI: `plugins/mod_crm_engine/mod_crm_engine/module.py` +
+`plugins/mod_crm_engine/mod_crm_engine/templates/crm/`.
 
 ## 6. Configuración (Pydantic → formulario)
 

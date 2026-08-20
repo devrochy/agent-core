@@ -8,6 +8,17 @@
 |---|---|---|
 | {{ channel }} | {{ channel_provider }} | configurado |
 
+## Conexiones (panel admin)
+
+Las credenciales del canal se gestionan en **/admin/conexiones**:
+
+- Se guardan cifradas (Fernet) en la tabla `channel_connections` y se validan
+  contra la Graph API del proveedor (Meta) antes de persistir.
+- Campos típicos Meta/WhatsApp: `label`, `phone_number_id`, `app_secret`,
+  `access_token` y `verify_token`.
+- El webhook y el envío resuelven las credenciales en este orden:
+  conexión que matchea el `phone_number_id` del payload → conexión primaria activa → `.env`.
+
 ## Endpoints
 
 | Endpoint | Uso |

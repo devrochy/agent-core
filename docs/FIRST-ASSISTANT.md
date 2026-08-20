@@ -38,16 +38,18 @@ voz de marca, en tono cálido, dividido en burbujas. **Ya tienes un asistente.**
 agent-core plugin install mod-crm-engine
 # ¿Datos? → Esquema base vacío
 # ¿crm_leads en panel? Sí · ¿tools? Sí
-# ¿crm_deals en panel? Sí · ¿tools? Sí
+# ¿crm_products / crm_orders en panel? Sí · ¿tools? Sí
 ```
 
-**8.** En el panel → Plugins → CRM Engine → **Configurar**:
-- Pipeline: `Citas` · Auto-crear lead: ✓ · Follow-up: 24h · Scoring: auto
+**8.** En el panel → Plugins → **CRM** → **Configurar**:
+- Pipeline: `Ventas` · Auto-crear lead: ✓ · Follow-up: 24h · Scoring: auto
 → **Guardar y activar**.
+   - Menú del plugin: Dashboard · Leads · Productos · Categorías · Promociones · Pedidos.
 
-**9.** Escríbele por WhatsApp: *"Hola, soy Andrés Pardo, quiero agendar un corte"*.
-El agente llamará `crear_lead` (nombre + interés). Verifícalo en
-/admin/conversaciones → abre el hilo → verás la tool ejecutada.
+**9.** Escríbele por WhatsApp: *"Hola, soy Andrés Pardo, quiero una hamburguesa"*.
+El agente llamará `crear_lead` (nombre + interés) y podrá consultar el menú con
+`consultar_inventario`. Verifícalo en /admin/conversaciones → abre el hilo → verás la
+tool ejecutada.
 
 **10.** Revisa `sdd/skills.md`: el SDD ya documenta las skills del CRM automáticamente.
 

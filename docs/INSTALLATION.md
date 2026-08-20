@@ -58,14 +58,30 @@ docker compose up -d --build
 
 Verifica: `curl http://localhost:8000/healthz` → `{"status":"ok"}`
 
+> **Importante (desarrollo):** `uvicorn --reload` solo recarga cambios en archivos
+> `.py`, **NO** recarga el `.env`. Si editas el `.env` (p. ej. cambias el token de
+> WhatsApp o la API key del LLM) mientras el servidor corre, debes reiniciarlo
+> manualmente (`Ctrl+C` + `make dev`). Un token viejo en memoria es una causa
+> frecuente de "el bot procesa el mensaje pero no responde por el canal".
+> Regla práctica: cambiaste el `.env` → reinicia el proceso.
+
 ## 5. Entrar al panel
 
 Abre **http://localhost:8000/admin** e ingresa con el email/contraseña del wizard.
-Verás el Dashboard con las secciones del core: Conversaciones, Escalaciones, Plugins,
-Costos LLM y Configuración.
+Verás el Dashboard con las secciones del core: Conversaciones, Escalaciones, **Conexiones**,
+Plugins, Costos LLM y Configuración.
 
 ## 6. Conectar WhatsApp (Meta Cloud API)
 
+Hay dos formas (equivalentes):
+
+**A. En el panel (recomendada):** ve a **/admin/conexiones** y completa el formulario
+con `label`, `phone_number_id`, `app_secret`, `access_token` y `verify_token`.
+Las credenciales se guardan cifradas (Fernet) en `channel_connections` y se **validan
+contra la Graph API de Meta antes de guardar** (una credencial mala nunca se persiste).
+No requiere reiniciar ni tocar el `.env`.
+
+**B. En el `.env`:**
 1. En [developers.facebook.com](https://developers.facebook.com): crea una app tipo
    Business → agrega el producto WhatsApp.
 2. Copia al `.env`: `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`,
@@ -73,12 +89,17 @@ Costos LLM y Configuración.
 3. Expón tu servidor local (desarrollo): `cloudflared tunnel --url http://localhost:8000`
 4. En Meta → WhatsApp → Configuration → Webhook:
    - Callback URL: `https://<tu-tunel>/webhooks/whatsapp`
-   - Verify token: el valor de `WHATSAPP_VERIFY_TOKEN` de tu `.env`
+   - Verify token: el valor de `WHATSAPP_VERIFY_TOKEN` (el mismo que pusiste en el panel
+     si usaste la opción A)
    - Suscríbete al campo `messages`.
 5. Reinicia: `docker compose restart core-api` (o el uvicorn local).
 6. Escribe al número de prueba de Meta. El mensaje debe aparecer en
    /admin/conversaciones y el asistente debe responder.
 
+> El webhook y el envío resuelven las credenciales en este orden: conexión que matchea
+> el `phone_number_id` del payload → conexión primaria activa → `.env`. Mientras no
+> guardes conexiones en el panel, todo funciona con el `.env`.
+>
 > Nota: el token de prueba de Meta caduca cada 24h. Para producción genera un token
 > permanente de System User.
 
@@ -89,7 +110,8 @@ agent-core plugin install mod-crm-engine
 ```
 
 Sigue los wizards (datos + exposición de entidades). Al terminar, en el panel:
-Plugins → CRM Engine → **Configurar** → guarda → el menú lateral muestra "CRM · Leads".
+Plugins → **CRM** → **Configurar** → guarda → el menú lateral agrupa el plugin bajo
+"CRM" con sus secciones: Dashboard · Leads · Productos · Categorías · Promociones · Pedidos.
 
 ## Solución de problemas
 

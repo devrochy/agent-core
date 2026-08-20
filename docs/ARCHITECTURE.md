@@ -46,7 +46,7 @@ flowchart TB
             TRANS[Translator<br/>MCP → function calling]
         end
         subgraph Plugins["Plugins (pip install -e, mismo proceso)"]
-            CRM[mod-crm-engine<br/>LeadSkill · DealSkill]
+            CRM[mod-crm-engine<br/>LeadSkill · CatalogSkill · OrderSkill]
             CAL[mod-google-calendar<br/>CalendarSkill]
         end
         subgraph Memoria
@@ -72,7 +72,9 @@ flowchart TB
 ## El turno de conversación, paso a paso
 
 ```
-1. Meta envía webhook → verificación HMAC → dedup (Redis NX) → XADD al stream → 200 OK
+1. Meta envía webhook → verificación HMAC (app_secret de la conexión que matchea
+   el phone_number_id del payload; fallback: conexión primaria → .env) → dedup
+   (Redis NX) → XADD al stream → 200 OK
    (el LLM NUNCA corre dentro del request del webhook)
 
 2. Consumer lee el stream:
@@ -107,6 +109,23 @@ flowchart TB
 | `TaskQueue` | `CeleryTaskQueue` | Arq, RQ |
 
 Cambiar de proveedor LLM = `LLM_PROVIDER` en `.env` o BYOK en el panel. Cero código.
+
+## Conexiones de canal (panel admin)
+
+Las credenciales de cada canal viven en la tabla `channel_connections` (cifradas con
+Fernet) y se gestionan en **`/admin/conexiones`**:
+
+- El guardado valida las credenciales contra la Graph API de Meta **antes** de persistir
+  (una credencial mala nunca se guarda: el síntoma de un canal roto no debería aparecer
+  hasta el primer mensaje que no llega).
+- Campos típicos de una conexión Meta/WhatsApp: `label`, `phone_number_id` (clave de
+  ruteo), `app_secret` (firma HMAC), `access_token` y `verify_token` (handshake).
+- Resolución en runtime (`core/gateway/connections.py`):
+  conexión que matchea el `phone_number_id` del payload → conexión primaria activa → `.env`.
+
+El webhook (`core/gateway/webhooks.py`) y el sender (`core/gateway/sender.py`) resuelven
+las credenciales por este orden, de modo que mover credenciales del `.env` al panel es
+opcional y no rompe nada mientras tanto.
 
 ## Memoria en 3 capas
 
