@@ -62,14 +62,20 @@ async def send_to_conversation(
     text: str,
     image_url: str | None = None,
     sender_type: str = "agent",
-) -> None:
+) -> bool:
+    """Envía la respuesta al canal. Devuelve True si el envío fue exitoso.
+
+    El mensaje outbound SIEMPRE se persiste (status 'sent' | 'failed') para que
+    un envío roto quede auditado en BD y pueda reintentarse/escalarse, en vez de
+    descartarse en silencio (incidente de envío silencioso detectado en producción).
+    """
     async with get_session() as session:
         conversation = await session.get(Conversation, conversation_id)
         if conversation is None:
-            return
+            return False
         customer = await session.get(Customer, conversation.customer_id)
         if customer is None:
-            return
+            return False
 
     provider, credentials = await resolve_credentials(conversation.connection_id)
     adapter = outbound_adapter_for(provider)
@@ -80,6 +86,7 @@ async def send_to_conversation(
     )
     bubbles = split_for_bubbles(text, style)
 
+    delivered = True
     for index, bubble in enumerate(bubbles):
         is_last = index == len(bubbles) - 1
         for attempt in range(SEND_RETRIES):
@@ -93,12 +100,13 @@ async def send_to_conversation(
                 log.exception("bubble_send_failed", attempt=attempt + 1,
                               conversation_id=str(conversation_id))
                 if attempt + 1 >= SEND_RETRIES:
-                    return  # no seguir enviando burbujas desordenadas
+                    delivered = False  # no seguir enviando burbujas desordenadas
+                    break
                 await asyncio.sleep(1)
-        if not is_last:
+        if not is_last and delivered:
             await asyncio.sleep(BUBBLE_DELAY_S)
 
-    # Persistir el turno saliente
+    # Persistir el turno saliente SIEMPRE (con status de entrega)
     async with get_session() as session:
         session.add(
             Message(
@@ -106,9 +114,11 @@ async def send_to_conversation(
                 direction="outbound",
                 sender_type=sender_type,
                 content=text,
+                status="sent" if delivered else "failed",
             )
         )
     await event_bus.emit(ON_MESSAGE_SENT, conversation_id=conversation_id, content=text)
+    return delivered
 
 
 async def _behavior_config() -> dict[str, object]:

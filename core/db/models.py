@@ -14,7 +14,7 @@ Los plugins definen sus PROPIAS tablas en su propio árbol de migraciones
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
@@ -32,7 +32,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Base(DeclarativeBase):
@@ -125,6 +125,7 @@ class Message(Base):
     direction: Mapped[str] = mapped_column(Text)      # inbound | outbound
     sender_type: Mapped[str] = mapped_column(Text)    # customer | agent | human
     content: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(Text, default="sent")  # sent | failed (outbound)
     tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     # Soporte de medios (mod-media-processor los transforma antes del orchestrator)
     media_type: Mapped[str | None] = mapped_column(Text)          # "audio/ogg", "image/jpeg"

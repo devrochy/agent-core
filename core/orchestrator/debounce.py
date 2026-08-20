@@ -75,20 +75,28 @@ async def _fire_conversation(conversation_id: uuid.UUID, payload: dict[str, Any]
     """Procesa el turno diferido. Sin reintento automático: si falla, el próximo
     mensaje del cliente genera un turno fresco (límite conocido, documentado)."""
     from core.gateway.sender import send_to_conversation
+    from core.orchestrator.escalation import escalate
     from core.orchestrator.loop import process_conversation
 
     try:
         latest_message = str(payload.get("latest_message", ""))
         result = await process_conversation(conversation_id, latest_message)
         if result is not None and result.text:
-            await send_to_conversation(conversation_id, result.text, image_url=result.image_url)
+            delivered = await send_to_conversation(
+                conversation_id, result.text, image_url=result.image_url
+            )
+            if not delivered and not result.escalated:
+                # El turno se generó pero no llegó al canal: escalar a humano
+                # para no perder al cliente (incidente de envío silencioso detectado en producción).
+                await escalate(conversation_id, reason="send_failed",
+                               summary=result.text[:200])
     except Exception:
         log.exception("debounce_fire_failed", conversation_id=str(conversation_id))
 
 
 async def recover_orphaned_conversations() -> None:
     """Al arrancar: reprograma conversaciones con inbound pendiente sin timer vivo."""
-    from sqlalchemy import select, text
+    from sqlalchemy import text
 
     from core.db.session import get_session
 

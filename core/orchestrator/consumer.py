@@ -134,7 +134,12 @@ async def handle_inbound(fields: dict[str, str]) -> None:
     if delay_ms == 0:
         result = await process_conversation(conversation.id, effective_message)
         if result is not None and result.text:
-            await send_to_conversation(conversation.id, result.text, image_url=result.image_url)
+            delivered = await send_to_conversation(
+                conversation.id, result.text, image_url=result.image_url
+            )
+            if not delivered and not result.escalated:
+                await escalate(conversation.id, reason="send_failed",
+                               summary=result.text[:200])
     else:
         await schedule_debounce(conversation.id, delay_ms, {"latest_message": effective_message})
 
