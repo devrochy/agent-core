@@ -294,7 +294,7 @@ def init_command(
 
         except subprocess.CalledProcessError as exc:
             err = (exc.stderr or exc.stdout or "")[:300]
-            console.print(f"[yellow]⚠ Error al levantar la BD:[/yellow]")
+            console.print("[yellow]⚠ Error al levantar la BD:[/yellow]")
             console.print(f"[yellow]{err}[/yellow]")
             console.print("[yellow]Corre manualmente:[/yellow]")
             console.print("[yellow]  docker compose up -d postgres redis[/yellow]")
@@ -322,7 +322,7 @@ def init_command(
         f"[bold]{assistant_name}[/bold] listo.",
         "",
         "Siguientes pasos:",
-        f"  1. docker compose up -d  (o ya está corriendo)",
+        "  1. docker compose up -d  (o ya está corriendo)",
         f"  2. Abre http://localhost:{app_host_port}/admin",
         f"  3. Ingresa con: [bold]{admin_email}[/bold]",
     ]
