@@ -18,7 +18,9 @@ Migraciones por plugin: cada plugin puede traer su propio árbol Alembic
 
 from __future__ import annotations
 
+import importlib
 import importlib.metadata
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -46,8 +48,28 @@ class PluginManager:
         self._active: set[str] = set()
 
     # ------------------------------------------------------------ detección
+    def _ensure_plugin_paths(self) -> None:
+        """Añade los directorios de plugins locales a sys.path.
+
+        Cuando `pip install -e` corre en un subproceso durante `plugin install`,
+        el proceso actual no re-procesa los .pth files (que registran el finder
+        del editable install). Este método garantiza que el paquete sea importable
+        añadiendo la carpeta fuente directamente a sys.path como fallback.
+        """
+        plugins_dir = Path("plugins")
+        if not plugins_dir.exists():
+            return
+        for plugin_dir in sorted(plugins_dir.iterdir()):
+            if plugin_dir.is_dir() and (plugin_dir / "pyproject.toml").exists():
+                src = str(plugin_dir.resolve())
+                if src not in sys.path:
+                    sys.path.insert(0, src)
+        # Invalida la caché de importación para detectar paquetes recién instalados
+        importlib.invalidate_caches()
+
     def scan(self) -> list[BaseModule]:
         """Escanea entry_points e instancia cada BaseModule encontrado."""
+        self._ensure_plugin_paths()
         discovered: list[BaseModule] = []
         for ep in importlib.metadata.entry_points(group=ENTRY_POINT_GROUP):
             try:

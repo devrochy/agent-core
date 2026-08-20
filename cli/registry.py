@@ -47,6 +47,39 @@ def clone_from_github(name: str) -> Path:
 
 def pip_install_editable(path: Path) -> None:
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-e", str(path)],
+        [sys.executable, "-m", "pip", "install", "-e", str(path.resolve())],
         check=True, capture_output=True, text=True,
     )
+    # Después de instalar, asegurar que el módulo sea importable en el proceso actual.
+    # pip instala el paquete con un editable finder (.pth) que solo se activa al
+    # arrancar Python. Como corremos en el mismo proceso, procesamos site-packages
+    # manualmente para que el módulo quede disponible de inmediato.
+    _refresh_site_packages(path)
+
+
+def _refresh_site_packages(path: Path) -> None:
+    """Procesa los site-packages para activar el finder del editable install."""
+    import importlib
+    import site
+
+    # Invalida caché de importación (detecta nuevos módulos instalados)
+    importlib.invalidate_caches()
+
+    # Procesa site-packages del usuario (donde pip install --user deposita los .pth)
+    try:
+        user_site = site.getusersitepackages()
+        site.addsitedir(user_site)
+    except Exception:
+        pass
+
+    # Procesa site-packages del sistema
+    for site_dir in site.getsitepackages():
+        try:
+            site.addsitedir(site_dir)
+        except Exception:
+            pass
+
+    # Fallback directo: añadir el directorio fuente del plugin a sys.path
+    src = str(path.resolve())
+    if src not in sys.path:
+        sys.path.insert(0, src)
