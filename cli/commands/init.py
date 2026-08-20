@@ -169,8 +169,10 @@ def init_command(
             console.print("✓ [green]Usuario admin y configuración creados[/green]")
         except subprocess.CalledProcessError as exc:
             console.print(f"[yellow]⚠ No se pudo migrar la BD: {exc.stderr[:200]}[/yellow]")
-            console.print("[yellow]  Levanta la BD (docker-compose up -d postgres redis) y corre:")
-            console.print("  agent-core db migrate && agent-core db seed[/yellow]")
+            console.print("[yellow]  Levanta la BD y corre:[/yellow]")
+            console.print("[yellow]    docker-compose up -d postgres redis[/yellow]")
+            console.print("[yellow]    agent-core db migrate[/yellow]")
+            console.print("[yellow]    agent-core db seed[/yellow]")
 
     # ---------------- resumen
     lines = [
