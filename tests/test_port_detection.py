@@ -112,3 +112,49 @@ def test_exclude_own_project_sin_nombre_no_filtra_nada() -> None:
 
     reclamados = {5432: "algo-postgres-1"}
     assert exclude_own_project(reclamados, "") == reclamados
+
+
+def test_choose_port_conserva_el_puerto_del_propio_asistente() -> None:
+    """El contenedor propio ocupa el socket: buscar 'libre' elegiría otro.
+
+    Regresión: cada re-init movía Postgres 5435 -> 5437 aunque el asistente ya
+    estuviera funcionando en 5435.
+    """
+    from cli.preflight import choose_port
+
+    elegido = choose_port(
+        start=5432, label="PostgreSQL", previous=5435,
+        own_ports={5435}, reserved=set(), docker_ports={5432: "otro-postgres-1"},
+    )
+    assert elegido == 5435
+
+
+def test_choose_port_ignora_un_previo_que_ya_no_es_nuestro() -> None:
+    from cli.preflight import choose_port
+
+    elegido = choose_port(
+        start=49600, label="API", previous=49999,
+        own_ports=set(), reserved=set(), docker_ports={},
+    )
+    assert elegido == 49600
+
+
+def test_choose_port_no_reutiliza_un_puerto_ya_asignado_en_esta_ejecucion() -> None:
+    from cli.preflight import choose_port
+
+    elegido = choose_port(
+        start=49700, label="Redis", previous=49700,
+        own_ports={49700}, reserved={49700}, docker_ports={},
+    )
+    assert elegido != 49700
+
+
+def test_own_project_ports_identifica_solo_los_propios() -> None:
+    from cli.preflight import own_project_ports
+
+    reclamados = {
+        5435: "verify-bot-postgres-1",
+        8002: "verify-bot-core-api-1",
+        5432: "agent-core-end-postgres-1",
+    }
+    assert own_project_ports(reclamados, "verify-bot") == {5435, 8002}

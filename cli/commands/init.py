@@ -22,16 +22,18 @@ from rich.panel import Panel
 
 from cli.preflight import (
     PortUnavailable,
+    choose_port,
     docker_available,
     docker_reserved_ports,
     docker_volume_exists,
     exclude_own_project,
     explain_docker_error,
-    find_free_port,
     llm_defaults,
+    own_project_ports,
     parse_db_url,
     parse_redis_url,
     port_owner,
+    read_env_file,
     slugify,
     update_url_port,
 )
@@ -167,7 +169,18 @@ def init_command(
     docker_ok, docker_detail = docker_available()
     # Los contenedores del propio proyecto no cuentan como ocupantes: si no,
     # cada re-init desplazaría los puertos del asistente.
-    docker_ports = exclude_own_project(docker_reserved_ports(), project) if docker_ok else {}
+    todos_los_puertos = docker_reserved_ports() if docker_ok else {}
+    docker_ports = exclude_own_project(todos_los_puertos, project)
+    puertos_propios = own_project_ports(todos_los_puertos, project)
+    # Puertos que este proyecto ya tenía asignados, para conservarlos.
+    env_previo = read_env_file(Path(".env"))
+    previos = {
+        clave: int(env_previo[clave])
+        for clave in ("POSTGRES_HOST_PORT", "REDIS_HOST_PORT", "APP_HOST_PORT")
+        if env_previo.get(clave, "").isdigit()
+    }
+    if env_previo.get("COMPOSE_PROJECT_NAME") != project:
+        previos = {}  # es otro asistente: sus puertos no aplican
     if not docker_ok:
         console.print(f"[yellow]⚠ Docker no disponible: {docker_detail}[/yellow]")
         console.print("[yellow]  Los puertos se comprueban solo contra el host.[/yellow]")
@@ -177,15 +190,19 @@ def init_command(
 
     try:
         assigned: set[int] = set()
-        pg_host_port = find_free_port(
-            int(db_info["port"]), "PostgreSQL", assigned, docker_ports
+        pg_host_port = choose_port(
+            int(db_info["port"]), "PostgreSQL", previos.get("POSTGRES_HOST_PORT"),
+            puertos_propios, assigned, docker_ports,
         )
         assigned.add(pg_host_port)
-        redis_host_port = find_free_port(
-            int(redis_info["port"]), "Redis", assigned, docker_ports
+        redis_host_port = choose_port(
+            int(redis_info["port"]), "Redis", previos.get("REDIS_HOST_PORT"),
+            puertos_propios, assigned, docker_ports,
         )
         assigned.add(redis_host_port)
-        app_host_port = find_free_port(8000, "API", assigned, docker_ports)
+        app_host_port = choose_port(
+            8000, "API", previos.get("APP_HOST_PORT"), puertos_propios, assigned, docker_ports,
+        )
     except PortUnavailable as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc

@@ -11,6 +11,7 @@ import re
 import socket
 import subprocess
 import unicodedata
+from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 PORT_SCAN_RANGE = 50
@@ -153,6 +154,51 @@ def docker_reserved_ports() -> dict[int, str]:
                 if host_port and host_port.isdigit():
                     reserved.setdefault(int(host_port), name.lstrip("/"))
     return reserved
+
+
+def own_project_ports(docker_ports: dict[int, str], project: str) -> set[int]:
+    """Puertos publicados por contenedores del propio proyecto."""
+    if not project:
+        return set()
+    propios = {f"{project}-{service}" for service in COMPOSE_SERVICES}
+    return {
+        port
+        for port, owner in docker_ports.items()
+        if re.sub(r"-\d+$", "", owner) in propios
+    }
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    """Lee un .env plano (KEY=VALOR), ignorando comentarios y comillas."""
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def choose_port(
+    start: int,
+    label: str,
+    previous: int | None,
+    own_ports: set[int],
+    reserved: set[int],
+    docker_ports: dict[int, str],
+) -> int:
+    """Puerto a usar, conservando el que ya tenía este proyecto.
+
+    Re-ejecutar `init` sobre un asistente existente debe devolver sus puertos
+    actuales: el contenedor propio ocupa el socket, así que una búsqueda de
+    "puerto libre" los daría por ocupados y elegiría otros distintos.
+    """
+    if previous and previous in own_ports and previous not in reserved:
+        return previous
+    return find_free_port(start, label, reserved, docker_ports)
 
 
 def exclude_own_project(docker_ports: dict[int, str], project: str) -> dict[int, str]:
