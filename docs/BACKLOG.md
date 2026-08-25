@@ -40,6 +40,16 @@ nunca por decisión del LLM. `MCPHost.trigger_escalation()` existe
 Mismo archivo: el prompt del framework habla de "registrar el lead en el CRM", que es
 un plugin concreto. Acopla el core a `mod_crm_engine`.
 
+**El contenedor corre como root y ensucia el repo del host**
+El `Dockerfile` no crea usuario no-root, y `docker-compose.yml` bind-montea
+`./plugins`. Al arrancar, el entrypoint hace `pip install -e` de cada plugin y deja
+`*.egg-info/` y `__pycache__/` **propiedad de root** dentro del repo del usuario, que
+después no puede borrarlos ni reinstalar los plugins desde el host sin `sudo`.
+Verificado: tras un `docker compose up`, `rm -rf` sobre el clon falla con
+*Permission denied* en `plugins/*/`.
+Arreglarlo bien implica un usuario no-root en la imagen con cuidado de que
+`pip install -e` siga funcionando sobre site-packages.
+
 **Panel admin sin CSRF ni rate limiting**
 Todos los POST de `core/admin/views.py` son formularios sin token. `/admin/login` no
 tiene límite de intentos. No hay middleware de seguridad de ningún tipo (el `grep` de
