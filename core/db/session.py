@@ -10,8 +10,9 @@ la corrutina en asyncio.run() — un solo engine y un solo estilo de código.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Coroutine
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 

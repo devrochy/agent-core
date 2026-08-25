@@ -9,7 +9,7 @@ edita el estado o las plantillas y corre `agent-core sdd update`.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,13 +30,13 @@ def load_state() -> dict[str, Any]:
 
 def save_state(state: dict[str, Any]) -> None:
     SDD_DIR.mkdir(exist_ok=True)
-    state["updated_at"] = datetime.now(timezone.utc).isoformat()
+    state["updated_at"] = datetime.now(UTC).isoformat()
     STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
 
 
 def append_changelog(state: dict[str, Any], entry: str) -> None:
     changelog = state.setdefault("changelog", [])
-    changelog.append({"date": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"), "entry": entry})
+    changelog.append({"date": datetime.now(UTC).strftime("%Y-%m-%d %H:%M"), "entry": entry})
 
 
 def render_all(state: dict[str, Any]) -> list[str]:

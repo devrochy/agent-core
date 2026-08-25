@@ -13,7 +13,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections import defaultdict
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from core.shared.logger import get_logger
 
@@ -35,6 +36,9 @@ ON_TOOL_EXECUTED = "tool.executed"                # payload: tool_name, plugin_i
 class EventBus:
     def __init__(self) -> None:
         self._subscribers: dict[str, list[EventHandler]] = defaultdict(list)
+        # Tasks vivas de emit_nowait: mantener la referencia evita que el
+        # recolector se las lleve antes de que terminen.
+        self._pending: set[asyncio.Task[None]] = set()
 
     def subscribe(self, event: str, handler: EventHandler) -> None:
         self._subscribers[event].append(handler)
@@ -59,9 +63,14 @@ class EventBus:
         """Emite sin esperar (fire-and-forget) desde contexto síncrono."""
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self.emit(event, **payload))
         except RuntimeError:
             asyncio.run(self.emit(event, **payload))
+            return
+        # Guardar la referencia: sin ella el recolector puede llevarse la task
+        # antes de que termine y el evento se pierde en silencio.
+        task = loop.create_task(self.emit(event, **payload))
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
 
 
 event_bus = EventBus()
