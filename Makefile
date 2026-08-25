@@ -9,8 +9,8 @@ down:          ## Detiene el stack
 dev:           ## API en modo desarrollo (recarga automática)
 	uvicorn core.main:app --reload --port 8000
 
-migrate:       ## Corre migraciones del core
-	alembic upgrade head
+migrate:       ## Corre migraciones del core + plugins
+	agent-core db migrate
 
 seed:          ## Crea tablas base + usuario admin por defecto
 	python scripts/init_db.py
@@ -22,11 +22,11 @@ install-plugins: ## Instala todos los plugins locales
 	bash scripts/install_plugins.sh
 
 lint:          ## Linters
-	ruff check core cli
+	ruff check core cli tests evals scripts
 	mypy core cli || true
 
 test:          ## Tests
-	pytest tests -q
+	pytest -q
 
 evals:         ## Corre los golden scenarios
 	python evals/runner.py

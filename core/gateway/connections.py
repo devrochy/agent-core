@@ -207,7 +207,7 @@ async def verify_meta_credentials(
                 params={"fields": "id,verified_name,display_phone_number"},
                 headers={"Authorization": f"Bearer {access_token}"},
             )
-    except Exception as exc:  # noqa: BLE001 - la verificación contra Meta falla por red o API
+    except Exception as exc:
         return False, f"Error de red con Meta: {str(exc)[:120]}", {}
 
     if response.status_code >= 400:

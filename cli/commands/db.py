@@ -15,18 +15,24 @@ console = Console()
 @app.command()
 def migrate() -> None:
     """Corre las migraciones del core + las de todos los plugins instalados."""
-    subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], check=True)
-    console.print("✓ Migraciones del core aplicadas")
+    from core.db.migrations import upgrade_all
 
-    from core.plugin_manager import plugin_manager
+    results = upgrade_all()
+    console.print("✓ [green]Migraciones del core aplicadas[/green]")
 
-    plugin_manager.scan()
-    for module in plugin_manager.list_modules():
-        try:
-            plugin_manager._run_plugin_migrations(module.id)
-        except Exception as exc:
-            console.print(f"[yellow]⚠ {module.id}: {str(exc)[:100]}[/yellow]")
-    console.print("✓ Migraciones de plugins aplicadas")
+    failed = False
+    for plugin_id, status in results.items():
+        if status.startswith("error:"):
+            failed = True
+            console.print(f"[red]✗ {plugin_id}: {status[7:][:150]}[/red]")
+        elif status == "aplicadas":
+            console.print(f"✓ [green]{plugin_id}: migraciones aplicadas[/green]")
+        else:
+            console.print(f"[dim]· {plugin_id}: sin migraciones propias[/dim]")
+
+    if failed:
+        console.print("\n[red]Alguna migración de plugin falló (ver arriba).[/red]")
+        raise typer.Exit(1)
 
 
 @app.command()

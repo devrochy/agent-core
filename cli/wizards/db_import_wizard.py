@@ -8,7 +8,7 @@ antes de ejecutar — nunca se migran datos sin revisión.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import questionary
@@ -45,7 +45,7 @@ def run_import_wizard(plugin_id: str, entity_targets: dict[str, list[str]]) -> P
 
     statements: list[str] = [
         f"-- Importación generada por agent-core plugin install {plugin_id}",
-        f"-- Fecha: {datetime.now(timezone.utc).isoformat()}",
+        f"-- Fecha: {datetime.now(UTC).isoformat()}",
         f"-- Origen: {source_url.split('@')[-1]}",
         "-- REVISA este script antes de ejecutarlo. Ajusta los mapeos de columnas.",
         "",
@@ -62,7 +62,7 @@ def run_import_wizard(plugin_id: str, entity_targets: dict[str, list[str]]) -> P
         source_columns = [c["name"] for c in inspector.get_columns(source_table)]
         mapping: dict[str, str] = {}
         for target_col in target_columns:
-            choices = ["(omitir)"] + source_columns
+            choices = ["(omitir)", *source_columns]
             default = target_col if target_col in source_columns else "(omitir)"
             selected = questionary.select(
                 f"  {entity}.{target_col} <- columna de {source_table}:",
@@ -79,7 +79,7 @@ def run_import_wizard(plugin_id: str, entity_targets: dict[str, list[str]]) -> P
                 f"INSERT INTO {entity} ({target_cols})\nSELECT {source_cols} FROM {source_table};\n"
             )
 
-    output = Path("plugins") / plugin_id / f"import_{datetime.now(timezone.utc):%Y%m%d_%H%M}.sql"
+    output = Path("plugins") / plugin_id / f"import_{datetime.now(UTC):%Y%m%d_%H%M}.sql"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("\n".join(statements))
     console.print(f"\n✓ Script de importación generado: [bold]{output}[/bold]")

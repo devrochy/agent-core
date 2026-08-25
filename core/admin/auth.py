@@ -8,7 +8,7 @@ Decisiones (ADR-025 de agent-sale):
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import bcrypt
 from fastapi import Request
@@ -50,7 +50,7 @@ async def login(email_or_username: str, password: str) -> str | None:
             AdminSession(
                 token=token,
                 admin_id=admin.id,
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=SESSION_TTL_HOURS),
+                expires_at=datetime.now(UTC) + timedelta(hours=SESSION_TTL_HOURS),
             )
         )
         return token
@@ -70,7 +70,7 @@ async def current_admin(request: Request) -> Admin | None:
         return None
     async with get_session() as session:
         stored = await session.get(AdminSession, token)
-        if stored is None or stored.expires_at < datetime.now(timezone.utc):
+        if stored is None or stored.expires_at < datetime.now(UTC):
             return None
         admin = await session.get(Admin, stored.admin_id)
         if admin is None or not admin.active:

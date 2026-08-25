@@ -36,7 +36,7 @@ async def upsert_attributes(customer_id: uuid.UUID, attributes: dict[str, Any]) 
             return
         merged = {**customer.attributes, **attributes}
         customer.attributes = merged
-        if "name" in attributes and attributes["name"]:
+        if attributes.get("name"):
             customer.name = str(attributes["name"])
 
 

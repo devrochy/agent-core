@@ -61,17 +61,17 @@ def install(
         try:
             path = clone_from_github(name)
             console.print(f"✓ Clonado en {path}")
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError as exc:
             console.print(f"[red]No se pudo clonar el plugin '{name}'.[/red]")
             console.print("Verifica el nombre con: agent-core plugin list")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from exc
 
     try:
         pip_install_editable(path)
         console.print("✓ [green]Paquete instalado (pip install -e, código embebido en el monolito)[/green]")
     except subprocess.CalledProcessError as exc:
         console.print(f"[red]pip install falló:[/red] {exc.stderr[-400:] if exc.stderr else exc}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from exc
 
     # ---------------- 2. Detectar el módulo
     from core.plugin_manager import plugin_manager

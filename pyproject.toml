@@ -67,5 +67,28 @@ plugins = ["pydantic.mypy"]
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.lint]
+# E/F: pycodestyle + pyflakes (el default). I: orden de imports. B: bugbear.
+# UP: modernización de sintaxis. RUF: reglas propias de ruff.
+select = ["E", "F", "I", "B", "UP", "RUF"]
+ignore = [
+    # 63 violaciones preexistentes de longitud de línea. Activarlo hoy obligaría
+    # a un reformateo masivo mezclado con cambios de arranque. Ver docs/BACKLOG.md.
+    "E501",
+    # El repo está en español y usa tipografía intencional (×, ·, —) en docstrings.
+    "RUF002",
+    "RUF003",
+    # BaseModule.on_deactivate es un hook OPCIONAL a propósito: un plugin que no
+    # necesita limpieza no debe verse obligado a implementarlo.
+    "B027",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# El contrato público de plugins declara `keywords` y `admin_menu` como
+# atributos de clase que las subclases sobrescriben con literales. Convertirlos
+# en ClassVar cambiaría la firma que siguen todos los plugins existentes.
+"core/mcp/types.py" = ["RUF012"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]
