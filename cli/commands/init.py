@@ -25,6 +25,7 @@ from cli.preflight import (
     docker_available,
     docker_reserved_ports,
     docker_volume_exists,
+    exclude_own_project,
     explain_docker_error,
     find_free_port,
     llm_defaults,
@@ -164,7 +165,9 @@ def init_command(
     # ---- puertos publicables
     console.print("\n[dim]Detectando puertos disponibles...[/dim]")
     docker_ok, docker_detail = docker_available()
-    docker_ports = docker_reserved_ports() if docker_ok else {}
+    # Los contenedores del propio proyecto no cuentan como ocupantes: si no,
+    # cada re-init desplazaría los puertos del asistente.
+    docker_ports = exclude_own_project(docker_reserved_ports(), project) if docker_ok else {}
     if not docker_ok:
         console.print(f"[yellow]⚠ Docker no disponible: {docker_detail}[/yellow]")
         console.print("[yellow]  Los puertos se comprueban solo contra el host.[/yellow]")
@@ -269,8 +272,9 @@ def init_command(
         console.print(f"✓ [green]{file}[/green]")
 
     # ---- base de datos
+    db_lista = True
     if not skip_db:
-        _bootstrap_database(
+        db_lista = _bootstrap_database(
             project=project,
             answers=answers,
             skip_docker=skip_docker,
@@ -280,6 +284,27 @@ def init_command(
         )
 
     # ---- resumen final
+    if not db_lista:
+        console.print(
+            Panel(
+                "\n".join(
+                    [
+                        f"Se generó la configuración de [bold]{answers['assistant_name']}[/bold], "
+                        "pero la base de datos quedó a medias.",
+                        "",
+                        "El .env y el SDD están escritos; el asistente NO puede arrancar todavía.",
+                        "Revisa la causa indicada arriba y luego:",
+                        "",
+                        "  agent-core doctor",
+                        "  agent-core db migrate && agent-core db seed",
+                    ]
+                ),
+                border_style="red",
+                title="⚠ init incompleto",
+            )
+        )
+        raise typer.Exit(1)
+
     lines = [
         f"[bold]{answers['assistant_name']}[/bold] listo.",
         "",
@@ -436,8 +461,12 @@ def _bootstrap_database(
     docker_ok: bool,
     recreate_volume: bool,
     non_interactive: bool,
-) -> None:
-    """Levanta la BD (si toca), aplica migraciones y crea el admin."""
+) -> bool:
+    """Levanta la BD (si toca), aplica migraciones y crea el admin.
+
+    Devuelve False si algo quedó a medias, para que el resumen final no anuncie
+    un asistente listo cuando no lo está.
+    """
     if not skip_docker:
         if not docker_ok:
             console.print(
@@ -445,7 +474,7 @@ def _bootstrap_database(
                 "\n[yellow]  Levanta PostgreSQL y Redis por tu cuenta y corre:"
                 " agent-core db migrate[/yellow]"
             )
-            return
+            return False
 
         _handle_existing_volume(project, recreate_volume, non_interactive)
 
@@ -456,7 +485,7 @@ def _bootstrap_database(
         )
         if result.returncode != 0:
             _report_failure(result.stderr or result.stdout, project)
-            return
+            return False
         console.print("✓ [green]PostgreSQL y Redis levantados[/green]")
     else:
         console.print("\n[dim]Aplicando migraciones sobre la BD existente...[/dim]")
@@ -475,7 +504,7 @@ def _bootstrap_database(
         results = upgrade_all()
     except Exception as exc:
         _report_failure(str(exc), project)
-        return
+        return False
 
     console.print("✓ [green]Migraciones del core aplicadas[/green]")
     for plugin_id, status in results.items():
@@ -491,8 +520,9 @@ def _bootstrap_database(
         )
     except Exception as exc:
         _report_failure(str(exc), project)
-        return
+        return False
     console.print("✓ [green]Usuario admin y configuración creados[/green]")
+    return True
 
 
 def _report_failure(raw_error: str, project: str) -> None:

@@ -15,6 +15,10 @@ from urllib.parse import urlparse, urlunparse
 
 PORT_SCAN_RANGE = 50
 
+# Servicios de docker-compose.yml. Compose nombra cada contenedor
+# `<proyecto>-<servicio>-<n>`; se usa para reconocer los propios.
+COMPOSE_SERVICES = ("postgres", "redis", "core-api", "celery-worker", "celery-beat")
+
 # Base URL y modelos por proveedor. Ojo: `LLM_BASE_URL` solo lo consume el
 # proveedor `openai_compatible` (ver core/llm/__init__.py); para el resto se
 # escribe por coherencia del .env. `LLM_MODEL_REASONING` sí es funcional en
@@ -151,6 +155,27 @@ def docker_reserved_ports() -> dict[int, str]:
     return reserved
 
 
+def exclude_own_project(docker_ports: dict[int, str], project: str) -> dict[int, str]:
+    """Quita del mapa los puertos que publica el propio proyecto.
+
+    Re-ejecutar `init` sobre un asistente existente debe conservar sus puertos.
+    Sin esto cada re-init los desplaza (8000 -> 8002 -> 8003...), porque el
+    proyecto se ve a sí mismo como un ocupante ajeno.
+
+    La comparación es exacta contra `<proyecto>-<servicio>-<n>`, no por prefijo:
+    un proyecto puede ser prefijo de otro (`agent-core` y `agent-core-end`) y
+    entonces se ignorarían puertos que sí están ocupados.
+    """
+    if not project:
+        return docker_ports
+    propios = {f"{project}-{service}" for service in COMPOSE_SERVICES}
+    return {
+        port: owner
+        for port, owner in docker_ports.items()
+        if re.sub(r"-\d+$", "", owner) not in propios
+    }
+
+
 def docker_volume_exists(name: str) -> bool:
     return bool(_docker(["volume", "inspect", name]))
 
@@ -237,6 +262,18 @@ def explain_docker_error(stderr: str, project: str = "", ports: dict[str, int] |
             "  el directorio de datos; después conserva las credenciales antiguas.\n"
             "  Salidas: usa las credenciales antiguas en el .env, o borra el volumen\n"
             "  (DESTRUYE los datos):  docker compose down -v"
+        )
+
+    if "is unhealthy" in text or "dependency failed to start" in text:
+        volume = f"{project}_pgdata" if project else "<proyecto>_pgdata"
+        return (
+            "Un servicio no llegó a estado saludable.\n"
+            "  Si es postgres: el healthcheck se autentica con las credenciales del .env,\n"
+            f"  así que suele significar que el volumen '{volume}' viene de otra instalación\n"
+            "  y conserva las suyas (PostgreSQL solo las aplica al crear el directorio de datos).\n"
+            "  Salidas: pon en el .env las credenciales antiguas, o borra el volumen\n"
+            "  (DESTRUYE los datos):  docker compose down -v\n"
+            "  Para ver el motivo exacto:  docker compose logs postgres"
         )
 
     if "does not exist" in text and "database" in text:

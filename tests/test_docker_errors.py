@@ -39,3 +39,17 @@ def test_error_desconocido_no_inventa_diagnostico() -> None:
 
 def test_error_vacio_no_rompe() -> None:
     assert explain_docker_error("") == ""
+
+
+def test_servicio_unhealthy_apunta_al_volumen() -> None:
+    """El healthcheck de postgres autentica: que falle suele ser el volumen."""
+    salida = explain_docker_error(
+        "container verify-bot-postgres-1 is unhealthy", project="verify-bot"
+    )
+    assert "verify-bot_pgdata" in salida
+    assert "down -v" in salida
+
+
+def test_dependency_failed_tambien_se_explica() -> None:
+    salida = explain_docker_error("dependency failed to start", project="demo")
+    assert "demo_pgdata" in salida

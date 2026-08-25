@@ -75,3 +75,40 @@ def test_port_owner_vacio_si_libre() -> None:
     sock, port = _bind("0.0.0.0")
     sock.close()
     assert port_owner(port, docker_ports={}) == ""
+
+
+def test_exclude_own_project_libera_los_puertos_propios() -> None:
+    """Re-ejecutar init sobre un asistente existente debe conservar sus puertos.
+
+    Regresión: el proyecto se veía a sí mismo como ocupante ajeno y cada
+    re-init desplazaba los puertos (8000 -> 8002 -> 8003...).
+    """
+    from cli.preflight import exclude_own_project
+
+    reclamados = {
+        5435: "verify-bot-postgres-1",
+        6381: "verify-bot-redis-1",
+        8002: "verify-bot-core-api-1",
+        5432: "otro-proyecto-postgres-1",
+    }
+    libres = exclude_own_project(reclamados, "verify-bot")
+    assert libres == {5432: "otro-proyecto-postgres-1"}
+
+
+def test_exclude_own_project_no_confunde_proyectos_con_prefijo_comun() -> None:
+    """`agent-core` es prefijo de `agent-core-end`: ambos existen en la práctica.
+
+    Comparar por prefijo haría que un init en `agent-core` ignorase los puertos
+    que ya reclama `agent-core-end`.
+    """
+    from cli.preflight import exclude_own_project
+
+    reclamados = {5432: "agent-core-end-postgres-1", 5435: "agent-core-postgres-1"}
+    assert exclude_own_project(reclamados, "agent-core") == {5432: "agent-core-end-postgres-1"}
+
+
+def test_exclude_own_project_sin_nombre_no_filtra_nada() -> None:
+    from cli.preflight import exclude_own_project
+
+    reclamados = {5432: "algo-postgres-1"}
+    assert exclude_own_project(reclamados, "") == reclamados
