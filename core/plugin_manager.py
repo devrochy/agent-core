@@ -22,7 +22,6 @@ import importlib
 import importlib.metadata
 import sys
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
@@ -56,7 +55,9 @@ class PluginManager:
         del editable install). Este método garantiza que el paquete sea importable
         añadiendo la carpeta fuente directamente a sys.path como fallback.
         """
-        plugins_dir = Path("plugins")
+        from core.db.migrations import project_root
+
+        plugins_dir = project_root() / "plugins"
         if not plugins_dir.exists():
             return
         for plugin_dir in sorted(plugins_dir.iterdir()):
@@ -201,27 +202,14 @@ class PluginManager:
 
     # ------------------------------------------------------------ migraciones por plugin
     def _run_plugin_migrations(self, plugin_id: str) -> None:
-        """Ejecuta `alembic upgrade head` del árbol propio del plugin, si existe.
+        """Aplica el árbol Alembic propio del plugin, si tiene uno.
 
-        Cada plugin usa su propia version_table (alembic_version_<plugin_id>)
-        para no chocar con el árbol del core ni con otros plugins.
+        Delega en core.db.migrations, el camino único compartido con el CLI y
+        el entrypoint del contenedor (antes cada entrada tenía el suyo).
         """
-        plugin_dir = Path("plugins") / plugin_id
-        ini_path = plugin_dir / "alembic.ini"
-        if not ini_path.exists():
-            return
-        from alembic.config import Config as AlembicConfig
+        from core.db.migrations import upgrade_plugin
 
-        from alembic import command
-        from core.config import get_settings
-
-        cfg = AlembicConfig(str(ini_path))
-        cfg.set_main_option("script_location", str(plugin_dir / "alembic"))
-        sync_url = get_settings().database_url.replace("+asyncpg", "")
-        cfg.set_main_option("sqlalchemy.url", sync_url)
-        cfg.set_main_option("version_table", f"alembic_version_{plugin_id}")
-        command.upgrade(cfg, "head")
-        log.info("plugin_migrations_applied", plugin=plugin_id)
+        upgrade_plugin(plugin_id)
 
     # ------------------------------------------------------------ helpers
     def get(self, plugin_id: str) -> BaseModule | None:

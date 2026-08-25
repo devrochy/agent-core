@@ -1,11 +1,44 @@
 #!/usr/bin/env bash
-# Entrypoint del contenedor: instala plugins montados y arranca el servicio dado.
+# Entrypoint del contenedor: instala plugins montados, aplica migraciones y
+# arranca el servicio indicado.
+#
+# AGENT_CORE_ROLE distingue los tres contenedores que comparten esta imagen:
+#   api    -> instala plugins Y aplica migraciones (core + plugins)
+#   worker -> instala plugins (necesita importarlos para los crons)
+#   beat   -> idem
+# Solo `api` migra: tres procesos corriendo `alembic upgrade head` a la vez
+# compiten por la tabla de versiones.
 set -euo pipefail
 
-if compgen -G "plugins/*/pyproject.toml" > /dev/null 2>&1; then
+ROLE="${AGENT_CORE_ROLE:-api}"
+# El lock vive en el bind-mount ./plugins: es el único punto que los tres
+# contenedores comparten de verdad (/tmp es privado de cada contenedor).
+PLUGIN_LOCK="plugins/.install.lock"
+
+install_plugins() {
+  if ! compgen -G "plugins/*/pyproject.toml" > /dev/null 2>&1; then
+    return 0
+  fi
   for dir in plugins/*/; do
-    [ -f "${dir}pyproject.toml" ] && pip install -q -e "${dir}" || true
+    [ -f "${dir}pyproject.toml" ] || continue
+    echo "[entrypoint] instalando plugin: ${dir}"
+    # Los tres contenedores comparten el bind-mount ./plugins, y `pip install -e`
+    # escribe el .egg-info dentro de él: sin lock se pisan entre ellos.
+    if ! flock "$PLUGIN_LOCK" pip install -q -e "${dir}"; then
+      echo "[entrypoint] ERROR: falló la instalación del plugin ${dir}" >&2
+      exit 1
+    fi
   done
+}
+
+install_plugins
+
+if [ "$ROLE" = "api" ]; then
+  echo "[entrypoint] aplicando migraciones (core + plugins)..."
+  if ! agent-core db migrate; then
+    echo "[entrypoint] ERROR: las migraciones fallaron. El servicio no arranca." >&2
+    exit 1
+  fi
 fi
 
 exec "$@"

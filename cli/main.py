@@ -15,6 +15,7 @@ import typer
 
 from cli.commands.configure import app as configure_app
 from cli.commands.db import app as db_app
+from cli.commands.doctor import doctor_command
 from cli.commands.init import init_command
 from cli.commands.plugin import app as plugin_app
 from cli.commands.sdd import app as sdd_app
@@ -26,6 +27,7 @@ app = typer.Typer(
 )
 
 app.command(name="init")(init_command)
+app.command(name="doctor")(doctor_command)
 app.add_typer(plugin_app, name="plugin", help="Gestión de plugins")
 app.add_typer(configure_app, name="configure", help="Reconfiguración del asistente")
 app.add_typer(db_app, name="db", help="Base de datos")

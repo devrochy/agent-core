@@ -1,3 +1,8 @@
+# El nombre del proyecto fija la identidad de contenedores y volúmenes. Sin él,
+# Docker lo deriva del nombre de la carpeta y dos clones que se llamen igual
+# comparten el volumen pgdata. `agent-core init` escribe COMPOSE_PROJECT_NAME.
+name: ${COMPOSE_PROJECT_NAME:-agent-core}
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -10,10 +15,19 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_core}"]
+      # Autentica de verdad, no solo comprueba que el servidor acepta conexiones:
+      # `pg_isready` da healthy aunque el rol del .env no exista en el volumen
+      # (caso de un pgdata heredado de otra instalación), y entonces las
+      # migraciones morían justo después con "role does not exist".
+      test:
+        [
+          "CMD-SHELL",
+          "PGPASSWORD=$${POSTGRES_PASSWORD} psql -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB} -c 'select 1' >/dev/null 2>&1",
+        ]
       interval: 5s
-      timeout: 3s
-      retries: 10
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
   redis:
     image: redis:7-alpine
@@ -32,6 +46,7 @@ services:
     env_file: .env
     # Las variables internas usan el hostname del servicio Docker, no localhost
     environment:
+      AGENT_CORE_ROLE: api
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agent_core}:${POSTGRES_PASSWORD:-agent_core}@postgres:5432/${POSTGRES_DB:-agent_core}
       REDIS_URL: redis://redis:6379/0
     ports:
@@ -39,6 +54,16 @@ services:
     volumes:
       - ./sdd:/app/sdd
       - ./plugins:/app/plugins
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')\" >/dev/null 2>&1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
     depends_on:
       postgres:
         condition: service_healthy
@@ -51,12 +76,16 @@ services:
     command: celery -A core.tasks.celery_app:celery worker --loglevel=info
     env_file: .env
     environment:
+      AGENT_CORE_ROLE: worker
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agent_core}:${POSTGRES_PASSWORD:-agent_core}@postgres:5432/${POSTGRES_DB:-agent_core}
       REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./sdd:/app/sdd
+      - ./plugins:/app/plugins
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
+      # Espera a core-api: es quien aplica las migraciones. Arrancar antes
+      # significaría trabajar contra un esquema a medio migrar.
+      core-api:
         condition: service_healthy
 
   celery-beat:
@@ -65,10 +94,14 @@ services:
     command: celery -A core.tasks.celery_app:celery beat --loglevel=info
     env_file: .env
     environment:
+      AGENT_CORE_ROLE: beat
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agent_core}:${POSTGRES_PASSWORD:-agent_core}@postgres:5432/${POSTGRES_DB:-agent_core}
       REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./sdd:/app/sdd
+      - ./plugins:/app/plugins
     depends_on:
-      redis:
+      core-api:
         condition: service_healthy
 
 volumes:
