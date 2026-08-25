@@ -1,7 +1,11 @@
-# El nombre del proyecto fija la identidad de contenedores y volúmenes. Sin él,
-# Docker lo deriva del nombre de la carpeta y dos clones que se llamen igual
-# comparten el volumen pgdata. `agent-core init` escribe COMPOSE_PROJECT_NAME.
-name: ${COMPOSE_PROJECT_NAME:-agent-core}
+# El nombre del proyecto fija la identidad de contenedores y volúmenes: sin él,
+# dos clones del framework comparten la base de datos. `agent-core init` lo
+# escribe en el .env.
+#
+# Es obligatorio a propósito. Con un valor por defecto, cualquier .env que no lo
+# declare caería en el MISMO proyecto que los demás clones y compartiría el
+# volumen pgdata sin avisar; es preferible fallar aquí con una instrucción clara.
+name: ${COMPOSE_PROJECT_NAME:?falta COMPOSE_PROJECT_NAME en el .env. Añádelo (un nombre único para este asistente) o regenera el .env con 'agent-core init --force'}
 
 services:
   postgres:

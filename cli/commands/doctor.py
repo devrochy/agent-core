@@ -78,9 +78,10 @@ def doctor_command() -> None:
         problems += 1
         rows.append((
             "Proyecto Docker",
-            WARN,
-            "Sin COMPOSE_PROJECT_NAME: Docker usará el nombre de la carpeta y "
-            "otro clon con el mismo nombre compartiría el volumen de datos.",
+            FAIL,
+            "Falta COMPOSE_PROJECT_NAME en el .env: docker compose no arrancará. "
+            "Añádelo con un nombre único para este asistente, o regenera el .env "
+            "con `agent-core init --force`.",
         ))
 
     # Variables del shell que pisan al .env (pydantic prioriza el entorno)

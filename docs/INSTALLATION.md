@@ -178,6 +178,8 @@ volumen. `agent-core doctor` lo marca como aviso.
 | Síntoma | Causa probable | Solución |
 |---|---|---|
 | `docker compose` falla con `.env not found` | No has corrido `init` | `agent-core init` genera el `.env` que compose exige |
+| `required variable COMPOSE_PROJECT_NAME is missing` | `.env` heredado de una versión anterior | Añade `COMPOSE_PROJECT_NAME=<nombre-único>` al `.env`, o `agent-core init --force`. Es obligatorio: sin él, dos clones compartirían la base de datos |
+| `exec format error` en `docker-buildx` | El binario de buildx está corrupto (suele ser un HTML descargado sin `curl -L`) | Compruébalo con `file ~/.docker/cli-plugins/docker-buildx`. Si dice *HTML document*, bórralo: Compose usa el builder clásico. Para reinstalarlo: `sudo apt install docker-buildx-plugin` |
 | `postgres is unhealthy` y no arranca nada más | El healthcheck se autentica con las credenciales del `.env` | Es el caso 2 de arriba: `docker compose logs postgres` |
 | `MASTER_ENCRYPTION_KEY no configurada` | .env sin generar | `agent-core init` o genera la clave manualmente |
 | Webhook devuelve 403 en el handshake | verify_token no coincide | Mismo valor en Meta y en `.env` |
