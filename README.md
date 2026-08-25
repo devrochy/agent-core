@@ -14,7 +14,12 @@ docker-compose up -d                     # postgres + redis + api + celery
 # → http://localhost:8000/admin
 
 agent-core plugin install mod-crm-engine # descarga, migra, expone en el panel
+agent-core doctor                        # si algo no arranca, empieza por aquí
 ```
+
+`init` elige puertos libres si los tuyos están ocupados y aísla cada asistente en su
+propio proyecto Docker, así que puedes tener varios clones conviviendo en la misma
+máquina.
 
 ## Qué incluye el core
 
@@ -35,7 +40,8 @@ agent-core plugin install mod-crm-engine # descarga, migra, expone en el panel
 
 | Documento | Contenido |
 |---|---|
-| [docs/INSTALLATION.md](docs/INSTALLATION.md) | Instalación desde cero |
+| [docs/INSTALLATION.md](docs/INSTALLATION.md) | Instalación desde cero y solución de problemas |
+| [docs/WORKFLOW.md](docs/WORKFLOW.md) | Cómo se hace un cambio: planificar → ejecutar → verificar |
 | [docs/FIRST-ASSISTANT.md](docs/FIRST-ASSISTANT.md) | Tu primer asistente en 15 pasos |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Arquitectura: Monolito Modular con Adaptadores Selectivos |
 | [docs/PLUGIN-CONTRACT.md](docs/PLUGIN-CONTRACT.md) | La "Biblia" para desarrollar plugins |
@@ -43,6 +49,7 @@ agent-core plugin install mod-crm-engine # descarga, migra, expone en el panel
 | [docs/SDD-TECH-STACK.md](docs/SDD-TECH-STACK.md) | Decisiones de stack + mapa de portabilidad a TypeScript |
 | [docs/HU/](docs/HU) | Historias de usuario |
 | [docs/ADR/](docs/ADR) | Architectural Decision Records |
+| [docs/BACKLOG.md](docs/BACKLOG.md) | Deuda técnica conocida, con evidencia |
 
 ## Estructura
 
@@ -53,6 +60,7 @@ plugins/         # Plugins locales (mod_crm_engine, mod_google_calendar)
 sdd/             # System Design Document VIVO del asistente (generado por `init`)
 docs/            # Documentación del framework
 evals/           # Golden scenarios (assertions determinísticas)
+tests/           # Tests de arranque y de los módulos puros del core
 ```
 
 ## Licencia
