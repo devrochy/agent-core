@@ -15,6 +15,9 @@ verificar → cerrar documentación. Primero se planifica, después se ejecuta.
 
 ## Comandos
 
+Todo asume el venv del proyecto activo (`source .venv/bin/activate`). Fuera de él
+`python` puede no existir y `agent-core` puede resolver a otra instalación.
+
 ```bash
 make install          # pip install -e ".[dev]"
 make test             # pytest — sin BD, sin red, sin API key

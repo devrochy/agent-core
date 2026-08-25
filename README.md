@@ -8,6 +8,7 @@ Python que corren **en el mismo proceso** que el core (cero latencia de red, cer
 ```
 git clone <este-repo> mi-asistente
 cd mi-asistente
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 agent-core init                          # wizard → .env + sdd/ + BD + admin
 docker-compose up -d                     # postgres + redis + api + celery

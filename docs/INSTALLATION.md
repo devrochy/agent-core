@@ -15,11 +15,24 @@ De cero a panel funcionando. Tiempo estimado: 10 minutos.
 ```bash
 git clone <url-del-repo> mi-asistente
 cd mi-asistente
-python -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
-Verifica: `agent-core --help` debe listar los comandos.
+`python3` en vez de `python`: en muchas distribuciones el ejecutable `python`
+sencillamente no existe. Dentro del venv ya da igual — `python`, `python3`, `pip` y
+`pip3` apuntan todos al mismo intérprete.
+
+Verifica que el CLI es el de este proyecto, no otro instalado antes:
+
+```bash
+command -v agent-core     # debe estar dentro de .venv/bin/
+agent-core --help
+```
+
+> Si `agent-core` resuelve a `~/.local/bin/agent-core`, estás ejecutando el CLI de
+> otra instalación y trabajará sobre los plugins de esa otra carpeta. Activa el venv,
+> o desinstala el global con `pip uninstall agent-core` fuera del venv.
 
 ## 2. Inicializar el asistente (wizard)
 

@@ -93,7 +93,7 @@ instalación *es* el producto:
 
 ```bash
 git clone <repo> /tmp/verificar && cd /tmp/verificar
-python -m venv .venv && .venv/bin/pip install -e ".[dev]"
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/agent-core init --non-interactive --name "Verificar"
 docker compose up -d && .venv/bin/agent-core doctor
 ```
