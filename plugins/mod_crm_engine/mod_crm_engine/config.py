@@ -52,3 +52,48 @@ class CRMConfig(BasePluginConfig):
     # ---------------------------------------------------------------- moneda
     currency_symbol: str = Field(default="$", description="Símbolo de moneda para precios")
     currency_code: str = Field(default="COP", description="Código de moneda (COP, USD)")
+
+    # ---------------------------------------------------------------- copy (ADR-0017: CONFIG editable)
+    follow_up_lead_message: str = Field(
+        default=(
+            "¡Hola{name}! 👋 Quedamos pendientes de tu interés en {interest}. "
+            "¿Sigues interesado? Estoy aquí para ayudarte con lo que necesites."
+        ),
+        description="Mensaje de reenganche de leads ({name}, {interest})",
+    )
+    follow_up_quote_message: str = Field(
+        default=(
+            "¡Hola! Te tengo lista tu cotización por {total}. ¿La confirmo para armar tu pedido? 😋"
+        ),
+        description="Mensaje de reenganche de cotizaciones ({total})",
+    )
+    order_status_visible: dict[str, str] = Field(
+        default_factory=lambda: {
+            "abierto": "en preparación",
+            "despachado": "en camino",
+            "entregado": "entregado",
+            "cancelado": "cancelado",
+            "expirado": "vencido",
+        },
+        description="Etiquetas de estado visibles al cliente",
+    )
+    order_status_label: dict[str, str] = Field(
+        default_factory=lambda: {
+            "abierto": "Abierto",
+            "despachado": "Despachado",
+            "entregado": "Entregado",
+            "cancelado": "Cancelado",
+            "expirado": "Expirado",
+        },
+        description="Etiquetas de estado en el panel",
+    )
+    order_confirmed_message: str = Field(
+        default="✅ Tu pedido {public_order_number} quedó confirmado. Total a pagar: {total}.",
+        description="Mensaje de confirmación de pedido (efectivo)",
+    )
+    order_confirmed_transfer_message: str = Field(
+        default=(
+            "Tu pedido {public_order_number} quedó confirmado por transferencia.\n\n{transfer_block}"
+        ),
+        description="Mensaje de confirmación de pedido por transferencia",
+    )

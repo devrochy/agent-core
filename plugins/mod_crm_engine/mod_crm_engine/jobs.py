@@ -23,15 +23,6 @@ from mod_crm_engine.models import Lead, Quote
 
 log = get_logger(__name__)
 
-FOLLOW_UP_LEAD_MESSAGE = (
-    "¡Hola{name}! 👋 Quedamos pendientes de tu interés en {interest}. "
-    "¿Sigues interesado? Estoy aquí para ayudarte con lo que necesites."
-)
-
-FOLLOW_UP_QUOTE_MESSAGE = (
-    "¡Hola! Te tengo lista tu cotización por {total}. ¿La confirmo para armar tu pedido? 😋"
-)
-
 
 async def _tenant_ids() -> list[uuid.UUID]:
     """Tenants activos. Query de sistema (tenants no tiene RLS)."""
@@ -82,7 +73,8 @@ async def follow_up_leads() -> None:
                     conversation = await session.get(Conversation, lead.conversation_id)
                 if conversation is None or conversation.bot_paused or conversation.status != "open":
                     continue
-                message = FOLLOW_UP_LEAD_MESSAGE.format(
+                template = getattr(config, "follow_up_lead_message", "")
+                message = template.format(
                     name=f" {lead.name}" if lead.name else "",
                     interest=lead.interest or "nuestros productos",
                 )
@@ -109,11 +101,13 @@ async def follow_up_quotes() -> None:
     """
     from core.db.models import Conversation
     from core.gateway.sender import send_to_conversation
+    from core.plugin_manager import plugin_manager
 
     total_candidates = 0
     total_sent = 0
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
+            config = await plugin_manager.load_config("mod_crm_engine")
             now = datetime.now(UTC)
             min_age = now - timedelta(hours=20)
             max_age = now - timedelta(hours=3)
@@ -138,7 +132,8 @@ async def follow_up_quotes() -> None:
                     conversation = await session.get(Conversation, quote.conversation_id)
                 if conversation is None or conversation.bot_paused or conversation.status != "open":
                     continue
-                message = FOLLOW_UP_QUOTE_MESSAGE.format(total=f"${float(quote.total):,.0f}")
+                template = getattr(config, "follow_up_quote_message", "")
+                message = template.format(total=f"${float(quote.total):,.0f}")
                 try:
                     await send_to_conversation(quote.conversation_id, message)
                     async with get_session() as session:

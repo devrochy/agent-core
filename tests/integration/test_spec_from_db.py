@@ -27,12 +27,14 @@ async def test_load_active_spec_desde_bd(tenant_setup) -> None:
         spec = await load_active_spec()
     assert spec.tenantId == str(t1)
     assert spec.persona.tone == "cercano"
-    # el spec sembrado referencia los playbooks default del framework
+    # el spec sembrado referencia los playbooks default + los del pack CRM (CULTO)
     assert {p.name for p in spec.playbooks} == {
         "identidad",
         "tono",
         "reglas-operacion",
         "respuestas",
+        "ventas",
+        "seguimiento",
     }
 
 

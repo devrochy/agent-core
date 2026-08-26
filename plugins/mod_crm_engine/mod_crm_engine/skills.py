@@ -38,21 +38,6 @@ from mod_crm_engine.models import (
 CUSTOMER_SEGMENTS = ("nuevo", "ocasional", "frecuente", "fiel", "inactivo")
 
 ORDER_STATUS_ACTIVE = ("abierto", "despachado")
-ORDER_STATUS_VISIBLE = {
-    "abierto": "en preparación",
-    "despachado": "en camino",
-    "entregado": "entregado",
-    "cancelado": "cancelado",
-    "expirado": "vencido",
-}
-
-ORDER_STATUS_LABEL = {
-    "abierto": "Abierto",
-    "despachado": "Despachado",
-    "entregado": "Entregado",
-    "cancelado": "Cancelado",
-    "expirado": "Expirado",
-}
 
 PAYMENT_METHODS = ("efectivo_contraentrega", "transferencia")
 DELIVERY_METHODS = ("domicilio", "recoger_en_tienda")
@@ -63,8 +48,8 @@ def _float(value: Any) -> float:
     return float(value or 0)
 
 
-def _money(value: Any) -> str:
-    return f"${_float(value):,.0f}"
+def _money(value: Any, symbol: str = "$") -> str:
+    return f"{symbol}{_float(value):,.0f}"
 
 
 def _now() -> datetime:
@@ -597,6 +582,7 @@ class OrderSkill(BaseSkill):
         items = arguments.get("items") or []
         if not items or not isinstance(items, list):
             return {"error": "Necesito al menos un producto para cotizar."}
+        config = await _plugin_config()
 
         rows: list[dict[str, Any]] = []
         subtotal = 0.0
@@ -666,7 +652,7 @@ class OrderSkill(BaseSkill):
             ],
             "subtotal": round(subtotal, 2),
             "total": round(subtotal, 2),
-            "moneda": "COP",
+            "moneda": getattr(config, "currency_code", "COP") or "COP",
         }
 
     async def aplicar_promocion(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
@@ -823,6 +809,7 @@ class OrderSkill(BaseSkill):
         payment_method = str(arguments.get("payment_method", ""))
         delivery_method = str(arguments.get("delivery_method", ""))
         customer_data = arguments.get("customer_data") or {}
+        config = await _plugin_config()
 
         if payment_method not in PAYMENT_METHODS:
             return {"error": "Método de pago no válido. Usa 'efectivo_contraentrega' o 'transferencia'."}
@@ -932,19 +919,23 @@ class OrderSkill(BaseSkill):
         }
         if payment_method == "transferencia":
             transfer_block = await _transfer_safe_append()
+            template = getattr(config, "order_confirmed_transfer_message", "") or ""
             if transfer_block:
-                result["_safe_append"] = (
-                    f"Tu pedido {public_order_number} quedó confirmado por transferencia.\n\n{transfer_block}"
+                message = template.format(
+                    public_order_number=public_order_number, transfer_block=transfer_block
                 )
             else:
-                result["_safe_append"] = (
+                message = (
                     f"Tu pedido {public_order_number} quedó confirmado por transferencia. "
                     "Te enviaremos los datos para pagar en breve."
                 )
+            result["_safe_append"] = message
         else:
-            result["_safe_append"] = (
-                f"✅ Tu pedido {public_order_number} quedó confirmado. "
-                f"Total a pagar: {_money(quote.total)}."
+            symbol = getattr(config, "currency_symbol", "$") or "$"
+            template = getattr(config, "order_confirmed_message", "") or ""
+            result["_safe_append"] = template.format(
+                public_order_number=public_order_number,
+                total=_money(quote.total, symbol),
             )
         return result
 
@@ -1027,6 +1018,7 @@ class OrderSkill(BaseSkill):
                 "hint": "El número de pedido tiene el formato OC-0001. Pídelo al cliente.",
             }
         public_number = f"OC-{int(match.group(1)):04d}"
+        config = await _plugin_config()
 
         async with get_session() as session:
             order = (
@@ -1051,7 +1043,8 @@ class OrderSkill(BaseSkill):
             ).all()
             by_id = {v.id: p for v, p in item_details}
 
-        status_label = ORDER_STATUS_VISIBLE.get(order.status, order.status)
+        status_labels = getattr(config, "order_status_visible", {}) or {}
+        status_label = status_labels.get(order.status, order.status)
         return {
             "found": True,
             "public_order_number": order.public_order_number,

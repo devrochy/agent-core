@@ -79,3 +79,15 @@ async def test_load_response_extrae_seccion() -> None:
 
     unknown = await load_response(spec, "no-existe")
     assert unknown is None
+
+
+def test_crm_config_copy_editable_por_tenant() -> None:
+    """ADR-0017: el copy de CULTO vive en CRMConfig (config), no en el código."""
+    from mod_crm_engine.config import CRMConfig
+
+    cfg = CRMConfig()
+    assert "¡Hola" in cfg.follow_up_lead_message
+    assert "{total}" in cfg.follow_up_quote_message
+    assert cfg.order_status_visible["abierto"] == "en preparación"
+    assert "{public_order_number}" in cfg.order_confirmed_message
+    assert cfg.currency_code == "COP"
