@@ -37,8 +37,12 @@ def project_root() -> Path:
 
 
 def sync_database_url() -> str:
-    """URL síncrona (psycopg2) para Alembic, escapando `%` para ConfigParser."""
-    url = get_settings().database_url.replace("+asyncpg", "")
+    """URL síncrona (psycopg2) para Alembic, escapando `%` para ConfigParser.
+
+    Las migraciones corren como el DUEÑO (MIGRATIONS_DATABASE_URL); el runtime
+    usa app_runtime y no tiene permiso de DDL. Vacío -> DATABASE_URL.
+    """
+    url = (get_settings().migrations_database_url or get_settings().database_url).replace("+asyncpg", "")
     return url.replace("%", "%%")
 
 

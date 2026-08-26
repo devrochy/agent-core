@@ -17,23 +17,49 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, Computed, DateTime, Integer, Numeric, Sequence, Text
+from sqlalchemy import Boolean, Computed, DateTime, Index, Integer, Numeric, Text, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from core.shared.exceptions import PluginError
+from core.shared.tenant import get_current_tenant_id
 
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def _tenant_or_raise() -> uuid.UUID:
+    """tenant_id de cada INSERT. Fail-fast: sin tenant_scope, error claro (no silencioso)."""
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        raise PluginError("mod_crm_engine", "INSERT crm_* sin tenant_scope")
+    return tenant_id
+
+
+class TenantMixin:
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, default=_tenant_or_raise
+    )
+
+
 class Base(DeclarativeBase):
     pass
 
 
-class Lead(Base):
+class Lead(TenantMixin, Base):
     """Prospecto capturado en conversación (lead de venta)."""
 
     __tablename__ = "crm_leads"
+    __table_args__ = (
+        Index(
+            "uq_crm_leads_tenant_idem",
+            "tenant_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key is not null"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))  # FK lógica a customers
@@ -44,13 +70,13 @@ class Lead(Base):
     interest: Mapped[str] = mapped_column(Text, default="")
     score: Mapped[int] = mapped_column(Integer, default=0)          # 0-10
     status: Mapped[str] = mapped_column(Text, default="nuevo")      # nuevo|calificado|contactado|convertido|perdido
-    idempotency_key: Mapped[str | None] = mapped_column(Text, unique=True)
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
     last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 # ------------------------------------------------------------------ catálogo
-class Category(Base):
+class Category(TenantMixin, Base):
     """Categoría de productos en árbol auto-referenciado."""
 
     __tablename__ = "crm_categories"
@@ -62,7 +88,7 @@ class Category(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
-class CategoryComplement(Base):
+class CategoryComplement(TenantMixin, Base):
     """Pares de categorías complementarias para venta cruzada (recomendar_producto)."""
 
     __tablename__ = "crm_category_complements"
@@ -76,7 +102,7 @@ class CategoryComplement(Base):
     complementary_category_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
 
 
-class Product(Base):
+class Product(TenantMixin, Base):
     __tablename__ = "crm_products"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -89,19 +115,22 @@ class Product(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
-class ProductVariant(Base):
+class ProductVariant(TenantMixin, Base):
     __tablename__ = "crm_product_variants"
+    __table_args__ = (
+        Index("uq_crm_variants_tenant_sku", "tenant_id", "sku", unique=True),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))  # FK lógica a crm_products
-    sku: Mapped[str] = mapped_column(Text, unique=True)
+    sku: Mapped[str] = mapped_column(Text)
     attributes: Mapped[dict] = mapped_column(JSONB, default=dict)  # {"talla": "M"} | {} si sin atributos
     price: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class Inventory(Base):
+class Inventory(TenantMixin, Base):
     __tablename__ = "crm_inventory"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -112,7 +141,7 @@ class Inventory(Base):
 
 
 # ------------------------------------------------------------------ promociones
-class Promotion(Base):
+class Promotion(TenantMixin, Base):
     __tablename__ = "crm_promotions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -130,7 +159,7 @@ class Promotion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class PromotionRedemption(Base):
+class PromotionRedemption(TenantMixin, Base):
     __tablename__ = "crm_promotion_redemptions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -141,7 +170,7 @@ class PromotionRedemption(Base):
 
 
 # ------------------------------------------------------------------ ventas
-class Quote(Base):
+class Quote(TenantMixin, Base):
     """Cotización inmutable: un cambio genera una nueva. Se convierte en pedido al aceptarla."""
 
     __tablename__ = "crm_quotes"
@@ -158,7 +187,7 @@ class Quote(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class QuoteItem(Base):
+class QuoteItem(TenantMixin, Base):
     __tablename__ = "crm_quote_items"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -168,10 +197,14 @@ class QuoteItem(Base):
     unit_price: Mapped[float] = mapped_column(Numeric(12, 2))
 
 
-class Order(Base):
+class Order(TenantMixin, Base):
     """Pedido confirmado. Estado y pago son dos ejes independientes (ag-sale 0056)."""
 
     __tablename__ = "crm_orders"
+    __table_args__ = (
+        Index("uq_crm_orders_tenant_idem", "tenant_id", "idempotency_key", unique=True),
+        Index("uq_crm_orders_tenant_seq", "tenant_id", "order_seq", unique=True),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     quote_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
@@ -182,8 +215,9 @@ class Order(Base):
     payment_method: Mapped[str] = mapped_column(Text, default="efectivo_contraentrega")  # efectivo_contraentrega|transferencia
     delivery_method: Mapped[str] = mapped_column(Text, default="domicilio")  # domicilio|recoger_en_tienda
     total: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
-    idempotency_key: Mapped[str] = mapped_column(Text, unique=True)
-    order_seq: Mapped[int] = mapped_column(Sequence("crm_orders_seq"), unique=True, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(Text)
+    # Numeración por tenant (ADR-0018): la asigna crear_pedido vía crm_next_order_seq(tenant).
+    order_seq: Mapped[int] = mapped_column(Integer, nullable=False)
     public_order_number: Mapped[str] = mapped_column(
         Text, Computed("'OC-' || lpad(order_seq::text, 4, '0')", persisted=True), nullable=False
     )
@@ -198,7 +232,7 @@ class Order(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class OrderItem(Base):
+class OrderItem(TenantMixin, Base):
     __tablename__ = "crm_order_items"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -208,12 +242,15 @@ class OrderItem(Base):
     unit_price: Mapped[float] = mapped_column(Numeric(12, 2))
 
 
-class OrderItemBatch(Base):
+class OrderItemBatch(TenantMixin, Base):
     """Idempotencia de agregar_item_pedido: un intento de agregar = una fila."""
 
     __tablename__ = "crm_order_item_batches"
+    __table_args__ = (
+        Index("uq_crm_batches_tenant_idem", "tenant_id", "idempotency_key", unique=True),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
-    idempotency_key: Mapped[str] = mapped_column(Text, unique=True)
+    idempotency_key: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

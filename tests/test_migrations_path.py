@@ -54,6 +54,9 @@ def test_sync_database_url_escapa_porcentajes() -> None:
 
     get_settings.cache_clear()
     anterior = os.environ.get("DATABASE_URL")
+    anterior_mig = os.environ.get("MIGRATIONS_DATABASE_URL")
+    # sin MIGRATIONS_DATABASE_URL (vacío en env, sobre .env), cae a DATABASE_URL
+    os.environ["MIGRATIONS_DATABASE_URL"] = ""
     os.environ["DATABASE_URL"] = "postgresql+asyncpg://u:pa%ss@localhost:5432/db"
     try:
         assert "pa%%ss" in sync_database_url()
@@ -62,4 +65,8 @@ def test_sync_database_url_escapa_porcentajes() -> None:
             del os.environ["DATABASE_URL"]
         else:
             os.environ["DATABASE_URL"] = anterior
+        if anterior_mig is None:
+            del os.environ["MIGRATIONS_DATABASE_URL"]
+        else:
+            os.environ["MIGRATIONS_DATABASE_URL"] = anterior_mig
         get_settings.cache_clear()

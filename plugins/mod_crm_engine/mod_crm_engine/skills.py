@@ -14,11 +14,12 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from core.db.session import get_session
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
+from core.shared.tenant import get_current_tenant_id
 from mod_crm_engine.models import (
     CategoryComplement,
     Inventory,
@@ -870,6 +871,12 @@ class OrderSkill(BaseSkill):
 
         async with get_session() as session:
             quote = await session.get(Quote, quote_id)
+            # Numeración por tenant (ADR-0018): contador atómico por tenant.
+            order_seq = (
+                await session.execute(
+                    text("select crm_next_order_seq(:t)"), {"t": get_current_tenant_id()}
+                )
+            ).scalar()
             order = Order(
                 quote_id=quote.id,
                 conversation_id=context.conversation_id,
@@ -878,6 +885,7 @@ class OrderSkill(BaseSkill):
                 delivery_method=delivery_method,
                 total=quote.total,
                 idempotency_key=f"quote:{quote.id}",
+                order_seq=order_seq,
                 delivery_full_name=customer_data.get("full_name"),
                 delivery_id_document=customer_data.get("id_document"),
                 delivery_address=customer_data.get("address"),

@@ -16,7 +16,10 @@ config = context.config
 if not config.get_main_option("sqlalchemy.url"):
     from core.config import get_settings
 
-    config.set_main_option("sqlalchemy.url", get_settings().database_url.replace("+asyncpg", ""))
+    # Las migraciones corren como el DUEÑO (MIGRATIONS_DATABASE_URL); el runtime
+    # usa app_runtime y no tiene permiso para DDL. Vacío -> DATABASE_URL.
+    _url = get_settings().migrations_database_url or get_settings().database_url
+    config.set_main_option("sqlalchemy.url", _url.replace("+asyncpg", ""))
 
 target_metadata = Base.metadata
 VERSION_TABLE = config.get_main_option("version_table") or "alembic_version_mod_crm_engine"

@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 
-from core.admin.auth import current_admin
+from core.admin.auth import SESSION_COOKIE, current_admin
 from core.admin.views import router as admin_router
 from core.config import get_settings
 from core.gateway.webhooks import router as webhooks_router
@@ -77,21 +77,24 @@ async def healthz() -> dict[str, str]:
 
 @app.middleware("http")
 async def tenant_context_middleware(request: Request, call_next):
-    """Establece el contexto de tenant (ADR-0012) para las rutas del panel.
+    """Establece el contexto de tenant (ADR-0012) para rutas autenticadas.
 
-    Los webhooks resuelven su tenant dentro del propio handler
-    (resolve_tenant_for_phone); aquí se cubre el panel: cookie -> admin ->
-    tenant_user -> tenant_scope. Si el admin aún no tiene tenant asignado, la
-    petición corre sin contexto (RLS devuelve vacío).
+    Allowlist de rutas públicas (webhooks, healthz, login, estáticos); para todo
+    lo demás, si hay cookie de sesión, resuelve admin -> tenant_user -> tenant_scope.
+    Así cubre el panel (/admin), los routers de plugins (/crm, /calendar) y cualquier
+    ruta futura sin tener que acordarse de registrar prefijos.
     """
     path = request.url.path
-    if path.startswith("/admin"):
-        admin = await current_admin(request)
-        if admin is not None:
-            tenants = await admin_tenants(admin.id)
-            if tenants:
-                async with tenant_scope(tenants[0][0]):
-                    return await call_next(request)
+    if path == "/" or path.startswith(("/webhooks", "/healthz", "/admin/login", "/static")):
+        return await call_next(request)
+    if SESSION_COOKIE not in request.cookies:
+        return await call_next(request)
+    admin = await current_admin(request)
+    if admin is not None:
+        tenants = await admin_tenants(admin.id)
+        if tenants:
+            async with tenant_scope(tenants[0][0]):
+                return await call_next(request)
     return await call_next(request)
 
 
