@@ -40,6 +40,7 @@ DEFAULT_SPEC: dict[str, Any] = {
         {"name": "identidad", "description": "Identidad del asistente"},
         {"name": "tono", "description": "Voz y tono del asistente"},
         {"name": "reglas-operacion", "description": "Reglas de operación del asistente"},
+        {"name": "respuestas", "description": "Mensajes de cierre y avisos del asistente"},
     ],
     "tools": [],
     "policies": {
@@ -52,6 +53,35 @@ DEFAULT_SPEC: dict[str, Any] = {
     },
     "packs": [],
 }
+
+
+DEFAULT_PLAYBOOK_REFS: list[dict[str, str]] = list(DEFAULT_SPEC["playbooks"])
+
+
+async def _ensure_default_playbooks(tenant_id: uuid.UUID, spec: AgentSpec) -> AgentSpec:
+    """Fusiona los playbooks default en el índice si faltan (data migration perezosa).
+
+    Los specs sembrados antes de añadir `respuestas` no la tienen; el merge es
+    idempotente y solo escribe si faltan referencias.
+    """
+    existing = {p.name for p in spec.playbooks}
+    missing = [ref for ref in DEFAULT_PLAYBOOK_REFS if ref["name"] not in existing]
+    if not missing:
+        return spec
+    merged = spec.model_copy(update={"playbooks": [*spec.playbooks, *missing]})
+    async with get_session() as session:
+        row = (
+            await session.execute(
+                select(AgentSpecRecord).where(
+                    AgentSpecRecord.tenant_id == tenant_id,
+                    AgentSpecRecord.is_active.is_(True),
+                    AgentSpecRecord.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if row is not None:
+            row.spec = merged.model_dump(mode="json")
+    return merged
 
 
 async def ensure_default_spec(tenant_id: uuid.UUID) -> AgentSpec:
@@ -102,4 +132,5 @@ async def load_active_spec(tenant_id: uuid.UUID | None = None) -> AgentSpec:
 
     if row is None:
         return await ensure_default_spec(tenant_id)
-    return AgentSpec.model_validate(row.spec)
+    spec = AgentSpec.model_validate(row.spec)
+    return await _ensure_default_playbooks(tenant_id, spec)

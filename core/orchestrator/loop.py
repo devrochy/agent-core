@@ -20,6 +20,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from core.agents.responses import load_response
 from core.agents.spec import load_active_spec
 from core.config import get_settings
 from core.db.models import AppSettings, Conversation, Customer, LLMUsage, Message
@@ -46,6 +47,7 @@ from core.shared.crypto import get_secret_box
 from core.shared.exceptions import LLMProviderError, PluginError
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from core.tools.core_skill import conversation_spent
 
 log = get_logger(__name__)
 
@@ -77,6 +79,11 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
 
     # ---------------- 0. AgentSpec del tenant (Sprint 2, ADR-0014)
     spec = await load_active_spec()
+
+    # Presupuesto agotado (ADR-0015): no se gasta más LLM en esta conversación
+    # hasta que un admin suba el presupuesto o lo resetee.
+    if conversation.state.get("budget_exhausted"):
+        return None
 
     # ---------------- 1. Memoria y contexto
     history = await _load_history(conversation_id)
@@ -118,8 +125,17 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     messages = list(history)
     all_tool_results: list[dict[str, Any]] = []
     guardrail_retries = 0
+    turn_cost: float = 0.0
+    budget = spec.policies.budgetUsdPerConversation
 
-    for _iteration in range(settings.max_agent_iterations):
+    for _iteration in range(spec.policies.maxToolCallsPerTurn):
+        # Presupuesto (ADR-0015): se mide ANTES de llamar al LLM, en la cabecera.
+        if budget is not None:
+            spent = await conversation_spent(conversation_id) + turn_cost
+            if spent >= budget:
+                await _mark_budget_exhausted(conversation_id)
+                closure = await load_response(spec, "budget_exhausted") or ""
+                return TurnResult(text=closure) if closure else None
         try:
             response = await provider.generate(
                 system_blocks=system_blocks,
@@ -132,6 +148,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             await escalate(conversation_id, reason="llm_error", summary="Fallo del proveedor LLM")
             return TurnResult(text=FALLBACK_REPLY, escalated=True)
 
+        turn_cost += _response_cost(response)
         await _record_usage(conversation_id, provider.provider_name, response)
 
         # ---- tool_use
@@ -194,7 +211,9 @@ async def _execute_tool_safely(
     try:
         result = await mcp_host.execute_tool(tool_call.name, tool_call.arguments, context)
     except PluginError as exc:
-        await plugin_manager.auto_disable(exc.plugin_id, str(exc))
+        # Las tools del CORE ("core") no se auto-desactivan: el core no se apaga a sí mismo.
+        if exc.plugin_id != "core":
+            await plugin_manager.auto_disable(exc.plugin_id, str(exc))
         result = {
             "error": "La herramienta no está disponible en este momento. "
             "Discúlpate y ofrece escalar a un asesor humano si es necesario."
@@ -253,6 +272,24 @@ async def _finish_turn(
         content=f"Cliente: {user_message[:300]} | Asistente: {response_text[:300]}",
         conversation_id=conversation_id,
     )
+
+
+def _response_cost(response) -> float:  # type: ignore[no-untyped-def]
+    """Costo USD de una respuesta según el pricing vigente."""
+    from core.llm.openai_compatible import PRICING as OPENAI_PRICING
+
+    cin, cout = OPENAI_PRICING.get(response.model, (0.0, 0.0))
+    return (response.usage.input_tokens * cin + response.usage.output_tokens * cout) / 1_000_000
+
+
+async def _mark_budget_exhausted(conversation_id: uuid.UUID) -> None:
+    """Marca la conversación para que los próximos inbound no gasten LLM (ADR-0015)."""
+    async with get_session() as session:
+        conversation = await session.get(Conversation, conversation_id)
+        if conversation is not None:
+            state = dict(conversation.state)
+            state["budget_exhausted"] = True
+            conversation.state = state
 
 
 async def _record_usage(conversation_id: uuid.UUID, provider_name: str, response) -> None:  # type: ignore[no-untyped-def]

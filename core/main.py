@@ -18,11 +18,13 @@ from core.admin.auth import current_admin
 from core.admin.views import router as admin_router
 from core.config import get_settings
 from core.gateway.webhooks import router as webhooks_router
+from core.mcp.host import mcp_host
 from core.orchestrator.consumer import consume_loop
 from core.orchestrator.debounce import poll_debounce_loop, recover_orphaned_conversations
 from core.plugin_manager import plugin_manager
 from core.shared.logger import configure_logging, get_logger
 from core.shared.tenant import admin_tenants, tenant_scope
+from core.tools.core_skill import register_core_skills
 
 configure_logging()
 log = get_logger(__name__)
@@ -60,6 +62,8 @@ app.include_router(admin_router)
 # porque los routers deben montarse ANTES de arrancar el servidor; el lifespan
 # vuelve a escanear (idempotente) para el registro en BD y la activación.
 plugin_manager.scan()
+# Tools nativas del core (Sprint 2): plomería del framework, registrada como skill "core".
+register_core_skills(mcp_host)
 for _module in plugin_manager.list_modules():
     plugin_router = getattr(_module, "admin_router", None)
     if plugin_router is not None:

@@ -162,30 +162,19 @@ async def test_tenant_ruidoso_no_bloquea_a_otro(app_client, tenant_setup, record
 # ---------------------------------------------------------------- 4. RLS real
 async def test_query_sin_tenant_no_ve_otro_tenant(app_client, tenant_setup):
     t1, t2 = tenant_setup
-    # limpieza (respetando FKs)
-    from core.db.models import (
-        Conversation,
-        Customer,
-        Escalation,
-        LLMUsage,
-        Message,
-        ProcessedEvent,
-    )
+    from core.db.models import Customer
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
+    # limpia SOLO sus propios clientes de prueba (rls:), sin tocar el resto:
+    # usage_ledger es append-only y otras pruebas dejan filas que bloquean
+    # borrados masivos de conversaciones.
     for tid in (t1, t2):
         async with tenant_scope(tid):
             async with get_session() as session:
-                for table in (
-                    ProcessedEvent,
-                    Message,
-                    LLMUsage,
-                    Escalation,
-                    Conversation,
-                    Customer,
-                ):
-                    await session.execute(table.__table__.delete())
+                await session.execute(
+                    Customer.__table__.delete().where(Customer.external_id.like("rls:%"))
+                )
 
     async with tenant_scope(t1):
         async with get_session() as session:
@@ -194,16 +183,17 @@ async def test_query_sin_tenant_no_ve_otro_tenant(app_client, tenant_setup):
         async with get_session() as session:
             session.add(Customer(tenant_id=t2, channel="whatsapp", external_id="rls:t2"))
 
-    # sin contexto de tenant (rol de runtime) -> 0 filas
+    # sin contexto de tenant (rol de runtime) -> 0 filas de cualquier tenant
     async with get_session() as session:
         n = (await session.execute(select(func.count()).select_from(Customer))).scalar()
     assert n == 0, f"sin contexto debería ver 0 filas, vio {n}"
 
-    # scope T1 -> solo T1
+    # scope T1 -> ve su cliente, NO el de T2
     async with tenant_scope(t1):
         async with get_session() as session:
             ids = (await session.execute(select(Customer.external_id))).scalars().all()
-    assert ids == ["rls:t1"], f"scope T1 debería ver solo T1: {ids}"
+    assert "rls:t1" in ids, f"scope T1 debería ver su cliente: {ids}"
+    assert "rls:t2" not in ids, f"scope T1 NO debería ver el de T2: {ids}"
 
     # T1 intentando leer por tenant_id de T2 -> RLS lo impide
     async with tenant_scope(t1):

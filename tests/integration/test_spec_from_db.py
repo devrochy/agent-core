@@ -28,7 +28,12 @@ async def test_load_active_spec_desde_bd(tenant_setup) -> None:
     assert spec.tenantId == str(t1)
     assert spec.persona.tone == "cercano"
     # el spec sembrado referencia los playbooks default del framework
-    assert {p.name for p in spec.playbooks} == {"identidad", "tono", "reglas-operacion"}
+    assert {p.name for p in spec.playbooks} == {
+        "identidad",
+        "tono",
+        "reglas-operacion",
+        "respuestas",
+    }
 
 
 async def test_spec_aislado_por_tenant(tenant_setup) -> None:
