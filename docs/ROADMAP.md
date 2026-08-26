@@ -3,7 +3,7 @@
 Este fichero es el tablero. Se actualiza al cerrar cada sprint. Claude lo lee para saber
 en qué estamos.
 
-**Sprint activo:** Sprint 0
+**Sprint activo:** Sprint 3
 **Última actualización:** 2026-08-26
 
 ---
