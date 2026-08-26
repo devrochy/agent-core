@@ -40,14 +40,15 @@ en qué estamos.
 
 ## Sprint 2 — Runtime · Semanas 4–5
 
-- [ ] `AgentSpec` leído desde base de datos (cero prompts en `.ts`)
-- [ ] Tool loop con límite de llamadas y presupuesto por conversación
-- [ ] 6–8 tools nativas del core
-- [ ] Tool `load_playbook` + índice de playbooks
-- [ ] `usage_ledger` append-only (ADR-0008)
-- [ ] Trazas OTel/Langfuse con costo por conversación
+- [x] `AgentSpec` leído desde base de datos (cero prompts en código, ADR-0014)
+- [x] Tool loop con límite de llamadas y presupuesto por conversación (ADR-0015)
+- [x] 8 tools nativas del core
+- [x] Tool `load_playbook` + índice de playbooks (allowlist)
+- [x] `usage_ledger` append-only (ADR-0008): una fila por turno con `agent_spec_version`
+- [x] Trazas OpenTelemetry con costo por conversación
 
-**Salida:** el panel muestra costo por conversación y por tenant, en vivo.
+**Salida:** el panel muestra costo por conversación y por tenant, en vivo. ✅
+`/admin/costos` lee `usage_ledger` por tenant + por conversación; `make test-integration` verde (95 tests).
 
 ---
 
@@ -114,5 +115,7 @@ documentos, no con promesas.
 | 2026-08-26 | Crons de plugins corren sin `tenant_scope` | Auditoría cierre Sprint 1 | media — iterar tenants al ejecutar crons |
 | 2026-08-26 | Activación de plugins global (singleton) vs enablement por tenant | Auditoría cierre Sprint 1 | media — Sprint 2/4 (AgentSpec.packs + registry) |
 | 2026-08-26 | Clave Redis de idempotencia sin `tenant_id` (fallback del claim por-tenant) | Auditoría cierre Sprint 1 | baja — incluir tenant_id en la clave |
+| 2026-08-26 | `llm_usage` (por llamada) queda como fuente legacy; `usage_ledger` es la fuente de costo | Sprint 2 (ADR-0008) | baja — retirar `llm_usage` en Sprint 3 |
+| 2026-08-26 | Pricing LLM hardcodeado en `openai_compatible.py` (CONFIG) | Sprint 2 | media — mover a configuración admin |
 
 Cada vez que un onboarding requiera escribir código, se anota aquí: es un pack incompleto.

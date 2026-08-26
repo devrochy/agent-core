@@ -25,9 +25,9 @@ from core.db.models import (
     Conversation,
     Customer,
     Escalation,
-    LLMUsage,
     Message,
     PluginRecord,
+    UsageLedger,
     utcnow,
 )
 from core.db.session import get_session
@@ -136,34 +136,45 @@ async def dashboard(request: Request):
 
     week_ago = datetime.now(UTC) - timedelta(days=7)
     month_ago = datetime.now(UTC) - timedelta(days=30)
+    my_tenant = get_current_tenant_id()
 
     async with get_session() as session:
         conversations_7d = (
             await session.execute(
-                select(func.count(Conversation.id)).where(Conversation.started_at >= week_ago)
+                select(func.count(Conversation.id)).where(
+                    Conversation.tenant_id == my_tenant,
+                    Conversation.started_at >= week_ago,
+                )
             )
         ).scalar() or 0
         messages_7d = (
             await session.execute(
-                select(func.count(Message.id)).where(Message.created_at >= week_ago)
+                select(func.count(Message.id)).where(
+                    Message.tenant_id == my_tenant,
+                    Message.created_at >= week_ago,
+                )
             )
         ).scalar() or 0
         pending = (
             await session.execute(
-                select(func.count(Escalation.id)).where(Escalation.status == "pendiente")
+                select(func.count(Escalation.id)).where(
+                    Escalation.tenant_id == my_tenant,
+                    Escalation.status == "pendiente",
+                )
             )
         ).scalar() or 0
         cost_30d = (
             await session.execute(
-                select(func.coalesce(func.sum(LLMUsage.cost_usd), 0)).where(
-                    LLMUsage.created_at >= month_ago
+                select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
+                    UsageLedger.tenant_id == my_tenant,
+                    UsageLedger.created_at >= month_ago,
                 )
             )
         ).scalar() or 0
         app_settings = (
             await session.execute(
                 select(AppSettings).where(
-                    AppSettings.tenant_id == get_current_tenant_id(),
+                    AppSettings.tenant_id == my_tenant,
                     AppSettings.deleted_at.is_(None),
                 )
             )
@@ -172,6 +183,7 @@ async def dashboard(request: Request):
             await session.execute(
                 select(Conversation, Customer)
                 .join(Customer, Customer.id == Conversation.customer_id)
+                .where(Conversation.tenant_id == my_tenant)
                 .order_by(Conversation.started_at.desc())
                 .limit(8)
             )
@@ -589,44 +601,61 @@ async def costs_page(request: Request):
     now = datetime.now(UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     month_ago = now - timedelta(days=30)
+    tenant_id = get_current_tenant_id()
+    # Filtro explícito por tenant (además de RLS): el panel es multi-tenant.
+    by_tenant = UsageLedger.tenant_id == tenant_id
 
     async with get_session() as session:
         today_cost = (
             await session.execute(
-                select(func.coalesce(func.sum(LLMUsage.cost_usd), 0)).where(
-                    LLMUsage.created_at >= today_start
+                select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
+                    by_tenant, UsageLedger.created_at >= today_start
                 )
             )
         ).scalar() or 0
         month_cost = (
             await session.execute(
-                select(func.coalesce(func.sum(LLMUsage.cost_usd), 0)).where(
-                    LLMUsage.created_at >= month_ago
+                select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
+                    by_tenant, UsageLedger.created_at >= month_ago
                 )
             )
         ).scalar() or 0
-        total_calls = (
-            await session.execute(select(func.count(LLMUsage.id)))
+        total_turns = (
+            await session.execute(select(func.count(UsageLedger.id)).where(by_tenant))
         ).scalar() or 0
         by_model_rows = (
             await session.execute(
                 select(
-                    LLMUsage.model,
-                    func.count(LLMUsage.id),
-                    func.sum(LLMUsage.input_tokens),
-                    func.sum(LLMUsage.output_tokens),
-                    func.avg(LLMUsage.latency_ms),
-                    func.sum(LLMUsage.cost_usd),
+                    UsageLedger.model,
+                    func.count(UsageLedger.id),
+                    func.sum(UsageLedger.input_tokens),
+                    func.sum(UsageLedger.output_tokens),
+                    func.avg(UsageLedger.latency_ms),
+                    func.sum(UsageLedger.cost_usd),
                 )
-                .where(LLMUsage.created_at >= month_ago)
-                .group_by(LLMUsage.model)
+                .where(by_tenant, UsageLedger.created_at >= month_ago)
+                .group_by(UsageLedger.model)
+            )
+        ).all()
+        by_conversation_rows = (
+            await session.execute(
+                select(
+                    UsageLedger.conversation_id,
+                    func.count(UsageLedger.id),
+                    func.sum(UsageLedger.cost_usd),
+                    func.max(UsageLedger.created_at),
+                )
+                .where(by_tenant, UsageLedger.created_at >= month_ago)
+                .group_by(UsageLedger.conversation_id)
+                .order_by(func.sum(UsageLedger.cost_usd).desc())
+                .limit(20)
             )
         ).all()
 
     ctx.update(
         today=float(today_cost),
         month=float(month_cost),
-        total_calls=total_calls,
+        total_turns=total_turns,
         by_model=[
             {
                 "model": model,
@@ -637,6 +666,15 @@ async def costs_page(request: Request):
                 "cost": float(cost or 0),
             }
             for model, calls, tokens_in, tokens_out, avg_latency, cost in by_model_rows
+        ],
+        by_conversation=[
+            {
+                "conversation_id": str(conversation_id)[:8],
+                "turns": turns,
+                "cost": float(cost or 0),
+                "last": last,
+            }
+            for conversation_id, turns, cost, last in by_conversation_rows
         ],
     )
     return _render("costs.html", ctx)

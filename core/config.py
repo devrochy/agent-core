@@ -87,6 +87,9 @@ class Settings(BaseSettings):
 
     # --- Observabilidad ---
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    otel_enabled: bool = Field(default=False, alias="OTEL_ENABLED")
+    otel_exporter_endpoint: str = Field(default="", alias="OTEL_EXPORTER_OTLP_ENDPOINT")
+    otel_service_name: str = Field(default="agent-core", alias="OTEL_SERVICE_NAME")
 
 
 @lru_cache

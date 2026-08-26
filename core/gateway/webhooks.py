@@ -61,10 +61,14 @@ async def receive_whatsapp(request: Request) -> dict[str, Any]:
     phone_id = phone_ids[0] if phone_ids else ""
 
     # Tenant del webhook: phone_number_id -> channel_connection -> tenant.
-    # SECURITY DEFINER (ADR-0012): se resuelve antes de saber el tenant. Si el
-    # número no pertenece a ninguna conexión, cae al primer tenant (dev/bootstrap).
+    # SECURITY DEFINER (ADR-0012): se resuelve antes de saber el tenant. El fallback
+    # al primer tenant solo vale en desarrollo (bootstrap): en producción, un número
+    # no registrado se rechaza para no mis-atribuir la conversación.
     tenant_id = await resolve_tenant_for_phone(phone_id)
     if tenant_id is None:
+        if get_settings().app_env != "development":
+            log.warning("webhook_unregistered_phone", phone_id=phone_id)
+            return {"status": "ignored"}
         tenant_id = await default_tenant()
     if tenant_id is None:
         log.warning("webhook_without_tenant")

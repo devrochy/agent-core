@@ -127,6 +127,11 @@ async def _behavior_config() -> dict[str, object]:
     from core.db.models import AppSettings
 
     async with get_session() as session:
-        result = await session.execute(select(AppSettings).limit(1))
+        result = await session.execute(
+            select(AppSettings).where(
+                AppSettings.tenant_id == get_current_tenant_id(),
+                AppSettings.deleted_at.is_(None),
+            )
+        )
         app_settings = result.scalar_one_or_none()
         return dict(app_settings.behavior_config) if app_settings else {}

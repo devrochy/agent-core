@@ -15,7 +15,7 @@ El LLM propone, las tools deciden (contra la BD), el core arbitra.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import select
@@ -23,7 +23,7 @@ from sqlalchemy import select
 from core.agents.responses import load_response
 from core.agents.spec import load_active_spec
 from core.config import get_settings
-from core.db.models import AppSettings, Conversation, Customer, LLMUsage, Message
+from core.db.models import AppSettings, Conversation, Customer, LLMUsage, Message, UsageLedger
 from core.db.session import get_session
 from core.llm import resolve_provider
 from core.llm.difficulty_router import route_model
@@ -34,6 +34,7 @@ from core.mcp.translator import skills_summary, to_llm_schemas
 from core.memory import entity as entity_memory
 from core.memory import vector as vector_memory
 from core.memory import working as working_memory
+from core.observability.tracing import get_tracer, span_attributes
 from core.orchestrator.escalation import ESCALATION_REPLY, escalate
 from core.orchestrator.guardrails import MAX_GUARDRAIL_RETRIES, run_guardrails
 from core.orchestrator.safe_renderer import (
@@ -64,6 +65,66 @@ class TurnResult:
     escalated: bool = False
 
 
+@dataclass
+class _TurnUsage:
+    """Acumula el uso LLM de UN turno para el usage_ledger (ADR-0008)."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    latency_ms: int = 0
+    cost_usd: float = 0.0
+    model: str = ""
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    escalated: bool = False
+
+    def add(self, response) -> None:  # type: ignore[no-untyped-def]
+        self.input_tokens += response.usage.input_tokens
+        self.output_tokens += response.usage.output_tokens
+        self.cached_tokens += getattr(response.usage, "cache_read_tokens", 0)
+        self.cached_tokens += getattr(response.usage, "cache_write_tokens", 0)
+        self.latency_ms += response.latency_ms
+        self.cost_usd += _response_cost(response)
+        self.model = response.model or self.model
+
+
+async def _write_usage_ledger(
+    conversation_id: uuid.UUID,
+    spec,  # type: ignore[no-untyped-def]
+    usage: _TurnUsage,
+    span=None,  # type: ignore[no-untyped-def]
+) -> None:
+    """Una fila append-only por turno. Best-effort: nunca interrumpe la respuesta."""
+    try:
+        async with get_session() as session:
+            session.add(
+                UsageLedger(
+                    tenant_id=get_current_tenant_id(),
+                    conversation_id=conversation_id,
+                    agent_spec_version=spec.version,
+                    model=usage.model or spec.model.primary,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    cached_tokens=usage.cached_tokens,
+                    latency_ms=usage.latency_ms,
+                    cost_usd=round(usage.cost_usd, 6),
+                    tool_calls=usage.tool_calls or None,
+                    result={"escalated": usage.escalated},
+                )
+            )
+    except Exception:
+        log.warning("usage_ledger_write_failed")
+    finally:
+        if span is not None:
+            span_attributes(
+                span,
+                cost_usd=usage.cost_usd,
+                outcome="escalated" if usage.escalated else "ok",
+                tool_calls=len(usage.tool_calls),
+            )
+            span.end()
+
+
 async def process_conversation(conversation_id: uuid.UUID, latest_message: str) -> TurnResult | None:
     settings = get_settings()
 
@@ -72,7 +133,14 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         if conversation is None:
             return None
         customer = await session.get(Customer, conversation.customer_id)
-        app_settings = (await session.execute(select(AppSettings).limit(1))).scalar_one_or_none()
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == get_current_tenant_id(),
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
 
     if customer is None or conversation.bot_paused or conversation.status == "escalated":
         return None
@@ -127,6 +195,17 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     guardrail_retries = 0
     turn_cost: float = 0.0
     budget = spec.policies.budgetUsdPerConversation
+    usage = _TurnUsage()
+
+    # Span del turno (OTel): atributos para el panel/trazas.
+    tracer = get_tracer()
+    turn_span = tracer.start_span("turn")
+    span_attributes(
+        turn_span,
+        tenant_id=str(get_current_tenant_id()),
+        conversation_id=str(conversation_id),
+        agent_spec_version=spec.version,
+    )
 
     for _iteration in range(spec.policies.maxToolCallsPerTurn):
         # Presupuesto (ADR-0015): se mide ANTES de llamar al LLM, en la cabecera.
@@ -135,21 +214,33 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             if spent >= budget:
                 await _mark_budget_exhausted(conversation_id)
                 closure = await load_response(spec, "budget_exhausted") or ""
+                await _write_usage_ledger(conversation_id, spec, usage, turn_span)
                 return TurnResult(text=closure) if closure else None
         try:
-            response = await provider.generate(
-                system_blocks=system_blocks,
-                messages=messages,
-                tools=tool_schemas,
-                max_tokens=settings.llm_max_tokens,
-            )
+            with tracer.start_as_current_span("llm_call") as llm_span:
+                response = await provider.generate(
+                    system_blocks=system_blocks,
+                    messages=messages,
+                    tools=tool_schemas,
+                    max_tokens=settings.llm_max_tokens,
+                )
+                span_attributes(
+                    llm_span,
+                    model=response.model,
+                    tokens_in=response.usage.input_tokens,
+                    tokens_out=response.usage.output_tokens,
+                    cost_usd=_response_cost(response),
+                )
         except LLMProviderError:
             log.exception("llm_call_failed", conversation_id=str(conversation_id))
             await escalate(conversation_id, reason="llm_error", summary="Fallo del proveedor LLM")
+            usage.escalated = True
+            await _write_usage_ledger(conversation_id, spec, usage, turn_span)
             return TurnResult(text=FALLBACK_REPLY, escalated=True)
 
         turn_cost += _response_cost(response)
         await _record_usage(conversation_id, provider.provider_name, response)
+        usage.add(response)
 
         # ---- tool_use
         if response.stop_reason == "tool_use":
@@ -157,8 +248,11 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                 LLMMessage(role="assistant", content=response.content, tool_calls=response.tool_calls)
             )
             for tool_call in response.tool_calls:
-                result = await _execute_tool_safely(conversation, customer, tool_call)
+                with tracer.start_as_current_span("tool_execute") as tool_span:
+                    result = await _execute_tool_safely(conversation, customer, tool_call)
+                    span_attributes(tool_span, tool=tool_call.name)
                 all_tool_results.append(result)
+                usage.tool_calls.append({"tool": tool_call.name})
                 messages.append(
                     LLMMessage(
                         role="tool",
@@ -171,6 +265,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # ---- refusal
         if response.stop_reason == "refusal":
             await escalate(conversation_id, reason="llm_refusal", summary=latest_message[:200])
+            usage.escalated = True
+            await _write_usage_ledger(conversation_id, spec, usage, turn_span)
             return TurnResult(text=ESCALATION_REPLY, escalated=True)
 
         # ---- end_turn: guardrails
@@ -182,16 +278,21 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                 messages.append(LLMMessage(role="user", content=f"[SISTEMA] {verdict.retry_instruction}"))
                 continue
             await escalate(conversation_id, reason="guardrail", summary=verdict.reason)
+            usage.escalated = True
+            await _write_usage_ledger(conversation_id, spec, usage, turn_span)
             return TurnResult(text=ESCALATION_REPLY, escalated=True)
 
         # ---- respuesta final
         extras = extract_safe_extras(all_tool_results)
         final_text = apply_safe_extras(response.content, extras)
         await _finish_turn(conversation_id, final_text, latest_message, resolved=bool(all_tool_results))
+        await _write_usage_ledger(conversation_id, spec, usage, turn_span)
         return TurnResult(text=final_text, image_url=extras.image_url)
 
     # Se agotaron las iteraciones
     await escalate(conversation_id, reason="max_iterations", summary="Loop sin resolución")
+    usage.escalated = True
+    await _write_usage_ledger(conversation_id, spec, usage, turn_span)
     return TurnResult(text=ESCALATION_REPLY, escalated=True)
 
 
