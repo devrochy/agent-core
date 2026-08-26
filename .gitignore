@@ -16,3 +16,4 @@ sdd/*.md
 *.sqlite3
 storage/
 plugins/.install.lock
+.claude/

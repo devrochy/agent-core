@@ -1,5 +1,11 @@
 # Arquitectura de agent-core
 
+> **SUPERSEDIDO por ADR-0001** (multi-tenant pooled + RLS). Describe la arquitectura
+> single-tenant heredada del monolito. El patrón de monolito modular con plugins embebidos y
+> los adaptadores selectivos (LLM/canal/cola) siguen vigentes; lo que cambia es el
+> aislamiento de datos: `tenant_id` + RLS en toda tabla y un binario único para todos los
+> clientes. Ver `docs/adr/0001-multitenant-pooled-rls.md` y `docs/ROADMAP.md`.
+
 ## Patrón: Monolito Modular con Adaptadores Selectivos
 
 **No es arquitectura hexagonal.** Es la evolución pragmática validada en producción por

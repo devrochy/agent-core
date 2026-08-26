@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentcore-contracts"
+version = "1.0.0"
+description = "Contratos congelados de agent-core v1.0.0 (ver docs/adr/0011-contratos-python.md)"
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2.8"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agentcore_contracts*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,5 +1,11 @@
 # PLUGIN-CONTRACT · La Biblia del desarrollador de plugins
 
+> **SUPERSEDIDO parcialmente por ADR-0001 y ADR-0011.** El modelo de plugins embebidos
+> in-process se conserva, pero dos secciones están obsoletas: el acceso a datos por
+> `core.db.session.get_session()` (§13) viola la invariante #6 — los plugins recibirán solo
+> `ToolContext.db` (ScopedDb con RLS, ver `packages/contracts`), y el lenguaje de referencia
+> es Python (ADR-0011). El contrato canónico de tipos vive en `packages/contracts`.
+
 Todo lo que necesitas para construir un plugin de agent-core. Si algo no está aquí,
 está en el código de referencia:
 

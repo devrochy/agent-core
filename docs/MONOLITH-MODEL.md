@@ -1,5 +1,11 @@
 # MONOLITH-MODEL · Los plugins son código embebido, no servicios
 
+> **SUPERSEDIDO por ADR-0001** (multi-tenant pooled + RLS). Este documento describe el
+> modelo single-tenant heredado ("un negocio = un despliegue"). El framework final conserva
+> los plugins embebidos in-process (ADR-0005), pero el aislamiento entre clientes se resuelve
+> con `tenant_id` + RLS y topologías pooled/silo/dedicado, no con un despliegue por cliente.
+> Ver `docs/adr/0001-multitenant-pooled-rls.md`.
+
 Este documento existe para eliminar una ambigüedad de raíz: **en agent-core un plugin
 NUNCA es un microservicio, un contenedor aparte ni un endpoint remoto.**
 
