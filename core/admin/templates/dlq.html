@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="h4">Cola de mensajes fallidos (DLQ)</h1>
+</div>
+
+{% if dlq_entries %}
+<table class="table table-sm table-hover">
+  <thead>
+    <tr>
+      <th>Mensaje</th>
+      <th>Tenant</th>
+      <th>Contenido</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for e in dlq_entries %}
+    <tr>
+      <td><code>{{ e.fields.get('external_message_id', '') }}</code></td>
+      <td><code>{{ e.fields.get('tenant_id', '')[:8] }}</code></td>
+      <td class="text-muted">{{ e.content }}</td>
+      <td class="text-end">
+        <form method="post" action="/admin/dlq/{{ e.entry_id }}/retry">
+          <button class="btn btn-sm btn-outline-primary">Reintentar</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="alert alert-success">Sin mensajes fallidos pendientes.</div>
+{% endif %}
+{% endblock %}

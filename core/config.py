@@ -17,6 +17,7 @@ SplitStyle = Literal["un_mensaje", "pocos_cortos", "varios_cortos"]
 
 DEBOUNCE_DELAY_MS: dict[str, int] = {
     "inmediato": 0,
+    "corto": 3_000,  # ventana alineada con ADR-0006 (2–4 s)
     "rapido": 5_000,
     "natural": 15_000,
     "pausado": 30_000,
@@ -75,6 +76,12 @@ class Settings(BaseSettings):
     debounce_mode: DebounceMode = Field(default="natural", alias="DEBOUNCE_MODE")
     max_agent_iterations: int = Field(default=6, alias="MAX_AGENT_ITERATIONS")
     message_split_style: SplitStyle = Field(default="pocos_cortos", alias="MESSAGE_SPLIT_STYLE")
+
+    # --- Concurrencia (Sprint 1, ADR-0006) ---
+    # Turnos concurrentes globales y por tenant. La cuota por tenant impide que un
+    # tenant ruidoso ahogue a los demás en el mismo worker.
+    max_concurrent_turns: int = Field(default=8, alias="MAX_CONCURRENT_TURNS")
+    max_turns_per_tenant: int = Field(default=2, alias="MAX_TURNS_PER_TENANT")
 
     # --- Observabilidad ---
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")

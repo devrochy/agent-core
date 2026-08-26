@@ -22,7 +22,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from core.config import DEBOUNCE_DELAY_MS, get_settings
-from core.db.models import AppSettings, ChannelConnection, Conversation, Customer, Message
+from core.db.models import (
+    AppSettings,
+    ChannelConnection,
+    Conversation,
+    Customer,
+    Message,
+    ProcessedEvent,
+)
 from core.db.session import get_session
 from core.gateway.sender import send_to_conversation
 from core.gateway.webhooks import INBOUND_STREAM
@@ -34,6 +41,7 @@ from core.orchestrator.escalation import (
     matches_escalation_keywords,
 )
 from core.orchestrator.loop import process_conversation
+from core.orchestrator.turn_gate import run_turn
 from core.shared.events import ON_CONVERSATION_STARTED, ON_MESSAGE_RECEIVED, event_bus
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, tenant_scope
@@ -63,8 +71,10 @@ async def consume_loop() -> None:
         try:
             batches = await r.xreadgroup(GROUP, CONSUMER, {INBOUND_STREAM: ">"}, count=10, block=2000)
             for _stream, entries in batches or []:
-                for entry_id, fields in entries:
-                    await _handle_entry(entry_id, fields)
+                if entries:
+                    # Concurrencia acotada por el gate (global + por tenant): un
+                    # tenant ruidoso no agota los slots del worker (ADR-0006).
+                    await asyncio.gather(*(_handle_entry(eid, f) for eid, f in entries))
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -76,7 +86,8 @@ async def _handle_entry(entry_id: str, fields: dict[str, str]) -> None:
     r = get_redis()
     retry_key = f"inbound:retries:{entry_id}"
     try:
-        await handle_inbound(fields)
+        tenant_id = fields.get("tenant_id")
+        await run_turn(tenant_id, handle_inbound(fields))
         await r.xack(INBOUND_STREAM, GROUP, entry_id)
         await r.delete(retry_key)
     except Exception:
@@ -90,12 +101,48 @@ async def _handle_entry(entry_id: str, fields: dict[str, str]) -> None:
             log.error("message_dead_lettered", entry_id=entry_id)
 
 
-async def handle_inbound(fields: dict[str, str]) -> None:
+async def handle_inbound(fields: dict[str, str]) -> bool:
+    """Procesa un inbound. Devuelve True si se procesó, False si era duplicado.
+
+    ADR-0007: se inserta el claim en `processed_events` ANTES de procesar; si ya
+    existe (único por tenant y message_id), el evento es un duplicado y se descarta
+    (ACK arriba). ADR-0013: el claim es revocable para permitir el reintento del DLQ.
+    """
     tenant_id = fields.get("tenant_id")
-    if tenant_id:
-        async with tenant_scope(tenant_id):
-            return await _handle_inbound_scoped(fields)
-    log.warning("inbound_without_tenant", message_id=fields.get("external_message_id"))
+    if not tenant_id:
+        log.warning("inbound_without_tenant", message_id=fields.get("external_message_id"))
+        return False
+
+    async with tenant_scope(tenant_id):
+        if not await _claim_event(uuid.UUID(tenant_id), fields):
+            log.info(
+                "event_already_processed",
+                message_id=fields.get("external_message_id"),
+                tenant_id=tenant_id,
+            )
+            return False
+        await _handle_inbound_scoped(fields)
+        return True
+
+
+async def _claim_event(tenant_id: uuid.UUID, fields: dict[str, str]) -> bool:
+    """INSERT del claim de idempotencia. False = ya procesado (duplicado)."""
+    async with get_session() as session:
+        session.add(
+            ProcessedEvent(
+                tenant_id=tenant_id,
+                provider=fields.get("provider", ""),
+                external_message_id=fields.get("external_message_id", ""),
+            )
+        )
+        try:
+            await session.flush()
+        except IntegrityError:
+            # El UNIQUE ya cortó: el evento es un duplicado. La transacción quedó
+            # en rollback pendiente; se revierte aquí y el ACK del stream la cierra.
+            await session.rollback()
+            return False
+    return True
 
 
 async def _handle_inbound_scoped(fields: dict[str, str]) -> None:

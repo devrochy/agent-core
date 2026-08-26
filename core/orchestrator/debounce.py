@@ -20,9 +20,11 @@ import asyncio
 import json
 import time
 import uuid
+from collections.abc import Awaitable
 from typing import Any
 
 from core.memory.working import get_redis
+from core.orchestrator.turn_gate import run_turn
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, tenant_scope
 
@@ -63,6 +65,7 @@ async def poll_debounce_once() -> None:
     r = get_redis()
     now = int(time.time() * 1000)
     due = await r.zrangebyscore(PENDING_KEY, "-inf", now)
+    fires: list[Awaitable[Any]] = []
     for conversation_id_str in due:
         # Claim atómico: solo quien logra el ZREM dispara
         removed = await r.zrem(PENDING_KEY, conversation_id_str)
@@ -72,7 +75,12 @@ async def poll_debounce_once() -> None:
         raw_payload = await r.get(payload_key)
         await r.delete(payload_key)
         payload = json.loads(raw_payload) if raw_payload else {}
-        await _fire_conversation(uuid.UUID(conversation_id_str), payload)
+        conversation_id = uuid.UUID(conversation_id_str)
+        tenant_id = payload.get("tenant_id")
+        # Gate de turnos (global + por tenant) y disparo concurrente.
+        fires.append(run_turn(tenant_id, _fire_conversation(conversation_id, payload)))
+    if fires:
+        await asyncio.gather(*fires)
 
 
 async def _fire_conversation(conversation_id: uuid.UUID, payload: dict[str, Any]) -> None:

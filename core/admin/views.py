@@ -28,6 +28,7 @@ from core.db.models import (
     LLMUsage,
     Message,
     PluginRecord,
+    utcnow,
 )
 from core.db.session import get_session
 from core.gateway.connections import (
@@ -40,10 +41,13 @@ from core.gateway.connections import (
 from core.plugin_manager import plugin_manager
 from core.shared.crypto import get_secret_box
 from core.shared.logger import get_logger
-from core.shared.tenant import get_current_tenant_id
+from core.shared.tenant import get_current_tenant_id, tenant_scope
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+INBOUND_STREAM = "agent_core:inbound"
+DLQ_STREAM = "agent_core:inbound:dlq"
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -737,3 +741,64 @@ async def settings_llm_save(
         if llm_api_key:
             app_settings.llm_api_key_encrypted = get_secret_box().encrypt(llm_api_key)
     return RedirectResponse("/admin/configuracion?flash=LLM actualizado", status_code=303)
+
+
+# ------------------------------------------------------------------ DLQ (reintento manual)
+@router.get("/dlq", response_class=HTMLResponse)
+async def dlq_page(request: Request):
+    """Lista la dead-letter del stream de entrada (mensajes que fallaron N veces)."""
+    ctx = await _base_context(request, "dlq")
+    if ctx is None:
+        return _login_redirect()
+    from core.memory.working import get_redis
+
+    r = get_redis()
+    entries = await r.xrange(DLQ_STREAM, count=100)
+    ctx["dlq_entries"] = [
+        {
+            "entry_id": eid,
+            "fields": dict(fields),
+            "content": dict(fields).get("content", "")[:120],
+        }
+        for eid, fields in entries
+    ]
+    return _render("dlq.html", ctx)
+
+
+@router.post("/dlq/{entry_id}/retry")
+async def dlq_retry(request: Request, entry_id: str):
+    """Re-encola un evento de la DLQ: revoca el claim de idempotencia (soft-delete)
+    y lo devuelve al stream de entrada (ADR-0013). Solo el tenant dueño puede reintentarlo."""
+    if await current_admin(request) is None:
+        return _login_redirect()
+    from sqlalchemy import update
+
+    from core.db.models import ProcessedEvent
+    from core.memory.working import get_redis
+
+    r = get_redis()
+    rows = await r.xrange(DLQ_STREAM, min=entry_id, max=entry_id)
+    if not rows:
+        return RedirectResponse("/admin/dlq?flash=El evento ya no está en la DLQ&flash_type=danger", status_code=303)
+    _eid, fields = rows[0]
+    fields = dict(fields)
+    tenant_id = fields.get("tenant_id")
+
+    if tenant_id != str(get_current_tenant_id()):
+        return RedirectResponse("/admin/dlq?flash=No puedes reintentar eventos de otro tenant&flash_type=danger", status_code=303)
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            await session.execute(
+                update(ProcessedEvent)
+                .where(
+                    ProcessedEvent.tenant_id == get_current_tenant_id(),
+                    ProcessedEvent.external_message_id == fields.get("external_message_id", ""),
+                    ProcessedEvent.deleted_at.is_(None),
+                )
+                .values(deleted_at=utcnow())
+            )
+
+    await r.xadd(INBOUND_STREAM, fields)
+    await r.xdel(DLQ_STREAM, entry_id)
+    return RedirectResponse("/admin/dlq?flash=Evento reintentado", status_code=303)
