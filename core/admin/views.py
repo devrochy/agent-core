@@ -753,7 +753,8 @@ async def dlq_page(request: Request):
     from core.memory.working import get_redis
 
     r = get_redis()
-    entries = await r.xrange(DLQ_STREAM, count=100)
+    my_tenant = str(get_current_tenant_id())
+    entries = await r.xrange(DLQ_STREAM, count=200)
     ctx["dlq_entries"] = [
         {
             "entry_id": eid,
@@ -761,6 +762,7 @@ async def dlq_page(request: Request):
             "content": dict(fields).get("content", "")[:120],
         }
         for eid, fields in entries
+        if dict(fields).get("tenant_id") == my_tenant
     ]
     return _render("dlq.html", ctx)
 

@@ -34,8 +34,10 @@ class Settings(BaseSettings):
     public_base_url: str = Field(default="http://localhost:8000", alias="PUBLIC_BASE_URL")
 
     # --- Infraestructura ---
+    # Default = app_runtime (NO dueño) para que RLS se aplique de verdad aunque
+    # alguien arranque sin .env. El dueño solo se usa en MIGRATIONS_DATABASE_URL.
     database_url: str = Field(
-        default="postgresql+asyncpg://agent_core:agent_core@localhost:5432/agent_core",
+        default="postgresql+asyncpg://app_runtime:app_runtime@localhost:5432/agent_core",
         alias="DATABASE_URL",
     )
     # Conexión de MIGRACIONES (dueño de las tablas). El runtime conecta con

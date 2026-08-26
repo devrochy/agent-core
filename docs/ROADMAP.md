@@ -25,15 +25,16 @@ en qué estamos.
 
 ## Sprint 1 — Núcleo multi-tenant · Semanas 2–3
 
-- [ ] Esquema core con `tenant_id` + RLS en todas las tablas
-- [ ] `tenant_id` como claim del contexto autenticado (auth propia, ADR-0012)
-- [ ] Gateway: verificación de firma de Meta
-- [ ] Dedupe por `external_message_id` (ADR-0007)
-- [ ] Lock + debounce por conversación en Redis (ADR-0006)
-- [ ] Colas con cuota de concurrencia por tenant
-- [ ] DLQ con reintento manual desde el panel
+- [x] Esquema core con `tenant_id` + RLS en todas las tablas
+- [x] `tenant_id` como claim del contexto autenticado (auth propia, ADR-0012)
+- [x] Gateway: verificación de firma de Meta
+- [x] Dedupe por `external_message_id` (ADR-0007)
+- [x] Lock + debounce por conversación en Redis (ADR-0006)
+- [x] Colas con cuota de concurrencia por tenant
+- [x] DLQ con reintento manual desde el panel
 
-**Salida:** test que envía 5 webhooks duplicados en 3 s y produce exactamente 1 respuesta.
+**Salida:** test que envía 5 webhooks duplicados en 3 s y produce exactamente 1 respuesta. ✅
+`make test-integration`: 4 tests de salida en verde contra el stack real.
 
 ---
 
@@ -109,5 +110,9 @@ documentos, no con promesas.
 | 2026-08-26 | Tablas `crm_*` del plugin sin `tenant_id`/RLS (13 tablas) | Excepción documentada en Sprint 1 (Fase A) | **alta** — migrar en Sprint 3 ANTES de CULTO en producción |
 | 2026-08-26 | `PluginManager.module.config` se cachea en singleton sin scope de tenant (punto 8 del auditor) | Sprint 1 (Fase A) | media — resolver en el registry por-tenant (Sprint 4) |
 | 2026-08-26 | Tools runtime sin `scopes` ni manifest de dominios (`agentpkg.yaml`) | Auditoría inicial | media — Sprint 5 (MCP + allowlist) |
+| 2026-08-26 | `ToolContext` runtime sin campo `db` (scoped); plugins usan `get_session()` | Auditoría cierre Sprint 1 | media — Sprint 2 (alinear con el contrato) |
+| 2026-08-26 | Crons de plugins corren sin `tenant_scope` | Auditoría cierre Sprint 1 | media — iterar tenants al ejecutar crons |
+| 2026-08-26 | Activación de plugins global (singleton) vs enablement por tenant | Auditoría cierre Sprint 1 | media — Sprint 2/4 (AgentSpec.packs + registry) |
+| 2026-08-26 | Clave Redis de idempotencia sin `tenant_id` (fallback del claim por-tenant) | Auditoría cierre Sprint 1 | baja — incluir tenant_id en la clave |
 
 Cada vez que un onboarding requiera escribir código, se anota aquí: es un pack incompleto.

@@ -25,8 +25,11 @@ lint:          ## Linters
 	ruff check core cli tests evals scripts
 	mypy core cli || true
 
-test:          ## Tests
+test:          ## Tests unitarios (sin BD/red)
 	pytest -q
+
+test-integration: ## Tests de integración (requiere stack local: Postgres+Redis)
+	AGENT_CORE_INTEGRATION=1 pytest tests/integration -q
 
 evals:         ## Corre los golden scenarios
 	python evals/runner.py

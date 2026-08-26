@@ -80,7 +80,7 @@ async def _plugin_config() -> Any:  # type: ignore[no-untyped-def]
         from core.plugin_manager import plugin_manager
 
         return await plugin_manager.load_config("mod_crm_engine")
-    except Exception:  # noqa: BLE001 - fail-open: sin config, se usan defaults
+    except Exception:
         return None
 
 

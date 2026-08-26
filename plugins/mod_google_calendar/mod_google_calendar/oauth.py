@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
+from sqlalchemy import select
 
 from core.config import get_settings
 from core.shared.exceptions import PluginError
@@ -70,10 +71,19 @@ async def save_tokens(tokens: dict[str, Any]) -> None:
     from core.db.models import PluginConfig
     from core.db.session import get_session
     from core.shared.crypto import get_secret_box
+    from core.shared.tenant import get_current_tenant_id
 
     box = get_secret_box()
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        stored = await session.get(PluginConfig, PLUGIN_ID)
+        stored = (
+            await session.execute(
+                select(PluginConfig).where(
+                    PluginConfig.plugin_id == PLUGIN_ID,
+                    PluginConfig.tenant_id == tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
         values = box.decrypt_json(stored.config_encrypted) if stored else {}
         # conservar el refresh_token previo si Google no devuelve uno nuevo
         previous = values.get("_oauth_tokens", {})
@@ -82,7 +92,9 @@ async def save_tokens(tokens: dict[str, Any]) -> None:
         values["_oauth_tokens"] = tokens
         encrypted = box.encrypt_json(values)
         if stored is None:
-            session.add(PluginConfig(plugin_id=PLUGIN_ID, config_encrypted=encrypted))
+            session.add(
+                PluginConfig(plugin_id=PLUGIN_ID, tenant_id=tenant_id, config_encrypted=encrypted)
+            )
         else:
             stored.config_encrypted = encrypted
 
@@ -92,10 +104,19 @@ async def get_access_token(client_id: str, client_secret: str) -> str:
     from core.db.models import PluginConfig
     from core.db.session import get_session
     from core.shared.crypto import get_secret_box
+    from core.shared.tenant import get_current_tenant_id
 
     box = get_secret_box()
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        stored = await session.get(PluginConfig, PLUGIN_ID)
+        stored = (
+            await session.execute(
+                select(PluginConfig).where(
+                    PluginConfig.plugin_id == PLUGIN_ID,
+                    PluginConfig.tenant_id == tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
     if stored is None:
         raise PluginError(PLUGIN_ID, "Plugin sin configurar")
     values = box.decrypt_json(stored.config_encrypted)

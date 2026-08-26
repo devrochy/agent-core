@@ -82,7 +82,7 @@ class GoogleCalendarModule(BaseModule):
     admin_router = admin_router
     declared_skills = [CalendarSkill]
 
-    def on_activate(self, host: "MCPHost") -> None:
+    def on_activate(self, host: MCPHost) -> None:
         config = self.config
         if not isinstance(config, CalendarConfig):
             from core.shared.exceptions import PluginConfigError

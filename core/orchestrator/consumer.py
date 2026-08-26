@@ -64,18 +64,34 @@ async def ensure_group() -> None:
 
 
 async def consume_loop() -> None:
-    """Bucle infinito: task de fondo del proceso principal."""
+    """Bucle infinito: task de fondo del proceso principal.
+
+    Pipelining: entrega las entradas a la cola del grupo sin esperar a que
+    termine el batch (xreadgroup '>' avanza aunque estén pendientes) y las
+    procesa de forma concurrente acotada por el gate (global + por tenant).
+    Así el mensaje de un tenant B se programa aunque A tenga cientos por delante:
+    el cupo de A (max_turns_per_tenant) deja slots globales libres para B.
+    """
     await ensure_group()
     r = get_redis()
+    pending: set[asyncio.Task[None]] = set()
+    max_inflight = get_settings().max_concurrent_turns * 5
     while True:
         try:
             batches = await r.xreadgroup(GROUP, CONSUMER, {INBOUND_STREAM: ">"}, count=10, block=2000)
             for _stream, entries in batches or []:
-                if entries:
-                    # Concurrencia acotada por el gate (global + por tenant): un
-                    # tenant ruidoso no agota los slots del worker (ADR-0006).
-                    await asyncio.gather(*(_handle_entry(eid, f) for eid, f in entries))
+                for entry_id, fields in entries:
+                    task = asyncio.create_task(_handle_entry(entry_id, fields))
+                    pending.add(task)
+                    task.add_done_callback(pending.discard)
+            if len(pending) >= max_inflight:
+                _, pending = await asyncio.wait(
+                    pending, timeout=2, return_when=asyncio.FIRST_COMPLETED
+                )
+                pending = set(pending)
         except asyncio.CancelledError:
+            for task in pending:
+                task.cancel()
             raise
         except Exception:
             log.exception("consumer_loop_error")
