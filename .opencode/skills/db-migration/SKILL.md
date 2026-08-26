@@ -12,8 +12,11 @@ Toda migración cumple, sin excepción:
    ```sql
    alter table <tabla> enable row level security;
    create policy tenant_isolation on <tabla>
-     using (tenant_id = current_setting('app.tenant_id')::uuid);
+     using (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+     with check (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
    ```
+   El `nullif` es obligatorio: sin contexto, `current_setting` devuelve `''` y
+   `''::uuid` revienta; con `nullif` falla cerrado (0 filas).
 3. Índice compuesto que empieza por `tenant_id` en toda tabla con volumen.
 4. Tabla de pack → prefijo `pack_<nombre>_`. Tabla de core → sin prefijo.
 5. Idempotente (`if not exists`) y con `<nombre>.down.sql` que la revierte.

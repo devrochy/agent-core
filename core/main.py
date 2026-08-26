@@ -11,9 +11,10 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 
+from core.admin.auth import current_admin
 from core.admin.views import router as admin_router
 from core.config import get_settings
 from core.gateway.webhooks import router as webhooks_router
@@ -21,6 +22,7 @@ from core.orchestrator.consumer import consume_loop
 from core.orchestrator.debounce import poll_debounce_loop, recover_orphaned_conversations
 from core.plugin_manager import plugin_manager
 from core.shared.logger import configure_logging, get_logger
+from core.shared.tenant import admin_tenants, tenant_scope
 
 configure_logging()
 log = get_logger(__name__)
@@ -67,6 +69,26 @@ for _module in plugin_manager.list_modules():
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.middleware("http")
+async def tenant_context_middleware(request: Request, call_next):
+    """Establece el contexto de tenant (ADR-0012) para las rutas del panel.
+
+    Los webhooks resuelven su tenant dentro del propio handler
+    (resolve_tenant_for_phone); aquí se cubre el panel: cookie -> admin ->
+    tenant_user -> tenant_scope. Si el admin aún no tiene tenant asignado, la
+    petición corre sin contexto (RLS devuelve vacío).
+    """
+    path = request.url.path
+    if path.startswith("/admin"):
+        admin = await current_admin(request)
+        if admin is not None:
+            tenants = await admin_tenants(admin.id)
+            if tenants:
+                async with tenant_scope(tenants[0][0]):
+                    return await call_next(request)
+    return await call_next(request)
 
 
 @app.get("/")

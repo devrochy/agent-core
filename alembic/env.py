@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from alembic import context
 from core.config import get_settings
 from core.db.models import Base
 
@@ -14,9 +14,12 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# URL síncrona (psycopg2) para migraciones
+# URL síncrona (psycopg2) para migraciones. Las migraciones corren como el DUEÑO
+# de las tablas (MIGRATIONS_DATABASE_URL); el runtime conecta con app_runtime para
+# que RLS se aplique (ADR-0001). Vacío → usa DATABASE_URL.
+_migrations_url = get_settings().migrations_database_url or get_settings().database_url
 if not config.get_main_option("sqlalchemy.url"):
-    config.set_main_option("sqlalchemy.url", get_settings().database_url.replace("+asyncpg", ""))
+    config.set_main_option("sqlalchemy.url", _migrations_url.replace("+asyncpg", ""))
 
 target_metadata = Base.metadata
 

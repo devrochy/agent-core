@@ -44,6 +44,7 @@ from core.shared.audit import record_audit
 from core.shared.crypto import get_secret_box
 from core.shared.exceptions import LLMProviderError, PluginError
 from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
@@ -259,6 +260,7 @@ async def _record_usage(conversation_id: uuid.UUID, provider_name: str, response
         async with get_session() as session:
             session.add(
                 LLMUsage(
+                    tenant_id=get_current_tenant_id(),
                     conversation_id=conversation_id,
                     provider=provider_name,
                     model=response.model,

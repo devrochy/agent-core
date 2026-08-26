@@ -16,6 +16,7 @@ from core.config import get_settings
 from core.db.models import ChannelConnection
 from core.db.session import get_session
 from core.shared.crypto import get_secret_box
+from core.shared.tenant import get_current_tenant_id
 
 # Claves que se guardan cifradas en credentials_encrypted (lista blanca)
 CREDENTIAL_KEYS = ("phone_number_id", "app_secret", "access_token", "verify_token")
@@ -137,6 +138,7 @@ async def save_connection(
                 existing.active = True
                 return existing, False
             connection = ChannelConnection(
+                tenant_id=get_current_tenant_id(),
                 channel="whatsapp",
                 provider="meta",
                 label=label,

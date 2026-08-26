@@ -40,6 +40,7 @@ from core.gateway.connections import (
 from core.plugin_manager import plugin_manager
 from core.shared.crypto import get_secret_box
 from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -53,7 +54,14 @@ async def _base_context(request: Request, section: str) -> dict[str, Any] | None
     if admin is None:
         return None
     async with get_session() as session:
-        app_settings = (await session.execute(select(AppSettings).limit(1))).scalar_one_or_none()
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == get_current_tenant_id(),
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
     return {
         "request": request,
         "section": section,
@@ -148,7 +156,14 @@ async def dashboard(request: Request):
                 )
             )
         ).scalar() or 0
-        app_settings = (await session.execute(select(AppSettings).limit(1))).scalar_one_or_none()
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == get_current_tenant_id(),
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
         recent_rows = (
             await session.execute(
                 select(Conversation, Customer)
@@ -410,7 +425,14 @@ async def plugin_config_save(request: Request, plugin_id: str):
         async with get_session() as session:
             from core.db.models import PluginConfig as PluginConfigModel
 
-            stored = await session.get(PluginConfigModel, plugin_id)
+            stored = (
+                await session.execute(
+                    select(PluginConfigModel).where(
+                        PluginConfigModel.plugin_id == plugin_id,
+                        PluginConfigModel.tenant_id == get_current_tenant_id(),
+                    )
+                )
+            ).scalar_one_or_none()
         if stored is not None:
             previous = get_secret_box().decrypt_json(stored.config_encrypted)
     except Exception:
@@ -623,10 +645,17 @@ async def settings_page(request: Request):
     if ctx is None:
         return _login_redirect()
     async with get_session() as session:
-        app_settings = (await session.execute(select(AppSettings).limit(1))).scalar_one_or_none()
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == get_current_tenant_id(),
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
     if app_settings is None:
         async with get_session() as session:
-            app_settings = AppSettings()
+            app_settings = AppSettings(tenant_id=get_current_tenant_id())
             session.add(app_settings)
     ctx.update(s=app_settings, behavior=dict(app_settings.behavior_config))
     return _render("settings.html", ctx)
@@ -644,9 +673,16 @@ async def settings_save(
     if await current_admin(request) is None:
         return _login_redirect()
     async with get_session() as session:
-        app_settings = (await session.execute(select(AppSettings).limit(1))).scalar_one_or_none()
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == get_current_tenant_id(),
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
         if app_settings is None:
-            app_settings = AppSettings()
+            app_settings = AppSettings(tenant_id=get_current_tenant_id())
             session.add(app_settings)
         app_settings.assistant_name = assistant_name
         app_settings.business_description = business_description
@@ -662,7 +698,14 @@ async def toggle_global_bot(request: Request):
     if await current_admin(request) is None:
         return _login_redirect()
     async with get_session() as session:
-        app_settings = (await session.execute(select(AppSettings).limit(1))).scalar_one_or_none()
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == get_current_tenant_id(),
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
         if app_settings is not None:
             app_settings.bot_paused = not app_settings.bot_paused
     return RedirectResponse("/admin/configuracion?flash=Estado del bot actualizado", status_code=303)
@@ -678,9 +721,16 @@ async def settings_llm_save(
     if await current_admin(request) is None:
         return _login_redirect()
     async with get_session() as session:
-        app_settings = (await session.execute(select(AppSettings).limit(1))).scalar_one_or_none()
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == get_current_tenant_id(),
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
         if app_settings is None:
-            app_settings = AppSettings()
+            app_settings = AppSettings(tenant_id=get_current_tenant_id())
             session.add(app_settings)
         app_settings.llm_provider = llm_provider or None
         app_settings.llm_model = llm_model or None

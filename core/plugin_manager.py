@@ -35,6 +35,7 @@ from core.shared.crypto import get_secret_box
 from core.shared.events import ON_PLUGIN_ACTIVATED, ON_PLUGIN_DISABLED, event_bus
 from core.shared.exceptions import PluginConfigError, PluginError
 from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
@@ -117,10 +118,20 @@ class PluginManager:
                 raise PluginConfigError(plugin_id, f"Configuración inválida: {exc}") from exc
 
         encrypted = get_secret_box().encrypt_json(raw_values)
+        tenant_id = get_current_tenant_id()
         async with get_session() as session:
-            existing = await session.get(PluginConfig, plugin_id)
+            existing = (
+                await session.execute(
+                    select(PluginConfig).where(
+                        PluginConfig.plugin_id == plugin_id,
+                        PluginConfig.tenant_id == tenant_id,
+                    )
+                )
+            ).scalar_one_or_none()
             if existing is None:
-                session.add(PluginConfig(plugin_id=plugin_id, config_encrypted=encrypted))
+                session.add(
+                    PluginConfig(plugin_id=plugin_id, tenant_id=tenant_id, config_encrypted=encrypted)
+                )
             else:
                 existing.config_encrypted = encrypted
             record = await session.get(PluginRecord, plugin_id)
@@ -131,8 +142,16 @@ class PluginManager:
         module = self._require(plugin_id)
         if module.config_schema is None:
             return None
+        tenant_id = get_current_tenant_id()
         async with get_session() as session:
-            stored = await session.get(PluginConfig, plugin_id)
+            stored = (
+                await session.execute(
+                    select(PluginConfig).where(
+                        PluginConfig.plugin_id == plugin_id,
+                        PluginConfig.tenant_id == tenant_id,
+                    )
+                )
+            ).scalar_one_or_none()
         if stored is None:
             if module.requires_config:
                 raise PluginConfigError(plugin_id, "El plugin requiere configuración previa")

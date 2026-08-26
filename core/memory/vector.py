@@ -20,6 +20,7 @@ import httpx
 
 from core.config import get_settings
 from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
@@ -103,6 +104,7 @@ async def store_memory(
         async with get_session() as session:
             session.add(
                 MemoryVector(
+                    tenant_id=get_current_tenant_id(),
                     customer_id=customer_id,
                     conversation_id=conversation_id,
                     content=content,

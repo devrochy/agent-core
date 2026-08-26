@@ -13,6 +13,7 @@ from typing import Any
 from core.db.models import AuditLog
 from core.db.session import get_session
 from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
@@ -28,6 +29,7 @@ async def record_audit(
         async with get_session() as session:
             session.add(
                 AuditLog(
+                    tenant_id=get_current_tenant_id(),
                     conversation_id=conversation_id,
                     actor=actor,
                     action=action,

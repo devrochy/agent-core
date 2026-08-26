@@ -37,6 +37,10 @@ class Settings(BaseSettings):
         default="postgresql+asyncpg://agent_core:agent_core@localhost:5432/agent_core",
         alias="DATABASE_URL",
     )
+    # Conexión de MIGRACIONES (dueño de las tablas). El runtime conecta con
+    # app_runtime (no dueño) para que RLS se aplique; solo las migraciones usan
+    # el dueño. Vacío = usa DATABASE_URL.
+    migrations_database_url: str = Field(default="", alias="MIGRATIONS_DATABASE_URL")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
 
     # --- Cifrado ---

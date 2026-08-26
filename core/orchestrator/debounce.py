@@ -24,6 +24,7 @@ from typing import Any
 
 from core.memory.working import get_redis
 from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id, tenant_scope
 
 log = get_logger(__name__)
 
@@ -35,6 +36,9 @@ POLL_INTERVAL_S = 1.5
 async def schedule_debounce(conversation_id: uuid.UUID, delay_ms: int, payload: dict[str, Any]) -> None:
     r = get_redis()
     fire_at = int(time.time() * 1000) + delay_ms
+    tenant_id = get_current_tenant_id()
+    if tenant_id is not None:
+        payload["tenant_id"] = str(tenant_id)
     await r.set(PAYLOAD_KEY.format(conversation_id=conversation_id), json.dumps(payload))
     await r.zadd(PENDING_KEY, {str(conversation_id): fire_at})
 
@@ -80,22 +84,32 @@ async def _fire_conversation(conversation_id: uuid.UUID, payload: dict[str, Any]
 
     try:
         latest_message = str(payload.get("latest_message", ""))
-        result = await process_conversation(conversation_id, latest_message)
-        if result is not None and result.text:
-            delivered = await send_to_conversation(
-                conversation_id, result.text, image_url=result.image_url
-            )
-            if not delivered and not result.escalated:
-                # El turno se generó pero no llegó al canal: escalar a humano
-                # para no perder al cliente (incidente de envío silencioso detectado en producción).
-                await escalate(conversation_id, reason="send_failed",
-                               summary=result.text[:200])
+        tenant_id = payload.get("tenant_id")
+        if tenant_id is None:
+            log.warning("debounce_without_tenant", conversation_id=str(conversation_id))
+            return
+
+        async with tenant_scope(tenant_id):
+            result = await process_conversation(conversation_id, latest_message)
+            if result is not None and result.text:
+                delivered = await send_to_conversation(
+                    conversation_id, result.text, image_url=result.image_url
+                )
+                if not delivered and not result.escalated:
+                    # El turno se generó pero no llegó al canal: escalar a humano
+                    # para no perder al cliente (incidente de envío silencioso detectado en producción).
+                    await escalate(conversation_id, reason="send_failed",
+                                   summary=result.text[:200])
     except Exception:
         log.exception("debounce_fire_failed", conversation_id=str(conversation_id))
 
 
 async def recover_orphaned_conversations() -> None:
-    """Al arrancar: reprograma conversaciones con inbound pendiente sin timer vivo."""
+    """Al arrancar: reprograma conversaciones con inbound pendiente sin timer vivo.
+
+    Recorre los tenants uno a uno dentro de tenant_scope: la query es RLS-aware
+    (ADR-0012), así que cada tenant recupera solo sus conversaciones.
+    """
     from sqlalchemy import text
 
     from core.db.session import get_session
@@ -103,30 +117,37 @@ async def recover_orphaned_conversations() -> None:
     r = get_redis()
     try:
         async with get_session() as session:
-            rows = (
-                await session.execute(
-                    text(
-                        """
-                        SELECT DISTINCT ON (m.conversation_id)
-                               m.conversation_id, m.direction, m.content
-                        FROM messages m
-                        JOIN conversations c ON c.id = m.conversation_id
-                        WHERE c.status = 'open' AND c.bot_paused = false
-                        ORDER BY m.conversation_id, m.created_at DESC
-                        """
-                    )
-                )
-            ).all()
+            tenant_ids = (
+                await session.execute(text("select id from tenants where deleted_at is null"))
+            ).scalars().all()
+
         recovered = 0
-        for conversation_id, direction, content in rows:
-            if direction != "inbound":
-                continue
-            has_timer = await r.zscore(PENDING_KEY, str(conversation_id))
-            if has_timer is None:
-                await schedule_debounce(
-                    uuid.UUID(str(conversation_id)), 0, {"latest_message": content or ""}
-                )
-                recovered += 1
+        for tenant_id in tenant_ids:
+            async with tenant_scope(tenant_id):
+                async with get_session() as session:
+                    rows = (
+                        await session.execute(
+                            text(
+                                """
+                                SELECT DISTINCT ON (m.conversation_id)
+                                       m.conversation_id, m.direction, m.content
+                                FROM messages m
+                                JOIN conversations c ON c.id = m.conversation_id
+                                WHERE c.status = 'open' AND c.bot_paused = false
+                                ORDER BY m.conversation_id, m.created_at DESC
+                                """
+                            )
+                        )
+                    ).all()
+            for conversation_id, direction, content in rows:
+                if direction != "inbound":
+                    continue
+                has_timer = await r.zscore(PENDING_KEY, str(conversation_id))
+                if has_timer is None:
+                    await schedule_debounce(
+                        uuid.UUID(str(conversation_id)), 0, {"latest_message": content or ""}
+                    )
+                    recovered += 1
         if recovered:
             log.info("orphaned_conversations_recovered", count=recovered)
     except Exception:

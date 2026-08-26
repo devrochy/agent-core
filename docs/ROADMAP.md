@@ -26,7 +26,7 @@ en qué estamos.
 ## Sprint 1 — Núcleo multi-tenant · Semanas 2–3
 
 - [ ] Esquema core con `tenant_id` + RLS en todas las tablas
-- [ ] `tenant_id` como claim en el JWT de Supabase
+- [ ] `tenant_id` como claim del contexto autenticado (auth propia, ADR-0012)
 - [ ] Gateway: verificación de firma de Meta
 - [ ] Dedupe por `external_message_id` (ADR-0007)
 - [ ] Lock + debounce por conversación en Redis (ADR-0006)
@@ -106,6 +106,8 @@ documentos, no con promesas.
 
 | Fecha | Deuda | Origen | Prioridad |
 |---|---|---|---|
-| | | | |
+| 2026-08-26 | Tablas `crm_*` del plugin sin `tenant_id`/RLS (13 tablas) | Excepción documentada en Sprint 1 (Fase A) | **alta** — migrar en Sprint 3 ANTES de CULTO en producción |
+| 2026-08-26 | `PluginManager.module.config` se cachea en singleton sin scope de tenant (punto 8 del auditor) | Sprint 1 (Fase A) | media — resolver en el registry por-tenant (Sprint 4) |
+| 2026-08-26 | Tools runtime sin `scopes` ni manifest de dominios (`agentpkg.yaml`) | Auditoría inicial | media — Sprint 5 (MCP + allowlist) |
 
 Cada vez que un onboarding requiera escribir código, se anota aquí: es un pack incompleto.

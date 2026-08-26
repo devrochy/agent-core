@@ -14,9 +14,11 @@ from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from core.config import get_settings
+from core.shared.tenant import get_current_tenant_id
 
 _engine = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -41,6 +43,14 @@ async def get_session() -> AsyncIterator[AsyncSession]:
     factory = get_session_factory()
     async with factory() as session:
         try:
+            tenant_id = get_current_tenant_id()
+            if tenant_id is not None:
+                # Scope de TRANSACCIÓN (is_local=true): muere con el COMMIT, no se
+                # filtra entre conexiones del pool. ADR-0012.
+                await session.execute(
+                    text("select set_config('app.tenant_id', :t, true)"),
+                    {"t": str(tenant_id)},
+                )
             yield session
             await session.commit()
         except Exception:

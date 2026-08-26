@@ -48,10 +48,13 @@ services:
     entrypoint: ["/app/scripts/entrypoint.sh"]
     command: uvicorn core.main:app --host 0.0.0.0 --port 8000
     env_file: .env
-    # Las variables internas usan el hostname del servicio Docker, no localhost
+    # Las variables internas usan el hostname del servicio Docker, no localhost.
+    # RLS se aplica de verdad solo si el runtime conecta como app_runtime (NO dueño);
+    # las migraciones corren como el dueño vía MIGRATIONS_DATABASE_URL (ADR-0001).
     environment:
       AGENT_CORE_ROLE: api
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agent_core}:${POSTGRES_PASSWORD:-agent_core}@postgres:5432/${POSTGRES_DB:-agent_core}
+      DATABASE_URL: postgresql+asyncpg://app_runtime:app_runtime@postgres:5432/${POSTGRES_DB:-agent_core}
+      MIGRATIONS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agent_core}:${POSTGRES_PASSWORD:-agent_core}@postgres:5432/${POSTGRES_DB:-agent_core}
       REDIS_URL: redis://redis:6379/0
     ports:
       - "${APP_HOST_PORT:-8000}:8000"
@@ -81,7 +84,8 @@ services:
     env_file: .env
     environment:
       AGENT_CORE_ROLE: worker
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agent_core}:${POSTGRES_PASSWORD:-agent_core}@postgres:5432/${POSTGRES_DB:-agent_core}
+      DATABASE_URL: postgresql+asyncpg://app_runtime:app_runtime@postgres:5432/${POSTGRES_DB:-agent_core}
+      MIGRATIONS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agent_core}:${POSTGRES_PASSWORD:-agent_core}@postgres:5432/${POSTGRES_DB:-agent_core}
       REDIS_URL: redis://redis:6379/0
     volumes:
       - ./sdd:/app/sdd
@@ -99,7 +103,8 @@ services:
     env_file: .env
     environment:
       AGENT_CORE_ROLE: beat
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agent_core}:${POSTGRES_PASSWORD:-agent_core}@postgres:5432/${POSTGRES_DB:-agent_core}
+      DATABASE_URL: postgresql+asyncpg://app_runtime:app_runtime@postgres:5432/${POSTGRES_DB:-agent_core}
+      MIGRATIONS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agent_core}:${POSTGRES_PASSWORD:-agent_core}@postgres:5432/${POSTGRES_DB:-agent_core}
       REDIS_URL: redis://redis:6379/0
     volumes:
       - ./sdd:/app/sdd

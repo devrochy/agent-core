@@ -36,6 +36,7 @@ from core.orchestrator.escalation import (
 from core.orchestrator.loop import process_conversation
 from core.shared.events import ON_CONVERSATION_STARTED, ON_MESSAGE_RECEIVED, event_bus
 from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id, tenant_scope
 
 log = get_logger(__name__)
 
@@ -90,6 +91,14 @@ async def _handle_entry(entry_id: str, fields: dict[str, str]) -> None:
 
 
 async def handle_inbound(fields: dict[str, str]) -> None:
+    tenant_id = fields.get("tenant_id")
+    if tenant_id:
+        async with tenant_scope(tenant_id):
+            return await _handle_inbound_scoped(fields)
+    log.warning("inbound_without_tenant", message_id=fields.get("external_message_id"))
+
+
+async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
     settings = get_settings()
     content = fields.get("content", "")
     media_context = fields.get("media_context", "")
@@ -152,21 +161,36 @@ async def _resolve_conversation(
     external_id = fields.get("customer_external_id", "")
     name = fields.get("customer_name") or None
     connection_external_id = fields.get("connection_external_id", "")
+    tenant_id = get_current_tenant_id()
 
     async with get_session() as session:
-        app_settings = (await session.execute(select(AppSettings).limit(1))).scalar_one_or_none()
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == tenant_id,
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
 
         customer = (
             await session.execute(
                 select(Customer).where(
-                    Customer.channel == channel, Customer.external_id == external_id
+                    Customer.tenant_id == tenant_id,
+                    Customer.channel == channel,
+                    Customer.external_id == external_id,
+                    Customer.deleted_at.is_(None),
                 )
             )
         ).scalar_one_or_none()
         if customer is None:
             contact_phone = external_id.removeprefix("whatsapp:") if channel == "whatsapp" else None
             customer = Customer(
-                channel=channel, external_id=external_id, name=name, contact_phone=contact_phone
+                tenant_id=tenant_id,
+                channel=channel,
+                external_id=external_id,
+                name=name,
+                contact_phone=contact_phone,
             )
             session.add(customer)
             await session.flush()
@@ -176,7 +200,8 @@ async def _resolve_conversation(
         connection = (
             await session.execute(
                 select(ChannelConnection).where(
-                    ChannelConnection.external_id == connection_external_id
+                    ChannelConnection.tenant_id == tenant_id,
+                    ChannelConnection.external_id == connection_external_id,
                 )
             )
         ).scalar_one_or_none()
@@ -185,8 +210,10 @@ async def _resolve_conversation(
             await session.execute(
                 select(Conversation)
                 .where(
+                    Conversation.tenant_id == tenant_id,
                     Conversation.customer_id == customer.id,
                     Conversation.status.in_(["open", "escalated"]),
+                    Conversation.deleted_at.is_(None),
                 )
                 .order_by(Conversation.started_at.desc())
                 .limit(1)
@@ -196,6 +223,7 @@ async def _resolve_conversation(
         is_new = conversation is None
         if conversation is None:
             conversation = Conversation(
+                tenant_id=tenant_id,
                 customer_id=customer.id,
                 channel=channel,
                 connection_id=connection.id if connection else None,
@@ -220,6 +248,7 @@ async def _persist_inbound(
         async with get_session() as session:
             session.add(
                 Message(
+                    tenant_id=get_current_tenant_id(),
                     conversation_id=conversation_id,
                     direction="inbound",
                     sender_type="customer",

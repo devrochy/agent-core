@@ -21,6 +21,7 @@ from core.gateway.message_splitter import split_for_bubbles
 from core.shared.crypto import get_secret_box
 from core.shared.events import ON_MESSAGE_SENT, event_bus
 from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
@@ -110,6 +111,7 @@ async def send_to_conversation(
     async with get_session() as session:
         session.add(
             Message(
+                tenant_id=get_current_tenant_id(),
                 conversation_id=conversation_id,
                 direction="outbound",
                 sender_type=sender_type,
