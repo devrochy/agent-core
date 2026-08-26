@@ -216,6 +216,31 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+# ---------------------------------------------------------------- agente (AgentSpec desde BD)
+class AgentSpecRecord(Base):
+    """AgentSpec por tenant desde BD (Sprint 2, ADR-0014).
+
+    `spec` es el JSONB del contrato congelado `AgentSpec`. UNIQUE(tenant_id, version)
+    + un solo activo por tenant (ADR-0009: canary corre dos versiones en paralelo).
+    """
+
+    __tablename__ = "agent_specs"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "version", name="uq_agent_specs_tenant_version"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    version: Mapped[str] = mapped_column(Text, default="1.0.0")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    spec: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 # ---------------------------------------------------------------- plugins
 class PluginRecord(Base):
     """Registro de plugins instalados en el binario (catálogo de SISTEMA, sin RLS).

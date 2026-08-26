@@ -17,7 +17,7 @@ from conftest import PHONE, FakeProvider, _meta_payload
 from sqlalchemy import func, select
 
 pytestmark = [
-    pytest.mark.asyncio(loop_scope="module"),
+    pytest.mark.asyncio(loop_scope="session"),
     pytest.mark.skipif(
         os.environ.get("AGENT_CORE_INTEGRATION") != "1",
         reason="tests de integración: requiere AGENT_CORE_INTEGRATION=1 y el stack local",

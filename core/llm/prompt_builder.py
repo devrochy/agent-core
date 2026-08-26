@@ -1,55 +1,22 @@
-"""SystemPromptBuilder: ensambla el system prompt dinámicamente.
+"""SystemPromptBuilder: ENSAMBLADOR de bloques del system prompt (Sprint 2, ADR-0014).
 
-Estructura en bloques (list[str], cada uno cacheable de forma independiente):
+Este módulo NO contiene texto de instrucciones al modelo: todo el contenido vive en
+playbooks (`.md`, allowlist de `AgentSpec.playbooks`) y en datos del tenant. Aquí solo
+se ensambla:
 
-  Bloque 1 — Base: identidad del asistente + reglas de operación (estable).
-  Bloque 2 — Tono: variante fija (calido | formal | divertido) — compartible.
-  Bloque 3 — Voz de marca: texto libre del negocio (estable por negocio).
-  Bloque 4 — Contexto dinámico: skills activas + memoria recuperada (RAG).
-              Este bloque SÍ cambia por turno — por eso va al final y separado,
-              para no invalidar el cache de los bloques 1-3.
-
-REGLA DE ORO: los bloques 1-3 NUNCA contienen fecha/hora ni valores variables
-(docs/PROMPT-CACHING-GUIDE.md).
+  1. Los playbooks del tenant en el orden del índice `AgentSpec.playbooks`,
+     con sustitución de placeholders ({assistant_name}, {business_description},
+     {language}).
+  2. Bloques dinámicos del turno (voz de marca, skills activas, perfil y memorias)
+     que cambian por turno — van al final para no invalidar el cache de los bloques
+     estables (docs/PROMPT-CACHING-GUIDE.md).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-TONE_BLOCKS: dict[str, str] = {
-    "calido": (
-        "## Tono\n"
-        "Habla de forma cercana y amable, como un buen vendedor de barrio que conoce a sus "
-        "clientes. Usa un lenguaje sencillo y cálido. Puedes usar emojis con moderación (máximo "
-        "uno por mensaje). Trata al cliente de 'tú'."
-    ),
-    "formal": (
-        "## Tono\n"
-        "Mantén un tono profesional y respetuoso. Usa 'usted' para dirigirte al cliente. "
-        "No uses emojis ni expresiones coloquiales. Sé claro, preciso y cortés."
-    ),
-    "divertido": (
-        "## Tono\n"
-        "Sé alegre y con buen humor, sin perder profesionalismo. Puedes usar emojis y "
-        "expresiones amigables. Haz que la conversación sea ligera y agradable. Trata al "
-        "cliente de 'tú'."
-    ),
-}
-
-BASE_RULES = """\
-## Reglas de operación
-- Responde SIEMPRE en {language}.
-- Usa las herramientas disponibles para consultar información real. NUNCA inventes datos: \
-si no tienes la información, dilo y ofrece escalar a un asesor humano.
-- No menciones que eres un modelo de lenguaje ni hables de tus herramientas internas.
-- Si el cliente pide hablar con una persona, usa la herramienta de escalamiento.
-- Cuando el cliente muestre intención de compra y proporcione su nombre, usa la \
-herramienta para registrar el lead (prospecto) en el CRM automáticamente.
-- Separa ideas distintas con un salto de línea en blanco (el sistema divide tu respuesta \
-en mensajes cortos).
-- Mantente dentro del ámbito del negocio. Ante temas ajenos, redirige una vez; si insiste, escala.
-"""
+from agentcore_contracts import AgentSpec
 
 
 @dataclass
@@ -57,33 +24,53 @@ class PromptContext:
     assistant_name: str
     business_description: str
     language: str = "es"
-    tone: str = "calido"
+    tone: str = "cercano"
     brand_voice: str = ""
     active_skills_summary: str = ""   # descripción de las skills activas del turno
     recalled_memories: list[str] = field(default_factory=list)  # Capa 3 (RAG)
     entity_profile: str = ""          # Capa 2 (perfil del cliente)
 
+    @property
+    def template_vars(self) -> dict[str, str]:
+        language_names = {"es": "español", "en": "inglés", "pt": "portugués"}
+        return {
+            "assistant_name": self.assistant_name,
+            "business_description": self.business_description,
+            "language": language_names.get(self.language, self.language),
+        }
 
-def build_system_blocks(ctx: PromptContext) -> list[str]:
-    language_names = {"es": "español", "en": "inglés", "pt": "portugués"}
-    language = language_names.get(ctx.language, ctx.language)
 
-    # Bloque 1 — Base (estable, cacheable)
-    block_base = (
-        f"Eres {ctx.assistant_name}, el asistente virtual de: {ctx.business_description}\n\n"
-        + BASE_RULES.format(language=language)
-    )
+async def _render_playbook(
+    spec: AgentSpec, ref_name: str, vars_: dict[str, str]
+) -> str | None:
+    """Carga el playbook y sustituye placeholders. None si no está en el índice."""
+    from core.agents.playbooks import load_playbook
 
-    # Bloque 2 — Tono (variante fija, cacheable y compartible)
-    block_tone = TONE_BLOCKS.get(ctx.tone, TONE_BLOCKS["calido"])
+    content = await load_playbook(spec, ref_name)
+    if content is None:
+        return None
+    try:
+        return content.format(**vars_)
+    except KeyError:
+        # playbook con placeholder no provisto: se incluye tal cual
+        return content
 
-    blocks = [block_base, block_tone]
 
-    # Bloque 3 — Voz de marca (estable por negocio)
+async def build_system_blocks(spec: AgentSpec, ctx: PromptContext) -> list[str]:
+    """Ensambla los bloques del system prompt desde el spec + playbooks + turno."""
+    blocks: list[str] = []
+
+    # 1. Playbooks del tenant, en el orden del índice (identidad, tono, reglas...)
+    for ref in spec.playbooks:
+        rendered = await _render_playbook(spec, ref.name, ctx.template_vars)
+        if rendered:
+            blocks.append(rendered)
+
+    # 2. Voz de marca (dato del tenant, estable por negocio)
     if ctx.brand_voice:
         blocks.append(f"## Voz de marca\n{ctx.brand_voice}")
 
-    # Bloque 4 — Contexto dinámico (cambia por turno; va al final)
+    # 3. Contexto dinámico del turno (va al final; no invalida el cache estable)
     dynamic_parts: list[str] = []
     if ctx.active_skills_summary:
         dynamic_parts.append(f"## Capacidades activas en este turno\n{ctx.active_skills_summary}")

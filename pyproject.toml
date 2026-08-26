@@ -93,6 +93,6 @@ ignore = [
 asyncio_mode = "auto"
 testpaths = ["tests"]
 # Los tests de integración comparten el engine async (singleton) y el stack real:
-# todas las corrutinas corren en el loop de módulo, no en uno por test.
-asyncio_default_fixture_loop_scope = "module"
-asyncio_default_test_loop_scope = "module"
+# todas las corrutinas corren en un único loop de SESIÓN, no uno por test/módulo.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"

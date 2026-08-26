@@ -32,6 +32,8 @@ async def run_scenario(path: Path) -> tuple[str, bool, str]:
         return name, ok, "" if ok else "La keyword no disparó escalamiento"
 
     # Escenarios con LLM real
+    from agentcore_contracts import AgentSpec
+
     from core.config import get_settings
     from core.llm import resolve_provider
     from core.llm.prompt_builder import PromptContext, build_system_blocks
@@ -49,6 +51,32 @@ async def run_scenario(path: Path) -> tuple[str, bool, str]:
         if plugin_manager.get(plugin_id) is None:
             return name, True, f"SKIP: requiere {plugin_id} (no instalado)"
 
+    # Spec sintético para evals: identidad/tono/reglas vienen de los playbooks
+    # default del framework (ADR-0014).
+    spec = AgentSpec(
+        id="eval",
+        version="1.0.0",
+        tenantId="eval-tenant",
+        persona={
+            "role": "asistente",
+            "tone": "cercano",
+            "warmth": 3,
+            "emojis": "sparse",
+            "maxLength": 500,
+            "forbiddenPhrases": [],
+            "locale": "es-CO",
+        },
+        model={"primary": settings.llm_model, "temperature": 0.3},
+        memory={"shortTermTurns": 30, "summarize": True},
+        playbooks=[
+            {"name": "identidad", "description": "Identidad"},
+            {"name": "tono", "description": "Tono"},
+            {"name": "reglas-operacion", "description": "Reglas"},
+        ],
+        tools=[],
+        policies={"escalation": {"triggers": []}, "confirmBeforeWrite": True, "maxToolCallsPerTurn": 10},
+        packs=[],
+    )
     provider = resolve_provider()
     ctx = PromptContext(
         assistant_name="Asistente de Prueba",
@@ -59,7 +87,7 @@ async def run_scenario(path: Path) -> tuple[str, bool, str]:
         LLMMessage(role=m["role"], content=m["content"]) for m in scenario["conversation"]
     ]
     response = await provider.generate(
-        system_blocks=build_system_blocks(ctx), messages=messages, tools=tools or None
+        system_blocks=await build_system_blocks(spec, ctx), messages=messages, tools=tools or None
     )
 
     failures: list[str] = []

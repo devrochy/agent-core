@@ -20,6 +20,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from core.agents.spec import load_active_spec
 from core.config import get_settings
 from core.db.models import AppSettings, Conversation, Customer, LLMUsage, Message
 from core.db.session import get_session
@@ -74,6 +75,9 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     if customer is None or conversation.bot_paused or conversation.status == "escalated":
         return None
 
+    # ---------------- 0. AgentSpec del tenant (Sprint 2, ADR-0014)
+    spec = await load_active_spec()
+
     # ---------------- 1. Memoria y contexto
     history = await _load_history(conversation_id)
     recent_context = " ".join(m.content for m in history[-6:] if m.content)
@@ -89,20 +93,20 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         assistant_name=app_settings.assistant_name if app_settings else settings.app_name,
         business_description=app_settings.business_description if app_settings else "",
         language=app_settings.language if app_settings else "es",
-        tone=str((app_settings.behavior_config if app_settings else {}).get("tono", "calido")),
+        tone=spec.persona.tone,
         brand_voice=app_settings.brand_voice if app_settings else "",
         active_skills_summary=skills_summary(active_tools),
         recalled_memories=recalled,
         entity_profile=entity_memory.profile_to_prompt(profile),
     )
-    system_blocks = build_system_blocks(prompt_ctx)
+    system_blocks = await build_system_blocks(spec, prompt_ctx)
 
     # ---------------- 2. Proveedor y routing
     turnos_sin_resolver = int(conversation.state.get("turnos_sin_resolver", 0))
     routing = route_model(
         message=latest_message,
         turnos_sin_resolver=turnos_sin_resolver,
-        default_model=_resolved_model(app_settings, settings.llm_model),
+        default_model=_resolved_model(app_settings, spec, settings.llm_model),
         reasoning_model=settings.llm_model_reasoning,
         routing_enabled=settings.difficulty_routing,
         requires_tools=bool(active_tools),
@@ -274,9 +278,12 @@ async def _record_usage(conversation_id: uuid.UUID, provider_name: str, response
         log.warning("llm_usage_record_failed")  # best-effort: nunca interrumpe la respuesta
 
 
-def _resolved_model(app_settings: AppSettings | None, env_model: str) -> str:
+def _resolved_model(app_settings: AppSettings | None, spec, env_model: str) -> str:  # type: ignore[no-untyped-def]
+    """Prioridad: BYOK del panel > spec.model.primary > env."""
     if app_settings and app_settings.llm_model:
         return app_settings.llm_model
+    if spec is not None and spec.model.primary:
+        return spec.model.primary
     return env_model
 
 
