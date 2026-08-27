@@ -16,9 +16,9 @@
         <td>{{ o.total }}</td>
         <td>
           <details>
-            <summary class="small text-primary">{{ o.items|length }} items</summary>
+            <summary class="small text-primary">{{ o.line_items|length }} items</summary>
             <ul class="list-unstyled mt-1 mb-0 small">
-              {% for i in o.items %}
+              {% for i in o.line_items %}
               <li>{{ i.quantity }}× {{ i.name }} ({{ i.unit_price }})</li>
               {% endfor %}
             </ul>

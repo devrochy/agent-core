@@ -486,7 +486,7 @@ async def crm_orders(request: Request):
                 "delivery_address": o.delivery_address,
                 "delivery_full_name": o.delivery_full_name,
                 "created_at": _iso(o.created_at),
-                "items": items_by_order.get(str(o.id), []),
+                "line_items": items_by_order.get(str(o.id), []),
             }
             for o in orders
         ],
