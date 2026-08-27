@@ -479,6 +479,7 @@ async def crm_orders(request: Request):
                 "id": o.id,
                 "public_order_number": o.public_order_number,
                 "total": _money(o.total),
+                "total_raw": float(o.total),
                 "status": o.status,
                 "payment_status": o.payment_status,
                 "payment_method": o.payment_method,

@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from core.admin.auth import SESSION_COOKIE, current_admin
 from core.admin.views import router as admin_router
@@ -57,6 +58,12 @@ app = FastAPI(title="agent-core", lifespan=lifespan, docs_url=None, redoc_url=No
 
 app.include_router(webhooks_router)
 app.include_router(admin_router)
+
+# Estáticos del panel (table.css/table.js del motor data-table)
+from pathlib import Path
+
+_admin_static = Path(__file__).resolve().parent / "admin" / "static"
+app.mount("/static", StaticFiles(directory=str(_admin_static)), name="static")
 
 # Rutas admin aportadas por plugins (routers propios). El scan aquí es necesario
 # porque los routers deben montarse ANTES de arrancar el servidor; el lifespan

@@ -1,0 +1,53 @@
+{# Motor data-table reutilizable (paridad agent-sale).
+
+Uso:
+  {% from "_datatable.html" import datatable %}
+  {% call datatable(filter_fields=[{"key":"estado","label":"Estado","options":[{"value":"x","label":"X"}]}], page_size=20, add_modal="modal-nuevo", add_label="Nuevo") %}
+    <thead>...<th class="dt-sortable" data-sort-key="col">Col</th>...</thead>
+    <tbody>
+      <tr data-search="texto" data-filter-estado="x" data-sort-col="valor">
+        ... <td class="text-end"><div class="dt-actions-row">...iconos...</div></td>
+      </tr>
+    </tbody>
+  {% endcall %}
+
+El contenedor `[data-table]` (card) engloba toolbar + tabla + pager; el JS
+client-side de /static/table.js hace búsqueda/filtros/sort/paginación.
+#}
+{% macro datatable(filter_fields=(), page_size=20, add_modal=None, add_label=None) %}
+<div class="card" data-table data-page-size="{{ page_size }}">
+  <div class="card-body">
+    <div class="dt-toolbar">
+      <input type="search" class="form-control dt-search" data-table-search placeholder="Buscar…">
+      {% for f in filter_fields %}
+      <select class="form-select dt-filter" data-table-filter data-filter-key="{{ f.key }}" style="max-width:180px">
+        <option value="">{{ f.label }}</option>
+        {% for opt in f.options %}
+        <option value="{{ opt.value }}">{{ opt.label }}</option>
+        {% endfor %}
+      </select>
+      {% endfor %}
+      {% if add_modal %}
+      <div class="ms-auto">
+        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#{{ add_modal }}">
+          <i class="bi bi-plus-lg"></i> {{ add_label or 'Nuevo' }}
+        </button>
+      </div>
+      {% endif %}
+    </div>
+    <div class="table-responsive">
+      <table class="table table-hover align-middle">
+        {{ caller() }}
+      </table>
+    </div>
+    <div class="dt-pager">
+      <span class="small text-secondary"><span data-table-count>0</span> registros</span>
+      <div class="btn-group btn-group-sm">
+        <button type="button" class="btn btn-outline-secondary" data-table-prev aria-label="Anterior">‹</button>
+        <span class="btn btn-outline-secondary disabled" data-table-pagelabel>1 / 1</span>
+        <button type="button" class="btn btn-outline-secondary" data-table-next aria-label="Siguiente">›</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endmacro %}

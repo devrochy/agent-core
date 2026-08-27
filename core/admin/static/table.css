@@ -1,0 +1,50 @@
+/* Motor data-table (paridad agent-sale): toolbar, sortable, pager, acciones. */
+
+[data-table] .dt-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+[data-table] .dt-toolbar .dt-search {
+  min-width: 220px;
+}
+[data-table] .dt-toolbar .ms-auto {
+  margin-left: auto;
+}
+[data-table] .dt-toolbar .btn {
+  white-space: nowrap;
+}
+
+[data-table] th.dt-sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+[data-table] th.dt-sortable:hover {
+  text-decoration: underline;
+}
+[data-table] th.dt-asc::after { content: " ↑"; }
+[data-table] th.dt-desc::after { content: " ↓"; }
+
+[data-table] .dt-actions-row {
+  display: flex;
+  gap: 0.25rem;
+  justify-content: flex-end;
+}
+[data-table] .dt-actions-row .btn {
+  padding: 0.15rem 0.4rem;
+  line-height: 1;
+}
+[data-table] .dt-actions-row .btn-outline-danger:hover {
+  color: #fff;
+}
+
+[data-table] .dt-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}

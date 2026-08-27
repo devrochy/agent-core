@@ -17,6 +17,7 @@ dependencies = [
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
     "itsdangerous>=2.2",
+    "aiofiles>=24.1",
     # DB
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.29",
