@@ -5,13 +5,14 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./
+COPY packages/contracts ./packages/contracts
 COPY core ./core
 COPY cli ./cli
 COPY alembic ./alembic
 COPY alembic.ini ./
 COPY sdd/templates ./sdd/templates
 
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e packages/contracts && pip install --no-cache-dir -e .
 
 # Los plugins locales se montan como volumen y se instalan al arrancar si existen
 COPY scripts ./scripts

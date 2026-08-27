@@ -93,7 +93,10 @@ async def consume_loop() -> None:
             for task in pending:
                 task.cancel()
             raise
-        except Exception:
+        except Exception as exc:
+            if "NOGROUP" in str(exc):
+                # El stream/grupo se borró en runtime (flush/limpieza): recrear.
+                await ensure_group()
             log.exception("consumer_loop_error")
             await asyncio.sleep(2)
 

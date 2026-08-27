@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     max_agent_iterations: int = Field(default=6, alias="MAX_AGENT_ITERATIONS")
     message_split_style: SplitStyle = Field(default="pocos_cortos", alias="MESSAGE_SPLIT_STYLE")
 
+    # --- Modo demo (SOLO desarrollo) ---
+    # Activa un LLM fake determinístico y un envío de canal no-op para probar el
+    # pipeline sin API key ni credenciales reales. Prohibido en producción.
+    demo_mode: bool = Field(default=False, alias="DEMO_MODE")
+
     # --- Concurrencia (Sprint 1, ADR-0006) ---
     # Turnos concurrentes globales y por tenant. La cuota por tenant impide que un
     # tenant ruidoso ahogue a los demás en el mismo worker.

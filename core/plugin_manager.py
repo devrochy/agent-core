@@ -204,20 +204,31 @@ class PluginManager:
         await self.deactivate(plugin_id, status="error", reason=reason)
 
     async def activate_all_configured(self) -> None:
-        """Al arrancar: activa todo plugin con estado configured/active en BD."""
+        """Al arrancar: activa todo plugin con estado configured/active en BD.
+
+        La activación es global (mcp_host es un singleton); la config del plugin se
+        carga del tenant por defecto. El enablement por tenant (AgentSpec.packs) es
+        deuda Sprint 4.
+        """
+        from core.shared.tenant import default_tenant, tenant_scope
+
         async with get_session() as session:
             result = await session.execute(
                 select(PluginRecord).where(PluginRecord.status.in_(["configured", "active"]))
             )
             records = result.scalars().all()
-        for record in records:
-            if record.id not in self._modules:
-                log.warning("plugin_in_db_not_installed", plugin=record.id)
-                continue
-            try:
-                await self.activate(record.id)
-            except PluginError:
-                pass  # ya quedó en estado error; el asistente sigue
+        tenant_id = await default_tenant()
+        if tenant_id is None:
+            return
+        async with tenant_scope(tenant_id):
+            for record in records:
+                if record.id not in self._modules:
+                    log.warning("plugin_in_db_not_installed", plugin=record.id)
+                    continue
+                try:
+                    await self.activate(record.id)
+                except PluginError:
+                    pass  # ya quedó en estado error; el asistente sigue
 
     # ------------------------------------------------------------ migraciones por plugin
     def _run_plugin_migrations(self, plugin_id: str) -> None:
