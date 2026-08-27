@@ -172,6 +172,7 @@ async def crm_products(request: Request):
                 "name": p.name,
                 "description": p.description,
                 "category": cat_by_id[p.category_id].name if p.category_id in cat_by_id else "Sin categoría",
+                "price_raw": float((variant_by_product.get(str(p.id)) or [None])[0].price or 0),
                 "variants": [
                     {
                         "id": v.id,
@@ -382,6 +383,7 @@ async def crm_promotions(request: Request):
                 "type": p.type,
                 "label": (p.rules or {}).get("label", ""),
                 "discount_pct": (p.rules or {}).get("discount_pct", ""),
+                "discount_raw": float((p.rules or {}).get("discount_pct", 0) or 0),
                 "active": p.active,
                 "valid_from": _iso(p.valid_from),
                 "valid_to": _iso(p.valid_to),

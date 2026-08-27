@@ -1,14 +1,94 @@
 {% extends "base.html" %}
+{% from "_datatable.html" import datatable %}
 {% block title %}Productos{% endblock %}
 {% block content %}
 <h1 class="fs-3 mb-4">Productos</h1>
 
-<div class="row g-3 mb-4">
-  <div class="col-md-6">
-    <div class="card h-100">
-      <div class="card-header fw-semibold">Nuevo producto</div>
-      <div class="card-body">
-        <form method="post" action="/crm/productos/guardar">
+{% set cat_options = [] %}
+{% for c in categories %}{% set _ = cat_options.append({"value": c.name, "label": c.name}) %}{% endfor %}
+{% call datatable(filter_fields=[
+  {"key": "categoria", "label": "Categoría", "options": cat_options},
+], page_size=20, add_modal="modal-nuevo-producto", add_label="Nuevo producto") %}
+  <thead>
+    <tr>
+      <th class="dt-sortable" data-sort-key="nombre">Producto</th>
+      <th class="dt-sortable" data-sort-key="categoria">Categoría</th>
+      <th class="dt-sortable" data-sort-key="precio">Precio</th>
+      <th>Variantes (SKU · stock)</th>
+      <th class="text-end">Acciones</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in products %}
+    {% set first = p.variants[0] if p.variants else None %}
+    <tr data-search="{{ p.name }} {{ p.description }} {{ p.category }} {% for v in p.variants %}{{ v.sku }} {% endfor %}"
+        data-filter-categoria="{{ p.category }}"
+        data-sort-nombre="{{ p.name }}" data-sort-categoria="{{ p.category }}" data-sort-precio="{{ p.price_raw }}">
+      <td>
+        <div class="fw-semibold">{{ p.name }}</div>
+        <small class="text-secondary">{{ p.description }}</small>
+      </td>
+      <td>{{ p.category }}</td>
+      <td>{{ first.price if first else '—' }}</td>
+      <td>
+        {% for v in p.variants %}
+        <span class="badge text-bg-light border me-1">{{ v.sku }} · stock {{ v.stock }}</span>
+        {% else %}
+        <span class="text-secondary">sin variantes</span>
+        {% endfor %}
+      </td>
+      <td class="text-end">
+        <div class="dt-actions-row">
+          <div class="dropdown">
+            <button class="btn btn-outline-secondary" data-bs-toggle="dropdown" title="Editar"><i class="bi bi-pencil"></i></button>
+            <div class="dropdown-menu dropdown-menu-end p-2" style="min-width:280px">
+              <form method="post" action="/crm/productos/guardar">
+                <input type="hidden" name="product_id" value="{{ p.id }}">
+                <div class="mb-2"><input name="name" value="{{ p.name }}" class="form-control form-control-sm" placeholder="Nombre"></div>
+                <div class="row g-2 mb-2">
+                  <div class="col-6"><input name="sku" value="{{ first.sku if first else '' }}" class="form-control form-control-sm" placeholder="SKU"></div>
+                  <div class="col-6"><input name="price" type="number" step="0.01" value="{{ p.price_raw }}" class="form-control form-control-sm" placeholder="Precio"></div>
+                  <div class="col-6"><input name="stock" type="number" value="{{ first.stock if first else 0 }}" class="form-control form-control-sm" placeholder="Stock"></div>
+                  <div class="col-6">
+                    <select name="category_id" class="form-select form-select-sm">
+                      <option value="">(sin categoría)</option>
+                      {% for c in categories %}
+                      <option value="{{ c.id }}" {{ 'selected' if p.category == c.name }}>{{ c.name }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                </div>
+                <div class="mb-2"><textarea name="description" class="form-control form-control-sm" rows="2" placeholder="Descripción">{{ p.description }}</textarea></div>
+                <button class="btn btn-sm btn-primary w-100"><i class="bi bi-check-lg"></i> Guardar cambios</button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </td>
+    </tr>
+    {% else %}
+    <tr data-search=""><td colspan="5" class="text-center text-secondary py-4">Sin productos en el catálogo</td></tr>
+    {% endfor %}
+  </tbody>
+{% endcall %}
+
+<div class="mt-3">
+  <form method="post" action="/crm/productos/importar-csv" enctype="multipart/form-data" class="d-flex gap-2 align-items-center">
+    <input type="file" name="file" class="form-control form-control-sm" style="max-width:300px" accept=".csv" required>
+    <button class="btn btn-outline-primary btn-sm"><i class="bi bi-file-earmark-arrow-up"></i> Importar CSV</button>
+    <span class="text-secondary small">Columnas: name, price, stock, sku, category, description</span>
+  </form>
+</div>
+
+<div class="modal fade" id="modal-nuevo-producto" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <form method="post" action="/crm/productos/guardar">
+        <div class="modal-header">
+          <h5 class="modal-title">Nuevo producto</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
           <div class="row g-2">
             <div class="col-md-6"><label class="form-label">Nombre</label><input name="name" class="form-control" required></div>
             <div class="col-md-6"><label class="form-label">Categoría</label>
@@ -21,75 +101,14 @@
             <div class="col-md-4"><label class="form-label">Precio (COP)</label><input name="price" type="number" step="0.01" class="form-control" required></div>
             <div class="col-md-4"><label class="form-label">Stock</label><input name="stock" type="number" value="0" class="form-control"></div>
             <div class="col-12"><label class="form-label">Descripción</label><textarea name="description" class="form-control" rows="2"></textarea></div>
-            <div class="col-12"><button class="btn btn-primary">Guardar producto</button></div>
           </div>
-        </form>
-      </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+          <button class="btn btn-primary"><i class="bi bi-plus-lg"></i> Guardar producto</button>
+        </div>
+      </form>
     </div>
   </div>
-  <div class="col-md-6">
-    <div class="card h-100">
-      <div class="card-header fw-semibold">Importar CSV</div>
-      <div class="card-body">
-        <p class="text-secondary small">Columnas: <code>name, price, stock, sku, category, description</code>. La primera fila debe ser el encabezado.</p>
-        <form method="post" action="/crm/productos/importar-csv" enctype="multipart/form-data">
-          <input type="file" name="file" class="form-control mb-2" accept=".csv" required>
-          <button class="btn btn-outline-primary">Importar</button>
-        </form>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="table-responsive">
-  <table class="table table-striped table-hover align-middle">
-    <thead>
-      <tr><th>Producto</th><th>Categoría</th><th>Variantes (SKU · precio · stock)</th><th></th></tr>
-    </thead>
-    <tbody>
-      {% for p in products %}
-      <tr>
-        <td>
-          <div class="fw-semibold">{{ p.name }}</div>
-          <small class="text-secondary">{{ p.description }}</small>
-        </td>
-        <td>{{ p.category }}</td>
-        <td>
-          {% for v in p.variants %}
-          <span class="badge text-bg-light border me-1">{{ v.sku }} · {{ v.price }} · stock {{ v.stock }}</span>
-          {% else %}
-          <span class="text-secondary">sin variantes</span>
-          {% endfor %}
-        </td>
-        <td>
-          <details>
-            <summary class="small text-primary">editar</summary>
-            <form method="post" action="/crm/productos/guardar" class="mt-2">
-              <input type="hidden" name="product_id" value="{{ p.id }}">
-              <div class="row g-2">
-                <div class="col-12"><input name="name" value="{{ p.name }}" class="form-control form-control-sm"></div>
-                <div class="col-6"><input name="sku" value="{{ p.variants[0].sku if p.variants else '' }}" class="form-control form-control-sm" placeholder="SKU"></div>
-                <div class="col-6"><input name="price" type="number" step="0.01" value="{{ p.variants[0].price if p.variants else 0 }}" class="form-control form-control-sm"></div>
-                <div class="col-6"><input name="stock" type="number" value="{{ p.variants[0].stock if p.variants else 0 }}" class="form-control form-control-sm"></div>
-                <div class="col-6">
-                  <select name="category_id" class="form-select form-select-sm">
-                    <option value="">(sin categoría)</option>
-                    {% for c in categories %}
-                    <option value="{{ c.id }}" {{ 'selected' if p.category == c.name }}>{{ c.name }}</option>
-                    {% endfor %}
-                  </select>
-                </div>
-                <div class="col-12"><textarea name="description" class="form-control form-control-sm" rows="2">{{ p.description }}</textarea></div>
-                <div class="col-12"><button class="btn btn-sm btn-outline-primary">Guardar cambios</button></div>
-              </div>
-            </form>
-          </details>
-        </td>
-      </tr>
-      {% else %}
-      <tr><td colspan="4" class="text-center text-secondary">Sin productos en el catálogo</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
 </div>
 {% endblock %}
