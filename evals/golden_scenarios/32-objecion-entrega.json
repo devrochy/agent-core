@@ -1,0 +1,12 @@
+{
+  "name": "objeccion-entrega-domicilio-27",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "¿El domicilio tiene costo? ¿Hasta qué hora entregan?"}
+  ],
+  "assertions": {
+    "must_not_contain": ["el domicilio cuesta 10.000", "entregan hasta las 11pm"],
+    "must_not_call_tools": false,
+    "max_response_chars": 400
+  }
+}

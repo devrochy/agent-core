@@ -1,0 +1,12 @@
+{
+  "name": "camino-feliz-saludo-catalogo-01",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "Hola, buenas tardes. ¿Qué me pueden ofrecer hoy?"}
+  ],
+  "assertions": {
+    "must_not_contain": ["no tengo idea", "error interno", "no estoy seguro"],
+    "must_not_call_tools": true,
+    "max_response_chars": 400
+  }
+}

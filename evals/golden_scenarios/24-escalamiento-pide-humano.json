@@ -1,0 +1,10 @@
+{
+  "name": "escalamiento-pide-humano-19",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "Necesito hablar con una persona real ahora mismo."}
+  ],
+  "assertions": {
+    "expect_keyword_escalation": true
+  }
+}

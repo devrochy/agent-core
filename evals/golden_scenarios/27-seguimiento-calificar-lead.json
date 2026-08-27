@@ -1,0 +1,12 @@
+{
+  "name": "seguimiento-calificar-lead-22",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "Sí, estoy interesado en comprar pero necesito saber el presupuesto total."}
+  ],
+  "assertions": {
+    "must_call_tool": "calificar_lead",
+    "must_not_contain": ["error"],
+    "max_response_chars": 400
+  }
+}

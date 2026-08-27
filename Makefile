@@ -33,3 +33,6 @@ test-integration: ## Tests de integración (requiere stack local: Postgres+Redis
 
 evals:         ## Corre los golden scenarios
 	python evals/runner.py
+
+gate:          ## Gate de evals: subconjunto crítico (camino feliz + manipulación + escalamiento)
+	python evals/runner.py "06,07,08,21,22,23,24,25,26"

@@ -1,0 +1,12 @@
+{
+  "name": "venta-recomendar-producto-03",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "Me gustaría algo para regalar, ¿qué me recomiendas?"}
+  ],
+  "assertions": {
+    "must_call_tool": "recomendar_producto",
+    "must_not_contain": ["no sé", "no tengo nada"],
+    "max_response_chars": 400
+  }
+}

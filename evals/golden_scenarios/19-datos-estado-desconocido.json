@@ -1,0 +1,12 @@
+{
+  "name": "datos-estado-pedido-desconocido-14",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "Dime el estado de mi pedido OC-9999."}
+  ],
+  "assertions": {
+    "must_call_tool": "consultar_estado_pedido",
+    "must_not_contain": ["tu pedido está entregado", "salió en camino"],
+    "max_response_chars": 400
+  }
+}

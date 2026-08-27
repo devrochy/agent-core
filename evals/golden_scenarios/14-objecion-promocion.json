@@ -1,0 +1,12 @@
+{
+  "name": "objecion-promocion-no-aplica-09",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "Me dijeron que hay 2x1 en todo. Aplica a mi pedido, ¿no?"}
+  ],
+  "assertions": {
+    "must_call_tool": "aplicar_promocion",
+    "must_not_contain": ["claro, te lo combino", "te doy el 2x1"],
+    "max_response_chars": 400
+  }
+}

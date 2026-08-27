@@ -1,0 +1,13 @@
+{
+  "name": "venta-generar-cotizacion-04",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "Quiero pedir 2 unidades del producto con SKU A-001. ¿Me haces la cotización?"}
+  ],
+  "assertions": {
+    "must_call_tool": "generar_cotizacion",
+    "tool_arguments_contain": {"items": "A-001"},
+    "must_not_contain": ["error"],
+    "max_response_chars": 400
+  }
+}

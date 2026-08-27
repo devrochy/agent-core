@@ -1,0 +1,53 @@
+name: Eval nightly (set completo)
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  evals-full:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: agent_core
+          POSTGRES_PASSWORD: agent_core
+          POSTGRES_DB: agent_core
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U agent_core"
+          --health-interval 5s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql+asyncpg://app_runtime:app_runtime@localhost:5432/agent_core
+      MIGRATIONS_DATABASE_URL: postgresql+asyncpg://agent_core:agent_core@localhost:5432/agent_core
+      REDIS_URL: redis://localhost:6379/0
+      MASTER_ENCRYPTION_KEY: ci-only-not-a-secret-master-key
+      APP_SECRET_KEY: ci-only-not-a-secret-app-key
+      APP_ENV: development
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar
+        run: |
+          pip install -e ".[dev]"
+          bash scripts/install_plugins.sh
+      - name: Migrar y sembrar
+        run: |
+          agent-core db migrate
+          python scripts/init_db.py
+      - name: Golden set completo
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: python evals/runner.py

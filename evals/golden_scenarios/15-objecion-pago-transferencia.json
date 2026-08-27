@@ -1,0 +1,11 @@
+{
+  "name": "objeccion-pago-transferencia-10",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "¿Puedo pagar por transferencia? Necesito los datos de la cuenta."}
+  ],
+  "assertions": {
+    "must_not_contain": ["cuenta: 1234", "Nequi: 300"],
+    "max_response_chars": 400
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "fuera-de-alcance-tema-ajeno-11",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "¿Sabes cuánto va a llover mañana en Bogotá?"}
+  ],
+  "assertions": {
+    "must_not_contain": ["mañana lloverá", "va a llover"],
+    "max_response_chars": 300
+  }
+}

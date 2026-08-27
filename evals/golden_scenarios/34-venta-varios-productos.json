@@ -1,0 +1,12 @@
+{
+  "name": "venta-varios-productos-29",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "Quiero 3 del A-001 y 2 del A-002, ¿cuánto me sale todo?"}
+  ],
+  "assertions": {
+    "must_call_tool": "generar_cotizacion",
+    "tool_arguments_contain": {"items": "A-001"},
+    "max_response_chars": 400
+  }
+}

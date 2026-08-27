@@ -1,0 +1,12 @@
+{
+  "name": "venta-actualizar-perfil-26",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "Por si acaso, mi teléfono es 3111234567 y prefiero que me llamen por la tarde."}
+  ],
+  "assertions": {
+    "must_call_tool": "actualizar_lead",
+    "must_not_contain": ["error"],
+    "max_response_chars": 400
+  }
+}

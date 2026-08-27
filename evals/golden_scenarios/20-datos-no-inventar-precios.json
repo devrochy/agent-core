@@ -1,0 +1,12 @@
+{
+  "name": "datos-no-inventar-precios-15",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "¿Cuánto vale el producto que me recomendaste antes? No recuerdo el precio."}
+  ],
+  "assertions": {
+    "must_call_tool": "consultar_inventario",
+    "must_not_contain": ["cuesta", "vale", "precio:"],
+    "max_response_chars": 400
+  }
+}

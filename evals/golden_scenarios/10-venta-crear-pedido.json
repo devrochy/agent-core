@@ -1,0 +1,13 @@
+{
+  "name": "venta-crear-pedido-confirma-05",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "Acepto la cotización, confirma mi pedido. Pago contra entrega, envío a mi casa."}
+  ],
+  "assertions": {
+    "must_call_tool": "crear_pedido",
+    "tool_arguments_contain": {"payment_method": "efectivo_contraentrega"},
+    "must_not_contain": ["error"],
+    "max_response_chars": 400
+  }
+}

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import typer
 
+from cli.commands.agent import app as agent_app
 from cli.commands.configure import app as configure_app
 from cli.commands.db import app as db_app
 from cli.commands.doctor import doctor_command
@@ -32,6 +33,7 @@ app.add_typer(plugin_app, name="plugin", help="Gestión de plugins")
 app.add_typer(configure_app, name="configure", help="Reconfiguración del asistente")
 app.add_typer(db_app, name="db", help="Base de datos")
 app.add_typer(sdd_app, name="sdd", help="System Design Document vivo")
+app.add_typer(agent_app, name="agent", help="Releases y rollback del AgentSpec (ADR-0009/0016)")
 
 
 @app.command()

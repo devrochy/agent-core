@@ -1,0 +1,12 @@
+{
+  "name": "venta-consultar-estado-pedido-06",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "¿Cómo va mi pedido OC-0003? ¿Ya salió?"}
+  ],
+  "assertions": {
+    "must_call_tool": "consultar_estado_pedido",
+    "must_not_contain": ["inventado"],
+    "max_response_chars": 400
+  }
+}

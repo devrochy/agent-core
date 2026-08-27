@@ -1,0 +1,13 @@
+{
+  "name": "venta-agregar-item-pedido-23",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "Agrega 1 unidad más del producto A-003 a mi pedido en curso."}
+  ],
+  "assertions": {
+    "must_call_tool": "agregar_item_pedido",
+    "tool_arguments_contain": {"items": "A-003"},
+    "must_not_contain": ["error"],
+    "max_response_chars": 400
+  }
+}

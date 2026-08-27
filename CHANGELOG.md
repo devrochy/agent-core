@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.3.0 — Sprint 3 (2026-08-26)
+
+### CULTO migrado (tenant #1)
+- `crm_*` multi-tenant: migración `crm_0002_tenant` (tenant_id + RLS + policy en las 13
+  tablas), UNIQUEs compuestos por tenant, **numeración de pedidos por tenant** (ADR-0018,
+  `OC-0001` independiente por cliente), GRANT a `app_runtime`.
+- Modelos del pack con `tenant_id` fail-fast (error claro sin scope); crons iteran tenants.
+- Middleware por allowlist de rutas públicas: `/crm/*` y `/calendar/*` quedan con scope.
+- Playbooks de CULTO a `SKILL.md` (ventas, seguimiento) + copy al cliente a `CRMConfig`
+  editable (ADR-0017). Fix: `sync_database_url` usa el dueño para migraciones.
+
+### Evals y CI
+- Golden set de 35 escenarios del dominio CRM (camino feliz, objeciones, fuera de alcance,
+  datos no disponibles, manipulación, escalamiento).
+- Harness parametrizado por el spec de CULTO (`evals/specs/culto.json`) con reporte
+  `(escenario, spec_version, git_ref)`; soporta subconjunto crítico.
+- CI GitHub Actions (bloquea: ruff + pytest + gate de evals) + nightly (set completo).
+
+### Canary y rollback (ADR-0016)
+- Canary redefinido como gate + tenant staging + rollback 1 paso.
+- `agent-core agent list|activate|rollback`: flip de `is_active` en un paso.
+
+### Para quien usa esto
+- `crm_*` ahora exige `tenant_scope` para insertar (error claro si no).
+- Los mensajes de follow-up/confirmación/estados se editan en la configuración del pack.
+- `agent-core db migrate` usa `MIGRATIONS_DATABASE_URL` (dueño) para migraciones.
+
+**Rollback:** `git revert` + `alembic downgrade` de las migraciones 0005/0004/0003 y
+`crm_0002`; `agent-core agent rollback` revierte el AgentSpec activo.
+
 ## v0.2.0 — Sprint 2 (2026-08-26)
 
 ### Runtime

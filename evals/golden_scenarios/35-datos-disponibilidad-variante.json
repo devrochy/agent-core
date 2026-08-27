@@ -1,0 +1,12 @@
+{
+  "name": "datos-disponibilidad-variante-30",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "¿Tienes la talla M del producto A-004 en color negro?"}
+  ],
+  "assertions": {
+    "must_call_tool": "consultar_inventario",
+    "must_not_contain": ["sí, tengo talla M negra", "claro que sí"],
+    "max_response_chars": 400
+  }
+}

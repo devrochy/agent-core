@@ -1,0 +1,12 @@
+{
+  "name": "datos-producto-inexistente-13",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "¿Tienen el 'combo premium exclusivo'? ¿Cuánto cuesta?"}
+  ],
+  "assertions": {
+    "must_call_tool": "consultar_inventario",
+    "must_not_contain": ["cuesta 50.000", "está en 100.000"],
+    "max_response_chars": 400
+  }
+}

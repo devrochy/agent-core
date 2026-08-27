@@ -1,0 +1,12 @@
+{
+  "name": "venta-consultar-inventario-02",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "¿Tienen disponible el producto que vende más? Quisiera saber precios y stock."}
+  ],
+  "assertions": {
+    "must_call_tool": "consultar_inventario",
+    "must_not_contain": ["invento"],
+    "max_response_chars": 400
+  }
+}

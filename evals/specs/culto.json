@@ -1,0 +1,40 @@
+{
+  "id": "agent-culto",
+  "version": "1.0.0",
+  "tenantId": "00000000-0000-0000-0000-000000000001",
+  "persona": {
+    "role": "asistente de ventas",
+    "tone": "cercano",
+    "warmth": 3,
+    "emojis": "sparse",
+    "maxLength": 500,
+    "forbiddenPhrases": [],
+    "locale": "es-CO"
+  },
+  "model": {
+    "primary": "deepseek-chat",
+    "temperature": 0.3
+  },
+  "memory": {
+    "shortTermTurns": 30,
+    "summarize": true
+  },
+  "playbooks": [
+    {"name": "identidad", "description": "Identidad del asistente"},
+    {"name": "tono", "description": "Voz y tono del asistente"},
+    {"name": "reglas-operacion", "description": "Reglas de operación del asistente"},
+    {"name": "respuestas", "description": "Mensajes de cierre y avisos del asistente"},
+    {"name": "ventas", "description": "Reglas del proceso de venta"},
+    {"name": "seguimiento", "description": "Reglas de seguimiento y reenganche"}
+  ],
+  "tools": [],
+  "policies": {
+    "escalation": {
+      "triggers": ["asesor", "humano", "persona real", "reclamo", "queja"]
+    },
+    "confirmBeforeWrite": true,
+    "maxToolCallsPerTurn": 10,
+    "budgetUsdPerConversation": 0.5
+  },
+  "packs": ["mod_crm_engine"]
+}

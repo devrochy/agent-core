@@ -3,7 +3,7 @@
 Este fichero es el tablero. Se actualiza al cerrar cada sprint. Claude lo lee para saber
 en qué estamos.
 
-**Sprint activo:** Sprint 3
+**Sprint activo:** Sprint 4
 **Última actualización:** 2026-08-26
 
 ---
@@ -54,14 +54,16 @@ en qué estamos.
 
 ## Sprint 3 — CULTO migrado · Semanas 6–7
 
-- [ ] CULTO como tenant #1 sin código específico en el core
-- [ ] Playbooks de CULTO convertidos a `SKILL.md`
-- [ ] Golden set de 30–50 conversaciones reales anonimizadas
-- [ ] Gate de regresión en CI
-- [ ] Canary + rollback funcionando
+- [x] CULTO como tenant #1 sin código específico en el core (el core no tiene dominio de CULTO)
+- [x] Playbooks de CULTO convertidos a `SKILL.md` (ventas, seguimiento) y copy a config editable
+- [x] `crm_*` multi-tenant: tenant_id + RLS + numeración de pedidos por tenant (ADR-0018)
+- [x] Golden set de 35 conversaciones del dominio CRM (sintético; real anonimizado pendiente si se aporta)
+- [x] Gate de regresión en CI (GitHub Actions, bloquea) + `make gate` (subconjunto crítico)
+- [x] Canary + rollback: ADR-0016 (gate + staging + rollback 1 paso) + `agent-core agent rollback`
 
-**Salida:** CULTO en producción sobre agent-core con métricas iguales o mejores que hoy.
-**Este es el hito que valida todo el proyecto. No se salta.**
+**Salida:** CULTO listo para producción sobre agent-core. Faltan de producción real: CULTO
+corriendo con credenciales reales, baseline de métricas y el corte (canal Meta + tenant CULTO
+configurado). **El hito se cierra en producción, no en el código.**
 
 ---
 
@@ -108,14 +110,17 @@ documentos, no con promesas.
 
 | Fecha | Deuda | Origen | Prioridad |
 |---|---|---|---|
-| 2026-08-26 | Tablas `crm_*` del plugin sin `tenant_id`/RLS (13 tablas) | Excepción documentada en Sprint 1 (Fase A) | **alta** — migrar en Sprint 3 ANTES de CULTO en producción |
+| ~~2026-08-26~~ | ~~Tablas `crm_*` sin `tenant_id`/RLS~~ | ~~Sprint 1~~ | ~~alta~~ — **RESUELTA en Sprint 3 (crm_0002)** |
 | 2026-08-26 | `PluginManager.module.config` se cachea en singleton sin scope de tenant (punto 8 del auditor) | Sprint 1 (Fase A) | media — resolver en el registry por-tenant (Sprint 4) |
 | 2026-08-26 | Tools runtime sin `scopes` ni manifest de dominios (`agentpkg.yaml`) | Auditoría inicial | media — Sprint 5 (MCP + allowlist) |
-| 2026-08-26 | `ToolContext` runtime sin campo `db` (scoped); plugins usan `get_session()` | Auditoría cierre Sprint 1 | media — Sprint 2 (alinear con el contrato) |
-| 2026-08-26 | Crons de plugins corren sin `tenant_scope` | Auditoría cierre Sprint 1 | media — iterar tenants al ejecutar crons |
-| 2026-08-26 | Activación de plugins global (singleton) vs enablement por tenant | Auditoría cierre Sprint 1 | media — Sprint 2/4 (AgentSpec.packs + registry) |
-| 2026-08-26 | Clave Redis de idempotencia sin `tenant_id` (fallback del claim por-tenant) | Auditoría cierre Sprint 1 | baja — incluir tenant_id en la clave |
-| 2026-08-26 | `llm_usage` (por llamada) queda como fuente legacy; `usage_ledger` es la fuente de costo | Sprint 2 (ADR-0008) | baja — retirar `llm_usage` en Sprint 3 |
+| 2026-08-26 | `ToolContext` runtime sin campo `db` (scoped); plugins usan `get_session()` | Auditoría cierre Sprint 1 | media — alinear con el contrato |
+| 2026-08-26 | Activación de plugins global; las skills no se filtran por `AgentSpec.packs` | Auditoría cierre Sprint 1 | media — Sprint 4 (filter skills por packs) |
+| 2026-08-26 | Clave Redis de idempotencia sin `tenant_id` | Auditoría cierre Sprint 1 | baja — incluir tenant_id en la clave |
+| 2026-08-26 | `llm_usage` (por llamada) fuente legacy; `usage_ledger` es la fuente | Sprint 2 (ADR-0008) | baja — retirar `llm_usage` |
 | 2026-08-26 | Pricing LLM hardcodeado en `openai_compatible.py` (CONFIG) | Sprint 2 | media — mover a configuración admin |
+| 2026-08-26 | Queries del pack CRM sin filtro `tenant_id` explícito (confían 100% en RLS) | Auditoría cierre Sprint 3 | media — defensa en profundidad (o `ToolContext.db`) |
+| 2026-08-26 | Middleware usa el primer tenant del admin sin selector | Auditoría cierre Sprint 3 | media — selector de tenant en sesión |
+| 2026-08-26 | `turn_gate._tenant_sems` sin eviction; provider de embeddings singleton | Auditoría cierre Sprint 3 | baja — evictar / no cachear por tenant |
+| 2026-08-26 | Extracción a `pack-commerce`: rename de 13 tablas + `custom jsonb` (ADR-0004) | Sprint 3 (nota) | alta — Sprint 4 |
 
 Cada vez que un onboarding requiera escribir código, se anota aquí: es un pack incompleto.

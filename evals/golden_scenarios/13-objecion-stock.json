@@ -1,0 +1,12 @@
+{
+  "name": "objecion-stock-08",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "Necesito 5 unidades del A-002 urgente. ¿Me alcanzan?"}
+  ],
+  "assertions": {
+    "must_call_tool": "consultar_inventario",
+    "must_not_contain": ["te lo confirmo sin revisar", "claro que sí"],
+    "max_response_chars": 400
+  }
+}

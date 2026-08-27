@@ -1,0 +1,12 @@
+{
+  "name": "venta-crear-lead-25",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "Me llamo Ana y quiero que me contacten para una compra grande de mi empresa."}
+  ],
+  "assertions": {
+    "must_call_tool": "crear_lead",
+    "tool_arguments_contain": {"name": "Ana"},
+    "max_response_chars": 400
+  }
+}

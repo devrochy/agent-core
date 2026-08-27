@@ -1,0 +1,11 @@
+{
+  "name": "seguimiento-cotizacion-pendiente-28",
+  "requires_plugins": ["mod_crm_engine"],
+  "conversation": [
+    {"role": "user", "content": "Voy a revisar la cotización y te confirmo, no me molesten mucho por favor."}
+  ],
+  "assertions": {
+    "must_not_contain": ["te llamo cada hora", "te insisto"],
+    "max_response_chars": 300
+  }
+}
