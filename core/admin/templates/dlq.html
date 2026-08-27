@@ -1,35 +1,38 @@
 {% extends "base.html" %}
+{% from "_datatable.html" import datatable %}
+{% block title %}DLQ{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h1 class="h4">Cola de mensajes fallidos (DLQ)</h1>
 </div>
 
-{% if dlq_entries %}
-<table class="table table-sm table-hover">
+{% call datatable(page_size=20) %}
   <thead>
     <tr>
-      <th>Mensaje</th>
+      <th class="dt-sortable" data-sort-key="msg">Mensaje</th>
       <th>Tenant</th>
-      <th>Contenido</th>
-      <th></th>
+      <th class="dt-sortable" data-sort-key="contenido">Contenido</th>
+      <th class="text-end">Acciones</th>
     </tr>
   </thead>
   <tbody>
     {% for e in dlq_entries %}
-    <tr>
+    <tr data-search="{{ e.fields.get('external_message_id', '') }} {{ e.content }}"
+        data-sort-msg="{{ e.fields.get('external_message_id', '') }}" data-sort-contenido="{{ e.content }}">
       <td><code>{{ e.fields.get('external_message_id', '') }}</code></td>
       <td><code>{{ e.fields.get('tenant_id', '')[:8] }}</code></td>
       <td class="text-muted">{{ e.content }}</td>
       <td class="text-end">
-        <form method="post" action="/admin/dlq/{{ e.entry_id }}/retry">
-          <button class="btn btn-sm btn-outline-primary">Reintentar</button>
-        </form>
+        <div class="dt-actions-row">
+          <form method="post" action="/admin/dlq/{{ e.entry_id }}/retry" class="d-inline">
+            <button class="btn btn-outline-primary" title="Reintentar"><i class="bi bi-arrow-repeat"></i></button>
+          </form>
+        </div>
       </td>
     </tr>
+    {% else %}
+    <tr data-search=""><td colspan="4" class="text-center text-secondary py-4">Sin mensajes fallidos pendientes.</td></tr>
     {% endfor %}
   </tbody>
-</table>
-{% else %}
-<div class="alert alert-success">Sin mensajes fallidos pendientes.</div>
-{% endif %}
+{% endcall %}
 {% endblock %}

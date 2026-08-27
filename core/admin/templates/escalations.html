@@ -1,24 +1,46 @@
 {% extends "base.html" %}
+{% from "_datatable.html" import datatable %}
 {% block title %}Escalaciones{% endblock %}
 {% block content %}
 <h1 class="fs-3 mb-4">Escalaciones</h1>
-<div class="card">
-  <table class="table table-hover align-middle mb-0">
-    <thead><tr><th>Cliente</th><th>Razón</th><th>Resumen</th><th>Estado</th><th>Fecha</th><th></th></tr></thead>
-    <tbody>
-      {% for e in escalations %}
-      <tr>
-        <td>{{ e.customer_name or e.external_id }}</td>
-        <td><span class="badge bg-warning text-dark">{{ e.reason }}</span></td>
-        <td class="small">{{ e.summary[:80] }}</td>
-        <td><span class="badge bg-{{ 'success' if e.status == 'resuelta' else 'danger' }}">{{ e.status }}</span></td>
-        <td class="small text-secondary">{{ e.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-        <td><a href="/admin/conversaciones/{{ e.conversation_id }}" class="btn btn-sm btn-outline-primary">Atender</a></td>
-      </tr>
-      {% else %}
-      <tr><td colspan="6" class="text-secondary text-center py-4">Sin escalaciones. 🎉</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
+
+{% call datatable(filter_fields=[
+  {"key": "estado", "label": "Estado", "options": [
+    {"value": "pendiente", "label": "Pendiente"},
+    {"value": "asignada", "label": "Asignada"},
+    {"value": "resuelta", "label": "Resuelta"},
+  ]},
+], page_size=20) %}
+  <thead>
+    <tr>
+      <th class="dt-sortable" data-sort-key="cliente">Cliente</th>
+      <th class="dt-sortable" data-sort-key="razon">Razón</th>
+      <th>Resumen</th>
+      <th class="dt-sortable" data-sort-key="estado">Estado</th>
+      <th class="dt-sortable" data-sort-key="fecha">Fecha</th>
+      <th class="text-end">Acciones</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for e in escalations %}
+    <tr data-search="{{ e.customer_name or '' }} {{ e.external_id }} {{ e.reason }} {{ e.summary }} {{ e.status }}"
+        data-filter-estado="{{ e.status }}"
+        data-sort-cliente="{{ e.customer_name or e.external_id }}" data-sort-razon="{{ e.reason }}"
+        data-sort-estado="{{ e.status }}" data-sort-fecha="{{ e.created_at.strftime('%Y-%m-%d %H:%M') }}">
+      <td>{{ e.customer_name or e.external_id }}</td>
+      <td><span class="badge bg-warning text-dark">{{ e.reason }}</span></td>
+      <td class="small">{{ e.summary[:80] }}</td>
+      <td><span class="badge bg-{{ 'success' if e.status == 'resuelta' else 'danger' }}">{{ e.status }}</span></td>
+      <td class="small text-secondary">{{ e.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td class="text-end">
+        <div class="dt-actions-row">
+          <a href="/admin/conversaciones/{{ e.conversation_id }}" class="btn btn-outline-primary" title="Atender"><i class="bi bi-chat-dots"></i></a>
+        </div>
+      </td>
+    </tr>
+    {% else %}
+    <tr data-search=""><td colspan="6" class="text-secondary text-center py-4">Sin escalaciones. 🎉</td></tr>
+    {% endfor %}
+  </tbody>
+{% endcall %}
 {% endblock %}

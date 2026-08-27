@@ -1,30 +1,57 @@
 {% extends "base.html" %}
+{% from "_datatable.html" import datatable %}
 {% block title %}Conversaciones{% endblock %}
 {% block content %}
 <h1 class="fs-3 mb-4">Conversaciones</h1>
-<div class="card">
-  <table class="table table-hover align-middle mb-0">
-    <thead><tr><th>Cliente</th><th>Canal</th><th>Estado</th><th>Bot</th><th>Inicio</th><th></th></tr></thead>
-    <tbody>
-      {% for c in conversations %}
-      <tr>
-        <td>{{ c.customer_name or c.external_id }}</td>
-        <td><span class="badge bg-secondary">{{ c.channel }}</span></td>
-        <td><span class="badge bg-{{ 'warning' if c.status == 'escalated' else ('success' if c.status == 'open' else 'secondary') }}">{{ c.status }}</span></td>
-        <td>
-          <form method="post" action="/admin/conversaciones/{{ c.id }}/toggle-bot" class="d-inline">
-            <button class="btn btn-sm btn-outline-{{ 'danger' if not c.bot_paused else 'success' }}">
-              {{ 'Pausar bot' if not c.bot_paused else 'Reanudar bot' }}
-            </button>
-          </form>
-        </td>
-        <td class="small text-secondary">{{ c.started_at.strftime('%Y-%m-%d %H:%M') }}</td>
-        <td><a href="/admin/conversaciones/{{ c.id }}" class="btn btn-sm btn-outline-primary">Ver</a></td>
-      </tr>
-      {% else %}
-      <tr><td colspan="6" class="text-secondary text-center py-4">Sin conversaciones todavía.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
+
+{% call datatable(filter_fields=[
+  {"key": "estado", "label": "Estado", "options": [
+    {"value": "open", "label": "Abierta"},
+    {"value": "escalated", "label": "Escalada"},
+    {"value": "closed", "label": "Cerrada"},
+  ]},
+  {"key": "bot", "label": "Bot", "options": [
+    {"value": "false", "label": "Activo"},
+    {"value": "true", "label": "Pausado"},
+  ]},
+], page_size=20) %}
+  <thead>
+    <tr>
+      <th class="dt-sortable" data-sort-key="cliente">Cliente</th>
+      <th class="dt-sortable" data-sort-key="canal">Canal</th>
+      <th class="dt-sortable" data-sort-key="estado">Estado</th>
+      <th class="dt-sortable" data-sort-key="bot">Bot</th>
+      <th class="dt-sortable" data-sort-key="inicio">Inicio</th>
+      <th class="text-end">Acciones</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in conversations %}
+    <tr data-search="{{ c.customer_name or '' }} {{ c.external_id }} {{ c.channel }} {{ c.status }}"
+        data-filter-estado="{{ c.status }}" data-filter-bot="{{ c.bot_paused|string|lower }}"
+        data-sort-cliente="{{ c.customer_name or c.external_id }}" data-sort-canal="{{ c.channel }}"
+        data-sort-estado="{{ c.status }}" data-sort-bot="{{ c.bot_paused|string|lower }}"
+        data-sort-inicio="{{ c.started_at.strftime('%Y-%m-%d %H:%M') }}">
+      <td>{{ c.customer_name or c.external_id }}</td>
+      <td><span class="badge bg-secondary">{{ c.channel }}</span></td>
+      <td><span class="badge bg-{{ 'warning' if c.status == 'escalated' else ('success' if c.status == 'open' else 'secondary') }}">{{ c.status }}</span></td>
+      <td>
+        <form method="post" action="/admin/conversaciones/{{ c.id }}/toggle-bot" class="d-inline">
+          <button class="btn btn-sm btn-outline-{{ 'danger' if not c.bot_paused else 'success' }}" title="{{ 'Pausar bot' if not c.bot_paused else 'Reanudar bot' }}">
+            <i class="bi bi-{{ 'pause-circle' if not c.bot_paused else 'play-circle' }}"></i>
+          </button>
+        </form>
+      </td>
+      <td class="small text-secondary">{{ c.started_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td class="text-end">
+        <div class="dt-actions-row">
+          <a href="/admin/conversaciones/{{ c.id }}" class="btn btn-outline-primary" title="Ver"><i class="bi bi-eye"></i></a>
+        </div>
+      </td>
+    </tr>
+    {% else %}
+    <tr data-search=""><td colspan="6" class="text-secondary text-center py-4">Sin conversaciones todavía.</td></tr>
+    {% endfor %}
+  </tbody>
+{% endcall %}
 {% endblock %}
