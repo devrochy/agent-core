@@ -29,6 +29,8 @@ test:          ## Tests unitarios (sin BD/red)
 	pytest -q
 
 test-integration: ## Tests de integración (requiere stack local: Postgres+Redis)
+	@echo "Nota: detén la app (docker compose stop core-api) antes de correr esto —"
+	@echo "el consumer del API comparte el consumer group de Redis con los tests."
 	AGENT_CORE_INTEGRATION=1 pytest tests/integration -q
 
 evals:         ## Corre los golden scenarios
