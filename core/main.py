@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
@@ -60,8 +61,6 @@ app.include_router(webhooks_router)
 app.include_router(admin_router)
 
 # Estáticos del panel (table.css/table.js del motor data-table)
-from pathlib import Path
-
 _admin_static = Path(__file__).resolve().parent / "admin" / "static"
 app.mount("/static", StaticFiles(directory=str(_admin_static)), name="static")
 
