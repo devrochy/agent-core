@@ -25,8 +25,15 @@ log = get_logger(__name__)
 MAX_GUARDRAIL_RETRIES = 1
 
 
-async def run_guardrails(response_text: str, tool_results: list[dict[str, Any]]) -> GuardrailResult:
-    for guardrail in mcp_host.get_guardrails():
+async def run_guardrails(
+    response_text: str, tool_results: list[dict[str, Any]], enabled: set[str] | None = None
+) -> GuardrailResult:
+    """Ejecuta los guardrails del turno. `enabled` = packs del tenant (ADR-0019);
+    solo corren los guardrails de packs habilitados."""
+    guardrails = mcp_host.get_guardrails()
+    if enabled is not None:
+        guardrails = [g for g in guardrails if g.plugin_id in enabled]
+    for guardrail in guardrails:
         try:
             result = await guardrail.fn(response_text, tool_results)
         except Exception:

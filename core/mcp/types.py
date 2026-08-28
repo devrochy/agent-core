@@ -56,6 +56,7 @@ class MCPTool:
     parameters: dict[str, Any]  # JSON Schema: {"type": "object", "properties": {...}, "required": [...]}
     handler: ToolHandler
     plugin_id: str = ""  # lo completa el MCPHost al registrar
+    scopes: list[str] = field(default_factory=list)  # scopes que requiere (ADR-0019)
 
 
 @dataclass

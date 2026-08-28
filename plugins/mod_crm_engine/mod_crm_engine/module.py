@@ -548,7 +548,21 @@ class CRMModule(BaseModule):
 
     # ------------------------------------------------------------ eventos
     async def _on_conversation_started(self, conversation_id: uuid.UUID, customer_id: uuid.UUID) -> None:
-        """Crea un lead borrador cuando arranca una conversación nueva."""
+        """Crea un lead borrador cuando arranca una conversación nueva.
+
+        Solo si el pack está habilitado para el tenant (ADR-0019): sin esto, un
+        tenant sin el pack recibiría leads fantasma.
+        """
+        from core.agents.spec import enabled_packs, load_active_spec
+        from core.shared.tenant import get_current_tenant_id
+
+        tenant_id = get_current_tenant_id()
+        if tenant_id is None:
+            return
+        spec = await load_active_spec(tenant_id)
+        if self.id not in enabled_packs(spec):
+            return
+
         from sqlalchemy import select
 
         from mod_crm_engine.models import Lead

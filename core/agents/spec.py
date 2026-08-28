@@ -17,6 +17,17 @@ from core.db.models import AgentSpecRecord
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
 
+CORE_PACK_ID = "core"
+
+
+def enabled_packs(spec: AgentSpec) -> set[str]:
+    """Packs habilitados para el tenant según `spec.packs` (ADR-0019).
+
+    El pack del core ("core") siempre está habilitado: sus tools son plomería del
+    framework y no se filtran por pack del tenant.
+    """
+    return set(spec.packs) | {CORE_PACK_ID}
+
 DEFAULT_VERSION = "1.0.0"
 
 # Spec default SIN texto de prompts (ADR-0014): identidad/tono/reglas viven en los

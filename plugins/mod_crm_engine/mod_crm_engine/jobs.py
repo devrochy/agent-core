@@ -24,13 +24,32 @@ from mod_crm_engine.models import Lead, Quote
 log = get_logger(__name__)
 
 
+PACK_ID = "mod_crm_engine"
+
+
 async def _tenant_ids() -> list[uuid.UUID]:
-    """Tenants activos. Query de sistema (tenants no tiene RLS)."""
+    """Tenants cuyo AgentSpec incluye este pack (ADR-0019).
+
+    Sin este filtro, los follow-ups se enviarían a tenants sin el pack.
+    """
+    from core.agents.spec import enabled_packs, load_active_spec
+
     async with get_session() as session:
         rows = (
             await session.execute(text("select id from tenants where deleted_at is null"))
         ).scalars().all()
-    return [uuid.UUID(str(x)) for x in rows]
+
+    result: list[uuid.UUID] = []
+    for raw in rows:
+        tid = uuid.UUID(str(raw))
+        try:
+            async with tenant_scope(tid):
+                spec = await load_active_spec()
+            if PACK_ID in enabled_packs(spec):
+                result.append(tid)
+        except Exception:
+            continue
+    return result
 
 
 @register_cron("mod_crm_engine", "0 9 * * *")

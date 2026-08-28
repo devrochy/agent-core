@@ -21,7 +21,7 @@ from typing import Any
 from sqlalchemy import select
 
 from core.agents.responses import load_response
-from core.agents.spec import load_active_spec
+from core.agents.spec import enabled_packs, load_active_spec
 from core.config import get_settings
 from core.db.models import AppSettings, Conversation, Customer, LLMUsage, Message, UsageLedger
 from core.db.session import get_session
@@ -161,6 +161,9 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     recalled = await vector_memory.recall(latest_message, customer_id=customer.id)
 
     available_skills = mcp_host.list_skills()
+    # Enablement por tenant (ADR-0019): solo skills de los packs del AgentSpec.
+    enabled = enabled_packs(spec)
+    available_skills = [s for s in available_skills if s.plugin_id in enabled]
     selected_names = select_relevant_skills(latest_message, recent_context, available_skills)
     active_tools = mcp_host.get_skill_tools(selected_names)
 
@@ -249,7 +252,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             )
             for tool_call in response.tool_calls:
                 with tracer.start_as_current_span("tool_execute") as tool_span:
-                    result = await _execute_tool_safely(conversation, customer, tool_call)
+                    result = await _execute_tool_safely(conversation, customer, tool_call, spec)
                     span_attributes(tool_span, tool=tool_call.name)
                 all_tool_results.append(result)
                 usage.tool_calls.append({"tool": tool_call.name})
@@ -270,7 +273,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             return TurnResult(text=ESCALATION_REPLY, escalated=True)
 
         # ---- end_turn: guardrails
-        verdict = await run_guardrails(response.content, all_tool_results)
+        verdict = await run_guardrails(response.content, all_tool_results, enabled)
         if not verdict.passed:
             if guardrail_retries < MAX_GUARDRAIL_RETRIES:
                 guardrail_retries += 1
@@ -298,7 +301,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
 
 # ------------------------------------------------------------------ helpers
 async def _execute_tool_safely(
-    conversation: Conversation, customer: Customer, tool_call: LLMToolCall
+    conversation: Conversation, customer: Customer, tool_call: LLMToolCall, spec=None  # type: ignore[no-untyped-def]
 ) -> dict[str, Any]:
     """Ejecuta una tool aislando el error: un plugin roto se desactiva, el turno sigue."""
     from core.plugin_manager import plugin_manager
@@ -309,6 +312,23 @@ async def _execute_tool_safely(
         idempotency_key=f"{conversation.id}:{tool_call.id}",
         channel=conversation.channel,
     )
+
+    # Consentimiento de scopes por tenant (ADR-0019): AgentSpec.tools. Fail-open
+    # transitorio: sin binding la tool corre. La denegación es un error de negocio
+    # limpio, SIN auto_disable.
+    if spec is not None:
+        allowed, reason = _tool_consent(spec, tool_call.name)
+        if not allowed:
+            result = {"error": reason}
+            await record_audit(
+                actor=f"tool:{tool_call.name}",
+                action="denied",
+                conversation_id=conversation.id,
+                input_data=tool_call.arguments,
+                output_data=result,
+            )
+            return result
+
     try:
         result = await mcp_host.execute_tool(tool_call.name, tool_call.arguments, context)
     except PluginError as exc:
@@ -327,6 +347,20 @@ async def _execute_tool_safely(
         output_data=result,
     )
     return result
+
+
+def _tool_consent(spec, tool_name: str) -> tuple[bool, str]:  # type: ignore[no-untyped-def]
+    """Consentimiento de una tool según AgentSpec.tools (ToolBinding).
+
+    Fail-open transitorio (ADR-0019): si no hay binding, la tool está habilitada.
+    Si hay binding y `enabled=false`, se deniega con error limpio.
+    """
+    for binding in spec.tools:
+        if binding.tool == tool_name:
+            if not binding.enabled:
+                return False, f"La herramienta '{tool_name}' está deshabilitada para este tenant."
+            return True, ""
+    return True, ""
 
 
 async def _load_history(conversation_id: uuid.UUID) -> list[LLMMessage]:
