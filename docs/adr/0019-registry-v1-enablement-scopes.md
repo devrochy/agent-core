@@ -51,5 +51,5 @@ fail-open deje correr una tool sensible sin consentimiento — señal de apretar
 ## Impacto en el código
 
 `core/agents/spec.py` (helper `enabled_packs`), `core/orchestrator/loop.py` (skills+consent),
-`core/orchestrator/guardrails.py`, `plugins/mod_crm_engine/.../module.py` (eventos) y
+`core/orchestrator/guardrails.py`, `plugins/pack_commerce/.../module.py` (eventos) y
 `jobs.py` (crons), `core/mcp/types.py` (`MCPTool.scopes`), `core/plugin_manager.py`.

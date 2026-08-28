@@ -12,7 +12,7 @@
   "debounce_mode": "natural",
   "installed_plugins": [
     {
-      "id": "mod_crm_engine",
+      "id": "pack_commerce",
       "name": "CRM Engine",
       "version": "1.0.0",
       "description": "Leads y deals",
@@ -23,7 +23,7 @@
   "entities": [
     {
       "name": "crm_leads",
-      "plugin": "mod_crm_engine",
+      "plugin": "pack_commerce",
       "exposure": {
         "admin_panel": true,
         "agent_tool": true

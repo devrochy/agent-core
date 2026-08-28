@@ -61,8 +61,33 @@ def upgrade_core() -> None:
 
 
 def plugin_dir(plugin_id: str) -> Path:
-    """Directorio del plugin, resuelto desde la raíz del proyecto, no del CWD."""
-    return project_root() / "plugins" / plugin_id
+    """Directorio del pack, resuelto por entry_point id (packages/pack-* o plugins/*).
+
+    El id del entry_point ("pack_commerce") no coincide con el nombre del directorio
+    ("pack-commerce"), así que se lee el pyproject para encontrar el que lo declara.
+    """
+    import tomllib
+
+    root = project_root()
+    for base in (root / "packages", root / "plugins"):
+        if not base.exists():
+            continue
+        for candidate in sorted(base.iterdir()):
+            pyproject = candidate / "pyproject.toml"
+            if not pyproject.exists():
+                continue
+            try:
+                data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+                eps = (
+                    data.get("project", {})
+                    .get("entry-points", {})
+                    .get("agent_core.plugins", {})
+                )
+            except Exception:
+                continue
+            if plugin_id in eps:
+                return candidate
+    return root / "plugins" / plugin_id
 
 
 def upgrade_plugin(plugin_id: str) -> bool:

@@ -1,7 +1,7 @@
 {
   "name": "tool_calling_lead",
   "description": "El cliente da nombre e interés; el asistente debe llamar crear_lead (si el CRM está activo).",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     { "role": "user", "content": "Hola, soy Carlos Ruiz y me interesa una página web para mi negocio" }
   ],

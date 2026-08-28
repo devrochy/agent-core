@@ -52,8 +52,8 @@ async def main() -> None:
 
     # 3. CRM configurado y activado (defaults)
     async with tenant_scope(T1):
-        await plugin_manager.save_config("mod_crm_engine", {})
-        await plugin_manager.activate("mod_crm_engine")
+        await plugin_manager.save_config("pack_commerce", {})
+        await plugin_manager.activate("pack_commerce")
     async with tenant_scope(T1):
         from core.mcp.host import mcp_host
 

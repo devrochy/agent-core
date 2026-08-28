@@ -26,8 +26,8 @@ from core.db.session import get_session
 from core.mcp.types import BaseModule, GuardrailResult
 from core.shared.events import ON_CONVERSATION_STARTED
 from core.shared.logger import get_logger
-from mod_crm_engine.config import CRMConfig
-from mod_crm_engine.models import (
+from pack_commerce.config import CRMConfig
+from pack_commerce.models import (
     Category,
     CategoryComplement,
     Inventory,
@@ -38,14 +38,14 @@ from mod_crm_engine.models import (
     ProductVariant,
     Promotion,
 )
-from mod_crm_engine.skills import CatalogSkill, LeadSkill, OrderSkill
+from pack_commerce.skills import CatalogSkill, LeadSkill, OrderSkill
 
 if TYPE_CHECKING:
     from core.mcp.host import MCPHost
 
 log = get_logger(__name__)
 
-PLUGIN_ID = "mod_crm_engine"
+PLUGIN_ID = "pack_commerce"
 
 MONEY_IN_TEXT = re.compile(r"\$\s?[\d.,]+")
 
@@ -544,7 +544,7 @@ class CRMModule(BaseModule):
             host.subscribe(ON_CONVERSATION_STARTED, self._on_conversation_started)
 
         # importar jobs.py registra los @register_cron en Celery Beat
-        import mod_crm_engine.jobs  # noqa: F401
+        import pack_commerce.jobs  # noqa: F401
 
     # ------------------------------------------------------------ eventos
     async def _on_conversation_started(self, conversation_id: uuid.UUID, customer_id: uuid.UUID) -> None:
@@ -565,7 +565,7 @@ class CRMModule(BaseModule):
 
         from sqlalchemy import select
 
-        from mod_crm_engine.models import Lead
+        from pack_commerce.models import Lead
 
         async with get_session() as session:
             existing = (

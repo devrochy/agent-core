@@ -1,6 +1,6 @@
 {
   "name": "datos-disponibilidad-variante-30",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "¿Tienes la talla M del producto A-004 en color negro?"}
   ],

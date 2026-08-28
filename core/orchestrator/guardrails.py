@@ -40,7 +40,9 @@ async def run_guardrails(
             log.exception("guardrail_crashed", guardrail=guardrail.name)
             continue
         if not result.passed:
-            log.warning("guardrail_failed", guardrail=guardrail.name, reason=result.reason)
+            # No se loggea el `reason` completo: puede contener fragmentos de la
+            # respuesta del LLM con contexto del cliente (montos, datos personales).
+            log.warning("guardrail_failed", guardrail=guardrail.name)
             return GuardrailResult(
                 passed=False,
                 reason=f"{guardrail.name}: {result.reason}",

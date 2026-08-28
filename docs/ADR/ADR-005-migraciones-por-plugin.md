@@ -14,8 +14,8 @@ el de otros plugins.
 Cada plugin con tablas propias trae su PROPIO árbol Alembic:
 
 ```
-plugins/mod_crm_engine/
-├── alembic.ini              # version_table = alembic_version_mod_crm_engine
+plugins/pack_commerce/
+├── alembic.ini              # version_table = alembic_version_pack_commerce
 └── alembic/
     ├── env.py               # metadata = Base propia del plugin
     └── versions/0001_*.py

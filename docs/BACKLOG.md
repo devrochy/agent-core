@@ -22,7 +22,7 @@ esto, pero nadie la llama. El panel `/admin/costos` subestima el gasto real.
 mensajes. Debería fallar cerrado, o al menos gritar en los logs.
 
 **El pedido de monto alto nunca escala**
-`plugins/mod_crm_engine/mod_crm_engine/skills.py:989` devuelve `{"escalate": True}`
+`plugins/pack_commerce/pack_commerce/skills.py:989` devuelve `{"escalate": True}`
 cuando el monto supera `monto_alto_threshold`. Ningún punto de `core/` lee esa clave:
 `core/orchestrator/safe_renderer.py` solo interpreta `_safe_append` e `_image_url`.
 La señal se pierde y el LLM solo ve un error genérico.
@@ -38,7 +38,7 @@ nunca por decisión del LLM. `MCPHost.trigger_escalation()` existe
 
 **`BASE_RULES` del core menciona el CRM**
 Mismo archivo: el prompt del framework habla de "registrar el lead en el CRM", que es
-un plugin concreto. Acopla el core a `mod_crm_engine`.
+un plugin concreto. Acopla el core a `pack_commerce`.
 
 **El contenedor corre como root y ensucia el repo del host**
 El `Dockerfile` no crea usuario no-root, y `docker-compose.yml` bind-montea
@@ -109,7 +109,7 @@ hace el código.
 
 **Documentación con deriva**
 - `docs/PLUGIN-CONTRACT.md` §13 prohíbe importar `core.plugin_manager`, y los dos
-  plugins de referencia lo importan (`mod_crm_engine` en `module.py:76`, `skills.py:80`,
+  plugins de referencia lo importan (`pack_commerce` en `module.py:76`, `skills.py:80`,
   `jobs.py:39`; `mod_google_calendar` en `module.py:32,50`). La lista blanca tampoco
   menciona `core.admin.auth`, `core.config`, `core.db.models` ni `core.shared.crypto`,
   que ambos usan.

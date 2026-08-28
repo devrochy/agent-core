@@ -1,6 +1,6 @@
 {
   "name": "venta-consultar-inventario-02",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "¿Tienen disponible el producto que vende más? Quisiera saber precios y stock."}
   ],

@@ -20,7 +20,7 @@ from core.db.session import get_session
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
 from core.shared.tenant import get_current_tenant_id
-from mod_crm_engine.models import (
+from pack_commerce.models import (
     CategoryComplement,
     Inventory,
     Lead,
@@ -65,7 +65,7 @@ async def _plugin_config() -> Any:  # type: ignore[no-untyped-def]
     try:
         from core.plugin_manager import plugin_manager
 
-        return await plugin_manager.load_config("mod_crm_engine")
+        return await plugin_manager.load_config("pack_commerce")
     except Exception:
         return None
 
@@ -861,7 +861,7 @@ class OrderSkill(BaseSkill):
             # Numeración por tenant (ADR-0018): contador atómico por tenant.
             order_seq = (
                 await session.execute(
-                    text("select crm_next_order_seq(:t)"), {"t": get_current_tenant_id()}
+                    text("select pack_commerce_next_order_seq(:t)"), {"t": get_current_tenant_id()}
                 )
             ).scalar()
             order = Order(

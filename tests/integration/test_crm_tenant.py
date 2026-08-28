@@ -19,7 +19,7 @@ pytestmark = [
 
 async def test_crm_aislado_por_tenant(tenant_setup) -> None:
     t1, t2 = tenant_setup
-    from mod_crm_engine.models import Lead
+    from pack_commerce.models import Lead
 
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -50,7 +50,7 @@ async def test_crm_aislado_por_tenant(tenant_setup) -> None:
 
 
 async def test_insert_crm_sin_scope_falla_claro(tenant_setup) -> None:
-    from mod_crm_engine.models import _tenant_or_raise
+    from pack_commerce.models import _tenant_or_raise
 
     from core.shared.exceptions import PluginError
     from core.shared.tenant import get_current_tenant_id
@@ -64,7 +64,7 @@ async def test_insert_crm_sin_scope_falla_claro(tenant_setup) -> None:
 
 async def test_numeracion_pedidos_por_tenant(tenant_setup) -> None:
     t1, t2 = tenant_setup
-    from mod_crm_engine.models import Order
+    from pack_commerce.models import Order
 
     from core.db.models import Conversation, Customer
     from core.db.session import get_session
@@ -74,20 +74,20 @@ async def test_numeracion_pedidos_por_tenant(tenant_setup) -> None:
     for tid in (t1, t2):
         async with tenant_scope(tid):
             async with get_session() as session:
-                await session.execute(text("delete from crm_order_items"))
-                await session.execute(text("delete from crm_orders"))
+                await session.execute(text("delete from pack_commerce_order_items"))
+                await session.execute(text("delete from pack_commerce_orders"))
                 await session.execute(
-                    text("delete from crm_order_counters where tenant_id = :t"), {"t": tid}
+                    text("delete from pack_commerce_order_counters where tenant_id = :t"), {"t": tid}
                 )
 
     # contadores independientes por tenant
     async with tenant_scope(t1):
         async with get_session() as session:
-            s1 = (await session.execute(text("select crm_next_order_seq(:t)"), {"t": t1})).scalar()
-            s2 = (await session.execute(text("select crm_next_order_seq(:t)"), {"t": t1})).scalar()
+            s1 = (await session.execute(text("select pack_commerce_next_order_seq(:t)"), {"t": t1})).scalar()
+            s2 = (await session.execute(text("select pack_commerce_next_order_seq(:t)"), {"t": t1})).scalar()
     async with tenant_scope(t2):
         async with get_session() as session:
-            s3 = (await session.execute(text("select crm_next_order_seq(:t)"), {"t": t2})).scalar()
+            s3 = (await session.execute(text("select pack_commerce_next_order_seq(:t)"), {"t": t2})).scalar()
     assert (s1, s2) == (1, 2), "T1 debe numerar desde 1"
     assert s3 == 1, "T2 debe numerar desde 1 (independiente)"
 

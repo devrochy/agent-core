@@ -36,5 +36,5 @@
     "maxToolCallsPerTurn": 10,
     "budgetUsdPerConversation": 0.5
   },
-  "packs": ["mod_crm_engine"]
+  "packs": ["pack_commerce"]
 }

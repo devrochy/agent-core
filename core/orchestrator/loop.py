@@ -313,13 +313,15 @@ async def _execute_tool_safely(
         channel=conversation.channel,
     )
 
-    # Consentimiento de scopes por tenant (ADR-0019): AgentSpec.tools. Fail-open
-    # transitorio: sin binding la tool corre. La denegación es un error de negocio
+    # Enablement + consentimiento de la tool por tenant (ADR-0019). Aunque las
+    # skills se filtran en el prompt, un tool_call fuera de schema (p. ej.
+    # inyección) no debe ejecutar tools de un pack que el tenant no tiene, ni
+    # una tool deshabilitada por binding. La denegación es un error de negocio
     # limpio, SIN auto_disable.
     if spec is not None:
-        allowed, reason = _tool_consent(spec, tool_call.name)
-        if not allowed:
-            result = {"error": reason}
+        denial = _tool_denial(spec, tool_call.name)
+        if denial is not None:
+            result = {"error": denial}
             await record_audit(
                 actor=f"tool:{tool_call.name}",
                 action="denied",
@@ -349,18 +351,22 @@ async def _execute_tool_safely(
     return result
 
 
-def _tool_consent(spec, tool_name: str) -> tuple[bool, str]:  # type: ignore[no-untyped-def]
-    """Consentimiento de una tool según AgentSpec.tools (ToolBinding).
+def _tool_denial(spec, tool_name: str) -> str | None:
+    """Razón de denegación de una tool según el AgentSpec (ADR-0019), o None si corre.
 
-    Fail-open transitorio (ADR-0019): si no hay binding, la tool está habilitada.
-    Si hay binding y `enabled=false`, se deniega con error limpio.
+    - La tool de un pack NO habilitado se deniega: defensa en profundidad, el
+      prompt ya filtra skills pero un tool_call fuera de schema (inyección) no
+      debe ejecutar tools de un pack que el tenant no tiene.
+    - Si hay ToolBinding con enabled=false se deniega. Fail-open transitorio:
+      sin binding, la tool corre (las migraciones de bindings van después).
     """
+    tool = mcp_host.get_tool(tool_name)
+    if tool is not None and tool.plugin_id not in enabled_packs(spec):
+        return f"La herramienta '{tool_name}' no está disponible para este tenant."
     for binding in spec.tools:
-        if binding.tool == tool_name:
-            if not binding.enabled:
-                return False, f"La herramienta '{tool_name}' está deshabilitada para este tenant."
-            return True, ""
-    return True, ""
+        if binding.tool == tool_name and not binding.enabled:
+            return f"La herramienta '{tool_name}' está deshabilitada para este tenant."
+    return None
 
 
 async def _load_history(conversation_id: uuid.UUID) -> list[LLMMessage]:

@@ -33,7 +33,7 @@ def _tenant_or_raise() -> uuid.UUID:
     """tenant_id de cada INSERT. Fail-fast: sin tenant_scope, error claro (no silencioso)."""
     tenant_id = get_current_tenant_id()
     if tenant_id is None:
-        raise PluginError("mod_crm_engine", "INSERT crm_* sin tenant_scope")
+        raise PluginError("pack_commerce", "INSERT pack_commerce_* sin tenant_scope")
     return tenant_id
 
 
@@ -50,7 +50,7 @@ class Base(DeclarativeBase):
 class Lead(TenantMixin, Base):
     """Prospecto capturado en conversación (lead de venta)."""
 
-    __tablename__ = "crm_leads"
+    __tablename__ = "pack_commerce_leads"
     __table_args__ = (
         Index(
             "uq_crm_leads_tenant_idem",
@@ -79,7 +79,7 @@ class Lead(TenantMixin, Base):
 class Category(TenantMixin, Base):
     """Categoría de productos en árbol auto-referenciado."""
 
-    __tablename__ = "crm_categories"
+    __tablename__ = "pack_commerce_categories"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     parent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
@@ -91,7 +91,7 @@ class Category(TenantMixin, Base):
 class CategoryComplement(TenantMixin, Base):
     """Pares de categorías complementarias para venta cruzada (recomendar_producto)."""
 
-    __tablename__ = "crm_category_complements"
+    __tablename__ = "pack_commerce_category_complements"
     __table_args__ = (
         __import__("sqlalchemy").PrimaryKeyConstraint(
             "category_id", "complementary_category_id", name="pk_crm_cat_complement"
@@ -103,7 +103,7 @@ class CategoryComplement(TenantMixin, Base):
 
 
 class Product(TenantMixin, Base):
-    __tablename__ = "crm_products"
+    __tablename__ = "pack_commerce_products"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(Text)
@@ -116,7 +116,7 @@ class Product(TenantMixin, Base):
 
 
 class ProductVariant(TenantMixin, Base):
-    __tablename__ = "crm_product_variants"
+    __tablename__ = "pack_commerce_product_variants"
     __table_args__ = (
         Index("uq_crm_variants_tenant_sku", "tenant_id", "sku", unique=True),
     )
@@ -131,7 +131,7 @@ class ProductVariant(TenantMixin, Base):
 
 
 class Inventory(TenantMixin, Base):
-    __tablename__ = "crm_inventory"
+    __tablename__ = "pack_commerce_inventory"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     variant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))  # FK lógica a crm_product_variants
@@ -142,7 +142,7 @@ class Inventory(TenantMixin, Base):
 
 # ------------------------------------------------------------------ promociones
 class Promotion(TenantMixin, Base):
-    __tablename__ = "crm_promotions"
+    __tablename__ = "pack_commerce_promotions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     type: Mapped[str] = mapped_column(Text)  # temporada|volumen|campaña
@@ -160,7 +160,7 @@ class Promotion(TenantMixin, Base):
 
 
 class PromotionRedemption(TenantMixin, Base):
-    __tablename__ = "crm_promotion_redemptions"
+    __tablename__ = "pack_commerce_promotion_redemptions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     promotion_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
@@ -173,7 +173,7 @@ class PromotionRedemption(TenantMixin, Base):
 class Quote(TenantMixin, Base):
     """Cotización inmutable: un cambio genera una nueva. Se convierte en pedido al aceptarla."""
 
-    __tablename__ = "crm_quotes"
+    __tablename__ = "pack_commerce_quotes"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     conversation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))  # FK lógica a conversations
@@ -188,7 +188,7 @@ class Quote(TenantMixin, Base):
 
 
 class QuoteItem(TenantMixin, Base):
-    __tablename__ = "crm_quote_items"
+    __tablename__ = "pack_commerce_quote_items"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     quote_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
@@ -200,7 +200,7 @@ class QuoteItem(TenantMixin, Base):
 class Order(TenantMixin, Base):
     """Pedido confirmado. Estado y pago son dos ejes independientes (ag-sale 0056)."""
 
-    __tablename__ = "crm_orders"
+    __tablename__ = "pack_commerce_orders"
     __table_args__ = (
         Index("uq_crm_orders_tenant_idem", "tenant_id", "idempotency_key", unique=True),
         Index("uq_crm_orders_tenant_seq", "tenant_id", "order_seq", unique=True),
@@ -233,7 +233,7 @@ class Order(TenantMixin, Base):
 
 
 class OrderItem(TenantMixin, Base):
-    __tablename__ = "crm_order_items"
+    __tablename__ = "pack_commerce_order_items"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
@@ -245,7 +245,7 @@ class OrderItem(TenantMixin, Base):
 class OrderItemBatch(TenantMixin, Base):
     """Idempotencia de agregar_item_pedido: un intento de agregar = una fila."""
 
-    __tablename__ = "crm_order_item_batches"
+    __tablename__ = "pack_commerce_order_item_batches"
     __table_args__ = (
         Index("uq_crm_batches_tenant_idem", "tenant_id", "idempotency_key", unique=True),
     )

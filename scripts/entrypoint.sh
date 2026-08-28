@@ -16,16 +16,14 @@ ROLE="${AGENT_CORE_ROLE:-api}"
 PLUGIN_LOCK="plugins/.install.lock"
 
 install_plugins() {
-  if ! compgen -G "plugins/*/pyproject.toml" > /dev/null 2>&1; then
-    return 0
-  fi
-  for dir in plugins/*/; do
+  # Packs (packages/pack-*) y plugins heredados (plugins/)
+  for dir in packages/pack-*/ plugins/*/; do
     [ -f "${dir}pyproject.toml" ] || continue
-    echo "[entrypoint] instalando plugin: ${dir}"
-    # Los tres contenedores comparten el bind-mount ./plugins, y `pip install -e`
+    echo "[entrypoint] instalando pack/plugin: ${dir}"
+    # Los contenedores comparten el bind-mount ./plugins, y `pip install -e`
     # escribe el .egg-info dentro de él: sin lock se pisan entre ellos.
     if ! flock "$PLUGIN_LOCK" pip install -q -e "${dir}"; then
-      echo "[entrypoint] ERROR: falló la instalación del plugin ${dir}" >&2
+      echo "[entrypoint] ERROR: falló la instalación de ${dir}" >&2
       exit 1
     fi
   done

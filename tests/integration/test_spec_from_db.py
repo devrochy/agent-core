@@ -70,5 +70,5 @@ async def test_enablement_packs_por_tenant(tenant_setup) -> None:
     packs_t1 = enabled_packs(spec_t1)
     packs_t2 = enabled_packs(spec_t2)
     assert "core" in packs_t1 and "core" in packs_t2
-    assert "mod_crm_engine" in packs_t1, "CULTO debe tener el pack del CRM"
-    assert "mod_crm_engine" not in packs_t2, "un tenant sin packs no debe tener el CRM"
+    assert "pack_commerce" in packs_t1, "CULTO debe tener el pack del CRM"
+    assert "pack_commerce" not in packs_t2, "un tenant sin packs no debe tener el CRM"

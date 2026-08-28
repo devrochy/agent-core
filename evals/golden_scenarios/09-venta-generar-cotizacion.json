@@ -1,6 +1,6 @@
 {
   "name": "venta-generar-cotizacion-04",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "Quiero pedir 2 unidades del producto con SKU A-001. ¿Me haces la cotización?"}
   ],

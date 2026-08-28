@@ -1,6 +1,6 @@
 {
   "name": "fuera-de-alcance-tema-ajeno-11",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "¿Sabes cuánto va a llover mañana en Bogotá?"}
   ],

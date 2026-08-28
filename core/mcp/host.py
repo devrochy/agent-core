@@ -115,6 +115,11 @@ class MCPHost:
                 tools.extend(self._tools[t.name] for t in skill.get_tools() if t.name in self._tools)
         return tools
 
+    def get_tool(self, tool_name: str) -> MCPTool | None:
+        """Devuelve la tool registrada por nombre, o None. El plugin_id permite
+        aplicar el enablement por tenant en la costura de ejecución (ADR-0019)."""
+        return self._tools.get(tool_name)
+
     def get_guardrails(self) -> list[Guardrail]:
         return list(self._guardrails)
 

@@ -52,7 +52,7 @@ flowchart TB
             TRANS[Translator<br/>MCP → function calling]
         end
         subgraph Plugins["Plugins (pip install -e, mismo proceso)"]
-            CRM[mod-crm-engine<br/>LeadSkill · CatalogSkill · OrderSkill]
+            CRM[pack-commerce<br/>LeadSkill · CatalogSkill · OrderSkill]
             CAL[mod-google-calendar<br/>CalendarSkill]
         end
         subgraph Memoria

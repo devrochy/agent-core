@@ -1,12 +1,12 @@
-"""Árbol Alembic PROPIO del plugin mod_crm_engine.
+"""Árbol Alembic PROPIO del plugin pack_commerce.
 
-version_table separada (alembic_version_mod_crm_engine) para no chocar con el
+version_table separada (alembic_version_pack_commerce) para no chocar con el
 core ni con otros plugins. El plugin_manager ejecuta esto al activar el plugin.
 """
 
 from __future__ import annotations
 
-from mod_crm_engine.models import Base
+from pack_commerce.models import Base
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
@@ -22,7 +22,7 @@ if not config.get_main_option("sqlalchemy.url"):
     config.set_main_option("sqlalchemy.url", _url.replace("+asyncpg", ""))
 
 target_metadata = Base.metadata
-VERSION_TABLE = config.get_main_option("version_table") or "alembic_version_mod_crm_engine"
+VERSION_TABLE = config.get_main_option("version_table") or "alembic_version_pack_commerce"
 
 
 def run_migrations_offline() -> None:

@@ -8,7 +8,7 @@ Eres el agente **Plugin-Dev** de un proyecto agent-core.
 ## Antes de escribir código
 
 1. Lee `docs/PLUGIN-CONTRACT.md` COMPLETO — es la Biblia del contrato.
-2. Estudia un plugin de referencia: `plugins/mod_crm_engine/` (skills + models + jobs + migraciones).
+2. Estudia un plugin de referencia: `plugins/pack_commerce/` (skills + models + jobs + migraciones).
 3. Lee `sdd/skills-config.md` para el contexto del negocio.
 
 ## Proceso

@@ -83,10 +83,68 @@ async def test_load_response_extrae_seccion() -> None:
 
 def test_crm_config_copy_editable_por_tenant() -> None:
     """ADR-0017: el copy de CULTO vive en CRMConfig (config), no en el código."""
-    from mod_crm_engine.config import CRMConfig
+    from pack_commerce.config import CRMConfig
 
     cfg = CRMConfig()
     assert "¡Hola" in cfg.follow_up_lead_message
+
+
+@pytest.mark.asyncio
+async def test_tool_denial_pack_y_binding(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR-0019: la costura de ejecución niega tools de packs no habilitados y
+    tools deshabilitadas por ToolBinding. Fail-open si no hay binding."""
+    from agentcore_contracts.contracts import ToolBinding
+
+    from core.mcp.types import MCPTool
+    from core.orchestrator.loop import _tool_denial
+
+    spec = make_spec([])
+    assert "pack_fake" not in spec.packs
+
+    fake_tool = MCPTool(
+        name="fake_pack_tool",
+        description="t",
+        parameters={"type": "object", "properties": {}},
+        handler=lambda *a, **k: {"ok": True},
+        plugin_id="pack_fake",
+    )
+    import core.orchestrator.loop as loop_mod
+
+    monkeypatch.setattr(
+        loop_mod.mcp_host, "get_tool", lambda name: fake_tool if name == fake_tool.name else None
+    )
+
+    # pack no habilitado → se niega en la costura de ejecución (defensa en profundidad)
+    assert _tool_denial(spec, "fake_pack_tool") is not None
+
+    # pack habilitado → corre
+    spec.packs = ["core", "pack_fake"]
+    assert _tool_denial(spec, "fake_pack_tool") is None
+
+    # binding deshabilitado → niega aunque el pack esté habilitado
+    spec.tools = [ToolBinding(tool="fake_pack_tool", enabled=False, scopes=[])]
+    assert "deshabilitada" in _tool_denial(spec, "fake_pack_tool")
+
+    # fail-open: tool del core sin binding corre
+    spec.tools = []
+    core_tool = MCPTool(
+        name="core_fake",
+        description="t",
+        parameters={},
+        handler=lambda *a, **k: {"ok": True},
+        plugin_id="core",
+    )
+    monkeypatch.setattr(
+        loop_mod.mcp_host, "get_tool", lambda name: core_tool if name == "core_fake" else None
+    )
+    assert _tool_denial(spec, "core_fake") is None
+
+
+def test_crm_config_copy_mensajes_pedido() -> None:
+    """ADR-0017: mensajes de pedido de CULTO en CRMConfig (config), no en código."""
+    from pack_commerce.config import CRMConfig
+
+    cfg = CRMConfig()
     assert "{total}" in cfg.follow_up_quote_message
     assert cfg.order_status_visible["abierto"] == "en preparación"
     assert "{public_order_number}" in cfg.order_confirmed_message

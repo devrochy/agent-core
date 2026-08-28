@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pack-commerce"
+version = "2.0.0"
+description = "Pack de comercio para agent-core: leads, catálogo (menú), promociones y pedidos"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.entry-points."agent_core.plugins"]
+pack_commerce = "pack_commerce.module:CRMModule"
+
+[tool.setuptools.packages.find]
+include = ["pack_commerce*"]
+
+[tool.agent_core.plugin]
+# Manifest del pack (ADR-0019): entidades para el wizard de importación.
+[tool.agent_core.plugin.entities]
+pack_commerce_leads = ["name", "phone", "email", "interest", "score", "status"]
+pack_commerce_products = ["name", "price", "stock", "description"]
+pack_commerce_orders = ["total", "status", "payment_status"]

@@ -75,7 +75,7 @@ def test_agent_spec_shape() -> None:
             "confirmBeforeWrite": True,
             "maxToolCallsPerTurn": 5,
         },
-        packs=["pack-crm"],
+        packs=["pack_commerce"],
     )
     assert spec.persona.tone in Tone.__args__
     assert spec.policies.escalation.triggers == ["asesor"]

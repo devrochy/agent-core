@@ -60,6 +60,7 @@ services:
       - "${APP_HOST_PORT:-8000}:8000"
     volumes:
       - ./sdd:/app/sdd
+      - ./packages:/app/packages
       - ./plugins:/app/plugins
     healthcheck:
       test:
@@ -89,6 +90,7 @@ services:
       REDIS_URL: redis://redis:6379/0
     volumes:
       - ./sdd:/app/sdd
+      - ./packages:/app/packages
       - ./plugins:/app/plugins
     depends_on:
       # Espera a core-api: es quien aplica las migraciones. Arrancar antes
@@ -108,6 +110,7 @@ services:
       REDIS_URL: redis://redis:6379/0
     volumes:
       - ./sdd:/app/sdd
+      - ./packages:/app/packages
       - ./plugins:/app/plugins
     depends_on:
       core-api:

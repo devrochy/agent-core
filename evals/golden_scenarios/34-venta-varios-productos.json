@@ -1,6 +1,6 @@
 {
   "name": "venta-varios-productos-29",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "Quiero 3 del A-001 y 2 del A-002, ¿cuánto me sale todo?"}
   ],

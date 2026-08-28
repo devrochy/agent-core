@@ -1,6 +1,6 @@
 {
   "name": "escalamiento-pide-humano-19",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "Necesito hablar con una persona real ahora mismo."}
   ],

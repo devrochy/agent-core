@@ -35,7 +35,7 @@ voz de marca, en tono cálido, dividido en burbujas. **Ya tienes un asistente.**
 
 **7.** Instala el CRM:
 ```bash
-agent-core plugin install mod-crm-engine
+agent-core plugin install pack-commerce
 # ¿Datos? → Esquema base vacío
 # ¿crm_leads en panel? Sí · ¿tools? Sí
 # ¿crm_products / crm_orders en panel? Sí · ¿tools? Sí

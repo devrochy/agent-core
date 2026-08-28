@@ -58,14 +58,14 @@ class PluginManager:
         """
         from core.db.migrations import project_root
 
-        plugins_dir = project_root() / "plugins"
-        if not plugins_dir.exists():
-            return
-        for plugin_dir in sorted(plugins_dir.iterdir()):
-            if plugin_dir.is_dir() and (plugin_dir / "pyproject.toml").exists():
-                src = str(plugin_dir.resolve())
-                if src not in sys.path:
-                    sys.path.insert(0, src)
+        for base in (project_root() / "packages", project_root() / "plugins"):
+            if not base.exists():
+                continue
+            for plugin_dir in sorted(base.iterdir()):
+                if plugin_dir.is_dir() and (plugin_dir / "pyproject.toml").exists():
+                    src = str(plugin_dir.resolve())
+                    if src not in sys.path:
+                        sys.path.insert(0, src)
         # Invalida la caché de importación para detectar paquetes recién instalados
         importlib.invalidate_caches()
 

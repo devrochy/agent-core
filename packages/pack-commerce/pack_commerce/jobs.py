@@ -19,12 +19,12 @@ from core.db.session import get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from core.tasks.decorators import register_cron
-from mod_crm_engine.models import Lead, Quote
+from pack_commerce.models import Lead, Quote
 
 log = get_logger(__name__)
 
 
-PACK_ID = "mod_crm_engine"
+PACK_ID = "pack_commerce"
 
 
 async def _tenant_ids() -> list[uuid.UUID]:
@@ -52,7 +52,7 @@ async def _tenant_ids() -> list[uuid.UUID]:
     return result
 
 
-@register_cron("mod_crm_engine", "0 9 * * *")
+@register_cron("pack_commerce", "0 9 * * *")
 async def follow_up_leads() -> None:
     """Reengancha leads calificados inactivos, dentro de la ventana de 24h de WhatsApp."""
     from core.db.models import Conversation
@@ -63,7 +63,7 @@ async def follow_up_leads() -> None:
     total_sent = 0
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
-            config = await plugin_manager.load_config("mod_crm_engine")
+            config = await plugin_manager.load_config("pack_commerce")
             follow_up_hours = getattr(config, "follow_up_hours", 24) or 24
             threshold = datetime.now(UTC) - timedelta(hours=follow_up_hours)
             # Ventana de 24h de WhatsApp: solo leads con actividad en las últimas 24h
@@ -111,7 +111,7 @@ async def follow_up_leads() -> None:
     log.info("follow_up_completed", kind="lead", candidates=total_candidates, sent=total_sent)
 
 
-@register_cron("mod_crm_engine", "30 9,15,20 * * *")
+@register_cron("pack_commerce", "30 9,15,20 * * *")
 async def follow_up_quotes() -> None:
     """Reengancha cotizaciones en borrador de hace 3-20h (ventana proactiva).
 
@@ -126,7 +126,7 @@ async def follow_up_quotes() -> None:
     total_sent = 0
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
-            config = await plugin_manager.load_config("mod_crm_engine")
+            config = await plugin_manager.load_config("pack_commerce")
             now = datetime.now(UTC)
             min_age = now - timedelta(hours=20)
             max_age = now - timedelta(hours=3)

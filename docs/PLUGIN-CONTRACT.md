@@ -9,9 +9,9 @@
 Todo lo que necesitas para construir un plugin de agent-core. Si algo no está aquí,
 está en el código de referencia:
 
-- `plugins/mod_crm_engine/` — el plugin **completo**: 3 skills (leads, catálogo y
+- `plugins/pack_commerce/` — el plugin **completo**: 3 skills (leads, catálogo y
   ventas), esquema de datos grande (13 tablas), cron jobs, guardrail de montos y un
-  **panel admin propio** con plantillas (`mod_crm_engine/templates/crm/`).
+  **panel admin propio** con plantillas (`pack_commerce/templates/crm/`).
 - `plugins/mod_google_calendar/` — el plugin mínimo con OAuth2 y rutas admin propias.
 
 ## 1. Qué es un plugin
@@ -120,8 +120,8 @@ plugin activo bajo el nombre del módulo (`plugin_manager.active_admin_menu()`),
 resalta la sección activa comparando el path de la petición con cada entrada. No hace
 falta lógica extra en el plugin para eso: solo define bien `admin_menu` y las rutas.
 
-Referencia completa de UI: `plugins/mod_crm_engine/mod_crm_engine/module.py` +
-`plugins/mod_crm_engine/mod_crm_engine/templates/crm/`.
+Referencia completa de UI: `plugins/pack_commerce/pack_commerce/module.py` +
+`plugins/pack_commerce/pack_commerce/templates/crm/`.
 
 ## 6. Configuración (Pydantic → formulario)
 
@@ -174,7 +174,7 @@ class MiSkill(BaseSkill):
 Reglas de las tools:
 - El handler es una **corrutina** que devuelve un dict JSON-serializable.
 - **Idempotencia obligatoria en escrituras**: usa `context.idempotency_key` con un
-  UNIQUE en tu tabla (ver `crear_lead` en mod_crm_engine).
+  UNIQUE en tu tabla (ver `crear_lead` en pack_commerce).
 - **El LLM propone, la tool decide**: valida SIEMPRE contra la BD, nunca confíes
   en los argumentos del modelo para datos críticos.
 - Errores: deja que las excepciones suban. El core convierte cualquier excepción en
@@ -223,7 +223,7 @@ async def mi_job() -> None:
 - Corre en el worker Celery (proceso hermano). Se salta automáticamente si el plugin
   está inactivo.
 - Mensajería proactiva: respeta la ventana de 24h de WhatsApp (solo puedes escribir
-  texto libre a quien te escribió hace <24h). Ver `follow_up_leads` de mod_crm_engine.
+  texto libre a quien te escribió hace <24h). Ver `follow_up_leads` de pack_commerce.
 
 ## 11. Guardrails
 

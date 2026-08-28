@@ -13,5 +13,5 @@
       activación, no el runtime).
 - [ ] Mensajería proactiva desde jobs usa `send_to_conversation()` y respeta la
       ventana de 24h de WhatsApp (responsabilidad del plugin; documentado y
-      ejemplificado en `follow_up_leads` de mod_crm_engine).
+      ejemplificado en `follow_up_leads` de pack_commerce).
 - [ ] `acks_late` en Celery: si el worker muere a mitad de tarea, se re-entrega.

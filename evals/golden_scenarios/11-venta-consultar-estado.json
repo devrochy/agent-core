@@ -1,6 +1,6 @@
 {
   "name": "venta-consultar-estado-pedido-06",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "¿Cómo va mi pedido OC-0003? ¿Ya salió?"}
   ],

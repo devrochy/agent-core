@@ -1,6 +1,6 @@
 {
   "name": "venta-actualizar-perfil-26",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "Por si acaso, mi teléfono es 3111234567 y prefiero que me llamen por la tarde."}
   ],

@@ -1,6 +1,6 @@
 {
   "name": "fuera-de-alcance-otro-negocio-12",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "¿Me venden motos? Vi que tenían una promoción de motos."}
   ],

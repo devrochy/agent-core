@@ -1,6 +1,6 @@
 {
   "name": "escalamiento-keyword-queja-21",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "Esto es un reclamo, su servicio es un desastre."}
   ],

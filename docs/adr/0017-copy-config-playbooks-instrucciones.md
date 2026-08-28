@@ -41,5 +41,5 @@ deba cambiar según el estado del modelo — señales de que la frontera está m
 
 ## Impacto en el código
 
-`plugins/mod_crm_engine/mod_crm_engine/config.py` (campos de copy), `skills.py`/`jobs.py`
-(leer copy de config), `plugins/mod_crm_engine/playbooks/` (nuevo), `AgentSpec` de CULTO.
+`plugins/pack_commerce/pack_commerce/config.py` (campos de copy), `skills.py`/`jobs.py`
+(leer copy de config), `plugins/pack_commerce/playbooks/` (nuevo), `AgentSpec` de CULTO.

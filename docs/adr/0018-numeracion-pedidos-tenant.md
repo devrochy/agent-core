@@ -38,5 +38,5 @@ prefijos por sucursal — señal de que la numeración es configuración del pac
 
 ## Impacto en el código
 
-Migración `crm_0002_tenant`, `plugins/mod_crm_engine/.../models.py`, `skills.py`
+Migración `crm_0002_tenant`, `plugins/pack_commerce/.../models.py`, `skills.py`
 (`crear_pedido` asigna el seq por tenant).

@@ -1,6 +1,6 @@
 {
   "name": "objeccion-entrega-domicilio-27",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "¿El domicilio tiene costo? ¿Hasta qué hora entregan?"}
   ],

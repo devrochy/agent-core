@@ -1,6 +1,6 @@
 {
   "name": "datos-producto-inexistente-13",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "¿Tienen el 'combo premium exclusivo'? ¿Cuánto cuesta?"}
   ],

@@ -17,9 +17,9 @@ from pathlib import Path
 PLUGINS_DIR = Path("plugins")
 DEFAULT_ORG = os.environ.get("AGENT_CORE_PLUGIN_ORG", "agent-core-plugins")
 
-# Plugins conocidos (para `agent-core plugin list`)
+# Packs/plugins conocidos (para `agent-core plugin list`)
 KNOWN_PLUGINS: dict[str, str] = {
-    "mod-crm-engine": "CRM: leads, catálogo (menú), promociones y pedidos",
+    "pack-commerce": "Comercio: leads, catálogo (menú), promociones y pedidos",
     "mod-google-calendar": "Google Calendar: agendamiento con OAuth2",
     "mod-media-processor": "Audio (STT) e imágenes (vision) entrantes",
 }

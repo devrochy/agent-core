@@ -1,6 +1,6 @@
 {
   "name": "escalamiento-monto-alto-20",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "Quiero comprar el catálogo completo, el pedido total supera los dos millones."}
   ],

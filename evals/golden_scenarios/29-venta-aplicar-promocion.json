@@ -1,6 +1,6 @@
 {
   "name": "venta-aplicar-promocion-24",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "¿Hay alguna promoción vigente que aplique a mi cotización?"}
   ],

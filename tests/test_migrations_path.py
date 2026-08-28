@@ -32,15 +32,15 @@ def test_plugin_dir_es_absoluto_y_no_depende_del_cwd(tmp_path: Path) -> None:
     anterior = Path.cwd()
     try:
         os.chdir(tmp_path)
-        destino = plugin_dir("mod_crm_engine")
+        destino = plugin_dir("pack_commerce")
         assert destino.is_absolute()
-        assert destino == ROOT / "plugins" / "mod_crm_engine"
+        assert destino == ROOT / "packages" / "pack-commerce"
     finally:
         os.chdir(anterior)
 
 
 def test_plugin_dir_apunta_a_un_plugin_real() -> None:
-    assert (plugin_dir("mod_crm_engine") / "alembic.ini").exists()
+    assert (plugin_dir("pack_commerce") / "alembic.ini").exists()
 
 
 def test_sync_database_url_quita_el_driver_async() -> None:

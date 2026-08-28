@@ -1,6 +1,6 @@
 {
   "name": "datos-no-inventar-precios-15",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "¿Cuánto vale el producto que me recomendaste antes? No recuerdo el precio."}
   ],

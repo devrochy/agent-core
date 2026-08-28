@@ -133,7 +133,7 @@ No requiere reiniciar ni tocar el `.env`.
 ## 6. Instalar tu primer plugin
 
 ```bash
-agent-core plugin install mod-crm-engine
+agent-core plugin install pack-commerce
 ```
 
 Sigue los wizards (datos + exposición de entidades). Al terminar, en el panel:

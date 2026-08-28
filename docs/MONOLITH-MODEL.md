@@ -18,7 +18,7 @@ UN asistente = UN despliegue = UN proceso principal con TODO el código adentro
 │  Proceso: uvicorn core.main:app                 │
 │                                                 │
 │  core/               (el framework)             │
-│  mod_crm_engine/     (pip install -e → embebido)│
+│  pack_commerce/     (pip install -e → embebido)│
 │  mod_google_calendar/(pip install -e → embebido)│
 │                                                 │
 │  Ejecutar una tool = llamada de función Python  │
@@ -58,9 +58,9 @@ en software, no en infraestructura:
 ## Qué significa "instalar un plugin"
 
 ```
-agent-core plugin install mod-crm-engine
-  1. git clone (o carpeta local) → plugins/mod_crm_engine/
-  2. pip install -e plugins/mod_crm_engine   ← EL CÓDIGO ENTRA AL PROCESO
+agent-core plugin install pack-commerce
+  1. git clone (o carpeta local) → plugins/pack_commerce/
+  2. pip install -e plugins/pack_commerce   ← EL CÓDIGO ENTRA AL PROCESO
   3. migraciones propias del plugin (árbol Alembic separado)
   4. wizards (datos + exposición) + actualización del SDD
   5. docker compose restart core-api          ← el proceso renace CON el plugin adentro

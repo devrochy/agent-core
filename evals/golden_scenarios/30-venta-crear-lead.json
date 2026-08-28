@@ -1,6 +1,6 @@
 {
   "name": "venta-crear-lead-25",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "Me llamo Ana y quiero que me contacten para una compra grande de mi empresa."}
   ],

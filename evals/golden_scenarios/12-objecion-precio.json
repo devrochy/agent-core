@@ -1,6 +1,6 @@
 {
   "name": "objecion-precio-07",
-  "requires_plugins": ["mod_crm_engine"],
+  "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "uy no, está muy caro. ¿Me haces descuento?"}
   ],

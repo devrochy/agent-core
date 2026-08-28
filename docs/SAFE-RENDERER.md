@@ -53,7 +53,7 @@ El LLM ve `{"status": "created", "amount": 35000}` y responde algo como
 ## Defensa en profundidad: SafeRenderer + Guardrail
 
 SafeRenderer evita que el LLM corrompa el dato exacto. El guardrail (ver
-`_amount_guardrail` en mod_crm_engine) evita que el LLM INVENTE cifras que ninguna
+`_amount_guardrail` en pack_commerce) evita que el LLM INVENTE cifras que ninguna
 tool devolvió. Se usan juntos:
 
 ```
