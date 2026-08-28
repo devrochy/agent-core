@@ -539,9 +539,10 @@ class CRMModule(BaseModule):
         host.register_skill(OrderSkill())
         host.register_guardrail("crm_amount_check", self._amount_guardrail, priority=5)
 
-        config = self.config
-        if config is not None and getattr(config, "auto_create_lead", True):
-            host.subscribe(ON_CONVERSATION_STARTED, self._on_conversation_started)
+        # La suscripción se registra SIEMPRE: la decisión de auto_create_lead se
+        # evalúa por tenant en el evento (la config activada no es global — vive
+        # en plugin_configs y un tenant puede desactivarla sin afectar al resto).
+        host.subscribe(ON_CONVERSATION_STARTED, self._on_conversation_started)
 
         # importar jobs.py registra los @register_cron en Celery Beat
         import pack_commerce.jobs  # noqa: F401
@@ -550,10 +551,12 @@ class CRMModule(BaseModule):
     async def _on_conversation_started(self, conversation_id: uuid.UUID, customer_id: uuid.UUID) -> None:
         """Crea un lead borrador cuando arranca una conversación nueva.
 
-        Solo si el pack está habilitado para el tenant (ADR-0019): sin esto, un
-        tenant sin el pack recibiría leads fantasma.
+        Solo si el pack está habilitado para el tenant (ADR-0019) y su config
+        tiene auto_create_lead activo (decisión por tenant, no global): sin esto,
+        un tenant sin el pack o con la config apagada recibiría leads fantasma.
         """
         from core.agents.spec import enabled_packs, load_active_spec
+        from core.plugin_manager import plugin_manager
         from core.shared.tenant import get_current_tenant_id
 
         tenant_id = get_current_tenant_id()
@@ -561,6 +564,9 @@ class CRMModule(BaseModule):
             return
         spec = await load_active_spec(tenant_id)
         if self.id not in enabled_packs(spec):
+            return
+        config = await plugin_manager.load_config(self.id)
+        if config is None or not getattr(config, "auto_create_lead", True):
             return
 
         from sqlalchemy import select

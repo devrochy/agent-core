@@ -57,8 +57,12 @@ async def resolve_tenant_for_phone(phone_number_id: str) -> uuid.UUID | None:
         ).scalar_one_or_none()
 
 
-async def admin_tenants(admin_id: uuid.UUID) -> list[tuple[uuid.UUID, str]]:
-    """Tenants a los que un admin tiene acceso (SECURITY DEFINER, sin RLS)."""
+async def admin_tenants(admin_id: uuid.UUID) -> list[tuple[uuid.UUID, str, str]]:
+    """Tenants a los que un admin tiene acceso, con nombre (SECURITY DEFINER, sin RLS).
+
+    Devuelve (tenant_id, tenant_name, role). Usado por el middleware y el selector
+    de tenant del panel (C3, Sprint 4).
+    """
     from sqlalchemy import text
 
     from core.db.session import get_session
@@ -66,10 +70,11 @@ async def admin_tenants(admin_id: uuid.UUID) -> list[tuple[uuid.UUID, str]]:
     async with get_session() as session:
         rows = (
             await session.execute(
-                text("select tenant_id, role from admin_tenants(:aid)"), {"aid": str(admin_id)}
+                text("select tenant_id, tenant_name, role from admin_tenants(:aid)"),
+                {"aid": str(admin_id)},
             )
         ).all()
-        return [(uuid.UUID(str(r[0])), str(r[1])) for r in rows]
+        return [(uuid.UUID(str(r[0])), str(r[1]), str(r[2])) for r in rows]
 
 
 async def default_tenant() -> uuid.UUID | None:

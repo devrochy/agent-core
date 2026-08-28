@@ -20,12 +20,23 @@
 <body class="d-flex">
   <nav class="sidebar bg-dark p-3 d-flex flex-column">
     <a href="/admin" class="text-white text-decoration-none fs-5 fw-bold mb-3">🤖 {{ assistant_name }}</a>
+    {% if tenants and tenants|length > 1 %}
+    <form method="post" action="/admin/switch-tenant" class="mb-3">
+      <select name="tenant_id" class="form-select form-select-sm bg-dark text-light border-secondary"
+              onchange="this.form.submit()" aria-label="Cambiar de negocio">
+        {% for t in tenants %}
+        <option value="{{ t.id }}" {% if t.active %}selected{% endif %}>{{ t.name }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    {% endif %}
     <ul class="nav nav-pills flex-column gap-1">
       <li><a class="nav-link {% if section == 'dashboard' %}active{% endif %}" href="/admin">Dashboard</a></li>
       <li><a class="nav-link {% if section == 'conversations' %}active{% endif %}" href="/admin/conversaciones">Conversaciones</a></li>
       <li><a class="nav-link {% if section == 'escalations' %}active{% endif %}" href="/admin/escalaciones">Escalaciones</a></li>
       <li><a class="nav-link {% if section == 'connections' %}active{% endif %}" href="/admin/conexiones">Conexiones</a></li>
       <li><a class="nav-link {% if section == 'plugins' %}active{% endif %}" href="/admin/plugins">Plugins</a></li>
+      <li><a class="nav-link {% if section == 'spec' %}active{% endif %}" href="/admin/spec">AgentSpec</a></li>
       <li><a class="nav-link {% if section == 'costs' %}active{% endif %}" href="/admin/costos">Costos LLM</a></li>
       <li><a class="nav-link {% if section == 'settings' %}active{% endif %}" href="/admin/configuracion">Configuración</a></li>
     </ul>

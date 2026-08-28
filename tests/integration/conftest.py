@@ -155,6 +155,30 @@ async def tenant_setup():
     return t1_id, t2_id
 
 
+@pytest.fixture(scope="module")
+async def formoto_setup():
+    """Asegura el tenant FORMOTO (onboarding idempotente). Devuelve (t1, formoto_id)."""
+    from sqlalchemy import select
+
+    from core.db.models import Tenant
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        formoto = (
+            await session.execute(select(Tenant).where(Tenant.slug == "formoto"))
+        ).scalar_one_or_none()
+    if formoto is None:
+        from scripts.onboard_formoto import onboard
+
+        await onboard()
+    async with get_session() as session:
+        t1 = (await session.execute(select(Tenant).where(Tenant.slug == "tenant-1"))).scalar_one()
+        formoto = (
+            await session.execute(select(Tenant).where(Tenant.slug == "formoto"))
+        ).scalar_one()
+    return t1.id, formoto.id
+
+
 def _meta_payload(phone_id: str, wa_id: str, message_id: str, body: str) -> dict[str, Any]:
     return {
         "object": "whatsapp_business_account",

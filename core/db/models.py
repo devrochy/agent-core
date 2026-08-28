@@ -220,13 +220,20 @@ class Message(Base):
 class AgentSpecRecord(Base):
     """AgentSpec por tenant desde BD (Sprint 2, ADR-0014).
 
-    `spec` es el JSONB del contrato congelado `AgentSpec`. UNIQUE(tenant_id, version)
-    + un solo activo por tenant (ADR-0009: canary corre dos versiones en paralelo).
+    `spec` es el JSONB del contrato congelado `AgentSpec`. Índice único PARCIAL
+    (tenant_id, version) WHERE deleted_at IS NULL (0009, invariante #8) + un solo
+    activo por tenant (ADR-0009: canary corre dos versiones en paralelo).
     """
 
     __tablename__ = "agent_specs"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "version", name="uq_agent_specs_tenant_version"),
+        Index(
+            "uq_agent_specs_tenant_version",
+            "tenant_id",
+            "version",
+            unique=True,
+            postgresql_where=text("deleted_at is null"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

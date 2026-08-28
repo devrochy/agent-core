@@ -7,20 +7,25 @@ al desactivar un plugin su UI desaparece sola.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from agentcore_contracts import AgentSpec
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
-from core.admin.auth import SESSION_COOKIE, current_admin, login, logout
+from core.admin.auth import SESSION_COOKIE, TENANT_COOKIE, current_admin, login, logout
 from core.admin.form_generator import parse_form_values, render_form_fields
+from core.agents.spec import CORE_PACK_ID, load_active_spec
 from core.config import get_settings
 from core.db.models import (
+    AgentSpecRecord,
     AppSettings,
     Conversation,
     Customer,
@@ -41,7 +46,7 @@ from core.gateway.connections import (
 from core.plugin_manager import plugin_manager
 from core.shared.crypto import get_secret_box
 from core.shared.logger import get_logger
-from core.shared.tenant import get_current_tenant_id, tenant_scope
+from core.shared.tenant import admin_tenants, get_current_tenant_id, tenant_scope
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -72,9 +77,20 @@ async def _base_context(request: Request, section: str) -> dict[str, Any] | None
         "admin": admin,
         "assistant_name": app_settings.assistant_name if app_settings else get_settings().app_name,
         "plugin_menu": plugin_manager.active_admin_menu(),
+        "tenants": await _admin_tenant_options(admin.id),
+        "active_tenant_id": str(get_current_tenant_id()) if get_current_tenant_id() else "",
         "flash": request.query_params.get("flash"),
         "flash_type": request.query_params.get("flash_type"),
     }
+
+
+async def _admin_tenant_options(admin_id) -> list[dict[str, str]]:
+    """Opciones del selector de tenant (C3): tenants del admin con nombre y activo."""
+    active = str(get_current_tenant_id()) if get_current_tenant_id() else ""
+    return [
+        {"id": str(tid), "name": tname, "role": trole, "active": str(tid) == active}
+        for (tid, tname, trole) in await admin_tenants(admin_id)
+    ]
 
 
 def _login_redirect() -> RedirectResponse:
@@ -116,6 +132,30 @@ async def login_submit(request: Request, email: str = Form(...), password: str =
     return response
 
 
+@router.post("/switch-tenant")
+async def switch_tenant(request: Request, tenant_id: str = Form(...)) -> RedirectResponse:
+    """Selector de tenant del panel (C3). Solo permite tenants del admin; un
+    tenant ajeno se ignora (fallback al primero) — sin escalada de acceso."""
+    admin = await current_admin(request)
+    if admin is None:
+        return _login_redirect()
+    tenants = await admin_tenants(admin.id)
+    if any(str(t[0]) == tenant_id for t in tenants):
+        response = RedirectResponse("/admin", status_code=303)
+        response.set_cookie(
+            TENANT_COOKIE,
+            tenant_id,
+            httponly=True,
+            samesite="lax",
+            max_age=60 * 60 * 24 * 30,
+            secure=get_settings().app_env == "production",
+        )
+        return response
+    return RedirectResponse(
+        "/admin?flash=tenant_sin_acceso&flash_type=danger", status_code=303
+    )
+
+
 @router.post("/logout")
 async def logout_submit(request: Request) -> RedirectResponse:
     token = request.cookies.get(SESSION_COOKIE)
@@ -124,6 +164,164 @@ async def logout_submit(request: Request) -> RedirectResponse:
     response = _login_redirect()
     response.delete_cookie(SESSION_COOKIE)
     return response
+
+
+# ------------------------------------------------------------------ AgentSpec
+async def _spec_versions() -> list[dict[str, Any]]:
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                select(AgentSpecRecord)
+                .where(
+                    AgentSpecRecord.tenant_id == get_current_tenant_id(),
+                    AgentSpecRecord.deleted_at.is_(None),
+                )
+                .order_by(AgentSpecRecord.created_at.desc())
+            )
+        ).scalars().all()
+    return [
+        {"version": r.version, "is_active": r.is_active, "created_at": r.created_at}
+        for r in rows
+    ]
+
+
+async def _next_spec_version() -> str:
+    """Versión nueva: sube la patch de la versión más alta existente (1.0.0 → 1.0.1)."""
+    versions = await _spec_versions()
+    nums: list[list[int]] = []
+    for v in versions:
+        parts = [int(x) for x in str(v["version"]).split(".") if x.isdigit()]
+        if parts:
+            nums.append(parts)
+    if not nums:
+        return "1.0.0"
+    base = max(nums, key=lambda p: tuple(([*p, 0, 0])[:3]))
+    base = ([*base, 0, 0])[:3]
+    base[2] += 1
+    return ".".join(str(x) for x in base)
+
+
+@router.get("/spec", response_class=HTMLResponse)
+async def spec_editor(request: Request) -> HTMLResponse:
+    """Editor del AgentSpec del tenant activo (C4, Sprint 4). Form por secciones
+    + vista JSON cruda validada (fallback de poder). Guardar crea una versión
+    nueva y la activa (misma semántica que `agent-core agent activate`)."""
+    ctx = await _base_context(request, "spec")
+    if ctx is None:
+        return _login_redirect()
+    spec = await load_active_spec()
+    installed = sorted({m.id for m in plugin_manager.list_modules()})
+    ctx["spec"] = spec.model_dump(mode="json")
+    ctx["installed_packs"] = [p for p in installed if p != CORE_PACK_ID]
+    ctx["enabled_packs"] = sorted(set(spec.packs) - {CORE_PACK_ID})
+    ctx["versions"] = await _spec_versions()
+    return _render("spec.html", ctx)
+
+
+@router.post("/spec")
+async def spec_save(request: Request):
+    admin = await current_admin(request)
+    if admin is None:
+        return _login_redirect()
+    form = await request.form()
+    packs = [str(x) for x in form.getlist("packs")]
+    persona_role = str(form.get("persona_role", ""))
+    persona_tone = str(form.get("persona_tone", ""))
+    try:
+        persona_warmth = int(form.get("persona_warmth", 3) or 3)
+    except ValueError:
+        persona_warmth = 3
+    try:
+        persona_max_length = int(form.get("persona_max_length", 500) or 500)
+    except ValueError:
+        persona_max_length = 500
+    persona_forbidden = str(form.get("persona_forbidden", ""))
+    persona_emojis = str(form.get("persona_emojis", "sparse"))
+    model_primary = str(form.get("model_primary", ""))
+    try:
+        model_temperature = float(form.get("model_temperature", 0.3) or 0.3)
+    except ValueError:
+        model_temperature = 0.3
+    try:
+        policy_budget = float(form.get("policy_budget", 0.5) or 0.5)
+    except ValueError:
+        policy_budget = 0.5
+    try:
+        policy_max_tool_calls = int(form.get("policy_max_tool_calls", 10) or 10)
+    except ValueError:
+        policy_max_tool_calls = 10
+    escalation_triggers = str(form.get("escalation_triggers", ""))
+    raw_json = str(form.get("raw_json", ""))
+
+    try:
+        if raw_json.strip():
+            # fallback de poder: JSON completo validado por el contrato congelado
+            data = json.loads(raw_json)
+            new_spec = AgentSpec.model_validate(data)
+        else:
+            current = await load_active_spec()
+            data = current.model_dump(mode="json")
+            data["packs"] = sorted(set(packs))
+            data["persona"].update(
+                {
+                    "role": persona_role or data["persona"].get("role", ""),
+                    "tone": persona_tone or data["persona"].get("tone", ""),
+                    "warmth": persona_warmth,
+                    "emojis": persona_emojis or data["persona"].get("emojis", "sparse"),
+                    "maxLength": persona_max_length,
+                    "forbiddenPhrases": [
+                        p.strip() for p in persona_forbidden.split(",") if p.strip()
+                    ],
+                }
+            )
+            if model_primary:
+                data["model"]["primary"] = model_primary
+            data["model"]["temperature"] = model_temperature
+            data["policies"]["budgetUsdPerConversation"] = policy_budget
+            data["policies"]["maxToolCallsPerTurn"] = policy_max_tool_calls
+            data["policies"]["escalation"]["triggers"] = [
+                t.strip() for t in escalation_triggers.split(",") if t.strip()
+            ]
+            new_spec = AgentSpec.model_validate(data)
+    except Exception as exc:
+        return RedirectResponse(
+            f"/admin/spec?flash=spec_invalido: {exc}&flash_type=danger", status_code=303
+        )
+
+    version = await _next_spec_version()
+    try:
+        async with get_session() as session:
+            current_row = (
+                await session.execute(
+                    select(AgentSpecRecord).where(
+                        AgentSpecRecord.tenant_id == get_current_tenant_id(),
+                        AgentSpecRecord.is_active.is_(True),
+                        AgentSpecRecord.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if current_row is not None:
+                current_row.is_active = False
+            session.add(
+                AgentSpecRecord(
+                    tenant_id=get_current_tenant_id(),
+                    version=version,
+                    is_active=True,
+                    spec=new_spec.model_dump(mode="json"),
+                )
+            )
+    except IntegrityError:
+        # Raza de dos saves concurrentes: los índices parciales protegieron la
+        # integridad (nunca dos activos ni dos versiones iguales); el usuario
+        # reintenta.
+        return RedirectResponse(
+            "/admin/spec?flash=hubo una edición concurrente, reintenta&flash_type=danger",
+            status_code=303,
+        )
+    return RedirectResponse(
+        f"/admin/spec?flash=spec guardado y activado (v{version})&flash_type=success",
+        status_code=303,
+    )
 
 
 # ------------------------------------------------------------------ dashboard

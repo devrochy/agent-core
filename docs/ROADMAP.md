@@ -69,12 +69,18 @@ configurado). **El hito se cierra en producción, no en el código.**
 
 ## Sprint 4 — Packs y segundo tenant · Semanas 8–9
 
-- [ ] `pack-commerce` extraído de CULTO
-- [ ] `ext-moto-fitment` (compatibilidad marca/línea/cilindraje/año)
-- [ ] FORMOTO como tenant #2 sobre el mismo pack
-- [ ] Registry v1: manifest, instalación, migraciones por tenant, consentimiento de scopes
-- [ ] Formulario de configuración autogenerado desde JSON Schema
-- [ ] Renderizador de vistas por descriptor
+- [x] `pack-commerce` extraído de CULTO (ADR-0020)
+- [x] FORMOTO como tenant #2 sobre el mismo pack
+- [x] Registry v1: manifest, instalación, migraciones por tenant, consentimiento de scopes (ADR-0019)
+- [x] Selector de tenant en el panel (cookie `ac_tenant` validada + dropdown)
+- [x] Editor de AgentSpec en el panel (form por secciones + JSON crudo; versiona y activa)
+- [ ] Formulario de configuración autogenerado desde JSON Schema *(Fase D, diferida)*
+- [ ] Renderizador de vistas por descriptor *(Fase D, diferida)*
+- [~] `ext-moto-fitment` — **descartado por validación de negocio**: ForMotos es una
+      tienda de repuestos/accesorios de moto (no un motor de compatibilidad). En el
+      sistema real (agent-sale) la "compatibilidad técnica" es un motivo de escalación
+      a humano, no una tabla de reglas. Se cubre con configuración: trigger de
+      escalación "compatibilidad" + copy. (Ver docs/audit o ADR-0020 para el razonamiento.)
 
 **Salida:** dar de alta un tercer cliente de comercio toma menos de un día y es 100%
 configuración. **Cronometrarlo.** Ese número es la métrica de negocio principal.

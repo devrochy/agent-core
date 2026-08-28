@@ -18,6 +18,7 @@ from core.db.models import Admin, AdminSession
 from core.db.session import get_session
 
 SESSION_COOKIE = "agent_core_session"
+TENANT_COOKIE = "ac_tenant"
 SESSION_TTL_HOURS = 24 * 7
 
 

@@ -8,6 +8,7 @@ Celery worker/beat corren como procesos hermanos (docker-compose).
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,7 +17,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from core.admin.auth import SESSION_COOKIE, current_admin
+from core.admin.auth import SESSION_COOKIE, TENANT_COOKIE, current_admin
 from core.admin.views import router as admin_router
 from core.config import get_settings
 from core.gateway.webhooks import router as webhooks_router
@@ -99,7 +100,13 @@ async def tenant_context_middleware(request: Request, call_next):
     if admin is not None:
         tenants = await admin_tenants(admin.id)
         if tenants:
-            async with tenant_scope(tenants[0][0]):
+            # Selector de tenant (C3, Sprint 4): la cookie ac_tenant decide el
+            # tenant activo del panel; si no es válida o falta, el primero.
+            target = str(tenants[0][0])
+            cookie_tenant = request.cookies.get(TENANT_COOKIE)
+            if cookie_tenant and any(str(t[0]) == cookie_tenant for t in tenants):
+                target = cookie_tenant
+            async with tenant_scope(uuid.UUID(target)):
                 return await call_next(request)
     return await call_next(request)
 
