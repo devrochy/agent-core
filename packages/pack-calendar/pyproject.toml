@@ -1,14 +1,21 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agentcore-pack-calendar"
-version = "0.1.0"
-description = "Pack vertical Google Calendar (vacio en Sprint 0)"
+name = "pack-calendar"
+version = "1.0.0"
+description = "Pack Google Calendar para agent-core: agendamiento de citas con OAuth2"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["httpx>=0.27"]
+
+[project.entry-points."agent_core.plugins"]
+pack_calendar = "pack_calendar.module:GoogleCalendarModule"
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["agentcore_pack_calendar*"]
+include = ["pack_calendar*"]
+
+[tool.agent_core.plugin]
+# Manifest del pack (ADR-0019). Allowlist de dominios de red que el pack puede
+# alcanzar (OAuth2 + Calendar API).
+network = ["www.googleapis.com", "accounts.google.com", "oauth2.googleapis.com"]

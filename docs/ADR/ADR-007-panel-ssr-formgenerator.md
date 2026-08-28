@@ -19,7 +19,7 @@ Los plugins necesitan UI de configuración sin que su autor escriba HTML.
 3. Menú lateral dinámico: `plugin_manager.active_admin_menu()` — al desactivar un
    plugin su UI desaparece en el siguiente request.
 4. Los plugins pueden aportar un `admin_router` (APIRouter) propio para vistas
-   avanzadas (ej. el flujo OAuth de mod-google-calendar).
+   avanzadas (ej. el flujo OAuth de pack-calendar).
 5. Auth: sesión en BD con cookie firmada + bcrypt. No JWT (sin revocación inmediata
    — lección del ADR-025 de agent-sale).
 

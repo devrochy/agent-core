@@ -53,7 +53,7 @@ flowchart TB
         end
         subgraph Plugins["Plugins (pip install -e, mismo proceso)"]
             CRM[pack-commerce<br/>LeadSkill · CatalogSkill · OrderSkill]
-            CAL[mod-google-calendar<br/>CalendarSkill]
+            CAL[pack-calendar<br/>CalendarSkill]
         end
         subgraph Memoria
             L1[(L1 Redis<br/>working: 30 turnos)]

@@ -25,7 +25,7 @@ filtraría datos entre tenants.
 | **media** | `core/mcp/host.py:149` · `core/shared/events.py:76` | `mcp_host` y `event_bus` son singletons globales; un suscriptor de un tenant procesaría eventos de otro en pooled. | Scopeo de registros/suscriptores por tenant o agente. |
 | **media** | `core/orchestrator/debounce.py:108-118` | SQL crudo que recorre `messages`/`conversations` sin filtro de tenant ni `ctx.db`. | Reescribir con ORM + filtro de tenant. |
 | **media** | `core/mcp/types.py:53-58` · `core/mcp/translator.py:14-18` | El `MCPTool` del runtime no declara ni aplica `scopes`/`sideEffect` (el contrato sí). Los tools del CRM acceden a toda la tabla sin restricción por scope. | Implementar `scopes` y hacer cumplir `ToolBinding` del AgentSpec. |
-| **media** | `plugins/mod_google_calendar/.../skills.py:14,85,108` · `oauth.py:27-28,51,117` · `core/llm/vector.py:55` | Llamadas de red a `*.googleapis.com`, `accounts.google.com`, `api.openai.com` sin manifest `agentpkg.yaml` que declare la allowlist (no existe ningún manifest). | Crear manifests por pack con allowlist de dominios. |
+| **media** | `plugins/pack_calendar/.../skills.py:14,85,108` · `oauth.py:27-28,51,117` · `core/llm/vector.py:55` | Llamadas de red a `*.googleapis.com`, `accounts.google.com`, `api.openai.com` sin manifest `agentpkg.yaml` que declare la allowlist (no existe ningún manifest). | Crear manifests por pack con allowlist de dominios. |
 | **baja** | `core/memory/vector.py:64-65` | Singletons `_provider`/`_provider_resolved` (proveedor de embeddings) compartidos entre requests; no retiene datos de tenant pero es estado de módulo. | Documentar; por-tenant si se aíslan claves API. |
 
 ## Sin hallazgos

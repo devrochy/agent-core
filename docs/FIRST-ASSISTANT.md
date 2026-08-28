@@ -57,12 +57,12 @@ tool ejecutada.
 
 **11.** Crea credenciales OAuth2 en [console.cloud.google.com](https://console.cloud.google.com):
 APIs & Services → Credentials → OAuth client ID (tipo Web) → Redirect URI:
-`http://localhost:8000/admin/plugins/mod_google_calendar/oauth/callback`
+`http://localhost:8000/admin/plugins/pack_calendar/oauth/callback`
 (habilita también la Google Calendar API).
 
 **12.** Instala y configura:
 ```bash
-agent-core plugin install mod-google-calendar
+agent-core plugin install pack-calendar
 ```
 Panel → Plugins → Google Calendar → Configurar → pega client_id y client_secret,
 timezone `America/Bogota`, duración `45` → Guardar y activar.

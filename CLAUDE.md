@@ -23,19 +23,30 @@ Runtime y contratos en **Python** (ver ADR-0011).
 
 ## Estructura
 
-Monorepo Python (uv/pyproject, paquetes instalables). Los nombres son los del plan
-original; el lenguaje es Python según ADR-0011.
+Monorepo Python (uv/pyproject, paquetes instalables). El lenguaje es Python según
+ADR-0011. La estructura REAL (ver `docs/architecture/c4.md`) es un monolito modular:
 
 ```
-packages/contracts      tipos compartidos (pydantic), sin dependencias, congelados
-packages/core-runtime   agent runtime, tool loop, memoria
-packages/core-crm       entidades canónicas
-packages/channel-*      adaptadores de canal
-packages/pack-*         verticales instalables
-apps/gateway            ingreso de webhooks
-apps/agentos            panel de control
-apps/worker             consumidores de cola
+core/                  monolito modular (todo el runtime en un proceso)
+  main.py              FastAPI: panel SSR + gateway de webhooks + consumer + debounce
+  gateway/             webhooks (firma Meta), canales, sender
+  orchestrator/        loop, consumer, debounce, turn_gate
+  mcp/                 host de skills/tools/guardrails
+  plugin_manager.py    entry_points, registry, config por tenant
+  agents/              AgentSpec (BD), playbooks (allowlist)
+  memory/              working (Redis) + recall (pgvector)
+  admin/               panel SSR + auth propia + data-table + editor spec
+  db/                  tenant_scope→set_config, RLS, migraciones
+  tasks/               celery (crons), colas
+packages/contracts     tipos compartidos (pydantic), congelados, sin dependencias
+packages/pack-*        verticales instalables (pack-commerce, pack-calendar)
+plugins/               heredado del monolith (migrando a packages/pack-*)
+apps/                  stubs del plan original (hogares futuros: gateway/panel/worker)
 ```
+
+Los stubs de `apps/*` y de los packages `core-crm`, `core-runtime`, `channel-whatsapp`
+son residuos del plan; no hay que escribir código nuevo ahí: el código nuevo vive en
+`core/` (runtime) o en `packages/pack-*` (verticales).
 
 ## Flujo de trabajo
 

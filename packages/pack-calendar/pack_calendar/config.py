@@ -2,7 +2,7 @@
 
 El formulario del panel pide client_id y client_secret (OAuth2 de Google Cloud).
 Los tokens de acceso/refresh NO van aquí: se obtienen con el flujo OAuth
-(/admin/plugins/mod_google_calendar/oauth) y se guardan cifrados aparte.
+(/admin/plugins/pack_calendar/oauth) y se guardan cifrados aparte.
 """
 
 from __future__ import annotations

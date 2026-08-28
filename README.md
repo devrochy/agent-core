@@ -57,7 +57,7 @@ máquina.
 ```
 core/            # El framework: plomería (gateway, orchestrator, llm, memory, mcp, admin)
 cli/             # CLI: agent-core init | plugin install | configure | db | sdd
-plugins/         # Plugins locales (mod_crm_engine, mod_google_calendar)
+packages/        # Contratos (congelados) + packs verticales (pack-commerce, pack-calendar)
 sdd/             # System Design Document VIVO del asistente (generado por `init`)
 docs/            # Documentación del framework
 evals/           # Golden scenarios (assertions determinísticas)

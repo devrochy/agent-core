@@ -19,7 +19,7 @@ UN asistente = UN despliegue = UN proceso principal con TODO el código adentro
 │                                                 │
 │  core/               (el framework)             │
 │  pack_commerce/     (pip install -e → embebido)│
-│  mod_google_calendar/(pip install -e → embebido)│
+│  pack_calendar/(pip install -e → embebido)│
 │                                                 │
 │  Ejecutar una tool = llamada de función Python  │
 │  await tool.handler(arguments, context)         │

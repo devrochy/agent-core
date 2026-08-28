@@ -141,12 +141,12 @@ esquema** (Sprint 1 del ROADMAP).
 | `plugins/pack_commerce/alembic/script.py.mako` | PACK | `packages/pack-crm` | bajo | Plantilla |
 | `plugins/pack_commerce/alembic/versions/0001_crm_full.py` | PACK | `packages/pack-crm` | **alto** | 13 tablas `crm_*` sin `tenant_id`/RLS; `public_order_number` 'OC-' hardcodeado |
 | `plugins/pack_commerce/pyproject.toml` | PACK | `packages/pack-crm` | bajo | Manifest + entidades para wizard |
-| `plugins/mod_google_calendar/mod_google_calendar/__init__.py` | PACK | `packages/pack-calendar` | bajo | Marcador |
-| `plugins/mod_google_calendar/mod_google_calendar/module.py` | PACK | `packages/pack-calendar` | medio | Rutas OAuth; sin tablas propias |
-| `plugins/mod_google_calendar/mod_google_calendar/skills.py` | PACK | `packages/pack-calendar` | medio | 2 tool-descriptions; copy cita hardcodeado |
-| `plugins/mod_google_calendar/mod_google_calendar/oauth.py` | PACK | `packages/pack-calendar` | medio | Flujo OAuth; tokens en `plugin_configs` |
-| `plugins/mod_google_calendar/mod_google_calendar/config.py` | CONFIG | config por tenant | bajo | `client_id/secret`, `calendar_id`, `timezone` |
-| `plugins/mod_google_calendar/pyproject.toml` | PACK | `packages/pack-calendar` | bajo | Metadata |
+| `plugins/pack_calendar/pack_calendar/__init__.py` | PACK | `packages/pack-calendar` | bajo | Marcador |
+| `plugins/pack_calendar/pack_calendar/module.py` | PACK | `packages/pack-calendar` | medio | Rutas OAuth; sin tablas propias |
+| `plugins/pack_calendar/pack_calendar/skills.py` | PACK | `packages/pack-calendar` | medio | 2 tool-descriptions; copy cita hardcodeado |
+| `plugins/pack_calendar/pack_calendar/oauth.py` | PACK | `packages/pack-calendar` | medio | Flujo OAuth; tokens en `plugin_configs` |
+| `plugins/pack_calendar/pack_calendar/config.py` | CONFIG | config por tenant | bajo | `client_id/secret`, `calendar_id`, `timezone` |
+| `plugins/pack_calendar/pyproject.toml` | PACK | `packages/pack-calendar` | bajo | Metadata |
 | `tests/conftest.py` | CORE | `tests/` | bajo | Fixtures |
 | `tests/test_compose_identity.py` | CORE | `tests/` | medio | Testea topología "un despliegue = un tenant" (dedicado), no pooled |
 | `tests/test_docker_errors.py` | CORE | `tests/` | bajo | Errores Docker |
@@ -234,8 +234,8 @@ esquema** (Sprint 1 del ROADMAP).
 | `plugins/pack_commerce/pack_commerce/skills.py:668` — moneda `COP` fija | CONFIG | CRMConfig.currency_code (ya existe) |
 | `plugins/pack_commerce/pack_commerce/module.py:595-598` — `retry_instruction` guardrail | procedimiento | SKILL.md de pack-crm |
 | `plugins/pack_commerce/pack_commerce/jobs.py:24-31` — `FOLLOW_UP_LEAD/QUOTE_MESSAGE` | procedimiento + copy | SKILL.md de pack-crm + CONFIG |
-| `plugins/mod_google_calendar/mod_google_calendar/skills.py:31-51` — 2 descripciones de tools | procedimiento | SKILL.md de pack-calendar |
-| `plugins/mod_google_calendar/mod_google_calendar/skills.py:98` — "Tu cita quedó agendada…" | copy al cliente | CONFIG |
+| `plugins/pack_calendar/pack_calendar/skills.py:31-51` — 2 descripciones de tools | procedimiento | SKILL.md de pack-calendar |
+| `plugins/pack_calendar/pack_calendar/skills.py:98` — "Tu cita quedó agendada…" | copy al cliente | CONFIG |
 | `evals/runner.py:54-55` — identidad de prueba fija | identidad | AgentSpec / fixture de escenario |
 
 **Cero prompts en `.ts`** (contracts y guards.ts limpios). Todos los encontrados viven en

@@ -14,13 +14,13 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from core.mcp.types import BaseModule
-from mod_google_calendar.config import CalendarConfig
-from mod_google_calendar.skills import CalendarSkill
+from pack_calendar.config import CalendarConfig
+from pack_calendar.skills import CalendarSkill
 
 if TYPE_CHECKING:
     from core.mcp.host import MCPHost
 
-PLUGIN_ID = "mod_google_calendar"
+PLUGIN_ID = "pack_calendar"
 
 admin_router = APIRouter(prefix=f"/admin/plugins/{PLUGIN_ID}", tags=[PLUGIN_ID])
 
@@ -39,7 +39,7 @@ async def start_oauth(request: Request):  # type: ignore[no-untyped-def]
             f"/admin/plugins/{PLUGIN_ID}/configurar?flash=Configura primero client_id y secret",
             status_code=303,
         )
-    from mod_google_calendar.oauth import build_authorization_url
+    from pack_calendar.oauth import build_authorization_url
 
     return RedirectResponse(build_authorization_url(config.client_id))  # type: ignore[attr-defined]
 
@@ -58,7 +58,7 @@ async def oauth_callback(request: Request, code: str = ""):  # type: ignore[no-u
     if config is None:
         return RedirectResponse("/admin/plugins", status_code=303)
 
-    from mod_google_calendar.oauth import exchange_code, save_tokens
+    from pack_calendar.oauth import exchange_code, save_tokens
 
     tokens = await exchange_code(
         config.client_id,  # type: ignore[attr-defined]
@@ -88,4 +88,4 @@ class GoogleCalendarModule(BaseModule):
             from core.shared.exceptions import PluginConfigError
 
             raise PluginConfigError(PLUGIN_ID, "Config inválida o ausente")
-        host.register_skill(CalendarSkill(config))
+        host.register_skill(CalendarSkill())

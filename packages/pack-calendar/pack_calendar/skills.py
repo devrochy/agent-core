@@ -8,11 +8,11 @@ import httpx
 
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.shared.exceptions import PluginError
-from mod_google_calendar.config import CalendarConfig
-from mod_google_calendar.oauth import get_access_token
+from pack_calendar.config import CalendarConfig
+from pack_calendar.oauth import get_access_token
 
 CALENDAR_API = "https://www.googleapis.com/calendar/v3"
-PLUGIN_ID = "mod_google_calendar"
+PLUGIN_ID = "pack_calendar"
 
 
 class CalendarSkill(BaseSkill):
@@ -20,8 +20,19 @@ class CalendarSkill(BaseSkill):
     description = "Agendamiento de citas en Google Calendar"
     keywords = ["cita", "agendar", "reservar", "reunión", "disponibilidad", "horario", "calendario"]
 
-    def __init__(self, config: CalendarConfig) -> None:
-        self._config = config
+    async def _tenant_config(self) -> CalendarConfig:
+        """Config del pack para el tenant ACTUAL (no una capturada en activación).
+
+        Sin esto, el skill quedaría con el calendario de un solo tenant mientras
+        los tokens se resuelven por tenant: una fuga cruzada (escribir citas del
+        tenant B en el calendario del A). Carga por invocación.
+        """
+        from core.plugin_manager import plugin_manager
+
+        config = await plugin_manager.load_config(PLUGIN_ID)
+        if config is None:
+            raise PluginError(PLUGIN_ID, "Google Calendar no configurado para este tenant")
+        return config
 
     def get_tools(self) -> list[MCPTool]:
         return [
@@ -64,25 +75,26 @@ class CalendarSkill(BaseSkill):
     async def create_event(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         from datetime import datetime, timedelta
 
+        config = await self._tenant_config()
         token = await get_access_token(
-            self._config.client_id, self._config.client_secret.get_secret_value()
+            config.client_id, config.client_secret.get_secret_value()
         )
         start = datetime.fromisoformat(str(arguments["start_datetime"]))
-        end = start + timedelta(minutes=self._config.event_duration_minutes)
+        end = start + timedelta(minutes=config.event_duration_minutes)
 
         body: dict[str, Any] = {
             "summary": str(arguments.get("title", "Cita")),
             "description": str(arguments.get("description", ""))
             + f"\n[agent-core conversación {context.conversation_id}]",
-            "start": {"dateTime": start.isoformat(), "timeZone": self._config.timezone},
-            "end": {"dateTime": end.isoformat(), "timeZone": self._config.timezone},
+            "start": {"dateTime": start.isoformat(), "timeZone": config.timezone},
+            "end": {"dateTime": end.isoformat(), "timeZone": config.timezone},
         }
         if arguments.get("attendee_email"):
             body["attendees"] = [{"email": str(arguments["attendee_email"])}]
 
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
-                f"{CALENDAR_API}/calendars/{self._config.calendar_id}/events",
+                f"{CALENDAR_API}/calendars/{config.calendar_id}/events",
                 json=body,
                 headers={"Authorization": f"Bearer {token}"},
             )
@@ -99,13 +111,14 @@ class CalendarSkill(BaseSkill):
         }
 
     async def check_availability(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        config = await self._tenant_config()
         token = await get_access_token(
-            self._config.client_id, self._config.client_secret.get_secret_value()
+            config.client_id, config.client_secret.get_secret_value()
         )
         date = str(arguments["date"])
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.get(
-                f"{CALENDAR_API}/calendars/{self._config.calendar_id}/events",
+                f"{CALENDAR_API}/calendars/{config.calendar_id}/events",
                 params={
                     "timeMin": f"{date}T00:00:00Z",
                     "timeMax": f"{date}T23:59:59Z",

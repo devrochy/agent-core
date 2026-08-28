@@ -149,3 +149,16 @@ def test_crm_config_copy_mensajes_pedido() -> None:
     assert cfg.order_status_visible["abierto"] == "en preparación"
     assert "{public_order_number}" in cfg.order_confirmed_message
     assert cfg.currency_code == "COP"
+
+
+def test_calendar_skill_sin_estado_por_tenant() -> None:
+    """C4 #2: el skill de calendar NO captura la config de un solo tenant en
+    activación (eso era una fuga cruzada: tokens del tenant B en el calendario
+    del A). La config se resuelve por invocación desde el tenant actual."""
+    from pack_calendar.skills import CalendarSkill
+
+    skill = CalendarSkill()
+    assert not hasattr(skill, "_config"), "config debe resolverse por invocación"
+    assert hasattr(skill, "_tenant_config")
+    tools = skill.get_tools()
+    assert {t.name for t in tools} == {"create_calendar_event", "check_availability"}

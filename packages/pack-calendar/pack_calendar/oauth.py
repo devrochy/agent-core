@@ -4,8 +4,8 @@ Los tokens se guardan CIFRADOS en la tabla plugin_configs bajo la clave
 "_oauth_tokens" (el sufijo _ los excluye del formulario del panel).
 
 Flujo:
-1. Admin abre /admin/plugins/mod_google_calendar/oauth -> redirect a Google.
-2. Google redirige a /admin/plugins/mod_google_calendar/oauth/callback?code=...
+1. Admin abre /admin/plugins/pack_calendar/oauth -> redirect a Google.
+2. Google redirige a /admin/plugins/pack_calendar/oauth/callback?code=...
 3. Se intercambia el code por access_token + refresh_token y se persisten.
 4. get_access_token() refresca automáticamente cuando expira.
 """
@@ -28,7 +28,7 @@ log = get_logger(__name__)
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 SCOPES = "https://www.googleapis.com/auth/calendar.events"
-PLUGIN_ID = "mod_google_calendar"
+PLUGIN_ID = "pack_calendar"
 
 
 def redirect_uri() -> str:
@@ -124,7 +124,7 @@ async def get_access_token(client_id: str, client_secret: str) -> str:
     if not tokens:
         raise PluginError(
             PLUGIN_ID,
-            "Cuenta de Google no conectada. Abre /admin/plugins/mod_google_calendar/oauth",
+            "Cuenta de Google no conectada. Abre /admin/plugins/pack_calendar/oauth",
         )
 
     if time.time() < float(tokens.get("expires_at", 0)):

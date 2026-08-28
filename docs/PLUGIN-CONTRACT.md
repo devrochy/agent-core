@@ -12,7 +12,7 @@ está en el código de referencia:
 - `plugins/pack_commerce/` — el plugin **completo**: 3 skills (leads, catálogo y
   ventas), esquema de datos grande (13 tablas), cron jobs, guardrail de montos y un
   **panel admin propio** con plantillas (`pack_commerce/templates/crm/`).
-- `plugins/mod_google_calendar/` — el plugin mínimo con OAuth2 y rutas admin propias.
+- `plugins/pack_calendar/` — el plugin mínimo con OAuth2 y rutas admin propias.
 
 ## 1. Qué es un plugin
 

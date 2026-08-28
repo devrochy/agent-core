@@ -92,6 +92,8 @@ ignore = [
 # atributos de clase que las subclases sobrescriben con literales. Convertirlos
 # en ClassVar cambiaría la firma que siguen todos los plugins existentes.
 "core/mcp/types.py" = ["RUF012"]
+"packages/pack-calendar/pack_calendar/module.py" = ["RUF012"]
+"packages/pack-calendar/pack_calendar/skills.py" = ["RUF012"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

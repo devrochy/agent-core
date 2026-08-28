@@ -418,7 +418,10 @@ async def promotion_save(
     if promo_type == "campaña" and once_per_customer == "on":
         rules["once_per_customer"] = True
     segments_list = [s.strip() for s in segments.split(",") if s.strip()] or None
-    parse_dt = lambda s: datetime.fromisoformat(s) if s else None
+
+    def parse_dt(s: str | None) -> datetime | None:
+        return datetime.fromisoformat(s) if s else None
+
     async with get_session() as session:
         if promotion_id:
             promo = await session.get(Promotion, promotion_id)

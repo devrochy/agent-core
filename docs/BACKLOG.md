@@ -110,7 +110,7 @@ hace el código.
 **Documentación con deriva**
 - `docs/PLUGIN-CONTRACT.md` §13 prohíbe importar `core.plugin_manager`, y los dos
   plugins de referencia lo importan (`pack_commerce` en `module.py:76`, `skills.py:80`,
-  `jobs.py:39`; `mod_google_calendar` en `module.py:32,50`). La lista blanca tampoco
+  `jobs.py:39`; `pack_calendar` en `module.py:32,50`). La lista blanca tampoco
   menciona `core.admin.auth`, `core.config`, `core.db.models` ni `core.shared.crypto`,
   que ambos usan.
 - `docs/FIRST-ASSISTANT.md` paso 9: tutorial de barbería que pide "una hamburguesa".
@@ -126,3 +126,35 @@ hace el código.
 
 **Sin `LICENSE`**
 `README.md` y `pyproject.toml` declaran MIT; el archivo no existe.
+
+---
+
+## C4 review (2026-08-28)
+
+Hallazgos del diagrama C4 (`docs/architecture/c4.md`). Los ya resueltos están
+marcados; los abiertos siguen aquí.
+
+**La observabilidad está gated por env**
+`core/observability/tracing.py` configura el exporter OTLP solo si `OTEL_ENABLED`;
+por defecto el tracer es no-op. El panel de costos lee `usage_ledger` (funcional),
+pero no hay trazas del loop/consumer en producción. → Activar el exporter OTLP y
+exponer métricas (p99 del webhook) cuando se despliegue producción real. [Media]
+
+**Consentimiento de scopes fail-open transitorio (ADR-0019)**
+`_tool_denial` (`core/orchestrator/loop.py`) niega solo si hay `ToolBinding.enabled=false`
+o el pack no está habilitado; sin binding la tool corre (fail-open). Los bindings
+(`AgentSpec.tools`) de CULTO/FORMOTO no están migrados. → Migrar los bindings de las
+tools sensibles y pasar a fail-closed. [Media]
+
+**Estructura declarada ≠ realidad (resuelto)**
+`CLAUDE.md` ya refleja el monolito en `core/` y los packs en `packages/`; los stubs
+`apps/*`, `core-crm`, `core-runtime`, `channel-whatsapp` quedan documentados como
+hogares futuros. [Baja — resuelto]
+
+**`plugins/` migrado a `packages/` (resuelto)**
+`mod_google_calendar` → `packages/pack-calendar` (id `pack_calendar`). `plugins/` ya
+no existe. [Baja — resuelto]
+
+**Topología panel vs gateway+consumer (decisión)**
+Ver ADR-0021: hoy un solo proceso; se separa cuando OTel muestre p99 del webhook
+degradado. [Media — decidido, sin código]

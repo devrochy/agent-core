@@ -20,7 +20,7 @@ DEFAULT_ORG = os.environ.get("AGENT_CORE_PLUGIN_ORG", "agent-core-plugins")
 # Packs/plugins conocidos (para `agent-core plugin list`)
 KNOWN_PLUGINS: dict[str, str] = {
     "pack-commerce": "Comercio: leads, catálogo (menú), promociones y pedidos",
-    "mod-google-calendar": "Google Calendar: agendamiento con OAuth2",
+    "pack-calendar": "Google Calendar: agendamiento con OAuth2",
     "mod-media-processor": "Audio (STT) e imágenes (vision) entrantes",
 }
 
