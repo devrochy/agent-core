@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% from "_datatable.html" import datatable %}
+{% block title %}{{ descriptor.title }}{% endblock %}
+{% block content %}
+<h4 class="mb-3">{{ descriptor.title }}</h4>
+{% call datatable(filter_fields=descriptor.table.filters, page_size=descriptor.table.page_size, add_modal=('modal-' ~ descriptor.path) if descriptor.add_label else none, add_label=descriptor.add_label) %}
+<thead>
+  <tr>
+    {% for col in descriptor.table.columns %}
+    <th class="dt-sortable" data-sort-key="{{ col.key }}">{{ col.label }}</th>
+    {% endfor %}
+    <th class="text-end">Acciones</th>
+  </tr>
+</thead>
+<tbody>
+  {% for row in rows %}
+  <tr data-id="{{ row['_id'] }}" data-form="{{ row | tojson }}"
+      data-search="{% for col in descriptor.table.columns %}{{ row.get(col.key, '') }} {% endfor %}">
+    {% for col in descriptor.table.columns %}
+    <td>{{ row.get(col.key, '') }}</td>
+    {% endfor %}
+    <td class="text-end">
+      <button type="button" class="btn btn-sm btn-outline-secondary" data-edit-row
+              data-bs-toggle="modal" data-bs-target="#modal-{{ descriptor.path }}">
+        <i class="bi bi-pencil"></i>
+      </button>
+    </td>
+  </tr>
+  {% endfor %}
+</tbody>
+{% endcall %}
+
+<div class="modal fade" id="modal-{{ descriptor.path }}" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" action="{{ view_path }}/guardar">
+        <div class="modal-header">
+          <h5 class="modal-title">{{ descriptor.title }}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" name="record_id" value="">
+          {{ form_fields | safe }}
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+          <button class="btn btn-primary">{{ descriptor.save_label }}</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  document.querySelectorAll('[data-edit-row]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var row = btn.closest('tr');
+      var data = JSON.parse(row.dataset.form);
+      var modal = document.querySelector(btn.dataset.bsTarget);
+      modal.querySelector('input[name="record_id"]').value = row.dataset.id;
+      modal.querySelectorAll('[name]').forEach(function (input) {
+        var key = input.getAttribute('name');
+        if (key === 'record_id') return;
+        var val = data[key];
+        if (input.type === 'checkbox') input.checked = !!val;
+        else input.value = (val === null || val === undefined) ? '' : val;
+      });
+    });
+  });
+})();
+</script>
+{% endblock %}

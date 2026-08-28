@@ -74,8 +74,8 @@ configurado). **El hito se cierra en producción, no en el código.**
 - [x] Registry v1: manifest, instalación, migraciones por tenant, consentimiento de scopes (ADR-0019)
 - [x] Selector de tenant en el panel (cookie `ac_tenant` validada + dropdown)
 - [x] Editor de AgentSpec en el panel (form por secciones + JSON crudo; versiona y activa)
-- [ ] Formulario de configuración autogenerado desde JSON Schema *(Fase D, diferida)*
-- [ ] Renderizador de vistas por descriptor *(Fase D, diferida)*
+- [x] Formulario de configuración autogenerado desde JSON Schema (FormEngine en core/admin/form_generator)
+- [x] Renderizador de vistas por descriptor (ViewRegistry + /admin/packs/{pack}/{view}; leads del CRM portado)
 - [~] `ext-moto-fitment` — **descartado por validación de negocio**: ForMotos es una
       tienda de repuestos/accesorios de moto (no un motor de compatibilidad). En el
       sistema real (agent-sale) la "compatibilidad técnica" es un motivo de escalación

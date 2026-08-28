@@ -1,50 +1,77 @@
-"""FormGenerator: modelo Pydantic -> formulario Bootstrap 5.
+"""FormEngine: JSON Schema -> formulario Bootstrap 5 (Fase D, Sprint 4).
 
-Cada plugin declara su config como Pydantic (config_schema). El panel admin
-genera el formulario automáticamente: cero HTML escrito por el autor del plugin.
+Un solo motor para todo form del panel:
+  - config de plugins (Pydantic -> model_json_schema(), delegación automática)
+  - vistas por descriptor de los packs (register_view)
+  - (futuro) editor de AgentSpec
 
-Mapeo de tipos:
-  SecretStr        -> <input type="password">   (cifrado Fernet al guardar)
-  bool             -> <input type="checkbox">
-  int / float      -> <input type="number">
-  Literal[...]     -> <select>
-  str (default)    -> <input type="text">
-  Field(description=...) -> texto de ayuda bajo el campo
+Mapeo de tipos del JSON Schema:
+  boolean            -> <input type="checkbox">
+  integer / number   -> <input type="number"> (min/max)
+  string + enum      -> <select>
+  string + format:password (writeOnly) -> <input type="password"> (cifrado al guardar)
+  string (default)   -> <input type="text">
+  title / description -> label y texto de ayuda
 """
 
 from __future__ import annotations
 
 import html
-from typing import Any, Literal, get_args, get_origin
+from typing import Any
 
-from pydantic import BaseModel, SecretStr
-from pydantic.fields import FieldInfo
+from pydantic import BaseModel
 
 
-def render_form_fields(
-    schema: type[BaseModel], current_values: dict[str, Any] | None = None
-) -> str:
+# ---------------------------------------------------------------- JSON Schema
+def render_json_schema_form(schema: dict[str, Any], current_values: dict[str, Any] | None = None) -> str:
+    """Renderiza un form a partir de un JSON Schema ({"type":"object", properties, required})."""
     values = current_values or {}
+    properties = schema.get("properties", {}) or {}
+    required = set(schema.get("required", []) or [])
     parts: list[str] = []
-    for name, field in schema.model_fields.items():
-        parts.append(_render_field(name, field, values.get(name)))
+    for name, prop in properties.items():
+        if not isinstance(prop, dict):
+            continue
+        parts.append(_render_prop(name, prop, values.get(name), name in required))
     return "\n".join(parts)
 
 
-def _render_field(name: str, field: FieldInfo, current: Any) -> str:
-    label = html.escape(field.title or name.replace("_", " ").capitalize())
-    help_text = html.escape(field.description or "")
-    required = field.is_required()
-    annotation = field.annotation
-    default = current if current is not None else (field.default if field.default is not None else "")
+def _render_prop(name: str, prop: dict[str, Any], current: Any, required: bool) -> str:
+    label = html.escape(str(prop.get("title") or name.replace("_", " ").capitalize()))
+    help_text = html.escape(str(prop.get("description") or ""))
+    ptype = prop.get("type")
+    enum = prop.get("enum")
+    default = current if current is not None else prop.get("default")
 
     help_html = f'<div class="form-text">{help_text}</div>' if help_text else ""
     required_attr = "required" if required else ""
 
-    # SecretStr -> password
-    if annotation is SecretStr or (
-        get_origin(annotation) is None and isinstance(default, SecretStr)
-    ):
+    # boolean -> checkbox
+    if ptype == "boolean":
+        checked = "checked" if default in (True, "true", "on") else ""
+        return f"""
+<div class="mb-3 form-check">
+  <input type="checkbox" class="form-check-input" id="{name}" name="{name}" {checked}>
+  <label class="form-check-label" for="{name}">{label}</label>
+  {help_html}
+</div>"""
+
+    # string + enum -> select
+    if ptype == "string" and enum:
+        options = "".join(
+            f'<option value="{html.escape(str(opt))}" '
+            f'{"selected" if str(default) == str(opt) else ""}>{html.escape(str(opt))}</option>'
+            for opt in enum
+        )
+        return f"""
+<div class="mb-3">
+  <label class="form-label" for="{name}">{label}</label>
+  <select class="form-select" id="{name}" name="{name}" {required_attr}>{options}</select>
+  {help_html}
+</div>"""
+
+    # secret / writeOnly -> password
+    if prop.get("format") == "password" or prop.get("writeOnly"):
         placeholder = "••••••••" if current else ""
         return f"""
 <div class="mb-3">
@@ -54,43 +81,21 @@ def _render_field(name: str, field: FieldInfo, current: Any) -> str:
   {help_html}
 </div>"""
 
-    # bool -> checkbox
-    if annotation is bool:
-        checked = "checked" if default in (True, "true", "on") else ""
-        return f"""
-<div class="mb-3 form-check">
-  <input type="checkbox" class="form-check-input" id="{name}" name="{name}" {checked}>
-  <label class="form-check-label" for="{name}">{label}</label>
-  {help_html}
-</div>"""
-
-    # Literal -> select
-    if get_origin(annotation) is Literal:
-        options = "".join(
-            f'<option value="{html.escape(str(opt))}" '
-            f'{"selected" if str(default) == str(opt) else ""}>{html.escape(str(opt))}</option>'
-            for opt in get_args(annotation)
-        )
-        return f"""
-<div class="mb-3">
-  <label class="form-label" for="{name}">{label}</label>
-  <select class="form-select" id="{name}" name="{name}" {required_attr}>{options}</select>
-  {help_html}
-</div>"""
-
-    # int / float -> number
-    if annotation in (int, float):
-        step = "1" if annotation is int else "any"
+    # number / integer
+    if ptype in ("number", "integer"):
+        step = "1" if ptype == "integer" else "any"
+        min_attr = f' min="{prop["minimum"]}"' if "minimum" in prop else ""
+        max_attr = f' max="{prop["maximum"]}"' if "maximum" in prop else ""
         return f"""
 <div class="mb-3">
   <label class="form-label" for="{name}">{label}</label>
   <input type="number" step="{step}" class="form-control" id="{name}" name="{name}"
-         value="{html.escape(str(default))}" {required_attr}>
+         value="{html.escape(str(default))}" {required_attr}{min_attr}{max_attr}>
   {help_html}
 </div>"""
 
-    # str (default)
-    value = "" if isinstance(default, SecretStr) else html.escape(str(default))
+    # string (default)
+    value = "" if isinstance(default, dict) else html.escape(str(default))
     return f"""
 <div class="mb-3">
   <label class="form-label" for="{name}">{label}</label>
@@ -100,37 +105,58 @@ def _render_field(name: str, field: FieldInfo, current: Any) -> str:
 </div>"""
 
 
-def parse_form_values(
-    schema: type[BaseModel], form_data: dict[str, str], previous: dict[str, Any] | None = None
+def parse_json_schema_form(
+    schema: dict[str, Any],
+    form_data: dict[str, str],
+    previous: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Convierte los strings del form a los tipos del schema.
+    """Convierte los strings del form a los tipos del JSON Schema.
 
     Campos password vacíos conservan el valor previo (no se pisa el secreto).
     """
     previous = previous or {}
+    properties = schema.get("properties", {}) or {}
     values: dict[str, Any] = {}
-    for name, field in schema.model_fields.items():
-        annotation = field.annotation
+    for name, prop in properties.items():
+        if not isinstance(prop, dict):
+            continue
+        ptype = prop.get("type")
         raw = form_data.get(name)
 
-        if annotation is bool:
+        if ptype == "boolean":
             values[name] = name in form_data and form_data[name] in ("on", "true", "1")
             continue
         if raw is None or raw == "":
-            if annotation is SecretStr and name in previous:
-                values[name] = previous[name]  # conservar secreto previo
-            elif not field.is_required():
-                if field.default is not None:
-                    values[name] = (
-                        field.default.get_secret_value()
-                        if isinstance(field.default, SecretStr)
-                        else field.default
-                    )
+            if prop.get("format") == "password" and name in previous:
+                values[name] = previous[name]
+            elif "default" in prop:
+                values[name] = prop["default"]
             continue
-        if annotation is int:
-            values[name] = int(raw)
-        elif annotation is float:
-            values[name] = float(raw)
+        if ptype == "integer":
+            try:
+                values[name] = int(raw)
+            except ValueError:
+                continue
+        elif ptype == "number":
+            try:
+                values[name] = float(raw)
+            except ValueError:
+                continue
         else:
             values[name] = raw
     return values
+
+
+# ---------------------------------------------------------------- Pydantic (legacy)
+def render_form_fields(
+    schema: type[BaseModel], current_values: dict[str, Any] | None = None
+) -> str:
+    """Form de config de un plugin: delega al motor JSON Schema (model_json_schema)."""
+    return render_json_schema_form(schema.model_json_schema(), current_values)
+
+
+def parse_form_values(
+    schema: type[BaseModel], form_data: dict[str, str], previous: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Parseo de config de un plugin: delega al motor JSON Schema."""
+    return parse_json_schema_form(schema.model_json_schema(), form_data, previous)

@@ -158,3 +158,10 @@ no existe. [Baja — resuelto]
 **Topología panel vs gateway+consumer (decisión)**
 Ver ADR-0021: hoy un solo proceso; se separa cuando OTel muestre p99 del webhook
 degradado. [Media — decidido, sin código]
+
+**Vistas del CRM por descriptor (Fase D)**
+El renderizador por descriptor (`core/admin/view_registry.py`) sirve las vistas
+con HTML genérico; leads ya está portado. Las vistas complejas del CRM (productos
+con árbol de categorías, promociones, pedidos con line_items) siguen en plantillas
+propias del pack. → Migrarlas a descriptores cuando el descriptor soporte los casos
+(tabla con árbol, sub-items). [Media — follow-up Fase D]

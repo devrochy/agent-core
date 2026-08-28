@@ -21,7 +21,13 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from core.admin.auth import SESSION_COOKIE, TENANT_COOKIE, current_admin, login, logout
-from core.admin.form_generator import parse_form_values, render_form_fields
+from core.admin.form_generator import (
+    parse_form_values,
+    parse_json_schema_form,
+    render_form_fields,
+    render_json_schema_form,
+)
+from core.admin.view_registry import view_registry
 from core.agents.spec import CORE_PACK_ID, load_active_spec
 from core.config import get_settings
 from core.db.models import (
@@ -130,6 +136,67 @@ async def login_submit(request: Request, email: str = Form(...), password: str =
         secure=get_settings().app_env == "production",
     )
     return response
+
+
+async def _pack_view_allowed(plugin_id: str) -> bool:
+    """Enablement del pack para el tenant (ADR-0019): la vista por descriptor solo
+    se sirve si el pack está activo y habilitado en el spec del tenant, igual que
+    las tools en el orchestrator (`_tool_denial`). RLS aísla los datos igualmente,
+    pero un pack no provisionado no debe exponer su UI."""
+    from core.agents.spec import enabled_packs, load_active_spec
+
+    if not plugin_manager.is_active(plugin_id):
+        return False
+    spec = await load_active_spec()
+    return plugin_id in enabled_packs(spec)
+
+
+@router.get("/packs/{plugin_id}/{view}", response_class=HTMLResponse)
+async def pack_descriptor_view(request: Request, plugin_id: str, view: str) -> HTMLResponse:
+    """Vista por descriptor (Fase D): el pack registra tabla+form+handlers y el
+    core sirve el HTML genérico. Sin plantillas ni rutas propias del pack."""
+    ctx = await _base_context(request, "packs")
+    if ctx is None:
+        return _login_redirect()
+    if not await _pack_view_allowed(plugin_id):
+        return RedirectResponse(
+            "/admin?flash=pack no habilitado para este tenant&flash_type=danger", status_code=303
+        )
+    entry = view_registry.get(plugin_id, view)
+    if entry is None:
+        return RedirectResponse("/admin", status_code=303)
+    descriptor, list_handler, _save = entry
+    rows = await list_handler()
+    ctx.update(
+        descriptor=descriptor,
+        rows=rows,
+        form_fields=render_json_schema_form(descriptor.form),
+        view_path=f"/admin/packs/{plugin_id}/{descriptor.path.strip('/')}",
+    )
+    return _render("view_descriptor.html", ctx)
+
+
+@router.post("/packs/{plugin_id}/{view}/guardar")
+async def pack_descriptor_save(request: Request, plugin_id: str, view: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return _login_redirect()
+    if not await _pack_view_allowed(plugin_id):
+        return RedirectResponse(
+            "/admin?flash=pack no habilitado para este tenant&flash_type=danger", status_code=303
+        )
+    entry = view_registry.get(plugin_id, view)
+    if entry is None:
+        return RedirectResponse("/admin", status_code=303)
+    descriptor, _list, save_handler = entry
+    form = await request.form()
+    form_data = {str(k): str(v) for k, v in form.items()}
+    record_id = form.get("record_id")
+    values = parse_json_schema_form(descriptor.form, form_data)
+    await save_handler(str(record_id) if record_id else None, values)
+    return RedirectResponse(
+        f"/admin/packs/{plugin_id}/{descriptor.path.strip('/')}?flash=Guardado&flash_type=success",
+        status_code=303,
+    )
 
 
 @router.post("/switch-tenant")

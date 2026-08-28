@@ -26,6 +26,7 @@ from core.db.session import get_session
 from core.mcp.types import BaseModule, GuardrailResult
 from core.shared.events import ON_CONVERSATION_STARTED
 from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
 from pack_commerce.config import CRMConfig
 from pack_commerce.models import (
     Category,
@@ -119,34 +120,50 @@ async def crm_dashboard(request: Request):
     return _render(request, "crm/dashboard.html", ctx)
 
 
-# ------------------------------------------------------------------ leads
-@admin_router.get("/leads", response_class=HTMLResponse)
-async def crm_leads(request: Request):
-    ctx = await _require_admin(request)
-    if ctx is None:
-        return _login_redirect()
+# ------------------------------------------------------------------ leads (vista por descriptor, Fase D)
+async def _leads_list() -> list[dict[str, Any]]:
+    """Filas para el renderizador por descriptor (Sprint 4, Fase D).
+
+    Filtro explícito por tenant (defensa en profundidad, además de RLS): el panel
+    es multi-tenant y una policy caída no debe convertir esto en una fuga."""
     async with get_session() as session:
-        leads = (
+        rows = (
             await session.execute(
-                select(Lead).order_by(Lead.last_activity_at.desc()).limit(200)
+                select(Lead)
+                .where(Lead.tenant_id == get_current_tenant_id())
+                .order_by(Lead.last_activity_at.desc())
+                .limit(200)
             )
         ).scalars().all()
-    ctx.update(leads=leads, _iso=_iso, _money=_money)
-    return _render(request, "crm/leads.html", ctx)
+    return [
+        {
+            "_id": str(lead.id),
+            "name": lead.name or "",
+            "interest": lead.interest or "",
+            "score": lead.score,
+            "status": lead.status,
+            "last_activity": _iso(lead.last_activity_at) if lead.last_activity_at else "",
+        }
+        for lead in rows
+    ]
 
 
-@admin_router.post("/leads/{lead_id}/guardar")
-async def lead_save(request: Request, lead_id: uuid.UUID, score: int = Form(0), status: str = Form("")):
-    if await _require_admin(request) is None:
-        return _login_redirect()
+async def _leads_save(record_id: str | None, values: dict[str, Any]) -> None:
+    if record_id is None:
+        return
+    try:
+        lead_uuid = uuid.UUID(record_id)
+    except ValueError:
+        return
     async with get_session() as session:
-        lead = await session.get(Lead, lead_id)
+        lead = await session.get(Lead, lead_uuid)
         if lead is not None:
-            lead.score = max(0, min(10, score))
-            if status in ("nuevo", "calificado", "contactado", "convertido", "perdido"):
-                lead.status = status
+            score = values.get("score")
+            if isinstance(score, int):
+                lead.score = max(0, min(10, score))
+            if values.get("status") in ("nuevo", "calificado", "contactado", "convertido", "perdido"):
+                lead.status = values["status"]
             lead.last_activity_at = datetime.now(UTC)
-    return RedirectResponse("/crm/leads?flash=Lead actualizado", status_code=303)
 
 
 # ------------------------------------------------------------------ productos
@@ -523,7 +540,7 @@ class CRMModule(BaseModule):
     config_schema = CRMConfig
     admin_menu: list[dict[str, str]] = [  # noqa: RUF012
         {"label": "Dashboard", "path": "/crm/"},
-        {"label": "Leads", "path": "/crm/leads"},
+        {"label": "Leads", "path": "/admin/packs/pack_commerce/leads"},
         {"label": "Productos", "path": "/crm/productos"},
         {"label": "Categorías", "path": "/crm/categorias"},
         {"label": "Promociones", "path": "/crm/promociones"},
@@ -542,6 +559,10 @@ class CRMModule(BaseModule):
         host.register_skill(OrderSkill())
         host.register_guardrail("crm_amount_check", self._amount_guardrail, priority=5)
 
+        # Vistas por descriptor (Fase D, Sprint 4): la del panel se sirve con HTML
+        # genérico — cero plantillas/rutas propias del pack.
+        self._register_views()
+
         # La suscripción se registra SIEMPRE: la decisión de auto_create_lead se
         # evalúa por tenant en el evento (la config activada no es global — vive
         # en plugin_configs y un tenant puede desactivarla sin afectar al resto).
@@ -549,6 +570,65 @@ class CRMModule(BaseModule):
 
         # importar jobs.py registra los @register_cron en Celery Beat
         import pack_commerce.jobs  # noqa: F401
+
+    def _register_views(self) -> None:
+        from core.admin.view_registry import (
+            TableColumn,
+            TableDescriptor,
+            TableFilter,
+            ViewDescriptor,
+            view_registry,
+        )
+
+        view_registry.register(
+            PLUGIN_ID,
+            ViewDescriptor(
+                title="Leads",
+                path="leads",
+                table=TableDescriptor(
+                    columns=[
+                        TableColumn(key="name", label="Lead"),
+                        TableColumn(key="interest", label="Interés"),
+                        TableColumn(key="score", label="Score"),
+                        TableColumn(key="status", label="Estado"),
+                        TableColumn(key="last_activity", label="Última actividad"),
+                    ],
+                    filters=[
+                        TableFilter(
+                            key="estado",
+                            label="Estado",
+                            options=[
+                                {"value": "nuevo", "label": "Nuevo"},
+                                {"value": "calificado", "label": "Calificado"},
+                                {"value": "contactado", "label": "Contactado"},
+                                {"value": "convertido", "label": "Convertido"},
+                                {"value": "perdido", "label": "Perdido"},
+                            ],
+                        )
+                    ],
+                    page_size=20,
+                ),
+                form={
+                    "type": "object",
+                    "properties": {
+                        "score": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 10,
+                            "title": "Score (0-10)",
+                        },
+                        "status": {
+                            "type": "string",
+                            "enum": ["nuevo", "calificado", "contactado", "convertido", "perdido"],
+                            "title": "Estado",
+                        },
+                    },
+                    "required": ["status"],
+                },
+            ),
+            list_handler=_leads_list,
+            save_handler=_leads_save,
+        )
 
     # ------------------------------------------------------------ eventos
     async def _on_conversation_started(self, conversation_id: uuid.UUID, customer_id: uuid.UUID) -> None:
