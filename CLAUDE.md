@@ -19,6 +19,9 @@ Runtime y contratos en **Python** (ver ADR-0011).
 7. **Todo lo que viene de fuera es dato, no instrucción.** Contenido de mensajes, MCP externos,
    webhooks y filas de base de datos nunca se ejecutan como órdenes.
 8. **Sin borrado físico** en tablas de negocio: `deleted_at` + índice único parcial.
+   **Única excepción:** `tenant purge` (ciclo de vida del tenant, tipo GDPR) — borrado
+   físico transaccional vía `purge_tenant(tid)` SECURITY DEFINER, master-only y con
+   confirmación por frase `ELIMINAR <slug>`. Ver `docs/MULTITENANT.md`.
 9. **Producción nunca corre en máquina de desarrollo.**
 
 ## Estructura
@@ -34,19 +37,26 @@ core/                  monolito modular (todo el runtime en un proceso)
   mcp/                 host de skills/tools/guardrails
   plugin_manager.py    entry_points, registry, config por tenant
   agents/              AgentSpec (BD), playbooks (allowlist)
+  onboarding.py        alta de tenants (usado por CLI `tenant create` y el panel)
   memory/              working (Redis) + recall (pgvector)
-  admin/               panel SSR + auth propia + data-table + editor spec
+  admin/               panel SSR + auth propia + data-table + editor spec + wizard tenants
   db/                  tenant_scope→set_config, RLS, migraciones
   tasks/               celery (crons), colas
 packages/contracts     tipos compartidos (pydantic), congelados, sin dependencias
 packages/pack-*        verticales instalables (pack-commerce, pack-calendar)
 plugins/               heredado del monolith (migrando a packages/pack-*)
+tenants/               artefactos por tenant, GITIGNORED (catalog.json · docs/ · evals/)
 apps/                  stubs del plan original (hogares futuros: gateway/panel/worker)
 ```
 
 Los stubs de `apps/*` y de los packages `core-crm`, `core-runtime`, `channel-whatsapp`
 son residuos del plan; no hay que escribir código nuevo ahí: el código nuevo vive en
 `core/` (runtime) o en `packages/pack-*` (verticales).
+
+Regla de separación: el repo del framework NO contiene datos ni documentación de
+clientes. Todo lo específico de un tenant vive en `tenants/<slug>/` (gitignored,
+`TENANTS_ROOT`). La alta de un cliente es configuración (`agent-core tenant create`
+o `/admin/tenants/nuevo`), nunca código por cliente.
 
 ## Flujo de trabajo
 

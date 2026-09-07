@@ -1,0 +1,43 @@
+{
+  "pack": "pack_commerce",
+  "name": "Tenant de ejemplo (moto)",
+  "category_paths": [
+    ["Protección", "Cascos"],
+    ["Protección", "Guantes"],
+    ["Repuestos", "Bujías"]
+  ],
+  "products": [
+    {
+      "name": "Casco Integral Test",
+      "description": "Casco integral de prueba con visor.",
+      "category_path": ["Protección", "Cascos"],
+      "image_url": "https://picsum.photos/seed/TST-001/600/400",
+      "variants": [
+        {"sku": "TST-001-S", "attributes": {"talla": "S"}, "price": 100000, "stock": 2},
+        {"sku": "TST-001-M", "attributes": {"talla": "M"}, "price": 100000, "stock": 3}
+      ]
+    },
+    {
+      "name": "Guantes Urbanos Test",
+      "description": "Guantes urbanos de prueba.",
+      "category_path": ["Protección", "Guantes"],
+      "image_url": "https://picsum.photos/seed/TST-002/600/400",
+      "variants": [
+        {"sku": "TST-002", "attributes": {}, "price": 30000, "stock": 5}
+      ]
+    },
+    {
+      "name": "Bujía de Prueba",
+      "description": "Bujía estándar de prueba.",
+      "category_path": ["Repuestos", "Bujías"],
+      "image_url": "https://picsum.photos/seed/TST-003/600/400",
+      "variants": [
+        {"sku": "TST-003", "attributes": {}, "price": 10000, "stock": 8}
+      ]
+    }
+  ],
+  "complement_pairs": [
+    ["Protección", "Cascos"],
+    ["Protección", "Guantes"]
+  ]
+}

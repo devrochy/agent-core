@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     app_secret_key: str = Field(default="change-me", alias="APP_SECRET_KEY")
     public_base_url: str = Field(default="http://localhost:8000", alias="PUBLIC_BASE_URL")
 
+    # --- Tenants (datos por cliente, fuera del código del framework) ---
+    # Carpeta con los artefactos de cada tenant: catalog.json, docs/, evals/.
+    # Gitignored por defecto; cada despliegue tiene la suya (ADR-0001).
+    tenants_root: str = Field(default="tenants", alias="TENANTS_ROOT")
+
     # --- Infraestructura ---
     # Default = app_runtime (NO dueño) para que RLS se aplique de verdad aunque
     # alguien arranque sin .env. El dueño solo se usa en MIGRATIONS_DATABASE_URL.

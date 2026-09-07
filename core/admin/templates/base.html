@@ -38,6 +38,9 @@
       <li><a class="nav-link {% if section == 'plugins' %}active{% endif %}" href="/admin/plugins">Plugins</a></li>
       <li><a class="nav-link {% if section == 'spec' %}active{% endif %}" href="/admin/spec">AgentSpec</a></li>
       <li><a class="nav-link {% if section == 'costs' %}active{% endif %}" href="/admin/costos">Costos LLM</a></li>
+      {% if admin and admin.role == 'master' %}
+      <li><a class="nav-link {% if section == 'tenants' %}active{% endif %}" href="/admin/tenants">Tenants</a></li>
+      {% endif %}
       <li><a class="nav-link {% if section == 'settings' %}active{% endif %}" href="/admin/configuracion">Configuración</a></li>
     </ul>
     {% if plugin_menu %}

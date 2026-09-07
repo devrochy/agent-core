@@ -1,6 +1,10 @@
 # Manual de Instalación
 
-De cero a panel funcionando. Tiempo estimado: 10 minutos.
+De cero a plataforma funcionando. Tiempo estimado: 10 minutos.
+
+agent-core es multi-tenant: **se instala una vez por despliegue** y luego cada
+cliente se da de alta como tenant (`agent-core tenant create` o el panel).
+Ver [MULTITENANT.md](MULTITENANT.md).
 
 ## Pre-requisitos
 
@@ -13,8 +17,8 @@ De cero a panel funcionando. Tiempo estimado: 10 minutos.
 ## 1. Clonar e instalar el CLI
 
 ```bash
-git clone <url-del-repo> mi-asistente
-cd mi-asistente
+git clone <url-del-repo> mi-despliegue
+cd mi-despliegue
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
@@ -31,49 +35,34 @@ agent-core --help
 ```
 
 > Si `agent-core` resuelve a `~/.local/bin/agent-core`, estás ejecutando el CLI de
-> otra instalación y trabajará sobre los plugins de esa otra carpeta. Activa el venv,
-> o desinstala el global con `pip uninstall agent-core` fuera del venv.
+> otra instalación. Activa el venv, o desinstala el global con `pip uninstall agent-core`.
 
-## 2. Inicializar el asistente (wizard)
+## 2. Bootstrap del despliegue
 
 ```bash
 agent-core init
 ```
 
-El wizard pregunta: nombre, negocio, idioma, tono, proveedor LLM (DeepSeek por defecto),
-API key, embeddings, velocidad de respuesta, URLs de BD/Redis y el admin. Después
-levanta PostgreSQL y Redis, aplica las migraciones y crea el usuario admin.
-
-`init` va antes que `docker compose`: genera el `.env`, y compose lo exige para arrancar.
+`init` prepara el despliegue: genera `.env`, levanta PostgreSQL y Redis, aplica
+las migraciones y crea el admin master. Después de esto la plataforma está lista
+para dar de alta clientes.
 
 **Qué resuelve solo:**
 
-- **Puertos.** Busca puertos publicables, saltando los que ocupa otro proceso y los que
-  reclama cualquier contenedor —aunque esté parado, porque los reclamará al arrancar—.
-  Te dice qué puerto eligió y quién ocupaba el que pediste.
-- **Aislamiento entre asistentes.** Escribe `COMPOSE_PROJECT_NAME`, que da a este
-  asistente sus propios contenedores y su propio volumen de datos. Sin él, Docker
-  deriva el nombre del proyecto de la carpeta y dos clones que se llamen igual
-  comparten la base de datos.
-- **Re-ejecución.** Con `--force` conserva los puertos que ya tenía este asistente en
-  vez de desplazarlos.
+- **Puertos.** Busca puertos publicables, saltando los que ocupa otro proceso o contenedor.
+- **Identidad Docker.** Escribe `COMPOSE_PROJECT_NAME`, que da a este despliegue sus
+  propios contenedores y su propio volumen de datos. Dos despliegues que se llamen
+  igual no comparten base de datos.
+- **Re-ejecución.** Con `--force` conserva los puertos que ya tenía este despliegue.
 
-Para automatizarlo (CI, scripts, crear varios asistentes):
+Para automatizarlo (CI, scripts, replicar el despliegue):
 
 ```bash
-agent-core init --non-interactive --name "Mi Bot" --llm deepseek
+agent-core init --non-interactive --name "Mi Plataforma" --llm deepseek
 agent-core init --help    # todas las banderas
 ```
 
-Qué genera:
-- `.env` con claves de cifrado y sesión auto-generadas
-- `sdd/*.md` — el System Design Document vivo de TU asistente
-- Migraciones aplicadas + usuario admin + configuración base
-
-> ¿La BD no estaba lista? Usa `agent-core init --skip-db` y luego
-> `agent-core db migrate && agent-core db seed`.
-
-## 3. Arrancar el asistente
+## 3. Arrancar la plataforma
 
 ```bash
 # Desarrollo (recarga automática):
@@ -86,59 +75,94 @@ docker compose up -d --build
 Verifica: `curl http://localhost:8000/healthz` → `{"status":"ok"}`
 
 > **Importante (desarrollo):** `uvicorn --reload` solo recarga cambios en archivos
-> `.py`, **NO** recarga el `.env`. Si editas el `.env` (p. ej. cambias el token de
-> WhatsApp o la API key del LLM) mientras el servidor corre, debes reiniciarlo
-> manualmente (`Ctrl+C` + `make dev`). Un token viejo en memoria es una causa
-> frecuente de "el bot procesa el mensaje pero no responde por el canal".
-> Regla práctica: cambiaste el `.env` → reinicia el proceso.
+> `.py`, **NO** recarga el `.env`. Si editas el `.env` mientras el servidor corre,
+> reinícialo manualmente (`Ctrl+C` + `make dev`).
 
 ## 4. Entrar al panel
 
-Abre **http://localhost:8000/admin** e ingresa con el email/contraseña del wizard.
-Verás el Dashboard con las secciones del core: Conversaciones, Escalaciones, **Conexiones**,
-Plugins, Costos LLM y Configuración.
+Abre **http://localhost:8000/admin** e ingresa con el email/contraseña del admin
+creado por `init`. Verás el Dashboard con las secciones del core: Conversaciones,
+Escalaciones, Conexiones, Plugins, Costos LLM y (para admins master) **Tenants**.
 
-## 5. Conectar WhatsApp (Meta Cloud API)
+## 5. Dar de alta un cliente (tenant)
 
-Hay dos formas (equivalentes):
+Dos formas equivalentes:
 
-**A. En el panel (recomendada):** ve a **/admin/conexiones** y completa el formulario
-con `label`, `phone_number_id`, `app_secret`, `access_token` y `verify_token`.
-Las credenciales se guardan cifradas (Fernet) en `channel_connections` y se **validan
-contra la Graph API de Meta antes de guardar** (una credencial mala nunca se persiste).
-No requiere reiniciar ni tocar el `.env`.
+**A. CLI (wizard paso a paso):**
+```bash
+agent-core tenant create
+# 1. Nombre del negocio · slug · descripción · idioma · tono
+# 2. Packs a habilitar (checkbox)
+# 3. Triggers de escalación
+# 4. WhatsApp (opcional, credenciales cifradas)
+# 5. Revisión y crear
+```
 
-**B. En el `.env`:**
-1. En [developers.facebook.com](https://developers.facebook.com): crea una app tipo
-   Business → agrega el producto WhatsApp.
-2. Copia al `.env`: `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`,
-   `WHATSAPP_APP_SECRET`. El `WHATSAPP_VERIFY_TOKEN` ya lo generó el init.
-3. Expón tu servidor local (desarrollo): `cloudflared tunnel --url http://localhost:8000`
-4. En Meta → WhatsApp → Configuration → Webhook:
-   - Callback URL: `https://<tu-tunel>/webhooks/whatsapp`
-   - Verify token: el valor de `WHATSAPP_VERIFY_TOKEN` (el mismo que pusiste en el panel
-     si usaste la opción A)
-   - Suscríbete al campo `messages`.
-5. Reinicia: `docker compose restart core-api` (o el uvicorn local).
-6. Escribe al número de prueba de Meta. El mensaje debe aparecer en
-   /admin/conversaciones y el asistente debe responder.
+**B. Panel:** `/admin/tenants` → **+ Nuevo tenant** → el mismo wizard en 5 pasos.
 
-> El webhook y el envío resuelven las credenciales en este orden: conexión que matchea
-> el `phone_number_id` del payload → conexión primaria activa → `.env`. Mientras no
-> guardes conexiones en el panel, todo funciona con el `.env`.
->
-> Nota: el token de prueba de Meta caduca cada 24h. Para producción genera un token
-> permanente de System User.
+Al terminar, el tenant aparece en el selector del panel y su `AgentSpec` es
+editable en `/admin/spec`. Si el cliente tiene datos (catálogo, servicios):
 
-## 6. Instalar tu primer plugin
+```bash
+# copia/crea TENANTS_ROOT/<slug>/catalog.json y luego:
+agent-core tenant seed <slug>
+```
+
+## 6. Conectar WhatsApp (Meta Cloud API)
+
+Por tenant, en **/admin/conexiones** (o dentro del wizard de alta): completa
+`label`, `phone_number_id`, `app_secret`, `access_token` y `verify_token`. Las
+credenciales se guardan cifradas (Fernet) y se **validan contra la Graph API de
+Meta antes de guardar**.
+
+**Cada tenant tiene su propio webhook**: `https://<tu-dominio>/webhooks/whatsapp/<slug>`
+(lo imprime `agent-core tenant webhook <slug>` y el panel en `/admin/conexiones`).
+
+### Prueba end-to-end real (paso a paso)
+
+**1. Crea la WABA de prueba en Meta (gratis):**
+- [business.facebook.com](https://business.facebook.com) → Business settings →
+  WhatsApp → Add phone number → elige *"usar un número de prueba"* (test number).
+- Crea una app en [developers.facebook.com](https://developers.facebook.com)
+  (tipo Business), agrega el producto **WhatsApp** y anota:
+  **Phone Number ID**, **App Secret**, **Access Token** (WhatsApp → API Setup →
+  Generate token; 24 h en dev).
+- WhatsApp → Recipients: agrega tu celular como **tester** (para poder chatear).
+
+**2. Expón tu webhook con un túnel:**
+```bash
+cloudflared tunnel --url http://localhost:8001
+# → https://<aleatorio>.trycloudflare.com   (déjalo corriendo)
+```
+Pon esa URL pública en el `.env` (`PUBLIC_BASE_URL=https://<aleatorio>.trycloudflare.com`)
+y reinicia la API. El webhook del tenant será
+`https://<aleatorio>.trycloudflare.com/webhooks/whatsapp/<slug>`.
+
+**3. Conecta WhatsApp del tenant** en `/admin/conexiones` (Phone Number ID, App
+Secret, Access Token y un Verify Token propio, ej. `miToken123`). El core valida
+contra Meta antes de guardar.
+
+**4. Registra el webhook en Meta:** tu app → **WhatsApp → Configuration**:
+- **Callback URL**: `https://<aleatorio>.trycloudflare.com/webhooks/whatsapp/<slug>`
+- **Verify token**: el mismo del paso 3
+- Suscríbete al campo **`messages`**.
+
+Meta hace el handshake (`GET /webhooks/whatsapp/<slug>?hub.mode=subscribe...`);
+el core responde 200 + challenge si el token coincide.
+
+**5. Prueba:** escribe desde tu celular (tester) al número de prueba. La firma se
+valida (App Secret) → se resuelve el tenant por el slug → se procesa y responde.
+Verás la conversación en `/admin/conversaciones`. (Con `DEMO_MODE=true` el LLM es
+fake determinístico; con `LLM_API_KEY` respuestas reales.)
+
+## 7. Instalar un pack (vertical)
 
 ```bash
 agent-core plugin install pack-commerce
 ```
 
-Sigue los wizards (datos + exposición de entidades). Al terminar, en el panel:
-Plugins → **CRM** → **Configurar** → guarda → el menú lateral agrupa el plugin bajo
-"CRM" con sus secciones: Dashboard · Leads · Productos · Categorías · Promociones · Pedidos.
+Los packs se habilitan **por tenant** desde su `AgentSpec` (checkbox en el wizard
+de alta o editor `/admin/spec`). El mismo pack sirve a N clientes.
 
 ## Solución de problemas
 
@@ -148,55 +172,47 @@ Plugins → **CRM** → **Configurar** → guarda → el menú lateral agrupa el
 agent-core doctor
 ```
 
-Revisa `.env`, Docker, puertos (y quién los ocupa), volumen de datos, conexión a
-PostgreSQL y Redis, migraciones del core y de cada plugin, y plugins detectados.
-Cada fila que falla dice qué hacer. Sale con código 1 si encuentra algo, así que
-sirve en scripts.
+Revisa `.env`, Docker, puertos, conexión a PostgreSQL y Redis, migraciones y
+plugins detectados. Cada fila que falla dice qué hacer. Sale con código 1 si
+encuentra algo, así que sirve en scripts.
 
-### Los tres fallos que más cuestan
+### Los fallos que más cuestan
 
 **1. `port is already allocated` al levantar**
 
-Otro servicio ocupó el puerto entre el `init` y el `docker compose up`, o lo reclama
-un contenedor que estaba parado. `agent-core doctor` dice qué contenedor es. Cambia
-`POSTGRES_HOST_PORT` / `REDIS_HOST_PORT` / `APP_HOST_PORT` en el `.env`, o para el
-servicio que lo ocupa.
+Otro servicio ocupó el puerto entre el `init` y el `docker compose up`. Cambia
+`POSTGRES_HOST_PORT` / `REDIS_HOST_PORT` / `APP_HOST_PORT` en el `.env`, o para
+el servicio que lo ocupa.
 
 **2. `password authentication failed` o `role "X" does not exist` al migrar**
 
-Casi siempre es el volumen de datos, no las migraciones. PostgreSQL aplica
-`POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` **solo la primera vez que
-inicializa su directorio de datos**. Si el volumen `<proyecto>_pgdata` sobrevive a una
-instalación anterior, conserva las credenciales viejas y las del `.env` nuevo se
-ignoran, sin ningún aviso que mencione el volumen.
-
-Dos salidas:
+Casi siempre es el volumen de datos. PostgreSQL aplica `POSTGRES_USER` /
+`POSTGRES_PASSWORD` / `POSTGRES_DB` **solo la primera vez** que inicializa su
+directorio de datos. Si el volumen `<proyecto>_pgdata` sobrevive a una instalación
+anterior, conserva las credenciales viejas.
 
 ```bash
 # a) Conservar los datos: pon en el .env las credenciales con las que se creó el volumen
-# b) Empezar de cero (DESTRUYE los datos de ese asistente):
+# b) Empezar de cero (DESTRUYE los datos de ese despliegue):
 docker compose down -v && agent-core init --force
 ```
 
-`agent-core init --recreate-volume` hace (b) sin preguntar.
+**3. Dos despliegues se pisan**
 
-**3. Dos asistentes se pisan**
-
-Cada asistente necesita su propio `COMPOSE_PROJECT_NAME` en el `.env`. Sin él Docker
-usa el nombre de la carpeta, y dos clones llamados igual comparten contenedores y
-volumen. `agent-core doctor` lo marca como aviso.
+Cada despliegue necesita su propio `COMPOSE_PROJECT_NAME` en el `.env` (lo escribe
+`init`). Sin él Docker usa el nombre de la carpeta y dos clones llamados igual
+comparten contenedores y volumen. `agent-core doctor` lo marca como aviso.
 
 ### Otros síntomas
 
 | Síntoma | Causa probable | Solución |
 |---|---|---|
 | `docker compose` falla con `.env not found` | No has corrido `init` | `agent-core init` genera el `.env` que compose exige |
-| `required variable COMPOSE_PROJECT_NAME is missing` | `.env` heredado de una versión anterior | Añade `COMPOSE_PROJECT_NAME=<nombre-único>` al `.env`, o `agent-core init --force`. Es obligatorio: sin él, dos clones compartirían la base de datos |
-| `exec format error` en `docker-buildx` | El binario de buildx está corrupto (suele ser un HTML descargado sin `curl -L`) | Compruébalo con `file ~/.docker/cli-plugins/docker-buildx`. Si dice *HTML document*, bórralo: Compose usa el builder clásico. Para reinstalarlo: `sudo apt install docker-buildx-plugin` |
-| `postgres is unhealthy` y no arranca nada más | El healthcheck se autentica con las credenciales del `.env` | Es el caso 2 de arriba: `docker compose logs postgres` |
-| `MASTER_ENCRYPTION_KEY no configurada` | .env sin generar | `agent-core init` o genera la clave manualmente |
-| Webhook devuelve 403 en el handshake | verify_token no coincide | Mismo valor en Meta y en `.env` |
-| El bot no responde pero guarda mensajes | Kill-switch activo | Panel → Configuración → estado del bot; revisa también cliente y conversación |
-| Plugin en estado `error` | Excepción en activación/runtime | El mensaje exacto está en /admin/plugins; corrige y pulsa Activar |
-| `alembic upgrade` falla con pgvector | Imagen de Postgres sin la extensión | Usa `pgvector/pgvector:pg16` (ya está en docker-compose.yml) |
-| Respuestas nunca llegan | Consumer sin arrancar | El consumer corre dentro de core-api; revisa logs: `docker compose logs core-api` |
+| `required variable COMPOSE_PROJECT_NAME is missing` | `.env` heredado | `agent-core init --force` |
+| `exec format error` en `docker-buildx` | Binario de buildx corrupto | `sudo apt install docker-buildx-plugin` |
+| `postgres is unhealthy` | Healthcheck se autentica con el `.env` | Caso 2 de arriba: `docker compose logs postgres` |
+| `MASTER_ENCRYPTION_KEY no configurada` | .env sin generar | `agent-core init` |
+| Webhook devuelve 403 en el handshake | verify_token no coincide | Mismo valor en Meta y en la conexión del tenant |
+| El bot no responde pero guarda mensajes | Kill-switch activo | Panel → Configuración → estado del bot |
+| Plugin en estado `error` | Excepción en activación/runtime | El mensaje exacto está en /admin/plugins |
+| Respuestas nunca llegan | Consumer sin arrancar | `docker compose logs core-api` |

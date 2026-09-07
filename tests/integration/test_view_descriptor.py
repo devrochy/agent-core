@@ -1,5 +1,9 @@
 """Renderizador de vistas por descriptor (Fase D, Sprint 4): el pack registra
-tabla+form+handlers y el core sirve el HTML genérico y el guardado."""
+tabla+form+handlers y el core sirve el HTML genérico y el guardado.
+
+Usa el tenant por defecto (el que usa el middleware sin cookie): consistente
+entre la lectura, el POST y la verificación, sin depender del seed del framework.
+"""
 
 from __future__ import annotations
 
@@ -37,23 +41,58 @@ async def _login(app_client) -> str:
     return r.headers["set-cookie"].split(";")[0]
 
 
-async def _first_lead_id() -> str | None:
+async def _login_as_default(app_client) -> str:
+    """Login + cookie ac_tenant del tenant por defecto (el del middleware sin cookie).
+
+    El middleware usa el PRIMER tenant del admin (orden arbitrario de admin_tenants);
+    fijar la cookie hace el test determinístico y consistente con default_tenant().
+    """
+    from core.shared.tenant import default_tenant
+
+    session = await _login(app_client)
+    r = await app_client.post(
+        "/admin/switch-tenant",
+        headers={"Cookie": session},
+        data={"tenant_id": str(await default_tenant())},
+    )
+    ac_tenant = next(
+        c.split(";")[0] for c in r.headers.get_list("set-cookie") if "ac_tenant" in c
+    )
+    return f"{session}; {ac_tenant}"
+
+
+async def _ensure_test_lead() -> str:
+    """Crea (si falta) un lead de prueba en el tenant por defecto. Devuelve su id."""
     from pack_commerce.models import Lead
     from sqlalchemy import select
 
     from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
+    from core.shared.tenant import default_tenant, tenant_scope
 
-    async with tenant_scope("00000000-0000-0000-0000-000000000001"):
+    tenant_id = await default_tenant()
+    async with tenant_scope(tenant_id):
         async with get_session() as session:
             lead = (
-                await session.execute(select(Lead.id).order_by(Lead.created_at.desc()).limit(1))
+                await session.execute(
+                    select(Lead).where(Lead.idempotency_key == "test-view-descriptor")
+                )
             ).scalar_one_or_none()
-    return str(lead) if lead else None
+            if lead is None:
+                lead = Lead(
+                    name="Lead de prueba",
+                    phone="3001234567",
+                    interest="vista descriptor",
+                    score=0,
+                    status="nuevo",
+                    idempotency_key="test-view-descriptor",
+                )
+                session.add(lead)
+                await session.flush()
+            return str(lead.id)
 
 
 async def test_vista_descriptor_renderiza(app_client) -> None:
-    cookie = await _login(app_client)
+    cookie = await _login_as_default(app_client)
     r = await app_client.get(
         "/admin/packs/pack_commerce/leads", headers={"Cookie": cookie}
     )
@@ -65,25 +104,21 @@ async def test_vista_descriptor_renderiza(app_client) -> None:
 
 
 async def test_vista_descriptor_guarda(app_client) -> None:
-    lead_id = await _first_lead_id()
-    if lead_id is None:
-        pytest.skip("sin leads para probar el guardado")
-    cookie = await _login(app_client)
-    headers = {"Cookie": cookie}
+    from pack_commerce.models import Lead
+
+    from core.db.session import get_session
+    from core.shared.tenant import default_tenant, tenant_scope
+
+    lead_id = await _ensure_test_lead()
+    cookie = await _login_as_default(app_client)
     r = await app_client.post(
         "/admin/packs/pack_commerce/leads/guardar",
-        headers=headers,
+        headers={"Cookie": cookie},
         data={"record_id": lead_id, "score": "9", "status": "calificado"},
     )
     assert r.status_code == 303
 
-
-    from pack_commerce.models import Lead
-
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope("00000000-0000-0000-0000-000000000001"):
+    async with tenant_scope(await default_tenant()):
         async with get_session() as session:
             lead = await session.get(Lead, uuid.UUID(lead_id))
     assert lead is not None

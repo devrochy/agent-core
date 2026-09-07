@@ -1,34 +1,51 @@
 """Runner de golden scenarios (assertions determinísticas, sin LLM-as-judge).
 
-Uso:  python evals/runner.py            # corre todos los escenarios
-      python evals/runner.py 03         # corre solo los que matcheen "03"
+Uso:
+  python evals/runner.py                       # golden set genérico del framework
+  python evals/runner.py 03                    # solo los que matcheen "03"
+  python evals/runner.py --tenant <slug>       # golden set del tenant (TENANTS_ROOT/<slug>/evals/)
 
 Requiere LLM_API_KEY configurada (hace llamadas reales al proveedor activo).
 Criterio (heredado de agent-sale ADR-012): assertions duras bloquean; el tono
 se revisa manualmente. Correr antes de cada deploy, no en cada commit.
+
+El spec y los escenarios de cada tenant viven en TENANTS_ROOT/<slug>/evals/
+(dato por despliegue, gitignored) — el framework no mezcla datos de clientes.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
-import sys
 import uuid
 from pathlib import Path
 
 from agentcore_contracts import AgentSpec
 
+from core.onboarding import tenants_root
+
 SCENARIOS_DIR = Path(__file__).parent / "golden_scenarios"
 SPECS_DIR = Path(__file__).parent / "specs"
 
 
-def _load_spec(fixture: str = "culto.json") -> AgentSpec:
-    """Carga el AgentSpec del tenant (CULTO) desde evals/specs/ (ADR-0016:
-    el gate evalúa la configuración real, no un spec sintético)."""
-    path = SPECS_DIR / fixture
-    if path.exists():
-        return AgentSpec.model_validate(json.loads(path.read_text()))
-    raise FileNotFoundError(f"Spec fixture no encontrada: {path}")
+def _load_spec(tenant: str | None) -> AgentSpec:
+    """Spec real: del tenant (TENANTS_ROOT/<slug>/evals/spec.json) o el neutro
+    del framework. ADR-0016: el gate evalúa la configuración real, no una sintética."""
+    if tenant:
+        path = tenants_root() / tenant / "evals" / "spec.json"
+        if not path.exists():
+            raise FileNotFoundError(f"Spec del tenant no encontrada: {path}")
+    else:
+        path = SPECS_DIR / "framework.json"
+        if not path.exists():
+            raise FileNotFoundError(f"Spec del framework no encontrada: {path}")
+    return AgentSpec.model_validate(json.loads(path.read_text()))
+
+
+def _scenario_paths(tenant: str | None, patterns: list[str]) -> list[Path]:
+    base = tenants_root() / tenant / "evals" / "scenarios" if tenant else SCENARIOS_DIR
+    return sorted(p for p in base.glob("*.json") if any(pat in p.name for pat in patterns))
 
 
 def _git_ref() -> str:
@@ -45,7 +62,21 @@ def _git_ref() -> str:
 TENANT1 = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
-async def _ensure_plugin_active(plugin_id: str) -> bool:
+async def _tenant_id(slug: str) -> uuid.UUID:
+    """Id del tenant por slug (los evals corren con un tenant REAL, nunca un UUID sintético)."""
+    from sqlalchemy import select
+
+    from core.db.models import Tenant
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        row = (await session.execute(select(Tenant).where(Tenant.slug == slug))).scalar_one_or_none()
+    if row is None:
+        raise FileNotFoundError(f"Tenant no existe: {slug}")
+    return row.id
+
+
+async def _ensure_plugin_active(plugin_id: str, tenant_id: uuid.UUID) -> bool:
     """Activa un plugin para evals con su config default (si no está activo).
 
     Corre dentro de tenant_scope: save_config/activate persisten config por
@@ -57,14 +88,14 @@ async def _ensure_plugin_active(plugin_id: str) -> bool:
     module = plugin_manager.get(plugin_id)
     if module is None:
         return False
-    async with tenant_scope(TENANT1):
+    async with tenant_scope(tenant_id):
         if not plugin_manager.is_active(plugin_id):
             await plugin_manager.save_config(plugin_id, {})
             await plugin_manager.activate(plugin_id)
         return plugin_manager.is_active(plugin_id)
 
 
-async def run_scenario(path: Path) -> tuple[str, bool, str]:
+async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tuple[str, bool, str]:
     scenario = json.loads(path.read_text())
     name = scenario["name"]
     assertions = scenario.get("assertions", {})
@@ -91,15 +122,13 @@ async def run_scenario(path: Path) -> tuple[str, bool, str]:
 
     required = scenario.get("requires_plugins", [])
     for plugin_id in required:
-        if not await _ensure_plugin_active(plugin_id):
+        if not await _ensure_plugin_active(plugin_id, tenant_id):
             return name, True, f"SKIP: requiere {plugin_id} (no instalado)"
 
-    # Spec real del tenant (CULTO) desde evals/specs/ (ADR-0016).
-    spec = _load_spec(scenario.get("spec", "culto.json"))
     provider = resolve_provider()
     ctx = PromptContext(
         assistant_name="Asistente de Prueba",
-        business_description="Agencia de desarrollo de software y páginas web en Colombia.",
+        business_description="Negocio de ejemplo para evaluación.",
     )
     tools = to_llm_schemas(mcp_host.get_skill_tools([s.name for s in mcp_host.list_skills()]))
     messages = [
@@ -139,9 +168,16 @@ async def run_scenario(path: Path) -> tuple[str, bool, str]:
 
 
 async def main() -> int:
-    raw_pattern = sys.argv[1] if len(sys.argv) > 1 else ""
-    # soporta subconjuntos: `python evals/runner.py "06,21,22"` (gate de CI)
-    patterns = [p.strip() for p in raw_pattern.split(",") if p.strip()] or [""]
+    parser = argparse.ArgumentParser(description="Runner de golden scenarios")
+    parser.add_argument("pattern", nargs="?", default="", help="Subconjunto por nombre (ej: 06)")
+    parser.add_argument(
+        "--tenant",
+        default=None,
+        help="Slug del tenant: corre su golden set desde TENANTS_ROOT/<slug>/evals/",
+    )
+    args = parser.parse_args()
+
+    patterns = [p.strip() for p in args.pattern.split(",") if p.strip()] or [""]
 
     # Cargar y ACTIVAR plugins para escenarios que los requieran (los tools
     # solo se registran en el MCPHost al activar el plugin).
@@ -150,24 +186,27 @@ async def main() -> int:
     plugin_manager.scan()
     await plugin_manager.activate_all_configured()
 
-    paths = sorted(p for p in SCENARIOS_DIR.glob("*.json") if any(pat in p.name for pat in patterns))
+    spec = _load_spec(args.tenant)
+    paths = _scenario_paths(args.tenant, patterns)
     if not paths:
-        print(f"No hay escenarios que matcheen '{raw_pattern}'")
+        base = "tenants/" + args.tenant + "/evals/scenarios" if args.tenant else "evals/golden_scenarios"
+        print(f"No hay escenarios que matcheen '{args.pattern}' en {base}")
         return 1
 
-    print(f"Corriendo {len(paths)} escenarios (ref {_git_ref()})...\n")
+    label = f"tenant {args.tenant}" if args.tenant else "framework"
+    tenant_id = await _tenant_id(args.tenant) if args.tenant else TENANT1
+    print(f"Corriendo {len(paths)} escenarios ({label}, ref {_git_ref()})...\n")
     exit_code = 0
-    spec_version = ""
     for path in paths:
         try:
-            name, ok, detail = await run_scenario(path)
+            name, ok, detail = await run_scenario(path, spec, tenant_id)
         except Exception as exc:
             name, ok, detail = path.stem, False, f"excepción: {exc}"
         status = "✓ PASS" if ok else "✗ FAIL"
         print(f"  {status}  {name}" + (f"  — {detail}" if detail else ""))
         if not ok:
             exit_code = 1
-    print(f"\nGolden set: {len(paths)} escenarios · spec {spec_version or 'culto.json'} · ref {_git_ref()}")
+    print(f"\nGolden set: {len(paths)} escenarios · spec {label} · ref {_git_ref()}")
     return exit_code
 
 

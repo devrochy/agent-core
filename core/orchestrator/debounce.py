@@ -98,6 +98,13 @@ async def _fire_conversation(conversation_id: uuid.UUID, payload: dict[str, Any]
             return
 
         async with tenant_scope(tenant_id):
+            # Ciclo de vida: un tenant suspendido/eliminado no genera respuestas
+            # (el mensaje quedó encolado ANTES de la suspensión).
+            from core.tenants import is_tenant_active
+
+            if not await is_tenant_active(uuid.UUID(tenant_id)):
+                log.info("debounce_tenant_not_active", conversation_id=str(conversation_id))
+                return
             result = await process_conversation(conversation_id, latest_message)
             if result is not None and result.text:
                 delivered = await send_to_conversation(
@@ -126,7 +133,9 @@ async def recover_orphaned_conversations() -> None:
     try:
         async with get_session() as session:
             tenant_ids = (
-                await session.execute(text("select id from tenants where deleted_at is null"))
+                await session.execute(
+                    text("select id from tenants where deleted_at is null and status = 'active'")
+                )
             ).scalars().all()
 
         recovered = 0

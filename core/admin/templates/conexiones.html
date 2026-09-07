@@ -13,6 +13,23 @@
   Meta y quedarán cifradas en la base de datos (Fernet), sin depender del <code>.env</code>.
 </p>
 
+{% if webhook_url %}
+<div class="card mb-4">
+  <div class="card-body">
+    <h5 class="card-title fs-6">Webhook de este tenant</h5>
+    <p class="mb-2 small text-secondary">
+      Regístralo en Meta (app → WhatsApp → Configuration) con el Verify token de la conexión.
+    </p>
+    <div class="input-group input-group-sm mb-1">
+      <span class="input-group-text">Callback URL</span>
+      <input type="text" class="form-control font-monospace" value="{{ webhook_url }}" readonly
+             onclick="this.select()">
+    </div>
+    <div class="form-text">Cada app/tenant tiene su propio webhook (<code>/webhooks/whatsapp/&lt;slug&gt;</code>).</div>
+  </div>
+</div>
+{% endif %}
+
 {% if connections %}
 {% call datatable(filter_fields=[
   {"key": "estado", "label": "Estado", "options": [

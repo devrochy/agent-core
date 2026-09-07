@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import uuid
 
 import pytest
 
@@ -15,19 +14,17 @@ pytestmark = [
     ),
 ]
 
-T1 = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
-
-async def test_load_active_spec_desde_bd(tenant_setup) -> None:
-    t1, _t2 = tenant_setup
+async def test_load_active_spec_desde_bd(moto_setup) -> None:
+    _t1, t2 = moto_setup
     from core.agents.spec import load_active_spec
     from core.shared.tenant import tenant_scope
 
-    async with tenant_scope(t1):
+    async with tenant_scope(t2):
         spec = await load_active_spec()
-    assert spec.tenantId == str(t1)
+    assert spec.tenantId == str(t2)
     assert spec.persona.tone == "cercano"
-    # el spec sembrado referencia los playbooks default + los del pack CRM (CULTO)
+    # el spec sembrado referencia los playbooks default + los del pack habilitado
     assert {p.name for p in spec.playbooks} == {
         "identidad",
         "tono",
@@ -56,19 +53,20 @@ async def test_spec_aislado_por_tenant(tenant_setup) -> None:
     assert spec_t1.tenantId != spec_t2.tenantId
 
 
-async def test_enablement_packs_por_tenant(tenant_setup) -> None:
-    """ADR-0019: CULTO tiene el pack habilitado; el core siempre; T2 (sin packs) no."""
-    t1, t2 = tenant_setup
+async def test_enablement_packs_por_tenant(moto_setup, tenant_setup) -> None:
+    """ADR-0019: un tenant con pack lo tiene habilitado; el core siempre; otro sin packs no."""
+    _t1, moto = moto_setup
+    _a, t2 = tenant_setup
     from core.agents.spec import enabled_packs, load_active_spec
     from core.shared.tenant import tenant_scope
 
-    async with tenant_scope(t1):
-        spec_t1 = await load_active_spec()
+    async with tenant_scope(moto):
+        spec_moto = await load_active_spec()
     async with tenant_scope(t2):
         spec_t2 = await load_active_spec()
 
-    packs_t1 = enabled_packs(spec_t1)
+    packs_moto = enabled_packs(spec_moto)
     packs_t2 = enabled_packs(spec_t2)
-    assert "core" in packs_t1 and "core" in packs_t2
-    assert "pack_commerce" in packs_t1, "CULTO debe tener el pack del CRM"
+    assert "core" in packs_moto and "core" in packs_t2
+    assert "pack_commerce" in packs_moto, "el tenant con el pack lo debe tener habilitado"
     assert "pack_commerce" not in packs_t2, "un tenant sin packs no debe tener el CRM"

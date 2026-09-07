@@ -71,23 +71,15 @@ def _iso(dt: datetime | None) -> str:
 
 
 async def _require_admin(request: Request) -> dict[str, Any] | None:
-    from core.admin.auth import current_admin
-    from core.config import get_settings
-    from core.db.models import AppSettings
-    from core.plugin_manager import plugin_manager
+    """Contexto común del panel (incluye el selector de tenants) o None si no hay sesión.
 
-    admin = await current_admin(request)
-    if admin is None:
-        return None
-    async with get_session() as session:
-        app_settings = (await session.execute(select(AppSettings).limit(1))).scalar_one_or_none()
-    return {
-        "request": request,
-        "section": "crm",
-        "admin": admin,
-        "assistant_name": app_settings.assistant_name if app_settings else get_settings().app_name,
-        "plugin_menu": plugin_manager.active_admin_menu(),
-    }
+    Reutiliza `core.admin.context.base_context` en vez de construir un contexto
+    parcial: así todas las rutas del pack reciben `tenants`, `active_tenant_id` y
+    `flash`, igual que las páginas del core. Los packs dependen del core.
+    """
+    from core.admin.context import base_context
+
+    return await base_context(request, "crm")
 
 
 def _login_redirect() -> RedirectResponse:

@@ -1,9 +1,10 @@
 """CLI de agent-core.
 
 Comandos:
-  agent-core init                      Wizard de nuevo asistente (.env + sdd/ + BD + admin)
-  agent-core status                    Estado del sistema
-  agent-core configure [tone|llm]      Reconfiguración puntual
+  agent-core init                         Bootstrap de una instalación nueva (.env + sdd/ + BD + admin)
+  agent-core tenant create|list|seed|docs|deactivate|activate|purge  Alta y operación de tenants (multi-tenant)
+  agent-core status                       Estado del sistema
+  agent-core configure [tone|llm]         Reconfiguración puntual
   agent-core plugin list|install|remove|scaffold
   agent-core db migrate|seed
   agent-core sdd update|show
@@ -20,10 +21,11 @@ from cli.commands.doctor import doctor_command
 from cli.commands.init import init_command
 from cli.commands.plugin import app as plugin_app
 from cli.commands.sdd import app as sdd_app
+from cli.commands.tenant import app as tenant_app
 
 app = typer.Typer(
     name="agent-core",
-    help="Framework de asistentes IA: monolito modular con plugins embebidos.",
+    help="Framework multi-tenant de agentes IA: un solo código base sirve a todos los clientes.",
     no_args_is_help=True,
 )
 
@@ -34,6 +36,7 @@ app.add_typer(configure_app, name="configure", help="Reconfiguración del asiste
 app.add_typer(db_app, name="db", help="Base de datos")
 app.add_typer(sdd_app, name="sdd", help="System Design Document vivo")
 app.add_typer(agent_app, name="agent", help="Releases y rollback del AgentSpec (ADR-0009/0016)")
+app.add_typer(tenant_app, name="tenant", help="Alta y operación de tenants (multi-tenant, ADR-0001)")
 
 
 @app.command()

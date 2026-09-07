@@ -13,7 +13,7 @@ from typing import Any
 from sqlalchemy import func, select
 
 from core.config import get_settings
-from core.db.models import ChannelConnection
+from core.db.models import ChannelConnection, utcnow
 from core.db.session import get_session
 from core.shared.crypto import get_secret_box
 from core.shared.tenant import get_current_tenant_id
@@ -25,7 +25,9 @@ CREDENTIAL_KEYS = ("phone_number_id", "app_secret", "access_token", "verify_toke
 async def list_connections() -> list[ChannelConnection]:
     async with get_session() as session:
         result = await session.execute(
-            select(ChannelConnection).order_by(ChannelConnection.created_at)
+            select(ChannelConnection)
+            .where(ChannelConnection.deleted_at.is_(None))
+            .order_by(ChannelConnection.created_at)
         )
         return list(result.scalars().all())
 
@@ -38,7 +40,10 @@ async def get_connection(connection_id: uuid.UUID) -> ChannelConnection | None:
 async def find_by_external_id(external_id: str) -> ChannelConnection | None:
     async with get_session() as session:
         result = await session.execute(
-            select(ChannelConnection).where(ChannelConnection.external_id == external_id)
+            select(ChannelConnection).where(
+                ChannelConnection.external_id == external_id,
+                ChannelConnection.deleted_at.is_(None),
+            )
         )
         return result.scalar_one_or_none()
 
@@ -136,6 +141,7 @@ async def save_connection(
                 existing.label = label
                 existing.credentials_encrypted = encrypted
                 existing.active = True
+                existing.deleted_at = None  # re-agregar des-elimina (invariante #8)
                 return existing, False
             connection = ChannelConnection(
                 tenant_id=get_current_tenant_id(),
@@ -182,10 +188,12 @@ async def set_primary(connection_id: uuid.UUID) -> None:
 
 
 async def delete_connection(connection_id: uuid.UUID) -> None:
+    """Borra (soft-delete) una conexión — invariante #8: sin borrado físico."""
     async with get_session() as session:
         connection = await session.get(ChannelConnection, connection_id)
         if connection is not None:
-            await session.delete(connection)
+            connection.deleted_at = utcnow()
+            connection.active = False
 
 
 async def verify_meta_credentials(

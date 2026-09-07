@@ -96,10 +96,12 @@ git clone <repo> /tmp/verificar && cd /tmp/verificar
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/agent-core init --non-interactive --name "Verificar"
 docker compose up -d && .venv/bin/agent-core doctor
+.venv/bin/agent-core tenant create --non-interactive --name "Cliente de prueba" --packs pack_commerce
 ```
 
 Debe completarse sin intervención manual, en una máquina que ya tenga puertos
-ocupados y volúmenes de instalaciones anteriores.
+ocupados y volúmenes de instalaciones anteriores. El `tenant create` final prueba
+que una instalación limpia puede dar de alta clientes de verdad.
 
 ### 5. Cierre documental
 
@@ -108,7 +110,8 @@ Antes del merge, en este orden:
 1. Actualiza **el documento dueño** del tema (tabla de abajo). Solo ese: los demás
    enlazan.
 2. Marca los criterios cumplidos en la HU (`- [ ]` → `- [x]`).
-3. Si cambió el estado del asistente (plugin, tono, LLM): `agent-core sdd update`.
+3. Si cambió el estado de un tenant (plugin, tono, LLM): `agent-core sdd update`
+   (o anótalo en `TENANTS_ROOT/<slug>/docs/`).
 4. `git merge --no-ff` a `main`.
 
 ---
@@ -126,14 +129,15 @@ documento que manda; el resto enlaza en vez de repetir.
 | Instalar, arrancar y diagnosticar | `docs/INSTALLATION.md` | Enlazan |
 | Proceso de trabajo | `docs/WORKFLOW.md` (este) | `CLAUDE.md` resume |
 | Qué se pide construir | `docs/HU/` | — |
-| Estado del asistente desplegado | `sdd/.state.json` → `sdd/*.md` | **Generado. Nunca a mano** |
+| Estado del tenant desplegado | `TENANTS_ROOT/<slug>/docs/` + `sdd/.state.json` | **Generado. Nunca a mano** |
 | Reglas para agentes IA | `CLAUDE.md` | `.opencode/agents/*` enlazan |
 | Deuda técnica conocida | `docs/BACKLOG.md` | — |
 
-**Corolario para los templates SDD:** describen *este asistente*, no el framework.
+**Corolario para los templates SDD:** describen *este despliegue*, no el framework.
 Lo que sea del framework se parametriza desde `.state.json` o se enlaza a `docs/`.
-Un valor del framework copiado a mano en un `.j2` miente en cuanto alguien toca el
-`.env`.
+Lo que sea de un cliente concreto va a `TENANTS_ROOT/<slug>/docs/`, no al repo del
+framework. Un valor del framework copiado a mano en un `.j2` miente en cuanto
+alguien toca el `.env`.
 
 ---
 

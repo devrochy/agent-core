@@ -203,7 +203,7 @@ esquema** (Sprint 1 del ROADMAP).
 | `Dockerfile` | CORE | raíz | bajo | Imagen |
 | `docker-compose.yml` | CORE | raíz | medio | Topología "dedicado" (un stack = un tenant); el default pooled requiere compose distinto |
 | `.env.example` | CONFIG | raíz (plantilla por tenant) | bajo | Exactamente lo que el cliente edita |
-| `README.md` | CORE | raíz | medio | Documenta "un asistente = un despliegue"; inconsistente con ADR-0001 pooled |
+| `README.md` | CORE | raíz | medio | Reescribido para el modelo multi-tenant (ADR-0001): instalar una vez, dar de alta tenants |
 | `README-BOOTSTRAP.md` | CORE | raíz | bajo | Kit de arranque (untracked) |
 | `opencode.json` | CORE | raíz | bajo | Permisos OpenCode (untracked) |
 | `.gitignore` | CORE | raíz | bajo | Ignora `sdd/*.md` pero NO `sdd/.state.json` |
@@ -290,8 +290,9 @@ Cosas que el inventario no pudo clasificar solo y requieren criterio:
   dato de tenant debe versionarse en el repo.
 - [ ] **`cli/wizards/db_import_wizard.py`** — exigir `tenant_id` (autoasignado por tenant)
   en el import.
-- [ ] **README.md y docker-compose documentan single-tenant** — son topología `dedicado`; el
-  default pooled (ADR-0001) necesita otra documentación.
+- [x] **README.md y docker-compose documentan single-tenant** — son topología `dedicado`; el
+  default pooled (ADR-0001) necesita otra documentación. **RESUELTO**: README, INSTALLATION y
+  FIRST-ASSISTANT reescritos para multi-tenant (`tenant create`); docs/MULTITENANT.md nuevo.
 - [ ] **Devkit sin commitear** — `packages/`, `prompts/`, `.opencode/skills/`,
   `.opencode/plugins/`, 4 agentes, `README-BOOTSTRAP.md`, `opencode.json` y `docs/adr/`
   están untracked. Versionarlos antes de seguir.

@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from core.admin.auth import SESSION_COOKIE, TENANT_COOKIE, current_admin, login, logout
+from core.admin.context import base_context as _base_context
 from core.admin.form_generator import (
     parse_form_values,
     parse_json_schema_form,
@@ -61,42 +62,6 @@ INBOUND_STREAM = "agent_core:inbound"
 DLQ_STREAM = "agent_core:inbound:dlq"
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
-
-
-async def _base_context(request: Request, section: str) -> dict[str, Any] | None:
-    """Contexto común. None => redirigir a login."""
-    admin = await current_admin(request)
-    if admin is None:
-        return None
-    async with get_session() as session:
-        app_settings = (
-            await session.execute(
-                select(AppSettings).where(
-                    AppSettings.tenant_id == get_current_tenant_id(),
-                    AppSettings.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-    return {
-        "request": request,
-        "section": section,
-        "admin": admin,
-        "assistant_name": app_settings.assistant_name if app_settings else get_settings().app_name,
-        "plugin_menu": plugin_manager.active_admin_menu(),
-        "tenants": await _admin_tenant_options(admin.id),
-        "active_tenant_id": str(get_current_tenant_id()) if get_current_tenant_id() else "",
-        "flash": request.query_params.get("flash"),
-        "flash_type": request.query_params.get("flash_type"),
-    }
-
-
-async def _admin_tenant_options(admin_id) -> list[dict[str, str]]:
-    """Opciones del selector de tenant (C3): tenants del admin con nombre y activo."""
-    active = str(get_current_tenant_id()) if get_current_tenant_id() else ""
-    return [
-        {"id": str(tid), "name": tname, "role": trole, "active": str(tid) == active}
-        for (tid, tname, trole) in await admin_tenants(admin_id)
-    ]
 
 
 def _login_redirect() -> RedirectResponse:
@@ -231,6 +196,196 @@ async def logout_submit(request: Request) -> RedirectResponse:
     response = _login_redirect()
     response.delete_cookie(SESSION_COOKIE)
     return response
+
+
+# ------------------------------------------------------------------ Tenants (onboarding, ADR-0001)
+def _slugify(value: str) -> str:
+    import re
+    import unicodedata
+
+    normalized = unicodedata.normalize("NFKD", value or "")
+    ascii_only = normalized.encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "-", ascii_only.lower()).strip("-") or "tenant"
+
+
+async def _require_master(request: Request) -> bool:
+    admin = await current_admin(request)
+    if admin is None or admin.role != "master":
+        return False
+    return True
+
+
+@router.get("/tenants", response_class=HTMLResponse)
+async def tenants_list(request: Request):
+    ctx = await _base_context(request, "tenants")
+    if ctx is None:
+        return _login_redirect()
+    if not await _require_master(request):
+        return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
+
+    from core.db.models import Tenant
+
+    async with get_session() as session:
+        rows = (
+            await session.execute(select(Tenant).order_by(Tenant.created_at))
+        ).scalars().all()
+    ctx["tenants_rows"] = [
+        {
+            "id": str(t.id),
+            "name": t.name,
+            "slug": t.slug,
+            "status": t.status,
+            "created_at": t.created_at,
+        }
+        for t in rows
+    ]
+    return _render("tenants.html", ctx)
+
+
+@router.get("/tenants/nuevo", response_class=HTMLResponse)
+async def tenants_new(request: Request):
+    ctx = await _base_context(request, "tenants")
+    if ctx is None:
+        return _login_redirect()
+    if not await _require_master(request):
+        return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
+    ctx["available_packs"] = sorted({m.id for m in plugin_manager.list_modules()} - {CORE_PACK_ID})
+    return _render("tenants_new.html", ctx)
+
+
+@router.post("/tenants/nuevo")
+async def tenants_create(
+    request: Request,
+    name: str = Form(default=""),
+    slug: str = Form(default=""),
+    business: str = Form(default=""),
+    language: str = Form(default="es"),
+    tone: str = Form(default="cercano"),
+    packs: list[str] = Form(default=[]),  # noqa: B008
+    escalation_triggers: str = Form(default=""),
+    connect_whatsapp: bool = Form(default=False),
+    wa_label: str = Form(default=""),
+    wa_phone_number_id: str = Form(default=""),
+    wa_app_secret: str = Form(default=""),
+    wa_access_token: str = Form(default=""),
+    wa_verify_token: str = Form(default=""),
+):
+    if not await _require_master(request):
+        return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
+    admin = await current_admin(request)
+    if admin is None:
+        return _login_redirect()
+
+    tenant_slug = slug or _slugify(name)
+    if not name or not tenant_slug:
+        return RedirectResponse(
+            "/admin/tenants/nuevo?flash=nombre y slug son obligatorios&flash_type=danger",
+            status_code=303,
+        )
+
+    whatsapp = None
+    if connect_whatsapp:
+        whatsapp = {
+            "label": wa_label or name,
+            "phone_number_id": wa_phone_number_id,
+            "app_secret": wa_app_secret,
+            "access_token": wa_access_token,
+            "verify_token": wa_verify_token,
+        }
+        ok, msg, _info = await verify_meta_credentials(wa_phone_number_id, wa_access_token)
+        if not ok:
+            return RedirectResponse(
+                f"/admin/tenants/nuevo?flash=WhatsApp: {msg[:120]}&flash_type=danger", status_code=303
+            )
+
+    triggers = [t.strip() for t in escalation_triggers.split(",") if t.strip()]
+    try:
+        from core.onboarding import onboard_tenant
+
+        tid, _steps = await onboard_tenant(
+            name=name,
+            slug=tenant_slug,
+            business_description=business,
+            language=language,
+            persona={"role": "asistente", "tone": tone, "locale": f"es-{language.upper()}"},
+            escalation_triggers=triggers or None,
+            packs=packs or None,
+            admin_email=admin.email,
+            whatsapp=whatsapp,
+        )
+    except Exception as exc:
+        log.exception("tenant_create_failed")
+        return RedirectResponse(
+            f"/admin/tenants/nuevo?flash=Error al crear: {str(exc)[:140]}&flash_type=danger",
+            status_code=303,
+        )
+
+    response = RedirectResponse(
+        f"/admin/spec?flash=tenant {tenant_slug} creado&flash_type=success", status_code=303
+    )
+    response.set_cookie(
+        TENANT_COOKIE,
+        str(tid),
+        httponly=True,
+        samesite="lax",
+        max_age=60 * 60 * 24 * 30,
+        secure=get_settings().app_env == "production",
+    )
+    return response
+
+
+# --------------------------------------------------- ciclo de vida del tenant
+async def _toggle_tenant_status(
+    request: Request, tenant_id: uuid.UUID, status: str
+) -> RedirectResponse:
+    if not await _require_master(request):
+        return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
+    from core.tenants import activate_tenant, deactivate_tenant
+
+    ref = str(tenant_id)
+    if status == "suspended":
+        await deactivate_tenant(ref)
+        flash = "tenant_suspendido"
+    else:
+        await activate_tenant(ref)
+        flash = "tenant_activado"
+    return RedirectResponse(f"/admin/tenants?flash={flash}&flash_type=success", status_code=303)
+
+
+@router.post("/tenants/{tenant_id}/deactivate")
+async def tenants_deactivate(request: Request, tenant_id: uuid.UUID):
+    return await _toggle_tenant_status(request, tenant_id, "suspended")
+
+
+@router.post("/tenants/{tenant_id}/activate")
+async def tenants_activate(request: Request, tenant_id: uuid.UUID):
+    return await _toggle_tenant_status(request, tenant_id, "active")
+
+
+@router.post("/tenants/{tenant_id}/purge")
+async def tenants_purge(request: Request, tenant_id: uuid.UUID, confirm_phrase: str = Form(default="")):
+    """Eliminación física IRREVERSIBLE (excepción a la invariante #8).
+
+    Exige que `confirm_phrase` sea exactamente "ELIMINAR <slug>". Solo master.
+    """
+    if not await _require_master(request):
+        return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
+    from core.tenants import purge_tenant
+
+    ref = str(tenant_id)
+    try:
+        await purge_tenant(ref, confirm_phrase)
+    except ValueError as exc:
+        return RedirectResponse(
+            f"/admin/tenants?flash={str(exc)[:140]}&flash_type=danger", status_code=303
+        )
+    except Exception as exc:
+        log.exception("tenant_purge_failed")
+        return RedirectResponse(
+            f"/admin/tenants?flash=Error al eliminar: {str(exc)[:140]}&flash_type=danger",
+            status_code=303,
+        )
+    return RedirectResponse("/admin/tenants?flash=tenant_eliminado&flash_type=success", status_code=303)
 
 
 # ------------------------------------------------------------------ AgentSpec
@@ -759,6 +914,18 @@ async def connections_page(request: Request):
     if ctx is None:
         return _login_redirect()
     connections = await list_connections()
+
+    # URL del webhook por tenant (cada app tiene el suyo: /webhooks/whatsapp/<slug>).
+    from core.db.models import Tenant
+    from core.tenants import tenant_webhook_url
+
+    tenant_slug = ""
+    tid = get_current_tenant_id()
+    if tid is not None:
+        async with get_session() as session:
+            tenant = await session.get(Tenant, tid)
+            tenant_slug = tenant.slug if tenant else ""
+
     ctx.update(
         connections=[
             {
@@ -774,6 +941,7 @@ async def connections_page(request: Request):
             for c in connections
         ],
         has_connection=bool(connections),
+        webhook_url=tenant_webhook_url(tenant_slug) if tenant_slug else "",
     )
     return _render("conexiones.html", ctx)
 
@@ -797,6 +965,13 @@ async def connection_save(
     # guardada rompe el canal y el síntoma aparece recién en un mensaje que
     # no llega).
     ok, msg, info = await verify_meta_credentials(phone_number_id, access_token)
+    log.info(
+        "connection_verify",
+        tenant_id=str(get_current_tenant_id() or ""),
+        phone_number_id=phone_number_id,
+        ok=ok,
+        msg=msg[:200],
+    )
     if not ok:
         return RedirectResponse(
             f"/admin/conexiones?flash={msg[:140]}&flash_type=danger", status_code=303
@@ -813,6 +988,13 @@ async def connection_save(
         }
         _connection, _created = await save_connection(label, credentials, connection_id_uuid)
         meta_name = info.get("verified_name") or info.get("display_phone_number") or ""
+        log.info(
+            "connection_saved",
+            tenant_id=str(get_current_tenant_id() or ""),
+            phone_number_id=phone_number_id,
+            created=_created,
+            connection_id=str(_connection.id),
+        )
         flash = f"Conectado con Meta ✓ {meta_name}".strip()
         return RedirectResponse(
             f"/admin/conexiones?flash={flash}", status_code=303

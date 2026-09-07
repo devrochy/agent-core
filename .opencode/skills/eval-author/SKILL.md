@@ -6,7 +6,17 @@ description: >
   publicar un pack o un tenant nuevo.
 ---
 
-Genera casos de evaluación para `$ARGUMENTS` en `evals/`.
+Genera casos de evaluación para `$ARGUMENTS`.
+
+## Dónde vive cada golden set
+
+- **Por tenant** (recomendado para clientes): `TENANTS_ROOT/<slug>/evals/` (default
+  `tenants/<slug>/evals/`, gitignored) con `spec.json` (AgentSpec real del tenant)
+  y `scenarios/*.json`. Se corre con `python evals/runner.py --tenant <slug>`.
+- **Genérico del framework** (dominio de un pack, sin cliente): `evals/golden_scenarios/`
+  con el spec neutro `evals/specs/framework.json`. Se corre con `python evals/runner.py`.
+
+El framework NO mezcla datos de clientes: cada tenant tiene su carpeta fuera del repo.
 
 ## Fuente de los casos
 
@@ -15,22 +25,20 @@ Prioridad estricta:
 2. Casos que produjeron escalamiento a humano — son los que más enseñan.
 3. Casos inventados solo para cubrir huecos evidentes.
 
-## Formato
+## Formato (runner)
 
 ```json
 {
-  "id": "venta-objecion-precio-01",
-  "turns": [
+  "name": "venta-objecion-precio-01",
+  "conversation": [
     { "role": "user", "content": "¿cuánto vale?" },
     { "role": "user", "content": "uy no, muy caro" }
   ],
-  "assertions": [
-    { "type": "no_contiene", "value": ["descuento", "%"] },
-    { "type": "menciona", "value": ["valor", "garantía"] },
-    { "type": "tool_llamada", "value": "catalog.get_price" },
-    { "type": "no_escala" },
-    { "type": "costo_max_usd", "value": 0.04 }
-  ]
+  "assertions": {
+    "must_not_contain": ["descuento", "%"],
+    "must_call_tool": "catalog.get_price",
+    "max_response_chars": 500
+  }
 }
 ```
 

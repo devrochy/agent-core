@@ -82,7 +82,7 @@ async def test_load_response_extrae_seccion() -> None:
 
 
 def test_crm_config_copy_editable_por_tenant() -> None:
-    """ADR-0017: el copy de CULTO vive en CRMConfig (config), no en el código."""
+    """ADR-0017: el copy del negocio vive en CRMConfig (config), no en el código."""
     from pack_commerce.config import CRMConfig
 
     cfg = CRMConfig()
@@ -141,7 +141,7 @@ async def test_tool_denial_pack_y_binding(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_crm_config_copy_mensajes_pedido() -> None:
-    """ADR-0017: mensajes de pedido de CULTO en CRMConfig (config), no en código."""
+    """ADR-0017: mensajes de pedido en CRMConfig (config), no en código."""
     from pack_commerce.config import CRMConfig
 
     cfg = CRMConfig()

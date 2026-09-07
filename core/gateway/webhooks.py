@@ -12,6 +12,8 @@ El LLM nunca corre dentro del request del webhook.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 from typing import Any
 
@@ -37,7 +39,7 @@ async def verify_webhook(
     hub_verify_token: str = Query(default="", alias="hub.verify_token"),
     hub_challenge: str = Query(default="", alias="hub.challenge"),
 ) -> Response:
-    """Handshake de verificación de Meta."""
+    """Handshake de verificación de Meta (endpoint genérico por phone_number_id)."""
     settings = get_settings()
     creds = await effective_credentials()
     verify_token = creds.get("verify_token") or settings.whatsapp_verify_token
@@ -46,9 +48,35 @@ async def verify_webhook(
     return Response(status_code=403)
 
 
+@router.get("/whatsapp/{slug}")
+async def verify_webhook_tenant(
+    slug: str,
+    hub_mode: str = Query(default="", alias="hub.mode"),
+    hub_verify_token: str = Query(default="", alias="hub.verify_token"),
+    hub_challenge: str = Query(default="", alias="hub.challenge"),
+) -> Response:
+    """Handshake de verificación por tenant: `/webhooks/whatsapp/<slug>`.
+
+    Cada app/tenant tiene su propio webhook (la URL la imprime
+    `agent-core tenant webhook <slug>`). El verify_token se toma de la conexión
+    del tenant (o del `.env`).
+    """
+    from core.tenants import resolve_tenant_by_slug
+
+    settings = get_settings()
+    tenant_id = await resolve_tenant_by_slug(slug)
+    if tenant_id is None:
+        return Response(status_code=403)
+    async with tenant_scope(tenant_id):
+        creds = await effective_credentials()
+    verify_token = creds.get("verify_token") or settings.whatsapp_verify_token
+    if hub_mode == "subscribe" and verify_token and hub_verify_token == verify_token:
+        return Response(content=hub_challenge, media_type="text/plain")
+    return Response(status_code=403)
+
+
 @router.post("/whatsapp")
 async def receive_whatsapp(request: Request) -> dict[str, Any]:
-    settings = get_settings()
     raw_body = await request.body()
     adapter = inbound_adapter_for("meta")
 
@@ -74,13 +102,65 @@ async def receive_whatsapp(request: Request) -> dict[str, Any]:
         log.warning("webhook_without_tenant")
         return {"status": "ignored"}
 
+    # Ciclo de vida (core/tenants.py): un tenant suspendido no procesa mensajes.
+    from core.tenants import is_tenant_active
+
+    if not await is_tenant_active(tenant_id):
+        log.warning("webhook_tenant_not_active", tenant_id=str(tenant_id))
+        return {"status": "ignored"}
+
+    return await _receive_for_tenant(tenant_id, raw_body, request, adapter)
+
+
+@router.post("/whatsapp/{slug}")
+async def receive_whatsapp_tenant(request: Request, slug: str) -> dict[str, Any]:
+    """Webhook por tenant: `/webhooks/whatsapp/<slug>`. El slug identifica al tenant."""
+    from core.tenants import is_tenant_active, resolve_tenant_by_slug
+
+    tenant_id = await resolve_tenant_by_slug(slug)
+    if tenant_id is None:
+        log.warning("webhook_tenant_not_found", slug=slug)
+        return {"status": "ignored"}
+    if not await is_tenant_active(tenant_id):
+        log.warning("webhook_tenant_not_active", tenant_id=str(tenant_id), slug=slug)
+        return {"status": "ignored"}
+
+    adapter = inbound_adapter_for("meta")
+    return await _receive_for_tenant(tenant_id, await request.body(), request, adapter)
+
+
+async def _receive_for_tenant(
+    tenant_id: Any, raw_body: bytes, request: Request, adapter: Any
+) -> dict[str, Any]:
+    """Firma + parseo + dedupe + encolado para un tenant ya resuelto."""
+    settings = get_settings()
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError:
+        return {"status": "ignored"}
+
     async with tenant_scope(tenant_id):
         # La firma se valida con el app_secret de la conexión que matchea el
         # phone_number_id del payload (fallback: primaria activa -> .env).
-        creds = await effective_credentials(phone_id)
+        phone_ids = _payload_phone_number_ids(payload)
+        creds = await effective_credentials(phone_ids[0] if phone_ids else "")
         app_secret = creds.get("app_secret") or settings.whatsapp_app_secret
         if app_secret:
             headers = {k.lower(): v for k, v in request.headers.items()}
+            sig = headers.get("x-hub-signature-256", "")
+            # TEMP-DIAG: trazar firma vs app_secret para el E2E de yopoldo
+            try:
+                expected = hmac.new(app_secret.encode(), raw_body, hashlib.sha256).hexdigest()
+                log.info(
+                    "webhook_signature_trace",
+                    phone=phone_ids[0] if phone_ids else "",
+                    sig_prefix=sig[:12],
+                    expected_prefix=("sha256=" + expected)[:12],
+                    app_secret_len=len(app_secret),
+                    body_len=len(raw_body),
+                )
+            except Exception:
+                pass
             if not adapter.verify_request(raw_body, headers, app_secret):
                 log.warning("webhook_signature_invalid")
                 return {"status": "ignored"}

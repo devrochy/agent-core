@@ -8,6 +8,7 @@ pipeline (dedupe, debounce, cuota por tenant, RLS), no el modelo.
 from __future__ import annotations
 
 import os
+import uuid
 from pathlib import Path
 
 # El conftest raíz (tests/) fija una DATABASE_URL falsa para los tests unitarios
@@ -37,6 +38,11 @@ pytestmark = pytest.mark.skipif(
 
 T1 = "00000000-0000-0000-0000-000000000001"
 PHONE = "1234567890"
+
+# UUIDs dedicados para los tenants de PRUEBA (espacio reservado, no colisiona con
+# tenants reales; 0000...0002 está ocupado por formoto).
+TEST_ALPHA_ID = uuid.UUID("10000000-0000-0000-0000-000000000001")
+TEST_BETA_ID = uuid.UUID("10000000-0000-0000-0000-000000000002")
 
 
 class FakeResponse:
@@ -116,7 +122,12 @@ async def app_client() -> AsyncIterator[httpx.AsyncClient]:
 
 @pytest.fixture(scope="module")
 async def tenant_setup():
-    """Tenant #1 (seed) con conexión de canal + tenant #2. Devuelve (t1, t2)."""
+    """Dos tenants de PRUEBA auto-contenidos (no dependen del seed del framework).
+
+    Usa UUIDs fijos conocidos (T1/T2) para que las referencias de los tests sigan
+    valiendo sin exigir que `tenant-1` exista en la BD (la suite crea los suyos).
+    Devuelve (t1, t2) con conexiones de canal.
+    """
     from sqlalchemy import select
 
     from core.db.models import ChannelConnection, Tenant
@@ -124,10 +135,14 @@ async def tenant_setup():
     from core.shared.tenant import tenant_scope
 
     async with get_session() as session:
-        t1 = (await session.execute(select(Tenant).where(Tenant.slug == "tenant-1"))).scalar_one()
-        t2 = (await session.execute(select(Tenant).where(Tenant.slug == "tenant-2"))).scalar_one_or_none()
+        t1 = await session.get(Tenant, TEST_ALPHA_ID)
+        if t1 is None:
+            t1 = Tenant(id=TEST_ALPHA_ID, name="Test Alpha", slug="test-alpha", status="active")
+            session.add(t1)
+            await session.flush()
+        t2 = await session.get(Tenant, TEST_BETA_ID)
         if t2 is None:
-            t2 = Tenant(name="Tenant #2", slug="tenant-2")
+            t2 = Tenant(id=TEST_BETA_ID, name="Test Beta", slug="test-beta", status="active")
             session.add(t2)
             await session.flush()
         t1_id, t2_id = t1.id, t2.id
@@ -156,27 +171,76 @@ async def tenant_setup():
 
 
 @pytest.fixture(scope="module")
-async def formoto_setup():
-    """Asegura el tenant FORMOTO (onboarding idempotente). Devuelve (t1, formoto_id)."""
+async def moto_setup():
+    """Tenant de ejemplo genérico con pack_commerce + catálogo (ADR-0001).
+
+    Onboarding idempotente vía core.onboarding + seed del catálogo desde
+    tests/fixtures/tenants/moto/catalog.json. Devuelve (t1, moto_id).
+    """
+    import json
+
     from sqlalchemy import select
 
     from core.db.models import Tenant
     from core.db.session import get_session
 
-    async with get_session() as session:
-        formoto = (
-            await session.execute(select(Tenant).where(Tenant.slug == "formoto"))
-        ).scalar_one_or_none()
-    if formoto is None:
-        from scripts.onboard_formoto import onboard
+    MOTO_SLUG = "tenant-moto"
+    CATALOG_PATH = (
+        Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "tenants" / "moto" / "catalog.json"
+    )
 
-        await onboard()
     async with get_session() as session:
-        t1 = (await session.execute(select(Tenant).where(Tenant.slug == "tenant-1"))).scalar_one()
-        formoto = (
-            await session.execute(select(Tenant).where(Tenant.slug == "formoto"))
+        moto = (
+            await session.execute(select(Tenant).where(Tenant.slug == MOTO_SLUG))
+        ).scalar_one_or_none()
+    if moto is None:
+        from cli.commands.tenant import seed_catalog
+        from core.onboarding import onboard_tenant
+
+        moto_id, _ = await onboard_tenant(
+            name="Tenant de ejemplo (moto)",
+            slug=MOTO_SLUG,
+            business_description="Tienda de repuestos y accesorios de moto (ejemplo genérico).",
+            persona={"role": "asistente de ventas", "tone": "cercano"},
+            escalation_triggers=["asesor", "humano", "reclamo", "queja", "compatibilidad"],
+            packs=["pack_commerce"],
+            admin_email="admin@local",
+        )
+        catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+        await seed_catalog(moto_id, catalog)
+    else:
+        moto_id = moto.id
+
+    # El admin de tests siempre debe poder ver el tenant de ejemplo (idempotente).
+    from core.db.models import Admin, TenantUser
+
+    async with get_session() as session:
+        admin = (
+            await session.execute(select(Admin).where(Admin.email == "admin@local"))
+        ).scalar_one_or_none()
+        if admin is not None:
+            link = (
+                await session.execute(
+                    select(TenantUser).where(
+                        TenantUser.tenant_id == moto_id, TenantUser.admin_id == admin.id
+                    )
+                )
+            ).scalar_one_or_none()
+            if link is None:
+                session.add(TenantUser(tenant_id=moto_id, admin_id=admin.id, role="owner"))
+                await session.commit()
+
+    async with get_session() as session:
+        # t1 = el tenant de prueba "alpha" (TEST_ALPHA_ID); lo crea tenant_setup si falta.
+        t1 = await session.get(Tenant, TEST_ALPHA_ID)
+        if t1 is None:
+            t1 = Tenant(id=TEST_ALPHA_ID, name="Test Alpha", slug="test-alpha", status="active")
+            session.add(t1)
+            await session.flush()
+        moto = (
+            await session.execute(select(Tenant).where(Tenant.slug == MOTO_SLUG))
         ).scalar_one()
-    return t1.id, formoto.id
+    return t1.id, moto.id
 
 
 def _meta_payload(phone_id: str, wa_id: str, message_id: str, body: str) -> dict[str, Any]:

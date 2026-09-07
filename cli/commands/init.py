@@ -1,7 +1,12 @@
-"""agent-core init: wizard de creación de un nuevo asistente.
+"""agent-core init: bootstrap de una instalación nueva del framework.
+
+Prepara un despliegue multi-tenant desde cero: .env con credenciales, SDD vivo
+(sdd/*.md), infraestructura (postgres + redis) y el admin master. Los clientes
+se dan de alta DESPUÉS con `agent-core tenant create` (cada cliente es un tenant
+con su AgentSpec — ADR-0001).
 
 Flujo:
-1. Respuestas del negocio (wizard interactivo, o banderas con --non-interactive).
+1. Respuestas del despliegue (wizard interactivo, o banderas con --non-interactive).
 2. Detecta puertos publicables, evitando los que reclama cualquier contenedor.
 3. Genera .env con credenciales, puertos y nombre de proyecto Docker.
 4. Genera el SDD vivo (sdd/*.md desde plantillas).
@@ -122,8 +127,8 @@ def init_command(
     skip_db: bool = typer.Option(False, "--skip-db", help="No tocar la BD (solo .env + sdd/)"),
     skip_docker: bool = typer.Option(False, "--skip-docker", help="No levantar docker-compose"),
 ) -> None:
-    """Wizard interactivo: crea un nuevo asistente desde el core."""
-    console.print(Panel.fit("🤖 [bold]agent-core init[/bold] — nuevo asistente", border_style="cyan"))
+    """Wizard interactivo: bootstrap de una instalación nueva del framework."""
+    console.print(Panel.fit("🤖 [bold]agent-core init[/bold] — nueva instalación", border_style="cyan"))
 
     if Path(".env").exists() and not force:
         if non_interactive:

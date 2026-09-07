@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% block title %}Nuevo tenant{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4">Nuevo tenant</h1>
+
+<form method="post" action="/admin/tenants/nuevo" id="wizard">
+  <!-- barra de pasos -->
+  <ol class="breadcrumb mb-4" id="steps">
+    <li class="breadcrumb-item active" data-step="0">1 · Negocio</li>
+    <li class="breadcrumb-item" data-step="1">2 · Packs</li>
+    <li class="breadcrumb-item" data-step="2">3 · Escalación</li>
+    <li class="breadcrumb-item" data-step="3">4 · WhatsApp</li>
+    <li class="breadcrumb-item" data-step="4">5 · Revisión</li>
+  </ol>
+
+  <div class="card mb-3">
+    <!-- PASO 1 · Negocio -->
+    <div class="card-body" data-panel="0">
+      <h2 class="fs-5 mb-3">Datos del negocio</h2>
+      <div class="mb-3">
+        <label class="form-label">Nombre del negocio / asistente *</label>
+        <input type="text" name="name" id="name" class="form-control" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Slug</label>
+        <input type="text" name="slug" id="slug" class="form-control font-monospace"
+               placeholder="auto (derivado del nombre)">
+        <div class="form-text">Identificador único del tenant (minúsculas, guiones).</div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Descripción del negocio</label>
+        <textarea name="business" class="form-control" rows="2"></textarea>
+      </div>
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">Idioma</label>
+          <select name="language" class="form-select">
+            <option value="es" selected>es</option>
+            <option value="en">en</option>
+            <option value="pt">pt</option>
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Tono</label>
+          <select name="tone" class="form-select">
+            <option value="cercano" selected>cercano</option>
+            <option value="formal">formal</option>
+            <option value="neutral">neutral</option>
+            <option value="informal">informal</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- PASO 2 · Packs -->
+    <div class="card-body d-none" data-panel="1">
+      <h2 class="fs-5 mb-3">Packs a habilitar</h2>
+      {% if available_packs %}
+      {% for pack in available_packs %}
+      <div class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" name="packs" value="{{ pack }}" id="pack-{{ pack }}">
+        <label class="form-check-label" for="pack-{{ pack }}">
+          <code>{{ pack }}</code>
+        </label>
+      </div>
+      {% endfor %}
+      {% else %}
+      <p class="text-secondary">No hay packs instalados. Instala uno con <code>agent-core plugin install</code>.</p>
+      {% endif %}
+      <div class="form-text">El pack del core (plomería del framework) siempre está activo.</div>
+    </div>
+
+    <!-- PASO 3 · Escalación -->
+    <div class="card-body d-none" data-panel="2">
+      <h2 class="fs-5 mb-3">Escalamiento a humano</h2>
+      <div class="mb-3">
+        <label class="form-label">Triggers de escalación (coma-separados)</label>
+        <input type="text" name="escalation_triggers" class="form-control"
+               value="asesor, humano, persona real, reclamo, queja">
+        <div class="form-text">Si el cliente menciona una de estas palabras, el bot pausa y escala a un humano.</div>
+      </div>
+    </div>
+
+    <!-- PASO 4 · WhatsApp -->
+    <div class="card-body d-none" data-panel="3">
+      <h2 class="fs-5 mb-3">Canal WhatsApp (opcional)</h2>
+      <div class="form-check mb-3">
+        <input class="form-check-input" type="checkbox" name="connect_whatsapp" value="true" id="connect_wa">
+        <label class="form-check-label" for="connect_wa">Conectar WhatsApp ahora</label>
+        <div class="form-text">También puedes conectarlo después en Conexiones.</div>
+      </div>
+      <div id="wa_fields" class="d-none">
+        <div class="mb-3">
+          <label class="form-label">Etiqueta</label>
+          <input type="text" name="wa_label" class="form-control" placeholder="Ventas WhatsApp">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">phone_number_id</label>
+          <input type="text" name="wa_phone_number_id" class="form-control">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">App secret</label>
+          <input type="password" name="wa_app_secret" class="form-control">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Access token</label>
+          <input type="password" name="wa_access_token" class="form-control">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Verify token</label>
+          <input type="password" name="wa_verify_token" class="form-control">
+        </div>
+      </div>
+    </div>
+
+    <!-- PASO 5 · Revisión -->
+    <div class="card-body d-none" data-panel="4">
+      <h2 class="fs-5 mb-3">Revisión</h2>
+      <ul class="list-group list-group-flush">
+        <li class="list-group-item d-flex justify-content-between"><span>Negocio</span><strong id="r_name"></strong></li>
+        <li class="list-group-item d-flex justify-content-between"><span>Slug</span><code id="r_slug"></code></li>
+        <li class="list-group-item d-flex justify-content-between"><span>Idioma / Tono</span><span id="r_lang_tone"></span></li>
+        <li class="list-group-item d-flex justify-content-between"><span>Packs</span><span id="r_packs"></span></li>
+        <li class="list-group-item d-flex justify-content-between"><span>Triggers</span><code id="r_triggers"></code></li>
+        <li class="list-group-item d-flex justify-content-between"><span>WhatsApp</span><span id="r_wa"></span></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="d-flex justify-content-between">
+    <button type="button" class="btn btn-outline-secondary" id="prev">← Anterior</button>
+    <button type="button" class="btn btn-primary" id="next">Siguiente →</button>
+    <button type="submit" class="btn btn-success d-none" id="submit">Crear tenant</button>
+  </div>
+</form>
+
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var step = 0, TOTAL = 5;
+  var panels = document.querySelectorAll('[data-panel]');
+  var steps = document.querySelectorAll('#steps [data-step]');
+  var prev = document.getElementById('prev');
+  var next = document.getElementById('next');
+  var submit = document.getElementById('submit');
+
+  function show(s) {
+    step = s;
+    panels.forEach(function (p) { p.classList.toggle('d-none', Number(p.dataset.panel) !== step); });
+    steps.forEach(function (li) {
+      li.classList.toggle('active', Number(li.dataset.step) === step);
+      li.classList.toggle('text-secondary', Number(li.dataset.step) !== step);
+    });
+    prev.classList.toggle('d-none', step === 0);
+    next.classList.toggle('d-none', step === TOTAL - 1);
+    submit.classList.toggle('d-none', step !== TOTAL - 1);
+    if (step === TOTAL - 1) refreshSummary();
+  }
+
+  function refreshSummary() {
+    document.getElementById('r_name').textContent = document.getElementById('name').value || '—';
+    document.getElementById('r_slug').textContent =
+      document.getElementById('slug').value || (document.getElementById('name').value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'auto');
+    var lang = document.querySelector('[name=language]').value;
+    var tone = document.querySelector('[name=tone]').value;
+    document.getElementById('r_lang_tone').textContent = lang + ' · ' + tone;
+    var packs = Array.prototype.map.call(
+      document.querySelectorAll('[name=packs]:checked'), function (c) { return c.value; });
+    document.getElementById('r_packs').textContent = packs.join(', ') || 'ninguno';
+    document.getElementById('r_triggers').textContent =
+      document.querySelector('[name=escalation_triggers]').value || '—';
+    var wa = document.getElementById('connect_wa').checked;
+    document.getElementById('r_wa').textContent = wa ? 'conectar' : 'luego';
+  }
+
+  prev.addEventListener('click', function () { if (step > 0) show(step - 1); });
+  next.addEventListener('click', function () {
+    if (step === 0 && !document.getElementById('name').value) {
+      document.getElementById('name').focus(); return;
+    }
+    if (step < TOTAL - 1) show(step + 1);
+  });
+
+  document.getElementById('connect_wa').addEventListener('change', function () {
+    document.getElementById('wa_fields').classList.toggle('d-none', !this.checked);
+  });
+
+  show(0);
+})();
+</script>
+{% endblock %}

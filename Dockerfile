@@ -5,16 +5,23 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./
-COPY packages/contracts ./packages/contracts
+COPY packages ./packages
 COPY core ./core
 COPY cli ./cli
 COPY alembic ./alembic
 COPY alembic.ini ./
 COPY sdd/templates ./sdd/templates
 
-RUN pip install --no-cache-dir -e packages/contracts && pip install --no-cache-dir -e .
+# Packs (packages/pack-*) y plugins (plugins/) horneados en la imagen:
+# en el despliegue (Coolify) no hay volúmenes de bind-mount como en compose.
+RUN pip install --no-cache-dir -e packages/contracts \
+    && pip install --no-cache-dir -e . \
+    && for d in packages/pack-*/ plugins/*/; do \
+         if [ -f "${d}pyproject.toml" ]; then \
+           pip install --no-cache-dir -e "${d}" || exit 1; \
+         fi; \
+       done
 
-# Los plugins locales se montan como volumen y se instalan al arrancar si existen
 COPY scripts ./scripts
 RUN chmod +x scripts/entrypoint.sh || true
 

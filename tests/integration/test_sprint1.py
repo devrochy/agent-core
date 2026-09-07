@@ -13,7 +13,7 @@ import os
 import uuid
 
 import pytest
-from conftest import PHONE, FakeProvider, _meta_payload
+from conftest import PHONE, TEST_ALPHA_ID, FakeProvider, _meta_payload
 from sqlalchemy import func, select
 
 pytestmark = [
@@ -24,7 +24,7 @@ pytestmark = [
     ),
 ]
 
-T1 = uuid.UUID("00000000-0000-0000-0000-000000000001")
+T1 = TEST_ALPHA_ID
 
 
 async def _set_behavior(tenant_id: uuid.UUID, debounce_mode: str) -> None:

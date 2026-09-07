@@ -133,6 +133,17 @@ async def handle_inbound(fields: dict[str, str]) -> bool:
         return False
 
     async with tenant_scope(tenant_id):
+        # Ciclo de vida: mensajes de un tenant suspendido/eliminado se descartan
+        # (ACK) sin procesar — cubre eventos ya encolados antes de la suspensión.
+        from core.tenants import is_tenant_active
+
+        if not await is_tenant_active(uuid.UUID(tenant_id)):
+            log.warning(
+                "inbound_tenant_not_active",
+                tenant_id=tenant_id,
+                message_id=fields.get("external_message_id"),
+            )
+            return False
         if not await _claim_event(uuid.UUID(tenant_id), fields):
             log.info(
                 "event_already_processed",

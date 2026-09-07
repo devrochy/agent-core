@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Tenants{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h1 class="fs-3 mb-0">Tenants</h1>
+  <a class="btn btn-primary" href="/admin/tenants/nuevo">+ Nuevo tenant</a>
+</div>
+
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Nombre</th>
+            <th>Slug</th>
+            <th>Estado</th>
+            <th>Creado</th>
+            <th class="text-end">Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in tenants_rows %}
+          <tr data-tid="{{ t.id }}">
+            <td>{{ t.name or '—' }}</td>
+            <td><code>{{ t.slug }}</code></td>
+            <td>
+              <span class="badge text-bg-{{ 'success' if t.status == 'active' else 'warning' }}">
+                {{ 'activo' if t.status == 'active' else 'suspendido' }}
+              </span>
+            </td>
+            <td>{{ t.created_at.strftime('%Y-%m-%d') if t.created_at }}</td>
+            <td class="text-end">
+              <form method="post" action="/admin/switch-tenant" class="d-inline">
+                <input type="hidden" name="tenant_id" value="{{ t.id }}">
+                <button class="btn btn-sm btn-outline-secondary">Abrir</button>
+              </form>
+              {% if t.status == 'active' %}
+              <form method="post" action="/admin/tenants/{{ t.id }}/deactivate" class="d-inline">
+                <button class="btn btn-sm btn-outline-warning">Desactivar</button>
+              </form>
+              {% else %}
+              <form method="post" action="/admin/tenants/{{ t.id }}/activate" class="d-inline">
+                <button class="btn btn-sm btn-outline-success">Reactivar</button>
+              </form>
+              {% endif %}
+              <button class="btn btn-sm btn-outline-danger" data-bs-toggle="modal"
+                      data-bs-target="#purge-modal"
+                      data-slug="{{ t.slug }}" data-name="{{ t.name }}">Eliminar</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Modal de eliminación (irreversible, exige frase exacta) -->
+<div class="modal fade" id="purge-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" action="" id="purge-form">
+        <div class="modal-header bg-danger text-white">
+          <h5 class="modal-title">Eliminar tenant</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-danger fw-semibold">Esta acción es <strong>irreversible</strong>:
+            borra todos los datos del tenant (core, packs y Redis) y su fila. No se puede deshacer.</p>
+          <p>Vas a eliminar: <strong id="pm-name"></strong> (<code id="pm-slug"></code>)</p>
+          <div class="mb-3">
+            <label class="form-label">Para confirmar, escribe exactamente:</label>
+            <input type="text" name="confirm_phrase" id="pm-phrase" class="form-control font-monospace"
+                   placeholder="ELIMINAR <slug>" autocomplete="off">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+          <button type="submit" class="btn btn-danger">Eliminar definitivamente</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var modal = document.getElementById('purge-modal');
+  if (!modal) return;
+  var form = document.getElementById('purge-form');
+  var phraseInput = document.getElementById('pm-phrase');
+  document.querySelectorAll('[data-bs-target="#purge-modal"]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var slug = btn.dataset.slug;
+      document.getElementById('pm-name').textContent = btn.dataset.name;
+      document.getElementById('pm-slug').textContent = slug;
+      form.action = '/admin/tenants/' + btn.closest('tr').dataset.tid + '/purge';
+      phraseInput.value = '';
+      phraseInput.placeholder = 'ELIMINAR ' + slug;
+    });
+  });
+})();
+</script>
+{% endblock %}

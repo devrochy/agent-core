@@ -17,3 +17,6 @@ sdd/*.md
 storage/
 plugins/.install.lock
 .claude/
+
+# Datos y documentación de tenants (por despliegue, fuera del framework)
+/tenants/
