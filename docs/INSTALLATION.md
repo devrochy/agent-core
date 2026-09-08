@@ -138,6 +138,13 @@ Pon esa URL pública en el `.env` (`PUBLIC_BASE_URL=https://<aleatorio>.trycloud
 y reinicia la API. El webhook del tenant será
 `https://<aleatorio>.trycloudflare.com/webhooks/whatsapp/<slug>`.
 
+> **Despliegue en Coolify (test/producción):** en lugar de un túnel aleatorio,
+> el entorno desplegado usa un **dominio fijo por Funnel de Tailscale**
+> (`https://devrochy.tail2ad60a.ts.net/agent-core`, Meta exige HTTPS/443).
+> Ver [despliegue-coolify.md](despliegue-coolify.md) para el alta del tenant,
+> el registro del webhook en Meta y las verificaciones. El `PUBLIC_BASE_URL`
+> del despliegue es el dominio fijo, no localhost.
+
 **3. Conecta WhatsApp del tenant** en `/admin/conexiones` (Phone Number ID, App
 Secret, Access Token y un Verify Token propio, ej. `miToken123`). El core valida
 contra Meta antes de guardar.
