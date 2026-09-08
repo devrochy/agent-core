@@ -26,4 +26,10 @@ COPY scripts ./scripts
 RUN chmod +x scripts/entrypoint.sh || true
 
 EXPOSE 8000
+
+# El entrypoint instala plugins (si faltan), aplica migraciones (rol api) y
+# ejecuta el CMD. En docker-compose se fuerza igual, pero en Coolify no hay
+# bind-mounts ni override de entrypoint: sin ENTRYPOINT las migraciones
+# no corren y el arranque falla (app_runtime no existe).
+ENTRYPOINT ["/app/scripts/entrypoint.sh"]
 CMD ["uvicorn", "core.main:app", "--host", "0.0.0.0", "--port", "8000"]
