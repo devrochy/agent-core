@@ -29,3 +29,4 @@ Se crean con `/adr`.
 | 0019 | Registry v1: manifest, enablement por tenant y consentimiento de scopes | aceptado |
 | 0020 | Extracción de pack-commerce desde el plugin heredado mod_crm_engine | aceptado |
 | 0021 | Topología de despliegue: panel y gateway+consumer en un solo proceso | aceptado |
+| 0022 | Leads como vista computada de Customer, no una tabla que sincronizar | aceptado |

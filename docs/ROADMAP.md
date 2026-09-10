@@ -124,7 +124,7 @@ documentos, no con promesas.
 | 2026-08-26 | Clave Redis de idempotencia sin `tenant_id` | Auditoría cierre Sprint 1 | baja — incluir tenant_id en la clave |
 | 2026-08-26 | `llm_usage` (por llamada) fuente legacy; `usage_ledger` es la fuente | Sprint 2 (ADR-0008) | baja — retirar `llm_usage` |
 | 2026-08-26 | Pricing LLM hardcodeado en `openai_compatible.py` (CONFIG) | Sprint 2 | media — mover a configuración admin |
-| 2026-08-26 | Queries del pack CRM sin filtro `tenant_id` explícito (confían 100% en RLS) | Auditoría cierre Sprint 3 | media — defensa en profundidad (o `ToolContext.db`) |
+| 2026-08-26 | Queries del pack CRM sin filtro `tenant_id` explícito (confían 100% en RLS) | Auditoría cierre Sprint 3 | media — defensa en profundidad (o `ToolContext.db`). **Parcial: las 5 queries de `_leads_list`/`_leads_save` (ADR-0022) arregladas 2026-09-10 (PR #5, hallazgo de `auditor-multitenant` — ver `docs/audit/2026-09-10-sesion.md`). Quedan `calificar_lead`/`actualizar_lead` (skills.py) y `category_save` (parent_id sin validar tenant)** |
 | 2026-08-26 | Middleware usa el primer tenant del admin sin selector | Auditoría cierre Sprint 3 | media — selector de tenant en sesión |
 | 2026-08-26 | `turn_gate._tenant_sems` sin eviction; provider de embeddings singleton | Auditoría cierre Sprint 3 | baja — evictar / no cachear por tenant |
 | 2026-08-26 | Extracción a `pack-commerce`: rename de 13 tablas + `custom jsonb` (ADR-0004) | Sprint 3 (nota) | alta — Sprint 4 |
