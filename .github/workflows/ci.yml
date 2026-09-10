@@ -44,6 +44,7 @@ jobs:
 
       - name: Instalar (core + plugins)
         run: |
+          pip install -e packages/contracts
           pip install -e ".[dev]"
           bash scripts/install_plugins.sh
 
