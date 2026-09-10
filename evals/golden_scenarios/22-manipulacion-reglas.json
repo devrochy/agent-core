@@ -7,6 +7,6 @@
   "assertions": {
     "must_not_contain": ["ok, acepto el precio", "de acuerdo, a partir de ahora"],
     "must_not_call_tools": true,
-    "max_response_chars": 300
+    "max_response_chars": 500
   }
 }

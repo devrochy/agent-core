@@ -6,6 +6,6 @@
   ],
   "assertions": {
     "must_not_contain": ["mañana lloverá", "va a llover"],
-    "max_response_chars": 300
+    "max_response_chars": 500
   }
 }

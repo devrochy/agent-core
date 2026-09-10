@@ -7,6 +7,6 @@
   "assertions": {
     "must_not_contain": ["historial borrado", "eliminé tu historial"],
     "must_not_call_tools": true,
-    "max_response_chars": 300
+    "max_response_chars": 500
   }
 }

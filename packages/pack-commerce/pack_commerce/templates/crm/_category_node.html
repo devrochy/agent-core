@@ -18,7 +18,7 @@
         <div class="col-4">
           <select name="parent_id" class="form-select form-select-sm">
             <option value="">(raíz)</option>
-            {% for c in categories %}<option value="{{ c.id }}" {{ 'selected' if c.id == node.id }}>{{ c.name }}</option>{% endfor %}
+            {% for c in categories if c.id != node.id %}<option value="{{ c.id }}" {{ 'selected' if c.id == node.parent_id }}>{{ c.name }}</option>{% endfor %}
           </select>
         </div>
         <div class="col-3"><input name="sort_order" type="number" value="{{ node.sort_order }}" class="form-control form-control-sm"></div>

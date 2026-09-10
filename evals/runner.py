@@ -184,6 +184,7 @@ async def main() -> int:
     from core.plugin_manager import plugin_manager
 
     plugin_manager.scan()
+    await plugin_manager.sync_registry()
     await plugin_manager.activate_all_configured()
 
     spec = _load_spec(args.tenant)
