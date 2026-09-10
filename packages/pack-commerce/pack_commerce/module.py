@@ -466,6 +466,14 @@ async def category_save(
         return _login_redirect()
     async with get_session() as session:
         parent = uuid.UUID(parent_id) if parent_id else None
+        if parent is not None and await session.get(Category, parent) is None:
+            # session.get ya filtra por RLS: si `parent` no existe o es de otro
+            # tenant, devuelve None en ambos casos — rechazar en vez de asignar
+            # igual (dejaría un parent_id colgando hacia otro tenant).
+            return RedirectResponse(
+                "/crm/categorias?flash=Categoría padre no encontrada&flash_type=danger",
+                status_code=303,
+            )
         if category_id:
             category = await session.get(Category, category_id)
             if category is not None:
