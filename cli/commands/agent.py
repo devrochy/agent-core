@@ -7,31 +7,16 @@ resuelve por el gate de evals + tenant staging (ADR-0016).
 from __future__ import annotations
 
 import asyncio
-import uuid
 
 import typer
 from rich.console import Console
 from rich.table import Table
 from sqlalchemy import select
 
+from cli.tenant_ref import resolve_tenant as _resolve_tenant
+
 app = typer.Typer(no_args_is_help=True)
 console = Console()
-
-
-async def _resolve_tenant(ref: str) -> uuid.UUID:
-    from core.db.models import Tenant
-    from core.db.session import get_session
-
-    async with get_session() as session:
-        if len(ref) == 36:
-            row = await session.get(Tenant, uuid.UUID(ref))
-        else:
-            row = (
-                await session.execute(select(Tenant).where(Tenant.slug == ref))
-            ).scalar_one_or_none()
-        if row is None:
-            raise typer.BadParameter(f"Tenant no encontrado: {ref}")
-        return row.id
 
 
 def _playbooks_count(spec: dict) -> int:

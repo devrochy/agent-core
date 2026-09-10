@@ -10,21 +10,24 @@ from rich.console import Console
 from sqlalchemy import select
 
 from cli.sdd_generator import append_changelog, load_state, render_all, save_state
+from cli.tenant_ref import resolve_tenant
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
 
 
 @app.command()
-def tone() -> None:
-    """Cambia el tono del asistente (calido | formal | divertido)."""
+def tone(tenant: str = typer.Argument(..., help="Tenant (slug o UUID)")) -> None:
+    """Cambia el tono del asistente (calido | formal | divertido) de un tenant."""
     selected = questionary.select("Tono:", choices=["calido", "formal", "divertido"]).ask()
 
     async def _update() -> None:
         from core.db.models import AppSettings
         from core.db.session import get_session
+        from core.shared.tenant import tenant_scope
 
-        async with get_session() as session:
+        tid = await resolve_tenant(tenant)
+        async with tenant_scope(tid), get_session() as session:
             settings_row = (await session.execute(select(AppSettings).limit(1))).scalar_one_or_none()
             if settings_row is None:
                 console.print("[red]No hay configuración. Corre: agent-core init[/red]")
@@ -43,8 +46,8 @@ def tone() -> None:
 
 
 @app.command()
-def llm() -> None:
-    """Cambia el proveedor/modelo LLM (BYOK, se guarda cifrado en BD)."""
+def llm(tenant: str = typer.Argument(..., help="Tenant (slug o UUID)")) -> None:
+    """Cambia el proveedor/modelo LLM de un tenant (BYOK, se guarda cifrado en BD)."""
     provider = questionary.select("Proveedor:", choices=["deepseek", "openai", "anthropic"]).ask()
     defaults = {"deepseek": "deepseek-chat", "openai": "gpt-4o-mini", "anthropic": "claude-haiku-4-5"}
     model = questionary.text("Modelo:", default=defaults[provider]).ask()
@@ -54,8 +57,10 @@ def llm() -> None:
         from core.db.models import AppSettings
         from core.db.session import get_session
         from core.shared.crypto import get_secret_box
+        from core.shared.tenant import tenant_scope
 
-        async with get_session() as session:
+        tid = await resolve_tenant(tenant)
+        async with tenant_scope(tid), get_session() as session:
             settings_row = (await session.execute(select(AppSettings).limit(1))).scalar_one_or_none()
             if settings_row is None:
                 console.print("[red]No hay configuración. Corre: agent-core init[/red]")
