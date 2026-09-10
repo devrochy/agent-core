@@ -251,16 +251,23 @@ class PluginManager:
     def list_modules(self) -> list[BaseModule]:
         return list(self._modules.values())
 
-    def active_admin_menu(self) -> list[dict[str, Any]]:
+    def active_admin_menu(self, enabled: set[str] | None = None) -> list[dict[str, Any]]:
         """Entradas de menú del panel agrupadas por plugin ACTIVO.
 
         Devuelve una lista de grupos:
             [{"name": "CRM", "items": [{"label": "Leads", "path": "..."}, ...]}]
 
-        Al desactivar un plugin, su grupo desaparece automáticamente.
+        `self._active` es global al proceso (código cargado en el servidor, no
+        por tenant). Sin `enabled`, se listan todos los activos — comportamiento
+        histórico, para quien llame sin conocer el tenant actual. Pasando
+        `enabled` (el `AgentSpec.packs` del tenant, vía `enabled_packs()`) se
+        filtra a los que además están habilitados para ESE tenant — si no, el
+        menú de un pack activo globalmente por otro tenant aparecía igual para
+        cualquiera, aunque `/admin/plugins` ya dijera "no habilitado".
         """
+        active = self._active if enabled is None else self._active & enabled
         groups: list[dict[str, Any]] = []
-        for plugin_id in self._active:
+        for plugin_id in active:
             module = self._modules.get(plugin_id)
             if module and module.admin_menu:
                 groups.append(

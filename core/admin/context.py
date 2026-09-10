@@ -46,12 +46,19 @@ async def base_context(request: Request, section: str) -> dict[str, Any] | None:
                 )
             )
         ).scalar_one_or_none()
+    # Import local (no a nivel de módulo): los packs con admin_router propio
+    # reusan base_context sin necesitar arrastrar agents.spec si no llaman a
+    # esta rama. El menú lateral debe reflejar solo los packs de ESTE tenant
+    # (AgentSpec.packs), no todo lo activo globalmente en el proceso.
+    from core.agents.spec import enabled_packs, load_active_spec
+
+    tenant_enabled = enabled_packs(await load_active_spec())
     return {
         "request": request,
         "section": section,
         "admin": admin,
         "assistant_name": app_settings.assistant_name if app_settings else get_settings().app_name,
-        "plugin_menu": plugin_manager.active_admin_menu(),
+        "plugin_menu": plugin_manager.active_admin_menu(tenant_enabled),
         "tenants": await admin_tenant_options(admin.id),
         "active_tenant_id": str(get_current_tenant_id()) if get_current_tenant_id() else "",
         "flash": request.query_params.get("flash"),
