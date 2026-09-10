@@ -194,6 +194,13 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
 
     # ---------------- 3. Agentic loop
     messages = list(history)
+    # _load_history puede devolver turnos cacheados en working memory (Redis)
+    # que no incluyen el mensaje que acaba de llegar (append_turn solo escribe
+    # ahí al FINAL del turno, en _finish_turn) — sin esto el LLM respondería
+    # sin ver el mensaje actual del cliente en cualquier turno posterior al
+    # primero de la conversación.
+    if not messages or messages[-1].role != "user" or messages[-1].content != latest_message:
+        messages.append(LLMMessage(role="user", content=latest_message))
     all_tool_results: list[dict[str, Any]] = []
     guardrail_retries = 0
     turn_cost: float = 0.0
