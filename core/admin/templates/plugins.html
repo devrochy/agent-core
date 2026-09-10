@@ -4,46 +4,59 @@
 {% block content %}
 <h1 class="fs-3 mb-4">Plugins</h1>
 
+<p class="text-secondary small mb-4">
+  Activar o desactivar acá es <b>solo para el tenant que tenés seleccionado</b>
+  arriba — no afecta a los demás. La primera vez que algún tenant activa un pack,
+  su código se carga en el servidor; desactivarlo para este tenant no se lo apaga
+  a otros que lo sigan usando.
+</p>
+
 {% set estado_opts = [
-  {"value": "active", "label": "Activo"},
-  {"value": "configured", "label": "Configurado"},
-  {"value": "detected", "label": "Detectado"},
-  {"value": "disabled", "label": "Desactivado"},
-  {"value": "error", "label": "Error"},
-  {"value": "no instalado", "label": "No instalado"},
+  {"value": "si", "label": "Habilitado (este tenant)"},
+  {"value": "no", "label": "No habilitado"},
 ] %}
 {% call datatable(filter_fields=[{"key": "estado", "label": "Estado", "options": estado_opts}], page_size=20) %}
   <thead>
     <tr>
       <th class="dt-sortable" data-sort-key="nombre">Plugin</th>
       <th class="dt-sortable" data-sort-key="version">Versión</th>
-      <th class="dt-sortable" data-sort-key="estado">Estado</th>
-      <th>Error</th>
+      <th class="dt-sortable" data-sort-key="estado">Este tenant</th>
+      <th>Sistema</th>
       <th class="text-end">Acciones</th>
     </tr>
   </thead>
   <tbody>
     {% for p in plugins %}
-    {% set colors = {'active': 'success', 'configured': 'info', 'detected': 'secondary', 'disabled': 'warning', 'error': 'danger', 'no instalado': 'dark'} %}
-    <tr data-search="{{ p.name }} {{ p.id }} {{ p.status }}"
-        data-filter-estado="{{ p.status }}"
-        data-sort-nombre="{{ p.name }}" data-sort-version="{{ p.version }}" data-sort-estado="{{ p.status }}">
+    {% set habilitado = 'si' if p.enabled_for_tenant else 'no' %}
+    {% set sys_colors = {'active': 'success', 'configured': 'info', 'detected': 'secondary', 'disabled': 'secondary', 'error': 'danger'} %}
+    <tr data-search="{{ p.name }} {{ p.id }}"
+        data-filter-estado="{{ habilitado }}"
+        data-sort-nombre="{{ p.name }}" data-sort-version="{{ p.version }}" data-sort-estado="{{ habilitado }}">
       <td><strong>{{ p.name }}</strong><br><span class="text-secondary small">{{ p.id }}</span></td>
       <td>{{ p.version }}</td>
-      <td><span class="badge bg-{{ colors.get(p.status, 'secondary') }}">{{ p.status }}</span></td>
-      <td class="small text-danger">{{ p.error_message or '' }}</td>
+      <td>
+        {% if p.enabled_for_tenant %}
+        <span class="badge bg-success">Habilitado</span>
+        {% else %}
+        <span class="badge bg-secondary">No habilitado</span>
+        {% endif %}
+      </td>
+      <td>
+        <span class="badge bg-{{ sys_colors.get(p.status, 'secondary') }}" title="Estado del código en el servidor">{{ p.status }}</span>
+        {% if p.error_message %}<br><span class="small text-danger">{{ p.error_message }}</span>{% endif %}
+      </td>
       <td class="text-end">
         <div class="dt-actions-row">
           {% if p.has_config %}
           <a href="/admin/plugins/{{ p.id }}/configurar" class="btn btn-outline-secondary" title="Configurar"><i class="bi bi-gear"></i></a>
           {% endif %}
-          {% if p.status == 'active' %}
+          {% if p.enabled_for_tenant %}
           <form method="post" action="/admin/plugins/{{ p.id }}/desactivar" class="d-inline">
-            <button class="btn btn-outline-warning" title="Desactivar"><i class="bi bi-stop-circle"></i></button>
+            <button class="btn btn-outline-warning" title="Desactivar para este tenant"><i class="bi bi-stop-circle"></i></button>
           </form>
-          {% elif p.status in ('configured', 'disabled', 'error') %}
+          {% else %}
           <form method="post" action="/admin/plugins/{{ p.id }}/activar" class="d-inline">
-            <button class="btn btn-outline-success" title="Activar"><i class="bi bi-play-circle"></i></button>
+            <button class="btn btn-outline-success" title="Activar para este tenant"><i class="bi bi-play-circle"></i></button>
           </form>
           {% endif %}
         </div>

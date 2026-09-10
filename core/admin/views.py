@@ -29,7 +29,7 @@ from core.admin.form_generator import (
     render_json_schema_form,
 )
 from core.admin.view_registry import view_registry
-from core.agents.spec import CORE_PACK_ID, load_active_spec
+from core.agents.spec import CORE_PACK_ID, enabled_packs, load_active_spec
 from core.config import get_settings
 from core.db.models import (
     AgentSpecRecord,
@@ -38,6 +38,7 @@ from core.db.models import (
     Customer,
     Escalation,
     Message,
+    PluginConfig,
     PluginRecord,
     UsageLedger,
     utcnow,
@@ -52,6 +53,7 @@ from core.gateway.connections import (
 )
 from core.plugin_manager import plugin_manager
 from core.shared.crypto import get_secret_box
+from core.shared.exceptions import PluginError
 from core.shared.logger import get_logger
 from core.shared.tenant import admin_tenants, get_current_tenant_id, tenant_scope
 
@@ -432,12 +434,76 @@ async def spec_editor(request: Request) -> HTMLResponse:
     if ctx is None:
         return _login_redirect()
     spec = await load_active_spec()
-    installed = sorted({m.id for m in plugin_manager.list_modules()})
     ctx["spec"] = spec.model_dump(mode="json")
-    ctx["installed_packs"] = [p for p in installed if p != CORE_PACK_ID]
-    ctx["enabled_packs"] = sorted(set(spec.packs) - {CORE_PACK_ID})
     ctx["versions"] = await _spec_versions()
     return _render("spec.html", ctx)
+
+
+async def _ensure_pack_activated(pack: str) -> str | None:
+    """Activa un pack si su código todavía no estaba cargado. Devuelve el error
+    (str) o None si quedó activo (o ya lo estaba).
+
+    Un pack con config obligatoria y sin fila previa para el tenant actual (ej.
+    nunca pasó por `tenant create --packs` ni por `/admin/plugins/<id>/configurar`)
+    no activa: `load_config` exige una fila existente. Se crea una config vacía
+    por default, mismo patrón que ya usa `onboard_tenant` (core/onboarding.py) —
+    si el schema del pack exige campos reales, la activación falla igual y el
+    error se devuelve tal cual, sin pisar una configuración real si ya existía.
+    """
+    if plugin_manager.is_active(pack):
+        return None
+    try:
+        module = plugin_manager.get(pack)
+        if module is not None and module.config_schema is not None:
+            async with get_session() as session:
+                has_config = (
+                    await session.execute(
+                        select(PluginConfig).where(
+                            PluginConfig.plugin_id == pack,
+                            PluginConfig.tenant_id == get_current_tenant_id(),
+                        )
+                    )
+                ).scalar_one_or_none() is not None
+            if not has_config:
+                await plugin_manager.save_config(pack, {})
+        await plugin_manager.activate(pack)
+        return None
+    except PluginError as exc:
+        return f"{pack}: {exc}"
+
+
+async def _save_spec_version(new_spec: AgentSpec) -> int | None:
+    """Persiste `new_spec` como nueva versión activa del tenant actual.
+
+    Desactiva la versión previa e inserta la nueva en la misma transacción.
+    Devuelve la versión nueva, o None si hubo una edición concurrente (los
+    índices parciales protegen la integridad; el llamador decide cómo avisar).
+    """
+    version = await _next_spec_version()
+    try:
+        async with get_session() as session:
+            current_row = (
+                await session.execute(
+                    select(AgentSpecRecord).where(
+                        AgentSpecRecord.tenant_id == get_current_tenant_id(),
+                        AgentSpecRecord.is_active.is_(True),
+                        AgentSpecRecord.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if current_row is not None:
+                current_row.is_active = False
+            session.add(
+                AgentSpecRecord(
+                    tenant_id=get_current_tenant_id(),
+                    version=version,
+                    is_active=True,
+                    spec=new_spec.model_dump(mode="json"),
+                )
+            )
+    except IntegrityError:
+        return None
+    return version
 
 
 @router.post("/spec")
@@ -446,7 +512,6 @@ async def spec_save(request: Request):
     if admin is None:
         return _login_redirect()
     form = await request.form()
-    packs = [str(x) for x in form.getlist("packs")]
     persona_role = str(form.get("persona_role", ""))
     persona_tone = str(form.get("persona_tone", ""))
     try:
@@ -475,15 +540,16 @@ async def spec_save(request: Request):
     escalation_triggers = str(form.get("escalation_triggers", ""))
     raw_json = str(form.get("raw_json", ""))
 
+    current = await load_active_spec()
     try:
         if raw_json.strip():
             # fallback de poder: JSON completo validado por el contrato congelado
             data = json.loads(raw_json)
             new_spec = AgentSpec.model_validate(data)
         else:
-            current = await load_active_spec()
+            # Los packs ya no se editan acá: se activan/desactivan por tenant
+            # desde /admin/plugins (una sola pantalla, sin redundancia).
             data = current.model_dump(mode="json")
-            data["packs"] = sorted(set(packs))
             data["persona"].update(
                 {
                     "role": persona_role or data["persona"].get("role", ""),
@@ -510,34 +576,24 @@ async def spec_save(request: Request):
             f"/admin/spec?flash=spec_invalido: {exc}&flash_type=danger", status_code=303
         )
 
-    version = await _next_spec_version()
-    try:
-        async with get_session() as session:
-            current_row = (
-                await session.execute(
-                    select(AgentSpecRecord).where(
-                        AgentSpecRecord.tenant_id == get_current_tenant_id(),
-                        AgentSpecRecord.is_active.is_(True),
-                        AgentSpecRecord.deleted_at.is_(None),
-                    )
-                )
-            ).scalar_one_or_none()
-            if current_row is not None:
-                current_row.is_active = False
-            session.add(
-                AgentSpecRecord(
-                    tenant_id=get_current_tenant_id(),
-                    version=version,
-                    is_active=True,
-                    spec=new_spec.model_dump(mode="json"),
-                )
-            )
-    except IntegrityError:
-        # Raza de dos saves concurrentes: los índices parciales protegieron la
-        # integridad (nunca dos activos ni dos versiones iguales); el usuario
-        # reintenta.
+    # `raw_json` es el único camino que puede seguir tocando `packs` (fallback
+    # de poder); si agrega alguno nuevo, se activa igual que desde Plugins.
+    activation_errors = [
+        err
+        for pack in set(new_spec.packs) - set(current.packs)
+        if (err := await _ensure_pack_activated(pack)) is not None
+    ]
+
+    version = await _save_spec_version(new_spec)
+    if version is None:
         return RedirectResponse(
             "/admin/spec?flash=hubo una edición concurrente, reintenta&flash_type=danger",
+            status_code=303,
+        )
+    if activation_errors:
+        return RedirectResponse(
+            f"/admin/spec?flash=spec guardado (v{version}), pero no se pudo activar: "
+            f"{'; '.join(activation_errors)}&flash_type=danger",
             status_code=303,
         )
     return RedirectResponse(
@@ -782,14 +838,26 @@ async def escalations_list(request: Request):
 # ------------------------------------------------------------------ plugins
 @router.get("/plugins", response_class=HTMLResponse)
 async def plugins_list(request: Request):
+    """Packs disponibles y si están habilitados para el TENANT ACTUAL.
+
+    Activar/desactivar acá edita `AgentSpec.packs` de este tenant únicamente
+    (nueva versión del spec, igual que antes hacía el formulario de AgentSpec —
+    esa sección se eliminó de ahí por redundante). El estado "instalado"/"error"
+    es informativo y de sistema (¿está el código cargado en el servidor?); no
+    determina el botón, que refleja el consentimiento de este tenant.
+    """
     ctx = await _base_context(request, "plugins")
     if ctx is None:
         return _login_redirect()
     async with get_session() as session:
         records = {r.id: r for r in (await session.execute(select(PluginRecord))).scalars().all()}
+    spec = await load_active_spec()
+    enabled = enabled_packs(spec)
 
     plugins = []
     for module in plugin_manager.list_modules():
+        if module.id == CORE_PACK_ID:
+            continue
         record = records.get(module.id)
         plugins.append(
             {
@@ -799,22 +867,9 @@ async def plugins_list(request: Request):
                 "status": record.status if record else "detected",
                 "error_message": record.error_message if record else None,
                 "has_config": module.config_schema is not None,
+                "enabled_for_tenant": module.id in enabled,
             }
         )
-    # Plugins en BD pero no instalados (pip uninstall sin limpiar registro)
-    installed_ids = {m.id for m in plugin_manager.list_modules()}
-    for record in records.values():
-        if record.id not in installed_ids:
-            plugins.append(
-                {
-                    "id": record.id,
-                    "name": record.name,
-                    "version": record.version,
-                    "status": "no instalado",
-                    "error_message": "Paquete no encontrado en entry_points",
-                    "has_config": False,
-                }
-            )
     ctx["plugins"] = plugins
     return _render("plugins.html", ctx)
 
@@ -859,13 +914,11 @@ async def plugin_config_save(request: Request, plugin_id: str):
     previous: dict[str, Any] = {}
     try:
         async with get_session() as session:
-            from core.db.models import PluginConfig as PluginConfigModel
-
             stored = (
                 await session.execute(
-                    select(PluginConfigModel).where(
-                        PluginConfigModel.plugin_id == plugin_id,
-                        PluginConfigModel.tenant_id == get_current_tenant_id(),
+                    select(PluginConfig).where(
+                        PluginConfig.plugin_id == plugin_id,
+                        PluginConfig.tenant_id == get_current_tenant_id(),
                     )
                 )
             ).scalar_one_or_none()
@@ -878,33 +931,57 @@ async def plugin_config_save(request: Request, plugin_id: str):
         values = parse_form_values(module.config_schema, form_data, previous)
         await plugin_manager.save_config(plugin_id, values)
         await plugin_manager.activate(plugin_id)
-        return RedirectResponse("/admin/plugins?flash=Plugin configurado y activado", status_code=303)
     except Exception as exc:
         log.exception("plugin_config_save_failed", plugin=plugin_id)
         return RedirectResponse(
             f"/admin/plugins?flash=Error: {str(exc)[:120]}&flash_type=danger", status_code=303
         )
+    # Configurarlo implica que este tenant lo quiere usar.
+    await _enable_pack_for_tenant(plugin_id)
+    return RedirectResponse("/admin/plugins?flash=Plugin configurado y activado", status_code=303)
+
+
+async def _enable_pack_for_tenant(pack: str) -> int | None:
+    """Agrega `pack` a `AgentSpec.packs` del tenant actual (nueva versión)."""
+    spec = await load_active_spec()
+    if pack in spec.packs:
+        return None
+    new_spec = spec.model_copy(update={"packs": sorted({*spec.packs, pack})})
+    return await _save_spec_version(new_spec)
+
+
+async def _disable_pack_for_tenant(pack: str) -> int | None:
+    """Quita `pack` de `AgentSpec.packs` del tenant actual (nueva versión).
+
+    NO desactiva el código globalmente — otro tenant puede seguir usándolo.
+    """
+    spec = await load_active_spec()
+    if pack not in spec.packs:
+        return None
+    new_spec = spec.model_copy(update={"packs": sorted(set(spec.packs) - {pack})})
+    return await _save_spec_version(new_spec)
 
 
 @router.post("/plugins/{plugin_id}/activar")
 async def plugin_activate(request: Request, plugin_id: str):
+    """Habilita `plugin_id` para el TENANT ACTUAL únicamente (AgentSpec.packs)."""
     if await current_admin(request) is None:
         return _login_redirect()
-    try:
-        await plugin_manager.activate(plugin_id)
-        return RedirectResponse("/admin/plugins?flash=Plugin activado", status_code=303)
-    except Exception as exc:
-        return RedirectResponse(
-            f"/admin/plugins?flash=Error: {str(exc)[:120]}&flash_type=danger", status_code=303
-        )
+    error = await _ensure_pack_activated(plugin_id)
+    if error is not None:
+        return RedirectResponse(f"/admin/plugins?flash=Error: {error}&flash_type=danger", status_code=303)
+    await _enable_pack_for_tenant(plugin_id)
+    return RedirectResponse("/admin/plugins?flash=Plugin activado para este tenant", status_code=303)
 
 
 @router.post("/plugins/{plugin_id}/desactivar")
 async def plugin_deactivate(request: Request, plugin_id: str):
+    """Deshabilita `plugin_id` para el TENANT ACTUAL únicamente. El código sigue
+    cargado en el servidor por si otro tenant lo usa."""
     if await current_admin(request) is None:
         return _login_redirect()
-    await plugin_manager.deactivate(plugin_id)
-    return RedirectResponse("/admin/plugins?flash=Plugin desactivado", status_code=303)
+    await _disable_pack_for_tenant(plugin_id)
+    return RedirectResponse("/admin/plugins?flash=Plugin desactivado para este tenant", status_code=303)
 
 
 # ------------------------------------------------------------------ conexiones

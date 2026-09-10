@@ -5,25 +5,12 @@
 <p class="text-secondary small mb-4">
   Configuración del asistente por tenant (cero prompts en código, ADR-0014).
   Guardar crea una <b>versión nueva y la activa</b> (rollback en un paso).
+  Los packs habilitados para este tenant se gestionan en
+  <a href="/admin/plugins">Plugins</a>.
 </p>
 
 <form method="post" action="/admin/spec" class="row g-4">
   <div class="col-lg-7">
-    <div class="card">
-      <div class="card-header fw-semibold">Packs habilitados</div>
-      <div class="card-body">
-        <p class="text-secondary small">El core siempre está activo. Un pack deshabilitado no expone skills, guardrails, eventos ni crons a este tenant (ADR-0019).</p>
-        <div class="d-flex flex-wrap gap-3">
-          {% for p in installed_packs %}
-          <div class="form-check">
-            <input class="form-check-input" type="checkbox" name="packs" value="{{ p }}"
-                   id="pack-{{ p }}" {% if p in enabled_packs %}checked{% endif %}>
-            <label class="form-check-label" for="pack-{{ p }}">{{ p }}</label>
-          </div>
-          {% endfor %}
-        </div>
-      </div>
-    </div>
 
     <div class="card mt-3">
       <div class="card-header fw-semibold">Persona</div>
