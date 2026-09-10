@@ -142,16 +142,29 @@ async def _leads_list() -> list[dict[str, Any]]:
         ).scalars().all()
 
         order_customer_ids = set(
-            (await session.execute(select(Order.customer_id).distinct())).scalars().all()
+            (
+                await session.execute(
+                    select(Order.customer_id).where(Order.tenant_id == tenant_id).distinct()
+                )
+            )
+            .scalars()
+            .all()
         )
         quote_customer_ids = set(
-            (await session.execute(select(Quote.customer_id).distinct())).scalars().all()
+            (
+                await session.execute(
+                    select(Quote.customer_id).where(Quote.tenant_id == tenant_id).distinct()
+                )
+            )
+            .scalars()
+            .all()
         )
         escalated_customer_ids = set(
             (
                 await session.execute(
                     select(Conversation.customer_id)
                     .join(Escalation, Escalation.conversation_id == Conversation.id)
+                    .where(Conversation.tenant_id == tenant_id)
                     .distinct()
                 )
             )
@@ -167,7 +180,7 @@ async def _leads_list() -> list[dict[str, Any]]:
                         func.count().label("pedidos"),
                         func.max(Order.created_at).label("ultima_compra"),
                     )
-                    .where(Order.status != "expirado")
+                    .where(Order.tenant_id == tenant_id, Order.status != "expirado")
                     .group_by(Order.customer_id)
                 )
             ).all()
@@ -181,6 +194,7 @@ async def _leads_list() -> list[dict[str, Any]]:
                         func.max(Message.created_at).label("ultimo_mensaje"),
                     )
                     .join(Message, Message.conversation_id == Conversation.id)
+                    .where(Conversation.tenant_id == tenant_id)
                     .group_by(Conversation.customer_id)
                 )
             ).all()
@@ -233,7 +247,23 @@ async def _leads_save(record_id: str | None, values: dict[str, Any]) -> None:
         customer_uuid = uuid.UUID(record_id)
     except ValueError:
         return
+    from core.db.models import Customer
+
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
+        # customer_id es FK lógica (sin constraint física) — validar que el
+        # customer exista y sea de este tenant antes de crear/tocar el Lead,
+        # para no dejar una referencia colgante hacia otro tenant.
+        customer = (
+            await session.execute(
+                select(Customer).where(
+                    Customer.id == customer_uuid, Customer.tenant_id == tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+        if customer is None:
+            return
+
         lead = (
             await session.execute(select(Lead).where(Lead.customer_id == customer_uuid))
         ).scalar_one_or_none()
