@@ -13,10 +13,11 @@ venv/
 sdd/*.md
 !sdd/templates/
 .DS_Store
+.obsidian/
 *.sqlite3
 storage/
 plugins/.install.lock
-.claude/
+.claude/settings.local.json
 
 # Datos y documentación de tenants (por despliegue, fuera del framework)
 /tenants/
