@@ -419,15 +419,23 @@ def docs(slug: str = typer.Argument(..., help="Slug del tenant")) -> None:
 @app.command()
 def webhook(slug: str = typer.Argument(..., help="Slug del tenant")) -> None:
     """Imprime la URL del webhook del tenant + verify token (para Meta)."""
+    token = asyncio.run(_tenant_verify_token(slug))
+    print_webhook_panel(slug, token)
+
+
+def print_webhook_panel(slug: str, verify_token: str) -> None:
+    """Panel con la Callback URL + verify token a registrar en Meta.
+
+    Compartido por `tenant webhook` y `meta configure` (mismo texto, una sola vez).
+    """
     from core.tenants import tenant_webhook_url
 
     url = tenant_webhook_url(slug)
-    token = asyncio.run(_tenant_verify_token(slug))
     console.print(Panel(
         "\n".join([
             "Regístralo en Meta: WhatsApp → Configuration → Webhook:",
             f"  Callback URL:  [bold cyan]{url}[/bold cyan]",
-            f"  Verify token:  [bold]{token or '— (no configurado: /admin/conexiones o WHATSAPP_VERIFY_TOKEN)'}[/bold]",
+            f"  Verify token:  [bold]{verify_token or '— (no configurado: /admin/conexiones o WHATSAPP_VERIFY_TOKEN)'}[/bold]",
             "  Fields: subscribe a [bold]messages[/bold]",
             "",
             "[dim]Desarrollo: expón un túnel y úsalo como PUBLIC_BASE_URL:[/dim]",
