@@ -28,6 +28,6 @@
     </form>
   </div>
   {% if node.children %}
-  <ul class="list-unstyled ms-4">{% for child in node.children %}{% include "crm/_category_node.html" %}{% endfor %}</ul>
+  <ul class="list-unstyled ms-4">{% for child in node.children %}{% with node = child %}{% include "crm/_category_node.html" %}{% endwith %}{% endfor %}</ul>
   {% endif %}
 </li>
