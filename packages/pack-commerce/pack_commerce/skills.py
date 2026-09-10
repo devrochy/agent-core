@@ -277,7 +277,12 @@ class LeadSkill(BaseSkill):
         score = max(1, min(10, int(arguments.get("score", 0))))
         async with get_session() as session:
             lead = (
-                await session.execute(select(Lead).where(Lead.customer_id == context.customer_id))
+                await session.execute(
+                    select(Lead).where(
+                        Lead.customer_id == context.customer_id,
+                        Lead.tenant_id == get_current_tenant_id(),
+                    )
+                )
             ).scalar_one_or_none()
             if lead is None:
                 return {"error": "No hay lead para esta conversación. Usa crear_lead primero."}
@@ -289,7 +294,12 @@ class LeadSkill(BaseSkill):
     async def actualizar_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         async with get_session() as session:
             lead = (
-                await session.execute(select(Lead).where(Lead.customer_id == context.customer_id))
+                await session.execute(
+                    select(Lead).where(
+                        Lead.customer_id == context.customer_id,
+                        Lead.tenant_id == get_current_tenant_id(),
+                    )
+                )
             ).scalar_one_or_none()
             if lead is None:
                 return {"error": "No hay lead para esta conversación. Usa crear_lead primero."}
