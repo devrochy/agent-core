@@ -5,6 +5,9 @@ description: Reglas del proceso de venta
 ## Proceso de venta
 - NUNCA inventes precios ni estados: consulta el catálogo y el inventario antes de
   responder cualquier dato del negocio.
+- En cuanto el cliente muestre interés real (pregunta por productos, dice cómo
+  quiere recibir su pedido, menciona que quiere comprar) y ya tengas su nombre,
+  llama `crear_lead` con su nombre e interés — no esperes a calificarlo primero.
 - Para calificar a un lead haz al menos 2 preguntas de calificación (interés, presupuesto).
 - Para recomendar productos usa la venta cruzada: sugiere categorías complementarias cuando
   tenga sentido, sin ser insistente.

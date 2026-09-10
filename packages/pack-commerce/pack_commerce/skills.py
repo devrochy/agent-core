@@ -216,10 +216,11 @@ class LeadSkill(BaseSkill):
             ),
             MCPTool(
                 name="actualizar_lead",
-                description="Actualiza datos del lead existente de esta conversación (email, interés, estado).",
+                description="Actualiza datos del lead existente de esta conversación (nombre, email, interés, estado).",
                 parameters={
                     "type": "object",
                     "properties": {
+                        "name": {"type": "string", "description": "Nombre completo del prospecto"},
                         "email": {"type": "string"},
                         "interest": {"type": "string"},
                         "status": {
@@ -292,6 +293,8 @@ class LeadSkill(BaseSkill):
             ).scalar_one_or_none()
             if lead is None:
                 return {"error": "No hay lead para esta conversación. Usa crear_lead primero."}
+            if arguments.get("name"):
+                lead.name = str(arguments["name"])
             if arguments.get("email"):
                 lead.email = str(arguments["email"])
             if arguments.get("interest"):
