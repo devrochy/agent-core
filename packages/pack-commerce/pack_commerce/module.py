@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from core.db.session import get_session
 from core.mcp.types import BaseModule, GuardrailResult
@@ -38,8 +38,9 @@ from pack_commerce.models import (
     Product,
     ProductVariant,
     Promotion,
+    Quote,
 )
-from pack_commerce.skills import CatalogSkill, LeadSkill, OrderSkill
+from pack_commerce.skills import CatalogSkill, LeadSkill, OrderSkill, classify_customer
 
 if TYPE_CHECKING:
     from core.mcp.host import MCPHost
@@ -116,46 +117,134 @@ async def crm_dashboard(request: Request):
 async def _leads_list() -> list[dict[str, Any]]:
     """Filas para el renderizador por descriptor (Sprint 4, Fase D).
 
+    Todo `Customer` del tenant ES un lead: no hace falta crear ni sincronizar
+    nada (mismo diseño que agent-sale, ADR-036 "clasificación de cliente en 5
+    niveles y rediseño de leads") — apenas alguien escribe por primera vez ya
+    existe su `Customer` (`core/orchestrator/consumer.py::_resolve_conversation`),
+    y `estado`/`segmento` se calculan en vivo contra su actividad real, sin
+    depender de que el LLM llame ninguna tool. `pack_commerce_leads` sigue
+    existiendo solo como enriquecimiento opcional de nombre/interés (lo que el
+    LLM o un admin haya capturado en la conversación).
+
     Filtro explícito por tenant (defensa en profundidad, además de RLS): el panel
     es multi-tenant y una policy caída no debe convertir esto en una fuga."""
+    from core.db.models import Conversation, Customer, Escalation, Message
+
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        rows = (
+        customers = (
             await session.execute(
-                select(Lead)
-                .where(Lead.tenant_id == get_current_tenant_id())
-                .order_by(Lead.last_activity_at.desc())
+                select(Customer)
+                .where(Customer.tenant_id == tenant_id, Customer.deleted_at.is_(None))
+                .order_by(Customer.created_at.desc())
                 .limit(200)
             )
         ).scalars().all()
-    return [
-        {
-            "_id": str(lead.id),
-            "name": lead.name or "",
-            "interest": lead.interest or "",
-            "score": lead.score,
-            "status": lead.status,
-            "last_activity": _iso(lead.last_activity_at) if lead.last_activity_at else "",
+
+        order_customer_ids = set(
+            (await session.execute(select(Order.customer_id).distinct())).scalars().all()
+        )
+        quote_customer_ids = set(
+            (await session.execute(select(Quote.customer_id).distinct())).scalars().all()
+        )
+        escalated_customer_ids = set(
+            (
+                await session.execute(
+                    select(Conversation.customer_id)
+                    .join(Escalation, Escalation.conversation_id == Conversation.id)
+                    .distinct()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        order_stats = {
+            row.customer_id: (row.pedidos, row.ultima_compra)
+            for row in (
+                await session.execute(
+                    select(
+                        Order.customer_id,
+                        func.count().label("pedidos"),
+                        func.max(Order.created_at).label("ultima_compra"),
+                    )
+                    .where(Order.status != "expirado")
+                    .group_by(Order.customer_id)
+                )
+            ).all()
         }
-        for lead in rows
-    ]
+        last_message_at = {
+            row.customer_id: row.ultimo_mensaje
+            for row in (
+                await session.execute(
+                    select(
+                        Conversation.customer_id,
+                        func.max(Message.created_at).label("ultimo_mensaje"),
+                    )
+                    .join(Message, Message.conversation_id == Conversation.id)
+                    .group_by(Conversation.customer_id)
+                )
+            ).all()
+        }
+        leads_by_customer = {
+            lead.customer_id: lead
+            for lead in (
+                await session.execute(select(Lead).where(Lead.tenant_id == tenant_id))
+            )
+            .scalars()
+            .all()
+            if lead.customer_id is not None
+        }
+
+    rows: list[dict[str, Any]] = []
+    for c in customers:
+        lead = leads_by_customer.get(c.id)
+        if c.id in order_customer_ids:
+            estado = "con_pedido"
+        elif c.id in escalated_customer_ids:
+            estado = "escalada"
+        elif c.id in quote_customer_ids:
+            estado = "con_cotizacion"
+        else:
+            estado = "sin_actividad_comercial"
+        pedidos, _ultima_compra = order_stats.get(c.id, (0, None))
+        activity = last_message_at.get(c.id) or c.created_at
+        rows.append(
+            {
+                "_id": str(c.id),
+                "name": (lead.name if lead else None) or c.name or c.external_id,
+                "interest": (lead.interest if lead else "") or "",
+                "segment": await classify_customer(c.id),
+                "estado": estado,
+                "pedidos": pedidos,
+                "last_activity": _iso(activity) if activity else "",
+            }
+        )
+    rows.sort(key=lambda r: r["last_activity"], reverse=True)
+    return rows
 
 
 async def _leads_save(record_id: str | None, values: dict[str, Any]) -> None:
+    """`record_id` es el `customer.id` (no un `lead.id`): estado/segmento ya se
+    calculan solos, lo único editable a mano es el enriquecimiento de
+    nombre/interés — se crea la fila de `Lead` si todavía no existía."""
     if record_id is None:
         return
     try:
-        lead_uuid = uuid.UUID(record_id)
+        customer_uuid = uuid.UUID(record_id)
     except ValueError:
         return
     async with get_session() as session:
-        lead = await session.get(Lead, lead_uuid)
-        if lead is not None:
-            score = values.get("score")
-            if isinstance(score, int):
-                lead.score = max(0, min(10, score))
-            if values.get("status") in ("nuevo", "calificado", "contactado", "convertido", "perdido"):
-                lead.status = values["status"]
-            lead.last_activity_at = datetime.now(UTC)
+        lead = (
+            await session.execute(select(Lead).where(Lead.customer_id == customer_uuid))
+        ).scalar_one_or_none()
+        if lead is None:
+            lead = Lead(customer_id=customer_uuid, idempotency_key=f"manual:{customer_uuid}")
+            session.add(lead)
+        if "name" in values:
+            lead.name = str(values["name"]) or None
+        if "interest" in values:
+            lead.interest = str(values["interest"] or "")
+        lead.last_activity_at = datetime.now(UTC)
 
 
 # ------------------------------------------------------------------ productos
@@ -597,8 +686,9 @@ class CRMModule(BaseModule):
                     columns=[
                         TableColumn(key="name", label="Lead"),
                         TableColumn(key="interest", label="Interés"),
-                        TableColumn(key="score", label="Score"),
-                        TableColumn(key="status", label="Estado"),
+                        TableColumn(key="segment", label="Clasificación"),
+                        TableColumn(key="estado", label="Estado"),
+                        TableColumn(key="pedidos", label="Pedidos"),
                         TableColumn(key="last_activity", label="Última actividad"),
                     ],
                     filters=[
@@ -606,32 +696,32 @@ class CRMModule(BaseModule):
                             key="estado",
                             label="Estado",
                             options=[
-                                {"value": "nuevo", "label": "Nuevo"},
-                                {"value": "calificado", "label": "Calificado"},
-                                {"value": "contactado", "label": "Contactado"},
-                                {"value": "convertido", "label": "Convertido"},
-                                {"value": "perdido", "label": "Perdido"},
+                                {"value": "con_pedido", "label": "Con pedido"},
+                                {"value": "escalada", "label": "Escalada"},
+                                {"value": "con_cotizacion", "label": "Con cotización"},
+                                {"value": "sin_actividad_comercial", "label": "Sin actividad"},
                             ],
-                        )
+                        ),
+                        TableFilter(
+                            key="segment",
+                            label="Clasificación",
+                            options=[
+                                {"value": "nuevo", "label": "Nuevo"},
+                                {"value": "ocasional", "label": "Ocasional"},
+                                {"value": "frecuente", "label": "Frecuente"},
+                                {"value": "fiel", "label": "Fiel"},
+                                {"value": "inactivo", "label": "Inactivo"},
+                            ],
+                        ),
                     ],
                     page_size=20,
                 ),
                 form={
                     "type": "object",
                     "properties": {
-                        "score": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 10,
-                            "title": "Score (0-10)",
-                        },
-                        "status": {
-                            "type": "string",
-                            "enum": ["nuevo", "calificado", "contactado", "convertido", "perdido"],
-                            "title": "Estado",
-                        },
+                        "name": {"type": "string", "title": "Nombre"},
+                        "interest": {"type": "string", "title": "Interés"},
                     },
-                    "required": ["status"],
                 },
             ),
             list_handler=_leads_list,
