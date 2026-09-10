@@ -320,6 +320,7 @@ async def crm_categories(request: Request):
                 nodes.append(
                     {
                         "id": c.id,
+                        "parent_id": c.parent_id,
                         "name": c.name,
                         "sort_order": c.sort_order,
                         "active": c.active,
@@ -349,6 +350,21 @@ async def category_save(
         if category_id:
             category = await session.get(Category, category_id)
             if category is not None:
+                if parent is not None:
+                    # Una categoría no puede ser su propia padre ni un descendiente
+                    # de sí misma (eso la dejaría inalcanzable en el árbol del listado).
+                    ancestor_id: uuid.UUID | None = parent
+                    seen: set[uuid.UUID] = set()
+                    while ancestor_id is not None and ancestor_id not in seen:
+                        if ancestor_id == category.id:
+                            return RedirectResponse(
+                                "/crm/categorias?flash=Una categoría no puede ser su propia"
+                                " categoría padre ni descendiente de sí misma&flash_type=danger",
+                                status_code=303,
+                            )
+                        seen.add(ancestor_id)
+                        ancestor = await session.get(Category, ancestor_id)
+                        ancestor_id = ancestor.parent_id if ancestor is not None else None
                 category.name = name
                 category.parent_id = parent
                 category.sort_order = sort_order
