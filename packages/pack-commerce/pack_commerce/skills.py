@@ -39,7 +39,7 @@ CUSTOMER_SEGMENTS = ("nuevo", "ocasional", "frecuente", "fiel", "inactivo")
 
 ORDER_STATUS_ACTIVE = ("abierto", "despachado")
 
-PAYMENT_METHODS = ("efectivo_contraentrega", "transferencia")
+PAYMENT_METHODS = ("efectivo_contraentrega", "transferencia", "pago_en_linea")
 DELIVERY_METHODS = ("domicilio", "recoger_en_tienda")
 
 
@@ -528,7 +528,11 @@ class OrderSkill(BaseSkill):
                         "quote_id": {"type": "string"},
                         "payment_method": {
                             "type": "string",
-                            "enum": ["efectivo_contraentrega", "transferencia"],
+                            "enum": ["efectivo_contraentrega", "transferencia", "pago_en_linea"],
+                            "description": (
+                                "'pago_en_linea' SOLO si el pack de pagos está activo para este "
+                                "tenant -- llamá luego generar_link_pago con la referencia del pedido."
+                            ),
                         },
                         "delivery_method": {
                             "type": "string",
@@ -830,7 +834,9 @@ class OrderSkill(BaseSkill):
         config = await _plugin_config()
 
         if payment_method not in PAYMENT_METHODS:
-            return {"error": "Método de pago no válido. Usa 'efectivo_contraentrega' o 'transferencia'."}
+            return {
+                "error": "Método de pago no válido. Usa 'efectivo_contraentrega', 'transferencia' o 'pago_en_linea'."
+            }
         if delivery_method not in DELIVERY_METHODS:
             return {"error": "Método de entrega no válido. Usa 'domicilio' o 'recoger_en_tienda'."}
 
@@ -897,7 +903,9 @@ class OrderSkill(BaseSkill):
                 delivery_municipality=customer_data.get("municipality"),
                 delivery_city=customer_data.get("city"),
                 status="abierto",
-                payment_status="pendiente" if payment_method == "transferencia" else "pagado",
+                # transferencia/pago_en_linea se confirman después (comprobante manual o
+                # webhook de pack-payments); contraentrega se da por pagado al entregar.
+                payment_status="pendiente" if payment_method in ("transferencia", "pago_en_linea") else "pagado",
             )
             session.add(order)
             await session.flush()

@@ -29,3 +29,9 @@ description: Reglas del proceso de venta
 - Los montos por transferencia y las cuentas NO pasan por el texto libre: el sistema las
   adjunta de forma determinística.
 - Si el total supera el umbral de aprobación humana, escala al asesor y no cierres el pedido.
+- Si el cliente quiere pagar en línea (tarjeta, PSE) Y tenés disponible la tool
+  `generar_link_pago`, usá `payment_method: "pago_en_linea"` al crear el pedido y
+  llamá `generar_link_pago` en el mismo turno con `reference` = el
+  `public_order_number` que te devolvió `crear_pedido` y `amount` = el total exacto
+  (nunca inventes el monto). Si esa tool no está disponible, ofrecé solo
+  transferencia o contraentrega.

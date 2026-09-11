@@ -760,6 +760,12 @@ class CRMModule(BaseModule):
         # en plugin_configs y un tenant puede desactivarla sin afectar al resto).
         host.subscribe(ON_CONVERSATION_STARTED, self._on_conversation_started)
 
+        # Coordinación con pack-payments SIN importarlo (invariante nº5, ADR-0023):
+        # el nombre del evento es el contrato real, un string literal acordado en
+        # esa ADR -- no una constante compartida entre packs.
+        host.subscribe("payment.confirmed", self._on_payment_confirmed)
+        host.subscribe("payment.rejected", self._on_payment_rejected)
+
         # importar jobs.py registra los @register_cron en Celery Beat
         import pack_commerce.jobs  # noqa: F401
 
@@ -863,6 +869,48 @@ class CRMModule(BaseModule):
                     )
                 )
                 log.info("lead_draft_created", conversation_id=str(conversation_id))
+
+    async def _on_payment_confirmed(
+        self, reference: str, provider: str, provider_reference: str, amount: float
+    ) -> None:
+        await self._update_order_payment_status(reference, "pagado")
+
+    async def _on_payment_rejected(
+        self, reference: str, provider: str, provider_reference: str, amount: float
+    ) -> None:
+        await self._update_order_payment_status(reference, "rechazado")
+
+    async def _update_order_payment_status(self, reference: str, payment_status: str) -> None:
+        """Reacciona a eventos de `pack-payments` (ADR-0023) sin importarlo: por
+        convención, `reference` es el `public_order_number` que `crear_pedido`
+        le pasó a `generar_link_pago`. Si no matchea ninguna Order, se loggea y
+        se ignora -- pack-payments no sabe qué es una Order, la correlación es
+        responsabilidad de este lado.
+        """
+        tenant_id = get_current_tenant_id()
+        if tenant_id is None:
+            return
+        from core.agents.spec import enabled_packs, load_active_spec
+
+        spec = await load_active_spec(tenant_id)
+        if self.id not in enabled_packs(spec):
+            return
+
+        async with get_session() as session:
+            order = (
+                await session.execute(
+                    select(Order).where(
+                        Order.tenant_id == tenant_id,
+                        Order.public_order_number == reference,
+                    )
+                )
+            ).scalar_one_or_none()
+            if order is None:
+                log.warning("payment_event_no_matching_order", reference=reference, payment_status=payment_status)
+                return
+            order.payment_status = payment_status
+            order.status_changed_at = datetime.now(UTC)
+            log.info("order_payment_status_updated", order_id=str(order.id), payment_status=payment_status)
 
     # ------------------------------------------------------------ guardrail
     async def _amount_guardrail(
