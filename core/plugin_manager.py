@@ -161,8 +161,32 @@ class PluginManager:
 
     # ------------------------------------------------------------ activación
     async def activate(self, plugin_id: str) -> None:
+        """Registra las tools/skills del plugin en `mcp_host` (una sola vez por
+        proceso) y valida la config del tenant actual.
+
+        `mcp_host` es un registro GLOBAL al proceso (`register_skill` revienta
+        con "Skill duplicada" si se llama dos veces para el mismo plugin) — el
+        registro de tools solo puede correr una vez, sin importar cuántos
+        tenants lo activen. El enablement real por-tenant ya vive en
+        `AgentSpec.packs` (ver `_enable_pack_for_tenant`), no acá.
+
+        Lo que SÍ es por-tenant y antes se saltaba en cualquier activación
+        posterior a la primera: `load_config()` valida la config de ESTE
+        tenant. Sin esto, si el tenant B guardaba una config inválida, nunca
+        se enteraba al activar — recién le fallaba a mitad de una conversación
+        real, cuando una tool intentaba cargarla.
+        """
         module = self._require(plugin_id)
         if plugin_id in self._active:
+            # ya registrado en mcp_host para otro tenant; acá solo se valida
+            # la config de ESTE tenant, sin tocar el status global del plugin
+            # ni mcp_host -- un error de config de B no puede marcar como
+            # roto lo que a A le funciona bien.
+            try:
+                module.config = await self.load_config(plugin_id)
+                await self._set_status(plugin_id, "active", activated=True)
+            except Exception as exc:
+                raise PluginError(plugin_id, f"Configuración inválida: {exc}") from exc
             return
         try:
             module.config = await self.load_config(plugin_id)

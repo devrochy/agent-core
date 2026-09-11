@@ -3,7 +3,7 @@
 Por turno (hasta MAX_AGENT_ITERATIONS vueltas):
   1. Recall de memoria (3 capas) + selección de skills + system blocks.
   2. Difficulty routing (deepseek-chat vs deepseek-reasoner).
-  3. Llamada al LLM. Registro de tokens/costo/latencia en llm_usage.
+  3. Llamada al LLM. Registro de tokens/costo/latencia en usage_ledger (ADR-0008).
   4. tool_use  -> ejecutar tools vía MCPHost (PluginError => auto-disable, el loop sigue).
   5. end_turn  -> guardrails -> ok? SafeExtras + respuesta final.
                             -> falla? 1 reintento correctivo; si reincide, escalar.
@@ -23,7 +23,7 @@ from sqlalchemy import select
 from core.agents.responses import load_response
 from core.agents.spec import enabled_packs, load_active_spec
 from core.config import get_settings
-from core.db.models import AppSettings, Conversation, Customer, LLMUsage, Message, UsageLedger
+from core.db.models import AppSettings, Conversation, Customer, Message, UsageLedger
 from core.db.session import get_session
 from core.llm import resolve_provider
 from core.llm.difficulty_router import route_model
@@ -249,7 +249,6 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             return TurnResult(text=FALLBACK_REPLY, escalated=True)
 
         turn_cost += _response_cost(provider, response)
-        await _record_usage(conversation_id, provider, response)
         usage.add(provider, response)
 
         # ---- tool_use
@@ -441,26 +440,6 @@ async def _mark_budget_exhausted(conversation_id: uuid.UUID) -> None:
             state = dict(conversation.state)
             state["budget_exhausted"] = True
             conversation.state = state
-
-
-async def _record_usage(conversation_id: uuid.UUID, provider, response) -> None:  # type: ignore[no-untyped-def]
-    try:
-        cost = _response_cost(provider, response)
-        async with get_session() as session:
-            session.add(
-                LLMUsage(
-                    tenant_id=get_current_tenant_id(),
-                    conversation_id=conversation_id,
-                    provider=provider.provider_name,
-                    model=response.model,
-                    input_tokens=response.usage.input_tokens,
-                    output_tokens=response.usage.output_tokens,
-                    latency_ms=response.latency_ms,
-                    cost_usd=cost,
-                )
-            )
-    except Exception:
-        log.warning("llm_usage_record_failed")  # best-effort: nunca interrumpe la respuesta
 
 
 def _resolved_model(app_settings: AppSettings | None, spec, env_model: str) -> str:  # type: ignore[no-untyped-def]
