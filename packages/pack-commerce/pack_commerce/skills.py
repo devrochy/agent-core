@@ -299,7 +299,10 @@ class LeadSkill(BaseSkill):
         return {"lead_id": lead_id, "status": "created"}
 
     async def calificar_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        score = max(1, min(10, int(arguments.get("score", 0))))
+        try:
+            score = max(1, min(10, int(arguments.get("score", 0))))
+        except (TypeError, ValueError):
+            return {"error": "score inválido: debe ser un número entre 1 y 10."}
         async with get_session() as session:
             lead = (
                 await session.execute(
@@ -631,6 +634,8 @@ class OrderSkill(BaseSkill):
         rows: list[dict[str, Any]] = []
         subtotal = 0.0
         for item in items:
+            if not isinstance(item, dict):
+                return {"error": "Cada producto de la cotización debe traer variant_id y quantity."}
             variant_id = str(item.get("variant_id", ""))
             try:
                 quantity = int(item.get("quantity", 0))
@@ -855,6 +860,12 @@ class OrderSkill(BaseSkill):
         payment_method = str(arguments.get("payment_method", ""))
         delivery_method = str(arguments.get("delivery_method", ""))
         customer_data = arguments.get("customer_data") or {}
+        if not isinstance(customer_data, dict):
+            return {
+                "error": "Faltan datos de entrega",
+                "missing_fields": ["full_name", "id_document", "address", "municipality", "city"],
+                "hint": "Pide al cliente esos datos antes de confirmar el pedido.",
+            }
         config = await _plugin_config()
 
         if payment_method not in PAYMENT_METHODS:
@@ -1003,6 +1014,8 @@ class OrderSkill(BaseSkill):
         items = arguments.get("items") or []
         if not items or not isinstance(items, list):
             return {"error": "Necesito al menos un producto para agregar."}
+        if any(not isinstance(item, dict) for item in items):
+            return {"error": "Cada producto a agregar debe traer variant_id y quantity."}
         if _parse_uuid(order_id) is None:
             return {"error": "Pedido no encontrado."}
 
