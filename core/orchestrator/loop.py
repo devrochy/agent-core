@@ -400,6 +400,10 @@ async def _historical_tool_results(conversation_id: uuid.UUID) -> list[dict[str,
         result = await session.execute(
             select(AuditLog.output)
             .where(
+                # tenant_id explícito -- defensa en profundidad además de RLS,
+                # mismo criterio que el resto de queries sensibles del repo
+                # (auditor-multitenant, 2026-09-11).
+                AuditLog.tenant_id == get_current_tenant_id(),
                 AuditLog.conversation_id == conversation_id,
                 AuditLog.actor.like("tool:%"),
                 AuditLog.output.is_not(None),
