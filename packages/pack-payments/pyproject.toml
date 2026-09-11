@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pack-payments"
+version = "0.1.0"
+description = "Pack de pagos en línea (Wompi) para agent-core, ADR-0023"
+requires-python = ">=3.12"
+dependencies = ["httpx>=0.27"]
+
+[project.entry-points."agent_core.plugins"]
+pack_payments = "pack_payments.module:PaymentsModule"
+
+[tool.setuptools.packages.find]
+include = ["pack_payments*"]
+
+[tool.agent_core.plugin]
+# Manifest del pack (ADR-0019). Allowlist de dominios de red: API de Wompi.
+network = ["production.wompi.co", "sandbox.wompi.co", "checkout.wompi.co"]
+
+# entidades que este pack gestiona (para el wizard de importación)
+[tool.agent_core.plugin.entities]
+pack_payments_transactions = ["reference", "amount", "currency", "status"]
