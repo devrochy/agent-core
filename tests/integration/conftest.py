@@ -57,10 +57,15 @@ class FakeResponse:
 
 class FakeProvider:
     provider_name = "fake"
+    pricing_per_mtok = (0.0, 0.0)
 
     def __init__(self, recorded: list[str], delay_s: float = 0.0) -> None:
         self._recorded = recorded
         self._delay = delay_s
+
+    def estimate_cost_usd(self, input_tokens: int, output_tokens: int) -> float:
+        cin, cout = self.pricing_per_mtok
+        return (input_tokens * cin + output_tokens * cout) / 1_000_000
 
     async def generate(self, **kwargs: Any) -> FakeResponse:
         import asyncio

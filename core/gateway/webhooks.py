@@ -171,7 +171,7 @@ async def _receive_for_tenant(
 
         redis = get_redis()
         for message in messages:
-            if not await claim_message_once(message.provider, message.external_message_id):
+            if not await claim_message_once(tenant_id, message.provider, message.external_message_id):
                 duplicates += 1
                 continue
 

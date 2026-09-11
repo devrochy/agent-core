@@ -327,6 +327,14 @@ class Escalation(Base):
 
 # ---------------------------------------------------------------- observabilidad
 class LLMUsage(Base):
+    """Legacy (Sprint 2): fuente de facturación real es UsageLedger (ADR-0008).
+
+    Ya no se escribe (retirado 2026-09-11, ver docs/ROADMAP.md — deuda de
+    Sprint 2). El modelo queda mapeado para no perder metadata/histórico
+    del schema hasta que se decida la retención de los datos viejos y se
+    dé de baja la tabla con una migración.
+    """
+
     __tablename__ = "llm_usage"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
