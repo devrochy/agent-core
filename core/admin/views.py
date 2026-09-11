@@ -53,7 +53,7 @@ from core.gateway.connections import (
 )
 from core.plugin_manager import plugin_manager
 from core.shared.crypto import get_secret_box
-from core.shared.exceptions import PluginError
+from core.shared.exceptions import PluginConfigError, PluginError
 from core.shared.logger import get_logger
 from core.shared.tenant import admin_tenants, get_current_tenant_id, tenant_scope
 
@@ -445,10 +445,16 @@ async def _ensure_pack_activated(pack: str) -> str | None:
 
     Un pack con config obligatoria y sin fila previa para el tenant actual (ej.
     nunca pasó por `tenant create --packs` ni por `/admin/plugins/<id>/configurar`)
-    no activa: `load_config` exige una fila existente. Se crea una config vacía
-    por default, mismo patrón que ya usa `onboard_tenant` (core/onboarding.py) —
-    si el schema del pack exige campos reales, la activación falla igual y el
-    error se devuelve tal cual, sin pisar una configuración real si ya existía.
+    no activa: `load_config` exige una fila existente. Se intenta una config
+    vacía por default (mismo patrón que ya usa `onboard_tenant` en
+    core/onboarding.py) para los packs cuyo schema no tiene campos obligatorios.
+
+    Si el schema SÍ exige campos reales (ej. credenciales de una pasarela de
+    pago), antes esto dejaba pasar el `ValidationError` crudo de pydantic tal
+    cual al flash del admin ("3 validation errors for PaymentsConfig...") --
+    inentendible para quien solo apretó el botón "Activar" en vez de
+    "Configurar" primero. Ahora se traduce a un mensaje accionable, sin pisar
+    una configuración real si ya existía.
     """
     if plugin_manager.is_active(pack):
         return None
@@ -465,7 +471,10 @@ async def _ensure_pack_activated(pack: str) -> str | None:
                     )
                 ).scalar_one_or_none() is not None
             if not has_config:
-                await plugin_manager.save_config(pack, {})
+                try:
+                    await plugin_manager.save_config(pack, {})
+                except PluginConfigError:
+                    return f'{pack} necesita configuración -- usá el botón "Configurar" (⚙️) primero'
         await plugin_manager.activate(pack)
         return None
     except PluginError as exc:
