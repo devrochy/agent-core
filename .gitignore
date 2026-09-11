@@ -11,6 +11,7 @@ venv/
 .ruff_cache/
 .pytest_cache/
 sdd/*.md
+sdd/.state.json
 !sdd/templates/
 .DS_Store
 .obsidian/
