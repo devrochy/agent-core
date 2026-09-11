@@ -138,8 +138,16 @@ class MiConfig(BasePluginConfig):
 
 Reglas:
 - `SecretStr` → input password. Vacío al re-guardar = conserva el valor anterior.
-- Todo se persiste **cifrado con Fernet** en `plugin_configs.config_encrypted`.
-- En runtime accedes con `self.config` (ya validado y tipado).
+- Todo se persiste **cifrado con Fernet** en `plugin_configs.config_encrypted`, con
+  `tenant_id` — cada tenant tiene su propia config del mismo plugin.
+- `self.config` (seteado por `PluginManager.activate()`) es un atajo **solo válido
+  dentro de `on_activate()`**, para el tenant que disparó la PRIMERA activación del
+  plugin en este proceso. La instancia de `BaseModule` es un singleton compartido por
+  todos los tenants (`mcp_host` es un registro global) — `self.config` fuera de
+  `on_activate()` puede tener la config de OTRO tenant. **En handlers de tools, nunca
+  uses `self.config`**: recargá con `await plugin_manager.load_config(plugin_id)`
+  (tenant-scoped por `get_current_tenant_id()`) en cada llamada, como hace
+  `pack_calendar/skills.py::_tenant_config()`.
 - Claves con prefijo `_` (ej. `_oauth_tokens`) se persisten pero NO aparecen en el form.
 
 ## 7. Skills y Tools

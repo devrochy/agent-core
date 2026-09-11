@@ -18,6 +18,7 @@ Migraciones por plugin: cada plugin puede traer su propio árbol Alembic
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import importlib.metadata
 import sys
@@ -46,6 +47,23 @@ class PluginManager:
     def __init__(self) -> None:
         self._modules: dict[str, BaseModule] = {}   # instancias detectadas
         self._active: set[str] = set()
+        self._activation_locks: dict[str, asyncio.Lock] = {}
+
+    def _activation_lock(self, plugin_id: str) -> asyncio.Lock:
+        """Un lock por plugin_id (no por tenant): serializa la PRIMERA
+        activación de cada plugin. Sin esto, dos tenants activando el mismo
+        plugin por primera vez casi al mismo tiempo pasan ambos el chequeo
+        `plugin_id in self._active` (todavía False para los dos) y compiten
+        por `mcp_host.register_skill()` -- el segundo revienta con "Skill
+        duplicada" y su except llama `mcp_host.remove_plugin()`, que borra
+        TAMBIÉN las tools que el primer tenant acababa de registrar con
+        éxito, y pisa el status global a "error" por un problema de timing
+        ajeno a la config del primer tenant."""
+        lock = self._activation_locks.get(plugin_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._activation_locks[plugin_id] = lock
+        return lock
 
     # ------------------------------------------------------------ detección
     def _ensure_plugin_paths(self) -> None:
@@ -175,36 +193,44 @@ class PluginManager:
         tenant. Sin esto, si el tenant B guardaba una config inválida, nunca
         se enteraba al activar — recién le fallaba a mitad de una conversación
         real, cuando una tool intentaba cargarla.
+
+        Todo el método corre bajo `_activation_lock(plugin_id)`: sin eso, dos
+        tenants activando el MISMO plugin por primera vez casi a la vez
+        pasarían ambos el chequeo `plugin_id in self._active` y competirían
+        por registrar en `mcp_host` -- el perdedor de la carrera rompía con
+        "Skill duplicada" y su cleanup borraba también las tools que el
+        ganador acababa de registrar con éxito.
         """
         module = self._require(plugin_id)
-        if plugin_id in self._active:
-            # ya registrado en mcp_host para otro tenant; acá solo se valida
-            # la config de ESTE tenant, sin tocar el status global del plugin
-            # ni mcp_host -- un error de config de B no puede marcar como
-            # roto lo que a A le funciona bien.
+        async with self._activation_lock(plugin_id):
+            if plugin_id in self._active:
+                # ya registrado en mcp_host para otro tenant; acá solo se
+                # valida la config de ESTE tenant, sin tocar el status
+                # global del plugin ni mcp_host -- un error de config de B
+                # no puede marcar como roto lo que a A le funciona bien.
+                try:
+                    module.config = await self.load_config(plugin_id)
+                    await self._set_status(plugin_id, "active", activated=True)
+                except Exception as exc:
+                    raise PluginError(plugin_id, f"Configuración inválida: {exc}") from exc
+                return
             try:
                 module.config = await self.load_config(plugin_id)
+                self._run_plugin_migrations(plugin_id)
+                mcp_host.begin_activation(plugin_id)
+                try:
+                    module.on_activate(mcp_host)
+                finally:
+                    mcp_host.end_activation()
+                self._active.add(plugin_id)
                 await self._set_status(plugin_id, "active", activated=True)
+                await event_bus.emit(ON_PLUGIN_ACTIVATED, plugin_id=plugin_id)
+                log.info("plugin_activated", plugin=plugin_id)
             except Exception as exc:
-                raise PluginError(plugin_id, f"Configuración inválida: {exc}") from exc
-            return
-        try:
-            module.config = await self.load_config(plugin_id)
-            self._run_plugin_migrations(plugin_id)
-            mcp_host.begin_activation(plugin_id)
-            try:
-                module.on_activate(mcp_host)
-            finally:
-                mcp_host.end_activation()
-            self._active.add(plugin_id)
-            await self._set_status(plugin_id, "active", activated=True)
-            await event_bus.emit(ON_PLUGIN_ACTIVATED, plugin_id=plugin_id)
-            log.info("plugin_activated", plugin=plugin_id)
-        except Exception as exc:
-            mcp_host.remove_plugin(plugin_id)
-            await self._set_status(plugin_id, "error", error=str(exc))
-            log.exception("plugin_activation_failed", plugin=plugin_id)
-            raise PluginError(plugin_id, f"Activación falló: {exc}") from exc
+                mcp_host.remove_plugin(plugin_id)
+                await self._set_status(plugin_id, "error", error=str(exc))
+                log.exception("plugin_activation_failed", plugin=plugin_id)
+                raise PluginError(plugin_id, f"Activación falló: {exc}") from exc
 
     async def deactivate(self, plugin_id: str, status: str = "disabled", reason: str = "") -> None:
         module = self._modules.get(plugin_id)

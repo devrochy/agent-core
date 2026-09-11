@@ -1,12 +1,19 @@
 """Activación de plugins: registro en mcp_host es global (una vez por proceso),
 pero la config de cada tenant se valida en CADA `activate()` (ROADMAP: deuda de
-`PluginManager.module.config` cacheado sin scope de tenant, cerrada 2026-09-11).
+`PluginManager.module.config` cacheado sin scope de tenant, fila 120, PARCIAL
+2026-09-11 — NO cerrada del todo: `self.config` sigue siendo un atributo de
+instancia compartido entre tenants, solo válido dentro de `on_activate()`.
+Ver la advertencia en `docs/PLUGIN-CONTRACT.md` § 6 y `docs/audit/` de esta
+fecha. Este test cubre la parte que sí se corrigió: la config de CADA tenant
+se valida al activar, no solo la del primero.
 
 Sin mocks de BD: se monkeypatchea `load_config`/`_run_plugin_migrations`/
 `_set_status` directamente sobre la instancia, evitando get_session().
 """
 
 from __future__ import annotations
+
+import asyncio
 
 import pytest
 
@@ -110,3 +117,30 @@ async def test_second_activate_surfaces_bad_config_without_touching_global_statu
 
     # on_activate() no debió re-correr pese al error de B
     assert module.activate_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_activation_does_not_wipe_out_winner():
+    """Dos tenants activando el mismo plugin por primera vez casi a la vez
+    (hallazgo del auditor-multitenant, 2026-09-11): sin el lock por
+    plugin_id, ambos pasaban el chequeo `plugin_id in self._active`
+    (todavía False para los dos) y competían por `mcp_host.register_skill()`
+    -- el perdedor de la carrera rompía con "Skill duplicada" y su cleanup
+    (`mcp_host.remove_plugin`) borraba TAMBIÉN las tools que el ganador
+    acababa de registrar con éxito, y pisaba el status global a "error" por
+    un problema de timing ajeno a la config de nadie."""
+    manager, module = _manager_with_module()
+
+    async def _fake_load_config(plugin_id: str):
+        await asyncio.sleep(0.01)  # fuerza el interleaving entre las 2 corrutinas
+        return None
+
+    manager.load_config = _fake_load_config  # type: ignore[method-assign]
+
+    results = await asyncio.gather(
+        manager.activate("fake_pack"), manager.activate("fake_pack"), return_exceptions=True
+    )
+
+    assert all(r is None for r in results), results
+    assert module.activate_calls == 1, "on_activate() debe correr una sola vez, sin importar la carrera"
+    assert "fake_skill" in plugin_manager_mod.mcp_host._skills, "la skill del ganador no debe desaparecer"
