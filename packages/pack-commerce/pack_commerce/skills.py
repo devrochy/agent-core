@@ -859,6 +859,13 @@ class OrderSkill(BaseSkill):
             if not items:
                 return {"error": "La cotización no tiene productos."}
 
+            threshold = getattr(config, "monto_alto_threshold", 1_000_000) or 1_000_000
+            if _float(quote.total) > threshold:
+                return {
+                    "error": "El total supera el monto máximo permitido y requiere aprobación humana.",
+                    "escalate": True,
+                }
+
         complete, missing = _validate_delivery_data(customer_data)
         if not complete:
             return {
