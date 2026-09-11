@@ -2,7 +2,9 @@
   "name": "venta-agregar-item-pedido-23",
   "requires_plugins": ["pack_commerce"],
   "conversation": [
-    {"role": "user", "content": "Agrega 1 unidad más del producto A-003 a mi pedido en curso."}
+    {"role": "user", "content": "Confirmo mi pedido de 2 unidades del A-001, pago contra entrega, envío a domicilio."},
+    {"role": "assistant", "content": "¡Listo! Tu pedido #OC-0042 quedó confirmado: 2 unidades del A-001, pago contra entrega, a domicilio."},
+    {"role": "user", "content": "Agrega 1 unidad más del producto A-003 a mi pedido #OC-0042."}
   ],
   "assertions": {
     "must_call_tool": "agregar_item_pedido",

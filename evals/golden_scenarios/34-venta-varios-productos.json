@@ -2,6 +2,8 @@
   "name": "venta-varios-productos-29",
   "requires_plugins": ["pack_commerce"],
   "conversation": [
+    {"role": "user", "content": "¿Tienen el A-001 y el A-002?"},
+    {"role": "assistant", "content": "¡Sí! Ambos productos están disponibles ahora mismo: A-001 y A-002."},
     {"role": "user", "content": "Quiero 3 del A-001 y 2 del A-002, ¿cuánto me sale todo?"}
   ],
   "assertions": {
