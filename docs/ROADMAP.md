@@ -128,5 +128,10 @@ documentos, no con promesas.
 | 2026-08-26 | Middleware usa el primer tenant del admin sin selector | Auditoría cierre Sprint 3 | media — selector de tenant en sesión |
 | 2026-08-26 | `turn_gate._tenant_sems` sin eviction; provider de embeddings singleton | Auditoría cierre Sprint 3 | baja — evictar / no cachear por tenant |
 | 2026-08-26 | Extracción a `pack-commerce`: rename de 13 tablas + `custom jsonb` (ADR-0004) | Sprint 3 (nota) | alta — Sprint 4 |
+| 2026-09-10 | El LLM a veces no llama la tool esperada en el primer turno (evals `venta-consultar-inventario`/`venta-recomendar-producto`) ni respeta el límite de longitud en `escalamiento-monto-alto` | Evals, sesión 2026-09-10 | media — requiere ajuste de prompt/playbook, no es bug de código |
+| 2026-09-10 | `evals-nightly.yml`: infraestructura arreglada (faltaba `packages/contracts`, clave Fernet inválida) pero nunca se confirmó una corrida completa del golden set (35 escenarios) | Sesión 2026-09-10 | baja — dispararlo y revisar |
+| 2026-09-10 | `pack_commerce_categories` sin `deleted_at` — no sigue el patrón de soft-delete del resto del proyecto (invariante nº 8 de `CLAUDE.md`) | Fix de categorías, sesión 2026-09-10 | media — requiere `/db-migration` |
+| 2026-09-10 | `sdd/` (docs autogeneradas de un tenant de prueba obsoleto) bloquea portar 4 sub-agentes de OpenCode (`customizer`, `optimizer`, `plugin-dev`, `migrator`) a `.claude/agents/` | Port de tooling, sesión 2026-09-10 | baja — decidir limpiar/mover/regenerar `sdd/` antes de portarlos |
+| 2026-09-10 | `.opencode/` y `.claude/` conviven en paralelo sin que quede definido cuál es la fuente de verdad | Port de tooling, sesión 2026-09-10 | baja — riesgo de que diverjan si se edita uno sin el otro |
 
 Cada vez que un onboarding requiera escribir código, se anota aquí: es un pack incompleto.
