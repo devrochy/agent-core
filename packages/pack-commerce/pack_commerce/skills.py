@@ -11,6 +11,7 @@ agent-core. Reglas de oro:
 from __future__ import annotations
 
 import re
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -58,6 +59,25 @@ def _now() -> datetime:
 
 def _normalize_phone(phone: str) -> str:
     return re.sub(r"[^\d]", "", phone).lstrip("0")
+
+
+def _parse_uuid(value: str) -> uuid.UUID | None:
+    """Parsea un ID que el LLM pasó como argumento. `None` si no es un UUID válido.
+
+    Encontrado en vivo (tenant yopoldo, 2026-09-11): el LLM inventó
+    `variant_id="pollo_broaster"` en vez de usar el UUID real que
+    `consultar_inventario` acababa de devolver. Sin validar esto ANTES de
+    consultar, el string inválido llegaba directo a Postgres
+    (`asyncpg.exceptions.DataError`), una excepción no manejada que el core
+    interpreta como una falla real del plugin y lo desactiva -- GLOBALMENTE,
+    para todos los tenants (`PluginRecord.status` no es por-tenant). Un
+    argumento inválido de un LLM (que va a pasar periódicamente) no debería
+    poder tumbar el pack entero: se valida acá y se devuelve un error que el
+    LLM puede corregir en su propio turno, en vez de una excepción."""
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        return None
 
 
 async def _plugin_config() -> Any:  # type: ignore[no-untyped-def]
@@ -147,6 +167,8 @@ async def _transfer_safe_append() -> str:
 
 
 async def _get_variant_with_stock(variant_id) -> dict[str, Any] | None:  # type: ignore[no-untyped-def]
+    if _parse_uuid(variant_id) is None:
+        return None
     async with get_session() as session:
         result = await session.execute(
             select(ProductVariant, Product, Inventory)
@@ -277,7 +299,10 @@ class LeadSkill(BaseSkill):
         return {"lead_id": lead_id, "status": "created"}
 
     async def calificar_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        score = max(1, min(10, int(arguments.get("score", 0))))
+        try:
+            score = max(1, min(10, int(arguments.get("score", 0))))
+        except (TypeError, ValueError):
+            return {"error": "score inválido: debe ser un número entre 1 y 10."}
         async with get_session() as session:
             lead = (
                 await session.execute(
@@ -413,7 +438,7 @@ class CatalogSkill(BaseSkill):
         product_id = str(arguments.get("product_id", "")).strip()
         async with get_session() as session:
             product = None
-            if product_id:
+            if product_id and _parse_uuid(product_id) is not None:
                 product = await session.get(Product, product_id)
             if product is None or product.category_id is None:
                 return {"recommendations": []}
@@ -609,6 +634,8 @@ class OrderSkill(BaseSkill):
         rows: list[dict[str, Any]] = []
         subtotal = 0.0
         for item in items:
+            if not isinstance(item, dict):
+                return {"error": "Cada producto de la cotización debe traer variant_id y quantity."}
             variant_id = str(item.get("variant_id", ""))
             try:
                 quantity = int(item.get("quantity", 0))
@@ -679,6 +706,8 @@ class OrderSkill(BaseSkill):
 
     async def aplicar_promocion(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         quote_id = str(arguments.get("quote_id", ""))
+        if _parse_uuid(quote_id) is None:
+            return {"error": "Cotización no encontrada."}
         async with get_session() as session:
             quote = await session.get(Quote, quote_id)
             if quote is None:
@@ -831,6 +860,12 @@ class OrderSkill(BaseSkill):
         payment_method = str(arguments.get("payment_method", ""))
         delivery_method = str(arguments.get("delivery_method", ""))
         customer_data = arguments.get("customer_data") or {}
+        if not isinstance(customer_data, dict):
+            return {
+                "error": "Faltan datos de entrega",
+                "missing_fields": ["full_name", "id_document", "address", "municipality", "city"],
+                "hint": "Pide al cliente esos datos antes de confirmar el pedido.",
+            }
         config = await _plugin_config()
 
         if payment_method not in PAYMENT_METHODS:
@@ -839,6 +874,8 @@ class OrderSkill(BaseSkill):
             }
         if delivery_method not in DELIVERY_METHODS:
             return {"error": "Método de entrega no válido. Usa 'domicilio' o 'recoger_en_tienda'."}
+        if _parse_uuid(quote_id) is None:
+            return {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
 
         async with get_session() as session:
             quote = await session.get(Quote, quote_id)
@@ -977,6 +1014,10 @@ class OrderSkill(BaseSkill):
         items = arguments.get("items") or []
         if not items or not isinstance(items, list):
             return {"error": "Necesito al menos un producto para agregar."}
+        if any(not isinstance(item, dict) for item in items):
+            return {"error": "Cada producto a agregar debe traer variant_id y quantity."}
+        if _parse_uuid(order_id) is None:
+            return {"error": "Pedido no encontrado."}
 
         async with get_session() as session:
             order = await session.get(Order, order_id)
