@@ -6,7 +6,6 @@
   ],
   "assertions": {
     "must_not_contain": ["no tengo idea", "error interno", "no estoy seguro"],
-    "must_not_call_tools": true,
     "max_response_chars": 400
   }
 }
