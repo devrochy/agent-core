@@ -66,6 +66,28 @@ o `/admin/tenants/nuevo`), nunca código por cliente.
 - Antes de cerrar cualquier tanda de cambios: correr el subagente `auditor-multitenant`.
 - Un cambio no está completo si `ruff check` && `pytest` no pasan.
 
+## Herramientas de asistentes IA (OpenCode + Claude Code)
+
+Este repo se trabaja con dos asistentes: OpenCode (`.opencode/`) y Claude Code
+(`.claude/`). Para no mantener el mismo contenido dos veces:
+
+- **Skills** (`skills/*/SKILL.md`): `.opencode/skills/` son symlinks hacia
+  `.claude/skills/` — `.claude/` es la fuente de verdad, editar siempre ahí.
+- **Sub-agentes** (`agents/*.md`): NO se symlinkean — el frontmatter difiere
+  entre herramientas (`mode`/`permission` en OpenCode vs `tools`/`model` en
+  Claude Code). Existen en ambos lados: `auditor-multitenant`, `arquitecto`,
+  `eval-runner`, `customizer`, `optimizer`, `plugin-dev`, `migrator`. Al
+  cambiar las instrucciones de uno, replicar el cambio a mano en su par.
+  `.opencode/agents/migrador.md` (migración histórica CULTO/FORMOTO) no
+  tiene par en `.claude/` — es intencional, trabajo puntual ya cerrado.
+- **Guardas de comandos peligrosos**: `.opencode/plugins/guards.ts` (plugin
+  TypeScript) y `.claude/hooks/guards.py` (hook Python) implementan la misma
+  lógica en dos lenguajes — no se puede compartir código entre ambos; si
+  cambian los patrones bloqueados o las reglas de migraciones, replicar el
+  cambio a mano en los dos archivos.
+- **Permisos**: `opencode.json` y `.claude/settings.json` — mismo criterio,
+  replicar los cambios de allowlist/denylist a mano en ambos.
+
 ## Estado actual
 
 Ver `docs/ROADMAP.md` para el sprint activo y `docs/inventory.md` para la clasificación

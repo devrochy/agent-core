@@ -1,0 +1,1 @@
+../../../.claude/skills/desplegar-test/SKILL.md
