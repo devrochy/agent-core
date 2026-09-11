@@ -78,13 +78,13 @@ class _TurnUsage:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     escalated: bool = False
 
-    def add(self, response) -> None:  # type: ignore[no-untyped-def]
+    def add(self, provider, response) -> None:  # type: ignore[no-untyped-def]
         self.input_tokens += response.usage.input_tokens
         self.output_tokens += response.usage.output_tokens
         self.cached_tokens += getattr(response.usage, "cache_read_tokens", 0)
         self.cached_tokens += getattr(response.usage, "cache_write_tokens", 0)
         self.latency_ms += response.latency_ms
-        self.cost_usd += _response_cost(response)
+        self.cost_usd += _response_cost(provider, response)
         self.model = response.model or self.model
 
 
@@ -239,7 +239,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                     model=response.model,
                     tokens_in=response.usage.input_tokens,
                     tokens_out=response.usage.output_tokens,
-                    cost_usd=_response_cost(response),
+                    cost_usd=_response_cost(provider, response),
                 )
         except LLMProviderError:
             log.exception("llm_call_failed", conversation_id=str(conversation_id))
@@ -248,9 +248,9 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             await _write_usage_ledger(conversation_id, spec, usage, turn_span)
             return TurnResult(text=FALLBACK_REPLY, escalated=True)
 
-        turn_cost += _response_cost(response)
-        await _record_usage(conversation_id, provider.provider_name, response)
-        usage.add(response)
+        turn_cost += _response_cost(provider, response)
+        await _record_usage(conversation_id, provider, response)
+        usage.add(provider, response)
 
         # ---- tool_use
         if response.stop_reason == "tool_use":
@@ -422,12 +422,15 @@ async def _finish_turn(
     )
 
 
-def _response_cost(response) -> float:  # type: ignore[no-untyped-def]
-    """Costo USD de una respuesta según el pricing vigente."""
-    from core.llm.openai_compatible import PRICING as OPENAI_PRICING
+def _response_cost(provider, response) -> float:  # type: ignore[no-untyped-def]
+    """Costo USD de una respuesta según el pricing del provider que la sirvió.
 
-    cin, cout = OPENAI_PRICING.get(response.model, (0.0, 0.0))
-    return (response.usage.input_tokens * cin + response.usage.output_tokens * cout) / 1_000_000
+    Antes esto importaba SIEMPRE el pricing de openai_compatible, sin mirar
+    qué provider respondió. Con Anthropic activo, response.model nunca
+    matcheaba ese dict y el costo quedaba en $0.00 — silenciosamente mal en
+    usage_ledger, la fuente de facturación (ADR-0008).
+    """
+    return provider.estimate_cost_usd(response.usage.input_tokens, response.usage.output_tokens)
 
 
 async def _mark_budget_exhausted(conversation_id: uuid.UUID) -> None:
@@ -440,18 +443,15 @@ async def _mark_budget_exhausted(conversation_id: uuid.UUID) -> None:
             conversation.state = state
 
 
-async def _record_usage(conversation_id: uuid.UUID, provider_name: str, response) -> None:  # type: ignore[no-untyped-def]
+async def _record_usage(conversation_id: uuid.UUID, provider, response) -> None:  # type: ignore[no-untyped-def]
     try:
-        from core.llm.openai_compatible import PRICING as OPENAI_PRICING
-
-        cin, cout = OPENAI_PRICING.get(response.model, (0.0, 0.0))
-        cost = (response.usage.input_tokens * cin + response.usage.output_tokens * cout) / 1_000_000
+        cost = _response_cost(provider, response)
         async with get_session() as session:
             session.add(
                 LLMUsage(
                     tenant_id=get_current_tenant_id(),
                     conversation_id=conversation_id,
-                    provider=provider_name,
+                    provider=provider.provider_name,
                     model=response.model,
                     input_tokens=response.usage.input_tokens,
                     output_tokens=response.usage.output_tokens,

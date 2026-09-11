@@ -18,14 +18,24 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections import OrderedDict
 from collections.abc import Awaitable
 from typing import Any
 
 from core.config import get_settings
 from core.memory.working import get_redis
 
+# Cota simple del cache de semáforos por tenant: un proceso de larga vida no
+# debe acumular un entry para siempre por cada tenant_id distinto que haya
+# visto alguna vez (deuda registrada en el ROADMAP). Solo se evictan tenants
+# sin un turno activo/en cola ahora mismo -- _active_tenants es la guarda.
+_TENANT_SEM_CACHE_MAX = 500
+
 _global_sem: asyncio.Semaphore | None = None
-_tenant_sems: dict[str, asyncio.Semaphore] = {}
+_tenant_sems: OrderedDict[str, asyncio.Semaphore] = OrderedDict()
+# Refcount, no set: dos turnos concurrentes del mismo tenant no deben
+# pisarse -- el segundo turno en terminar es el que debe limpiar la marca.
+_active_tenants: dict[str, int] = {}
 
 
 def _ensure_global() -> asyncio.Semaphore:
@@ -38,10 +48,27 @@ def _ensure_global() -> asyncio.Semaphore:
 def _tenant_sem(tenant_id: uuid.UUID) -> asyncio.Semaphore:
     key = str(tenant_id)
     sem = _tenant_sems.get(key)
-    if sem is None:
-        sem = asyncio.Semaphore(get_settings().max_turns_per_tenant)
-        _tenant_sems[key] = sem
+    if sem is not None:
+        _tenant_sems.move_to_end(key)
+        return sem
+    sem = asyncio.Semaphore(get_settings().max_turns_per_tenant)
+    _tenant_sems[key] = sem
+    _evict_idle()
     return sem
+
+
+def _evict_idle() -> None:
+    """Poda entries LRU por encima de la cota, salteando tenants con un
+    turno activo ahora (nunca se evicta un semáforo que alguien está
+    esperando o sosteniendo)."""
+    if len(_tenant_sems) <= _TENANT_SEM_CACHE_MAX:
+        return
+    for key in list(_tenant_sems.keys()):
+        if len(_tenant_sems) <= _TENANT_SEM_CACHE_MAX:
+            return
+        if key in _active_tenants:
+            continue
+        del _tenant_sems[key]
 
 
 async def run_turn(tenant_id: uuid.UUID | str | None, coro: Awaitable[Any]) -> Any:
@@ -57,10 +84,17 @@ async def run_turn(tenant_id: uuid.UUID | str | None, coro: Awaitable[Any]) -> A
     except Exception:
         pass  # el contador es observabilidad; el gate real son los semáforos
 
+    key = str(tid)
+    _active_tenants[key] = _active_tenants.get(key, 0) + 1
     try:
         async with _ensure_global(), _tenant_sem(tid):
             return await coro
     finally:
+        remaining = _active_tenants.get(key, 1) - 1
+        if remaining <= 0:
+            _active_tenants.pop(key, None)
+        else:
+            _active_tenants[key] = remaining
         try:
             await r.decr(counter_key)
         except Exception:

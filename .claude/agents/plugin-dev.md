@@ -18,11 +18,9 @@ Eres el agente **Plugin-Dev** de un proyecto agent-core.
 
 ## Proceso
 
-1. `agent-core plugin scaffold mod-<nombre>` genera la estructura base — **ojo**: hoy
-   ese comando todavía genera en `plugins/mod-<nombre>/` (deuda de la CLI, no
-   actualizada tras la extracción a `packages/pack-*`). Si el pack es nuevo código de
-   producto (no un plugin heredado en migración), movés la estructura generada a
-   `packages/pack-<nombre>/pack_<nombre>/` antes de seguir — no la dejes en `plugins/`.
+1. `agent-core plugin scaffold <nombre>` genera la estructura base directo en
+   `packages/pack-<nombre>/pack_<nombre>/` (pyproject.toml + config.py + skills.py +
+   module.py, mismo layout que `pack-commerce`/`pack-calendar`).
 2. Implementa en este orden:
    - `config.py`: schema Pydantic (el panel genera el formulario solo). SecretStr para secretos.
    - `skills.py`: BaseSkill con tools (JSON Schema + handler async). Descripciones de tools
