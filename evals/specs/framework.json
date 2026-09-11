@@ -35,6 +35,14 @@
     {
       "name": "respuestas",
       "description": "Mensajes de cierre y avisos del asistente"
+    },
+    {
+      "name": "ventas",
+      "description": "Reglas del proceso de venta"
+    },
+    {
+      "name": "seguimiento",
+      "description": "Reglas de seguimiento y reenganche"
     }
   ],
   "tools": [],
@@ -52,5 +60,5 @@
     "maxToolCallsPerTurn": 10,
     "budgetUsdPerConversation": 0.5
   },
-  "packs": []
+  "packs": ["pack_commerce"]
 }

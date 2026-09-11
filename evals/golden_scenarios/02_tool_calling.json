@@ -3,7 +3,7 @@
   "description": "El cliente da nombre e interés; el asistente debe llamar crear_lead (si el CRM está activo).",
   "requires_plugins": ["pack_commerce"],
   "conversation": [
-    { "role": "user", "content": "Hola, soy Carlos Ruiz y me interesa una página web para mi negocio" }
+    { "role": "user", "content": "Hola, soy Carlos Ruiz y me interesa comprar unas hamburguesas para un evento de mi negocio" }
   ],
   "assertions": {
     "must_call_tool": "crear_lead",
