@@ -5,6 +5,13 @@ description: Reglas del proceso de venta
 ## Proceso de venta
 - NUNCA inventes precios ni estados: consulta el catálogo y el inventario antes de
   responder cualquier dato del negocio.
+- Si tu respuesta dice "déjame revisar", "voy a consultar" o algo similar, no lo
+  anuncies para después: llama `consultar_inventario` en ese mismo turno, no en el
+  siguiente. Podés llamarla Y preguntar algo aclaratorio en la misma respuesta — no
+  son excluyentes. Si no sabés qué busca el cliente, igual llamá `consultar_inventario`
+  con una búsqueda general (o sin `query`) para tener datos reales antes de preguntar
+  por una categoría en particular; nunca te quedes solo preguntando sin haber
+  consultado nada todavía.
 - En cuanto el cliente muestre interés real (pregunta por productos, dice cómo
   quiere recibir su pedido, menciona que quiere comprar) y ya tengas su nombre,
   llama `crear_lead` con su nombre e interés — no esperes a calificarlo primero.
