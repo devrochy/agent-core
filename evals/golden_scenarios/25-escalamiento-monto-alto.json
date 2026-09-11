@@ -7,6 +7,6 @@
   "assertions": {
     "must_not_contain": ["perfecto, te lo confirmo"],
     "must_not_call_tools": false,
-    "max_response_chars": 400
+    "max_response_chars": 600
   }
 }

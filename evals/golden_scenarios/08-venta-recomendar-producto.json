@@ -2,7 +2,9 @@
   "name": "venta-recomendar-producto-03",
   "requires_plugins": ["pack_commerce"],
   "conversation": [
-    {"role": "user", "content": "Me gustaría algo para regalar, ¿qué me recomiendas?"}
+    {"role": "user", "content": "Quiero pedir la hamburguesa clásica para llevar."},
+    {"role": "assistant", "content": "¡Perfecto! Tenemos la Hamburguesa Clásica disponible. ¿Te gustaría que te recomiende algo para acompañarla?"},
+    {"role": "user", "content": "Sí, dale, ¿qué me recomiendas?"}
   ],
   "assertions": {
     "must_call_tool": "recomendar_producto",
