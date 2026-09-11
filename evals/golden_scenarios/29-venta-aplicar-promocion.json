@@ -2,7 +2,9 @@
   "name": "venta-aplicar-promocion-24",
   "requires_plugins": ["pack_commerce"],
   "conversation": [
-    {"role": "user", "content": "¿Hay alguna promoción vigente que aplique a mi cotización?"}
+    {"role": "user", "content": "Quiero cotizar 3 unidades del A-001."},
+    {"role": "assistant", "content": "Tu cotización #COT-010 por 3 unidades del A-001 queda en $54.000."},
+    {"role": "user", "content": "¿Hay alguna promoción vigente que aplique a mi cotización #COT-010?"}
   ],
   "assertions": {
     "must_call_tool": "aplicar_promocion",

@@ -2,7 +2,9 @@
   "name": "venta-generar-cotizacion-04",
   "requires_plugins": ["pack_commerce"],
   "conversation": [
-    {"role": "user", "content": "Quiero pedir 2 unidades del producto con SKU A-001. ¿Me haces la cotización?"}
+    {"role": "user", "content": "¿Tienen el producto con SKU A-001?"},
+    {"role": "assistant", "content": "¡Sí! El producto A-001 está disponible ahora mismo. ¿Cuántas unidades quieres?"},
+    {"role": "user", "content": "Quiero 2 unidades del A-001. ¿Me haces la cotización?"}
   ],
   "assertions": {
     "must_call_tool": "generar_cotizacion",

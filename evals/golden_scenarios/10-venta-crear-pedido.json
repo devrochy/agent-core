@@ -2,7 +2,9 @@
   "name": "venta-crear-pedido-confirma-05",
   "requires_plugins": ["pack_commerce"],
   "conversation": [
-    {"role": "user", "content": "Acepto la cotización, confirma mi pedido. Pago contra entrega, envío a mi casa."}
+    {"role": "user", "content": "Quiero cotizar 2 unidades del producto A-001."},
+    {"role": "assistant", "content": "Tu cotización #COT-001 por 2 unidades del A-001 queda en $40.000. ¿La confirmas?"},
+    {"role": "user", "content": "Acepto la cotización #COT-001, confirma mi pedido. Pago contra entrega, envío a mi casa. Mi nombre es Pedro Gómez, cédula 1020304050, dirección Calle 10 #5-20, Manizales, Caldas, teléfono 3009998877."}
   ],
   "assertions": {
     "must_call_tool": "crear_pedido",

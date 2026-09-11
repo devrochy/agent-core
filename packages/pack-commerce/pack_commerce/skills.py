@@ -192,6 +192,7 @@ class LeadSkill(BaseSkill):
                     "properties": {
                         "name": {"type": "string", "description": "Nombre completo del prospecto"},
                         "email": {"type": "string", "description": "Email si lo dio"},
+                        "phone": {"type": "string", "description": "Teléfono si lo dio"},
                         "interest": {"type": "string", "description": "Qué producto/servicio le interesa"},
                     },
                     "required": ["name", "interest"],
@@ -216,12 +217,13 @@ class LeadSkill(BaseSkill):
             ),
             MCPTool(
                 name="actualizar_lead",
-                description="Actualiza datos del lead existente de esta conversación (nombre, email, interés, estado).",
+                description="Actualiza datos del lead existente de esta conversación (nombre, email, teléfono, interés, estado).",
                 parameters={
                     "type": "object",
                     "properties": {
                         "name": {"type": "string", "description": "Nombre completo del prospecto"},
                         "email": {"type": "string"},
+                        "phone": {"type": "string", "description": "Teléfono si lo dio"},
                         "interest": {"type": "string"},
                         "status": {
                             "type": "string",
@@ -259,6 +261,7 @@ class LeadSkill(BaseSkill):
                 conversation_id=context.conversation_id,
                 name=arguments.get("name"),
                 email=arguments.get("email"),
+                phone=arguments.get("phone"),
                 interest=arguments.get("interest", ""),
                 idempotency_key=context.idempotency_key,
             )
@@ -307,6 +310,8 @@ class LeadSkill(BaseSkill):
                 lead.name = str(arguments["name"])
             if arguments.get("email"):
                 lead.email = str(arguments["email"])
+            if arguments.get("phone"):
+                lead.phone = str(arguments["phone"])
             if arguments.get("interest"):
                 lead.interest = str(arguments["interest"])
             if arguments.get("status"):

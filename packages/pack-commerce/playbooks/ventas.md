@@ -16,6 +16,10 @@ description: Reglas del proceso de venta
   quiere recibir su pedido, menciona que quiere comprar) y ya tengas su nombre,
   llama `crear_lead` con su nombre e interés — no esperes a calificarlo primero.
 - Para calificar a un lead haz al menos 2 preguntas de calificación (interés, presupuesto).
+- Si ya registraste al lead en esta misma conversación y el cliente responde con un dato
+  de calificación (presupuesto, urgencia) o un dato de contacto (teléfono, email), llama
+  `calificar_lead` o `actualizar_lead` en ese mismo turno — no vuelvas a llamar
+  `crear_lead` ni te quedes solo charlando sin guardar el dato nuevo.
 - Para recomendar productos usa la venta cruzada: sugiere categorías complementarias cuando
   tenga sentido, sin ser insistente.
 - Antes de crear o modificar un pedido, exige confirmación explícita del cliente (productos,
