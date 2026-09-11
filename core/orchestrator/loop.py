@@ -23,7 +23,7 @@ from sqlalchemy import select
 from core.agents.responses import load_response
 from core.agents.spec import enabled_packs, load_active_spec
 from core.config import get_settings
-from core.db.models import AppSettings, Conversation, Customer, Message, UsageLedger
+from core.db.models import AppSettings, AuditLog, Conversation, Customer, Message, UsageLedger
 from core.db.session import get_session
 from core.llm import resolve_provider
 from core.llm.difficulty_router import route_model
@@ -156,6 +156,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # ---------------- 1. Memoria y contexto
     history = await _load_history(conversation_id)
     recent_context = " ".join(m.content for m in history[-6:] if m.content)
+    history_tool_results = await _historical_tool_results(conversation_id)
 
     profile = await entity_memory.get_profile(customer.id)
     recalled = await vector_memory.recall(latest_message, customer_id=customer.id)
@@ -279,7 +280,18 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             return TurnResult(text=ESCALATION_REPLY, escalated=True)
 
         # ---- end_turn: guardrails
-        verdict = await run_guardrails(response.content, all_tool_results, enabled)
+        # Se siembra con tool_results de turnos ANTERIORES (audit_log) + los del
+        # turno actual -- sin esto, un guardrail como _amount_guardrail solo veía
+        # lo llamado en ESTE turno y escalaba conversaciones válidas cada vez que
+        # el asistente repetía/confirmaba un monto ya verificado antes (mismo bug
+        # que agent-sale ya había encontrado y resuelto en priceGuardrail.ts).
+        # OJO: no se mezcla con `all_tool_results` (ese sigue siendo solo del
+        # turno actual) porque ese sí alimenta `extract_safe_extras` más abajo --
+        # si se mezclara ahí, un _safe_append viejo (ej. un link de pago vencido)
+        # podría reaparecer en la respuesta de un turno nuevo sin relación.
+        verdict = await run_guardrails(
+            response.content, [*history_tool_results, *all_tool_results], enabled
+        )
         if not verdict.passed:
             if guardrail_retries < MAX_GUARDRAIL_RETRIES:
                 guardrail_retries += 1
@@ -373,6 +385,29 @@ def _tool_denial(spec, tool_name: str) -> str | None:
         if binding.tool == tool_name and not binding.enabled:
             return f"La herramienta '{tool_name}' está deshabilitada para este tenant."
     return None
+
+
+async def _historical_tool_results(conversation_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Resultados de tools de turnos ANTERIORES de esta conversación.
+
+    `_load_history` no sirve para esto: colapsa la historia a texto plano
+    user/assistant y descarta el JSON de cada tool_result. `audit_log` es la
+    única fuente que los conserva (insert-only, ADR de auditoría) -- se usa
+    solo para alimentar guardrails como `_amount_guardrail`, nunca para
+    construir el prompt ni la respuesta final.
+    """
+    async with get_session() as session:
+        result = await session.execute(
+            select(AuditLog.output)
+            .where(
+                AuditLog.conversation_id == conversation_id,
+                AuditLog.actor.like("tool:%"),
+                AuditLog.output.is_not(None),
+            )
+            .order_by(AuditLog.created_at.desc())
+            .limit(40)
+        )
+        return [row for row in result.scalars().all() if row is not None]
 
 
 async def _load_history(conversation_id: uuid.UUID) -> list[LLMMessage]:

@@ -51,6 +51,37 @@ PLUGIN_ID = "pack_commerce"
 
 MONEY_IN_TEXT = re.compile(r"\$\s?[\d.,]+")
 
+# Claves bajo las que un resultado de tool puede traer un monto real (puerto
+# directo de MONEY_KEYS/walkForKeys de agent-sale, src/shared/observability/
+# priceGuardrail.ts) -- por NOMBRE de clave, no "cualquier número", para no
+# confundir un stock/quantity numérico con un monto verificado.
+MONEY_KEYS = {"price", "unit_price", "line_total", "subtotal", "total", "discount"}
+
+
+def _extract_monetary_values(node: Any, key: str | None = None) -> list[float]:
+    """Recorre `node` recursivamente (listas y dicts anidados) y colecciona los
+    números que aparecen bajo una clave de `MONEY_KEYS`.
+
+    Antes, `_amount_guardrail` solo miraba los valores de primer nivel del
+    dict de resultado de cada tool -- `consultar_inventario`/`recomendar_producto`
+    devuelven el precio anidado dentro de `matches`/`recommendations` (una
+    lista), así que el guardrail nunca podía verificarlo y bloqueaba CUALQUIER
+    respuesta que mencionara un precio de catálogo real (encontrado en vivo:
+    tenant yopoldo, "Pollo Broaster" a $60.000 escalaba siempre, no de forma
+    intermitente). El escaneo por nombre de clave (no "cualquier número")
+    también evita que un `stock`/`quantity` se cuele como monto verificado.
+    """
+    values: list[float] = []
+    if isinstance(node, list):
+        for item in node:
+            values.extend(_extract_monetary_values(item))
+    elif isinstance(node, dict):
+        for child_key, child_value in node.items():
+            values.extend(_extract_monetary_values(child_value, child_key))
+    elif isinstance(node, (int, float)) and key is not None and key in MONEY_KEYS:
+        values.append(float(node))
+    return values
+
 admin_router = APIRouter(prefix="/crm", tags=[PLUGIN_ID])
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -926,9 +957,8 @@ class CRMModule(BaseModule):
 
         known: set[str] = set()
         for result in tool_results:
-            for value in result.values():
-                if isinstance(value, (int, float)):
-                    known.add(f"{value:g}")
+            for value in _extract_monetary_values(result):
+                known.add(f"{value:g}")
 
         def normalize(amount: str) -> str:
             return amount.replace("$", "").replace(".", "").replace(",", "").strip()
