@@ -287,7 +287,11 @@ async def crm_products(request: Request):
         products = (await session.execute(select(Product).order_by(Product.name))).scalars().all()
         variants = (await session.execute(select(ProductVariant))).scalars().all()
         inventory = (await session.execute(select(Inventory))).scalars().all()
-        categories = (await session.execute(select(Category).order_by(Category.name))).scalars().all()
+        categories = (
+            await session.execute(
+                select(Category).where(Category.deleted_at.is_(None)).order_by(Category.name)
+            )
+        ).scalars().all()
     cat_by_id = {c.id: c for c in categories}
     inv_by_variant = {i.variant_id: i for i in inventory}
     variant_by_product: dict[str, list[ProductVariant]] = {}
@@ -400,7 +404,11 @@ async def product_import_csv(request: Request, file: Annotated[UploadFile, File(
             product = Product(name=name, description=description)
             if cat_name:
                 cat = (
-                    await session.execute(select(Category).where(Category.name == cat_name))
+                    await session.execute(
+                        select(Category).where(
+                            Category.name == cat_name, Category.deleted_at.is_(None)
+                        )
+                    )
                 ).scalar_one_or_none()
                 if cat is not None:
                     product.category_id = cat.id
@@ -425,7 +433,13 @@ async def crm_categories(request: Request):
     if ctx is None:
         return _login_redirect()
     async with get_session() as session:
-        categories = (await session.execute(select(Category).order_by(Category.sort_order, Category.name))).scalars().all()
+        categories = (
+            await session.execute(
+                select(Category)
+                .where(Category.deleted_at.is_(None))
+                .order_by(Category.sort_order, Category.name)
+            )
+        ).scalars().all()
         complements = (await session.execute(select(CategoryComplement))).scalars().all()
     comp_by_cat: dict[str, list[str]] = {}
     for c in complements:
@@ -466,14 +480,17 @@ async def category_save(
         return _login_redirect()
     async with get_session() as session:
         parent = uuid.UUID(parent_id) if parent_id else None
-        if parent is not None and await session.get(Category, parent) is None:
+        if parent is not None:
+            parent_category = await session.get(Category, parent)
             # session.get ya filtra por RLS: si `parent` no existe o es de otro
             # tenant, devuelve None en ambos casos — rechazar en vez de asignar
-            # igual (dejaría un parent_id colgando hacia otro tenant).
-            return RedirectResponse(
-                "/crm/categorias?flash=Categoría padre no encontrada&flash_type=danger",
-                status_code=303,
-            )
+            # igual (dejaría un parent_id colgando hacia otro tenant). Una
+            # categoría eliminada (soft-delete) tampoco es un padre válido.
+            if parent_category is None or parent_category.deleted_at is not None:
+                return RedirectResponse(
+                    "/crm/categorias?flash=Categoría padre no encontrada&flash_type=danger",
+                    status_code=303,
+                )
         if category_id:
             category = await session.get(Category, category_id)
             if category is not None:
@@ -518,6 +535,42 @@ async def category_save(
     return RedirectResponse("/crm/categorias?flash=Categoría guardada", status_code=303)
 
 
+@admin_router.post("/categorias/eliminar")
+async def category_delete(request: Request, category_id: str = Form(default="")):
+    """Soft-delete (invariante nº 8): marca deleted_at, nunca borra la fila.
+
+    Se niega si tiene hijos activos — reparentarlos automáticamente sería
+    sorprendente, y dejarlos huérfanos los volvería inalcanzables en el árbol
+    (mismo problema ya arreglado para el ciclo de auto-referencia)."""
+    if await _require_admin(request) is None:
+        return _login_redirect()
+    try:
+        category_uuid = uuid.UUID(category_id)
+    except ValueError:
+        return RedirectResponse("/crm/categorias?flash=Categoría inválida&flash_type=danger", status_code=303)
+    async with get_session() as session:
+        category = await session.get(Category, category_uuid)
+        if category is None or category.deleted_at is not None:
+            return RedirectResponse(
+                "/crm/categorias?flash=Categoría no encontrada&flash_type=danger", status_code=303
+            )
+        has_children = (
+            await session.execute(
+                select(Category).where(
+                    Category.parent_id == category_uuid, Category.deleted_at.is_(None)
+                )
+            )
+        ).scalar_one_or_none()
+        if has_children is not None:
+            return RedirectResponse(
+                "/crm/categorias?flash=No se puede eliminar: tiene subcategorías activas."
+                " Movelas o eliminalas primero.&flash_type=danger",
+                status_code=303,
+            )
+        category.deleted_at = datetime.now(UTC)
+    return RedirectResponse("/crm/categorias?flash=Categoría eliminada", status_code=303)
+
+
 # ------------------------------------------------------------------ promociones
 @admin_router.get("/promociones", response_class=HTMLResponse)
 async def crm_promotions(request: Request):
@@ -526,7 +579,11 @@ async def crm_promotions(request: Request):
         return _login_redirect()
     async with get_session() as session:
         promotions = (await session.execute(select(Promotion).order_by(Promotion.created_at.desc()))).scalars().all()
-        categories = (await session.execute(select(Category).order_by(Category.name))).scalars().all()
+        categories = (
+            await session.execute(
+                select(Category).where(Category.deleted_at.is_(None)).order_by(Category.name)
+            )
+        ).scalars().all()
         products = (await session.execute(select(Product).order_by(Product.name))).scalars().all()
     ctx.update(
         promotions=[

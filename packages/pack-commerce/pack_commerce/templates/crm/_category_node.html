@@ -6,8 +6,13 @@
         {% for c in node.complements %}<span class="badge text-bg-light border me-1">{{ c }}</span>{% endfor %}
       </span>
     {% endif %}
-    <span class="ms-auto">
+    <span class="ms-auto d-flex gap-1">
       <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#cat-edit-{{ node.id }}">editar</button>
+      <form method="post" action="/crm/categorias/eliminar"
+            onsubmit="return confirm('¿Eliminar la categoría &quot;{{ node.name }}&quot;? Se niega si tiene subcategorías activas.');">
+        <input type="hidden" name="category_id" value="{{ node.id }}">
+        <button class="btn btn-sm btn-outline-danger" title="Eliminar"><i class="bi bi-trash"></i></button>
+      </form>
     </span>
   </div>
   <div class="collapse ms-4 mb-2" id="cat-edit-{{ node.id }}">
