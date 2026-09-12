@@ -22,6 +22,15 @@ REAL_INCIDENT_TEXT = (
     "¡Gracias por tu compra!"
 )
 
+# Segundo incidente real, mismo día: el modelo esquivó las frases exactas del
+# primer fix cambiando de conjugación ("Cerramos" en vez de "Cerré", "genero
+# el link" en vez de "envío/paso el link") -- confirmó que matchear frases
+# exactas no alcanza, hay que matchear por raíz de verbo + tema.
+SECOND_INCIDENT_TEXT = (
+    "¡Listo, Robinson! Cerramos tu pedido del Pollo Broaster por $60.000. 🎉\n\n"
+    "Ahora mismo te genero el link de pago para que lo hagas en línea. Dame un momentico. 🍗"
+)
+
 
 def _tool_result(name: str, **fields) -> dict:
     return {**fields, "_tool_name": name}
@@ -35,6 +44,17 @@ async def test_real_incident_text_fails_with_no_tool_calls():
     verdict = await module._completion_guardrail(REAL_INCIDENT_TEXT, [])
     assert not verdict.passed
     assert "pedido" in verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_second_incident_text_fails_despite_different_conjugation():
+    """El segundo incidente real, mismo día: "Cerramos" (no "Cerré"), "genero
+    el link" (no "envío"/"paso") -- esquivó el primer fix cambiando de verbo.
+    Confirma que la versión ampliada de los patrones (por raíz, no frase
+    exacta) sigue bloqueando."""
+    module = CRMModule()
+    verdict = await module._completion_guardrail(SECOND_INCIDENT_TEXT, [])
+    assert not verdict.passed
 
 
 @pytest.mark.asyncio
@@ -67,9 +87,19 @@ async def test_link_de_pago_passes_when_generar_link_pago_called():
 @pytest.mark.asyncio
 async def test_link_de_pago_blocks_without_generar_link_pago():
     module = CRMModule()
-    verdict = await module._completion_guardrail("Te envío el link ahora mismo.", [])
+    verdict = await module._completion_guardrail("Te envío el link de pago ahora mismo.", [])
     assert not verdict.passed
     assert "link_de_pago" in verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_generic_link_mention_without_de_pago_does_not_trigger():
+    """"El link" a secas (sin "de pago"/"para pagar") es deliberadamente
+    ambiguo -- podría ser cualquier link (ej. uno de Calendar) y exigirle acá
+    generar_link_pago daría falsos positivos fuera del dominio de pagos."""
+    module = CRMModule()
+    verdict = await module._completion_guardrail("Te envío el link ahora mismo.", [])
+    assert verdict.passed, verdict.reason
 
 
 @pytest.mark.asyncio

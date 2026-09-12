@@ -33,8 +33,8 @@ description: Reglas del proceso de venta
   `generar_link_pago`, usá `payment_method: "pago_en_linea"` al crear el pedido y
   llamá `generar_link_pago` en el mismo turno con `reference` = el
   `public_order_number` que te devolvió `crear_pedido` y `amount` = el total exacto
-  (nunca inventes el monto). Si esa tool no está disponible, ofrecé solo
-  transferencia o contraentrega.
+  (nunca inventes el monto). Si esa tool no está disponible, o el total es menor a
+  $150.000 (mínimo real de la pasarela), ofrecé solo transferencia o contraentrega.
 - NUNCA digas que el pedido quedó confirmado, que le vas a enviar el link de pago,
   o que un asesor se va a poner en contacto, sin haber llamado esa tool
   (`crear_pedido`, `generar_link_pago`, `escalate_to_human`) en ese mismo turno.

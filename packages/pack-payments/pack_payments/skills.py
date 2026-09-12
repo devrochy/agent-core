@@ -13,6 +13,7 @@ from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from pack_payments.config import PaymentsConfig
 from pack_payments.models import PaymentTransaction
+from pack_payments.providers.base import PaymentRequestRejected
 from pack_payments.providers.wompi import WompiProvider
 
 log = get_logger(__name__)
@@ -55,7 +56,9 @@ class PaymentSkill(BaseSkill):
                     "referencia de negocio ya existente (ej. el número de un pedido). Úsala SOLO cuando "
                     "el cliente eligió explícitamente pagar en línea, con el monto y la referencia "
                     "correctos (nunca inventes el monto: usá el que devolvió la tool que creó el "
-                    "pedido/cotización)."
+                    "pedido/cotización). Wompi tiene un mínimo real de $150.000 COP por cobro: si el "
+                    "total es menor, esta tool devuelve un error -- ofrecé transferencia o "
+                    "contraentrega en vez de reintentar."
                 ),
                 parameters={
                     "type": "object",
@@ -74,13 +77,22 @@ class PaymentSkill(BaseSkill):
 
     async def generar_link_pago(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         reference = str(arguments["reference"]).strip()
-        amount = float(arguments["amount"])
+        try:
+            amount = float(arguments["amount"])
+        except (TypeError, ValueError):
+            return {"error": "amount inválido: debe ser un número."}
         if not reference:
-            raise PluginError(PLUGIN_ID, "reference vacía")
+            return {"error": "reference vacía."}
         if amount <= 0:
-            raise PluginError(PLUGIN_ID, "amount debe ser mayor a 0")
+            return {"error": "amount debe ser mayor a 0."}
 
-        config = await tenant_config()
+        try:
+            config = await tenant_config()
+        except PluginError as exc:
+            # Config faltante para ESTE tenant -- no es una falla del plugin,
+            # no debe disparar auto_disable (mismo criterio que
+            # PaymentRequestRejected: un problema de datos, no de código).
+            return {"error": str(exc)}
         provider = build_provider(config)
 
         # Idempotencia (invariante del contrato de plugin): si esta misma llamada de
@@ -97,12 +109,20 @@ class PaymentSkill(BaseSkill):
             if existing is not None:
                 return _result(existing)
 
-        link = await provider.create_payment_link(
-            reference=reference,
-            amount=amount,
-            currency=config.currency,
-            expires_in_hours=config.link_expira_horas,
-        )
+        try:
+            link = await provider.create_payment_link(
+                reference=reference,
+                amount=amount,
+                currency=config.currency,
+                expires_in_hours=config.link_expira_horas,
+            )
+        except PaymentRequestRejected as exc:
+            # Rechazo de NEGOCIO (monto fuera de rango, dato faltante) -- error
+            # recuperable por el LLM, NUNCA un PluginError acá (auto_disable
+            # apagaría pack_payments para TODOS los tenants por esto, ver el
+            # docstring de PaymentRequestRejected).
+            log.warning("wompi_payment_link_rejected", reference=reference, reason=str(exc))
+            return {"error": str(exc)}
 
         async with get_session() as session:
             transaction = PaymentTransaction(
