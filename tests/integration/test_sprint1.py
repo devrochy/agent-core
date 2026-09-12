@@ -4,11 +4,14 @@
 2. 3 mensajes distintos del mismo contacto en 2 s → 1 turno agrupado.
 3. Un tenant encolando muchos mensajes no impide que otro tenant sea atendido.
 4. Una query sin tenant_id no devuelve filas de otro tenant (RLS real).
+5. `recover_orphaned_conversations` siembra el tenant_id (bug encontrado por
+   `auditor-multitenant`, 2026-09-12, sobre el fix de debounce).
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 
@@ -111,6 +114,55 @@ async def test_tres_mensajes_en_2s_un_turno(app_client, tenant_setup, recorded):
     await _run_background(6)
 
     assert len(recorded) == 1, f"turnos agrupados esperados 1, hay {len(recorded)}"
+    # Incidente real (tenant yopoldo, 2026-09-12): agrupar en UN turno no
+    # basta si `schedule_debounce` reemplaza el payload en vez de acumularlo
+    # -- el turno único terminaba viendo SOLO el último mensaje ("msg 2"), y
+    # los dos anteriores (ej. la dirección del pedido) se perdían para
+    # siempre aunque quedaran persistidos en `messages`. Este assert es el
+    # que hubiera atrapado ese bug (el de arriba, `len(recorded) == 1`,
+    # seguía pasando con el bug presente).
+    for i in range(3):
+        assert f"msg {i}" in recorded[0], f"mensaje 'msg {i}' perdido del turno agrupado: {recorded[0]!r}"
+
+
+async def test_schedule_debounce_concurrente_no_pierde_mensajes(tenant_setup):
+    """Hallazgo de `auditor-multitenant` (2026-09-12) sobre el fix de arriba:
+    `consumer.py` crea una task de asyncio por entrada del batch (`count=10`
+    en `xreadgroup`) -- dos mensajes del MISMO `conversation_id` pueden
+    procesarse concurrentemente. Un GET+merge+SET no atómico pierde uno de
+    los dos bajo esa concurrencia (la misma clase de bug que el fix de
+    arriba corrige para el caso secuencial). `schedule_debounce` acumula
+    con RPUSH (atómico por comando) precisamente para que esto no pase.
+    """
+    from core.memory.working import get_redis
+    from core.orchestrator.debounce import (
+        MESSAGES_KEY,
+        PAYLOAD_KEY,
+        PENDING_KEY,
+        schedule_debounce,
+    )
+    from core.shared.tenant import tenant_scope
+
+    t1, _ = tenant_setup
+    conversation_id = uuid.uuid4()
+    r = get_redis()
+    try:
+        async with tenant_scope(t1):
+            await asyncio.gather(
+                schedule_debounce(conversation_id, 200, {"latest_message": "concurrente A"}),
+                schedule_debounce(conversation_id, 200, {"latest_message": "concurrente B"}),
+            )
+
+        messages = await r.lrange(MESSAGES_KEY.format(conversation_id=conversation_id), 0, -1)
+        assert set(messages) == {"concurrente A", "concurrente B"}, (
+            f"se perdió un mensaje bajo llamadas concurrentes: {messages}"
+        )
+    finally:
+        await r.delete(
+            MESSAGES_KEY.format(conversation_id=conversation_id),
+            PAYLOAD_KEY.format(conversation_id=conversation_id),
+        )
+        await r.zrem(PENDING_KEY, str(conversation_id))
 
 
 # ---------------------------------------------------------------- 3. fairness
@@ -204,3 +256,73 @@ async def test_query_sin_tenant_no_ve_otro_tenant(app_client, tenant_setup):
                 )
             ).scalar()
     assert leaked == 0, f"RLS debió bloquear la lectura de T2 desde T1, vio {leaked}"
+
+
+# ------------------------------------------------------ 5. recovery de huérfanas
+async def test_recover_orphaned_conversations_siembra_tenant_id(tenant_setup):
+    """Bug encontrado por `auditor-multitenant` (2026-09-12) sobre el fix de
+    debounce: el `for` que recorría las conversaciones huérfanas quedaba
+    (por indentación) FUERA del `tenant_scope` que las había consultado --
+    `schedule_debounce` llamaba `get_current_tenant_id()` y obtenía `None`,
+    así que el payload nunca llevaba `tenant_id` y `_fire_conversation` lo
+    descartaba en silencio. La recuperación de crash quedaba inoperante
+    para TODOS los tenants. Este test reproduce el escenario mínimo: una
+    conversación abierta, sin timer vivo, cuyo último mensaje es inbound.
+    """
+    from core.db.models import Conversation, Customer, Message
+    from core.db.session import get_session
+    from core.memory.working import get_redis
+    from core.orchestrator.debounce import PAYLOAD_KEY, PENDING_KEY, recover_orphaned_conversations
+    from core.shared.tenant import tenant_scope
+
+    t1, _ = tenant_setup
+    r = get_redis()
+    external_id = f"orphan:test:{uuid.uuid4().hex[:8]}"
+
+    async with tenant_scope(t1):
+        async with get_session() as session:
+            customer = Customer(tenant_id=t1, channel="whatsapp", external_id=external_id)
+            session.add(customer)
+            await session.flush()
+            conversation = Conversation(tenant_id=t1, customer_id=customer.id, status="open")
+            session.add(conversation)
+            await session.flush()
+            session.add(
+                Message(
+                    tenant_id=t1,
+                    conversation_id=conversation.id,
+                    direction="inbound",
+                    sender_type="customer",
+                    content="mensaje huérfano",
+                )
+            )
+            conversation_id = conversation.id
+
+    try:
+        await recover_orphaned_conversations()
+
+        raw_payload = await r.get(PAYLOAD_KEY.format(conversation_id=conversation_id))
+        assert raw_payload is not None, "recover_orphaned_conversations no programó ningún timer"
+        payload = json.loads(raw_payload)
+        assert payload.get("tenant_id") == str(t1), (
+            f"tenant_id no sembrado en el payload recuperado: {payload!r}"
+        )
+    finally:
+        from core.orchestrator.debounce import MESSAGES_KEY
+
+        await r.delete(
+            PAYLOAD_KEY.format(conversation_id=conversation_id),
+            MESSAGES_KEY.format(conversation_id=conversation_id),
+        )
+        await r.zrem(PENDING_KEY, str(conversation_id))
+        async with tenant_scope(t1):
+            async with get_session() as session:
+                await session.execute(
+                    Message.__table__.delete().where(Message.conversation_id == conversation_id)
+                )
+                await session.execute(
+                    Conversation.__table__.delete().where(Conversation.id == conversation_id)
+                )
+                await session.execute(
+                    Customer.__table__.delete().where(Customer.id == customer.id)
+                )
