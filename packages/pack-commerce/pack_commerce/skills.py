@@ -166,15 +166,27 @@ async def _transfer_safe_append() -> str:
     return "\n".join(lines)
 
 
-async def _get_variant_with_stock(variant_id) -> dict[str, Any] | None:  # type: ignore[no-untyped-def]
-    if _parse_uuid(variant_id) is None:
+async def _get_variant_with_stock(variant_id_or_sku) -> dict[str, Any] | None:  # type: ignore[no-untyped-def]
+    """Busca una variante por `id` real o, si no es un UUID, por `sku` exacto.
+
+    El cliente suele referirse a un producto por su SKU ("A-001"), no por el
+    UUID interno -- exigirle al LLM que siempre tenga el UUID a mano (vía
+    `consultar_inventario` primero) lo empuja a consultar inventario incluso
+    cuando el cliente ya fue explícito, así que las tools que llaman a esta
+    función aceptan cualquiera de los dos.
+    """
+    value = str(variant_id_or_sku or "").strip()
+    if not value:
         return None
+    tenant_id = get_current_tenant_id()
+    parsed = _parse_uuid(value)
+    condition = ProductVariant.id == parsed if parsed is not None else ProductVariant.sku == value
     async with get_session() as session:
         result = await session.execute(
             select(ProductVariant, Product, Inventory)
             .join(Product, Product.id == ProductVariant.product_id)
             .outerjoin(Inventory, Inventory.variant_id == ProductVariant.id)
-            .where(ProductVariant.id == variant_id)
+            .where(condition, ProductVariant.tenant_id == tenant_id)
         )
         row = result.first()
     if row is None:
@@ -502,7 +514,9 @@ class OrderSkill(BaseSkill):
                 description=(
                     "Crea una cotización con los productos y cantidades que el cliente pidió. "
                     "Vuelve a validar precio y stock reales (nunca confíes en lo que dice el LLM). "
-                    "Úsala cuando el cliente confirme qué quiere, aunque sea un menú completo."
+                    "Úsala cuando el cliente confirme qué quiere, aunque sea un menú completo. "
+                    "Si el cliente ya te dio un SKU (ej. \"A-001\") no hace falta llamar "
+                    "consultar_inventario antes: pasá el SKU directo en variant_id."
                 ),
                 parameters={
                     "type": "object",
@@ -513,7 +527,10 @@ class OrderSkill(BaseSkill):
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "variant_id": {"type": "string"},
+                                    "variant_id": {
+                                        "type": "string",
+                                        "description": "ID real de la variante, o su SKU si eso es lo que te dio el cliente",
+                                    },
                                     "quantity": {"type": "integer"},
                                 },
                                 "required": ["variant_id", "quantity"],
@@ -602,7 +619,9 @@ class OrderSkill(BaseSkill):
                 name="agregar_item_pedido",
                 description=(
                     "Suma productos a un pedido ya confirmado en la misma conversación, "
-                    "mientras siga abierto (aún no entregado). No crea pedido ni cotización nueva."
+                    "mientras siga abierto (aún no entregado). No crea pedido ni cotización nueva. "
+                    "Si el cliente ya te dio un SKU (ej. \"A-001\") no hace falta llamar "
+                    "consultar_inventario antes: pasá el SKU directo en variant_id."
                 ),
                 parameters={
                     "type": "object",
@@ -613,7 +632,10 @@ class OrderSkill(BaseSkill):
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "variant_id": {"type": "string"},
+                                    "variant_id": {
+                                        "type": "string",
+                                        "description": "ID real de la variante, o su SKU si eso es lo que te dio el cliente",
+                                    },
                                     "quantity": {"type": "integer"},
                                 },
                                 "required": ["variant_id", "quantity"],
@@ -653,14 +675,14 @@ class OrderSkill(BaseSkill):
         for item in items:
             if not isinstance(item, dict):
                 return {"error": "Cada producto de la cotización debe traer variant_id y quantity."}
-            variant_id = str(item.get("variant_id", ""))
+            variant_ref = str(item.get("variant_id", ""))
             try:
                 quantity = int(item.get("quantity", 0))
             except (TypeError, ValueError):
                 return {"error": "Cantidad inválida para un producto de la cotización."}
             if quantity <= 0:
                 return {"error": "Las cantidades deben ser números enteros positivos."}
-            data = await _get_variant_with_stock(variant_id)
+            data = await _get_variant_with_stock(variant_ref)
             if data is None or not data["variant"].active:
                 return {"error": "Uno de los productos solicitados no está disponible."}
             if data["stock"] < quantity:
@@ -672,7 +694,7 @@ class OrderSkill(BaseSkill):
             subtotal += line_total
             rows.append(
                 {
-                    "variant_id": variant_id,
+                    "variant_id": str(data["variant"].id),
                     "product_name": data["product"].name,
                     "attributes": data["variant"].attributes or {},
                     "unit_price": data["price"],
@@ -1125,7 +1147,13 @@ class OrderSkill(BaseSkill):
             return {"error": "Pedido no encontrado."}
 
         async with get_session() as session:
-            order = await session.get(Order, order_id)
+            order = (
+                await session.execute(
+                    select(Order).where(
+                        Order.id == order_id, Order.tenant_id == get_current_tenant_id()
+                    )
+                )
+            ).scalar_one_or_none()
             if order is None:
                 return {"error": "Pedido no encontrado."}
             if order.status != "abierto":
@@ -1143,14 +1171,14 @@ class OrderSkill(BaseSkill):
             additions: list[tuple[ProductVariant, int, float]] = []
             add_total = 0.0
             for item in items:
-                variant_id = str(item.get("variant_id", ""))
+                variant_ref = str(item.get("variant_id", ""))
                 try:
                     quantity = int(item.get("quantity", 0))
                 except (TypeError, ValueError):
                     return {"error": "Cantidad inválida."}
                 if quantity <= 0:
                     return {"error": "Las cantidades deben ser positivas."}
-                data = await _get_variant_with_stock(variant_id)
+                data = await _get_variant_with_stock(variant_ref)
                 if data is None or not data["variant"].active:
                     return {"error": "Uno de los productos no está disponible."}
                 if data["stock"] < quantity:

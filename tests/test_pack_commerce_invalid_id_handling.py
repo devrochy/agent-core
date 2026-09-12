@@ -15,6 +15,14 @@ diff: `calificar_lead` (score no numérico), `generar_cotizacion`/
 `agregar_item_pedido` (un elemento de `items` que no es un dict) y
 `crear_pedido` (`customer_data` que no es un dict). Se corrigieron todas
 en la misma tanda.
+
+Nota (2026-09-12): el caso exacto del incidente (`_get_variant_with_stock
+("pollo_broaster")` debe devolver `None`, no reventar) se movió a
+`tests/integration/test_pack_commerce_sku_lookup.py` -- desde que esa
+función también resuelve por SKU (no solo por UUID), un string inválido
+YA NO se descarta antes de tocar la base de datos (antes alcanzaba con
+`_parse_uuid`; ahora hay que consultar si es un SKU real), así que dejó de
+ser un test "puro" como exige este archivo (ver conftest.py).
 """
 
 from __future__ import annotations
@@ -22,7 +30,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from pack_commerce.skills import LeadSkill, OrderSkill, _get_variant_with_stock, _parse_uuid
+from pack_commerce.skills import LeadSkill, OrderSkill, _parse_uuid
 
 from core.mcp.types import ToolContext
 
@@ -45,13 +53,6 @@ def test_parse_uuid_valid():
 @pytest.mark.parametrize("value", ["pollo_broaster", "", "123", None, 42])
 def test_parse_uuid_invalid_returns_none(value):
     assert _parse_uuid(value) is None
-
-
-@pytest.mark.asyncio
-async def test_get_variant_with_stock_invalid_id_returns_none_not_exception():
-    """El caso real exacto: antes esto llegaba a Postgres y tiraba DataError."""
-    result = await _get_variant_with_stock("pollo_broaster")
-    assert result is None
 
 
 @pytest.mark.asyncio
