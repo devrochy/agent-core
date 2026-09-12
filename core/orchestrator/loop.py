@@ -38,6 +38,7 @@ from core.observability.tracing import get_tracer, span_attributes
 from core.orchestrator.escalation import ESCALATION_REPLY, escalate
 from core.orchestrator.guardrails import MAX_GUARDRAIL_RETRIES, run_guardrails
 from core.orchestrator.safe_renderer import (
+    TOOL_NAME_KEY,
     apply_safe_extras,
     extract_safe_extras,
     strip_reserved_keys,
@@ -261,7 +262,12 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                 with tracer.start_as_current_span("tool_execute") as tool_span:
                     result = await _execute_tool_safely(conversation, customer, tool_call, spec)
                     span_attributes(tool_span, tool=tool_call.name)
-                all_tool_results.append(result)
+                # _tool_name (reservada, safe_renderer.py): guardrails como
+                # crm_completion_check necesitan saber QUÉ tool produjo cada
+                # resultado para verificar que una afirmación de "ya lo hice"
+                # en el texto corresponda a una tool REALMENTE llamada, no solo
+                # a que algún resultado exista.
+                all_tool_results.append({**result, TOOL_NAME_KEY: tool_call.name})
                 usage.tool_calls.append({"tool": tool_call.name})
                 messages.append(
                     LLMMessage(
