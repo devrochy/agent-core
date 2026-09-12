@@ -8,7 +8,9 @@
   Activar o desactivar acá es <b>solo para el tenant que tenés seleccionado</b>
   arriba — no afecta a los demás. La primera vez que algún tenant activa un pack,
   su código se carga en el servidor; desactivarlo para este tenant no se lo apaga
-  a otros que lo sigan usando.
+  a otros que lo sigan usando. Si una tool de un plugin falla en una conversación
+  real, tampoco se apaga para nadie más — solo para este tenant (columna "Salud"),
+  y podés reintentarlo acá una vez corregida la causa.
 </p>
 
 {% set estado_opts = [
@@ -22,6 +24,7 @@
       <th class="dt-sortable" data-sort-key="version">Versión</th>
       <th class="dt-sortable" data-sort-key="estado">Este tenant</th>
       <th>Sistema</th>
+      <th>Salud (este tenant)</th>
       <th class="text-end">Acciones</th>
     </tr>
   </thead>
@@ -45,10 +48,23 @@
         <span class="badge bg-{{ sys_colors.get(p.status, 'secondary') }}" title="Estado del código en el servidor">{{ p.status }}</span>
         {% if p.error_message %}<br><span class="small text-danger">{{ p.error_message }}</span>{% endif %}
       </td>
+      <td>
+        {% if p.tenant_health_error %}
+        <span class="badge bg-danger">Error</span>
+        <br><span class="small text-danger">{{ p.tenant_health_error }}</span>
+        {% else %}
+        <span class="badge bg-success">OK</span>
+        {% endif %}
+      </td>
       <td class="text-end">
         <div class="dt-actions-row">
           {% if p.has_config %}
           <a href="/admin/plugins/{{ p.id }}/configurar" class="btn btn-outline-secondary" title="Configurar"><i class="bi bi-gear"></i></a>
+          {% endif %}
+          {% if p.tenant_health_error %}
+          <form method="post" action="/admin/plugins/{{ p.id }}/reintentar" class="d-inline">
+            <button class="btn btn-outline-danger" title="Reintentar para este tenant"><i class="bi bi-arrow-clockwise"></i></button>
+          </form>
           {% endif %}
           {% if p.enabled_for_tenant %}
           <form method="post" action="/admin/plugins/{{ p.id }}/desactivar" class="d-inline">
@@ -63,7 +79,7 @@
       </td>
     </tr>
     {% else %}
-    <tr data-search=""><td colspan="5" class="text-secondary text-center py-4">
+    <tr data-search=""><td colspan="6" class="text-secondary text-center py-4">
       No hay plugins instalados. Usa <code>agent-core plugin install &lt;nombre&gt;</code>.
     </td></tr>
     {% endfor %}

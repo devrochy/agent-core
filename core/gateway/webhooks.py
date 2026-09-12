@@ -25,7 +25,12 @@ from core.gateway.connections import effective_credentials
 from core.gateway.idempotency import claim_message_once
 from core.memory.working import get_redis
 from core.shared.logger import get_logger
-from core.shared.tenant import default_tenant, resolve_tenant_for_phone, tenant_scope
+from core.shared.tenant import (
+    default_tenant,
+    get_current_tenant_id,
+    resolve_tenant_for_phone,
+    tenant_scope,
+)
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -228,5 +233,7 @@ async def _try_process_media(message: Any) -> Any:
         return processed
     except Exception as exc:
         log.exception("media_processing_failed")
-        await plugin_manager.auto_disable("mod_media_processor", str(exc))
+        # Acotado al tenant de este webhook (ADR-0024): no apaga el
+        # procesador de medios para los demás tenants.
+        await plugin_manager.auto_disable_for_tenant(get_current_tenant_id(), "mod_media_processor", str(exc))
         return message

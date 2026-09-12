@@ -40,6 +40,7 @@ from core.db.models import (
     Message,
     PluginConfig,
     PluginRecord,
+    PluginTenantState,
     UsageLedger,
     utcnow,
 )
@@ -862,12 +863,25 @@ async def plugins_list(request: Request):
         records = {r.id: r for r in (await session.execute(select(PluginRecord))).scalars().all()}
     spec = await load_active_spec()
     enabled = enabled_packs(spec)
+    tenant_id = get_current_tenant_id()
+    async with get_session() as session:
+        tenant_state = {
+            r.plugin_id: r
+            for r in (
+                await session.execute(
+                    select(PluginTenantState).where(PluginTenantState.tenant_id == tenant_id)
+                )
+            )
+            .scalars()
+            .all()
+        }
 
     plugins = []
     for module in plugin_manager.list_modules():
         if module.id == CORE_PACK_ID:
             continue
         record = records.get(module.id)
+        health = tenant_state.get(module.id)
         plugins.append(
             {
                 "id": module.id,
@@ -877,6 +891,7 @@ async def plugins_list(request: Request):
                 "error_message": record.error_message if record else None,
                 "has_config": module.config_schema is not None,
                 "enabled_for_tenant": module.id in enabled,
+                "tenant_health_error": health.error_message if health else None,
             }
         )
     ctx["plugins"] = plugins
@@ -991,6 +1006,17 @@ async def plugin_deactivate(request: Request, plugin_id: str):
         return _login_redirect()
     await _disable_pack_for_tenant(plugin_id)
     return RedirectResponse("/admin/plugins?flash=Plugin desactivado para este tenant", status_code=303)
+
+
+@router.post("/plugins/{plugin_id}/reintentar")
+async def plugin_reintentar(request: Request, plugin_id: str):
+    """Borra la salud de error de `plugin_id` para el TENANT ACTUAL (ADR-0024)
+    -- para usar después de corregir la causa del error (o si fue un problema
+    transitorio). No toca el estado de sistema ni a otros tenants."""
+    if await current_admin(request) is None:
+        return _login_redirect()
+    await plugin_manager.reactivate_for_tenant(get_current_tenant_id(), plugin_id)
+    return RedirectResponse("/admin/plugins?flash=Plugin reactivado para este tenant", status_code=303)
 
 
 # ------------------------------------------------------------------ conexiones
