@@ -976,6 +976,24 @@ class OrderSkill(BaseSkill):
                     "escalate": True,
                 }
 
+            min_online = getattr(config, "pago_en_linea_monto_minimo", 150_000) or 150_000
+            if payment_method == "pago_en_linea" and _float(quote.total) < min_online:
+                # Incidente real (tenant yopoldo, 2026-09-12): un pedido de
+                # $54.000 con pago_en_linea nunca iba a poder completarse (el
+                # mínimo real de la pasarela es $150.000, MIN_AMOUNT_COP en
+                # pack_payments/providers/wompi.py -- no importable acá,
+                # invariante 5). Antes esto solo se descubría (si el modelo
+                # llegaba a llamarla) en generar_link_pago, ya tarde para
+                # redirigir la conversación con naturalidad; ahora es
+                # determinístico en el primer punto posible.
+                return {
+                    "error": (
+                        f"El pago en línea no está disponible para montos menores a "
+                        f"${min_online:,.0f}."
+                    ),
+                    "hint": "Ofrecele transferencia o contraentrega en su lugar.",
+                }
+
         complete, missing = _validate_delivery_data(customer_data)
         if not complete:
             return {
