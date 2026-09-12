@@ -42,6 +42,20 @@ class CRMConfig(BasePluginConfig):
     monto_alto_threshold: float = Field(
         default=1_000_000, description="Monto en COP que dispara escalamiento a humano"
     )
+    # Gate determinístico en crear_pedido (incidente real 2026-09-11, tenant
+    # yopoldo): un pedido con pago_en_linea por debajo del mínimo real de la
+    # pasarela (Wompi: $150.000 COP, ver pack_payments/providers/wompi.py::
+    # MIN_AMOUNT_COP) nunca puede completarse -- pack_commerce no puede
+    # importar esa constante (invariante 5, ningún pack importa de otro), así
+    # que este valor es la política propia de pack_commerce, con un default
+    # que hoy coincide con el mínimo real. Antes de esto, `crear_pedido`
+    # dejaba pasar cualquier monto con pago_en_linea y el rechazo solo
+    # ocurría (si el modelo llegaba a llamarla) en generar_link_pago, ya
+    # tarde para redirigir la conversación con naturalidad.
+    pago_en_linea_monto_minimo: float = Field(
+        default=150_000,
+        description="Monto mínimo en COP para aceptar pago_en_linea al crear un pedido",
+    )
     # Cuentas de transferencia visibles al cliente (nunca pasan por el LLM).
     # Formato: [{"entity","accountType","accountNumber","holderName","holderDocument"}]
     transfer_accounts: list[dict] = Field(
