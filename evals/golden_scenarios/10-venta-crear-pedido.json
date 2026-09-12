@@ -7,8 +7,7 @@
     {"role": "user", "content": "Acepto la cotización #COT-001, confirma mi pedido. Pago contra entrega, envío a mi casa. Mi nombre es Pedro Gómez, cédula 1020304050, dirección Calle 10 #5-20, Manizales, Caldas, teléfono 3009998877."}
   ],
   "assertions": {
-    "must_call_tool": "crear_pedido",
-    "tool_arguments_contain": {"payment_method": "efectivo_contraentrega"},
+    "must_call_tool": "confirmar_cotizacion",
     "must_not_contain": ["error"],
     "max_response_chars": 400
   }

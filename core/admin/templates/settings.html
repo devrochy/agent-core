@@ -38,6 +38,15 @@
             </select>
             <div class="form-text">Cuánto espera el bot a que el cliente termine de escribir.</div>
           </div>
+          <div class="mb-3">
+            <label class="form-label">Reintentos de guardrail antes de escalar</label>
+            <input type="number" name="guardrail_max_retries" class="form-control" min="0" max="5"
+                   value="{{ behavior.guardrail_max_retries if behavior.guardrail_max_retries is not none else 1 }}">
+            <div class="form-text">
+              Si una respuesta no pasa una validación (monto, alucinación de cierre), cuántas veces
+              se le pide corregirla antes de escalar a un asesor. Default: 1.
+            </div>
+          </div>
           <button class="btn btn-primary">Guardar</button>
         </form>
       </div>
