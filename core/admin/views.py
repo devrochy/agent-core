@@ -1244,6 +1244,7 @@ async def settings_save(
     brand_voice: str = Form(default=""),
     tono: str = Form(default="calido"),
     debounce_mode: str = Form(default="natural"),
+    guardrail_max_retries: int = Form(default=1),
 ):
     if await current_admin(request) is None:
         return _login_redirect()
@@ -1263,7 +1264,11 @@ async def settings_save(
         app_settings.business_description = business_description
         app_settings.brand_voice = brand_voice
         behavior = dict(app_settings.behavior_config)
-        behavior.update(tono=tono, debounce_mode=debounce_mode)
+        behavior.update(
+            tono=tono,
+            debounce_mode=debounce_mode,
+            guardrail_max_retries=max(0, guardrail_max_retries),
+        )
         app_settings.behavior_config = behavior
     return RedirectResponse("/admin/configuracion?flash=Configuración guardada", status_code=303)
 

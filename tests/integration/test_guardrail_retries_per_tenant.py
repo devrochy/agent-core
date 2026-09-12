@@ -1,0 +1,156 @@
+"""`guardrail_max_retries` por tenant -- parametrización pedida explícitamente
+por el usuario ("intentos fallidos" configurable, no fijo para todos los
+tenants). Mismo patrón exacto que `debounce_mode`
+(`AppSettings.behavior_config`, sin tocar el contrato `AgentSpec` congelado
+-- eso exigiría un ADR nuevo, invariante 4 de `CLAUDE.md`).
+
+Antes de este cambio, `MAX_GUARDRAIL_RETRIES = 1` (`core/orchestrator/
+guardrails.py:25`) era una constante global: TODOS los tenants tenían
+exactamente 1 reintento antes de escalar, sin poder ajustarlo. Ahora
+`loop.py` resuelve `guardrail_max_retries` desde `behavior_config` con
+fallback a ese mismo default.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import uuid
+
+import pytest
+from conftest import PHONE, TEST_ALPHA_ID, _meta_payload
+from sqlalchemy import select
+
+pytestmark = [
+    pytest.mark.asyncio(loop_scope="session"),
+    pytest.mark.skipif(
+        os.environ.get("AGENT_CORE_INTEGRATION") != "1",
+        reason="tests de integración: requiere AGENT_CORE_INTEGRATION=1 y el stack local",
+    ),
+]
+
+T1 = TEST_ALPHA_ID
+
+
+async def _set_behavior(tenant_id: uuid.UUID, **overrides) -> None:
+    from core.db.models import AppSettings
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            row = (
+                await session.execute(select(AppSettings).where(AppSettings.tenant_id == tenant_id))
+            ).scalar_one_or_none()
+            if row is None:
+                row = AppSettings(tenant_id=tenant_id, assistant_name="it")
+                session.add(row)
+            behavior = dict(row.behavior_config or {})
+            behavior.update(overrides)
+            row.behavior_config = behavior
+
+
+async def _ensure_max_tool_calls_per_turn(tid: uuid.UUID, value: int) -> None:
+    """Algún otro test de la suite (`test_tools_limits.py`) deja
+    `maxToolCallsPerTurn=1` persistido para T1 en la BD local (no se resetea
+    entre corridas) -- con guardrail_max_retries>0 eso corta el turno por
+    "max_iterations" antes de completar los reintentos esperados. Se fija
+    explícito acá para no depender de qué dejó una corrida anterior."""
+    import copy
+
+    from core.db.models import AgentSpecRecord
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        from core.agents.spec import ensure_default_spec
+
+        await ensure_default_spec(tid)
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(AgentSpecRecord).where(
+                        AgentSpecRecord.tenant_id == tid,
+                        AgentSpecRecord.is_active.is_(True),
+                    )
+                )
+            ).scalar_one()
+            spec = copy.deepcopy(row.spec)
+            spec.setdefault("policies", {})["maxToolCallsPerTurn"] = value
+            row.spec = spec
+
+
+async def _run_background(seconds: float) -> None:
+    from core.orchestrator.consumer import consume_loop
+
+    consumer = asyncio.create_task(consume_loop())
+    await asyncio.sleep(seconds)
+    consumer.cancel()
+    try:
+        await consumer
+    except asyncio.CancelledError:
+        pass
+
+
+class _AlwaysFailingGuardrail:
+    """Guardrail de prueba: falla siempre, para forzar la ruta de reintento."""
+
+    async def __call__(self, response_text: str, tool_results: list):
+        from core.mcp.types import GuardrailResult
+
+        return GuardrailResult(passed=False, reason="test_siempre_falla", retry_instruction="[test]")
+
+
+@pytest.fixture
+def _registered_failing_guardrail():
+    from core.mcp.host import mcp_host
+
+    guardrail = _AlwaysFailingGuardrail()
+    mcp_host.begin_activation("core")
+    mcp_host.register_guardrail("test_siempre_falla", guardrail, priority=1)
+    mcp_host.end_activation()
+    try:
+        yield
+    finally:
+        mcp_host._guardrails = [g for g in mcp_host._guardrails if g.name != "test_siempre_falla"]
+
+
+async def test_guardrail_max_retries_0_escala_en_la_primera_llamada(
+    app_client, tenant_setup, recorded, _registered_failing_guardrail
+):
+    t1, _ = tenant_setup
+    await _ensure_max_tool_calls_per_turn(t1, 10)
+    await _set_behavior(t1, debounce_mode="inmediato", guardrail_max_retries=0)
+    recorded.clear()
+
+    resp = await app_client.post(
+        "/webhooks/whatsapp",
+        json=_meta_payload(PHONE, f"wa-grmax0-{uuid.uuid4().hex[:6]}", f"wamid.GRMAX0.{uuid.uuid4().hex[:6]}", "hola"),
+    )
+    assert resp.json()["enqueued"] == 1
+    await _run_background(2)
+
+    assert len(recorded) == 1, (
+        f"con guardrail_max_retries=0 no debería haber reintento, hubo {len(recorded)} llamadas al LLM"
+    )
+
+
+async def test_guardrail_max_retries_2_reintenta_dos_veces(
+    app_client, tenant_setup, recorded, _registered_failing_guardrail
+):
+    t1, _ = tenant_setup
+    await _ensure_max_tool_calls_per_turn(t1, 10)
+    await _set_behavior(t1, debounce_mode="inmediato", guardrail_max_retries=2)
+    recorded.clear()
+
+    resp = await app_client.post(
+        "/webhooks/whatsapp",
+        json=_meta_payload(PHONE, f"wa-grmax2-{uuid.uuid4().hex[:6]}", f"wamid.GRMAX2.{uuid.uuid4().hex[:6]}", "hola"),
+    )
+    assert resp.json()["enqueued"] == 1
+    await _run_background(2)
+
+    assert len(recorded) == 3, (
+        f"con guardrail_max_retries=2 deberían ser 3 llamadas al LLM (1 + 2 reintentos), "
+        f"hubo {len(recorded)}"
+    )

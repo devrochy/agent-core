@@ -210,6 +210,18 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     provider = _resolved_provider(app_settings, routing.model)
     tool_schemas = to_llm_schemas(active_tools) if routing.allow_tools else None
 
+    # Reintentos de guardrail antes de escalar de verdad (pedido explícito del
+    # usuario: "intentos fallidos" configurable por tenant, mismo patrón exacto
+    # que debounce_mode -- JSONB libre en AppSettings, sin tocar el contrato
+    # AgentSpec congelado). Fallback al default global si el tenant no lo seteó.
+    behavior = dict(app_settings.behavior_config) if app_settings else {}
+    # Clamp acá también (no solo en el form del admin, auditor-multitenant
+    # 2026-09-12): behavior_config es JSONB libre, puede llegar por otra vía
+    # (script, migración, endpoint futuro) sin pasar por la validación del form.
+    guardrail_max_retries = max(
+        0, min(5, int(behavior.get("guardrail_max_retries", MAX_GUARDRAIL_RETRIES)))
+    )
+
     # ---------------- 3. Agentic loop
     messages = list(history)
     # _load_history puede devolver turnos cacheados en working memory (Redis)
@@ -315,7 +327,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             response.content, [*history_tool_results, *all_tool_results], enabled
         )
         if not verdict.passed:
-            if guardrail_retries < MAX_GUARDRAIL_RETRIES:
+            if guardrail_retries < guardrail_max_retries:
                 guardrail_retries += 1
                 messages.append(LLMMessage(role="assistant", content=response.content))
                 messages.append(LLMMessage(role="user", content=f"[SISTEMA] {verdict.retry_instruction}"))

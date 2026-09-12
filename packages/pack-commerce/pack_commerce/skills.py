@@ -541,11 +541,28 @@ class OrderSkill(BaseSkill):
                 handler=self.aplicar_promocion,
             ),
             MCPTool(
+                name="confirmar_cotizacion",
+                description=(
+                    "Marca una cotización como aceptada por el cliente. Llamala SOLO cuando el "
+                    "cliente ya vio el total final (con la promoción aplicada si corresponde) y "
+                    "dijo que sí explícitamente. Es el paso OBLIGATORIO antes de crear_pedido -- "
+                    "esa tool falla si la cotización no pasó por acá."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "quote_id": {"type": "string", "description": "ID de la cotización"},
+                    },
+                    "required": ["quote_id"],
+                },
+                handler=self.confirmar_cotizacion,
+            ),
+            MCPTool(
                 name="crear_pedido",
                 description=(
                     "Convierte una cotización aceptada por el cliente en un pedido confirmado. "
-                    "Úsala SOLO después de que el cliente confirme explícitamente que quiere comprar "
-                    "y haya acordado método de pago y de entrega."
+                    "Úsala SOLO después de haber llamado confirmar_cotizacion en esta conversación "
+                    "y de que el cliente haya acordado método de pago y de entrega."
                 ),
                 parameters={
                     "type": "object",
@@ -818,6 +835,44 @@ class OrderSkill(BaseSkill):
             "segmento": segment,
         }
 
+    async def confirmar_cotizacion(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Transiciona `Quote.status` a "aceptada" -- el gate determinístico que
+        faltaba (ver `crear_pedido`, que ahora lo exige antes de crear el
+        pedido). Incidente real (tenant `yopoldo`, 2026-09-12): el modelo
+        armaba bien la cotización (`generar_cotizacion` + `aplicar_promocion`
+        reales) pero afirmaba haber cerrado el pedido en texto sin haber
+        llamado `crear_pedido` -- `crm_completion_check` lo detectaba DESPUÉS
+        de redactado, nunca lo prevenía. Comparado con `agent-sale`
+        (`loop.ts::FORZAR_SIGUIENTE_TOOL`/`esTurnoSilencioso`), que hace esto
+        imposible por diseño (tool_choice forzado + corte de turno): acá se
+        resuelve más simple, con una precondición de datos en la propia tool
+        (`Quote.status` ya declaraba "aceptada" en el schema, `models.py:186`,
+        pero ningún código lo escribía jamás)."""
+        quote_id = str(arguments.get("quote_id", ""))
+        if _parse_uuid(quote_id) is None:
+            return {"error": "Cotización no encontrada."}
+        async with get_session() as session:
+            # Defensa en profundidad además de RLS (mismo criterio que
+            # calificar_lead/actualizar_lead, auditor-multitenant 2026-09-12):
+            # filtrar tenant_id explícito en vez de session.get() a secas.
+            quote = (
+                await session.execute(
+                    select(Quote).where(
+                        Quote.id == quote_id, Quote.tenant_id == get_current_tenant_id()
+                    )
+                )
+            ).scalar_one_or_none()
+            if quote is None:
+                return {"error": "Cotización no encontrada."}
+            if quote.status == "convertida":
+                return {"error": "Esta cotización ya se convirtió en un pedido."}
+            if quote.status == "expirada":
+                return {"error": "Esta cotización expiró. Generá una nueva con generar_cotizacion."}
+            quote.status = "aceptada"
+            total = _float(quote.total)
+
+        return {"quote_id": quote_id, "status": "aceptada", "total": round(total, 2)}
+
     @staticmethod
     def _line_matches_promo(line: dict[str, Any], promo: Promotion) -> bool:
         return not (
@@ -878,7 +933,14 @@ class OrderSkill(BaseSkill):
             return {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
 
         async with get_session() as session:
-            quote = await session.get(Quote, quote_id)
+            # Defensa en profundidad además de RLS (auditor-multitenant 2026-09-12).
+            quote = (
+                await session.execute(
+                    select(Quote).where(
+                        Quote.id == quote_id, Quote.tenant_id == get_current_tenant_id()
+                    )
+                )
+            ).scalar_one_or_none()
             if quote is None:
                 return {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
             existing_order = (
@@ -889,6 +951,17 @@ class OrderSkill(BaseSkill):
                     "order_id": str(existing_order.id),
                     "status": "duplicate",
                     "public_order_number": existing_order.public_order_number,
+                }
+            if quote.status != "aceptada":
+                # Gate determinístico (incidente real 2026-09-12, tenant yopoldo):
+                # sin esto, el modelo podía "creer" que el cliente ya confirmó y
+                # alucinar el cierre del pedido en texto sin llamar esta tool --
+                # ahora ni siquiera puede completarla sin haber pasado antes por
+                # confirmar_cotizacion, sin importar qué diga el texto del turno.
+                return {
+                    "error": "La cotización todavía no fue confirmada por el cliente.",
+                    "hint": "Llamá confirmar_cotizacion primero, después de que el "
+                    "cliente haya dicho que sí al total final.",
                 }
             items = (
                 await session.execute(select(QuoteItem).where(QuoteItem.quote_id == quote.id))
@@ -925,7 +998,13 @@ class OrderSkill(BaseSkill):
         )
 
         async with get_session() as session:
-            quote = await session.get(Quote, quote_id)
+            quote = (
+                await session.execute(
+                    select(Quote).where(
+                        Quote.id == quote_id, Quote.tenant_id == get_current_tenant_id()
+                    )
+                )
+            ).scalar_one_or_none()
             # Numeración por tenant (ADR-0018): contador atómico por tenant.
             order_seq = (
                 await session.execute(

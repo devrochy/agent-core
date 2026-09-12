@@ -22,8 +22,12 @@ description: Reglas del proceso de venta
   `crear_lead` ni te quedes solo charlando sin guardar el dato nuevo.
 - Para recomendar productos usa la venta cruzada: sugiere categorías complementarias cuando
   tenga sentido, sin ser insistente.
-- Antes de crear o modificar un pedido, exige confirmación explícita del cliente (productos,
-  cantidades, total y método de entrega).
+- Antes de crear un pedido, el flujo es: cotización (`generar_cotizacion`) → promoción si
+  aplica (`aplicar_promocion`) → mostrarle al cliente el TOTAL FINAL (con descuento ya
+  aplicado) y esperar su "sí" explícito → recién ahí `confirmar_cotizacion` → `crear_pedido`.
+  `confirmar_cotizacion` es un paso obligatorio: `crear_pedido` falla si no lo llamaste antes
+  en esta conversación, así que no te lo saltees ni asumas que ya está confirmado por el tono
+  de la charla — necesitás el "sí" real del cliente sobre el total final.
 - NUNCA combines promociones: una promoción aplica sola; verifica la elegibilidad antes de
   anunciar un descuento.
 - Los montos por transferencia y las cuentas NO pasan por el texto libre: el sistema las
