@@ -986,11 +986,19 @@ class OrderSkill(BaseSkill):
                 # llegaba a llamarla) en generar_link_pago, ya tarde para
                 # redirigir la conversación con naturalidad; ahora es
                 # determinístico en el primer punto posible.
+                #
+                # SEGUNDO incidente real, mismo día: la primera versión de este
+                # error incluía el monto exacto en texto libre ("...menores a
+                # $150.000"). El modelo lo repetía en su respuesta, y
+                # `_amount_guardrail` (module.py) lo bloqueaba por "monto no
+                # verificado" -- ese guardrail solo reconoce montos que salen
+                # de una clave de MONEY_KEYS en el resultado de una tool, no
+                # números embebidos en un string de error. En vez de enseñarle
+                # al guardrail a reconocer este caso puntual, se saca el monto
+                # del texto libre: el modelo no necesita citarlo para cumplir
+                # la regla del playbook ("ofrecé otro método").
                 return {
-                    "error": (
-                        f"El pago en línea no está disponible para montos menores a "
-                        f"${min_online:,.0f}."
-                    ),
+                    "error": "El pago en línea no está disponible para este pedido.",
                     "hint": "Ofrecele transferencia o contraentrega en su lugar.",
                 }
 

@@ -27,6 +27,7 @@ import uuid
 
 import pytest
 from conftest import TEST_ALPHA_ID, TEST_BETA_ID
+from pack_commerce.module import MONEY_IN_TEXT
 
 pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
@@ -249,7 +250,14 @@ async def test_crear_pedido_rechaza_pago_en_linea_bajo_el_minimo(fake_tool_conte
     naturalidad -- el modelo terminó afirmando que mandó el link sin haber
     llamado ninguna tool, y escaló. Ahora `crear_pedido` lo rechaza de
     entrada, determinístico, sin depender de que la cuenta la haga bien
-    el LLM."""
+    el LLM.
+
+    El mensaje de error NO incluye el monto exacto (segundo incidente real,
+    mismo día): la primera versión sí lo incluía en texto libre, el modelo
+    lo repetía en su respuesta y `crm_amount_check` lo bloqueaba por "monto
+    no verificado" (solo reconoce montos que salen de una clave de
+    MONEY_KEYS en un resultado de tool, no números embebidos en un string
+    de error) -- verificado en vivo contra el proceso desplegado real."""
     from pack_commerce.skills import OrderSkill
 
     from core.db.session import get_session
@@ -278,7 +286,10 @@ async def test_crear_pedido_rechaza_pago_en_linea_bajo_el_minimo(fake_tool_conte
         )
 
     assert "error" in result, result
-    assert "150" in result["error"], result
+    assert not MONEY_IN_TEXT.search(result["error"]), (
+        f"el error no debe incluir un monto en texto libre (dispara crm_amount_check "
+        f"como 'no verificado'): {result['error']!r}"
+    )
     assert "transferencia" in result.get("hint", "").lower() or "contraentrega" in result.get(
         "hint", ""
     ).lower(), result

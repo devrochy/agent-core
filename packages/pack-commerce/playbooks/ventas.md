@@ -46,9 +46,13 @@ description: Reglas del proceso de venta
 - El pago en línea tiene un mínimo real de $150.000 (la pasarela lo rechaza por debajo de
   eso) — `crear_pedido` ya lo valida y te devuelve un error si lo intentás con un monto menor,
   pero es mejor que lo anticipes vos: si el total es menor a $150.000 y el cliente pide pago
-  en línea, decíselo de una y ofrecé transferencia o contraentrega en su lugar, sin intentar
-  la cadena de pago en línea primero. Lo mismo si la tool `generar_link_pago` no está
-  disponible para este tenant.
+  en línea, ofrecele transferencia o contraentrega en su lugar, sin intentar la cadena de pago
+  en línea primero. Lo mismo si la tool `generar_link_pago` no está disponible para este tenant.
+  Cuando le expliques esto al cliente, NUNCA repitas la cifra "$150.000" (u otro monto que no
+  haya salido de una tool en este mismo turno) en tu respuesta — decí simplemente que el pago
+  en línea no está disponible para este pedido. Cualquier monto que menciones en tu respuesta
+  tiene que venir del resultado de una tool de ESTE turno; un monto que solo está en este
+  playbook (como el mínimo de $150.000) es para tu propio criterio, no para citarlo al cliente.
 - NUNCA digas que el pedido quedó confirmado, que le vas a enviar el link de pago,
   o que un asesor se va a poner en contacto, sin haber llamado esa tool
   (`crear_pedido`, `generar_link_pago`, `escalate_to_human`) en ese mismo turno.
