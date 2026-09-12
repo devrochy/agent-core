@@ -22,13 +22,14 @@ import asyncio
 import importlib
 import importlib.metadata
 import sys
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from core.db.models import PluginConfig, PluginRecord
+from core.db.models import PluginConfig, PluginRecord, Tenant
 from core.db.session import get_session
 from core.mcp.host import mcp_host
 from core.mcp.types import BaseModule, BasePluginConfig
@@ -256,9 +257,19 @@ class PluginManager:
     async def activate_all_configured(self) -> None:
         """Al arrancar: activa todo plugin con estado configured/active en BD.
 
-        La activación es global (mcp_host es un singleton); la config del plugin se
-        carga del tenant por defecto. El enablement por tenant (AgentSpec.packs) es
-        deuda Sprint 4.
+        El registro de tools en `mcp_host` es una acción GLOBAL de una sola vez
+        por proceso (ver docstring de `activate()`) -- qué tenant se use para esa
+        primera activación no importa funcionalmente (`self.config` solo se lee
+        dentro de `on_activate()` para validar el schema hoy). Lo que SÍ importa:
+        `load_config()` exige que ESE tenant tenga una fila de `plugin_configs`
+        guardada, o la activación falla.
+
+        Antes esto usaba SIEMPRE `default_tenant()` para todos los plugins por
+        igual -- un plugin cuyo config solo existe para OTRO tenant (ej.
+        `pack_payments`: credenciales de Wompi específicas de un negocio, nunca
+        del tenant "por defecto") fallaba con "El plugin requiere configuración
+        previa" en CADA reinicio, aunque ese tenant tuviera una config
+        perfectamente válida -- confirmado 3 veces en el entorno de test.
         """
         from core.shared.tenant import default_tenant, tenant_scope
 
@@ -267,18 +278,51 @@ class PluginManager:
                 select(PluginRecord).where(PluginRecord.status.in_(["configured", "active"]))
             )
             records = result.scalars().all()
-        tenant_id = await default_tenant()
-        if tenant_id is None:
+        if not records:
             return
-        async with tenant_scope(tenant_id):
-            for record in records:
-                if record.id not in self._modules:
-                    log.warning("plugin_in_db_not_installed", plugin=record.id)
-                    continue
+        fallback_tenant_id = await default_tenant()
+
+        for record in records:
+            if record.id not in self._modules:
+                log.warning("plugin_in_db_not_installed", plugin=record.id)
+                continue
+            tenant_id = await self._tenant_with_config(record.id) or fallback_tenant_id
+            if tenant_id is None:
+                continue
+            async with tenant_scope(tenant_id):
                 try:
                     await self.activate(record.id)
                 except PluginError:
                     pass  # ya quedó en estado error; el asistente sigue
+
+    async def _tenant_with_config(self, plugin_id: str) -> uuid.UUID | None:
+        """Un tenant real con config guardada para este plugin, para el arranque.
+
+        `plugin_configs` tiene RLS: no se puede preguntar "qué tenant tiene esto"
+        sin resolver el tenant primero. Se itera `tenants` (tabla de sistema, sin
+        RLS -- ver su docstring) probando cada uno dentro de su propio
+        `tenant_scope`. Cantidad de tenants esperada: chica (este framework es de
+        un solo operador por despliegue), el costo de iterar es despreciable y
+        solo pasa una vez, al arrancar."""
+        from core.shared.tenant import tenant_scope
+
+        async with get_session() as session:
+            tenant_ids = (
+                await session.execute(select(Tenant.id).where(Tenant.status == "active"))
+            ).scalars().all()
+        for tenant_id in tenant_ids:
+            async with tenant_scope(tenant_id):
+                async with get_session() as session:
+                    exists = (
+                        await session.execute(
+                            select(PluginConfig.tenant_id).where(
+                                PluginConfig.plugin_id == plugin_id
+                            ).limit(1)
+                        )
+                    ).scalar_one_or_none()
+                if exists is not None:
+                    return tenant_id
+        return None
 
     # ------------------------------------------------------------ migraciones por plugin
     def _run_plugin_migrations(self, plugin_id: str) -> None:
