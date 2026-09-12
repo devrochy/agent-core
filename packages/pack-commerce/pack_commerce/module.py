@@ -72,25 +72,35 @@ _TOOL_NAME_KEY = "_tool_name"
 # generar_link_pago NI escalado de verdad -- el cliente quedaba esperando algo
 # que nunca iba a pasar. Mismo principio que _amount_guardrail, pero para
 # acciones en vez de montos.
+#
+# Los patrones usan raíces (`\w*`) en vez de conjugaciones exactas: la primera
+# versión de este guardrail (solo "cerré tu pedido"/"te envío el link") la
+# esquivó SIN querer el propio modelo al decir "Cerramos tu pedido... Ahora
+# mismo te genero el link" en un incidente posterior (mismo día) -- ninguna
+# forma exacta de "decirlo" cubre todas las conjugaciones que un LLM puede
+# elegir, así que se prioriza la raíz del verbo + la palabra clave del tema
+# por sobre la frase exacta.
 COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
     "pedido": (
         re.compile(
-            r"pedido (?:qued[oó]|est[aá]) confirmad|cerr[eé] tu pedido|pedido (?:creado|generado)",
+            r"cerr\w*\s+(?:tu|el|los?|la)?\s*pedido|"
+            r"pedido\b(?:\W+\w+){0,3}\W+(?:confirmad\w*|cerrad\w*|cread\w*|generad\w*)",
             re.IGNORECASE,
         ),
         {"crear_pedido", "consultar_estado_pedido"},
     ),
     "link_de_pago": (
-        re.compile(
-            r"te env[ií]o el link|aqu[ií] tienes el link de pago|te paso el link de pago",
-            re.IGNORECASE,
-        ),
+        # Cualquier mención de "link de/para pago(ar)" en el texto LIBRE del
+        # modelo (nunca en el _safe_append, que corre después de los
+        # guardrails) implica que se está anunciando -- si no llamó la tool,
+        # es una promesa vacía sin importar el verbo que haya usado.
+        re.compile(r"link\s+(?:de\s+pago|para\s+pagar)", re.IGNORECASE),
         {"generar_link_pago"},
     ),
     "asesor_humano": (
         re.compile(
-            r"te comuniqu[eé] con un asesor|un asesor te (?:contact|escrib)|"
-            r"ya te pas[eé] con un (?:asesor|humano)|en un momentico te contactan",
+            r"comuniqu\w*\s+con\s+un\s+asesor|un\s+asesor\s+te\s+\w*|"
+            r"pas[eé]\s+con\s+un\s+(?:asesor|humano)|en\s+un\s+momentico\s+te\s+contactan",
             re.IGNORECASE,
         ),
         {"escalate_to_human"},

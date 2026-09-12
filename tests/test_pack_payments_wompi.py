@@ -1,4 +1,8 @@
-"""WompiProvider: verificación de firma de webhook y parseo de eventos.
+"""WompiProvider: verificación de firma de webhook, parseo de eventos, y el
+body/comportamiento real de `create_payment_link` -- verificado contra el
+sandbox REAL de Wompi (tenant yopoldo, 2026-09-11: un 422 real por
+`collect_shipping` faltante) y contra la implementación ya probada de
+agent-sale (`src/payments/wompiClient.ts`, `wompiWebhookHandler.ts`).
 
 La verificación de firma es la parte de seguridad crítica de pack-payments
 (un webhook sin verificar dejaría marcar pedidos como pagados a cualquiera
@@ -12,15 +16,27 @@ from __future__ import annotations
 
 import hashlib
 
-from pack_payments.providers.wompi import WompiProvider
+import pytest
+from pack_payments.providers.base import PaymentRequestRejected
+from pack_payments.providers.wompi import MIN_AMOUNT_COP, WompiProvider
 
 
-def _make_payload(*, transaction_id="1234", status="APPROVED", amount_in_cents=44900, timestamp=1530291411,
-                   reference="OC-0001", events_secret="test_events_secret", tamper=False):
+def _make_payload(
+    *,
+    transaction_id="tx-1234",
+    payment_link_id="link-abc",
+    status="APPROVED",
+    amount_in_cents=44900,
+    timestamp=1530291411,
+    reference="OC-0001",
+    events_secret="test_events_secret",
+    tamper=False,
+):
     properties = ["transaction.id", "transaction.status", "transaction.amount_in_cents"]
     data = {
         "transaction": {
             "id": transaction_id,
+            "payment_link_id": payment_link_id,
             "status": status,
             "amount_in_cents": amount_in_cents,
             "reference": reference,
@@ -40,7 +56,7 @@ def _make_payload(*, transaction_id="1234", status="APPROVED", amount_in_cents=4
 
 
 def _provider(events_secret: str = "test_events_secret") -> WompiProvider:
-    return WompiProvider(public_key="pub", private_key="prv", events_secret=events_secret, sandbox=True)
+    return WompiProvider(public_key="pub", private_key="prv_test_x", events_secret=events_secret, sandbox=True)
 
 
 def test_verify_webhook_signature_accepts_valid_checksum():
@@ -70,12 +86,23 @@ def test_verify_webhook_signature_missing_fields_is_false():
     assert _provider().verify_webhook_signature({"signature": {}}) is False
 
 
+def test_parse_webhook_event_correlates_by_payment_link_id_not_transaction_id():
+    """El bug real encontrado en vivo: `provider_reference` tiene que matchear
+    lo que guardamos al crear el link (`payment_link_id`), NUNCA el id de la
+    transacción individual (`transaction.id`, distinto en cada intento de
+    pago) -- si no, ningún webhook real encuentra jamás la fila que originó
+    el pago. Confirmado contra agent-sale: `wompiWebhookHandler.ts` resuelve
+    por `payment_link_id`, no por `id` ni por `reference`."""
+    payload = _make_payload(status="APPROVED", transaction_id="tx-distinto-cada-intento", payment_link_id="link-abc")
+    event = _provider().parse_webhook_event(payload)
+    assert event.provider_reference == "link-abc"
+    assert event.provider_reference != "tx-distinto-cada-intento"
+
+
 def test_parse_webhook_event_maps_approved():
-    payload = _make_payload(status="APPROVED", reference="OC-0042", transaction_id="tx-1")
+    payload = _make_payload(status="APPROVED")
     event = _provider().parse_webhook_event(payload)
     assert event.status == "aprobado"
-    assert event.reference == "OC-0042"
-    assert event.provider_reference == "tx-1"
 
 
 def test_parse_webhook_event_maps_declined_and_error_to_rechazado():
@@ -89,3 +116,106 @@ def test_parse_webhook_event_unknown_status_defaults_to_pendiente():
     payload = _make_payload(status="SOME_NEW_WOMPI_STATUS")
     event = _provider().parse_webhook_event(payload)
     assert event.status == "pendiente"
+
+
+@pytest.mark.asyncio
+async def test_create_payment_link_rejects_amount_below_wompi_minimum_without_network_call():
+    """El caso real: Pollo Broaster ($60.000) está por debajo del mínimo real
+    de Wompi ($150.000 COP, confirmado por QA de agent-sale contra el
+    sandbox real) -- se rechaza ANTES de llamar a la red, con un mensaje
+    accionable, no con un 422 crudo."""
+    provider = _provider()
+    with pytest.raises(PaymentRequestRejected, match="mínimo"):
+        await provider.create_payment_link(
+            reference="OC-0001", amount=60_000, currency="COP", expires_in_hours=24
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_payment_link_sends_collect_shipping_and_no_reference_field(monkeypatch):
+    """El body real que Wompi exige: `collect_shipping` (encontrado en vivo,
+    422 real por su ausencia) y SIN `reference` (Wompi no la documenta ni la
+    usa en Payment Links -- confirmado contra agent-sale, que tampoco la
+    manda)."""
+    captured: dict = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"data": {"id": "link-xyz"}}
+
+        text = ""
+
+    class FakeAsyncClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            return FakeResponse()
+
+    import pack_payments.providers.wompi as wompi_mod
+
+    monkeypatch.setattr(wompi_mod.httpx, "AsyncClient", FakeAsyncClient)
+
+    provider = _provider()
+    result = await provider.create_payment_link(
+        reference="OC-0001", amount=200_000, currency="COP", expires_in_hours=24
+    )
+
+    assert result.provider_reference == "link-xyz"
+    assert captured["json"]["collect_shipping"] is False
+    assert "reference" not in captured["json"]
+    assert "expires_at" in captured["json"]
+    assert captured["json"]["amount_in_cents"] == 20_000_000
+
+
+@pytest.mark.asyncio
+async def test_create_payment_link_rejection_is_recoverable_not_plugin_error(monkeypatch):
+    """Un 422 real de Wompi (ej. collect_shipping/monto) debe llegar como
+    PaymentRequestRejected -- NUNCA como PluginError, que dispararía
+    auto_disable y apagaría pack_payments para TODOS los tenants por un
+    rechazo de negocio (incidente real, 2026-09-11)."""
+
+    class FakeResponse:
+        status_code = 422
+        text = '{"error":{"type":"INPUT_VALIDATION_ERROR"}}'
+
+        def json(self):
+            return {}
+
+    class FakeAsyncClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **k):
+            return FakeResponse()
+
+    import pack_payments.providers.wompi as wompi_mod
+
+    monkeypatch.setattr(wompi_mod.httpx, "AsyncClient", FakeAsyncClient)
+
+    provider = _provider()
+    with pytest.raises(PaymentRequestRejected):
+        await provider.create_payment_link(
+            reference="OC-0001", amount=200_000, currency="COP", expires_in_hours=24
+        )
+
+
+def test_min_amount_cop_constant_matches_known_wompi_minimum():
+    assert MIN_AMOUNT_COP == 150_000

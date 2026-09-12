@@ -6,30 +6,41 @@ valores de `signature.properties` (en el orden dado, sin separador) +
 `timestamp` + el `events_secret` del tenant, SHA256, comparar contra
 `signature.checksum`. Este algoritmo SÍ está verificado.
 
-El body exacto de creación de un link de pago (`POST /v1/payment_links`)
-está implementado según la forma pública conocida de la API de Wompi
-(amount_in_cents, single_use, currency, name, redirect_url), pero no se
-pudo verificar en vivo contra la documentación al escribir esto (la página
-devolvió 403 a la herramienta de fetch). **Validar contra el sandbox real
-de Wompi antes de procesar un cobro real** — si el shape difiere, el único
-lugar a tocar es `create_payment_link` de este archivo.
+El body de creación de un link de pago (`POST /v1/payment_links`) se
+verificó contra el sandbox REAL de Wompi (encontrado en vivo, tenant
+yopoldo, 2026-09-11: un 422 real por `collect_shipping` faltante) y contra
+la implementación ya probada de `agent-sale`
+(`src/payments/wompiClient.ts`), que documenta además un mínimo real de
+Wompi para el monto (150.000 COP) no explícito en su guía pública —
+descubierto ahí también por QA contra el sandbox real, no por
+documentación.
 """
 
 from __future__ import annotations
 
 import hashlib
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 
-from core.shared.exceptions import PluginError
 from core.shared.logger import get_logger
-from pack_payments.providers.base import BasePaymentProvider, PaymentLinkResult, WebhookEvent
+from pack_payments.providers.base import (
+    BasePaymentProvider,
+    PaymentLinkResult,
+    PaymentRequestRejected,
+    WebhookEvent,
+)
 
 log = get_logger(__name__)
 
 PRODUCTION_BASE_URL = "https://production.wompi.co/v1"
 SANDBOX_BASE_URL = "https://sandbox.wompi.co/v1"
+
+# Mínimo real de Wompi para la base de una transacción en COP -- no está en
+# su guía pública de Links de pago, lo confirmó agent-sale por QA contra el
+# sandbox real (mismo 422 que si no se chequea acá antes de llamar).
+MIN_AMOUNT_COP = 150_000
 
 # Wompi usa su propio vocabulario de estado de transacción; lo normalizamos
 # al de este pack para que ningún pack downstream tenga que conocerlo.
@@ -54,14 +65,28 @@ class WompiProvider(BasePaymentProvider):
     async def create_payment_link(
         self, *, reference: str, amount: float, currency: str, expires_in_hours: int
     ) -> PaymentLinkResult:
+        if currency == "COP" and amount < MIN_AMOUNT_COP:
+            # Chequeo ANTES de llamar a la red: sabemos que Wompi va a rechazar
+            # esto (mismo criterio que agent-sale, wompiClient.ts) -- evita una
+            # llamada de red que ya sabemos que falla, y devuelve un mensaje
+            # accionable en vez de un 422 crudo.
+            raise PaymentRequestRejected(
+                f"El monto (${amount:,.0f}) es menor al mínimo permitido para pago en línea "
+                f"(${MIN_AMOUNT_COP:,.0f} COP). Ofrecé otro método de pago."
+            )
         amount_in_cents = round(amount * 100)
+        expires_at = (datetime.now(UTC) + timedelta(hours=expires_in_hours)).isoformat()
         body = {
             "name": f"Pago {reference}",
             "description": f"Referencia {reference}",
             "single_use": True,
+            # Requerido por Wompi (encontrado en vivo: 422 real,
+            # "collect_shipping: No está presente" -- no está en su guía
+            # pública, confirmado también en la implementación de agent-sale).
+            "collect_shipping": False,
             "currency": currency,
             "amount_in_cents": amount_in_cents,
-            "reference": reference,
+            "expires_at": expires_at,
         }
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
@@ -70,11 +95,17 @@ class WompiProvider(BasePaymentProvider):
                 headers={"Authorization": f"Bearer {self.private_key}"},
             )
         if resp.status_code >= 400:
-            raise PluginError("pack_payments", f"Wompi rechazó la creación del link: {resp.status_code} {resp.text[:300]}")
+            # Rechazo de NEGOCIO (validación de Wompi), no una falla del plugin
+            # -- PaymentRequestRejected, nunca PluginError acá (ver su docstring
+            # en providers/base.py: eso apagaría pack_payments para TODOS los
+            # tenants por un rechazo esperable).
+            raise PaymentRequestRejected(
+                f"Wompi rechazó la creación del link: {resp.status_code} {resp.text[:300]}"
+            )
         data = resp.json().get("data", {})
         link_id = data.get("id")
         if not link_id:
-            raise PluginError("pack_payments", "Respuesta de Wompi sin id de link de pago")
+            raise PaymentRequestRejected("Respuesta de Wompi sin id de link de pago")
         return PaymentLinkResult(
             provider_reference=str(link_id),
             payment_link_url=f"https://checkout.wompi.co/l/{link_id}",
@@ -107,9 +138,19 @@ class WompiProvider(BasePaymentProvider):
     def parse_webhook_event(self, payload: dict[str, Any]) -> WebhookEvent:
         transaction = (payload.get("data") or {}).get("transaction") or {}
         raw_status = str(transaction.get("status", "")).upper()
+        # `transaction.id` es el id de ESTE intento de pago (Wompi genera uno
+        # nuevo por cada intento contra el mismo link) -- NO es lo que
+        # guardamos como provider_reference al crear el link. Lo que
+        # correlaciona de vuelta a NUESTRA fila es `transaction.payment_link_id`
+        # (el id del link reusable, `data.id` de la creación). Confirmado
+        # contra la implementación real de agent-sale
+        # (wompiWebhookHandler.ts::handleWompiWebhook, resuelve por
+        # `payment_link_id`, no por `reference` ni por `id`) -- antes de este
+        # fix, ESTE campo comparaba mal y ningún webhook real iba a encontrar
+        # jamás la transacción que originó el pago.
         return WebhookEvent(
             reference=str(transaction.get("reference", "")),
-            provider_reference=str(transaction.get("id", "")),
+            provider_reference=str(transaction.get("payment_link_id", "")),
             status=_STATUS_MAP.get(raw_status, "pendiente"),
             raw=payload,
         )

@@ -14,6 +14,7 @@ El LLM propone, las tools deciden (contra la BD), el core arbitra.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -57,6 +58,21 @@ FALLBACK_REPLY = (
     "Disculpa, estoy teniendo un inconveniente técnico. "
     "Ya avisé a nuestro equipo para que te atienda una persona."
 )
+
+# WhatsApp y canales similares no interpretan Markdown: un cliente ve
+# "**Pollo Broaster**" literal, asteriscos incluidos, no negrita. La regla ya
+# está en core/playbooks/reglas-operacion.md, pero confiar solo en que el LLM
+# la siga siempre no es suficiente (mismo criterio que los guardrails de esta
+# sesión: lo que se puede garantizar en código, no se deja solo al prompt) --
+# esto es un strip determinístico de última línea, no un reemplazo del
+# playbook.
+_MARKDOWN_BOLD = re.compile(r"\*\*(.+?)\*\*")
+_MARKDOWN_ITALIC = re.compile(r"(?<!\*)\*([^*\n]+?)\*(?!\*)")
+
+
+def strip_markdown(text: str) -> str:
+    text = _MARKDOWN_BOLD.sub(r"\1", text)
+    return _MARKDOWN_ITALIC.sub(r"\1", text)
 
 
 @dataclass
@@ -311,7 +327,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
 
         # ---- respuesta final
         extras = extract_safe_extras(all_tool_results)
-        final_text = apply_safe_extras(response.content, extras)
+        final_text = apply_safe_extras(strip_markdown(response.content), extras)
         await _finish_turn(conversation_id, final_text, latest_message, resolved=bool(all_tool_results))
         await _write_usage_ledger(conversation_id, spec, usage, turn_span)
         return TurnResult(text=final_text, image_url=extras.image_url)
