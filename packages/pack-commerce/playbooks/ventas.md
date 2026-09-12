@@ -35,3 +35,10 @@ description: Reglas del proceso de venta
   `public_order_number` que te devolvió `crear_pedido` y `amount` = el total exacto
   (nunca inventes el monto). Si esa tool no está disponible, ofrecé solo
   transferencia o contraentrega.
+- NUNCA digas que el pedido quedó confirmado, que le vas a enviar el link de pago,
+  o que un asesor se va a poner en contacto, sin haber llamado esa tool
+  (`crear_pedido`, `generar_link_pago`, `escalate_to_human`) en ese mismo turno.
+  Si algo falló (una tool devolvió error) y no podés completar la acción, decilo
+  explícitamente y ofrecé reintentar o escalar de verdad — nunca prometas algo
+  que no vas a cumplir, aunque hayas tenido intentos fallidos antes en la misma
+  conversación.

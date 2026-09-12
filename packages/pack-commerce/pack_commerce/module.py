@@ -57,6 +57,60 @@ MONEY_IN_TEXT = re.compile(r"\$\s?[\d.,]+")
 # confundir un stock/quantity numérico con un monto verificado.
 MONEY_KEYS = {"price", "unit_price", "line_total", "subtotal", "total", "discount"}
 
+# Clave reservada del core (docs/SAFE-RENDERER.md, core/orchestrator/safe_renderer.py)
+# -- se usa el literal, NO se importa: los packs no pueden importar de
+# core.orchestrator.* (invariante nº5/allowlist de CLAUDE.md), mismo criterio ya
+# usado acá para "_safe_append".
+_TOOL_NAME_KEY = "_tool_name"
+
+# Frases que afirman que una acción de negocio quedó resuelta -> deben
+# corresponder a una tool REALMENTE llamada en ESTE turno, o es una "phantom
+# completion": el modelo dice que hizo algo sin haberlo hecho. Encontrado en
+# vivo (tenant yopoldo, 2026-09-11): tras 2 intentos fallidos de generar_cotizacion
+# (variant_id inventado), el modelo terminó diciendo "cerré tu pedido, en un
+# momentico el asesor te pasa el link" sin haber llamado crear_pedido NI
+# generar_link_pago NI escalado de verdad -- el cliente quedaba esperando algo
+# que nunca iba a pasar. Mismo principio que _amount_guardrail, pero para
+# acciones en vez de montos.
+COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
+    "pedido": (
+        re.compile(
+            r"pedido (?:qued[oó]|est[aá]) confirmad|cerr[eé] tu pedido|pedido (?:creado|generado)",
+            re.IGNORECASE,
+        ),
+        {"crear_pedido", "consultar_estado_pedido"},
+    ),
+    "link_de_pago": (
+        re.compile(
+            r"te env[ií]o el link|aqu[ií] tienes el link de pago|te paso el link de pago",
+            re.IGNORECASE,
+        ),
+        {"generar_link_pago"},
+    ),
+    "asesor_humano": (
+        re.compile(
+            r"te comuniqu[eé] con un asesor|un asesor te (?:contact|escrib)|"
+            r"ya te pas[eé] con un (?:asesor|humano)|en un momentico te contactan",
+            re.IGNORECASE,
+        ),
+        {"escalate_to_human"},
+    ),
+    # Deuda registrada en el ROADMAP (sesión 2026-09-11, evals): el modelo a
+    # veces DICE que guardó un dato de contacto del lead ("ya guardé tu
+    # teléfono") sin haber llamado la tool -- mismo mecanismo, cierra ese
+    # hallazgo también. Acotado a datos de CONTACTO específicamente (no
+    # "guardé"/"registré" a secas, que también aplicaría a "guardé tu pedido"
+    # y generaría falsos positivos contra la categoría "pedido" de arriba).
+    "dato_de_contacto_guardado": (
+        re.compile(
+            r"(?:guard[eé]|registr[eé]|anot[eé])\s+(?:tu|el|los?|la)\s*"
+            r"(?:tel[eé]fono|correo|email|nombre|direcci[oó]n|nu?mero)",
+            re.IGNORECASE,
+        ),
+        {"crear_lead", "calificar_lead", "actualizar_lead", "update_customer_profile", "remember_fact"},
+    ),
+}
+
 
 def _extract_monetary_values(node: Any, key: str | None = None) -> list[float]:
     """Recorre `node` recursivamente (listas y dicts anidados) y colecciona los
@@ -781,6 +835,7 @@ class CRMModule(BaseModule):
         host.register_skill(CatalogSkill())
         host.register_skill(OrderSkill())
         host.register_guardrail("crm_amount_check", self._amount_guardrail, priority=5)
+        host.register_guardrail("crm_completion_check", self._completion_guardrail, priority=6)
 
         # Vistas por descriptor (Fase D, Sprint 4): la del panel se sirve con HTML
         # genérico — cero plantillas/rutas propias del pack.
@@ -972,6 +1027,34 @@ class CRMModule(BaseModule):
                     retry_instruction=(
                         "Mencionaste un monto que no proviene de ninguna herramienta. "
                         "No cites cifras específicas salvo que una herramienta las haya devuelto."
+                    ),
+                )
+        return GuardrailResult(passed=True)
+
+    async def _completion_guardrail(
+        self, response_text: str, tool_results: list[dict[str, Any]]
+    ) -> GuardrailResult:
+        """Si la respuesta afirma que una acción de negocio quedó resuelta
+        (pedido confirmado, link de pago enviado, asesor contactado) pero
+        ninguna tool que respalde esa afirmación corrió en este turno, bloquear.
+
+        No es infalible (es texto libre, no todas las formas de decirlo están
+        cubiertas), pero corta el caso real encontrado: el modelo prometiendo
+        algo que nunca iba a pasar, dejando al cliente esperando en el vacío.
+        """
+        called_tools = {
+            result.get(_TOOL_NAME_KEY) for result in tool_results if isinstance(result, dict)
+        }
+        for label, (pattern, required_tools) in COMPLETION_CLAIMS.items():
+            if pattern.search(response_text) and not (called_tools & required_tools):
+                return GuardrailResult(
+                    passed=False,
+                    reason=f"Afirmación de '{label}' sin la tool correspondiente en este turno",
+                    retry_instruction=(
+                        f"Dijiste que se completó una acción de '{label}' pero no llamaste la "
+                        "herramienta correspondiente en este turno. Llamala ahora mismo, o si no "
+                        "podés completarla de verdad, decilo explícitamente en vez de prometer "
+                        "algo que no vas a cumplir."
                     ),
                 )
         return GuardrailResult(passed=True)
