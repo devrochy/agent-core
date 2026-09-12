@@ -153,4 +153,13 @@ documentos, no con promesas.
 
 | 2026-09-12 | `generar_link_pago` no declara `scopes` (ADR-0019) pese a hacer red externa + escritura; `MIN_AMOUNT_COP` hardcodeado (podría variar por tenant); dominios de Wompi no están en ningún `agentpkg.yaml` (ese manifest no existe todavía en el repo) | `auditor-multitenant` sobre el fix de Wompi, 2026-09-12 | baja — deuda preexistente/de diseño futuro, no bloqueante; se retoma junto con la fila de `scopes`/manifest ya registrada arriba (Sprint 5) |
 
+Nota aparte (no un hallazgo del auditor): en el CI del PR de Wompi real
+(2026-09-12), `venta-recomendar-producto-03` falló 4 veces seguidas antes
+de pasar (mismo síntoma ya aceptado — llama `consultar_inventario` en vez
+de `recomendar_producto`, ~70% de acierto documentado arriba). Una racha
+de 4/4 fallos es estadísticamente rara para ese ratio (~1%). Sin conexión
+lógica encontrada con ese diff (los cambios de playbook eran sobre
+markdown y el mínimo de Wompi, secciones no relacionadas). Se anota por si
+la racha se repite y amerita remedir el ratio real.
+
 Cada vez que un onboarding requiera escribir código, se anota aquí: es un pack incompleto.
