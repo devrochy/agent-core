@@ -20,10 +20,14 @@ import asyncio
 import json
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agentcore_contracts import AgentSpec
 
 from core.onboarding import tenants_root
+
+if TYPE_CHECKING:
+    from core.llm.types import LLMMessage
 
 SCENARIOS_DIR = Path(__file__).parent / "golden_scenarios"
 SPECS_DIR = Path(__file__).parent / "specs"
@@ -95,6 +99,51 @@ async def _ensure_plugin_active(plugin_id: str, tenant_id: uuid.UUID) -> bool:
         return plugin_manager.is_active(plugin_id)
 
 
+def _build_messages(conversation: list[dict]) -> list[LLMMessage]:
+    """Arma el historial de un escenario con la MISMA forma que usa
+    `core/orchestrator/loop.py` dentro de un turno real (líneas ~296-316):
+    un tool_call declarado en el JSON del escenario se traduce a un
+    `LLMMessage(role="assistant", tool_calls=[...])` seguido de un
+    `LLMMessage(role="tool", tool_call_id=..., content=...)` por cada
+    resultado.
+
+    Sin esto (el comportamiento de antes), el modelo solo veía la
+    AFIRMACIÓN en texto de un turno "assistant" anterior -- sin evidencia
+    estructurada de que la tool realmente corrió. Causa confirmada de la
+    flakiness de `venta-recomendar-producto-03`/`seguimiento-calificar-lead-22`
+    (ver docs/ROADMAP.md): el modelo a veces no confiaba en que el dato ya
+    estuviera resuelto y volvía a consultar inventario o repetía `crear_lead`.
+
+    Un turno sin `tool_calls` declarados (el caso de TODOS los demás
+    escenarios) produce exactamente el mismo `LLMMessage(role, content)`
+    de antes -- cero cambio de comportamiento para el resto del golden set.
+    """
+    from core.llm.types import LLMMessage, LLMToolCall
+
+    messages: list[LLMMessage] = []
+    for i, m in enumerate(conversation):
+        declared = m.get("tool_calls", [])
+        messages.append(
+            LLMMessage(
+                role=m["role"],
+                content=m.get("content", ""),
+                tool_calls=[
+                    LLMToolCall(id=f"eval_{i}_{j}", name=tc["name"], arguments=tc["arguments"])
+                    for j, tc in enumerate(declared)
+                ],
+            )
+        )
+        for j, tc in enumerate(declared):
+            messages.append(
+                LLMMessage(
+                    role="tool",
+                    tool_call_id=f"eval_{i}_{j}",
+                    content=json.dumps(tc.get("result", {}), ensure_ascii=False),
+                )
+            )
+    return messages
+
+
 async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tuple[str, bool, str]:
     scenario = json.loads(path.read_text())
     name = scenario["name"]
@@ -112,7 +161,6 @@ async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tup
     from core.config import get_settings
     from core.llm import resolve_provider
     from core.llm.prompt_builder import PromptContext, build_system_blocks
-    from core.llm.types import LLMMessage
     from core.mcp.host import mcp_host
     from core.mcp.translator import to_llm_schemas
 
@@ -131,9 +179,7 @@ async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tup
         business_description="Negocio de ejemplo para evaluación.",
     )
     tools = to_llm_schemas(mcp_host.get_skill_tools([s.name for s in mcp_host.list_skills()]))
-    messages = [
-        LLMMessage(role=m["role"], content=m["content"]) for m in scenario["conversation"]
-    ]
+    messages = _build_messages(scenario["conversation"])
     response = await provider.generate(
         system_blocks=await build_system_blocks(spec, ctx), messages=messages, tools=tools or None
     )
