@@ -109,6 +109,25 @@ class PaymentSkill(BaseSkill):
             if existing is not None:
                 return _result(existing)
 
+        # Idempotencia por REFERENCE (un pedido = una transacción): si el modelo
+        # llama esta tool dos veces para el MISMO pedido en turnos distintos (no
+        # el mismo tool_call -- eso ya lo cubre el chequeo de arriba), hay que
+        # devolver el resultado existente en vez de reventar contra el índice
+        # único (tenant_id, reference) -- mismo patrón de bug ya corregido en
+        # pack_commerce (excepción no manejada -> PluginError -> auto_disable).
+        async with get_session() as session:
+            existing_by_reference = (
+                await session.execute(
+                    select(PaymentTransaction).where(
+                        PaymentTransaction.tenant_id == get_current_tenant_id(),
+                        PaymentTransaction.reference == reference,
+                        PaymentTransaction.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing_by_reference is not None:
+                return _result(existing_by_reference)
+
         try:
             link = await provider.create_payment_link(
                 reference=reference,
