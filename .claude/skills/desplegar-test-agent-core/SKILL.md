@@ -1,5 +1,5 @@
 ---
-name: desplegar-test
+name: desplegar-test-agent-core
 description: >
   Mergea un PR a develop y despliega el resultado en el entorno de test de
   Coolify (agent-core-test), verificando que quedó sano (contenedor healthy,
@@ -32,9 +32,14 @@ nuevo): resolver con `docker ps --format '{{.Names}}' | grep ggzjdyc`.
 
 No confundir con `agent-sale`: ese es OTRO proyecto (Node/TypeScript,
 `agent_sale` DB, migraciones `pgmigrations`/`npm run migrate`, puerto
-`:3000`). Si un skill con este mismo nombre carga datos de ese proyecto
-estando en `agent-core`, es el global de `agent-sale` colándose — este
-archivo (project-scoped) debería ganarle por especificidad.
+`:3000`). Este skill se llamaba antes `desplegar-test` a secas, mismo
+nombre que el skill de usuario (`~/.claude/skills/desplegar-test`) para
+`agent-sale` — un bug real del Skill tool (reportado a Anthropic, ver
+`docs/audit/` o el historial de la sesión 2026-09-12) hacía que el de
+usuario ganara pese a estar en el proyecto equivocado, cargando datos de
+`agent-sale` estando en `agent-core`. Se renombró a
+`desplegar-test-agent-core` específicamente para eliminar la colisión de
+nombre mientras Anthropic corrige la resolución real.
 
 ## 1. Mergear el PR
 
