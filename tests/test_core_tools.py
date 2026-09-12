@@ -115,15 +115,15 @@ async def test_tool_denial_pack_y_binding(monkeypatch: pytest.MonkeyPatch) -> No
     )
 
     # pack no habilitado → se niega en la costura de ejecución (defensa en profundidad)
-    assert _tool_denial(spec, "fake_pack_tool") is not None
+    assert await _tool_denial(spec, "fake_pack_tool") is not None
 
     # pack habilitado → corre
     spec.packs = ["core", "pack_fake"]
-    assert _tool_denial(spec, "fake_pack_tool") is None
+    assert await _tool_denial(spec, "fake_pack_tool") is None
 
     # binding deshabilitado → niega aunque el pack esté habilitado
     spec.tools = [ToolBinding(tool="fake_pack_tool", enabled=False, scopes=[])]
-    assert "deshabilitada" in _tool_denial(spec, "fake_pack_tool")
+    assert "deshabilitada" in await _tool_denial(spec, "fake_pack_tool")
 
     # fail-open: tool del core sin binding corre
     spec.tools = []
@@ -137,7 +137,7 @@ async def test_tool_denial_pack_y_binding(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(
         loop_mod.mcp_host, "get_tool", lambda name: core_tool if name == "core_fake" else None
     )
-    assert _tool_denial(spec, "core_fake") is None
+    assert await _tool_denial(spec, "core_fake") is None
 
 
 def test_crm_config_copy_mensajes_pedido() -> None:

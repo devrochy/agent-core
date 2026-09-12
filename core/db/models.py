@@ -280,6 +280,33 @@ class PluginConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class PluginTenantState(Base):
+    """Salud de un plugin POR TENANT (ADR-0024): sin fila activa = sano.
+
+    Independiente de `PluginRecord.status` (¿el módulo cargó bien al
+    activarse? -- sistema, sigue siendo global a propósito) y de
+    `mcp_host` (qué código existe -- singleton de proceso, ver ADR-0019,
+    no se toca). Esta tabla existe para que una excepción de runtime
+    causada por el tráfico de UN tenant no apague el pack para los demás
+    -- incidente real documentado en `docs/ROADMAP.md` (filas 143-149).
+
+    `deleted_at` (invariante #8: sin borrado físico) marca "reactivado por
+    un admin" -- `reactivate_for_tenant` no borra la fila, la marca. Si el
+    mismo plugin vuelve a fallar para este tenant, la fila se reutiliza
+    (mismo PK) y `deleted_at` se limpia.
+    """
+
+    __tablename__ = "plugin_tenant_state"
+
+    plugin_id: Mapped[str] = mapped_column(ForeignKey("plugins.id"), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    status: Mapped[str] = mapped_column(Text, default="error")
+    error_message: Mapped[str | None] = mapped_column(Text)
+    disabled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 # ---------------------------------------------------------------- admin (sistema, sin RLS)
 class Admin(Base):
     __tablename__ = "admins"

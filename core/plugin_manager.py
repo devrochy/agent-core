@@ -29,10 +29,11 @@ from typing import Any
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from core.db.models import PluginConfig, PluginRecord, Tenant
+from core.db.models import PluginConfig, PluginRecord, PluginTenantState, Tenant
 from core.db.session import get_session
 from core.mcp.host import mcp_host
 from core.mcp.types import BaseModule, BasePluginConfig
+from core.shared.audit import record_audit
 from core.shared.crypto import get_secret_box
 from core.shared.events import ON_PLUGIN_ACTIVATED, ON_PLUGIN_DISABLED, event_bus
 from core.shared.exceptions import PluginConfigError, PluginError
@@ -247,12 +248,112 @@ class PluginManager:
         log.info("plugin_deactivated", plugin=plugin_id, reason=reason)
 
     async def auto_disable(self, plugin_id: str, reason: str) -> None:
-        """Desactivación automática ante un PluginError en runtime.
+        """Desactivación automática GLOBAL ante un PluginError en runtime,
+        sin contexto de tenant resuelto (ver `auto_disable_for_tenant` --
+        el camino que usan `loop.py`/`webhooks.py` en la práctica).
 
         El asistente NUNCA se cae por un plugin roto. El panel admin muestra
         el error y el master puede reactivarlo tras corregir la causa.
         """
         await self.deactivate(plugin_id, status="error", reason=reason)
+
+    async def auto_disable_for_tenant(
+        self, tenant_id: uuid.UUID | None, plugin_id: str, reason: str
+    ) -> None:
+        """Desactivación automática ante un PluginError en runtime, ACOTADA
+        al tenant que lo disparó (ADR-0024).
+
+        A diferencia de `auto_disable`/`deactivate`, esto NO toca `mcp_host`
+        (el registro de tools sigue intacto para todos los tenants) ni
+        `PluginRecord.status` (el estado de sistema no cambia) -- solo
+        marca, en `plugin_tenant_state`, que ESTE tenant no puede usar el
+        plugin hasta que un admin lo reactive. Otro tenant con el mismo
+        plugin, que nunca causó el error, sigue funcionando con normalidad.
+
+        Sin `tenant_id` resuelto (contexto de sistema sin tenant claro, ej.
+        un cron), cae al `auto_disable()` global de siempre -- no hay dónde
+        acotar el daño.
+        """
+        if tenant_id is None:
+            await self.auto_disable(plugin_id, reason)
+            return
+        await self._write_tenant_error(tenant_id, plugin_id, reason)
+        log.warning(
+            "plugin_auto_disabled_for_tenant", plugin=plugin_id, tenant_id=str(tenant_id), reason=reason
+        )
+        await record_audit(
+            actor=f"plugin:{plugin_id}",
+            action="auto_disabled_for_tenant",
+            output_data={"reason": reason},
+        )
+
+    async def _write_tenant_error(self, tenant_id: uuid.UUID, plugin_id: str, reason: str) -> None:
+        """Upsert en `plugin_tenant_state`. Separado de `auto_disable_for_tenant`
+        para poder monkeypatchear la escritura a BD en tests unitarios (mismo
+        criterio que `_set_status`).
+
+        Sin borrado físico (invariante #8): si la fila ya existía pero estaba
+        `deleted_at` (reactivada por un admin) y el plugin vuelve a fallar
+        para este mismo tenant, se reutiliza la misma fila y se limpia
+        `deleted_at` -- no se crea una segunda."""
+        from sqlalchemy.exc import IntegrityError
+
+        now = datetime.now(UTC)
+        try:
+            async with get_session() as session:
+                existing = await session.get(PluginTenantState, (plugin_id, tenant_id))
+                if existing is None:
+                    session.add(
+                        PluginTenantState(
+                            plugin_id=plugin_id,
+                            tenant_id=tenant_id,
+                            status="error",
+                            error_message=reason,
+                            disabled_at=now,
+                            deleted_at=None,
+                            updated_at=now,
+                        )
+                    )
+                else:
+                    existing.status = "error"
+                    existing.error_message = reason
+                    existing.disabled_at = now
+                    existing.deleted_at = None
+                    existing.updated_at = now
+        except IntegrityError:
+            # Carrera: dos tool-calls del mismo tenant fallaron casi a la vez
+            # y ambas intentaron crear la fila. La que ganó ya dejó el
+            # estado en "error" -- no hace falta reintentar como UPDATE.
+            pass
+
+    async def is_disabled_for_tenant(self, tenant_id: uuid.UUID, plugin_id: str) -> bool:
+        async with get_session() as session:
+            row = await session.get(PluginTenantState, (plugin_id, tenant_id))
+        return row is not None and row.deleted_at is None
+
+    async def disabled_plugins_for_tenant(self, tenant_id: uuid.UUID) -> set[str]:
+        async with get_session() as session:
+            result = await session.execute(
+                select(PluginTenantState.plugin_id).where(
+                    PluginTenantState.tenant_id == tenant_id,
+                    PluginTenantState.deleted_at.is_(None),
+                )
+            )
+            return set(result.scalars().all())
+
+    async def reactivate_for_tenant(self, tenant_id: uuid.UUID | None, plugin_id: str) -> None:
+        """Marca `deleted_at` en la fila de error de este tenant (acción de
+        admin, tras corregir la causa) -- sin borrado físico (invariante #8).
+        Sin fila activa = sano, no hace falta distinguir "nunca falló" de
+        "falló y se reactivó"."""
+        if tenant_id is None:
+            log.warning("plugin_reactivate_sin_tenant", plugin=plugin_id)
+            return
+        async with get_session() as session:
+            row = await session.get(PluginTenantState, (plugin_id, tenant_id))
+            if row is not None and row.deleted_at is None:
+                row.deleted_at = datetime.now(UTC)
+        log.info("plugin_reactivated_for_tenant", plugin=plugin_id, tenant_id=str(tenant_id))
 
     async def activate_all_configured(self) -> None:
         """Al arrancar: activa todo plugin con estado configured/active en BD.

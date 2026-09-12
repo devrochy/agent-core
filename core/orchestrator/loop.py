@@ -178,10 +178,20 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     profile = await entity_memory.get_profile(customer.id)
     recalled = await vector_memory.recall(latest_message, customer_id=customer.id)
 
+    from core.plugin_manager import plugin_manager
+
     available_skills = mcp_host.list_skills()
     # Enablement por tenant (ADR-0019): solo skills de los packs del AgentSpec.
     enabled = enabled_packs(spec)
-    available_skills = [s for s in available_skills if s.plugin_id in enabled]
+    # Salud por tenant (ADR-0024): un plugin roto para ESTE tenant (por un
+    # PluginError de runtime) no debe ofrecerse, aunque siga registrado en
+    # mcp_host para los demás tenants. OJO: `enabled` (arriba) se reusa más
+    # abajo para filtrar guardrails -- ese filtro NO debe tocarse acá, los
+    # guardrails de un plugin con salud rota siguen corriendo a propósito.
+    disabled_for_tenant = await plugin_manager.disabled_plugins_for_tenant(get_current_tenant_id())
+    available_skills = [
+        s for s in available_skills if s.plugin_id in enabled and s.plugin_id not in disabled_for_tenant
+    ]
     selected_names = select_relevant_skills(latest_message, recent_context, available_skills)
     active_tools = mcp_host.get_skill_tools(selected_names)
 
@@ -371,7 +381,7 @@ async def _execute_tool_safely(
     # una tool deshabilitada por binding. La denegación es un error de negocio
     # limpio, SIN auto_disable.
     if spec is not None:
-        denial = _tool_denial(spec, tool_call.name)
+        denial = await _tool_denial(spec, tool_call.name)
         if denial is not None:
             result = {"error": denial}
             await record_audit(
@@ -388,7 +398,9 @@ async def _execute_tool_safely(
     except PluginError as exc:
         # Las tools del CORE ("core") no se auto-desactivan: el core no se apaga a sí mismo.
         if exc.plugin_id != "core":
-            await plugin_manager.auto_disable(exc.plugin_id, str(exc))
+            # Acotado al tenant de ESTA conversación (ADR-0024): no apaga el
+            # plugin para los demás tenants que nunca tuvieron el problema.
+            await plugin_manager.auto_disable_for_tenant(get_current_tenant_id(), exc.plugin_id, str(exc))
         result = {
             "error": "La herramienta no está disponible en este momento. "
             "Discúlpate y ofrece escalar a un asesor humano si es necesario."
@@ -403,18 +415,27 @@ async def _execute_tool_safely(
     return result
 
 
-def _tool_denial(spec, tool_name: str) -> str | None:
+async def _tool_denial(spec, tool_name: str) -> str | None:
     """Razón de denegación de una tool según el AgentSpec (ADR-0019), o None si corre.
 
     - La tool de un pack NO habilitado se deniega: defensa en profundidad, el
       prompt ya filtra skills pero un tool_call fuera de schema (inyección) no
       debe ejecutar tools de un pack que el tenant no tiene.
+    - La tool de un plugin con salud rota PARA ESTE TENANT (ADR-0024) también
+      se deniega acá -- mismo camino de defensa en profundidad que el punto
+      anterior, para un tool_call fuera de schema.
     - Si hay ToolBinding con enabled=false se deniega. Fail-open transitorio:
       sin binding, la tool corre (las migraciones de bindings van después).
     """
+    from core.plugin_manager import plugin_manager
+
     tool = mcp_host.get_tool(tool_name)
-    if tool is not None and tool.plugin_id not in enabled_packs(spec):
-        return f"La herramienta '{tool_name}' no está disponible para este tenant."
+    if tool is not None:
+        if tool.plugin_id not in enabled_packs(spec):
+            return f"La herramienta '{tool_name}' no está disponible para este tenant."
+        tenant_id = get_current_tenant_id()
+        if tenant_id is not None and await plugin_manager.is_disabled_for_tenant(tenant_id, tool.plugin_id):
+            return f"La herramienta '{tool_name}' no está disponible en este momento."
     for binding in spec.tools:
         if binding.tool == tool_name and not binding.enabled:
             return f"La herramienta '{tool_name}' está deshabilitada para este tenant."

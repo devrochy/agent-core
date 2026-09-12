@@ -34,10 +34,12 @@ Install (pip) → Detect (scan de entry_points al arrancar)
              → Configure (formulario en /admin/plugins, JSON cifrado con Fernet)
              → Activate (migraciones propias + on_activate(host))
              → Run
-             → [PluginError en runtime] → auto-disable + aviso en el panel
+             → [PluginError en runtime] → auto-disable PARA ESE TENANT (ADR-0024) + aviso en el panel
 ```
 
-Estados en la tabla `plugins`: `detected → configured → active | disabled | error`.
+Estados en la tabla `plugins`: `detected → configured → active | disabled | error` — esto es
+SISTEMA (¿el código cargó?), global. La salud por tenant (¿le funciona a este tenant ahora
+mismo?) vive aparte, en `plugin_tenant_state` (ver § "Errores" más abajo).
 
 ## 3. Estructura mínima
 
@@ -186,8 +188,12 @@ Reglas de las tools:
 - **El LLM propone, la tool decide**: valida SIEMPRE contra la BD, nunca confíes
   en los argumentos del modelo para datos críticos.
 - Errores: deja que las excepciones suban. El core convierte cualquier excepción en
-  `PluginError`, **desactiva tu plugin** y el asistente sigue vivo. Un plugin roto
-  jamás tumba el asistente.
+  `PluginError` y **desactiva tu plugin PARA EL TENANT de esa conversación** (ADR-0024)
+  — el asistente sigue vivo, y otros tenants que usan tu plugin sin problemas ni se
+  enteran. Esto es distinto del estado de SISTEMA (`agent-core status`/`PluginRecord.status`):
+  ese solo cambia si tu plugin falla al *activarse* (código roto/import inválido), y
+  sí es global — si no carga, no carga para nadie. Un admin reactiva el plugin para
+  un tenant puntual desde `/admin/plugins` una vez corregida la causa.
 
 ### Claves reservadas del resultado (SafeRenderer)
 
