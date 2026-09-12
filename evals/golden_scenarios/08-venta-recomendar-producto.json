@@ -3,7 +3,32 @@
   "requires_plugins": ["pack_commerce"],
   "conversation": [
     {"role": "user", "content": "Quiero pedir la hamburguesa clásica para llevar."},
-    {"role": "assistant", "content": "¡Perfecto! Tenemos la Hamburguesa Clásica disponible. ¿Te gustaría que te recomiende algo para acompañarla?"},
+    {
+      "role": "assistant",
+      "content": "¡Perfecto! Tenemos la Hamburguesa Clásica disponible. ¿Te gustaría que te recomiende algo para acompañarla?",
+      "tool_calls": [
+        {
+          "name": "consultar_inventario",
+          "arguments": {"query": "hamburguesa clásica"},
+          "result": {
+            "matches": [
+              {
+                "product_id": "b2b1f6b0-1a2b-4c3d-9e4f-5a6b7c8d9e0f",
+                "variant_id": "c3c2f7c1-2b3c-5d4e-af5f-6b7c8d9e0f1a",
+                "sku": "HAM-CLA-001",
+                "name": "Hamburguesa Clásica",
+                "attributes": {},
+                "price": 18000,
+                "price_label": "$18.000",
+                "disponible": true,
+                "stock": 12,
+                "description": "Hamburguesa clásica con carne, queso y vegetales"
+              }
+            ]
+          }
+        }
+      ]
+    },
     {"role": "user", "content": "Sí, dale, ¿qué me recomiendas?"}
   ],
   "assertions": {
