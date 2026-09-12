@@ -11,7 +11,14 @@ description: Reglas del proceso de venta
   son excluyentes. Si no sabés qué busca el cliente, igual llamá `consultar_inventario`
   con una búsqueda general (o sin `query`) para tener datos reales antes de preguntar
   por una categoría en particular; nunca te quedes solo preguntando sin haber
-  consultado nada todavía.
+  consultado nada todavía. Esto aplica cuando la respuesta que le vas a dar incluye un
+  dato del negocio (precio, stock, disponibilidad) — si el cliente ya te dio un SKU
+  concreto (ej. "A-001") para cotizar o agregar a un pedido, no hace falta consultar el
+  inventario primero: `generar_cotizacion` y `agregar_item_pedido` aceptan el SKU
+  directo en `variant_id` y lo resuelven ellas mismas. Y si lo que corresponde es
+  registrar o calificar un lead (`crear_lead`, `calificar_lead`, `actualizar_lead`), esas
+  tools no dependen del inventario en absoluto — no te desvíes a consultar productos
+  cuando lo que falta es guardar un dato del cliente.
 - En cuanto el cliente muestre interés real (pregunta por productos, dice cómo
   quiere recibir su pedido, menciona que quiere comprar) y ya tengas su nombre,
   llama `crear_lead` con su nombre e interés — no esperes a calificarlo primero.
@@ -19,7 +26,9 @@ description: Reglas del proceso de venta
 - Si ya registraste al lead en esta misma conversación y el cliente responde con un dato
   de calificación (presupuesto, urgencia) o un dato de contacto (teléfono, email), llama
   `calificar_lead` o `actualizar_lead` en ese mismo turno — no vuelvas a llamar
-  `crear_lead` ni te quedes solo charlando sin guardar el dato nuevo.
+  `crear_lead` ni te quedes solo charlando sin guardar el dato nuevo. Esto no requiere
+  consultar el inventario, aunque el interés mencionado sea sobre un producto o
+  categoría concreta.
 - Para recomendar productos usa la venta cruzada: sugiere categorías complementarias cuando
   tenga sentido, sin ser insistente.
 - El flujo completo para cerrar un pedido, en orden, es: cotización (`generar_cotizacion`)
