@@ -26,7 +26,7 @@ import os
 import uuid
 
 import pytest
-from conftest import TEST_ALPHA_ID
+from conftest import TEST_ALPHA_ID, TEST_BETA_ID
 
 pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
@@ -189,3 +189,51 @@ async def test_confirmar_cotizacion_rechaza_si_ya_se_convirtio(fake_tool_context
         result = await skill.confirmar_cotizacion({"quote_id": quote_id}, fake_tool_context)
 
     assert "error" in result, result
+
+
+async def test_confirmar_cotizacion_no_ve_cotizacion_de_otro_tenant(fake_tool_context):
+    """Hallazgo de `auditor-multitenant` (2026-09-12): el gate nuevo depende
+    de RLS (no filtraba `tenant_id` explícito en Python, ya corregido como
+    defensa en profundidad) -- esta es la prueba de regresión que faltaba
+    para ese caso: una cotización de un tenant no debe ser visible/editable
+    desde el `tenant_scope` de otro."""
+    from pack_commerce.skills import OrderSkill
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(T1):
+        async with get_session() as session:
+            quote = await _make_quote(session, status="draft")
+            quote_id = str(quote.id)
+
+    skill = OrderSkill()
+    async with tenant_scope(TEST_BETA_ID):
+        confirm_result = await skill.confirmar_cotizacion({"quote_id": quote_id}, fake_tool_context)
+        assert "error" in confirm_result, confirm_result
+
+        pedido_result = await skill.crear_pedido(
+            {
+                "quote_id": quote_id,
+                "payment_method": "efectivo_contraentrega",
+                "delivery_method": "domicilio",
+                "customer_data": {
+                    "full_name": "Otro Tenant",
+                    "id_document": "999",
+                    "address": "Calle 2",
+                    "municipality": "Manizales",
+                    "city": "Manizales",
+                },
+            },
+            fake_tool_context,
+        )
+        assert "error" in pedido_result, pedido_result
+
+    # Confirmamos que, desde el tenant dueño, la cotización sigue intacta
+    # (nadie la tocó desde el otro tenant_scope).
+    from pack_commerce.models import Quote
+
+    async with tenant_scope(T1):
+        async with get_session() as session:
+            refreshed = await session.get(Quote, quote_id)
+            assert refreshed.status == "draft"

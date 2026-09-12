@@ -215,7 +215,12 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # que debounce_mode -- JSONB libre en AppSettings, sin tocar el contrato
     # AgentSpec congelado). Fallback al default global si el tenant no lo seteó.
     behavior = dict(app_settings.behavior_config) if app_settings else {}
-    guardrail_max_retries = int(behavior.get("guardrail_max_retries", MAX_GUARDRAIL_RETRIES))
+    # Clamp acá también (no solo en el form del admin, auditor-multitenant
+    # 2026-09-12): behavior_config es JSONB libre, puede llegar por otra vía
+    # (script, migración, endpoint futuro) sin pasar por la validación del form.
+    guardrail_max_retries = max(
+        0, min(5, int(behavior.get("guardrail_max_retries", MAX_GUARDRAIL_RETRIES)))
+    )
 
     # ---------------- 3. Agentic loop
     messages = list(history)

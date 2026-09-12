@@ -852,7 +852,16 @@ class OrderSkill(BaseSkill):
         if _parse_uuid(quote_id) is None:
             return {"error": "Cotización no encontrada."}
         async with get_session() as session:
-            quote = await session.get(Quote, quote_id)
+            # Defensa en profundidad además de RLS (mismo criterio que
+            # calificar_lead/actualizar_lead, auditor-multitenant 2026-09-12):
+            # filtrar tenant_id explícito en vez de session.get() a secas.
+            quote = (
+                await session.execute(
+                    select(Quote).where(
+                        Quote.id == quote_id, Quote.tenant_id == get_current_tenant_id()
+                    )
+                )
+            ).scalar_one_or_none()
             if quote is None:
                 return {"error": "Cotización no encontrada."}
             if quote.status == "convertida":
@@ -924,7 +933,14 @@ class OrderSkill(BaseSkill):
             return {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
 
         async with get_session() as session:
-            quote = await session.get(Quote, quote_id)
+            # Defensa en profundidad además de RLS (auditor-multitenant 2026-09-12).
+            quote = (
+                await session.execute(
+                    select(Quote).where(
+                        Quote.id == quote_id, Quote.tenant_id == get_current_tenant_id()
+                    )
+                )
+            ).scalar_one_or_none()
             if quote is None:
                 return {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
             existing_order = (
@@ -982,7 +998,13 @@ class OrderSkill(BaseSkill):
         )
 
         async with get_session() as session:
-            quote = await session.get(Quote, quote_id)
+            quote = (
+                await session.execute(
+                    select(Quote).where(
+                        Quote.id == quote_id, Quote.tenant_id == get_current_tenant_id()
+                    )
+                )
+            ).scalar_one_or_none()
             # Numeración por tenant (ADR-0018): contador atómico por tenant.
             order_seq = (
                 await session.execute(
