@@ -12,6 +12,32 @@ Mecánica (Redis Sorted Set):
 
 Crash recovery: al arrancar, barrido de conversaciones abiertas cuyo último
 mensaje es inbound sin timer vivo => se reprograman con delay 0.
+
+Incidente real (tenant `yopoldo`, 2026-09-12): el cliente mandó "Domicilio,
+calle 68 # 29a 47" y 4s después "Pago en línea" (dos burbujas de WhatsApp,
+ambas dentro de la ventana de debounce). `schedule_debounce` REEMPLAZABA el
+payload pendiente en vez de agruparlo -- el turno que finalmente se disparó
+solo vio "Pago en línea"; la dirección se perdió para siempre (seguía en
+Postgres vía `_persist_inbound`, pero `loop.py::_load_history()` nunca la
+relee si Redis ya tiene turnos cacheados). El asistente terminó
+preguntando la dirección 3 veces en la misma conversación y escalando. Esto
+contradice la decisión de ADR-0006 ("agrupar mensajes consecutivos en un
+solo turno") -- `schedule_debounce` ahora ACUMULA los mensajes en vez de
+reemplazarlos. `agent-sale` no tiene esta clase de bug porque su payload no
+lleva texto en absoluto (solo IDs) y relee todo el historial desde
+Postgres en cada disparo -- portar ese diseño completo es un cambio mayor
+(firma de `process_conversation`), fuera de esta tanda.
+
+La acumulación usa RPUSH sobre una lista Redis aparte (`debounce:messages:
+{conversation_id}`), no un GET+merge+SET sobre el payload: `consumer.py`
+crea una task de asyncio por entrada del batch (`count=10`), así que dos
+mensajes del MISMO conversation_id pueden procesarse concurrentemente --
+un GET+SET no atómico reintroduciría el mismo bug bajo esa concurrencia
+(hallazgo de `auditor-multitenant`, 2026-09-12). RPUSH es atómico por
+comando, no hay ventana de carrera. `LTRIM`/`MAX_ACCUMULATED_MESSAGES`
+acota el crecimiento (cliente/bot en loop reseteando el timer para
+siempre) y el `EXPIRE`/TTL en ambas claves evita que una quede viva para
+siempre si el proceso muere entre el `RPUSH` y el disparo del turno.
 """
 
 from __future__ import annotations
@@ -32,7 +58,17 @@ log = get_logger(__name__)
 
 PENDING_KEY = "debounce:pending"
 PAYLOAD_KEY = "debounce:payload:{conversation_id}"
+MESSAGES_KEY = "debounce:messages:{conversation_id}"
 POLL_INTERVAL_S = 1.5
+# Tope duro de mensajes acumulados por ráfaga (higiene de memoria/Redis
+# compartido entre tenants, no un límite de negocio).
+MAX_ACCUMULATED_MESSAGES = 20
+# TTL de red de seguridad para payload/mensajes pendientes: bastante mayor
+# que el debounce_mode más largo (30s, "pausado") para no expirar una
+# ventana legítima, pero acotado para que un crash entre el RPUSH y el
+# disparo del turno no deje la clave viva para siempre. Se refresca en
+# cada mensaje nuevo, igual que el timer del ZADD.
+PENDING_KEY_TTL_S = 300
 
 
 async def schedule_debounce(conversation_id: uuid.UUID, delay_ms: int, payload: dict[str, Any]) -> None:
@@ -41,14 +77,32 @@ async def schedule_debounce(conversation_id: uuid.UUID, delay_ms: int, payload: 
     tenant_id = get_current_tenant_id()
     if tenant_id is not None:
         payload["tenant_id"] = str(tenant_id)
-    await r.set(PAYLOAD_KEY.format(conversation_id=conversation_id), json.dumps(payload))
-    await r.zadd(PENDING_KEY, {str(conversation_id): fire_at})
+
+    # El texto del mensaje se acumula aparte (lista Redis, RPUSH atómico) --
+    # el resto del payload (ej. tenant_id) no necesita acumularse, un
+    # "último valor gana" es correcto porque es el mismo valor en cada
+    # llamada de la misma conversación.
+    new_message = payload.pop("latest_message", "")
+    payload_key = PAYLOAD_KEY.format(conversation_id=conversation_id)
+    messages_key = MESSAGES_KEY.format(conversation_id=conversation_id)
+
+    pipe = r.pipeline()
+    if new_message:
+        pipe.rpush(messages_key, new_message)
+        pipe.ltrim(messages_key, -MAX_ACCUMULATED_MESSAGES, -1)
+        pipe.expire(messages_key, PENDING_KEY_TTL_S)
+    pipe.set(payload_key, json.dumps(payload), ex=PENDING_KEY_TTL_S)
+    pipe.zadd(PENDING_KEY, {str(conversation_id): fire_at})
+    await pipe.execute()
 
 
 async def cancel_debounce(conversation_id: uuid.UUID) -> None:
     r = get_redis()
     await r.zrem(PENDING_KEY, str(conversation_id))
-    await r.delete(PAYLOAD_KEY.format(conversation_id=conversation_id))
+    await r.delete(
+        PAYLOAD_KEY.format(conversation_id=conversation_id),
+        MESSAGES_KEY.format(conversation_id=conversation_id),
+    )
 
 
 async def poll_debounce_loop() -> None:
@@ -72,9 +126,13 @@ async def poll_debounce_once() -> None:
         if removed != 1:
             continue
         payload_key = PAYLOAD_KEY.format(conversation_id=conversation_id_str)
+        messages_key = MESSAGES_KEY.format(conversation_id=conversation_id_str)
         raw_payload = await r.get(payload_key)
-        await r.delete(payload_key)
+        messages = await r.lrange(messages_key, 0, -1)
+        await r.delete(payload_key, messages_key)
         payload = json.loads(raw_payload) if raw_payload else {}
+        if messages:
+            payload["latest_message"] = "\n".join(messages)
         conversation_id = uuid.UUID(conversation_id_str)
         tenant_id = payload.get("tenant_id")
         # Gate de turnos (global + por tenant) y disparo concurrente.
@@ -156,15 +214,21 @@ async def recover_orphaned_conversations() -> None:
                             )
                         )
                     ).all()
-            for conversation_id, direction, content in rows:
-                if direction != "inbound":
-                    continue
-                has_timer = await r.zscore(PENDING_KEY, str(conversation_id))
-                if has_timer is None:
-                    await schedule_debounce(
-                        uuid.UUID(str(conversation_id)), 0, {"latest_message": content or ""}
-                    )
-                    recovered += 1
+                # DENTRO del tenant_scope (bug encontrado por auditor-multitenant,
+                # 2026-09-12): `schedule_debounce` lee `get_current_tenant_id()`
+                # para sembrar `tenant_id` en el payload -- afuera de este bloque
+                # el ContextVar ya volvió a None y la recuperación quedaba
+                # silenciosamente inoperante para TODOS los tenants (el payload
+                # sin tenant_id hace que `_fire_conversation` descarte el turno).
+                for conversation_id, direction, content in rows:
+                    if direction != "inbound":
+                        continue
+                    has_timer = await r.zscore(PENDING_KEY, str(conversation_id))
+                    if has_timer is None:
+                        await schedule_debounce(
+                            uuid.UUID(str(conversation_id)), 0, {"latest_message": content or ""}
+                        )
+                        recovered += 1
         if recovered:
             log.info("orphaned_conversations_recovered", count=recovered)
     except Exception:
