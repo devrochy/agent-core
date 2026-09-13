@@ -52,6 +52,7 @@ from core.gateway.connections import (
     set_primary,
     verify_meta_credentials,
 )
+from core.mcp.host import mcp_host
 from core.plugin_manager import plugin_manager
 from core.shared.crypto import get_secret_box
 from core.shared.exceptions import PluginConfigError, PluginError
@@ -1258,7 +1259,18 @@ async def settings_page(request: Request):
         async with get_session() as session:
             app_settings = AppSettings(tenant_id=get_current_tenant_id())
             session.add(app_settings)
-    ctx.update(s=app_settings, behavior=dict(app_settings.behavior_config))
+    spec = await load_active_spec()
+    enabled = enabled_packs(spec)
+    all_guardrails = [
+        {"name": g.name, "plugin_id": g.plugin_id}
+        for g in mcp_host.get_guardrails()
+        if g.plugin_id in enabled
+    ]
+    ctx.update(
+        s=app_settings,
+        behavior=dict(app_settings.behavior_config),
+        all_guardrails=all_guardrails,
+    )
     return _render("settings.html", ctx)
 
 
@@ -1271,9 +1283,17 @@ async def settings_save(
     tono: str = Form(default="calido"),
     debounce_mode: str = Form(default="natural"),
     guardrail_max_retries: int = Form(default=1),
+    disabled_guardrails: list[str] = Form(default=[]),  # noqa: B008
 ):
     if await current_admin(request) is None:
         return _login_redirect()
+    # Validar contra los guardrails REALES de packs que este tenant tiene
+    # habilitado -- sin esto, `behavior_config` acumula nombres arbitrarios
+    # con el tiempo (hallazgo de `auditor-multitenant`). No es un riesgo de
+    # seguridad (el filtro solo puede restringir, nunca ampliar acceso),
+    # pero evita basura persistida.
+    spec = await load_active_spec()
+    valid_names = {g.name for g in mcp_host.get_guardrails() if g.plugin_id in enabled_packs(spec)}
     async with get_session() as session:
         app_settings = (
             await session.execute(
@@ -1294,6 +1314,7 @@ async def settings_save(
             tono=tono,
             debounce_mode=debounce_mode,
             guardrail_max_retries=max(0, guardrail_max_retries),
+            disabled_guardrails=sorted(valid_names & set(disabled_guardrails)),
         )
         app_settings.behavior_config = behavior
     return RedirectResponse("/admin/configuracion?flash=Configuración guardada", status_code=303)

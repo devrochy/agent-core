@@ -26,13 +26,22 @@ MAX_GUARDRAIL_RETRIES = 1
 
 
 async def run_guardrails(
-    response_text: str, tool_results: list[dict[str, Any]], enabled: set[str] | None = None
+    response_text: str,
+    tool_results: list[dict[str, Any]],
+    enabled: set[str] | None = None,
+    disabled: set[str] | None = None,
 ) -> GuardrailResult:
     """Ejecuta los guardrails del turno. `enabled` = packs del tenant (ADR-0019);
-    solo corren los guardrails de packs habilitados."""
+    solo corren los guardrails de packs habilitados. `disabled` = nombres de
+    guardrails individuales desactivados por este tenant (parametrización por
+    tenant, `AppSettings.behavior_config["disabled_guardrails"]`) -- permite
+    apagar un guardrail puntual (ej. `crm_amount_check`) sin apagar el pack
+    entero."""
     guardrails = mcp_host.get_guardrails()
     if enabled is not None:
         guardrails = [g for g in guardrails if g.plugin_id in enabled]
+    if disabled:
+        guardrails = [g for g in guardrails if g.name not in disabled]
     for guardrail in guardrails:
         try:
             result = await guardrail.fn(response_text, tool_results)

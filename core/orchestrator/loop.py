@@ -231,6 +231,10 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     guardrail_max_retries = max(
         0, min(5, int(behavior.get("guardrail_max_retries", MAX_GUARDRAIL_RETRIES)))
     )
+    # Guardrail individual on/off por tenant (mismo patrón, ver `AppSettings.
+    # behavior_config`): apagar un guardrail puntual (ej. `crm_amount_check`)
+    # sin apagar el pack entero.
+    disabled_guardrails = set(behavior.get("disabled_guardrails", []))
 
     # ---------------- 3. Agentic loop
     messages = list(history)
@@ -334,7 +338,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # si se mezclara ahí, un _safe_append viejo (ej. un link de pago vencido)
         # podría reaparecer en la respuesta de un turno nuevo sin relación.
         verdict = await run_guardrails(
-            response.content, [*history_tool_results, *all_tool_results], enabled
+            response.content, [*history_tool_results, *all_tool_results], enabled, disabled_guardrails
         )
         if not verdict.passed:
             if guardrail_retries < guardrail_max_retries:

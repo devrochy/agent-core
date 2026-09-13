@@ -120,7 +120,7 @@ async def test_guardrail_max_retries_0_escala_en_la_primera_llamada(
 ):
     t1, _ = tenant_setup
     await _ensure_max_tool_calls_per_turn(t1, 10)
-    await _set_behavior(t1, debounce_mode="inmediato", guardrail_max_retries=0)
+    await _set_behavior(t1, debounce_mode="inmediato", guardrail_max_retries=0, disabled_guardrails=[])
     recorded.clear()
 
     resp = await app_client.post(
@@ -140,7 +140,7 @@ async def test_guardrail_max_retries_2_reintenta_dos_veces(
 ):
     t1, _ = tenant_setup
     await _ensure_max_tool_calls_per_turn(t1, 10)
-    await _set_behavior(t1, debounce_mode="inmediato", guardrail_max_retries=2)
+    await _set_behavior(t1, debounce_mode="inmediato", guardrail_max_retries=2, disabled_guardrails=[])
     recorded.clear()
 
     resp = await app_client.post(
@@ -154,3 +154,37 @@ async def test_guardrail_max_retries_2_reintenta_dos_veces(
         f"con guardrail_max_retries=2 deberían ser 3 llamadas al LLM (1 + 2 reintentos), "
         f"hubo {len(recorded)}"
     )
+
+
+async def test_guardrail_individual_desactivado_no_reintenta(
+    app_client, tenant_setup, recorded, _registered_failing_guardrail
+):
+    """Guardrail individual on/off por tenant: con
+    `disabled_guardrails=["test_siempre_falla"]`, ese guardrail puntual no
+    corre en absoluto -- ni un solo reintento, aunque
+    `guardrail_max_retries` sea > 0 (nunca llega a evaluarse)."""
+    t1, _ = tenant_setup
+    await _ensure_max_tool_calls_per_turn(t1, 10)
+    try:
+        await _set_behavior(
+            t1, debounce_mode="inmediato", guardrail_max_retries=2, disabled_guardrails=["test_siempre_falla"]
+        )
+        recorded.clear()
+
+        resp = await app_client.post(
+            "/webhooks/whatsapp",
+            json=_meta_payload(PHONE, f"wa-grdis-{uuid.uuid4().hex[:6]}", f"wamid.GRDIS.{uuid.uuid4().hex[:6]}", "hola"),
+        )
+        assert resp.json()["enqueued"] == 1
+        await _run_background(2)
+
+        assert len(recorded) == 1, (
+            f"con el guardrail desactivado no debería haber reintento, hubo {len(recorded)} llamadas al LLM"
+        )
+    finally:
+        # `_set_behavior` hace merge (no reemplaza) sobre una fila
+        # compartida de `AppSettings` -- sin este `finally`, un assert
+        # fallido deja `disabled_guardrails` pegado para T1 en la BD real
+        # y contamina corridas futuras de la suite (hallazgo real de
+        # `auditor-multitenant` sobre este mismo test).
+        await _set_behavior(t1, disabled_guardrails=[])
