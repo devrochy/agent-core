@@ -47,6 +47,22 @@
               se le pide corregirla antes de escalar a un asesor. Default: 1.
             </div>
           </div>
+          {% if all_guardrails %}
+          <div class="mb-3">
+            <label class="form-label">Guardrails desactivados</label>
+            {% for g in all_guardrails %}
+            <div class="form-check">
+              <input type="checkbox" class="form-check-input" name="disabled_guardrails" value="{{ g.name }}"
+                     id="guardrail-{{ g.name }}"
+                     {{ 'checked' if g.name in behavior.get('disabled_guardrails', []) }}>
+              <label class="form-check-label" for="guardrail-{{ g.name }}">{{ g.name }} <span class="text-secondary small">({{ g.plugin_id }})</span></label>
+            </div>
+            {% endfor %}
+            <div class="form-text">
+              Marcado = ese guardrail puntual NO corre para este tenant. El resto del pack sigue activo.
+            </div>
+          </div>
+          {% endif %}
           <button class="btn btn-primary">Guardar</button>
         </form>
       </div>
