@@ -27,7 +27,12 @@ from core.config import get_settings
 from core.db.models import AppSettings, AuditLog, Conversation, Customer, Message, UsageLedger
 from core.db.session import get_session
 from core.llm import resolve_provider
-from core.llm.difficulty_router import route_model
+from core.llm.difficulty_router import (
+    DIFFICULTY_SCORE_THRESHOLD,
+    LONG_MESSAGE_THRESHOLD,
+    TURNOS_SIN_RESOLVER_THRESHOLD,
+    route_model,
+)
 from core.llm.prompt_builder import PromptContext, build_system_blocks
 from core.llm.types import LLMMessage, LLMToolCall
 from core.mcp.host import mcp_host, new_tool_context
@@ -208,6 +213,31 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     system_blocks = await build_system_blocks(spec, prompt_ctx)
 
     # ---------------- 2. Proveedor y routing
+    # `behavior` se adelanta acá (antes vivía después del routing) porque
+    # ahora también resuelve los umbrales del difficulty router por tenant
+    # -- se reusa el mismo dict más abajo para guardrail_max_retries/
+    # disabled_guardrails, sin recalcularlo dos veces.
+    behavior = dict(app_settings.behavior_config) if app_settings else {}
+    # Clamps (no solo en el form del admin, auditor-multitenant 2026-09-12):
+    # behavior_config es JSONB libre, puede llegar por otra vía (script,
+    # migración, endpoint futuro) sin pasar por la validación del form --
+    # incluido un `None` explícito guardado (una key presente pero vacía,
+    # distinta de "sin configurar"), que `_clamped_int` trata igual que si
+    # faltara del todo.
+    def _clamped_int(key: str, default: int, lo: int, hi: int) -> int:
+        raw = behavior.get(key)
+        return max(lo, min(hi, int(raw if raw is not None else default)))
+
+    difficulty_long_message_threshold = _clamped_int(
+        "difficulty_long_message_threshold", LONG_MESSAGE_THRESHOLD, 50, 5000
+    )
+    difficulty_turnos_sin_resolver_threshold = _clamped_int(
+        "difficulty_turnos_sin_resolver_threshold", TURNOS_SIN_RESOLVER_THRESHOLD, 1, 20
+    )
+    difficulty_score_threshold = _clamped_int(
+        "difficulty_score_threshold", DIFFICULTY_SCORE_THRESHOLD, 1, 10
+    )
+
     turnos_sin_resolver = int(conversation.state.get("turnos_sin_resolver", 0))
     routing = route_model(
         message=latest_message,
@@ -216,6 +246,9 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         reasoning_model=settings.llm_model_reasoning,
         routing_enabled=settings.difficulty_routing,
         requires_tools=bool(active_tools),
+        long_message_threshold=difficulty_long_message_threshold,
+        turnos_sin_resolver_threshold=difficulty_turnos_sin_resolver_threshold,
+        score_threshold=difficulty_score_threshold,
     )
     provider = _resolved_provider(app_settings, routing.model)
     tool_schemas = to_llm_schemas(active_tools) if routing.allow_tools else None
@@ -224,13 +257,11 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # usuario: "intentos fallidos" configurable por tenant, mismo patrón exacto
     # que debounce_mode -- JSONB libre en AppSettings, sin tocar el contrato
     # AgentSpec congelado). Fallback al default global si el tenant no lo seteó.
-    behavior = dict(app_settings.behavior_config) if app_settings else {}
-    # Clamp acá también (no solo en el form del admin, auditor-multitenant
-    # 2026-09-12): behavior_config es JSONB libre, puede llegar por otra vía
-    # (script, migración, endpoint futuro) sin pasar por la validación del form.
-    guardrail_max_retries = max(
-        0, min(5, int(behavior.get("guardrail_max_retries", MAX_GUARDRAIL_RETRIES)))
-    )
+    # `_clamped_int` (no solo `.get(key, default)`): hallazgo de
+    # `auditor-multitenant` sobre el diff de los umbrales de dificultad --
+    # un `None` explícito en `behavior_config` para esta key tumbaría el
+    # turno con `TypeError` sin este mismo cuidado.
+    guardrail_max_retries = _clamped_int("guardrail_max_retries", MAX_GUARDRAIL_RETRIES, 0, 5)
     # Guardrail individual on/off por tenant (mismo patrón, ver `AppSettings.
     # behavior_config`): apagar un guardrail puntual (ej. `crm_amount_check`)
     # sin apagar el pack entero.

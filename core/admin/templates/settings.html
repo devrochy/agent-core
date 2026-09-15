@@ -47,6 +47,32 @@
               se le pide corregirla antes de escalar a un asesor. Default: 1.
             </div>
           </div>
+          <div class="mb-3">
+            <label class="form-label">Difficulty router: mensaje largo (caracteres)</label>
+            <input type="number" name="difficulty_long_message_threshold" class="form-control" min="50" max="5000"
+                   value="{{ behavior.difficulty_long_message_threshold if behavior.difficulty_long_message_threshold is not none else 400 }}">
+            <div class="form-text">
+              Un mensaje más largo que esto suma puntos de "dificultad" y puede escalar al modelo de
+              razonamiento (más lento, sin herramientas). Default: 400.
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Difficulty router: turnos sin resolver</label>
+            <input type="number" name="difficulty_turnos_sin_resolver_threshold" class="form-control" min="1" max="20"
+                   value="{{ behavior.difficulty_turnos_sin_resolver_threshold if behavior.difficulty_turnos_sin_resolver_threshold is not none else 2 }}">
+            <div class="form-text">
+              Cuántos turnos seguidos sin resolver suman puntos de dificultad. Default: 2.
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Difficulty router: puntaje para razonamiento</label>
+            <input type="number" name="difficulty_score_threshold" class="form-control" min="1" max="10"
+                   value="{{ behavior.difficulty_score_threshold if behavior.difficulty_score_threshold is not none else 2 }}">
+            <div class="form-text">
+              A partir de qué puntaje total el turno usa el modelo de razonamiento en vez del
+              default. Default: 2.
+            </div>
+          </div>
           {% if all_guardrails %}
           <div class="mb-3">
             <label class="form-label">Guardrails desactivados</label>
