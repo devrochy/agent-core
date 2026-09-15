@@ -12,8 +12,6 @@ El LLM nunca corre dentro del request del webhook.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 from typing import Any
 
@@ -152,20 +150,6 @@ async def _receive_for_tenant(
         app_secret = creds.get("app_secret") or settings.whatsapp_app_secret
         if app_secret:
             headers = {k.lower(): v for k, v in request.headers.items()}
-            sig = headers.get("x-hub-signature-256", "")
-            # TEMP-DIAG: trazar firma vs app_secret para el E2E de yopoldo
-            try:
-                expected = hmac.new(app_secret.encode(), raw_body, hashlib.sha256).hexdigest()
-                log.info(
-                    "webhook_signature_trace",
-                    phone=phone_ids[0] if phone_ids else "",
-                    sig_prefix=sig[:12],
-                    expected_prefix=("sha256=" + expected)[:12],
-                    app_secret_len=len(app_secret),
-                    body_len=len(raw_body),
-                )
-            except Exception:
-                pass
             if not adapter.verify_request(raw_body, headers, app_secret):
                 log.warning("webhook_signature_invalid")
                 return {"status": "ignored"}
