@@ -53,6 +53,30 @@ def test_parse_json_schema_tipos_y_secretos() -> None:
     assert values2["score"] == 3
 
 
+def test_render_textarea_para_texto_largo() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "notas": {"type": "string", "format": "textarea", "description": "Texto largo"},
+        },
+    }
+    html = render_json_schema_form(schema, {"notas": "línea 1\nlínea 2"})
+    assert "<textarea" in html
+    assert 'type="text"' not in html
+    # el valor va DENTRO del elemento, no como atributo value="..."
+    assert "línea 1\nlínea 2" in html
+    assert 'value="línea 1' not in html
+
+
+def test_parse_textarea_devuelve_el_string_crudo() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"notas": {"type": "string", "format": "textarea"}},
+    }
+    values = parse_json_schema_form(schema, {"notas": "a: b => c\nd: e => f"})
+    assert values == {"notas": "a: b => c\nd: e => f"}
+
+
 def test_delegacion_pydantic_usa_el_mismo_motor() -> None:
     from pack_calendar.config import CalendarConfig
 

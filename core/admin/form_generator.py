@@ -10,6 +10,7 @@ Mapeo de tipos del JSON Schema:
   integer / number   -> <input type="number"> (min/max)
   string + enum      -> <select>
   string + format:password (writeOnly) -> <input type="password"> (cifrado al guardar)
+  string + format:textarea -> <textarea> (texto largo, ej. DSL multi-línea)
   string (default)   -> <input type="text">
   title / description -> label y texto de ayuda
 """
@@ -78,6 +79,17 @@ def _render_prop(name: str, prop: dict[str, Any], current: Any, required: bool) 
   <label class="form-label" for="{name}">{label}</label>
   <input type="password" class="form-control" id="{name}" name="{name}"
          placeholder="{placeholder}" {required_attr if not current else ""}>
+  {help_html}
+</div>"""
+
+    # string + format=textarea -> <textarea> (texto largo, reusable para
+    # cualquier campo futuro, no específico a un caso)
+    if ptype == "string" and prop.get("format") == "textarea":
+        value = "" if isinstance(default, dict) else html.escape(str(default or ""))
+        return f"""
+<div class="mb-3">
+  <label class="form-label" for="{name}">{label}</label>
+  <textarea class="form-control" id="{name}" name="{name}" rows="4" {required_attr}>{value}</textarea>
   {help_html}
 </div>"""
 

@@ -171,3 +171,103 @@ async def test_cerre_tu_pedido_does_not_require_a_lead_tool():
         "Cerré tu pedido, quedó confirmado con el número OC-0001.", tool_results
     )
     assert verdict.passed, verdict.reason
+
+
+# -------------------------------------------------------------------------
+# ADR-0025: claims desactivados/custom por tenant (CRMConfig)
+# -------------------------------------------------------------------------
+
+
+def _mock_config(monkeypatch: pytest.MonkeyPatch, config) -> None:
+    """Monkeypatchea `plugin_manager.load_config` para que
+    `_resolved_completion_claims` reciba un `CRMConfig` fijo, sin BD ni
+    tenant_scope (mismo criterio que el resto de tests unitarios de este
+    módulo -- son puros)."""
+    import core.plugin_manager as plugin_manager_mod
+
+    async def _fake_load_config(plugin_id):
+        return config
+
+    monkeypatch.setattr(plugin_manager_mod.plugin_manager, "load_config", _fake_load_config)
+
+
+@pytest.mark.asyncio
+async def test_claim_incorporado_desactivado_ya_no_bloquea(monkeypatch: pytest.MonkeyPatch):
+    from pack_commerce.config import CRMConfig
+
+    _mock_config(monkeypatch, CRMConfig(completion_claims_disabled="link_de_pago"))
+    module = CRMModule()
+    verdict = await module._completion_guardrail("Te envío el link de pago ahora mismo.", [])
+    assert verdict.passed, verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_claim_no_desactivado_sigue_bloqueando(monkeypatch: pytest.MonkeyPatch):
+    """Desactivar UN claim no apaga los demás."""
+    from pack_commerce.config import CRMConfig
+
+    _mock_config(monkeypatch, CRMConfig(completion_claims_disabled="link_de_pago"))
+    module = CRMModule()
+    verdict = await module._completion_guardrail("Cerré tu pedido, ya está confirmado.", [])
+    assert not verdict.passed
+    assert "pedido" in verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_claim_custom_del_tenant_bloquea_como_uno_incorporado(monkeypatch: pytest.MonkeyPatch):
+    from pack_commerce.config import CRMConfig
+
+    _mock_config(
+        monkeypatch,
+        CRMConfig(completion_claims_custom="agenda_cita: agendé tu cita => crear_cita"),
+    )
+    module = CRMModule()
+
+    verdict_sin_tool = await module._completion_guardrail("Listo, ya agendé tu cita.", [])
+    assert not verdict_sin_tool.passed
+    assert "agenda_cita" in verdict_sin_tool.reason
+
+    verdict_con_tool = await module._completion_guardrail(
+        "Listo, ya agendé tu cita.", [_tool_result("crear_cita", status="ok")]
+    )
+    assert verdict_con_tool.passed, verdict_con_tool.reason
+
+
+@pytest.mark.asyncio
+async def test_claim_custom_con_mismo_nombre_reemplaza_al_incorporado(monkeypatch: pytest.MonkeyPatch):
+    """Si el tenant nombra su claim custom igual que uno incorporado
+    ("pedido"), el custom gana -- reemplaza las frases/tools originales."""
+    from pack_commerce.config import CRMConfig
+
+    _mock_config(
+        monkeypatch,
+        CRMConfig(completion_claims_custom="pedido: pedido despachado => marcar_despachado"),
+    )
+    module = CRMModule()
+
+    # el texto original del claim "pedido" ("Cerré tu pedido") ya NO
+    # coincide con el reemplazo -- pasa.
+    verdict = await module._completion_guardrail("Cerré tu pedido, ya está confirmado.", [])
+    assert verdict.passed, verdict.reason
+
+    # el nuevo texto/tool custom sí se evalúa bajo el reemplazo.
+    verdict2 = await module._completion_guardrail("Tu pedido despachado ya va en camino.", [])
+    assert not verdict2.passed
+    assert "pedido" in verdict2.reason
+
+
+@pytest.mark.asyncio
+async def test_config_ausente_o_invalida_no_rompe_el_guardrail(monkeypatch: pytest.MonkeyPatch):
+    """Fail-open: si `load_config` lanza (config ausente, plugin sin
+    activar, lo que sea), el guardrail sigue funcionando con los claims
+    incorporados de siempre -- nunca debe romper el turno del cliente."""
+    import core.plugin_manager as plugin_manager_mod
+
+    async def _raise(plugin_id):
+        raise RuntimeError("plugin no configurado")
+
+    monkeypatch.setattr(plugin_manager_mod.plugin_manager, "load_config", _raise)
+    module = CRMModule()
+    verdict = await module._completion_guardrail(REAL_INCIDENT_TEXT, [])
+    assert not verdict.passed
+    assert "pedido" in verdict.reason

@@ -111,3 +111,26 @@ class CRMConfig(BasePluginConfig):
         ),
         description="Mensaje de confirmación de pedido por transferencia",
     )
+
+    # ---------------------------------------------------------------- crm_completion_check (ADR-0025)
+    completion_claims_disabled: str = Field(
+        default="",
+        description=(
+            "Nombres de claims incorporados a desactivar, separados por coma "
+            "(pedido, link_de_pago, asesor_humano, dato_de_contacto_guardado). "
+            "Vacío = todos activos."
+        ),
+    )
+    completion_claims_custom: str = Field(
+        default="",
+        max_length=4000,
+        json_schema_extra={"format": "textarea"},
+        description=(
+            "Claims propios de este negocio para crm_completion_check, uno por "
+            "línea (máx. 4000 caracteres en total -- este guardrail corre en "
+            "CADA turno de conversación). "
+            "`etiqueta: frase uno | frase dos => tool_uno, tool_dos`. "
+            "Las frases NUNCA se interpretan como regex (se escapan). Si el "
+            "nombre coincide con un claim incorporado, lo reemplaza."
+        ),
+    )
