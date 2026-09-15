@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, text
 
-from core.db.session import get_session
+from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from core.tasks.decorators import register_cron
@@ -77,6 +77,7 @@ async def follow_up_leads() -> None:
                                 Lead.status == "calificado",
                                 Lead.last_activity_at < threshold,
                                 Lead.last_activity_at > window_limit,
+                                Lead.tenant_id == tenant_id,
                             )
                         )
                     )
@@ -89,7 +90,7 @@ async def follow_up_leads() -> None:
                 if lead.conversation_id is None:
                     continue
                 async with get_session() as session:
-                    conversation = await session.get(Conversation, lead.conversation_id)
+                    conversation = await get_owned(session, Conversation, lead.conversation_id, tenant_id)
                 if conversation is None or conversation.bot_paused or conversation.status != "open":
                     continue
                 template = getattr(config, "follow_up_lead_message", "")
@@ -100,7 +101,7 @@ async def follow_up_leads() -> None:
                 try:
                     await send_to_conversation(lead.conversation_id, message)
                     async with get_session() as session:
-                        fresh = await session.get(Lead, lead.id)
+                        fresh = await get_owned(session, Lead, lead.id, tenant_id)
                         if fresh is not None:
                             fresh.status = "contactado"
                             fresh.last_activity_at = datetime.now(UTC)
@@ -141,6 +142,7 @@ async def follow_up_quotes() -> None:
                             Quote.created_at < min_age,
                             Quote.created_at > max_age,
                             Quote.created_at > window_limit,
+                            Quote.tenant_id == tenant_id,
                         )
                     )
                 ).scalars().all()
@@ -148,7 +150,7 @@ async def follow_up_quotes() -> None:
             total_candidates += len(quotes)
             for quote in quotes:
                 async with get_session() as session:
-                    conversation = await session.get(Conversation, quote.conversation_id)
+                    conversation = await get_owned(session, Conversation, quote.conversation_id, tenant_id)
                 if conversation is None or conversation.bot_paused or conversation.status != "open":
                     continue
                 template = getattr(config, "follow_up_quote_message", "")
@@ -156,7 +158,7 @@ async def follow_up_quotes() -> None:
                 try:
                     await send_to_conversation(quote.conversation_id, message)
                     async with get_session() as session:
-                        fresh = await session.get(Quote, quote.id)
+                        fresh = await get_owned(session, Quote, quote.id, tenant_id)
                         if fresh is not None:
                             fresh.follow_up_sent_at = now
                     total_sent += 1
