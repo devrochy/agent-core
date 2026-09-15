@@ -4,10 +4,19 @@ Un playbook es un `.md` versionado en `core/playbooks/` (defaults del framework)
 en `playbooks/` dentro de un pack. `load_playbook` SOLO devuelve contenido si el
 nombre está en la allowlist `AgentSpec.playbooks` del tenant (anti-inyección) y
 respeta el límite de tamaño. El contenido entra como bloque del system prompt.
+
+Un tenant puede OVERRIDEAR el contenido de un playbook ya permitido (ADR-0026):
+`TENANTS_ROOT/<slug>/playbooks/<name>.md`, si existe, gana sobre el default del
+pack/core -- gestionado por filesystem (mismo nivel que `catalog.json`/`docs/`/
+`evals/` del tenant), no por el panel admin (ADR-0017 sigue vigente: sin
+autoservicio de instrucciones en el panel). La allowlist sigue siendo el único
+control de acceso; el override no agrega nombres nuevos, solo cambia DÓNDE se
+busca uno ya autorizado.
 """
 
 from __future__ import annotations
 
+import re
 import uuid
 from pathlib import Path
 
@@ -19,6 +28,16 @@ from core.shared.logger import get_logger
 log = get_logger(__name__)
 
 MAX_SIZE_BYTES = 8 * 1024  # ADR-0014: límite por playbook (anti-bloat/inyección)
+
+# `PlaybookRef.name` es un `str` libre en el contrato (sin regex/validator) --
+# la allowlist responde "¿puede este tenant pedir este nombre?", no "¿es este
+# nombre un filename seguro?". Sin este chequeo, un `name` con "/"/".." que
+# llegara al índice de un spec (ej. vía el fallback `raw_json` de /admin/spec)
+# podría escapar `tenant_dir(slug)/playbooks/` -- o cualquier root de
+# `playbook_roots()` -- y leer un archivo fuera de lo previsto, incluido el
+# override PRIVADO de OTRO tenant (auditor-multitenant, ADR-0026). Mismos
+# caracteres que ya usan todos los nombres de playbook reales del repo.
+_SAFE_PLAYBOOK_NAME = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 CORE_PLAYBOOKS = Path(__file__).resolve().parent.parent / "playbooks"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -40,11 +59,18 @@ def _strip_frontmatter(content: str) -> str:
 
 
 async def load_playbook(
-    spec_or_tenant: AgentSpec | uuid.UUID | str | None, name: str
+    spec_or_tenant: AgentSpec | uuid.UUID | str | None,
+    name: str,
+    *,
+    tenant_slug: str | None = None,
 ) -> str | None:
     """Carga el contenido del playbook `name` si está en la allowlist del spec.
 
     Acepta un `AgentSpec` (evals/tests) o un tenant (resuelve su spec activo).
+    `tenant_slug`: si el caller ya lo resolvió (ej. `build_system_blocks`,
+    que arma varios playbooks por turno), evita una query repetida por cada
+    uno -- si no se pasa, esta función lo resuelve ella misma (una query,
+    aceptable en un call-site que no está en un loop).
     """
     if isinstance(spec_or_tenant, AgentSpec):
         spec = spec_or_tenant
@@ -54,6 +80,48 @@ async def load_playbook(
     if name not in allowed:
         log.info("playbook_not_allowed", playbook=name, tenant_id=str(spec.tenantId))
         return None
+    if not _SAFE_PLAYBOOK_NAME.match(name):
+        log.warning("playbook_name_unsafe", playbook=name, tenant_id=str(spec.tenantId))
+        return None
+
+    # Override por tenant (ADR-0026): gana sobre el default del pack/core si
+    # existe. Import local (mismo criterio que el resto del módulo) para no
+    # acoplar el import de este archivo a core.onboarding/core.shared.tenant.
+    # `tenant_slug`: `None` = "no me lo pasaron, resolverlo acá"; `""` =
+    # "el caller ya lo intentó y no hay slug" (no reintentar la query por
+    # cada playbook del loop de build_system_blocks si la BD está fallando).
+    slug = tenant_slug
+    if slug is None:
+        from core.shared.tenant import tenant_slug as _tenant_slug
+
+        try:
+            slug = await _tenant_slug(uuid.UUID(spec.tenantId))
+        except Exception:
+            # `tenantId` inválido (specs de test) o la BD no responde: el
+            # override es una CAPA EXTRA, no la fuente de verdad -- degradar
+            # al default del pack/core en vez de tumbar el turno, mismo
+            # criterio fail-open que el resto de esta función. Se loggea
+            # igual (a diferencia de un `pass` silencioso) para que un fallo
+            # persistente de BD no quede invisible.
+            log.warning(
+                "tenant_slug_resolve_failed", tenant_id=str(spec.tenantId), exc_info=True
+            )
+            slug = None
+    if slug:
+        from core.onboarding import tenant_dir
+
+        override = tenant_dir(slug) / "playbooks" / f"{name}.md"
+        if override.exists():
+            try:
+                content = override.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                log.warning(
+                    "tenant_playbook_read_failed", playbook=name, tenant_slug=slug, exc_info=True
+                )
+            else:
+                if len(content.encode("utf-8")) <= MAX_SIZE_BYTES:
+                    return _strip_frontmatter(content)
+                log.warning("tenant_playbook_too_large", playbook=name, tenant_slug=slug)
 
     for root in playbook_roots():
         candidate = root / f"{name}.md"

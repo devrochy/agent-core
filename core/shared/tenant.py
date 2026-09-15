@@ -87,3 +87,21 @@ async def default_tenant() -> uuid.UUID | None:
         return (
             await session.execute(text("select default_tenant_id()"))
         ).scalar_one_or_none()
+
+
+async def tenant_slug(tenant_id: uuid.UUID) -> str | None:
+    """Slug del tenant (tabla de sistema, sin RLS). `None` si no existe.
+
+    Usado para resolver `TENANTS_ROOT/<slug>/` (ADR-0026, playbooks por
+    tenant) sin necesitar una función SQL nueva -- `Tenant` ya se consulta
+    sin RLS por diseño (ver docstring del modelo).
+    """
+    from sqlalchemy import select
+
+    from core.db.models import Tenant
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        return (
+            await session.execute(select(Tenant.slug).where(Tenant.id == tenant_id))
+        ).scalar_one_or_none()
