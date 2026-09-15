@@ -21,6 +21,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from core.agents.responses import load_response
+from core.agents.spec import load_active_spec
 from core.config import DEBOUNCE_DELAY_MS, get_settings
 from core.db.models import (
     AppSettings,
@@ -208,8 +210,19 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
     # ---------------- escalamiento por keywords
     keywords = list((app_settings.escalation_config if app_settings else {}).get("keywords", []))
     if matches_escalation_keywords(effective_message, keywords or None):
+        # Resolver el texto ANTES de escalar (auditor-multitenant): si
+        # load_active_spec falla (ej. BD caída), no queremos dejar la
+        # conversación ya marcada `escalated`/`bot_paused` sin haber podido
+        # avisarle nada al cliente -- y el claim de idempotencia de este
+        # evento ya se insertó en _claim_event, así que un reintento
+        # posterior lo vería como duplicado y no volvería a intentar nada.
+        # `load_active_spec()` sin tenant explícito resuelve el de la
+        # conversación en curso vía el `tenant_scope` que `handle_inbound`
+        # ya abrió más arriba en la pila (mismo patrón que loop.py:171).
+        spec = await load_active_spec()
+        escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
         await escalate(conversation.id, reason="keyword", summary=effective_message[:200])
-        await send_to_conversation(conversation.id, ESCALATION_REPLY)
+        await send_to_conversation(conversation.id, escalation_text)
         return
 
     # ---------------- velocidad de respuesta

@@ -321,7 +321,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             await escalate(conversation_id, reason="llm_error", summary="Fallo del proveedor LLM")
             usage.escalated = True
             await _write_usage_ledger(conversation_id, spec, usage, turn_span)
-            return TurnResult(text=FALLBACK_REPLY, escalated=True)
+            fallback_text = await load_response(spec, "fallback") or FALLBACK_REPLY
+            return TurnResult(text=fallback_text, escalated=True)
 
         turn_cost += _response_cost(provider, response)
         usage.add(provider, response)
@@ -356,7 +357,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             await escalate(conversation_id, reason="llm_refusal", summary=latest_message[:200])
             usage.escalated = True
             await _write_usage_ledger(conversation_id, spec, usage, turn_span)
-            return TurnResult(text=ESCALATION_REPLY, escalated=True)
+            escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
+            return TurnResult(text=escalation_text, escalated=True)
 
         # ---- end_turn: guardrails
         # Se siembra con tool_results de turnos ANTERIORES (audit_log) + los del
@@ -380,7 +382,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             await escalate(conversation_id, reason="guardrail", summary=verdict.reason)
             usage.escalated = True
             await _write_usage_ledger(conversation_id, spec, usage, turn_span)
-            return TurnResult(text=ESCALATION_REPLY, escalated=True)
+            escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
+            return TurnResult(text=escalation_text, escalated=True)
 
         # ---- respuesta final
         extras = extract_safe_extras(all_tool_results)
@@ -393,7 +396,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     await escalate(conversation_id, reason="max_iterations", summary="Loop sin resolución")
     usage.escalated = True
     await _write_usage_ledger(conversation_id, spec, usage, turn_span)
-    return TurnResult(text=ESCALATION_REPLY, escalated=True)
+    escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
+    return TurnResult(text=escalation_text, escalated=True)
 
 
 # ------------------------------------------------------------------ helpers
