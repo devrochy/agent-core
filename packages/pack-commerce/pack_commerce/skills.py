@@ -17,7 +17,7 @@ from typing import Any
 
 from sqlalchemy import select, text
 
-from core.db.session import get_session
+from core.db.session import get_owned, get_session
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
 from core.shared.tenant import get_current_tenant_id
@@ -101,7 +101,11 @@ async def classify_customer(customer_id) -> str:  # type: ignore[no-untyped-def]
         rows = (
             await session.execute(
                 select(Order.created_at)
-                .where(Order.customer_id == customer_id, Order.status != "expirado")
+                .where(
+                    Order.customer_id == customer_id,
+                    Order.status != "expirado",
+                    Order.tenant_id == get_current_tenant_id(),
+                )
                 .order_by(Order.created_at)
             )
         ).scalars().all()
@@ -133,7 +137,11 @@ async def _active_customer_order(customer_id) -> Order | None:  # type: ignore[n
     async with get_session() as session:
         result = await session.execute(
             select(Order)
-            .where(Order.customer_id == customer_id, Order.status.in_(ORDER_STATUS_ACTIVE))
+            .where(
+                Order.customer_id == customer_id,
+                Order.status.in_(ORDER_STATUS_ACTIVE),
+                Order.tenant_id == get_current_tenant_id(),
+            )
             .order_by(Order.created_at.desc())
             .limit(1)
         )
@@ -272,16 +280,24 @@ class LeadSkill(BaseSkill):
     # ------------------------------------------------------------ handlers
     async def crear_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         async with get_session() as session:
+            tenant_id = get_current_tenant_id()
             existing = (
                 await session.execute(
-                    select(Lead).where(Lead.idempotency_key == context.idempotency_key)
+                    select(Lead).where(
+                        Lead.idempotency_key == context.idempotency_key,
+                        Lead.tenant_id == tenant_id,
+                    )
                 )
             ).scalar_one_or_none()
             if existing is not None:
                 return {"lead_id": str(existing.id), "status": "duplicate"}
 
             by_customer = (
-                await session.execute(select(Lead).where(Lead.customer_id == context.customer_id))
+                await session.execute(
+                    select(Lead).where(
+                        Lead.customer_id == context.customer_id, Lead.tenant_id == tenant_id
+                    )
+                )
             ).scalar_one_or_none()
             if by_customer is not None:
                 return {
@@ -411,7 +427,10 @@ class CatalogSkill(BaseSkill):
                 select(ProductVariant, Product, Inventory)
                 .join(Product, Product.id == ProductVariant.product_id)
                 .outerjoin(Inventory, Inventory.variant_id == ProductVariant.id)
-                .where(ProductVariant.active.is_(True))
+                .where(
+                    ProductVariant.active.is_(True),
+                    ProductVariant.tenant_id == get_current_tenant_id(),
+                )
             )
             if sku:
                 stmt = stmt.where(ProductVariant.sku == sku)
@@ -451,14 +470,15 @@ class CatalogSkill(BaseSkill):
         async with get_session() as session:
             product = None
             if product_id and _parse_uuid(product_id) is not None:
-                product = await session.get(Product, product_id)
+                product = await get_owned(session, Product, product_id, get_current_tenant_id())
             if product is None or product.category_id is None:
                 return {"recommendations": []}
 
             complements = (
                 await session.execute(
                     select(CategoryComplement.complementary_category_id).where(
-                        CategoryComplement.category_id == product.category_id
+                        CategoryComplement.category_id == product.category_id,
+                        CategoryComplement.tenant_id == get_current_tenant_id(),
                     )
                 )
             ).scalars().all()
@@ -476,6 +496,7 @@ class CatalogSkill(BaseSkill):
                         Product.id != product.id,
                         ProductVariant.active.is_(True),
                         Inventory.stock_quantity > 0,
+                        ProductVariant.tenant_id == get_current_tenant_id(),
                     )
                     .order_by(Product.name)
                     .limit(5)
@@ -748,11 +769,16 @@ class OrderSkill(BaseSkill):
         if _parse_uuid(quote_id) is None:
             return {"error": "Cotización no encontrada."}
         async with get_session() as session:
-            quote = await session.get(Quote, quote_id)
+            tenant_id = get_current_tenant_id()
+            quote = await get_owned(session, Quote, quote_id, tenant_id)
             if quote is None:
                 return {"error": "Cotización no encontrada."}
             items = (
-                await session.execute(select(QuoteItem).where(QuoteItem.quote_id == quote.id))
+                await session.execute(
+                    select(QuoteItem).where(
+                        QuoteItem.quote_id == quote.id, QuoteItem.tenant_id == tenant_id
+                    )
+                )
             ).scalars().all()
 
             variants = {
@@ -762,7 +788,10 @@ class OrderSkill(BaseSkill):
                         select(ProductVariant, Product, Inventory)
                         .join(Product, Product.id == ProductVariant.product_id)
                         .outerjoin(Inventory, Inventory.variant_id == ProductVariant.id)
-                        .where(ProductVariant.id.in_([i.variant_id for i in items]))
+                        .where(
+                            ProductVariant.id.in_([i.variant_id for i in items]),
+                            ProductVariant.tenant_id == tenant_id,
+                        )
                     )
                 ).all()
             }
@@ -772,6 +801,7 @@ class OrderSkill(BaseSkill):
                         Promotion.active.is_(True),
                         (Promotion.valid_from.is_(None)) | (Promotion.valid_from <= _now()),
                         (Promotion.valid_to.is_(None)) | (Promotion.valid_to >= _now()),
+                        Promotion.tenant_id == tenant_id,
                     )
                 )
             ).scalars().all()
@@ -839,7 +869,7 @@ class OrderSkill(BaseSkill):
         benefit, promo = best
         new_total = max(_float(quote.subtotal) - benefit, 0)
         async with get_session() as session:
-            quote = await session.get(Quote, quote_id)
+            quote = await get_owned(session, Quote, quote_id, get_current_tenant_id())
             quote.discount = benefit
             quote.total = new_total
             quote.applied_promotion_id = promo.id
@@ -928,6 +958,7 @@ class OrderSkill(BaseSkill):
                 select(PromotionRedemption.id).where(
                     PromotionRedemption.promotion_id == promotion_id,
                     PromotionRedemption.customer_id == customer_id,
+                    PromotionRedemption.tenant_id == get_current_tenant_id(),
                 ).limit(1)
             )
             return result.scalar_one_or_none() is not None
@@ -966,7 +997,11 @@ class OrderSkill(BaseSkill):
             if quote is None:
                 return {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
             existing_order = (
-                await session.execute(select(Order).where(Order.quote_id == quote.id))
+                await session.execute(
+                    select(Order).where(
+                        Order.quote_id == quote.id, Order.tenant_id == get_current_tenant_id()
+                    )
+                )
             ).scalar_one_or_none()
             if existing_order is not None:
                 return {
@@ -986,7 +1021,12 @@ class OrderSkill(BaseSkill):
                     "cliente haya dicho que sí al total final.",
                 }
             items = (
-                await session.execute(select(QuoteItem).where(QuoteItem.quote_id == quote.id))
+                await session.execute(
+                    select(QuoteItem).where(
+                        QuoteItem.quote_id == quote.id,
+                        QuoteItem.tenant_id == get_current_tenant_id(),
+                    )
+                )
             ).scalars().all()
             if not items:
                 return {"error": "La cotización no tiene productos."}
@@ -1095,7 +1135,9 @@ class OrderSkill(BaseSkill):
             public_order_number = order.public_order_number
 
             if quote.applied_promotion_id is not None:
-                promo = await session.get(Promotion, quote.applied_promotion_id)
+                promo = await get_owned(
+                    session, Promotion, quote.applied_promotion_id, get_current_tenant_id()
+                )
                 if promo and promo.type == "campaña" and (promo.rules or {}).get("once_per_customer"):
                     session.add(
                         PromotionRedemption(
@@ -1161,7 +1203,8 @@ class OrderSkill(BaseSkill):
             existing_batch = (
                 await session.execute(
                     select(OrderItemBatch).where(
-                        OrderItemBatch.idempotency_key == context.idempotency_key
+                        OrderItemBatch.idempotency_key == context.idempotency_key,
+                        OrderItemBatch.tenant_id == get_current_tenant_id(),
                     )
                 )
             ).scalar_one_or_none()
@@ -1228,24 +1271,33 @@ class OrderSkill(BaseSkill):
         config = await _plugin_config()
 
         async with get_session() as session:
+            tenant_id = get_current_tenant_id()
             order = (
                 await session.execute(
                     select(Order).where(
                         Order.customer_id == context.customer_id,
                         Order.public_order_number == public_number,
+                        Order.tenant_id == tenant_id,
                     )
                 )
             ).scalar_one_or_none()
             if order is None:
                 return {"found": False, "hint": "No encontré un pedido con ese número para este cliente."}
             items = (
-                await session.execute(select(OrderItem).where(OrderItem.order_id == order.id))
+                await session.execute(
+                    select(OrderItem).where(
+                        OrderItem.order_id == order.id, OrderItem.tenant_id == tenant_id
+                    )
+                )
             ).scalars().all()
             item_details = (
                 await session.execute(
                     select(ProductVariant, Product)
                     .join(Product, Product.id == ProductVariant.product_id)
-                    .where(ProductVariant.id.in_([i.variant_id for i in items]))
+                    .where(
+                        ProductVariant.id.in_([i.variant_id for i in items]),
+                        ProductVariant.tenant_id == tenant_id,
+                    )
                 )
             ).all()
             by_id = {v.id: p for v, p in item_details}
@@ -1274,7 +1326,10 @@ class OrderSkill(BaseSkill):
     async def _decrement_stock(session, variant_id, quantity: int) -> None:  # type: ignore[no-untyped-def]
         inventory = (
             await session.execute(
-                select(Inventory).where(Inventory.variant_id == variant_id)
+                select(Inventory).where(
+                    Inventory.variant_id == variant_id,
+                    Inventory.tenant_id == get_current_tenant_id(),
+                )
             )
         ).scalar_one_or_none()
         if inventory is None:

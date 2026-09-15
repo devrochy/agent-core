@@ -10,11 +10,12 @@ la corrutina en asyncio.run() — un solo engine y un solo estilo de código.
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from core.config import get_settings
@@ -61,3 +62,22 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 def run_async(coro: Coroutine[Any, Any, Any]) -> Any:
     """Puente para tareas Celery: ejecuta una corrutina en contexto síncrono."""
     return asyncio.run(coro)
+
+
+async def get_owned(
+    session: AsyncSession, model: type[Any], id_: Any, tenant_id: uuid.UUID | None = None
+) -> Any | None:
+    """Como `session.get(model, id_)` pero con un filtro EXPLÍCITO de
+    `tenant_id` -- defensa en profundidad más allá de RLS (ADR-0012: RLS
+    sigue siendo la garantía real; esto es un segundo cinturón que no
+    depende de que el contexto de sesión de Postgres esté bien seteado).
+
+    Requiere que `model` tenga una columna `tenant_id`. Devuelve `None` si
+    no existe o pertenece a otro tenant (mismo comportamiento "no
+    encontrado" que `session.get()` -- no se distinguen los dos casos,
+    tampoco lo hacía RLS).
+    """
+    tid = tenant_id if tenant_id is not None else get_current_tenant_id()
+    return (
+        await session.execute(select(model).where(model.id == id_, model.tenant_id == tid))
+    ).scalar_one_or_none()
