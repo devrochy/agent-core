@@ -52,6 +52,11 @@ from core.gateway.connections import (
     set_primary,
     verify_meta_credentials,
 )
+from core.llm.difficulty_router import (
+    DIFFICULTY_SCORE_THRESHOLD,
+    LONG_MESSAGE_THRESHOLD,
+    TURNOS_SIN_RESOLVER_THRESHOLD,
+)
 from core.mcp.host import mcp_host
 from core.plugin_manager import plugin_manager
 from core.shared.crypto import get_secret_box
@@ -1284,6 +1289,9 @@ async def settings_save(
     debounce_mode: str = Form(default="natural"),
     guardrail_max_retries: int = Form(default=1),
     disabled_guardrails: list[str] = Form(default=[]),  # noqa: B008
+    difficulty_long_message_threshold: int = Form(default=LONG_MESSAGE_THRESHOLD),
+    difficulty_turnos_sin_resolver_threshold: int = Form(default=TURNOS_SIN_RESOLVER_THRESHOLD),
+    difficulty_score_threshold: int = Form(default=DIFFICULTY_SCORE_THRESHOLD),
 ):
     if await current_admin(request) is None:
         return _login_redirect()
@@ -1315,6 +1323,11 @@ async def settings_save(
             debounce_mode=debounce_mode,
             guardrail_max_retries=max(0, guardrail_max_retries),
             disabled_guardrails=sorted(valid_names & set(disabled_guardrails)),
+            difficulty_long_message_threshold=max(50, min(5000, difficulty_long_message_threshold)),
+            difficulty_turnos_sin_resolver_threshold=max(
+                1, min(20, difficulty_turnos_sin_resolver_threshold)
+            ),
+            difficulty_score_threshold=max(1, min(10, difficulty_score_threshold)),
         )
         app_settings.behavior_config = behavior
     return RedirectResponse("/admin/configuracion?flash=Configuración guardada", status_code=303)
