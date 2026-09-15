@@ -122,6 +122,52 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
 }
 
 
+_MAX_CUSTOM_COMPLETION_CLAIM_LINES = 50
+
+
+def _parse_custom_completion_claims(raw: str) -> dict[str, tuple[re.Pattern[str], set[str]]]:
+    """Parsea `CRMConfig.completion_claims_custom` (ADR-0025): una línea por
+    claim, `etiqueta: frase uno | frase dos => tool_uno, tool_dos`. Nunca
+    acepta regex crudo -- las frases se escapan (`re.escape`) antes de
+    compilar, elimina el riesgo de ReDoS por diseño (no hay ninguna otra
+    parte del repo que compile un regex proveniente de config/BD/form, así
+    que no hay infraestructura de mitigación que reusar). Una línea mal
+    formada se ignora con un warning, nunca revienta el guardrail (mismo
+    criterio de fail-open que el resto de `core/orchestrator/guardrails.py`).
+
+    Tope de líneas (defensa en profundidad, además del `max_length` del
+    campo en `CRMConfig`): este guardrail corre en CADA turno de
+    conversación de ESE tenant -- sin límite, una config con miles de
+    líneas degradaría la latencia de ese tenant en cada turno (hallazgo de
+    `auditor-multitenant`, no es fuga cross-tenant sino un costo de
+    "vecino ruidoso" dentro del propio proceso compartido).
+    """
+    result: dict[str, tuple[re.Pattern[str], set[str]]] = {}
+    for lineno, raw_line in enumerate(raw.splitlines(), start=1):
+        if lineno > _MAX_CUSTOM_COMPLETION_CLAIM_LINES:
+            log.warning("completion_claims_custom_truncado", limite=_MAX_CUSTOM_COMPLETION_CLAIM_LINES)
+            break
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line or "=>" not in line:
+            log.warning("completion_claim_custom_malformado", line=lineno)
+            continue
+        label, _, rest = line.partition(":")
+        phrases_part, _, tools_part = rest.partition("=>")
+        label = label.strip()
+        phrases = [p.strip() for p in phrases_part.split("|") if p.strip()]
+        tools = {t.strip() for t in tools_part.split(",") if t.strip()}
+        if not label or not phrases or not tools:
+            log.warning("completion_claim_custom_incompleto", line=lineno)
+            continue
+        result[label] = (
+            re.compile("|".join(re.escape(p) for p in phrases), re.IGNORECASE),
+            tools,
+        )
+    return result
+
+
 def _extract_monetary_values(node: Any, key: str | None = None) -> list[float]:
     """Recorre `node` recursivamente (listas y dicts anidados) y colecciona los
     números que aparecen bajo una clave de `MONEY_KEYS`.
@@ -1041,6 +1087,30 @@ class CRMModule(BaseModule):
                 )
         return GuardrailResult(passed=True)
 
+    async def _resolved_completion_claims(self) -> dict[str, tuple[re.Pattern[str], set[str]]]:
+        """Combina `COMPLETION_CLAIMS` (incorporados) con la config de ESTE
+        tenant (ADR-0025): quita los deshabilitados
+        (`completion_claims_disabled`), agrega/reemplaza los custom
+        (`completion_claims_custom`). Fail-open ante config ausente/inválida
+        -- nunca debe romper el guardrail (mismo criterio que
+        `_plugin_config()` en `skills.py`)."""
+        from core.plugin_manager import plugin_manager
+
+        claims = dict(COMPLETION_CLAIMS)
+        try:
+            config = await plugin_manager.load_config(PLUGIN_ID)
+        except Exception:
+            config = None
+        if config is None:
+            return claims
+        disabled = {
+            n.strip() for n in (config.completion_claims_disabled or "").split(",") if n.strip()
+        }
+        for name in disabled:
+            claims.pop(name, None)
+        claims.update(_parse_custom_completion_claims(config.completion_claims_custom or ""))
+        return claims
+
     async def _completion_guardrail(
         self, response_text: str, tool_results: list[dict[str, Any]]
     ) -> GuardrailResult:
@@ -1051,11 +1121,14 @@ class CRMModule(BaseModule):
         No es infalible (es texto libre, no todas las formas de decirlo están
         cubiertas), pero corta el caso real encontrado: el modelo prometiendo
         algo que nunca iba a pasar, dejando al cliente esperando en el vacío.
+        Los claims son los incorporados + los que este tenant haya
+        configurado/desactivado (ADR-0025, `_resolved_completion_claims`).
         """
         called_tools = {
             result.get(_TOOL_NAME_KEY) for result in tool_results if isinstance(result, dict)
         }
-        for label, (pattern, required_tools) in COMPLETION_CLAIMS.items():
+        claims = await self._resolved_completion_claims()
+        for label, (pattern, required_tools) in claims.items():
             if pattern.search(response_text) and not (called_tools & required_tools):
                 return GuardrailResult(
                     passed=False,
