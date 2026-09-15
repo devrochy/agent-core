@@ -47,12 +47,21 @@ tenants/
     catalog.json     # datos del tenant importables a la BD (seed) — formato del pack
     docs/            # documentación específica del tenant (README, config, changelog)
     evals/           # golden set del tenant (spec.json + scenarios/) para `eval-runner --tenant`
+    playbooks/       # override de instrucciones por tenant (ADR-0026), ver abajo
 ```
 
 - `TENANTS_ROOT` se configura en `.env` (`core/config.py`). Por defecto es
   relativo al repo; puede apuntar a un directorio compartido.
 - La documentación del **framework** vive en `docs/`; la de cada **tenant**, en
   `TENANTS_ROOT/<slug>/docs/`. No se mezclan.
+- `TENANTS_ROOT/<slug>/playbooks/<nombre>.md` (ADR-0026): si existe, gana
+  sobre el `.md` default del pack/core para ESE tenant — `<nombre>` tiene
+  que ser uno ya permitido en su `AgentSpec.playbooks` (el override no
+  agrega playbooks nuevos, solo reemplaza el contenido de uno existente).
+  Es 100% filesystem, gestionado por quien tenga acceso al despliegue
+  (mismo nivel que colocar `catalog.json` antes de `tenant seed`) — no hay
+  editor en el panel admin (ADR-0017 sigue vigente: sin autoservicio de
+  instrucciones ahí).
 
 ## Flujo
 

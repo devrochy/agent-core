@@ -31,3 +31,6 @@ Se crean con `/adr`.
 | 0021 | Topología de despliegue: panel y gateway+consumer en un solo proceso | aceptado |
 | 0022 | Leads como vista computada de Customer, no una tabla que sincronizar | aceptado |
 | 0023 | pack-payments: coordinación entre packs vía eventos, sin acoplarlos | aceptado |
+| 0024 | Salud de plugin por tenant (`plugin_tenant_state`), no `auto_disable` global | aceptado |
+| 0025 | `completion_claims` custom por tenant: frases literales, nunca regex crudo | aceptado |
+| 0026 | Playbooks: override de contenido por tenant vía filesystem | aceptado |

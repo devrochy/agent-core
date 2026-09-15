@@ -77,12 +77,76 @@ async def test_load_playbook_respeta_allowlist() -> None:
 
 
 @pytest.mark.asyncio
+async def test_load_playbook_rechaza_nombre_con_traversal() -> None:
+    """Hallazgo real de `auditor-multitenant` (ADR-0026): `PlaybookRef.name`
+    es un `str` libre en el contrato -- si un `name` con "/"/".." llegara al
+    índice de un spec (ej. vía el fallback `raw_json` de `/admin/spec`), no
+    debe poder escapar `tenant_dir(slug)/playbooks/` (ni ningún root de
+    `playbook_roots()`) para leer un archivo fuera de lo previsto, incluido
+    el override PRIVADO de otro tenant."""
+    malicious = "../otro-tenant/playbooks/ventas"
+    spec = make_spec(playbooks=[{"name": malicious, "description": "x"}])
+    assert await load_playbook(spec, malicious) is None
+
+
+@pytest.mark.asyncio
 async def test_load_playbook_quita_frontmatter() -> None:
     spec = make_spec()
     content = await load_playbook(spec, "identidad")
     assert content is not None
     assert not content.lstrip().startswith("---")
     assert "Eres" in content
+
+
+@pytest.mark.asyncio
+async def test_load_playbook_usa_override_de_tenant_si_existe(tmp_path, monkeypatch) -> None:
+    """ADR-0026: `TENANTS_ROOT/<slug>/playbooks/<name>.md`, si existe, gana
+    sobre el default del pack/core."""
+    import core.onboarding as onboarding
+
+    slug = "tenant-override-test"
+    playbooks_dir = tmp_path / slug / "playbooks"
+    playbooks_dir.mkdir(parents=True)
+    (playbooks_dir / "tono.md").write_text("Tono a medida de este tenant.", encoding="utf-8")
+
+    monkeypatch.setattr(onboarding, "tenant_dir", lambda s: tmp_path / s)
+
+    spec = make_spec(playbooks=[{"name": "tono", "description": "Tono"}])
+    content = await load_playbook(spec, "tono", tenant_slug=slug)
+    assert content == "Tono a medida de este tenant."
+
+
+@pytest.mark.asyncio
+async def test_load_playbook_sin_override_cae_al_default_del_pack(tmp_path, monkeypatch) -> None:
+    """Sin archivo de override (carpeta del tenant vacía/inexistente), sigue
+    devolviendo el default -- el fallback de siempre queda intacto."""
+    import core.onboarding as onboarding
+
+    monkeypatch.setattr(onboarding, "tenant_dir", lambda s: tmp_path / s)
+
+    spec = make_spec(playbooks=[{"name": "tono", "description": "Tono"}])
+    content = await load_playbook(spec, "tono", tenant_slug="otro-tenant-sin-override")
+    assert content is not None
+    assert "Tono" in content
+    assert "a medida de este tenant" not in content
+
+
+@pytest.mark.asyncio
+async def test_load_playbook_override_respeta_allowlist(tmp_path, monkeypatch) -> None:
+    """Un override no agrega nombres nuevos: si `name` no está en la
+    allowlist del tenant, se rechaza ANTES de mirar el filesystem."""
+    import core.onboarding as onboarding
+
+    slug = "tenant-override-allowlist"
+    playbooks_dir = tmp_path / slug / "playbooks"
+    playbooks_dir.mkdir(parents=True)
+    (playbooks_dir / "identidad.md").write_text("Identidad falsa.", encoding="utf-8")
+
+    monkeypatch.setattr(onboarding, "tenant_dir", lambda s: tmp_path / s)
+
+    spec = make_spec(playbooks=[{"name": "tono", "description": "Tono"}])
+    content = await load_playbook(spec, "identidad", tenant_slug=slug)
+    assert content is None
 
 
 @pytest.mark.asyncio

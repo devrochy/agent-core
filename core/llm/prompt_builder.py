@@ -18,6 +18,10 @@ from dataclasses import dataclass, field
 
 from agentcore_contracts import AgentSpec
 
+from core.shared.logger import get_logger
+
+log = get_logger(__name__)
+
 
 @dataclass
 class PromptContext:
@@ -41,12 +45,12 @@ class PromptContext:
 
 
 async def _render_playbook(
-    spec: AgentSpec, ref_name: str, vars_: dict[str, str]
+    spec: AgentSpec, ref_name: str, vars_: dict[str, str], tenant_slug: str | None
 ) -> str | None:
     """Carga el playbook y sustituye placeholders. None si no está en el índice."""
     from core.agents.playbooks import load_playbook
 
-    content = await load_playbook(spec, ref_name)
+    content = await load_playbook(spec, ref_name, tenant_slug=tenant_slug)
     if content is None:
         return None
     try:
@@ -58,11 +62,34 @@ async def _render_playbook(
 
 async def build_system_blocks(spec: AgentSpec, ctx: PromptContext) -> list[str]:
     """Ensambla los bloques del system prompt desde el spec + playbooks + turno."""
+    import uuid
+
     blocks: list[str] = []
+
+    # Override por tenant (ADR-0026): se resuelve UNA VEZ acá, no dentro de
+    # cada llamada a load_playbook -- este loop puede pedir 4-6 playbooks por
+    # turno, y una query de slug por cada uno sería un N+1 real.
+    tenant_slug: str | None = None
+    try:
+        from core.shared.tenant import tenant_slug as _tenant_slug
+
+        tenant_slug = await _tenant_slug(uuid.UUID(spec.tenantId))
+    except Exception:
+        # `tenantId` inválido (specs de test) o la BD no responde: el
+        # override es una capa extra, no la fuente de verdad -- degradar a
+        # "sin override" en vez de tumbar el ensamblado del prompt entero.
+        # Se loggea igual para que un fallo persistente de BD no quede
+        # invisible (antes era un `pass` silencioso).
+        log.warning("tenant_slug_resolve_failed", tenant_id=spec.tenantId, exc_info=True)
+    if tenant_slug is None:
+        # "" (no None) le dice a load_playbook "ya se intentó, no hay slug"
+        # -- evita que cada llamada del loop de abajo reintente la misma
+        # query si la resolución de arriba falló (ej. BD caída).
+        tenant_slug = ""
 
     # 1. Playbooks del tenant, en el orden del índice (identidad, tono, reglas...)
     for ref in spec.playbooks:
-        rendered = await _render_playbook(spec, ref.name, ctx.template_vars)
+        rendered = await _render_playbook(spec, ref.name, ctx.template_vars, tenant_slug)
         if rendered:
             blocks.append(rendered)
 
