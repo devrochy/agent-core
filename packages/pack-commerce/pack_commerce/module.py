@@ -22,7 +22,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 
-from core.db.session import get_session
+from core.db.session import get_owned, get_session
 from core.mcp.types import BaseModule, GuardrailResult
 from core.shared.events import ON_CONVERSATION_STARTED
 from core.shared.logger import get_logger
@@ -235,11 +235,20 @@ async def crm_dashboard(request: Request):
     ctx = await _require_admin(request)
     if ctx is None:
         return _login_redirect()
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        leads = (await session.execute(select(Lead))).scalars().all()
-        products = (await session.execute(select(Product))).scalars().all()
-        promotions = (await session.execute(select(Promotion))).scalars().all()
-        orders = (await session.execute(select(Order))).scalars().all()
+        leads = (
+            await session.execute(select(Lead).where(Lead.tenant_id == tenant_id))
+        ).scalars().all()
+        products = (
+            await session.execute(select(Product).where(Product.tenant_id == tenant_id))
+        ).scalars().all()
+        promotions = (
+            await session.execute(select(Promotion).where(Promotion.tenant_id == tenant_id))
+        ).scalars().all()
+        orders = (
+            await session.execute(select(Order).where(Order.tenant_id == tenant_id))
+        ).scalars().all()
     ctx.update(
         kpi={
             "leads": len(leads),
@@ -406,7 +415,9 @@ async def _leads_save(record_id: str | None, values: dict[str, Any]) -> None:
             return
 
         lead = (
-            await session.execute(select(Lead).where(Lead.customer_id == customer_uuid))
+            await session.execute(
+                select(Lead).where(Lead.customer_id == customer_uuid, Lead.tenant_id == tenant_id)
+            )
         ).scalar_one_or_none()
         if lead is None:
             lead = Lead(customer_id=customer_uuid, idempotency_key=f"manual:{customer_uuid}")
@@ -424,13 +435,24 @@ async def crm_products(request: Request):
     ctx = await _require_admin(request)
     if ctx is None:
         return _login_redirect()
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        products = (await session.execute(select(Product).order_by(Product.name))).scalars().all()
-        variants = (await session.execute(select(ProductVariant))).scalars().all()
-        inventory = (await session.execute(select(Inventory))).scalars().all()
+        products = (
+            await session.execute(
+                select(Product).where(Product.tenant_id == tenant_id).order_by(Product.name)
+            )
+        ).scalars().all()
+        variants = (
+            await session.execute(select(ProductVariant).where(ProductVariant.tenant_id == tenant_id))
+        ).scalars().all()
+        inventory = (
+            await session.execute(select(Inventory).where(Inventory.tenant_id == tenant_id))
+        ).scalars().all()
         categories = (
             await session.execute(
-                select(Category).where(Category.deleted_at.is_(None)).order_by(Category.name)
+                select(Category)
+                .where(Category.deleted_at.is_(None), Category.tenant_id == tenant_id)
+                .order_by(Category.name)
             )
         ).scalars().all()
     cat_by_id = {c.id: c for c in categories}
@@ -479,16 +501,29 @@ async def product_save(
 ):
     if await _require_admin(request) is None:
         return _login_redirect()
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
+        # Defensa en profundidad, mismo criterio que `parent_id` en
+        # category_save: no dejar `Product.category_id` colgando hacia una
+        # categoría de otro tenant (o inexistente) sin validarla primero.
+        resolved_category_id: uuid.UUID | None = None
+        if category_id:
+            category = await get_owned(session, Category, category_id, tenant_id)
+            if category is not None:
+                resolved_category_id = category.id
+
         if product_id:
-            product = await session.get(Product, product_id)
+            product = await get_owned(session, Product, product_id, tenant_id)
             if product is not None:
                 product.name = name
                 product.description = description
-                product.category_id = uuid.UUID(category_id) if category_id else None
+                product.category_id = resolved_category_id
                 variant = (
                     await session.execute(
-                        select(ProductVariant).where(ProductVariant.product_id == product.id)
+                        select(ProductVariant).where(
+                            ProductVariant.product_id == product.id,
+                            ProductVariant.tenant_id == tenant_id,
+                        )
                     )
                 ).scalars().first()
                 if variant is not None:
@@ -496,7 +531,10 @@ async def product_save(
                     variant.price = price or variant.price
                     inv = (
                         await session.execute(
-                            select(Inventory).where(Inventory.variant_id == variant.id)
+                            select(Inventory).where(
+                                Inventory.variant_id == variant.id,
+                                Inventory.tenant_id == tenant_id,
+                            )
                         )
                     ).scalar_one_or_none()
                     if inv is None:
@@ -504,9 +542,7 @@ async def product_save(
                     else:
                         inv.stock_quantity = stock
         else:
-            product = Product(name=name, description=description)
-            if category_id:
-                product.category_id = uuid.UUID(category_id)
+            product = Product(name=name, description=description, category_id=resolved_category_id)
             session.add(product)
             await session.flush()
             variant = ProductVariant(
@@ -532,6 +568,7 @@ async def product_import_csv(request: Request, file: Annotated[UploadFile, File(
             status_code=303,
         )
     created = 0
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
         for row in rows:
             name = (row.get("name") or "").strip()
@@ -547,7 +584,9 @@ async def product_import_csv(request: Request, file: Annotated[UploadFile, File(
                 cat = (
                     await session.execute(
                         select(Category).where(
-                            Category.name == cat_name, Category.deleted_at.is_(None)
+                            Category.name == cat_name,
+                            Category.deleted_at.is_(None),
+                            Category.tenant_id == tenant_id,
                         )
                     )
                 ).scalar_one_or_none()
@@ -573,15 +612,20 @@ async def crm_categories(request: Request):
     ctx = await _require_admin(request)
     if ctx is None:
         return _login_redirect()
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
         categories = (
             await session.execute(
                 select(Category)
-                .where(Category.deleted_at.is_(None))
+                .where(Category.deleted_at.is_(None), Category.tenant_id == tenant_id)
                 .order_by(Category.sort_order, Category.name)
             )
         ).scalars().all()
-        complements = (await session.execute(select(CategoryComplement))).scalars().all()
+        complements = (
+            await session.execute(
+                select(CategoryComplement).where(CategoryComplement.tenant_id == tenant_id)
+            )
+        ).scalars().all()
     comp_by_cat: dict[str, list[str]] = {}
     for c in complements:
         comp_by_cat.setdefault(str(c.category_id), []).append(str(c.complementary_category_id))
@@ -619,40 +663,51 @@ async def category_save(
 ):
     if await _require_admin(request) is None:
         return _login_redirect()
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
         parent = uuid.UUID(parent_id) if parent_id else None
         if parent is not None:
-            parent_category = await session.get(Category, parent)
-            # session.get ya filtra por RLS: si `parent` no existe o es de otro
-            # tenant, devuelve None en ambos casos — rechazar en vez de asignar
-            # igual (dejaría un parent_id colgando hacia otro tenant). Una
-            # categoría eliminada (soft-delete) tampoco es un padre válido.
+            # Defensa en profundidad además de RLS: filtro tenant_id explícito
+            # en vez de session.get() a secas -- si `parent` no existe o es de
+            # otro tenant, devuelve None en ambos casos, se rechaza en vez de
+            # asignar igual (dejaría un parent_id colgando hacia otro tenant).
+            # Una categoría eliminada (soft-delete) tampoco es un padre válido.
+            parent_category = await get_owned(session, Category, parent, tenant_id)
             if parent_category is None or parent_category.deleted_at is not None:
                 return RedirectResponse(
                     "/crm/categorias?flash=Categoría padre no encontrada&flash_type=danger",
                     status_code=303,
                 )
         if category_id:
-            category = await session.get(Category, category_id)
-            if category is not None:
-                if parent is not None:
-                    # Una categoría no puede ser su propia padre ni un descendiente
-                    # de sí misma (eso la dejaría inalcanzable en el árbol del listado).
-                    ancestor_id: uuid.UUID | None = parent
-                    seen: set[uuid.UUID] = set()
-                    while ancestor_id is not None and ancestor_id not in seen:
-                        if ancestor_id == category.id:
-                            return RedirectResponse(
-                                "/crm/categorias?flash=Una categoría no puede ser su propia"
-                                " categoría padre ni descendiente de sí misma&flash_type=danger",
-                                status_code=303,
-                            )
-                        seen.add(ancestor_id)
-                        ancestor = await session.get(Category, ancestor_id)
-                        ancestor_id = ancestor.parent_id if ancestor is not None else None
-                category.name = name
-                category.parent_id = parent
-                category.sort_order = sort_order
+            category = await get_owned(session, Category, category_id, tenant_id)
+            if category is None:
+                # Antes de este fix, `session.get()` también devolvía `None`
+                # acá sin filtro explícito -- el código seguía de largo y
+                # reventaba más abajo con `category.id` sin definir (500 en
+                # vez de un flash controlado). Mismo criterio que
+                # `category_delete` para "no existe/es de otro tenant".
+                return RedirectResponse(
+                    "/crm/categorias?flash=Categoría no encontrada&flash_type=danger",
+                    status_code=303,
+                )
+            if parent is not None:
+                # Una categoría no puede ser su propia padre ni un descendiente
+                # de sí misma (eso la dejaría inalcanzable en el árbol del listado).
+                ancestor_id: uuid.UUID | None = parent
+                seen: set[uuid.UUID] = set()
+                while ancestor_id is not None and ancestor_id not in seen:
+                    if ancestor_id == category.id:
+                        return RedirectResponse(
+                            "/crm/categorias?flash=Una categoría no puede ser su propia"
+                            " categoría padre ni descendiente de sí misma&flash_type=danger",
+                            status_code=303,
+                        )
+                    seen.add(ancestor_id)
+                    ancestor = await get_owned(session, Category, ancestor_id, tenant_id)
+                    ancestor_id = ancestor.parent_id if ancestor is not None else None
+            category.name = name
+            category.parent_id = parent
+            category.sort_order = sort_order
         else:
             category = Category(name=name, parent_id=parent, sort_order=sort_order)
             session.add(category)
@@ -660,7 +715,10 @@ async def category_save(
 
         if category_id:
             await session.execute(
-                CategoryComplement.__table__.delete().where(CategoryComplement.category_id == category.id)
+                CategoryComplement.__table__.delete().where(
+                    CategoryComplement.category_id == category.id,
+                    CategoryComplement.tenant_id == tenant_id,
+                )
             )
         for raw in complements.split(","):
             comp = raw.strip()
@@ -672,7 +730,15 @@ async def category_save(
                 continue
             if comp_uuid == category.id:
                 continue
-            session.add(CategoryComplement(category_id=category.id, complementary_category_id=comp_uuid))
+            # Defensa en profundidad, mismo criterio que `parent_id` más
+            # arriba: no encadenar `complementary_category_id` a un UUID
+            # ajeno sin verificar que exista y sea del tenant activo.
+            complement = await get_owned(session, Category, comp_uuid, tenant_id)
+            if complement is None:
+                continue
+            session.add(
+                CategoryComplement(category_id=category.id, complementary_category_id=comp_uuid)
+            )
     return RedirectResponse("/crm/categorias?flash=Categoría guardada", status_code=303)
 
 
@@ -689,8 +755,9 @@ async def category_delete(request: Request, category_id: str = Form(default=""))
         category_uuid = uuid.UUID(category_id)
     except ValueError:
         return RedirectResponse("/crm/categorias?flash=Categoría inválida&flash_type=danger", status_code=303)
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        category = await session.get(Category, category_uuid)
+        category = await get_owned(session, Category, category_uuid, tenant_id)
         if category is None or category.deleted_at is not None:
             return RedirectResponse(
                 "/crm/categorias?flash=Categoría no encontrada&flash_type=danger", status_code=303
@@ -698,7 +765,9 @@ async def category_delete(request: Request, category_id: str = Form(default=""))
         has_children = (
             await session.execute(
                 select(Category).where(
-                    Category.parent_id == category_uuid, Category.deleted_at.is_(None)
+                    Category.parent_id == category_uuid,
+                    Category.deleted_at.is_(None),
+                    Category.tenant_id == tenant_id,
                 )
             )
         ).scalar_one_or_none()
@@ -718,14 +787,27 @@ async def crm_promotions(request: Request):
     ctx = await _require_admin(request)
     if ctx is None:
         return _login_redirect()
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        promotions = (await session.execute(select(Promotion).order_by(Promotion.created_at.desc()))).scalars().all()
-        categories = (
+        promotions = (
             await session.execute(
-                select(Category).where(Category.deleted_at.is_(None)).order_by(Category.name)
+                select(Promotion)
+                .where(Promotion.tenant_id == tenant_id)
+                .order_by(Promotion.created_at.desc())
             )
         ).scalars().all()
-        products = (await session.execute(select(Product).order_by(Product.name))).scalars().all()
+        categories = (
+            await session.execute(
+                select(Category)
+                .where(Category.deleted_at.is_(None), Category.tenant_id == tenant_id)
+                .order_by(Category.name)
+            )
+        ).scalars().all()
+        products = (
+            await session.execute(
+                select(Product).where(Product.tenant_id == tenant_id).order_by(Product.name)
+            )
+        ).scalars().all()
     ctx.update(
         promotions=[
             {
@@ -772,16 +854,31 @@ async def promotion_save(
     def parse_dt(s: str | None) -> datetime | None:
         return datetime.fromisoformat(s) if s else None
 
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
+        # Defensa en profundidad, mismo criterio que `parent_id`/`category_id`
+        # en category_save/product_save: no dejar category_id/product_id
+        # colgando hacia una fila de otro tenant sin validarla primero.
+        resolved_category_id: uuid.UUID | None = None
+        if category_id:
+            cat = await get_owned(session, Category, category_id, tenant_id)
+            if cat is not None:
+                resolved_category_id = cat.id
+        resolved_product_id: uuid.UUID | None = None
+        if product_id:
+            prod = await get_owned(session, Product, product_id, tenant_id)
+            if prod is not None:
+                resolved_product_id = prod.id
+
         if promotion_id:
-            promo = await session.get(Promotion, promotion_id)
+            promo = await get_owned(session, Promotion, promotion_id, tenant_id)
             if promo is not None:
                 promo.type = promo_type
                 promo.rules = rules
                 promo.valid_from = parse_dt(valid_from)
                 promo.valid_to = parse_dt(valid_to)
-                promo.category_id = uuid.UUID(category_id) if category_id else None
-                promo.product_id = uuid.UUID(product_id) if product_id else None
+                promo.category_id = resolved_category_id
+                promo.product_id = resolved_product_id
                 promo.eligible_segments = segments_list
         else:
             promo = Promotion(
@@ -789,8 +886,8 @@ async def promotion_save(
                 rules=rules,
                 valid_from=parse_dt(valid_from),
                 valid_to=parse_dt(valid_to),
-                category_id=uuid.UUID(category_id) if category_id else None,
-                product_id=uuid.UUID(product_id) if product_id else None,
+                category_id=resolved_category_id,
+                product_id=resolved_product_id,
                 eligible_segments=segments_list,
             )
             session.add(promo)
@@ -802,7 +899,7 @@ async def promotion_toggle(request: Request, promotion_id: uuid.UUID):
     if await _require_admin(request) is None:
         return _login_redirect()
     async with get_session() as session:
-        promo = await session.get(Promotion, promotion_id)
+        promo = await get_owned(session, Promotion, promotion_id, get_current_tenant_id())
         if promo is not None:
             promo.active = not promo.active
     return RedirectResponse("/crm/promociones?flash=Promoción actualizada", status_code=303)
@@ -814,10 +911,26 @@ async def crm_orders(request: Request):
     ctx = await _require_admin(request)
     if ctx is None:
         return _login_redirect()
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        orders = (await session.execute(select(Order).order_by(Order.created_at.desc()).limit(200))).scalars().all()
-        items = (await session.execute(select(OrderItem))).scalars().all()
-        variants = (await session.execute(select(ProductVariant, Product).join(Product, Product.id == ProductVariant.product_id))).all()
+        orders = (
+            await session.execute(
+                select(Order)
+                .where(Order.tenant_id == tenant_id)
+                .order_by(Order.created_at.desc())
+                .limit(200)
+            )
+        ).scalars().all()
+        items = (
+            await session.execute(select(OrderItem).where(OrderItem.tenant_id == tenant_id))
+        ).scalars().all()
+        variants = (
+            await session.execute(
+                select(ProductVariant, Product)
+                .join(Product, Product.id == ProductVariant.product_id)
+                .where(ProductVariant.tenant_id == tenant_id, Product.tenant_id == tenant_id)
+            )
+        ).all()
     var_by_id = {v.id: p for v, p in variants}
     items_by_order: dict[str, list[dict[str, Any]]] = {}
     for i in items:
@@ -856,7 +969,7 @@ async def order_update_status(request: Request, order_id: uuid.UUID, status: str
     if await _require_admin(request) is None:
         return _login_redirect()
     async with get_session() as session:
-        order = await session.get(Order, order_id)
+        order = await get_owned(session, Order, order_id, get_current_tenant_id())
         if order is not None and status in ("abierto", "despachado", "entregado", "cancelado", "expirado"):
             order.status = status
             order.status_changed_at = datetime.now(UTC)
@@ -999,7 +1112,11 @@ class CRMModule(BaseModule):
 
         async with get_session() as session:
             existing = (
-                await session.execute(select(Lead).where(Lead.customer_id == customer_id))
+                await session.execute(
+                    select(Lead).where(
+                        Lead.customer_id == customer_id, Lead.tenant_id == tenant_id
+                    )
+                )
             ).scalar_one_or_none()
             if existing is None:
                 session.add(
