@@ -553,7 +553,6 @@ async def spec_save(request: Request):
         policy_max_tool_calls = int(form.get("policy_max_tool_calls", 10) or 10)
     except ValueError:
         policy_max_tool_calls = 10
-    escalation_triggers = str(form.get("escalation_triggers", ""))
     raw_json = str(form.get("raw_json", ""))
 
     current = await load_active_spec()
@@ -583,9 +582,9 @@ async def spec_save(request: Request):
             data["model"]["temperature"] = model_temperature
             data["policies"]["budgetUsdPerConversation"] = policy_budget
             data["policies"]["maxToolCallsPerTurn"] = policy_max_tool_calls
-            data["policies"]["escalation"]["triggers"] = [
-                t.strip() for t in escalation_triggers.split(",") if t.strip()
-            ]
+            # `policies.escalation.triggers` NO se toca acá -- ese campo del
+            # contrato nunca se lee en runtime (ver `AppSettings.escalation_config`
+            # en /admin/configuracion, que sí es lo que usa el orchestrator).
             new_spec = AgentSpec.model_validate(data)
     except Exception as exc:
         return RedirectResponse(
@@ -1275,6 +1274,7 @@ async def settings_page(request: Request):
         s=app_settings,
         behavior=dict(app_settings.behavior_config),
         all_guardrails=all_guardrails,
+        escalation_keywords=list((app_settings.escalation_config or {}).get("keywords", [])),
     )
     return _render("settings.html", ctx)
 
@@ -1292,6 +1292,7 @@ async def settings_save(
     difficulty_long_message_threshold: int = Form(default=LONG_MESSAGE_THRESHOLD),
     difficulty_turnos_sin_resolver_threshold: int = Form(default=TURNOS_SIN_RESOLVER_THRESHOLD),
     difficulty_score_threshold: int = Form(default=DIFFICULTY_SCORE_THRESHOLD),
+    escalation_keywords: str = Form(default=""),
 ):
     if await current_admin(request) is None:
         return _login_redirect()
@@ -1330,6 +1331,11 @@ async def settings_save(
             difficulty_score_threshold=max(1, min(10, difficulty_score_threshold)),
         )
         app_settings.behavior_config = behavior
+        keywords = [t.strip() for t in escalation_keywords.split(",") if t.strip()]
+        app_settings.escalation_config = {
+            **dict(app_settings.escalation_config or {}),
+            "keywords": keywords,
+        }
     return RedirectResponse("/admin/configuracion?flash=Configuración guardada", status_code=303)
 
 

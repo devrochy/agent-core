@@ -75,10 +75,6 @@
           <label class="form-label small">Máx. tools por turno</label>
           <input class="form-control" type="number" name="policy_max_tool_calls" value="{{ spec['policies']['maxToolCallsPerTurn'] }}">
         </div>
-        <div class="col-12">
-          <label class="form-label small">Triggers de escalación (separados por coma)</label>
-          <input class="form-control" name="escalation_triggers" value="{{ spec['policies']['escalation']['triggers'] | join(', ') }}">
-        </div>
       </div>
     </div>
   </div>

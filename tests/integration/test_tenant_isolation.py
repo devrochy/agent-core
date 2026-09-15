@@ -60,20 +60,60 @@ async def test_catalogo_aislado_por_tenant(moto_setup) -> None:
 
 
 async def test_spec_enablement_y_escalacion_por_tenant(moto_setup) -> None:
-    """El enablement de packs y los triggers de escalación son por tenant."""
+    """El enablement de packs y las palabras de escalación son por tenant.
+
+    Las palabras de escalación viven en `AppSettings.escalation_config`
+    (lo que el orchestrator REALMENTE lee, `core/orchestrator/consumer.py`)
+    -- NO en `AgentSpec.policies.escalation.triggers`, que dejó de ser
+    personalizable por tenant (fila 170 ítem 7 del ROADMAP, bug real
+    corregido: ese campo del contrato nunca se leía en runtime).
+
+    Se setea `escalation_config` explícitamente acá (no se confía en el seed
+    de `onboard_tenant` dentro de `moto_setup`): ese seed solo corre la
+    PRIMERA vez que se crea la fila de `AppSettings` -- en una BD local
+    reusada entre corridas, `tenant-moto` puede ya existir desde antes de
+    que `escalation_config` existiera como concepto, y `onboard_tenant` es
+    idempotente a propósito (no pisa un tenant existente)."""
     t1, moto = moto_setup
+    from sqlalchemy import select
+
     from core.agents.spec import enabled_packs, load_active_spec
+    from core.db.models import AppSettings
+    from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(moto):
-        spec = await load_active_spec()
-    assert "pack_commerce" in enabled_packs(spec), "el tenant de ejemplo tiene el pack habilitado"
-    assert "compatibilidad" in spec.policies.escalation.triggers
+        async with get_session() as session:
+            settings_moto = (
+                await session.execute(select(AppSettings).where(AppSettings.tenant_id == moto))
+            ).scalar_one()
+            original_config = dict(settings_moto.escalation_config or {})
+            settings_moto.escalation_config = {"keywords": ["asesor", "compatibilidad"]}
+    try:
+        async with tenant_scope(moto):
+            spec = await load_active_spec()
+            async with get_session() as session:
+                settings_moto = (
+                    await session.execute(select(AppSettings).where(AppSettings.tenant_id == moto))
+                ).scalar_one()
+        assert "pack_commerce" in enabled_packs(spec), "el tenant de ejemplo tiene el pack habilitado"
+        assert "compatibilidad" in settings_moto.escalation_config.get("keywords", [])
 
-    # t1 no debe haberse contagiado el trigger específico del otro tenant
-    async with tenant_scope(t1):
-        spec_t1 = await load_active_spec()
-    assert "compatibilidad" not in spec_t1.policies.escalation.triggers
+        # t1 no debe haberse contagiado la palabra específica del otro tenant
+        async with tenant_scope(t1):
+            async with get_session() as session:
+                settings_t1 = (
+                    await session.execute(select(AppSettings).where(AppSettings.tenant_id == t1))
+                ).scalar_one_or_none()
+        t1_keywords = settings_t1.escalation_config.get("keywords", []) if settings_t1 else []
+        assert "compatibilidad" not in t1_keywords
+    finally:
+        async with tenant_scope(moto):
+            async with get_session() as session:
+                settings_moto = (
+                    await session.execute(select(AppSettings).where(AppSettings.tenant_id == moto))
+                ).scalar_one()
+                settings_moto.escalation_config = original_config
 
 
 async def test_numeracion_independiente_por_tenant(moto_setup) -> None:
@@ -189,3 +229,87 @@ async def test_panel_lista_tenants_y_crea_uno_nuevo(app_client, moto_setup) -> N
         data={"name": "Panadería del Barrio", "slug": "panaderia-del-barrio"},
     )
     assert r2.status_code == 303
+
+
+async def test_wizard_escalation_triggers_va_a_escalation_config(app_client) -> None:
+    """`escalation_triggers` del wizard debe terminar en
+    `AppSettings.escalation_config` (lo que el orchestrator REALMENTE lee,
+    `core/orchestrator/consumer.py`) -- no en el campo muerto del AgentSpec
+    (bug real corregido, fila 170 ítem 7 del ROADMAP).
+
+    Tenant con slug único por corrida (no reusa `panaderia-del-barrio`,
+    que es un fixture idempotente de otro test y en una BD compartida entre
+    corridas de pytest puede haberse creado ANTES de este fix, sin
+    `escalation_config`)."""
+    import uuid
+
+    from core.db.models import AppSettings, Tenant
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    cookie = await _login(app_client)
+    headers = {"Cookie": cookie}
+    unique_name = f"Panadería Escalation {uuid.uuid4().hex[:8]}"
+
+    r = await app_client.post(
+        "/admin/tenants/nuevo",
+        headers=headers,
+        data={
+            "name": unique_name,
+            "business": "Panadería de ejemplo",
+            "language": "es",
+            "tone": "cercano",
+            "escalation_triggers": "asesor, queja",
+        },
+    )
+    assert r.status_code == 303
+
+    async with get_session() as session:
+        nuevo = (
+            await session.execute(select(Tenant).where(Tenant.name == unique_name))
+        ).scalar_one()
+    async with tenant_scope(nuevo.id):
+        async with get_session() as session:
+            settings_row = (
+                await session.execute(
+                    select(AppSettings).where(AppSettings.tenant_id == nuevo.id)
+                )
+            ).scalar_one()
+    assert settings_row.escalation_config == {"keywords": ["asesor", "queja"]}
+
+
+async def test_wizard_sin_escalation_triggers_deja_escalation_config_vacio(app_client) -> None:
+    """Sin triggers en el form (caso del wizard "rápido", solo nombre/slug --
+    ver el segundo POST de `test_panel_lista_tenants_y_crea_uno_nuevo`), el
+    contrato es `escalation_config == {}` (implícito, no antes cubierto por
+    ningún test) -- en runtime cae a `DEFAULT_ESCALATION_KEYWORDS`
+    (`matches_escalation_keywords`, `core/orchestrator/escalation.py`)."""
+    import uuid
+
+    from core.db.models import AppSettings, Tenant
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    cookie = await _login(app_client)
+    headers = {"Cookie": cookie}
+    unique_name = f"Panadería Sin Triggers {uuid.uuid4().hex[:8]}"
+
+    r = await app_client.post(
+        "/admin/tenants/nuevo",
+        headers=headers,
+        data={"name": unique_name, "language": "es", "tone": "cercano"},
+    )
+    assert r.status_code == 303
+
+    async with get_session() as session:
+        nuevo = (
+            await session.execute(select(Tenant).where(Tenant.name == unique_name))
+        ).scalar_one()
+    async with tenant_scope(nuevo.id):
+        async with get_session() as session:
+            settings_row = (
+                await session.execute(
+                    select(AppSettings).where(AppSettings.tenant_id == nuevo.id)
+                )
+            ).scalar_one()
+    assert settings_row.escalation_config == {}
