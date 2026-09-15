@@ -194,27 +194,24 @@ async def moto_setup():
         Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "tenants" / "moto" / "catalog.json"
     )
 
-    async with get_session() as session:
-        moto = (
-            await session.execute(select(Tenant).where(Tenant.slug == MOTO_SLUG))
-        ).scalar_one_or_none()
-    if moto is None:
-        from cli.commands.tenant import seed_catalog
-        from core.onboarding import onboard_tenant
+    # Siempre a través de onboard_tenant (idempotente: si el tenant ya existe,
+    # solo rellena lo que falte -- ej. una BD local vieja con el Tenant creado
+    # pero sin AppSettings, de antes de que `escalation_config` existiera).
+    # `seed_catalog` también es idempotente (docstring propio).
+    from cli.commands.tenant import seed_catalog
+    from core.onboarding import onboard_tenant
 
-        moto_id, _ = await onboard_tenant(
-            name="Tenant de ejemplo (moto)",
-            slug=MOTO_SLUG,
-            business_description="Tienda de repuestos y accesorios de moto (ejemplo genérico).",
-            persona={"role": "asistente de ventas", "tone": "cercano"},
-            escalation_triggers=["asesor", "humano", "reclamo", "queja", "compatibilidad"],
-            packs=["pack_commerce"],
-            admin_email="admin@local",
-        )
-        catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
-        await seed_catalog(moto_id, catalog)
-    else:
-        moto_id = moto.id
+    moto_id, _ = await onboard_tenant(
+        name="Tenant de ejemplo (moto)",
+        slug=MOTO_SLUG,
+        business_description="Tienda de repuestos y accesorios de moto (ejemplo genérico).",
+        persona={"role": "asistente de ventas", "tone": "cercano"},
+        escalation_triggers=["asesor", "humano", "reclamo", "queja", "compatibilidad"],
+        packs=["pack_commerce"],
+        admin_email="admin@local",
+    )
+    catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+    await seed_catalog(moto_id, catalog)
 
     # El admin de tests siempre debe poder ver el tenant de ejemplo (idempotente).
     from core.db.models import Admin, TenantUser

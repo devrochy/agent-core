@@ -73,6 +73,16 @@
               default. Default: 2.
             </div>
           </div>
+          <div class="mb-3">
+            <label class="form-label">Palabras que disparan escalamiento a una persona</label>
+            <input type="text" name="escalation_keywords" class="form-control"
+                   value="{{ escalation_keywords | join(', ') }}">
+            <div class="form-text">
+              Si el cliente menciona alguna de estas palabras (separadas por coma), el bot pausa
+              y escala a una persona. Vacío = usa las palabras por defecto (asesor, humano,
+              persona real, reclamo, queja).
+            </div>
+          </div>
           {% if all_guardrails %}
           <div class="mb-3">
             <label class="form-label">Guardrails desactivados</label>

@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from core.db.models import AgentSpecRecord
 from core.db.session import get_session
+from core.orchestrator.escalation import DEFAULT_ESCALATION_KEYWORDS
 from core.shared.tenant import get_current_tenant_id
 
 CORE_PACK_ID = "core"
@@ -55,9 +56,11 @@ DEFAULT_SPEC: dict[str, Any] = {
     ],
     "tools": [],
     "policies": {
-        "escalation": {
-            "triggers": ["asesor", "humano", "persona real", "reclamo", "queja"]
-        },
+        # Este campo del contrato NUNCA se lee en runtime -- lo que sí se lee es
+        # `AppSettings.escalation_config["keywords"]` (core/orchestrator/consumer.py,
+        # `matches_escalation_keywords`). Se mantiene en sync con el mismo default
+        # para no tener dos listas hardcodeadas que puedan divergir con el tiempo.
+        "escalation": {"triggers": list(DEFAULT_ESCALATION_KEYWORDS)},
         "confirmBeforeWrite": True,
         "maxToolCallsPerTurn": 10,
         "budgetUsdPerConversation": 0.5,

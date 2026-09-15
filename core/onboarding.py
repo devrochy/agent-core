@@ -121,15 +121,12 @@ def _default_spec_for(
     slug: str,
     tenant_id: uuid.UUID,
     persona: dict | None,
-    escalation_triggers: list[str] | None,
     packs: list[str] | None,
 ) -> dict:
     spec = deepcopy(DEFAULT_SPEC)
     spec["tenantId"] = str(tenant_id)
     if persona:
         spec["persona"].update(persona)
-    if escalation_triggers:
-        spec["policies"]["escalation"]["triggers"] = list(escalation_triggers)
     if packs:
         spec["packs"] = list(packs)
         existing = {p["name"] for p in spec.get("playbooks", [])}
@@ -244,6 +241,12 @@ async def onboard_tenant(
                         business_description=business_description,
                         language=language,
                         behavior_config={"tono": persona.get("tone", "calido") if persona else "calido"},
+                        # `escalation.triggers` del AgentSpec nunca se lee en runtime
+                        # (core/orchestrator/consumer.py lee este campo) -- ver
+                        # `_default_spec_for`, que ya NO escribe ahí.
+                        escalation_config={"keywords": list(escalation_triggers)}
+                        if escalation_triggers
+                        else {},
                     )
                 )
                 steps.append("app_settings creados")
@@ -265,7 +268,7 @@ async def onboard_tenant(
                         tenant_id=tenant_id,
                         version="1.0.0",
                         is_active=True,
-                        spec=_default_spec_for(slug, tenant_id, persona, escalation_triggers, packs),
+                        spec=_default_spec_for(slug, tenant_id, persona, packs),
                     )
                 )
                 steps.append("agent_spec creado")

@@ -44,7 +44,6 @@ def _payload(**overrides) -> dict[str, str]:
         "model_temperature": "0.3",
         "policy_budget": "0.5",
         "policy_max_tool_calls": "10",
-        "escalation_triggers": "asesor,humano,compatibilidad",
     }
     base.update(overrides)
     return base
