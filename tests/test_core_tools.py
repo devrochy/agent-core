@@ -81,6 +81,54 @@ async def test_load_response_extrae_seccion() -> None:
     assert unknown is None
 
 
+@pytest.mark.asyncio
+async def test_load_response_fallback_y_escalation_coinciden_con_las_constantes() -> None:
+    """`FALLBACK_REPLY`/`ESCALATION_REPLY` (core/orchestrator/loop.py,
+    core/orchestrator/escalation.py) se movieron al playbook `respuestas` --
+    esto fija que fue una relocalización de copy, no una reescritura: el
+    texto del playbook debe ser IGUAL, no solo parecido, al de la constante
+    que sigue existiendo en el código como fallback determinístico."""
+    from core.orchestrator.escalation import ESCALATION_REPLY
+    from core.orchestrator.loop import FALLBACK_REPLY
+
+    spec = make_spec([{"name": "respuestas", "description": "Respuestas"}])
+
+    assert await load_response(spec, "fallback") == FALLBACK_REPLY
+    assert await load_response(spec, "escalation") == ESCALATION_REPLY
+
+
+@pytest.mark.asyncio
+async def test_load_response_ante_error_de_io_degrada_a_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`FALLBACK_REPLY`/`ESCALATION_REPLY` (loop.py/consumer.py) hacen
+    `await load_response(...) or CONSTANTE` como red de seguridad -- eso solo
+    funciona si un error real de IO al leer el `.md` (permisos, disco,
+    encoding) también degrada a `None` en vez de propagar la excepción y
+    tumbar el turno (hallazgo de auditor-multitenant, ítem 4 fila 170 del
+    ROADMAP)."""
+    from pathlib import Path
+
+    def _revienta(self: Path, encoding: str = "utf-8") -> str:
+        raise OSError("disco caído (simulado)")
+
+    monkeypatch.setattr(Path, "read_text", _revienta)
+
+    spec = make_spec([{"name": "respuestas", "description": "Respuestas"}])
+    assert await load_response(spec, "fallback") is None
+    assert await load_response(spec, "escalation") is None
+
+
+@pytest.mark.asyncio
+async def test_load_response_sin_playbook_respuestas_devuelve_none() -> None:
+    """Un tenant sin `respuestas` en su allowlist (o cualquier fallo de carga
+    del playbook) debe devolver `None` -- es lo que el código en loop.py/
+    consumer.py usa para caer al fallback determinístico `or FALLBACK_REPLY`/
+    `or ESCALATION_REPLY`, no una condición solo teórica."""
+    spec = make_spec([{"name": "identidad", "description": "I"}])
+
+    assert await load_response(spec, "fallback") is None
+    assert await load_response(spec, "escalation") is None
+
+
 def test_crm_config_copy_editable_por_tenant() -> None:
     """ADR-0017: el copy del negocio vive en CRMConfig (config), no en el código."""
     from pack_commerce.config import CRMConfig

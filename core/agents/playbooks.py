@@ -58,7 +58,17 @@ async def load_playbook(
     for root in playbook_roots():
         candidate = root / f"{name}.md"
         if candidate.exists():
-            content = candidate.read_text(encoding="utf-8")
+            # Fail-open ante un error de IO real (permisos, encoding, disco):
+            # quien llama (ej. FALLBACK_REPLY/ESCALATION_REPLY en loop.py/
+            # consumer.py) trata `None` como "usar el texto fijo de código",
+            # no como excepción que tumbe el turno -- un playbook roto no
+            # puede ser peor que el mecanismo de seguridad que reemplaza
+            # (auditor-multitenant, ítem 4 de la fila 170 del ROADMAP).
+            try:
+                content = candidate.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                log.warning("playbook_read_failed", playbook=name, exc_info=True)
+                return None
             if len(content.encode("utf-8")) > MAX_SIZE_BYTES:
                 log.warning("playbook_too_large", playbook=name)
                 return None
