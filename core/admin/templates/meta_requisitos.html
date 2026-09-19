@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Requisitos de Meta{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4 d-flex justify-content-between align-items-center">
+  Requisitos de la app de Meta
+  <a href="/admin/conexiones" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left"></i> Volver a conexiones
+  </a>
+</h1>
+
+{% if not meta_configured %}
+<div class="alert alert-warning">
+  Todavía no configuraste la app de Meta de este tenant (App ID / App Secret / Config ID).
+  Los checks automáticos de abajo no van a poder correr hasta que lo hagas.
+</div>
+{% endif %}
+
+<div class="card mb-4">
+  <div class="card-body">
+    <h5 class="card-title fs-6">Checks automáticos</h5>
+    <p class="small text-secondary mb-3">Esto es lo único que se puede verificar por API. El resto de la lista de abajo son pasos manuales.</p>
+    <table class="table table-sm align-middle mb-0">
+      <tbody>
+        {% for check in checks %}
+        <tr>
+          <td style="width: 2.5rem">
+            {% if check.ok is true %}
+              <span class="badge text-bg-success">OK</span>
+            {% elif check.ok is none %}
+              <span class="badge text-bg-secondary">?</span>
+            {% else %}
+              <span class="badge text-bg-danger">✗</span>
+            {% endif %}
+          </td>
+          <td class="fw-semibold text-nowrap">{{ check.key }}</td>
+          <td class="small text-secondary">{{ check.detail }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <h5 class="card-title fs-6">Pasos manuales (Meta App Dashboard)</h5>
+    <p class="small text-secondary mb-3">Ninguno de estos pasos se puede automatizar: se hacen una sola vez en developers.facebook.com y quedan marcados acá.</p>
+    <ul class="list-group list-group-flush">
+      {% for step in steps %}
+      <li class="list-group-item d-flex align-items-start gap-3">
+        <form method="post" action="/admin/conexiones/meta-requisitos/paso" class="d-flex align-items-start gap-3 flex-grow-1">
+          <input type="hidden" name="step_key" value="{{ step.key }}">
+          <div class="form-check mt-1">
+            <input type="checkbox" class="form-check-input" name="done" onchange="this.form.submit()"
+                   {% if step.done %}checked{% endif %}>
+          </div>
+          <div class="flex-grow-1">
+            <div class="d-flex align-items-center gap-2">
+              {% if not step.done %}<span class="badge text-bg-danger">pendiente</span>{% endif %}
+              <span class="{% if step.done %}text-decoration-line-through text-secondary{% endif %}">{{ step.label }}</span>
+              <a href="{{ step.link }}" target="_blank" rel="noopener" class="small">
+                <i class="bi bi-box-arrow-up-right"></i> abrir
+              </a>
+            </div>
+          </div>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+{% endblock %}

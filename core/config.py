@@ -79,6 +79,18 @@ class Settings(BaseSettings):
     whatsapp_access_token: str = Field(default="", alias="WHATSAPP_ACCESS_TOKEN")
     whatsapp_phone_number_id: str = Field(default="", alias="WHATSAPP_PHONE_NUMBER_ID")
 
+    # --- Meta App (preflight, ADR pendiente) ---
+    # BYOK por tenant (AppSettings.meta_app_config_encrypted); estos 3 son SOLO
+    # el fallback opcional de dev/single-tenant, igual criterio que whatsapp_*
+    # arriba -- nunca bloquean el arranque si faltan.
+    meta_app_id: str = Field(default="", alias="META_APP_ID")
+    meta_app_secret: str = Field(default="", alias="META_APP_SECRET")
+    meta_config_id: str = Field(default="", alias="META_CONFIG_ID")
+    # Versión de Graph API usada SOLO por el módulo de preflight (core/gateway/
+    # meta_preflight.py) -- no toca los v21.0 hardcodeados en outbound.py ni en
+    # connections.py::verify_meta_credentials (envío de mensajes en producción).
+    graph_api_version: str = Field(default="v21.0", alias="META_GRAPH_VERSION")
+
     # --- Comportamiento ---
     debounce_mode: DebounceMode = Field(default="natural", alias="DEBOUNCE_MODE")
     max_agent_iterations: int = Field(default=6, alias="MAX_AGENT_ITERATIONS")

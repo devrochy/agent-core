@@ -1156,6 +1156,104 @@ async def connection_delete(request: Request, connection_id: uuid.UUID):
     return RedirectResponse("/admin/conexiones?flash=Conexión eliminada", status_code=303)
 
 
+# ------------------------------------------------------------------ meta requisitos (preflight)
+@router.get("/conexiones/meta-requisitos", response_class=HTMLResponse)
+async def meta_requisitos_page(request: Request):
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+
+    from core.db.models import MetaSetupChecklist, Tenant
+    from core.gateway.meta_app_config import effective_meta_app_config
+    from core.gateway.meta_preflight import MANUAL_STEPS, run_preflight
+
+    tid = get_current_tenant_id()
+    tenant_slug = ""
+    if tid is not None:
+        async with get_session() as session:
+            tenant = await session.get(Tenant, tid)
+            tenant_slug = tenant.slug if tenant else ""
+
+    config = await effective_meta_app_config(tid)
+    checks = await run_preflight(tid, tenant_slug)
+
+    async with get_session() as session:
+        done_rows = (
+            await session.execute(select(MetaSetupChecklist).where(MetaSetupChecklist.tenant_id == tid))
+        ).scalars().all()
+    done_by_key = {row.step_key: row for row in done_rows}
+
+    app_dashboard_base = (
+        f"https://developers.facebook.com/apps/{config.app_id}/" if config else "https://developers.facebook.com/apps/"
+    )
+    steps = [
+        {
+            "key": step["key"],
+            "label": step["label"],
+            "link": app_dashboard_base + step["link_suffix"] if config else "https://developers.facebook.com/apps/",
+            "done": done_by_key[step["key"]].done if step["key"] in done_by_key else False,
+            "notes": done_by_key[step["key"]].notes if step["key"] in done_by_key else "",
+        }
+        for step in MANUAL_STEPS
+    ]
+
+    ctx.update(steps=steps, checks=checks, meta_configured=config is not None)
+    return _render("meta_requisitos.html", ctx)
+
+
+@router.get("/conexiones/meta-requisitos.json")
+async def meta_requisitos_json(request: Request):
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    from core.db.models import Tenant
+    from core.gateway.meta_preflight import run_preflight
+
+    tid = get_current_tenant_id()
+    tenant_slug = ""
+    if tid is not None:
+        async with get_session() as session:
+            tenant = await session.get(Tenant, tid)
+            tenant_slug = tenant.slug if tenant else ""
+
+    checks = await run_preflight(tid, tenant_slug)
+    return {"checks": [c.model_dump() for c in checks]}
+
+
+@router.post("/conexiones/meta-requisitos/paso")
+async def meta_requisitos_toggle(
+    request: Request,
+    step_key: str = Form(...),
+    done: str = Form(default=""),
+    notes: str = Form(default=""),
+):
+    admin = await current_admin(request)
+    if admin is None:
+        return _login_redirect()
+
+    from core.db.models import MetaSetupChecklist
+
+    tid = get_current_tenant_id()
+    is_done = done == "on"
+    async with get_session() as session:
+        row = (
+            await session.execute(
+                select(MetaSetupChecklist).where(
+                    MetaSetupChecklist.tenant_id == tid, MetaSetupChecklist.step_key == step_key
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            row = MetaSetupChecklist(tenant_id=tid, step_key=step_key)
+            session.add(row)
+        row.done = is_done
+        row.notes = notes or None
+        row.done_by = admin.id if is_done else None
+        row.done_at = utcnow() if is_done else None
+
+    return RedirectResponse("/admin/conexiones/meta-requisitos?flash=Guardado", status_code=303)
+
+
 # ------------------------------------------------------------------ costos
 @router.get("/costos", response_class=HTMLResponse)
 async def costs_page(request: Request):
