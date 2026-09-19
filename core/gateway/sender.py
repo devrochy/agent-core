@@ -14,7 +14,14 @@ import uuid
 from sqlalchemy import select
 
 from core.config import get_settings
-from core.db.models import ChannelConnection, Conversation, Customer, Message
+from core.db.models import (
+    ChannelConnection,
+    Conversation,
+    Customer,
+    Message,
+    MetaConnection,
+    PhoneNumber,
+)
 from core.db.session import get_session
 from core.gateway.channels.registry import outbound_adapter_for
 from core.gateway.message_splitter import split_for_bubbles
@@ -29,8 +36,57 @@ BUBBLE_DELAY_S = 0.7
 SEND_RETRIES = 2
 
 
-async def resolve_credentials(connection_id: uuid.UUID | None) -> tuple[str, dict[str, str]]:
-    """Devuelve (provider, credentials). Fallback a .env si no hay conexión en BD."""
+async def _resolve_meta_connection_credentials(
+    meta_connection_id: uuid.UUID, expected_tenant_id: uuid.UUID | None
+) -> dict[str, str] | None:
+    """Conexiones creadas por el wizard de Embedded Signup (ADR-0030): no
+    tienen `ChannelConnection`, el token vive en `meta_token_store`.
+
+    `expected_tenant_id` (el tenant de la CONVERSACIÓN que se está
+    despachando, no un contextvar ambiente) se compara contra
+    `connection.tenant_id` antes de pedir el token -- segundo cinturón más
+    allá de RLS/unicidad de esquema (hallazgo auditor-multitenant,
+    2026-09-22: `phone_numbers.phone_number_id` es único global, no
+    compuesto con `tenant_id`; si esa garantía de esquema se relajara algún
+    día, esta aserción evita enviar con el token de OTRO tenant)."""
+    from core.gateway import meta_token_store
+    from core.gateway.meta_onboarding import TOKEN_KIND
+
+    async with get_session() as session:
+        connection = await session.get(MetaConnection, meta_connection_id)
+        phone = (
+            await session.execute(select(PhoneNumber).where(PhoneNumber.connection_id == meta_connection_id))
+        ).scalars().first()
+    if connection is None or phone is None:
+        return None
+    if expected_tenant_id is not None and connection.tenant_id != expected_tenant_id:
+        log.error(
+            "meta_connection_tenant_mismatch",
+            meta_connection_id=str(meta_connection_id),
+            connection_tenant_id=str(connection.tenant_id),
+            expected_tenant_id=str(expected_tenant_id),
+        )
+        return None
+    token = await meta_token_store.get_token(
+        meta_connection_id, TOKEN_KIND, connection.business_id or str(meta_connection_id), tenant_id=connection.tenant_id
+    )
+    if not token:
+        return None
+    return {"phone_number_id": phone.phone_number_id, "access_token": token}
+
+
+async def resolve_credentials(
+    connection_id: uuid.UUID | None,
+    meta_connection_id: uuid.UUID | None = None,
+    expected_tenant_id: uuid.UUID | None = None,
+) -> tuple[str, dict[str, str]]:
+    """Devuelve (provider, credentials). Orden: `ChannelConnection` (conexión
+    manual) -> `MetaConnection`+`meta_token_store` (wizard de Embedded
+    Signup, ADR-0030) -> conexión primaria en BD -> `.env`.
+
+    `expected_tenant_id`: el tenant de la conversación que se está
+    despachando -- se verifica contra `MetaConnection.tenant_id` antes de
+    usar sus credenciales (ver docstring de `_resolve_meta_connection_credentials`)."""
     settings = get_settings()
     if connection_id is not None:
         async with get_session() as session:
@@ -38,6 +94,11 @@ async def resolve_credentials(connection_id: uuid.UUID | None) -> tuple[str, dic
         if connection and connection.credentials_encrypted:
             creds = get_secret_box().decrypt_json(connection.credentials_encrypted)
             return connection.provider, {str(k): str(v) for k, v in creds.items()}
+
+    if meta_connection_id is not None:
+        creds = await _resolve_meta_connection_credentials(meta_connection_id, expected_tenant_id)
+        if creds:
+            return "meta", creds
 
     # Fallback: conexión primaria en BD
     async with get_session() as session:
@@ -78,7 +139,9 @@ async def send_to_conversation(
         if customer is None:
             return False
 
-    provider, credentials = await resolve_credentials(conversation.connection_id)
+    provider, credentials = await resolve_credentials(
+        conversation.connection_id, conversation.meta_connection_id, expected_tenant_id=conversation.tenant_id
+    )
     adapter = outbound_adapter_for(provider)
 
     from core.gateway.meta_usage import connection_id_for_phone_number, is_paused
