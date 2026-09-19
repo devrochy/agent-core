@@ -168,7 +168,7 @@ async def _verify_whatsapp(whatsapp: dict) -> tuple[bool, str, dict]:
     from core.gateway.connections import verify_meta_credentials
 
     return await verify_meta_credentials(
-        whatsapp.get("phone_number_id", ""), whatsapp.get("access_token", "")
+        whatsapp.get("phone_number_id", ""), whatsapp.get("access_token", ""), whatsapp.get("app_secret", "")
     )
 
 

@@ -197,33 +197,33 @@ async def delete_connection(connection_id: uuid.UUID) -> None:
 
 
 async def verify_meta_credentials(
-    phone_number_id: str, access_token: str
+    phone_number_id: str, access_token: str, app_secret: str
 ) -> tuple[bool, str, dict[str, Any]]:
     """Valida las credenciales contra Meta Graph API antes de guardar.
 
     Devuelve (ok, mensaje, info). `info` incluye verified_name y
     display_phone_number reportados por Meta (ag-sale: no confiar en lo que
     tipea el admin; la clave de ruteo la reporta el proveedor cuando puede).
-    """
-    import httpx
 
-    if not phone_number_id or not access_token:
-        return False, "Faltan phone_number_id o access_token", {}
-    url = f"https://graph.facebook.com/v21.0/{phone_number_id}"
+    Usa el cliente único del panel (`core/gateway/meta_graph.py`): agrega
+    `appsecret_proof` y registra la llamada en `graph_api_calls`/`graph_api_usage`.
+    """
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_graph import graph_fetch
+
+    if not phone_number_id or not access_token or not app_secret:
+        return False, "Faltan phone_number_id, access_token o app_secret", {}
+
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.get(
-                url,
-                params={"fields": "id,verified_name,display_phone_number"},
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
+        info = await graph_fetch(
+            f"/{phone_number_id}",
+            token=access_token,
+            app_secret=app_secret,
+            query={"fields": "id,verified_name,display_phone_number"},
+        )
+    except GraphError as exc:
+        return False, f"Meta rechazó las credenciales: {exc.message}", {}
     except Exception as exc:
         return False, f"Error de red con Meta: {str(exc)[:120]}", {}
 
-    if response.status_code >= 400:
-        data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
-        error = data.get("error", {}).get("message", "credenciales inválidas")
-        return False, f"Meta rechazó las credenciales: {error}", {}
-
-    info = response.json()
-    return True, "Credenciales verificadas con Meta", info
+    return True, "Credenciales verificadas con Meta", info or {}
