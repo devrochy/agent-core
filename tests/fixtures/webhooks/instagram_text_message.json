@@ -1,0 +1,17 @@
+{
+  "object": "instagram",
+  "entry": [
+    {
+      "id": "REPLACE_WITH_IG_USER_ID",
+      "time": 1700000000,
+      "messaging": [
+        {
+          "sender": {"id": "REPLACE_WITH_IGSID"},
+          "recipient": {"id": "REPLACE_WITH_IG_USER_ID"},
+          "timestamp": 1700000000,
+          "message": {"mid": "mid.ig.REPLACE_ME", "text": "Hola por Instagram"}
+        }
+      ]
+    }
+  ]
+}
