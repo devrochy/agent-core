@@ -19,6 +19,7 @@ PHONE = "1234567890"
 
 async def main() -> None:
     plugin_manager.scan()
+    await plugin_manager.sync_registry()
     # 1. password del admin conocido (demo)
     async with get_session() as session:
         admin = (await session.execute(select(Admin).where(Admin.email == ADMIN_EMAIL))).scalar_one_or_none()

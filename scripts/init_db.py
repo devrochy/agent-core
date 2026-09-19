@@ -7,6 +7,7 @@ Idempotente: no duplica nada si ya existe.
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
 import subprocess
 import sys
@@ -25,7 +26,9 @@ async def seed() -> None:
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
-    password = secrets.token_urlsafe(10)
+    # ADMIN_PASSWORD: solo para CI (login determinístico en tests de integración).
+    # Sin setear, se genera una aleatoria (comportamiento seguro por defecto).
+    password = os.environ.get("ADMIN_PASSWORD") or secrets.token_urlsafe(10)
     async with get_session() as session:
         admin = (
             await session.execute(select(Admin).where(Admin.email == DEFAULT_EMAIL))

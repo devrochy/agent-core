@@ -181,7 +181,9 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     history_tool_results = await _historical_tool_results(conversation_id)
 
     profile = await entity_memory.get_profile(customer.id)
-    recalled = await vector_memory.recall(latest_message, customer_id=customer.id)
+    recalled = await vector_memory.recall(
+        latest_message, customer_id=customer.id, conversation_id=conversation_id
+    )
 
     from core.plugin_manager import plugin_manager
 

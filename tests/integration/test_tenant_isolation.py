@@ -187,6 +187,131 @@ async def test_onboarding_idempotente(moto_setup) -> None:
     assert antes == despues, "el onboarding repetido no duplica filas"
 
 
+class _ConstantEmbeddings:
+    """Embeddings fake: mismo vector siempre (distancia coseno == 0).
+
+    No probamos precisión semántica acá, solo qué filas devuelve `recall()`
+    según el filtro de aislamiento -- un embedding constante hace que
+    cualquier contenido "matchee" con cualquier query, aislando la variable
+    bajo prueba.
+    """
+
+    async def embed(self, text: str) -> list[float]:
+        return [1.0] + [0.0] * 383
+
+
+async def _customer_and_conversation(tenant_id, *, external_id: str):
+    """`external_id` se sufija con un UUID corto: la BD de integración es
+    compartida entre corridas de pytest y `customers` tiene un índice único
+    parcial por (tenant_id, channel, external_id) -- mismo motivo que
+    `test_wizard_escalation_triggers_va_a_escalation_config` usa nombres
+    únicos por corrida."""
+    import uuid as uuid_mod
+
+    from core.db.models import Conversation, Customer
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    unique_external_id = f"{external_id}-{uuid_mod.uuid4().hex[:8]}"
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            customer = Customer(
+                tenant_id=tenant_id, channel="whatsapp", external_id=unique_external_id
+            )
+            session.add(customer)
+            await session.flush()
+            conversation = Conversation(tenant_id=tenant_id, customer_id=customer.id)
+            session.add(conversation)
+            await session.flush()
+            return customer.id, conversation.id
+
+
+async def test_recall_no_cruza_tenants_via_conversation_id(moto_setup, monkeypatch) -> None:
+    """`recall()` no debe devolver hechos de otro tenant aunque se le pase un
+    `conversation_id` ajeno. Corre con RLS activo (igual que
+    `test_pack_commerce_tenant_id_explicito.py`, mismo criterio de la suite):
+    no aísla si el bloqueo es RLS o el filtro explícito de `tenant_id` +
+    `get_owned()` -- prueba que HOY no hay cruce, no que cada capa por
+    separado alcance."""
+    monkeypatch.setattr(
+        "core.memory.vector.get_embedding_provider", lambda: _ConstantEmbeddings()
+    )
+    from core.memory.vector import recall, store_memory
+    from core.shared.tenant import tenant_scope
+
+    t1, moto = moto_setup
+    t1_customer, t1_conversation = await _customer_and_conversation(t1, external_id="wa:recall-t1")
+    moto_customer, _moto_conversation = await _customer_and_conversation(
+        moto, external_id="wa:recall-moto"
+    )
+
+    async with tenant_scope(t1):
+        await store_memory(
+            "Cliente t1: le interesa la moto XYZ",
+            customer_id=t1_customer,
+            conversation_id=t1_conversation,
+        )
+
+    async with tenant_scope(moto):
+        leaked = await recall(
+            "moto", customer_id=moto_customer, conversation_id=t1_conversation
+        )
+    assert leaked == [], "conversation_id de otro tenant no debe traer memoria ajena"
+
+
+async def test_recall_funciona_entre_conversaciones_del_mismo_cliente(
+    moto_setup, monkeypatch
+) -> None:
+    """La validación por `conversation_id` es un cinturón extra, no un filtro:
+    recall() debe seguir trayendo hechos guardados en OTRA conversación del
+    mismo cliente (memoria de largo plazo cross-conversación)."""
+    monkeypatch.setattr(
+        "core.memory.vector.get_embedding_provider", lambda: _ConstantEmbeddings()
+    )
+    from core.db.models import Conversation
+    from core.db.session import get_session
+    from core.memory.vector import recall, store_memory
+    from core.shared.tenant import tenant_scope
+
+    _t1, moto = moto_setup
+    customer_id, conversation_a = await _customer_and_conversation(
+        moto, external_id="wa:recall-cross-convo"
+    )
+
+    async with tenant_scope(moto):
+        await store_memory(
+            "Cliente: su moto favorita es la XYZ",
+            customer_id=customer_id,
+            conversation_id=conversation_a,
+        )
+        async with get_session() as session:
+            conversation_b = Conversation(tenant_id=moto, customer_id=customer_id)
+            session.add(conversation_b)
+            await session.flush()
+            conversation_b_id = conversation_b.id
+
+        resultados = await recall(
+            "moto", customer_id=customer_id, conversation_id=conversation_b_id
+        )
+    assert resultados, "debe recuperar memoria de otra conversación del mismo cliente"
+
+
+async def test_recall_conversation_id_inexistente_no_rompe(moto_setup, monkeypatch) -> None:
+    """`conversation_id` que no existe (o de otro tenant) -> [] sin excepción."""
+    import uuid as uuid_mod
+
+    monkeypatch.setattr(
+        "core.memory.vector.get_embedding_provider", lambda: _ConstantEmbeddings()
+    )
+    from core.memory.vector import recall
+    from core.shared.tenant import tenant_scope
+
+    _t1, moto = moto_setup
+    async with tenant_scope(moto):
+        resultados = await recall("moto", conversation_id=uuid_mod.uuid4())
+    assert resultados == []
+
+
 async def _login(app_client) -> str:
     r = await app_client.post("/admin/login", data={"email": "admin@local", "password": "admin123"})
     assert r.status_code == 303
