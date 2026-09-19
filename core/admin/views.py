@@ -301,7 +301,7 @@ async def tenants_create(
             "access_token": wa_access_token,
             "verify_token": wa_verify_token,
         }
-        ok, msg, _info = await verify_meta_credentials(wa_phone_number_id, wa_access_token)
+        ok, msg, _info = await verify_meta_credentials(wa_phone_number_id, wa_access_token, wa_app_secret)
         if not ok:
             return RedirectResponse(
                 f"/admin/tenants/nuevo?flash=WhatsApp: {msg[:120]}&flash_type=danger", status_code=303
@@ -1081,7 +1081,7 @@ async def connection_save(
     # Verificar contra Meta ANTES de persistir (ag-sale: una credencial mala
     # guardada rompe el canal y el síntoma aparece recién en un mensaje que
     # no llega).
-    ok, msg, info = await verify_meta_credentials(phone_number_id, access_token)
+    ok, msg, info = await verify_meta_credentials(phone_number_id, access_token, app_secret)
     log.info(
         "connection_verify",
         tenant_id=str(get_current_tenant_id() or ""),
@@ -1164,8 +1164,7 @@ async def meta_requisitos_page(request: Request):
         return _login_redirect()
 
     from core.db.models import MetaSetupChecklist, Tenant
-    from core.gateway.meta_app_config import effective_meta_app_config
-    from core.gateway.meta_preflight import MANUAL_STEPS, run_preflight
+    from core.gateway.meta_preflight import MANUAL_STEPS, resolve_app_credentials, run_preflight
 
     tid = get_current_tenant_id()
     tenant_slug = ""
@@ -1174,7 +1173,7 @@ async def meta_requisitos_page(request: Request):
             tenant = await session.get(Tenant, tid)
             tenant_slug = tenant.slug if tenant else ""
 
-    config = await effective_meta_app_config(tid)
+    config = await resolve_app_credentials(tid)
     checks = await run_preflight(tid, tenant_slug)
 
     async with get_session() as session:

@@ -52,7 +52,19 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
 
     # --- Cifrado ---
+    # MASTER_ENCRYPTION_KEY: clave Fernet legada -- SecretBox ya no la usa para
+    # cifrar (todo lo nuevo es AES-256-GCM), solo para poder seguir
+    # DESCIFRANDO valores viejos que quedaron en ese formato. No borrar hasta
+    # confirmar que no queda ningún dato en formato Fernet en producción.
     master_encryption_key: str = Field(default="", alias="MASTER_ENCRYPTION_KEY")
+    # TOKEN_MASTER_KEYS: JSON {"<key_id>": "<32 bytes en base64>", ...} -- el
+    # set de claves AES-256-GCM disponibles para DESCIFRAR (rotación: nunca se
+    # borra una clave vieja mientras haya datos cifrados con ella). Vacío por
+    # default: SecretBox.encrypt() falla recién al usarse sin esto configurado
+    # (igual criterio que MASTER_ENCRYPTION_KEY hoy), no bloquea el arranque.
+    token_master_keys: str = Field(default="{}", alias="TOKEN_MASTER_KEYS")
+    # Con qué key_id se CIFRA contenido nuevo (debe existir en TOKEN_MASTER_KEYS).
+    token_active_key_id: str = Field(default="", alias="TOKEN_ACTIVE_KEY_ID")
 
     # --- LLM ---
     llm_provider: Literal["deepseek", "openai", "anthropic", "openai_compatible"] = Field(

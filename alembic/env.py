@@ -30,6 +30,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_schemas=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -42,7 +43,11 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        # include_schemas=True: desde meta_private (migración 0018), autogenerate
+        # y `alembic check` reflejan también schemas que no son `public` -- sin
+        # esto, cualquier tabla fuera de `public` aparece como "falta crear" aunque
+        # ya exista (falso positivo de la comparación, no un drift real).
+        context.configure(connection=connection, target_metadata=target_metadata, include_schemas=True)
         with context.begin_transaction():
             context.run_migrations()
 

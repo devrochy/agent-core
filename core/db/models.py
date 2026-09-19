@@ -26,17 +26,20 @@ from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     Text,
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -110,11 +113,6 @@ class AppSettings(Base):
     brand_voice: Mapped[str] = mapped_column(Text, default="")
     escalation_config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     # {"keywords": ["reclamo", "asesor"], "max_turnos_sin_resolver": 3}
-
-    # App de Meta del tenant (BYOK, igual criterio que llm_api_key_encrypted):
-    # {"app_id", "app_secret", "config_id"} cifrado en un solo blob (core/gateway/meta_app_config.py).
-    # Si es NULL, el preflight cae al fallback opcional de .env.
-    meta_app_config_encrypted: Mapped[str | None] = mapped_column(Text)
 
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -486,4 +484,294 @@ class MemoryVector(Base):
     embedding: Mapped[Any] = mapped_column(Vector(384))  # dim = EMBEDDING_DIMENSIONS
     meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ---------------------------------------------------------------- integración Meta (rico)
+class MetaConnection(Base):
+    """App de Meta conectada, por tenant (reemplaza `AppSettings.meta_app_config_
+    encrypted` de la migración 0013 -- migración 0014). Guarda METADATA (status,
+    scopes, salud): el App Secret y los tokens de la app viven cifrados en
+    `meta_private.meta_tokens` (`kind='app_access'`), nunca acá."""
+
+    __tablename__ = "meta_connections"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "channel", "environment", "meta_app_id", name="uq_meta_connections_tenant_app"
+        ),
+        CheckConstraint(
+            "channel in ('whatsapp','messenger','instagram','facebook_page')",
+            name="ck_meta_connections_channel",
+        ),
+        CheckConstraint("environment in ('sandbox','production')", name="ck_meta_connections_environment"),
+        CheckConstraint(
+            "status in ('draft','pending','connected','degraded','revoked','error')",
+            name="ck_meta_connections_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    channel: Mapped[str] = mapped_column(Text)
+    environment: Mapped[str] = mapped_column(Text, default="production")
+    meta_app_id: Mapped[str] = mapped_column(Text)
+    meta_config_id: Mapped[str | None] = mapped_column(Text)  # Embedded Signup Login Configuration
+    business_id: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default="draft")
+    status_reason: Mapped[str | None] = mapped_column(Text)
+    graph_api_version: Mapped[str] = mapped_column(Text, default="v26.0")
+    scopes: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    connected_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id", ondelete="SET NULL"))
+    connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_health_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    health: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class WabaAccount(Base):
+    """Cuenta de WhatsApp Business sincronizada desde Graph API para una `MetaConnection`."""
+
+    __tablename__ = "waba_accounts"
+    __table_args__ = (UniqueConstraint("waba_id", "connection_id", name="uq_waba_accounts_waba_connection"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    connection_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("meta_connections.id", ondelete="CASCADE"))
+    waba_id: Mapped[str] = mapped_column(Text)
+    name: Mapped[str | None] = mapped_column(Text)
+    currency: Mapped[str | None] = mapped_column(Text)
+    timezone_id: Mapped[str | None] = mapped_column(Text)
+    message_template_namespace: Mapped[str | None] = mapped_column(Text)
+    account_review_status: Mapped[str | None] = mapped_column(Text)
+    subscribed: Mapped[bool] = mapped_column(Boolean, default=False)
+    raw: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class PhoneNumber(Base):
+    """Número de WhatsApp sincronizado desde Graph API."""
+
+    __tablename__ = "phone_numbers"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    connection_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("meta_connections.id", ondelete="CASCADE"))
+    waba_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("waba_accounts.id", ondelete="SET NULL")
+    )
+    phone_number_id: Mapped[str] = mapped_column(Text, unique=True)
+    display_phone_number: Mapped[str | None] = mapped_column(Text)
+    verified_name: Mapped[str | None] = mapped_column(Text)
+    quality_rating: Mapped[str | None] = mapped_column(Text)
+    messaging_limit_tier: Mapped[str | None] = mapped_column(Text)
+    name_status: Mapped[str | None] = mapped_column(Text)
+    code_verification_status: Mapped[str | None] = mapped_column(Text)
+    platform_type: Mapped[str | None] = mapped_column(Text)
+    registered: Mapped[bool] = mapped_column(Boolean, default=False)
+    pin_set: Mapped[bool] = mapped_column(Boolean, default=False)
+    raw: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class FbPage(Base):
+    """Página de Facebook sincronizada desde Graph API."""
+
+    __tablename__ = "fb_pages"
+    __table_args__ = (UniqueConstraint("page_id", "connection_id", name="uq_fb_pages_page_connection"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    connection_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("meta_connections.id", ondelete="CASCADE"))
+    page_id: Mapped[str] = mapped_column(Text)
+    name: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(Text)
+    subscribed_fields: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    raw: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class IgAccount(Base):
+    """Cuenta de Instagram sincronizada desde Graph API."""
+
+    __tablename__ = "ig_accounts"
+    __table_args__ = (
+        UniqueConstraint("ig_user_id", "connection_id", name="uq_ig_accounts_iguser_connection"),
+        CheckConstraint(
+            "login_route is null or login_route in ('ig_facebook_login','ig_instagram_login')",
+            name="ck_ig_accounts_login_route",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    connection_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("meta_connections.id", ondelete="CASCADE"))
+    ig_user_id: Mapped[str] = mapped_column(Text)
+    username: Mapped[str | None] = mapped_column(Text)
+    linked_page_id: Mapped[str | None] = mapped_column(Text)
+    login_route: Mapped[str | None] = mapped_column(Text)
+    raw: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class MessageTemplate(Base):
+    """Plantilla de WhatsApp sincronizada desde Graph API."""
+
+    __tablename__ = "message_templates"
+    __table_args__ = (
+        UniqueConstraint(
+            "waba_account_id", "name", "language", name="uq_message_templates_waba_name_lang"
+        ),
+        Index(
+            "uq_message_templates_meta_id",
+            "meta_template_id",
+            unique=True,
+            postgresql_where=text("meta_template_id is not null"),
+        ),
+        CheckConstraint(
+            "status in ('DRAFT','PENDING','APPROVED','REJECTED','PAUSED','DISABLED','IN_APPEAL',"
+            "'ARCHIVED','LOCKED','LIMIT_EXCEEDED','FLAGGED','REINSTATED','PENDING_DELETION','DELETED')",
+            name="ck_message_templates_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    waba_account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("waba_accounts.id", ondelete="CASCADE"))
+    meta_template_id: Mapped[str | None] = mapped_column(Text)
+    name: Mapped[str] = mapped_column(Text)
+    language: Mapped[str] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(Text)
+    parameter_format: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default="DRAFT")
+    rejected_reason: Mapped[str | None] = mapped_column(Text)
+    rejection_recommendation: Mapped[str | None] = mapped_column(Text)
+    quality_score: Mapped[str | None] = mapped_column(Text)
+    components: Mapped[Any | None] = mapped_column(JSONB)
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sync_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class WebhookEvent(Base):
+    """Log crudo de entregas de webhook de Meta.
+
+    Tabla de SISTEMA (sin RLS, igual categoría que `admins`/`plugins` -- ver
+    docstring del módulo): `tenant_id` nullable A PROPÓSITO, excepción
+    documentada a la invariante nº1 de CLAUDE.md. Un webhook puede llegar
+    ANTES de poder resolver a qué tenant pertenece (firma inválida, app
+    todavía no vinculada a ningún tenant) -- por diseño este log existe
+    precisamente para auditar esos casos, así que exigir `tenant_id not null`
+    lo volvería inútil para su propio propósito.
+
+    ADVERTENCIA (auditor-multitenant, 2026-09-19): sin RLS, nada impide un
+    `select(WebhookEvent)` sin `WHERE tenant_id = ...` explícito que mezcle
+    payloads crudos de varios tenants -- hoy es inofensivo porque ningún
+    código lee/escribe esta tabla todavía (`core/gateway/webhooks.py` no la
+    usa). Cuando se conecte el pipeline real: (1) todo acceso debe filtrar
+    `tenant_id` a mano en cada query, nunca confiar en RLS para esto, y
+    (2) ningún endpoint de `core/admin/views.py` debe hacer
+    `select(WebhookEvent)` directo sin ese filtro -- considerar un test
+    estático (mismo patrón que `tests/test_meta_token_store_aislado.py`)
+    en ese momento."""
+
+    __tablename__ = "webhook_events"
+    __table_args__ = (
+        UniqueConstraint("meta_app_id", "external_id", name="uq_webhook_events_app_external"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("meta_connections.id", ondelete="SET NULL")
+    )
+    meta_app_id: Mapped[str] = mapped_column(Text)
+    object_type: Mapped[str] = mapped_column(Text)
+    field: Mapped[str | None] = mapped_column(Text)
+    external_id: Mapped[str] = mapped_column(Text)
+    signature_ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    process_error: Mapped[str | None] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class GraphApiCall(Base):
+    """Observabilidad: una fila por llamada saliente a Graph API."""
+
+    __tablename__ = "graph_api_calls"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("meta_connections.id", ondelete="SET NULL")
+    )
+    method: Mapped[str | None] = mapped_column(Text)
+    endpoint: Mapped[str] = mapped_column(Text)  # path SIN query string -- nunca incluye el token/proof
+    status_code: Mapped[int | None] = mapped_column(Integer)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    error_code: Mapped[int | None] = mapped_column(Integer)
+    error_subcode: Mapped[int | None] = mapped_column(Integer)
+    error_type: Mapped[str | None] = mapped_column(Text)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    fbtrace_id: Mapped[str | None] = mapped_column(Text)
+    request_id: Mapped[str | None] = mapped_column(Text)  # x-fb-request-id, si Meta lo manda
+    called_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class GraphApiUsage(Base):
+    """Observabilidad: agregado diario de llamadas a Graph API por conexión."""
+
+    __tablename__ = "graph_api_usage"
+    __table_args__ = (UniqueConstraint("connection_id", "usage_date", name="uq_graph_api_usage_connection_date"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    connection_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("meta_connections.id", ondelete="CASCADE"))
+    usage_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    call_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+# ---------------------------------------------------------------- custodia de tokens (schema aparte)
+class MetaToken(Base):
+    """Custodia cifrada de tokens de Meta (AES-256-GCM, `core/shared/crypto.py`).
+
+    Vive en el schema `meta_private` (no `public`), separado a propósito.
+    SOLO `core/gateway/meta_token_store.py` debe importar/tocar este modelo
+    -- verificado por `tests/test_meta_token_store_aislado.py` (grep estático).
+    Nunca se registra en el sistema de admin/view-descriptor ni se serializa
+    en ningún endpoint."""
+
+    __tablename__ = "meta_tokens"
+    __table_args__ = (
+        UniqueConstraint(
+            "connection_id", "kind", "subject_id", name="uq_meta_tokens_connection_kind_subject"
+        ),
+        {"schema": "meta_private"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("meta_connections.id", ondelete="CASCADE")
+    )
+    kind: Mapped[str] = mapped_column(Text)
+    subject_id: Mapped[str] = mapped_column(Text)
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    iv: Mapped[bytes] = mapped_column(LargeBinary)
+    auth_tag: Mapped[bytes] = mapped_column(LargeBinary)
+    key_id: Mapped[str] = mapped_column(Text)
+    token_hash: Mapped[str] = mapped_column(Text)
+    scopes: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

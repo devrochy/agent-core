@@ -81,6 +81,31 @@ async def send_to_conversation(
     provider, credentials = await resolve_credentials(conversation.connection_id)
     adapter = outbound_adapter_for(provider)
 
+    from core.gateway.meta_usage import connection_id_for_phone_number, is_paused
+
+    current_tenant_id = get_current_tenant_id()
+    meta_connection_id = await connection_id_for_phone_number(
+        credentials.get("phone_number_id", ""), current_tenant_id
+    )
+    if await is_paused(current_tenant_id, meta_connection_id):
+        log.error(
+            "envio_pausado_por_uso_de_api",
+            conversation_id=str(conversation_id),
+            connection_id=str(meta_connection_id),
+        )
+        async with get_session() as session:
+            session.add(
+                Message(
+                    tenant_id=get_current_tenant_id(),
+                    conversation_id=conversation_id,
+                    direction="outbound",
+                    sender_type=sender_type,
+                    content=text,
+                    status="failed",
+                )
+            )
+        return False
+
     settings = get_settings()
     style = str(
         (await _behavior_config()).get("split_style", settings.message_split_style)

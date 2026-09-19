@@ -162,6 +162,102 @@ async def test_meta_setup_checklist_aislado_por_tenant(moto_setup) -> None:
             assert row_t1.done is True, "el paso de t1 sigue como se dejó, sin contagiarse del de moto"
 
 
+async def test_meta_schema_nuevo_aislado_por_tenant(moto_setup) -> None:
+    """Las 9 tablas nuevas de la integración Meta (migraciones 0014-0019) no
+    cruzan tenants -- un query desde el tenant equivocado trae 0 filas, no una
+    excepción (mismo criterio que el resto de la suite)."""
+    import uuid as uuid_mod
+    from datetime import UTC, datetime
+
+    from core.db.models import (
+        FbPage,
+        GraphApiCall,
+        GraphApiUsage,
+        IgAccount,
+        MessageTemplate,
+        MetaConnection,
+        MetaToken,
+        PhoneNumber,
+        WabaAccount,
+    )
+    from core.db.session import get_session
+    from core.gateway import meta_token_store
+    from core.shared.tenant import tenant_scope
+
+    t1, moto = moto_setup
+    suffix = uuid_mod.uuid4().hex[:8]
+
+    async with tenant_scope(t1):
+        async with get_session() as session:
+            connection = MetaConnection(
+                tenant_id=t1, channel="whatsapp", environment="production", meta_app_id=f"app-{suffix}"
+            )
+            session.add(connection)
+            await session.flush()
+            conn_id = connection.id
+
+            waba = WabaAccount(tenant_id=t1, connection_id=conn_id, waba_id=f"waba-{suffix}")
+            session.add(waba)
+            await session.flush()
+            waba_id = waba.id
+
+            session.add(PhoneNumber(tenant_id=t1, connection_id=conn_id, phone_number_id=f"phone-{suffix}"))
+            session.add(FbPage(tenant_id=t1, connection_id=conn_id, page_id=f"page-{suffix}"))
+            session.add(IgAccount(tenant_id=t1, connection_id=conn_id, ig_user_id=f"ig-{suffix}"))
+            session.add(
+                MessageTemplate(tenant_id=t1, waba_account_id=waba_id, name=f"tpl-{suffix}", language="es")
+            )
+            session.add(GraphApiCall(tenant_id=t1, connection_id=conn_id, endpoint="/messages"))
+            session.add(
+                GraphApiUsage(
+                    tenant_id=t1, connection_id=conn_id, usage_date=datetime.now(UTC), call_count=1
+                )
+            )
+
+        await meta_token_store.put_token(conn_id, "app_access", f"app-{suffix}", "token-de-prueba")
+
+    models = (WabaAccount, PhoneNumber, FbPage, IgAccount, MessageTemplate, GraphApiCall, GraphApiUsage)
+
+    async with tenant_scope(t1):
+        async with get_session() as session:
+            for model in (MetaConnection, *models):
+                count = (
+                    await session.execute(select(func.count()).select_from(model).where(model.tenant_id == t1))
+                ).scalar()
+                assert count and count >= 1, f"{model.__name__} debería tener al menos 1 fila en t1"
+
+    async with tenant_scope(moto):
+        async with get_session() as session:
+            for model in (MetaConnection, *models):
+                leak = (await session.execute(select(func.count()).select_from(model))).scalar()
+                assert leak == 0, f"{model.__name__} de t1 no debe verse desde moto"
+
+            leak_tokens = (await session.execute(select(func.count()).select_from(MetaToken))).scalar()
+            assert leak_tokens == 0, "meta_tokens de t1 no debe verse desde moto"
+
+        # RLS ya esconde la fila (recién verificado arriba); además, aunque
+        # alguien pasara el connection_id correcto pero un tenant_id explícito
+        # equivocado a get_token (ej. un bug de contexto), el AAD no matchea:
+        # segundo cinturón independiente de RLS (mismo caso que
+        # tests/test_crypto_envelope.py::test_aad_ata_el_ciphertext_a_la_fila).
+        async with tenant_scope(t1):
+            try:
+                await meta_token_store.get_token(conn_id, "app_access", f"app-{suffix}", tenant_id=moto)
+                raise AssertionError("get_token no debería poder leer con un tenant_id distinto al de la fila")
+            except RuntimeError:
+                pass
+
+    async with tenant_scope(t1):
+        # revoke_token con tenant_id equivocado: filtra por tenant_id en el
+        # WHERE (no solo RLS) -> no encuentra la fila, no revoca nada.
+        await meta_token_store.revoke_token(conn_id, "app_access", f"app-{suffix}", tenant_id=moto)
+        assert await meta_token_store.get_token(conn_id, "app_access", f"app-{suffix}") == "token-de-prueba"
+
+        # con el tenant_id correcto sí revoca.
+        await meta_token_store.revoke_token(conn_id, "app_access", f"app-{suffix}", tenant_id=t1)
+        assert await meta_token_store.get_token(conn_id, "app_access", f"app-{suffix}") is None
+
+
 async def test_numeracion_independiente_por_tenant(moto_setup) -> None:
     """ADR-0018: cada tenant arranca su numeración de pedidos en 1 (sin colisión)."""
     t1, moto = moto_setup

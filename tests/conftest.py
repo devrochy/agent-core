@@ -19,4 +19,6 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://u:p@localhost:5432/test")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("MASTER_ENCRYPTION_KEY", "3sJ8kZ0mQ1nR5tV7wY9bC2eF4gH6jL8mN0pQ2rS4tU6=")
+os.environ.setdefault("TOKEN_MASTER_KEYS", '{"k1": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}')
+os.environ.setdefault("TOKEN_ACTIVE_KEY_ID", "k1")
 os.environ.setdefault("APP_SECRET_KEY", "test-secret")
