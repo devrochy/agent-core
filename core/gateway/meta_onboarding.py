@@ -1,0 +1,655 @@
+"""Wizard de Embedded Signup de WhatsApp: máquina de estados persistida y
+reanudable (`ConnectionWizard`). Único módulo que debe escribir esa tabla
+-- verificado por `tests/test_meta_onboarding_no_persiste_secretos.py`.
+
+Es la app del ISV/framework (`settings.meta_app_id`/`meta_app_secret`/
+`meta_config_id`) la que hace el Embedded Signup en nombre de cada tenant --
+no es BYOK como `meta_preflight.resolve_app_credentials` (eso es para
+tenants que YA tienen su propia app y conexión). Por eso acá se usan esas
+3 settings directo, no `resolve_app_credentials`.
+
+REGLA DURA: ninguna función de este módulo acepta ni persiste un `code` de
+Embedded Signup ni un token de acceso en `ConnectionWizard.context`/
+`last_error` -- los secretos van a `meta_token_store` (AAD tenant+conexión+
+tipo), nunca a esta tabla (RLS del propio tenant, no custodia de secretos).
+Ver ADR-0030.
+"""
+
+from __future__ import annotations
+
+import time
+import uuid
+from dataclasses import dataclass
+from typing import Any
+
+import httpx
+from sqlalchemy import select
+
+from core.config import get_settings
+from core.db.models import (
+    WIZARD_STEPS,
+    ConnectionWizard,
+    MessageTemplate,
+    MetaConnection,
+    PhoneNumber,
+    WabaAccount,
+    utcnow,
+)
+from core.db.session import get_owned, get_session
+from core.gateway import meta_token_store
+from core.gateway.meta_errors import GraphError, classify_and_build_error
+from core.gateway.meta_graph import graph_fetch
+from core.shared.exceptions import AgentCoreError
+from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
+
+log = get_logger(__name__)
+
+GRAPH_BASE = "https://graph.facebook.com"
+_TIMEOUT_S = 15.0
+TOKEN_KIND = "business_integration_system_user"
+
+# object del popup -> canal (mismo mapeo que webhook_flatten.py/meta_subscriptions.py)
+_EVENT_COEXISTENCE = "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"
+_EVENT_ONLY_WABA = "FINISH_ONLY_WABA"
+_EVENT_FINISH = "FINISH"
+
+
+class WizardError(AgentCoreError):
+    """Error de esta capa (wizard no encontrado, code expirado, paso
+    inválido) -- distinto de `GraphError`, que es un error de Graph API."""
+
+
+@dataclass
+class ConnectionWizardView:
+    """Vista seguro-de-exponer de un `ConnectionWizard` (sin nada sensible,
+    apto para pasar a la plantilla o devolver en JSON)."""
+
+    id: uuid.UUID
+    connection_id: uuid.UUID | None
+    channel: str
+    environment: str
+    current_step: str
+    completed_steps: list[str]
+    last_error: dict[str, Any] | None
+
+
+def _to_view(wizard: ConnectionWizard) -> ConnectionWizardView:
+    return ConnectionWizardView(
+        id=wizard.id,
+        connection_id=wizard.connection_id,
+        channel=wizard.channel,
+        environment=wizard.environment,
+        current_step=wizard.current_step,
+        completed_steps=list(wizard.completed_steps or []),
+        last_error=wizard.last_error,
+    )
+
+
+def _mark_done(wizard: ConnectionWizard, step: str) -> None:
+    if step not in wizard.completed_steps:
+        wizard.completed_steps = [*wizard.completed_steps, step]
+
+
+def _advance_to(wizard: ConnectionWizard, step: str) -> None:
+    _mark_done(wizard, wizard.current_step)
+    wizard.current_step = step
+
+
+async def _get_wizard(wizard_id: uuid.UUID, tenant_id: uuid.UUID | None = None) -> ConnectionWizard:
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+        if wizard is None:
+            raise WizardError("El wizard no existe o no pertenece a este tenant")
+        return wizard
+
+
+async def start_or_resume_wizard(
+    tenant_id: uuid.UUID, channel: str = "whatsapp", environment: str = "production", *, admin_id: uuid.UUID | None = None
+) -> ConnectionWizardView:
+    """Reanuda el wizard "vivo" (`current_step != 'done'`) de este tenant+
+    canal+entorno si existe y no expiró; si expiró, lo cierra y arranca uno
+    nuevo. Si ya hay una `MetaConnection` `connected` para ese tenant+canal,
+    entra en modo REAUTORIZACIÓN: reusa esa conexión en vez de crear una
+    nueva, y arranca directo en `launch_oauth` (se salta `select_channel`)."""
+    settings = get_settings()
+    if not settings.meta_app_id or not settings.meta_app_secret or not settings.meta_config_id:
+        raise WizardError(
+            "META_APP_ID/META_APP_SECRET/META_CONFIG_ID no están configurados -- "
+            "el wizard de Embedded Signup necesita la app del framework, no BYOK."
+        )
+
+    async with get_session() as session:
+        existing = (
+            await session.execute(
+                select(ConnectionWizard).where(
+                    ConnectionWizard.tenant_id == tenant_id,
+                    ConnectionWizard.channel == channel,
+                    ConnectionWizard.environment == environment,
+                    ConnectionWizard.current_step != "done",
+                )
+            )
+        ).scalar_one_or_none()
+
+        if existing is not None and existing.expires_at > utcnow():
+            return _to_view(existing)
+
+        if existing is not None:
+            # Expiró: se cierra (no se borra -- queda como historial de abandono)
+            # para liberar el índice único parcial y poder crear una fila nueva.
+            existing.current_step = "done"
+            existing.last_error = {"code": "wizard_expired", "message": "El wizard expiró (>24h) y se reinició"}
+            await session.flush()
+
+        connected = (
+            await session.execute(
+                select(MetaConnection)
+                .where(
+                    MetaConnection.tenant_id == tenant_id,
+                    MetaConnection.channel == channel,
+                    MetaConnection.environment == environment,
+                    MetaConnection.status == "connected",
+                )
+                .order_by(MetaConnection.created_at.desc())
+            )
+        ).scalars().first()
+
+        if connected is not None:
+            connection_id = connected.id
+            current_step = "launch_oauth"
+        else:
+            connection = MetaConnection(
+                tenant_id=tenant_id,
+                channel=channel,
+                environment=environment,
+                meta_app_id=settings.meta_app_id,
+                meta_config_id=settings.meta_config_id,
+                graph_api_version=settings.graph_api_version,
+                status="draft",
+            )
+            session.add(connection)
+            await session.flush()
+            connection_id = connection.id
+            current_step = "select_channel"
+
+        wizard = ConnectionWizard(
+            tenant_id=tenant_id,
+            connection_id=connection_id,
+            channel=channel,
+            environment=environment,
+            current_step=current_step,
+            started_by=admin_id,
+        )
+        session.add(wizard)
+        await session.flush()
+        return _to_view(wizard)
+
+
+async def record_cancel_or_progress(
+    wizard_id: uuid.UUID,
+    *,
+    current_step: str | None = None,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    error_id: str | None = None,
+    session_id: str | None = None,
+) -> None:
+    """Escrito por el listener de `postMessage` en el evento `CANCEL` --
+    analítica de abandono. NUNCA acepta `code` ni token (no hay parámetro
+    para eso, a propósito): esta función no puede persistir un secreto
+    aunque quisiera."""
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id)
+        if wizard is None:
+            return
+        if error_code or error_message or error_id:
+            wizard.last_error = {"code": error_code, "message": error_message, "error_id": error_id}
+        abandono = dict(wizard.context or {})
+        abandono["abandono"] = {"current_step": current_step, "session_id": session_id, "at": utcnow().isoformat()}
+        wizard.context = abandono
+
+
+async def persist_finish_payload(
+    wizard_id: uuid.UUID,
+    event_type: str,
+    *,
+    waba_id: str | None = None,
+    phone_number_id: str | None = None,
+    business_id: str | None = None,
+) -> ConnectionWizardView:
+    """Persiste lo que el popup YA dio, sin esperar al canje del `code` --
+    si el canje falla o el navegador se cierra, estos IDs no se pierden."""
+    tenant_id = get_current_tenant_id()
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+        if wizard is None:
+            raise WizardError("El wizard no existe o no pertenece a este tenant")
+
+        connection = await session.get(MetaConnection, wizard.connection_id) if wizard.connection_id else None
+        if connection is not None and business_id:
+            connection.business_id = business_id
+        if connection is not None and event_type == _EVENT_COEXISTENCE:
+            connection.health = {**(connection.health or {}), "coexistence": True}
+
+        if waba_id:
+            existing_waba = (
+                await session.execute(
+                    select(WabaAccount).where(WabaAccount.waba_id == waba_id, WabaAccount.connection_id == wizard.connection_id)
+                )
+            ).scalar_one_or_none()
+            if existing_waba is None:
+                session.add(WabaAccount(tenant_id=tenant_id, connection_id=wizard.connection_id, waba_id=waba_id))
+
+        if phone_number_id:
+            # tenant_id explícito, no solo la unicidad global de
+            # phone_number_id (defensa en profundidad -- hallazgo
+            # auditor-multitenant, 2026-09-22).
+            existing_phone = (
+                await session.execute(
+                    select(PhoneNumber).where(
+                        PhoneNumber.phone_number_id == phone_number_id, PhoneNumber.tenant_id == tenant_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing_phone is None:
+                session.add(
+                    PhoneNumber(
+                        tenant_id=tenant_id, connection_id=wizard.connection_id, phone_number_id=phone_number_id
+                    )
+                )
+
+        if event_type == _EVENT_COEXISTENCE:
+            _mark_done(wizard, "register_number")
+
+        await session.flush()
+        return _to_view(wizard)
+
+
+async def exchange_code(wizard_id: uuid.UUID, code: str) -> ConnectionWizardView:
+    """Time-critical: el `code` de Meta tiene TTL de 30s. Sin `redirect_uri`
+    primero (no confirmado contra doc primaria de Meta al momento de
+    escribir esto -- la doc devolvió 429). Si Meta responde OAuthException
+    mencionando `redirect_uri`, se reintenta UNA vez agregándolo."""
+    tenant_id = get_current_tenant_id()
+    settings = get_settings()
+    started_at = time.monotonic()
+
+    wizard = await _get_wizard(wizard_id, tenant_id)
+    if wizard.connection_id is None:
+        raise WizardError("El wizard no tiene una conexión asociada todavía")
+
+    version = settings.graph_api_version
+    params = {"client_id": settings.meta_app_id, "client_secret": settings.meta_app_secret, "code": code}
+    call_started_at = time.monotonic()
+
+    token, used_redirect_uri = await _fetch_exchange_token(version, params, settings)
+
+    latency_ms = int((time.monotonic() - started_at) * 1000)
+    dispatch_ms = int((call_started_at - started_at) * 1000)
+    log.info(
+        "embedded_signup_exchange_latency",
+        wizard_id=str(wizard_id),
+        latency_ms=latency_ms,
+        dispatch_ms=dispatch_ms,
+        used_redirect_uri=used_redirect_uri,
+    )
+
+    # Guarda el token ANTES de cualquier otra llamada a Meta -- si el
+    # navegador se cierra justo después, la conexión es reanudable sin
+    # repetir el OAuth (criterio de aceptación explícito del ticket).
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+        connection = await session.get(MetaConnection, wizard.connection_id)
+        business_id = connection.business_id if connection else None
+        subject_id = business_id or str(wizard.connection_id)
+
+    await meta_token_store.put_token(wizard.connection_id, TOKEN_KIND, subject_id, token, tenant_id=tenant_id)
+
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+        connection = await session.get(MetaConnection, wizard.connection_id)
+        if connection is not None:
+            connection.status = "pending"
+        _advance_to(wizard, "discover_assets")
+        await session.flush()
+        return _to_view(wizard)
+
+
+async def _fetch_exchange_token(version: str, params: dict[str, str], settings: Any) -> tuple[str, bool]:
+    async def _call(extra_params: dict[str, str]) -> httpx.Response:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+            return await client.get(f"{GRAPH_BASE}/{version}/oauth/access_token", params={**params, **extra_params})
+
+    try:
+        response = await _call({})
+    except (httpx.TimeoutException, httpx.ConnectError) as exc:
+        raise GraphError(f"No se pudo contactar a Meta para canjear el code: {exc}", category="TRANSIENT") from exc
+
+    if response.status_code >= 400:
+        body = _safe_json(response)
+        log.warning("embedded_signup_exchange_error_raw", body_redacted=_redact(body))
+        error = classify_and_build_error(http_status=response.status_code, body=body, headers=response.headers, raw_text=response.text)
+        message = (error.error_user_msg or error.message or "").lower()
+        if "redirect_uri" in message:
+            # Hallazgo documentado (no confirmado contra doc primaria, ver
+            # docstring del módulo): en al menos algún caso real Meta exigió
+            # redirect_uri incluso en el flujo de popup. Se reintenta UNA vez.
+            redirect_uri = f"{settings.public_base_url.rstrip('/')}/admin/conexiones/wizard/whatsapp"
+            try:
+                response2 = await _call({"redirect_uri": redirect_uri})
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                raise GraphError(f"No se pudo contactar a Meta (reintento con redirect_uri): {exc}", category="TRANSIENT") from exc
+            if response2.status_code >= 400:
+                body2 = _safe_json(response2)
+                raise classify_and_build_error(
+                    http_status=response2.status_code, body=body2, headers=response2.headers, raw_text=response2.text
+                )
+            token = _extract_token(response2)
+            return token, True
+        raise error
+
+    token = _extract_token(response)
+    return token, False
+
+
+def _extract_token(response: httpx.Response) -> str:
+    data = _safe_json(response) or {}
+    token = data.get("access_token")
+    if not token:
+        raise WizardError("Meta no devolvió access_token en el canje")
+    return str(token)
+
+
+def _safe_json(response: httpx.Response) -> dict[str, Any] | None:
+    try:
+        return response.json()
+    except Exception:
+        return None
+
+
+def _redact(body: dict[str, Any] | None) -> dict[str, Any] | None:
+    if body is None:
+        return None
+    return {k: ("<redactado>" if "token" in k.lower() else v) for k, v in body.items()}
+
+
+async def run_automatic_steps(wizard_id: uuid.UUID) -> ConnectionWizardView:
+    """Ejecuta en cadena los pasos que NO requieren input del admin, hasta
+    llegar a uno que sí lo requiere (`register_number` sin PIN todavía) o a
+    `done`. Cada paso es idempotente: si ya está en `completed_steps`, no
+    vuelve a llamar a Meta."""
+    tenant_id = get_current_tenant_id()
+    wizard = await _get_wizard(wizard_id, tenant_id)
+
+    step_order = list(WIZARD_STEPS)
+    while wizard.current_step not in ("register_number", "done") and wizard.current_step in step_order:
+        step = wizard.current_step
+        if step == "discover_assets":
+            wizard = await _discover_assets_step(wizard_id, tenant_id)
+        elif step == "select_assets":
+            wizard = await _select_assets_step(wizard_id, tenant_id)
+        elif step == "subscribe_webhook":
+            wizard = await _subscribe_webhook_step(wizard_id, tenant_id)
+        elif step == "sync_templates":
+            wizard = await _sync_templates_step(wizard_id, tenant_id)
+        elif step == "verify_health":
+            wizard = await _verify_health_step(wizard_id, tenant_id)
+        else:
+            break  # select_channel/launch_oauth/exchange_code: esperan al frontend
+
+    if wizard.current_step == "register_number" and "register_number" in (wizard.completed_steps or []):
+        wizard = await _advance_past_register(wizard_id, tenant_id)
+        return await run_automatic_steps(wizard.id)
+
+    return _to_view(wizard)
+
+
+async def _load_connection(wizard: ConnectionWizard, session) -> MetaConnection | None:
+    if wizard.connection_id is None:
+        return None
+    return await session.get(MetaConnection, wizard.connection_id)
+
+
+async def _discover_assets_step(wizard_id: uuid.UUID, tenant_id: uuid.UUID | None) -> ConnectionWizardView:
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+        connection = await _load_connection(wizard, session)
+        waba = (
+            await session.execute(select(WabaAccount).where(WabaAccount.connection_id == wizard.connection_id))
+        ).scalars().first()
+        phone = (
+            await session.execute(select(PhoneNumber).where(PhoneNumber.connection_id == wizard.connection_id))
+        ).scalars().first()
+        settings = get_settings()
+        version = connection.graph_api_version if connection else settings.graph_api_version
+
+    token = await meta_token_store.get_token(
+        wizard.connection_id, TOKEN_KIND, (connection.business_id if connection else None) or str(wizard.connection_id),
+        tenant_id=tenant_id,
+    )
+    if token and waba is not None and not waba.raw:
+        data = await graph_fetch(
+            f"/{waba.waba_id}", token=token, app_secret=settings.meta_app_secret,
+            query={"fields": "name,currency,timezone_id,message_template_namespace,account_review_status"},
+            version=version, connection_id=wizard.connection_id,
+        )
+        async with get_session() as session:
+            waba_row = await session.get(WabaAccount, waba.id)
+            waba_row.name = data.get("name")
+            waba_row.currency = data.get("currency")
+            waba_row.timezone_id = data.get("timezone_id")
+            waba_row.message_template_namespace = data.get("message_template_namespace")
+            waba_row.account_review_status = data.get("account_review_status")
+            waba_row.raw = data
+
+    if token and phone is not None and not phone.raw:
+        data = await graph_fetch(
+            f"/{phone.phone_number_id}", token=token, app_secret=settings.meta_app_secret,
+            query={"fields": "display_phone_number,verified_name,quality_rating,messaging_limit_tier,name_status,code_verification_status,platform_type"},
+            version=version, connection_id=wizard.connection_id,
+        )
+        async with get_session() as session:
+            phone_row = await session.get(PhoneNumber, phone.id)
+            phone_row.display_phone_number = data.get("display_phone_number")
+            phone_row.verified_name = data.get("verified_name")
+            phone_row.quality_rating = data.get("quality_rating")
+            phone_row.messaging_limit_tier = data.get("messaging_limit_tier")
+            phone_row.name_status = data.get("name_status")
+            phone_row.code_verification_status = data.get("code_verification_status")
+            phone_row.platform_type = data.get("platform_type")
+            phone_row.raw = data
+
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+        _advance_to(wizard, "select_assets")
+        await session.flush()
+        return _to_view(wizard)
+
+
+async def _select_assets_step(wizard_id: uuid.UUID, tenant_id: uuid.UUID | None) -> ConnectionWizardView:
+    """No-op idempotente: Meta ya hizo la selección dentro del popup. Este
+    paso solo existe para el caso `FINISH_ONLY_WABA` (fase 6, sin número
+    todavía) -- el admin carga el número más tarde y ese flujo re-dispara
+    `discover_assets` para ese número."""
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+        _advance_to(wizard, "subscribe_webhook")
+        await session.flush()
+        return _to_view(wizard)
+
+
+async def _subscribe_webhook_step(wizard_id: uuid.UUID, tenant_id: uuid.UUID | None) -> ConnectionWizardView:
+    from core.gateway.meta_preflight import AppCredentials
+    from core.gateway.meta_subscriptions import SubscriptionError, upsert_app_subscription
+
+    settings = get_settings()
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+        connection = await _load_connection(wizard, session)
+
+    config = AppCredentials(
+        app_id=settings.meta_app_id, app_secret=settings.meta_app_secret, config_id=settings.meta_config_id,
+        graph_api_version=connection.graph_api_version if connection else settings.graph_api_version,
+        connection_id=wizard.connection_id,
+    )
+    callback_url = f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"
+    try:
+        await upsert_app_subscription(
+            config, "whatsapp_business_account", callback_url=callback_url, verify_token=settings.whatsapp_verify_token
+        )
+    except SubscriptionError as exc:
+        log.warning("embedded_signup_subscribe_webhook_self_check_fallo", detail=str(exc))
+    except GraphError as exc:
+        log.warning("embedded_signup_subscribe_webhook_fallo", detail=exc.message)
+
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+        _advance_to(wizard, "register_number")
+        await session.flush()
+        return _to_view(wizard)
+
+
+async def _advance_past_register(wizard_id: uuid.UUID, tenant_id: uuid.UUID | None) -> ConnectionWizardView:
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+        _advance_to(wizard, "sync_templates")
+        await session.flush()
+        return _to_view(wizard)
+
+
+async def register_number_step(wizard_id: uuid.UUID, pin: str) -> ConnectionWizardView:
+    """Único paso con input humano (el PIN de 6 dígitos). Idempotente: si
+    Meta ya reporta el número registrado, se trata como éxito."""
+    tenant_id = get_current_tenant_id()
+    settings = get_settings()
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+        if wizard is None:
+            raise WizardError("El wizard no existe o no pertenece a este tenant")
+        connection = await _load_connection(wizard, session)
+        phone = (
+            await session.execute(select(PhoneNumber).where(PhoneNumber.connection_id == wizard.connection_id))
+        ).scalars().first()
+
+    if phone is None:
+        raise WizardError("Todavía no hay un número asociado a esta conexión (falta cargarlo)")
+
+    token = await meta_token_store.get_token(
+        wizard.connection_id, TOKEN_KIND, (connection.business_id if connection else None) or str(wizard.connection_id),
+        tenant_id=tenant_id,
+    )
+    if not token:
+        raise WizardError("No hay token guardado todavía para esta conexión -- repetí el paso de conexión")
+
+    try:
+        await graph_fetch(
+            f"/{phone.phone_number_id}/register", method="POST", token=token, app_secret=settings.meta_app_secret,
+            body={"messaging_product": "whatsapp", "pin": pin},
+            version=connection.graph_api_version if connection else settings.graph_api_version,
+            connection_id=wizard.connection_id,
+        )
+    except GraphError as exc:
+        if "already" in (exc.message or "").lower() and "regist" in (exc.message or "").lower():
+            pass  # ya registrado -- idempotente, no es un error real
+        else:
+            raise
+
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+        phone_row = await session.get(PhoneNumber, phone.id)
+        phone_row.registered = True
+        _advance_to(wizard, "sync_templates")
+        await session.flush()
+        return _to_view(wizard)
+
+
+async def _sync_templates_step(wizard_id: uuid.UUID, tenant_id: uuid.UUID | None) -> ConnectionWizardView:
+    settings = get_settings()
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+        connection = await _load_connection(wizard, session)
+        waba = (
+            await session.execute(select(WabaAccount).where(WabaAccount.connection_id == wizard.connection_id))
+        ).scalars().first()
+
+    if waba is not None:
+        token = await meta_token_store.get_token(
+            wizard.connection_id, TOKEN_KIND, (connection.business_id if connection else None) or str(wizard.connection_id),
+            tenant_id=tenant_id,
+        )
+        if token:
+            try:
+                data = await graph_fetch(
+                    f"/{waba.waba_id}/message_templates", token=token, app_secret=settings.meta_app_secret,
+                    query={"fields": "name,language,category,status,rejected_reason,quality_score,components"},
+                    version=connection.graph_api_version if connection else settings.graph_api_version,
+                    connection_id=wizard.connection_id,
+                )
+                for item in (data or {}).get("data", []):
+                    await _upsert_template(waba.id, tenant_id, item)
+            except GraphError as exc:
+                log.warning("embedded_signup_sync_templates_fallo", detail=exc.message)
+
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+        _advance_to(wizard, "verify_health")
+        await session.flush()
+        return _to_view(wizard)
+
+
+async def _upsert_template(waba_account_id: uuid.UUID, tenant_id: uuid.UUID | None, item: dict[str, Any]) -> None:
+    async with get_session() as session:
+        existing = (
+            await session.execute(
+                select(MessageTemplate).where(
+                    MessageTemplate.waba_account_id == waba_account_id,
+                    MessageTemplate.name == item.get("name", ""),
+                    MessageTemplate.language == item.get("language", ""),
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            session.add(
+                MessageTemplate(
+                    tenant_id=tenant_id,
+                    waba_account_id=waba_account_id,
+                    meta_template_id=item.get("id"),
+                    name=item.get("name", ""),
+                    language=item.get("language", ""),
+                    category=item.get("category"),
+                    status=item.get("status", "DRAFT"),
+                    rejected_reason=item.get("rejected_reason"),
+                    quality_score=str(item.get("quality_score")) if item.get("quality_score") else None,
+                    components=item.get("components"),
+                    synced_at=utcnow(),
+                )
+            )
+        else:
+            existing.status = item.get("status", existing.status)
+            existing.rejected_reason = item.get("rejected_reason")
+            existing.components = item.get("components")
+            existing.synced_at = utcnow()
+
+
+async def _verify_health_step(wizard_id: uuid.UUID, tenant_id: uuid.UUID | None) -> ConnectionWizardView:
+    from core.gateway.meta_subscriptions import list_app_subscriptions
+
+    settings = get_settings()
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+        connection = await _load_connection(wizard, session)
+
+    subs = await list_app_subscriptions(settings.meta_app_id)
+    sub_ok = any(s.object == "whatsapp_business_account" and s.active for s in subs)
+
+    async with get_session() as session:
+        wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+        connection = await session.get(MetaConnection, wizard.connection_id)
+        if connection is not None:
+            connection.status = "connected" if sub_ok else "degraded"
+            connection.connected_at = utcnow()
+            connection.last_health_check_at = utcnow()
+            connection.health = {**(connection.health or {}), "webhook_subscription_active": sub_ok}
+        _advance_to(wizard, "done")
+        await session.flush()
+        return _to_view(wizard)
