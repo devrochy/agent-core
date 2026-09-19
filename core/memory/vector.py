@@ -117,9 +117,26 @@ async def store_memory(
 
 
 async def recall(
-    query: str, customer_id: uuid.UUID | None = None, top_k: int = 3, max_distance: float = 0.6
+    query: str,
+    customer_id: uuid.UUID | None = None,
+    conversation_id: uuid.UUID | None = None,
+    top_k: int = 3,
+    max_distance: float = 0.6,
 ) -> list[str]:
-    """Recupera los hechos más relevantes (distancia coseno). [] si está desactivada."""
+    """Recupera los hechos más relevantes (distancia coseno). [] si está desactivada.
+
+    Filtra `MemoryVector` por `tenant_id` de forma EXPLÍCITA (defensa en
+    profundidad, ADR-0012) además de RLS -- no depende solo de que el
+    `set_config` de sesión haya corrido. `conversation_id`, si viene, se
+    valida contra `get_owned()` como cinturón adicional: no restringe el
+    recall a esa conversación puntual (sigue siendo cross-conversación por
+    `customer_id`), solo confirma que pertenece al tenant/cliente correctos
+    antes de ejecutar la búsqueda por similaridad.
+    """
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        log.warning("recall_missing_tenant_context")
+        return []
     provider = get_embedding_provider()
     if provider is None:
         return []
@@ -127,12 +144,25 @@ async def recall(
         query_embedding = await provider.embed(query)
         from sqlalchemy import select
 
-        from core.db.models import MemoryVector
-        from core.db.session import get_session
+        from core.db.models import Conversation, MemoryVector
+        from core.db.session import get_owned, get_session
 
         async with get_session() as session:
+            if conversation_id is not None:
+                conversation = await get_owned(session, Conversation, conversation_id, tenant_id=tenant_id)
+                if conversation is None or (
+                    customer_id is not None and conversation.customer_id != customer_id
+                ):
+                    log.warning("recall_conversation_not_owned", conversation_id=str(conversation_id))
+                    return []
+
             distance = MemoryVector.embedding.cosine_distance(query_embedding)
-            stmt = select(MemoryVector.content, distance.label("d")).order_by(distance).limit(top_k)
+            stmt = (
+                select(MemoryVector.content, distance.label("d"))
+                .where(MemoryVector.tenant_id == tenant_id)
+                .order_by(distance)
+                .limit(top_k)
+            )
             if customer_id is not None:
                 stmt = stmt.where(MemoryVector.customer_id == customer_id)
             rows = (await session.execute(stmt)).all()

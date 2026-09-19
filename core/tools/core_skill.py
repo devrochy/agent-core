@@ -80,7 +80,9 @@ class CoreSkill(BaseSkill):
         if not query:
             return {"error": "query vacío"}
         top_k = int(args.get("top_k", 3) or 3)
-        results = await vector_memory.recall(query, customer_id=ctx.customer_id, top_k=top_k)
+        results = await vector_memory.recall(
+            query, customer_id=ctx.customer_id, conversation_id=ctx.conversation_id, top_k=top_k
+        )
         return {"memories": results}
 
     async def _load_playbook(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
