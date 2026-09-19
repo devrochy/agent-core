@@ -6,6 +6,7 @@ ChannelConnection."""
 from __future__ import annotations
 
 import os
+import re
 import uuid
 
 import httpx
@@ -89,10 +90,16 @@ class FakeExchangeClient:
 
 def _fake_graph_fetch(register_calls: list, waba_id: str, phone_number_id: str):
     async def _inner(path, *, method="GET", body=None, **kwargs):
+        if path == "/debug_token":
+            return {"data": {"scopes": ["whatsapp_business_management"], "granular_scopes": []}}
         if path == f"/{waba_id}":
             return {"name": "Mi WABA", "currency": "USD", "timezone_id": "1", "message_template_namespace": "ns", "account_review_status": "APPROVED"}
         if path == f"/{phone_number_id}":
             return {"display_phone_number": "+1 555 0100", "verified_name": "Mi Negocio", "quality_rating": "GREEN"}
+        if path == f"/{waba_id}/subscribed_apps" and method == "POST":
+            return {"success": True}
+        if path == f"/{waba_id}/subscribed_apps":
+            return {"data": [{"whatsapp_business_api_data": {"id": "app-embedded-signup"}}]}
         if path == f"/{phone_number_id}/register":
             register_calls.append(body)
             return {"success": True}
@@ -176,13 +183,17 @@ async def test_reanuda_tras_cerrar_el_navegador_sin_repetir_oauth(app_client, mo
     assert phone_row.verified_name == "Mi Negocio"
     assert register_calls == [], "no debe llamar a /register todavía"
 
-    # Paso 3: PIN -> completa el resto de la cadena automática.
+    # Paso 3: registrar el número -> el PIN lo genera el sistema, completa
+    # el resto de la cadena automática.
     r4 = await app_client.post(
         "/admin/conexiones/wizard/whatsapp/registrar-numero",
-        headers={"Cookie": cookie}, data={"wizard_id": str(wizard_id), "pin": "123456"},
+        headers={"Cookie": cookie}, data={"wizard_id": str(wizard_id)},
     )
     assert r4.status_code == 303
-    assert register_calls == [{"messaging_product": "whatsapp", "pin": "123456"}]
+    assert len(register_calls) == 1
+    assert register_calls[0]["messaging_product"] == "whatsapp"
+    assert re.fullmatch(r"\d{6}", register_calls[0]["pin"])
+    assert register_calls[0]["pin"] not in r4.headers.get("location", ""), "el PIN no debe aparecer en la respuesta"
 
     async with tenant_scope(tid):
         async with get_session() as session:
@@ -216,8 +227,14 @@ async def test_coexistence_nunca_llama_a_register(app_client, monkeypatch):
     async def _fail_if_register_called(path, *, method="GET", body=None, **kwargs):
         if path.endswith("/register"):
             raise AssertionError("coexistence NUNCA debe llamar a /register")
+        if path == "/debug_token":
+            return {"data": {"scopes": ["whatsapp_business_management"]}}
         if path == f"/{waba_id}":
             return {"name": "WABA coexistence"}
+        if path == f"/{waba_id}/subscribed_apps" and method == "POST":
+            return {"success": True}
+        if path == f"/{waba_id}/subscribed_apps":
+            return {"data": [{"whatsapp_business_api_data": {"id": "app-embedded-signup"}}]}
         if path.endswith("/message_templates"):
             return {"data": []}
         raise AssertionError(f"path no esperado: {path}")
