@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Conectar Messenger{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4 d-flex justify-content-between align-items-center">
+  Conectar Facebook Messenger
+  <a href="/admin/conexiones" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left"></i> Volver a conexiones
+  </a>
+</h1>
+
+{% if setup_error %}
+<div class="alert alert-danger">{{ setup_error }}</div>
+{% else %}
+
+<div class="card mb-4" id="facebook-login-root"
+     data-config-id="{{ meta_config_id }}"
+     data-app-id="{{ meta_app_id }}"
+     data-graph-version="{{ graph_api_version }}">
+  <div class="card-body">
+    <p class="text-secondary">Hacé clic para conectar tus Páginas de Facebook con Messenger.</p>
+    <button id="facebook-login-button" class="btn btn-primary" disabled>
+      <i class="bi bi-facebook"></i> Conectar con Facebook
+    </button>
+    <div id="facebook-login-status" class="text-secondary small mt-2"></div>
+  </div>
+</div>
+
+{% if pages %}
+<div class="card">
+  <div class="card-body">
+    <h5 class="card-title fs-6">Páginas conectadas</h5>
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th>Página</th><th>Categoría</th><th>Fields suscritos</th><th class="text-end">Acciones</th></tr></thead>
+      <tbody>
+        {% for p in pages %}
+        <tr>
+          <td>{{ p.name }} <code class="text-secondary">{{ p.page_id }}</code></td>
+          <td>{{ p.category or "—" }}</td>
+          <td>
+            {% for f in p.subscribed_fields %}<span class="badge text-bg-light border me-1">{{ f }}</span>{% endfor %}
+            {% if not p.subscribed_fields %}<span class="badge text-bg-danger">ninguno</span>{% endif %}
+          </td>
+          <td class="text-end">
+            <a href="/admin/conexiones/meta/{{ connection.id }}/paginas" class="btn btn-sm btn-outline-primary">Gestionar</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<script src="/static/facebook_login_messenger.js"></script>
+{% endif %}
+{% endblock %}

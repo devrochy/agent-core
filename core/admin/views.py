@@ -1678,6 +1678,152 @@ async def meta_connection_numeros_verificar(request: Request, connection_id: str
     return RedirectResponse(f"{url}?flash=Número verificado", status_code=303)
 
 
+# ------------------------------------------------------------------ conexión de Messenger (Páginas)
+@router.get("/conexiones/wizard/messenger", response_class=HTMLResponse)
+async def messenger_wizard_page(request: Request):
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+
+    from core.db.models import FbPage, MetaConnection
+
+    settings = get_settings()
+    setup_error = None
+    if not settings.meta_app_id or not settings.meta_app_secret or not settings.meta_config_id:
+        setup_error = "META_APP_ID/META_APP_SECRET/META_CONFIG_ID no están configurados."
+
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        connection = (
+            await session.execute(
+                select(MetaConnection).where(MetaConnection.tenant_id == tid, MetaConnection.channel == "messenger")
+            )
+        ).scalars().first()
+        pages = (
+            await session.execute(
+                select(FbPage).where(FbPage.connection_id == connection.id, FbPage.tenant_id == tid)
+            )
+        ).scalars().all() if connection else []
+
+    ctx.update(
+        setup_error=setup_error, connection=connection, pages=pages,
+        meta_app_id=settings.meta_app_id, meta_config_id=settings.meta_config_id,
+        graph_api_version=settings.graph_api_version,
+    )
+    return _render("meta_wizard_messenger.html", ctx)
+
+
+@router.post("/conexiones/wizard/messenger/exchange")
+async def messenger_wizard_exchange(request: Request):
+    """Llamado por el listener de Facebook Login apenas llega el `code`.
+    Descubre y auto-conecta cada Página con permiso suficiente en el mismo
+    request -- el user access token no se persiste, solo se usa acá."""
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_messenger import MessengerError, connect_messenger
+
+    admin = await current_admin(request)
+    if admin is None:
+        return JSONResponse({"error": "no autenticado"}, status_code=401)
+
+    body = await request.json()
+    code = body.get("code")
+    if not code:
+        return JSONResponse({"error": "falta code"}, status_code=400)
+
+    tid = get_current_tenant_id()
+    try:
+        result = await connect_messenger(tid, str(code), admin_id=admin.id)
+    except (MessengerError, GraphError) as exc:
+        detail = exc.message if isinstance(exc, GraphError) else str(exc)
+        return JSONResponse({"error": detail}, status_code=502)
+
+    return JSONResponse(
+        {
+            "connectionId": str(result.connection_id),
+            "connectedPages": result.connected_pages,
+            "skippedPages": [
+                {"pageId": p.page_id, "name": p.name, "reason": p.reason} for p in result.skipped_pages
+            ],
+        }
+    )
+
+
+@router.get("/conexiones/meta/{connection_id}/paginas", response_class=HTMLResponse)
+async def meta_connection_paginas_page(request: Request, connection_id: str):
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+
+    from core.db.models import FbPage, MetaConnection
+
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+        if connection is None:
+            return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+        pages = (
+            await session.execute(select(FbPage).where(FbPage.connection_id == connection.id, FbPage.tenant_id == tid))
+        ).scalars().all()
+
+    ctx.update(connection=connection, pages=pages)
+    return _render("meta_paginas.html", ctx)
+
+
+@router.post("/conexiones/meta/{connection_id}/paginas/{page_id}/re-verificar")
+async def meta_connection_pagina_reverificar(request: Request, connection_id: str, page_id: str):
+    from core.db.models import MetaConnection
+    from core.gateway import meta_token_store
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_messenger import PAGE_TOKEN_KIND, subscribe_page_webhook
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    url = f"/admin/conexiones/meta/{connection_id}/paginas"
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+    if connection is None:
+        return RedirectResponse(f"{url}?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+
+    token = await meta_token_store.get_token(connection.id, PAGE_TOKEN_KIND, page_id, tenant_id=tid)
+    if not token:
+        return RedirectResponse(f"{url}?flash=No hay token guardado para esta Página&flash_type=danger", status_code=303)
+
+    try:
+        subscribed = await subscribe_page_webhook(page_id, token, connection.graph_api_version, connection.id, tid)
+    except GraphError as exc:
+        return RedirectResponse(f"{url}?flash={exc.message[:140]}&flash_type=danger", status_code=303)
+
+    flash = "Suscripción confirmada" if subscribed else "Meta no confirmó la suscripción"
+    flash_type = "success" if subscribed else "danger"
+    return RedirectResponse(f"{url}?flash={flash}&flash_type={flash_type}", status_code=303)
+
+
+@router.post("/conexiones/meta/{connection_id}/paginas/{page_id}/routing")
+async def meta_connection_pagina_routing(request: Request, connection_id: str, page_id: str, enabled: str = Form(default="")):
+    from core.db.models import FbPage, MetaConnection
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    url = f"/admin/conexiones/meta/{connection_id}/paginas"
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+        if connection is None:
+            return RedirectResponse(f"{url}?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+        page = (
+            await session.execute(
+                select(FbPage).where(FbPage.page_id == page_id, FbPage.connection_id == connection.id, FbPage.tenant_id == tid)
+            )
+        ).scalar_one_or_none()
+        if page is not None:
+            page.conversation_routing_enabled = enabled == "on"
+
+    return RedirectResponse(f"{url}?flash=Guardado", status_code=303)
+
+
 # ------------------------------------------------------------------ costos
 @router.get("/costos", response_class=HTMLResponse)
 async def costs_page(request: Request):
