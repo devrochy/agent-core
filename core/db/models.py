@@ -21,7 +21,7 @@ Los plugins definen sus PROPIAS tablas en su propio árbol de migraciones
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
@@ -207,6 +207,12 @@ class Conversation(Base):
     # {"step": ..., "turnos_sin_resolver": 0, ...} — actualizado por el orchestrator, no por el LLM
     channel: Mapped[str] = mapped_column(Text, default="whatsapp")
     connection_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("channel_connections.id"))
+    # Puente paralelo (migración 0024) para conexiones creadas por el wizard
+    # de Embedded Signup (MetaConnection + meta_token_store), que no tienen
+    # fila en channel_connections -- `connection_id` sigue intacto para las
+    # conexiones manuales viejas. `sender.py::resolve_credentials` prueba
+    # este primero, cae al de arriba si es None.
+    meta_connection_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("meta_connections.id", ondelete="SET NULL"))
     bot_paused: Mapped[bool] = mapped_column(Boolean, default=False)  # kill-switch por conversación
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -525,6 +531,63 @@ class MetaConnection(Base):
     connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_health_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     health: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+WIZARD_STEPS: tuple[str, ...] = (
+    "select_channel",
+    "launch_oauth",
+    "exchange_code",
+    "discover_assets",
+    "select_assets",
+    "subscribe_webhook",
+    "register_number",
+    "sync_templates",
+    "verify_health",
+    "done",
+)
+
+
+class ConnectionWizard(Base):
+    """Máquina de estados persistida del wizard de Embedded Signup, tabla de
+    NEGOCIO normal (tenant_id not null + RLS, a diferencia de webhook_events/
+    meta_app_subscriptions -- ver ADR-0030). Reanudable: si el admin cierra
+    el navegador a mitad de camino, `current_step`/`completed_steps` dicen
+    exactamente dónde retomar sin repetir el OAuth.
+
+    REGLA DURA: `context`/`last_error` NUNCA contienen el `code` de un solo
+    uso ni ningún token -- son columnas legibles por RLS del propio tenant,
+    no custodia de secretos (eso vive en meta_private.meta_tokens vía
+    core/gateway/meta_token_store.py). Verificado por
+    tests/test_meta_onboarding_no_persiste_secretos.py."""
+
+    __tablename__ = "connection_wizards"
+    __table_args__ = (
+        CheckConstraint(
+            "channel in ('whatsapp','messenger','instagram','facebook_page')",
+            name="ck_connection_wizards_channel",
+        ),
+        CheckConstraint("environment in ('sandbox','production')", name="ck_connection_wizards_environment"),
+        CheckConstraint(
+            "current_step in (" + ",".join(f"'{s}'" for s in WIZARD_STEPS) + ")",
+            name="ck_connection_wizards_current_step",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("meta_connections.id", ondelete="CASCADE"))
+    channel: Mapped[str] = mapped_column(Text)
+    environment: Mapped[str] = mapped_column(Text, default="production")
+    current_step: Mapped[str] = mapped_column(Text, default="select_channel")
+    completed_steps: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    context: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    last_error: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    started_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id", ondelete="SET NULL"))
+    # default de Python (además del server_default de la migración): el ORM
+    # manda NULL explícito si no hay valor, pisando el server_default.
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: utcnow() + timedelta(hours=24))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
