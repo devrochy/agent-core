@@ -15,7 +15,7 @@ from typing import Any
 
 from agentcore_contracts import AgentSpec
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -1386,6 +1386,125 @@ async def meta_webhooks_register(request: Request, channel: str = Form(...)):
         )
 
     return RedirectResponse("/admin/conexiones/webhooks?flash=Suscripción registrada", status_code=303)
+
+
+# ------------------------------------------------------------------ wizard de Embedded Signup (WhatsApp)
+@router.get("/conexiones/wizard/whatsapp", response_class=HTMLResponse)
+async def meta_wizard_whatsapp_page(request: Request):
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+
+    from core.gateway.meta_onboarding import (
+        WizardError,
+        run_automatic_steps,
+        start_or_resume_wizard,
+    )
+
+    admin = await current_admin(request)
+    tid = get_current_tenant_id()
+
+    try:
+        wizard = await start_or_resume_wizard(tid, "whatsapp", admin_id=admin.id if admin else None)
+        wizard = await run_automatic_steps(wizard.id)
+    except WizardError as exc:
+        ctx.update(setup_error=str(exc), wizard=None)
+        return _render("meta_wizard_whatsapp.html", ctx)
+
+    settings = get_settings()
+    ctx.update(
+        setup_error=None,
+        wizard=wizard,
+        meta_app_id=settings.meta_app_id,
+        meta_config_id=settings.meta_config_id,
+        graph_api_version=settings.graph_api_version,
+    )
+    return _render("meta_wizard_whatsapp.html", ctx)
+
+
+@router.post("/conexiones/wizard/whatsapp/exchange")
+async def meta_wizard_whatsapp_exchange(request: Request):
+    """Llamada por el listener de `postMessage` apenas llega el evento
+    `FINISH*` -- el `code` de Meta tiene TTL de 30s, así que esto tiene que
+    responder rápido. Nunca devuelve el token, solo `{connectionId, nextStep}`."""
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_onboarding import WizardError, exchange_code, persist_finish_payload
+
+    if await current_admin(request) is None:
+        return JSONResponse({"error": "no autenticado"}, status_code=401)
+
+    body = await request.json()
+    wizard_id = body.get("wizard_id")
+    code = body.get("code")
+    event_type = body.get("event_type", "FINISH")
+    if not wizard_id or not code:
+        return JSONResponse({"error": "faltan wizard_id/code"}, status_code=400)
+
+    try:
+        wizard_id_uuid = uuid.UUID(str(wizard_id))
+        view = await persist_finish_payload(
+            wizard_id_uuid,
+            event_type,
+            waba_id=body.get("waba_id"),
+            phone_number_id=body.get("phone_number_id"),
+            business_id=body.get("business_id"),
+        )
+        view = await exchange_code(view.id, str(code))
+    except WizardError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except GraphError as exc:
+        from core.gateway.meta_subscriptions import humanize_subscription_error
+
+        return JSONResponse(
+            {"error": humanize_subscription_error(exc), "fbtraceId": exc.fbtrace_id}, status_code=502
+        )
+
+    return JSONResponse({"connectionId": str(view.connection_id), "nextStep": view.current_step})
+
+
+@router.post("/conexiones/wizard/whatsapp/cancelar-evento")
+async def meta_wizard_whatsapp_cancel(request: Request):
+    """Beacon del listener en el evento `CANCEL` -- analítica de abandono,
+    nunca lleva `code` ni token (la función de destino ni acepta esos campos)."""
+    from core.gateway.meta_onboarding import record_cancel_or_progress
+
+    if await current_admin(request) is None:
+        return JSONResponse({"error": "no autenticado"}, status_code=401)
+
+    body = await request.json()
+    wizard_id = body.get("wizard_id")
+    if not wizard_id:
+        return JSONResponse({"error": "falta wizard_id"}, status_code=400)
+
+    await record_cancel_or_progress(
+        uuid.UUID(str(wizard_id)),
+        current_step=body.get("current_step"),
+        error_code=body.get("error_code"),
+        error_message=body.get("error_message"),
+        error_id=body.get("error_id"),
+        session_id=body.get("session_id"),
+    )
+    return JSONResponse({"status": "ok"})
+
+
+@router.post("/conexiones/wizard/whatsapp/registrar-numero")
+async def meta_wizard_whatsapp_register_number(request: Request, wizard_id: str = Form(...), pin: str = Form(...)):
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_onboarding import WizardError, register_number_step, run_automatic_steps
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    try:
+        view = await register_number_step(uuid.UUID(wizard_id), pin)
+        await run_automatic_steps(view.id)
+    except (WizardError, GraphError) as exc:
+        detail = exc.message if isinstance(exc, GraphError) else str(exc)
+        return RedirectResponse(
+            f"/admin/conexiones/wizard/whatsapp?flash={detail[:140]}&flash_type=danger", status_code=303
+        )
+
+    return RedirectResponse("/admin/conexiones/wizard/whatsapp", status_code=303)
 
 
 # ------------------------------------------------------------------ costos
