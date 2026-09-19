@@ -297,14 +297,15 @@ async def test_envio_saliente_usa_el_puente_sin_channel_connection(app_client, m
             session.add(conversation)
             await session.flush()
 
-        provider, creds = await resolve_credentials(None, connection_id, expected_tenant_id=tid)
+        provider, channel, creds = await resolve_credentials(None, connection_id, expected_tenant_id=tid)
         assert provider == "meta"
+        assert channel == "whatsapp"
         assert creds == {"phone_number_id": phone_number_id, "access_token": "tok-envio-real"}
 
         # Hallazgo auditor-multitenant (2026-09-22): si el tenant esperado no
         # coincide con el dueño real de la MetaConnection, nunca debe
         # devolver el token -- cae al fallback (.env, sin credenciales reales).
-        _, creds_mismatch = await resolve_credentials(None, connection_id, expected_tenant_id=uuid.uuid4())
+        _, _, creds_mismatch = await resolve_credentials(None, connection_id, expected_tenant_id=uuid.uuid4())
         assert creds_mismatch.get("access_token") != "tok-envio-real"
 
         sent = {}
