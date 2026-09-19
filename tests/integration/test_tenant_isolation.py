@@ -116,6 +116,52 @@ async def test_spec_enablement_y_escalacion_por_tenant(moto_setup) -> None:
                 settings_moto.escalation_config = original_config
 
 
+async def test_meta_setup_checklist_aislado_por_tenant(moto_setup) -> None:
+    """Un paso marcado en un tenant no aparece ni se puede pisar desde otro
+    (RLS + UNIQUE(tenant_id, step_key), migración 0013)."""
+    from core.db.models import MetaSetupChecklist
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    t1, moto = moto_setup
+
+    # BD de integración compartida entre corridas: limpiar antes de insertar
+    # para que el UNIQUE(tenant_id, step_key) no choque en una segunda corrida.
+    for tid in (t1, moto):
+        async with tenant_scope(tid):
+            async with get_session() as session:
+                await session.execute(
+                    MetaSetupChecklist.__table__.delete().where(
+                        MetaSetupChecklist.tenant_id == tid, MetaSetupChecklist.step_key == "crear_app"
+                    )
+                )
+
+    async with tenant_scope(t1):
+        async with get_session() as session:
+            session.add(MetaSetupChecklist(tenant_id=t1, step_key="crear_app", done=True))
+
+    async with tenant_scope(moto):
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(MetaSetupChecklist).where(MetaSetupChecklist.step_key == "crear_app")
+                )
+            ).scalar_one_or_none()
+            assert row is None, "el paso marcado en t1 no debe verse desde moto"
+
+            # mismo step_key, tenant distinto: no debe chocar con el UNIQUE(tenant_id, step_key)
+            session.add(MetaSetupChecklist(tenant_id=moto, step_key="crear_app", done=False))
+
+    async with tenant_scope(t1):
+        async with get_session() as session:
+            row_t1 = (
+                await session.execute(
+                    select(MetaSetupChecklist).where(MetaSetupChecklist.step_key == "crear_app")
+                )
+            ).scalar_one()
+            assert row_t1.done is True, "el paso de t1 sigue como se dejó, sin contagiarse del de moto"
+
+
 async def test_numeracion_independiente_por_tenant(moto_setup) -> None:
     """ADR-0018: cada tenant arranca su numeración de pedidos en 1 (sin colisión)."""
     t1, moto = moto_setup

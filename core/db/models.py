@@ -111,7 +111,35 @@ class AppSettings(Base):
     escalation_config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     # {"keywords": ["reclamo", "asesor"], "max_turnos_sin_resolver": 3}
 
+    # App de Meta del tenant (BYOK, igual criterio que llm_api_key_encrypted):
+    # {"app_id", "app_secret", "config_id"} cifrado en un solo blob (core/gateway/meta_app_config.py).
+    # Si es NULL, el preflight cae al fallback opcional de .env.
+    meta_app_config_encrypted: Mapped[str | None] = mapped_column(Text)
+
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class MetaSetupChecklist(Base):
+    """Checklist de pasos MANUALES de configuración de la app de Meta, por tenant.
+
+    Cada paso (crear la app, copiar el App Secret, añadir productos, etc. --
+    ver core/admin/templates/meta_requisitos.html) no es automatizable: un
+    humano lo hace en developers.facebook.com y marca la casilla acá. `done_by`
+    queda en NULL si el admin que lo marcó fue borrado (no hay ON DELETE
+    CASCADE con `admins`, tabla de sistema sin RLS)."""
+
+    __tablename__ = "meta_setup_checklist"
+    __table_args__ = (UniqueConstraint("tenant_id", "step_key", name="uq_meta_checklist_tenant_step"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    step_key: Mapped[str] = mapped_column(Text, nullable=False)
+    done: Mapped[bool] = mapped_column(Boolean, default=False)
+    done_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id", ondelete="SET NULL"))
+    done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
