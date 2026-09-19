@@ -21,11 +21,13 @@ RLS en toda tabla de negocio.
 volvería inútil su propio propósito (no podría registrar los eventos que
 todavía no tienen tenant resuelto).
 
-Hoy la tabla existe pero **ningún código la usa** (el pipeline real en
-`core/gateway/webhooks.py` sigue sin escribirla) — es infraestructura para
-un trabajo futuro de conectar el log real. Cuando eso pase, todo acceso
-(lectura desde el panel admin incluida) debe filtrar `tenant_id` a mano en
-cada query, sin confiar en RLS para el aislamiento (no lo hay).
+**Actualización 2026-09-20**: el pipeline real ya escribe acá
+(`core/gateway/webhooks.py::_log_webhook_event`, único punto de escritura de
+código de aplicación — verificado por `tests/test_webhook_events_solo_desde_webhooks.py`,
+mismo patrón que `tests/test_meta_token_store_aislado.py`). Todo acceso
+(lectura desde el panel admin incluida, si se agrega en el futuro) debe
+filtrar `tenant_id` a mano en cada query, sin confiar en RLS para el
+aislamiento (no lo hay). No hay ninguna lectura desde el panel admin todavía.
 
 ## Alternativas consideradas
 
@@ -44,15 +46,15 @@ sin filtro explícito de `tenant_id` mezclaría payloads de varios tenants —
 "puerta abierta" documentada (hallazgo de `auditor-multitenant`, 2026-09-19)
 que hoy no tiene consecuencia real porque nada lee/escribe la tabla todavía.
 
-**Qué haría que revisáramos esto:** el día que `core/gateway/webhooks.py`
-empiece a escribir en `webhook_events` de verdad — en ese momento, antes de
-exponer cualquier lectura desde el panel admin, agregar un test estático
-(mismo patrón que `tests/test_meta_token_store_aislado.py`) que obligue a
-que todo acceso pase por un helper único con `tenant_id` explícito en el
-`WHERE`.
+**Cumplido (2026-09-20)**: el pipeline ya escribe acá, con el test estático
+prometido ya agregado. **Qué haría que revisáramos esto de nuevo:** el día
+que se agregue una lectura desde el panel admin (ej. para debug de webhooks
+fallidos) — en ese momento, exigir `tenant_id` explícito en el `WHERE` de
+esa vista, con su propio test que lo verifique (no alcanza con el test
+estático de "quién importa el modelo", hay que probar el filtro real).
 
 ## Impacto en el código
 
 `alembic/versions/0017_webhook_events.py`, `core/db/models.py`
-(`WebhookEvent`). Sin impacto en `core/gateway/webhooks.py` todavía (no
-conectado).
+(`WebhookEvent`), `core/gateway/webhooks.py::_log_webhook_event` (único
+punto de escritura), `tests/test_webhook_events_solo_desde_webhooks.py`.

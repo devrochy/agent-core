@@ -1,0 +1,49 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "REPLACE_WITH_WABA_ID_TENANT_A",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {"phone_number_id": "REPLACE_WITH_PHONE_TENANT_A"},
+            "contacts": [{"profile": {"name": "Cliente A"}, "wa_id": "573001111111"}],
+            "messages": [
+              {
+                "from": "573001111111",
+                "id": "wamid.REPLACE_ME_A",
+                "timestamp": "1700000000",
+                "type": "text",
+                "text": {"body": "Hola desde el tenant A"}
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "REPLACE_WITH_WABA_ID_TENANT_B",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {"phone_number_id": "REPLACE_WITH_PHONE_TENANT_B"},
+            "contacts": [{"profile": {"name": "Cliente B"}, "wa_id": "573002222222"}],
+            "messages": [
+              {
+                "from": "573002222222",
+                "id": "wamid.REPLACE_ME_B",
+                "timestamp": "1700000001",
+                "type": "text",
+                "text": {"body": "Hola desde el tenant B"}
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
