@@ -6,11 +6,16 @@ plugins para que sus tareas @register_cron queden registradas.
 
 from __future__ import annotations
 
+import asyncio
+
 from celery import Celery
+from celery.schedules import crontab
 from celery.signals import worker_init
 
 from core.config import get_settings
+from core.shared.logger import get_logger
 
+log = get_logger(__name__)
 settings = get_settings()
 
 celery = Celery(
@@ -28,6 +33,30 @@ celery.conf.update(
     task_time_limit=300,
     beat_schedule={},             # lo llenan los @register_cron de los plugins
 )
+
+
+# ---------------------------------------------------------------- cron de core
+# Salud de suscripciones de webhook de Meta (cada 15 min): capacidad de
+# CORE, no de un pack -- no pasa por `register_cron` (core/tasks/decorators.py),
+# que está atado a `plugin_manager.is_active(plugin_id)` y no tiene sentido
+# para algo que no es un plugin. Se registra directo acá.
+_META_SUBSCRIPTIONS_HEALTH_TASK = "core.meta_subscriptions_health_check"
+
+
+@celery.task(name=_META_SUBSCRIPTIONS_HEALTH_TASK)
+def _meta_subscriptions_health_check() -> None:
+    from core.tasks.meta_subscriptions_health import check_all_subscriptions_health
+
+    try:
+        asyncio.run(check_all_subscriptions_health())
+    except Exception:
+        log.exception("cron_task_failed", task=_META_SUBSCRIPTIONS_HEALTH_TASK)
+
+
+celery.conf.beat_schedule[_META_SUBSCRIPTIONS_HEALTH_TASK] = {
+    "task": _META_SUBSCRIPTIONS_HEALTH_TASK,
+    "schedule": crontab(minute="*/15"),
+}
 
 
 @worker_init.connect

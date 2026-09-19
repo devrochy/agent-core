@@ -1253,6 +1253,141 @@ async def meta_requisitos_toggle(
     return RedirectResponse("/admin/conexiones/meta-requisitos?flash=Guardado", status_code=303)
 
 
+# ------------------------------------------------------------------ suscripciones de webhook (app de Meta)
+async def _require_owner_or_master(request: Request, tenant_id: uuid.UUID | None) -> bool:
+    """"owner/admin" del ticket, traducido a los dos roles elevados que
+    existen hoy: `Admin.role == "master"` (superadmin de plataforma) o
+    `TenantUser.role == "owner"` del tenant activo -- primer uso real de
+    este último campo en una ruta (existía desde el modelo, nunca antes
+    verificado)."""
+    from core.db.models import TenantUser
+
+    admin = await current_admin(request)
+    if admin is None:
+        return False
+    if admin.role == "master":
+        return True
+    if tenant_id is None:
+        return False
+    async with get_session() as session:
+        row = (
+            await session.execute(
+                select(TenantUser).where(TenantUser.tenant_id == tenant_id, TenantUser.admin_id == admin.id)
+            )
+        ).scalar_one_or_none()
+    return row is not None and row.role == "owner"
+
+
+async def _webhook_subscriptions_status(tid: uuid.UUID | None) -> list[dict[str, Any]]:
+    """Una fila por canal conectado del tenant activo, con el estado de la
+    suscripción de APP de la que depende ese canal (no de su suscripción de
+    objeto individual, que es otra cosa)."""
+    from core.db.models import MetaConnection
+    from core.gateway.meta_subscriptions import OBJECT_TO_CHANNEL, list_app_subscriptions
+
+    channel_to_object = {v: k for k, v in OBJECT_TO_CHANNEL.items()}
+
+    if tid is None:
+        return []
+    async with get_session() as session:
+        connections = (
+            await session.execute(
+                select(MetaConnection).where(MetaConnection.tenant_id == tid, MetaConnection.status == "connected")
+            )
+        ).scalars().all()
+
+    rows: list[dict[str, Any]] = []
+    for connection in connections:
+        object_ = channel_to_object.get(connection.channel)
+        if object_ is None:
+            continue
+        subs = await list_app_subscriptions(connection.meta_app_id)
+        sub = next((s for s in subs if s.object == object_), None)
+        rows.append(
+            {
+                "channel": connection.channel,
+                "object": object_,
+                "meta_app_id": connection.meta_app_id,
+                "callback_url": sub.callback_url if sub else None,
+                "active": sub.active if sub else None,
+                "fields": sub.fields if sub else [],
+                "last_error": sub.last_error if sub else None,
+            }
+        )
+    return rows
+
+
+@router.get("/conexiones/webhooks", response_class=HTMLResponse)
+async def meta_webhooks_page(request: Request):
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    rows = await _webhook_subscriptions_status(tid)
+    can_manage = await _require_owner_or_master(request, tid)
+    ctx.update(subscriptions=rows, can_manage=can_manage)
+    return _render("meta_webhooks.html", ctx)
+
+
+@router.get("/conexiones/webhooks.json")
+async def meta_webhooks_json(request: Request):
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    rows = await _webhook_subscriptions_status(tid)
+    return {"subscriptions": rows}
+
+
+@router.post("/conexiones/webhooks/registrar")
+async def meta_webhooks_register(request: Request, channel: str = Form(...)):
+    from core.gateway.connections import effective_credentials
+    from core.gateway.meta_preflight import resolve_app_credentials
+    from core.gateway.meta_subscriptions import (
+        OBJECT_TO_CHANNEL,
+        SubscriptionError,
+        upsert_app_subscription,
+    )
+    from core.shared.exceptions import AgentCoreError
+
+    tid = get_current_tenant_id()
+    if not await _require_owner_or_master(request, tid):
+        return HTMLResponse("No tenés permiso para re-registrar suscripciones (se requiere owner o master).", status_code=403)
+
+    channel_to_object = {v: k for k, v in OBJECT_TO_CHANNEL.items()}
+    object_ = channel_to_object.get(channel)
+    if object_ is None:
+        return RedirectResponse(
+            f"/admin/conexiones/webhooks?flash=Canal desconocido: {channel}&flash_type=danger", status_code=303
+        )
+
+    config = await resolve_app_credentials(tid, channel)
+    if config is None:
+        return RedirectResponse(
+            "/admin/conexiones/webhooks?flash=No hay app de Meta configurada para este canal&flash_type=danger",
+            status_code=303,
+        )
+
+    settings = get_settings()
+    callback_url = f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"
+    verify_token = (await effective_credentials()).get("verify_token", "") or settings.whatsapp_verify_token
+
+    try:
+        async with tenant_scope(tid):
+            await upsert_app_subscription(config, object_, callback_url=callback_url, verify_token=verify_token)
+    except SubscriptionError as exc:
+        return RedirectResponse(f"/admin/conexiones/webhooks?flash={str(exc)[:140]}&flash_type=danger", status_code=303)
+    except AgentCoreError as exc:  # GraphError
+        from core.gateway.meta_subscriptions import humanize_subscription_error
+
+        return RedirectResponse(
+            f"/admin/conexiones/webhooks?flash={humanize_subscription_error(exc)[:140]}&flash_type=danger", status_code=303
+        )
+
+    return RedirectResponse("/admin/conexiones/webhooks?flash=Suscripción registrada", status_code=303)
+
+
 # ------------------------------------------------------------------ costos
 @router.get("/costos", response_class=HTMLResponse)
 async def costs_page(request: Request):
