@@ -63,6 +63,20 @@ de otro tenant. Ninguno de los dos cambios altera el comportamiento cuando
 todo está bien formado; solo cierran la ventana si esa unicidad global
 alguna vez se relaja.
 
+**Actualización 2026-09-22 (bis) — activación post-signup**: se agregó
+`_subscribe_waba_to_app` (`POST /{waba_id}/subscribed_apps` + verificación
+`GET` obligatoria, distinta de la suscripción de app de PR #43), PIN
+autogenerado para `register_number_step` (guardado en `meta_private.
+meta_tokens` con `kind='phone_register_pin'`, migración 0025) con manejo de
+`133005`/`133008`, y `core/gateway/meta_phone_numbers.py` para números
+adicionales. El auditor encontró hallazgos de severidad media/baja (todos
+de "defensa en profundidad faltante", ninguna fuga activa): `verify_code`
+y `_subscribe_waba_to_app` ahora filtran `tenant_id` explícito además de
+`connection_id`, y la clave Redis de rate-limit de reenvío de código quedó
+namespaced por tenant (`verify_code_resend:{tenant_id}:{phone_number_id}`)
+para que un tenant no pueda interferir el rate limit de otro sobre el mismo
+`phone_number_id` (columna única global).
+
 ## Alternativas consideradas
 
 | Opción | Por qué no |
