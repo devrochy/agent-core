@@ -104,10 +104,22 @@ class WhatsAppMetaInbound(InboundAdapter):
                 if not message:
                     continue  # delivery/read receipts, postbacks sin texto: no soportados aún
                 sender_id = event.get("sender", {}).get("id", "")
-                media: list[dict[str, str]] = [
-                    {"type": att.get("type", ""), "id": "", "url": att.get("payload", {}).get("url", "")}
-                    for att in message.get("attachments", [])
-                ]
+                content = message.get("text", "")
+                media: list[dict[str, str]] = []
+                for att in message.get("attachments", []):
+                    payload_obj = att.get("payload", {})
+                    if att.get("type") == "ig_post":
+                        # El attachment legacy `share` fue eliminado el
+                        # 1/feb/2026 -- un post de IG compartido por DM llega
+                        # como `ig_post`, con media ID/URL/caption propios
+                        # (leer solo `share` deja esto sin metadata).
+                        media.append(
+                            {"type": "ig_post", "id": payload_obj.get("id", ""), "url": payload_obj.get("url", "")}
+                        )
+                        if not content:
+                            content = payload_obj.get("caption") or payload_obj.get("title") or ""
+                    else:
+                        media.append({"type": att.get("type", ""), "id": "", "url": payload_obj.get("url", "")})
                 messages.append(
                     InboundMessage(
                         provider=self.provider,
@@ -115,7 +127,7 @@ class WhatsAppMetaInbound(InboundAdapter):
                         external_message_id=message.get("mid", ""),
                         customer_external_id=f"{id_prefix}:{sender_id}",
                         customer_name=None,
-                        content=message.get("text", ""),
+                        content=content,
                         connection_external_id=entry_id,
                         media=media,
                     )
