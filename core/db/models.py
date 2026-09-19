@@ -671,14 +671,13 @@ class WebhookEvent(Base):
 
     ADVERTENCIA (auditor-multitenant, 2026-09-19): sin RLS, nada impide un
     `select(WebhookEvent)` sin `WHERE tenant_id = ...` explícito que mezcle
-    payloads crudos de varios tenants -- hoy es inofensivo porque ningún
-    código lee/escribe esta tabla todavía (`core/gateway/webhooks.py` no la
-    usa). Cuando se conecte el pipeline real: (1) todo acceso debe filtrar
-    `tenant_id` a mano en cada query, nunca confiar en RLS para esto, y
-    (2) ningún endpoint de `core/admin/views.py` debe hacer
-    `select(WebhookEvent)` directo sin ese filtro -- considerar un test
-    estático (mismo patrón que `tests/test_meta_token_store_aislado.py`)
-    en ese momento."""
+    payloads crudos de varios tenants. El pipeline ya escribe acá
+    (`core/gateway/webhooks.py::_log_webhook_event`, único punto de
+    escritura de código de aplicación) -- verificado por
+    `tests/test_webhook_events_solo_desde_webhooks.py`, mismo patrón que
+    `tests/test_meta_token_store_aislado.py`. Todo acceso (lectura desde el
+    panel admin incluida, si se agrega en el futuro) debe filtrar
+    `tenant_id` a mano en cada query, nunca confiar en RLS para esto."""
 
     __tablename__ = "webhook_events"
     __table_args__ = (
