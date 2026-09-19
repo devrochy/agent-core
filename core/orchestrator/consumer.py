@@ -275,15 +275,31 @@ async def _resolve_conversation(
         ).scalar_one_or_none()
         if customer is None:
             contact_phone = external_id.removeprefix("whatsapp:") if channel == "whatsapp" else None
-            customer = Customer(
-                tenant_id=tenant_id,
-                channel=channel,
-                external_id=external_id,
-                name=name,
-                contact_phone=contact_phone,
-            )
-            session.add(customer)
-            await session.flush()
+            try:
+                async with session.begin_nested():
+                    customer = Customer(
+                        tenant_id=tenant_id,
+                        channel=channel,
+                        external_id=external_id,
+                        name=name,
+                        contact_phone=contact_phone,
+                    )
+                    session.add(customer)
+                    await session.flush()
+            except IntegrityError:
+                # Ráfaga de mensajes del mismo cliente procesados concurrentemente
+                # (ADR-0013): otro turno ya ganó la carrera y creó el Customer.
+                # El SAVEPOINT se revirtió solo; se relee la fila ganadora.
+                customer = (
+                    await session.execute(
+                        select(Customer).where(
+                            Customer.tenant_id == tenant_id,
+                            Customer.channel == channel,
+                            Customer.external_id == external_id,
+                            Customer.deleted_at.is_(None),
+                        )
+                    )
+                ).scalar_one()
         elif name and not customer.name:
             customer.name = name
 
