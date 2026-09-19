@@ -33,6 +33,8 @@ jobs:
       MIGRATIONS_DATABASE_URL: postgresql+asyncpg://agent_core:agent_core@localhost:5432/agent_core
       REDIS_URL: redis://localhost:6379/0
       MASTER_ENCRYPTION_KEY: GpsiZ2sgMd4SvLHGp4Bs5xdaQLlQ1cByyK6DCNxVwL4=
+      TOKEN_MASTER_KEYS: '{"k1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}'
+      TOKEN_ACTIVE_KEY_ID: k1
       APP_SECRET_KEY: ci-only-not-a-secret-app-key
       APP_ENV: development
     steps:

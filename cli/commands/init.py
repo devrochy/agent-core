@@ -73,6 +73,11 @@ APP_HOST_PORT={app_host_port}
 
 MASTER_ENCRYPTION_KEY={fernet_key}
 
+# Cifrado AES-256-GCM (custodia de tokens Meta y todo cifrado nuevo). MASTER_
+# ENCRYPTION_KEY arriba queda solo para leer datos viejos en formato Fernet.
+TOKEN_MASTER_KEYS={token_master_keys}
+TOKEN_ACTIVE_KEY_ID={token_active_key_id}
+
 LLM_PROVIDER={llm_provider}
 LLM_API_KEY={llm_api_key}
 LLM_MODEL={llm_model}
@@ -236,10 +241,15 @@ def init_command(
     )
 
     # ---- .env
+    import base64
+    import json
+
     from cryptography.fernet import Fernet
 
     db_info = parse_db_url(answers["database_url"])
     llm_conf = llm_defaults(answers["llm_provider"])
+    token_key_id = "k1"
+    token_master_keys = json.dumps({token_key_id: base64.b64encode(os.urandom(32)).decode()})
 
     Path(".env").write_text(
         ENV_TEMPLATE.format(
@@ -255,6 +265,8 @@ def init_command(
             redis_host_port=redis_host_port,
             app_host_port=app_host_port,
             fernet_key=Fernet.generate_key().decode(),
+            token_master_keys=token_master_keys,
+            token_active_key_id=token_key_id,
             llm_provider=answers["llm_provider"],
             llm_api_key=answers["llm_api_key"],
             llm_model=answers["llm_model"],

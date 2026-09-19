@@ -34,3 +34,5 @@ Se crean con `/adr`.
 | 0024 | Salud de plugin por tenant (`plugin_tenant_state`), no `auto_disable` global | aceptado |
 | 0025 | `completion_claims` custom por tenant: frases literales, nunca regex crudo | aceptado |
 | 0026 | Playbooks: override de contenido por tenant vía filesystem | aceptado |
+| 0027 | Cifrado de secretos en BD: AES-256-GCM con rotación de claves | aceptado |
+| 0028 | `webhook_events` como tabla de sistema (excepción a invariante nº1) | aceptado |

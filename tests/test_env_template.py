@@ -81,5 +81,6 @@ def test_env_template_declara_las_variables_criticas() -> None:
     for clave in (
         "COMPOSE_PROJECT_NAME", "DATABASE_URL", "REDIS_URL",
         "LLM_MODEL_REASONING", "LLM_BASE_URL", "MASTER_ENCRYPTION_KEY",
+        "TOKEN_MASTER_KEYS", "TOKEN_ACTIVE_KEY_ID",
     ):
         assert f"{clave}=" in ENV_TEMPLATE
