@@ -701,6 +701,41 @@ class WebhookEvent(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class MetaAppSubscription(Base):
+    """Estado de la suscripción de webhook a nivel de APP de Meta (`POST
+    /{app_id}/subscriptions`), no por entrega (`WebhookEvent`) ni por objeto
+    individual (`WabaAccount.subscribed`/`FbPage.subscribed_fields`).
+
+    Tabla de SISTEMA (sin RLS, sin `tenant_id`): una misma app puede estar en
+    uso por varios tenants (BYOK), el recurso pertenece a la app, no a un
+    tenant. Ver ADR-0029. Único punto de escritura de código de aplicación:
+    `core/gateway/meta_subscriptions.py` y el cron de salud
+    (`core/tasks/meta_subscriptions_health.py`) -- verificado por
+    `tests/test_meta_app_subscriptions_solo_desde_su_modulo.py`, mismo patrón
+    que `tests/test_webhook_events_solo_desde_webhooks.py`. No guarda
+    secretos (ni `app_secret` ni `verify_token`), solo estado observable."""
+
+    __tablename__ = "meta_app_subscriptions"
+    __table_args__ = (
+        UniqueConstraint("meta_app_id", "object", name="uq_meta_app_subscriptions_app_object"),
+        CheckConstraint(
+            "object in ('whatsapp_business_account','page','instagram')",
+            name="ck_meta_app_subscriptions_object",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    meta_app_id: Mapped[str] = mapped_column(Text)
+    object: Mapped[str] = mapped_column(Text)
+    callback_url: Mapped[str | None] = mapped_column(Text)
+    active: Mapped[bool | None] = mapped_column(Boolean)
+    fields: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class GraphApiCall(Base):
     """Observabilidad: una fila por llamada saliente a Graph API."""
 
