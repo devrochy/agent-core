@@ -44,7 +44,7 @@ from core.db.models import (
     UsageLedger,
     utcnow,
 )
-from core.db.session import get_session
+from core.db.session import get_owned, get_session
 from core.gateway.connections import (
     delete_connection,
     list_connections,
@@ -1488,7 +1488,9 @@ async def meta_wizard_whatsapp_cancel(request: Request):
 
 
 @router.post("/conexiones/wizard/whatsapp/registrar-numero")
-async def meta_wizard_whatsapp_register_number(request: Request, wizard_id: str = Form(...), pin: str = Form(...)):
+async def meta_wizard_whatsapp_register_number(request: Request, wizard_id: str = Form(...)):
+    """El PIN lo genera el sistema -- este form no lleva ningún campo de
+    PIN, solo confirma la acción. El PIN nunca aparece en esta respuesta."""
     from core.gateway.meta_errors import GraphError
     from core.gateway.meta_onboarding import WizardError, register_number_step, run_automatic_steps
 
@@ -1496,7 +1498,7 @@ async def meta_wizard_whatsapp_register_number(request: Request, wizard_id: str 
         return _login_redirect()
 
     try:
-        view = await register_number_step(uuid.UUID(wizard_id), pin)
+        view = await register_number_step(uuid.UUID(wizard_id))
         await run_automatic_steps(view.id)
     except (WizardError, GraphError) as exc:
         detail = exc.message if isinstance(exc, GraphError) else str(exc)
@@ -1505,6 +1507,175 @@ async def meta_wizard_whatsapp_register_number(request: Request, wizard_id: str 
         )
 
     return RedirectResponse("/admin/conexiones/wizard/whatsapp", status_code=303)
+
+
+@router.post("/conexiones/wizard/whatsapp/fijar-pin-nuevo")
+async def meta_wizard_whatsapp_set_new_pin(request: Request, wizard_id: str = Form(...)):
+    """Remediación manual de un 133005 (PIN mismatch) -- nunca automática."""
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_onboarding import WizardError, run_automatic_steps, set_new_pin_step
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    try:
+        view = await set_new_pin_step(uuid.UUID(wizard_id))
+        await run_automatic_steps(view.id)
+    except (WizardError, GraphError) as exc:
+        detail = exc.message if isinstance(exc, GraphError) else str(exc)
+        return RedirectResponse(
+            f"/admin/conexiones/wizard/whatsapp?flash={detail[:140]}&flash_type=danger", status_code=303
+        )
+
+    return RedirectResponse("/admin/conexiones/wizard/whatsapp?flash=PIN nuevo fijado", status_code=303)
+
+
+# ------------------------------------------------------------------ números adicionales de una WABA
+# Prefijo "meta/" para no chocar con /conexiones/{connection_id}/... de
+# arriba, que son rutas de ChannelConnection (modelo viejo/distinto).
+async def _resolve_waba_and_token(connection_id: uuid.UUID, tenant_id: uuid.UUID | None):
+    from core.db.models import MetaConnection, WabaAccount
+    from core.gateway import meta_token_store
+    from core.gateway.meta_onboarding import TOKEN_KIND
+
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, connection_id, tenant_id)
+        if connection is None:
+            return None, None, None
+        waba = (
+            await session.execute(select(WabaAccount).where(WabaAccount.connection_id == connection_id))
+        ).scalars().first()
+    if waba is None:
+        return connection, None, None
+    token = await meta_token_store.get_token(
+        connection_id, TOKEN_KIND, connection.business_id or str(connection_id), tenant_id=tenant_id
+    )
+    return connection, waba, token
+
+
+@router.get("/conexiones/meta/{connection_id}/numeros", response_class=HTMLResponse)
+async def meta_connection_numeros_page(request: Request, connection_id: str):
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+
+    from core.db.models import PhoneNumber
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_phone_numbers import sync_phone_numbers
+
+    tid = get_current_tenant_id()
+    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    if connection is None:
+        return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+
+    sync_error = None
+    if waba is not None and token:
+        try:
+            await sync_phone_numbers(
+                waba.waba_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid
+            )
+        except GraphError as exc:
+            sync_error = exc.message
+
+    async with get_session() as session:
+        numbers = (
+            await session.execute(
+                select(PhoneNumber).where(PhoneNumber.connection_id == connection.id, PhoneNumber.tenant_id == tid)
+            )
+        ).scalars().all()
+
+    ctx.update(connection=connection, waba=waba, numbers=numbers, sync_error=sync_error)
+    return _render("meta_numeros.html", ctx)
+
+
+@router.post("/conexiones/meta/{connection_id}/numeros/agregar")
+async def meta_connection_numeros_agregar(
+    request: Request, connection_id: str, cc: str = Form(...), phone_number: str = Form(...), verified_name: str = Form(...)
+):
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_phone_numbers import add_phone_number
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    url = f"/admin/conexiones/meta/{connection_id}/numeros"
+    if connection is None or waba is None or not token:
+        return RedirectResponse(f"{url}?flash=No hay conexión/WABA lista todavía&flash_type=danger", status_code=303)
+
+    try:
+        await add_phone_number(
+            waba.waba_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid,
+            cc=cc, phone_number=phone_number, verified_name=verified_name,
+        )
+    except GraphError as exc:
+        return RedirectResponse(f"{url}?flash={exc.message[:140]}&flash_type=danger", status_code=303)
+
+    return RedirectResponse(f"{url}?flash=Número agregado", status_code=303)
+
+
+@router.post("/conexiones/meta/{connection_id}/numeros/{phone_number_id}/solicitar-codigo")
+async def meta_connection_numeros_solicitar_codigo(
+    request: Request, connection_id: str, phone_number_id: str, code_method: str = Form(...), language: str = Form(default="es")
+):
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_phone_numbers import request_verification_code
+    from core.memory.working import get_redis
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    connection, _waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    url = f"/admin/conexiones/meta/{connection_id}/numeros"
+    if connection is None or not token:
+        return RedirectResponse(f"{url}?flash=No hay conexión lista todavía&flash_type=danger", status_code=303)
+
+    redis = get_redis()
+    # Namespaced por tenant -- phone_number_id es único global en Meta pero
+    # no queremos que un tenant pueda interferir el rate limit de otro
+    # (hallazgo auditor-multitenant, 2026-09-22, severidad media).
+    rate_limit_key = f"verify_code_resend:{tid}:{phone_number_id}"
+    if await redis.get(rate_limit_key):
+        return RedirectResponse(f"{url}?flash=Esperá un momento antes de reenviar el código&flash_type=danger", status_code=303)
+
+    try:
+        await request_verification_code(
+            phone_number_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id,
+            code_method=code_method, language=language,
+        )
+    except GraphError as exc:
+        return RedirectResponse(f"{url}?flash={exc.message[:140]}&flash_type=danger", status_code=303)
+
+    await redis.set(rate_limit_key, "1", ex=60)
+    return RedirectResponse(f"{url}?flash=Código enviado", status_code=303)
+
+
+@router.post("/conexiones/meta/{connection_id}/numeros/{phone_number_id}/verificar")
+async def meta_connection_numeros_verificar(request: Request, connection_id: str, phone_number_id: str, code: str = Form(...)):
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_phone_numbers import verify_code
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    connection, _waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    url = f"/admin/conexiones/meta/{connection_id}/numeros"
+    if connection is None or not token:
+        return RedirectResponse(f"{url}?flash=No hay conexión lista todavía&flash_type=danger", status_code=303)
+
+    try:
+        ok = await verify_code(
+            phone_number_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid, code=code
+        )
+    except GraphError as exc:
+        return RedirectResponse(f"{url}?flash={exc.message[:140]}&flash_type=danger", status_code=303)
+
+    if not ok:
+        return RedirectResponse(f"{url}?flash=Código incorrecto&flash_type=danger", status_code=303)
+    return RedirectResponse(f"{url}?flash=Número verificado", status_code=303)
 
 
 # ------------------------------------------------------------------ costos
