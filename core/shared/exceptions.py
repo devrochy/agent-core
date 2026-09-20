@@ -33,6 +33,12 @@ class ChannelError(AgentCoreError):
     """Fallo en un adaptador de canal (envío o parseo)."""
 
 
+class OutboundWindowExpiredError(ChannelError):
+    """La ventana de servicio de 24h venció y el mensaje no es una
+    plantilla -- se levanta ANTES de encolar, nunca se llega a gastar un
+    ciclo de cola/rate-limit en un envío que Meta va a rechazar seguro."""
+
+
 class MemoryError_(AgentCoreError):
     """Fallo en una capa de memoria. Working/Vector degradan con gracia; Entity no."""
 
