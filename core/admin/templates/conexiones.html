@@ -117,41 +117,54 @@
 <div class="modal fade" id="modal-nueva-conexion" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-lg">
     <div class="modal-content">
-      <form method="post" action="/admin/conexiones/guardar">
-        <div class="modal-header">
-          <h5 class="modal-title">Configurar WhatsApp (Meta Cloud API)</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-        </div>
-        <div class="modal-body">
-          <div class="row g-3">
-            <div class="col-md-6">
-              <label class="form-label">Nombre de la conexión</label>
-              <input type="text" name="label" class="form-control" placeholder="Número principal" required>
+      <div class="modal-header">
+        <h5 class="modal-title">Elegí el canal a conectar</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row row-cols-2 row-cols-md-3 g-3">
+          <div class="col">
+            <a href="/admin/conexiones/wizard/whatsapp" class="card text-decoration-none text-body h-100 text-center py-3">
+              <i class="bi bi-whatsapp fs-1 mb-2 text-success"></i>
+              <div class="fw-semibold">WhatsApp</div>
+              <div class="small text-secondary">Meta Cloud API</div>
+            </a>
+          </div>
+          <div class="col">
+            <div class="card h-100 text-center py-3 opacity-50" aria-disabled="true">
+              <i class="bi bi-instagram fs-1 mb-2"></i>
+              <div class="fw-semibold">Instagram</div>
+              <span class="badge text-bg-secondary mx-auto mt-1">Próximamente</span>
             </div>
-            <div class="col-md-6">
-              <label class="form-label">Phone Number ID</label>
-              <input type="text" name="phone_number_id" class="form-control" placeholder="1256590580865995" required>
-              <div class="form-text">Meta Business Suite → WhatsApp → Número de teléfono.</div>
+          </div>
+          <div class="col">
+            <div class="card h-100 text-center py-3 opacity-50" aria-disabled="true">
+              <i class="bi bi-messenger fs-1 mb-2"></i>
+              <div class="fw-semibold">Messenger</div>
+              <span class="badge text-bg-secondary mx-auto mt-1">Próximamente</span>
             </div>
-            <div class="col-md-6">
-              <label class="form-label">App Secret (firma HMAC)</label>
-              <input type="password" name="app_secret" class="form-control" placeholder="App Secret" required>
+          </div>
+          <div class="col">
+            <div class="card h-100 text-center py-3 opacity-50" aria-disabled="true">
+              <i class="bi bi-whatsapp fs-1 mb-2"></i>
+              <div class="fw-semibold">WhatsApp</div>
+              <div class="small text-secondary">vía Twilio</div>
+              <span class="badge text-bg-secondary mx-auto mt-1">Próximamente</span>
             </div>
-            <div class="col-md-6">
-              <label class="form-label">Access Token</label>
-              <input type="password" name="access_token" class="form-control" placeholder="Token permanente" required>
-            </div>
-            <div class="col-md-12">
-              <label class="form-label">Verify Token (handshake del webhook)</label>
-              <input type="text" name="verify_token" class="form-control" placeholder="Token que registras en Meta">
+          </div>
+          <div class="col">
+            <div class="card h-100 text-center py-3 opacity-50" aria-disabled="true">
+              <i class="bi bi-whatsapp fs-1 mb-2"></i>
+              <div class="fw-semibold">WhatsApp</div>
+              <div class="small text-secondary">vía Plivo</div>
+              <span class="badge text-bg-secondary mx-auto mt-1">Próximamente</span>
             </div>
           </div>
         </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-          <button class="btn btn-primary"><i class="bi bi-check-lg"></i> Verificar y guardar conexión</button>
-        </div>
-      </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+      </div>
     </div>
   </div>
 </div>
