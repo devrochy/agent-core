@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Cuentas de Instagram{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4 d-flex justify-content-between align-items-center">
+  Cuentas de Instagram
+  <a href="/admin/conexiones/wizard/instagram" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left"></i> Volver
+  </a>
+</h1>
+
+<p class="small text-secondary mb-3">
+  Los <code>fields</code> suscritos son los que Meta CONFIRMA con
+  <code>GET /{ig_user_id}/subscribed_apps</code> -- no necesariamente los
+  pedidos. <code>comments</code>/<code>mentions</code> exigen Advanced
+  Access y cuenta pública.
+</p>
+
+{% for a in accounts %}
+<div class="card mb-3">
+  <div class="card-body">
+    <h5 class="card-title fs-6 d-flex justify-content-between align-items-center">
+      <span>@{{ a.username or a.ig_user_id }} <code class="text-secondary">{{ a.ig_user_id }}</code></span>
+      {% if a.status == "connected" %}
+        <span class="badge text-bg-success">conectada</span>
+      {% else %}
+        <span class="badge text-bg-danger">Reconexión requerida</span>
+      {% endif %}
+    </h5>
+    <p class="small text-secondary mb-1">
+      Ruta: {{ "Facebook Login (Página vinculada)" if a.login_route == "ig_facebook_login" else "Instagram Login" }}
+    </p>
+    {% if a.status_reason %}
+    <div class="alert alert-danger small">{{ a.status_reason }}</div>
+    {% endif %}
+    <p class="small mb-2">
+      {% for f in a.subscribed_fields %}<span class="badge text-bg-light border me-1">{{ f }}</span>{% endfor %}
+      {% if not a.subscribed_fields %}<span class="text-secondary">Ningún field confirmado todavía.</span>{% endif %}
+    </p>
+    <form method="post" action="/admin/conexiones/meta/{{ connection.id }}/cuentas-ig/{{ a.ig_user_id }}/re-verificar" class="d-inline">
+      <button class="btn btn-sm btn-outline-primary"><i class="bi bi-arrow-repeat"></i> Re-verificar suscripción</button>
+    </form>
+    <button class="btn btn-sm btn-outline-secondary ms-2" data-ig-diagnose-button
+            data-connection-id="{{ connection.id }}" data-ig-user-id="{{ a.ig_user_id }}">
+      <i class="bi bi-activity"></i> Diagnosticar Instagram
+    </button>
+    <div class="small text-secondary mt-2" data-ig-diagnose-status="{{ a.ig_user_id }}"></div>
+
+    <div class="alert alert-warning mt-3 d-none" data-ig-checklist="{{ a.ig_user_id }}">
+      <strong>Checklist manual (no automatizable, se hace desde la app móvil de Instagram):</strong>
+      <ol class="mb-0 small">
+        <li>La cuenta debe ser Professional (Business o Creator).</li>
+        <li class="text-danger">
+          <strong>Activar Settings → Messages and story replies → Message controls →
+          Connected tools → "Allow access to messages".</strong>
+          Si este toggle está apagado, los webhooks NUNCA llegan y Meta NO
+          devuelve ningún error -- es un fallo totalmente silencioso, y es
+          la causa más común de "no me llega nada".
+        </li>
+        {% if a.login_route == "ig_facebook_login" %}
+        <li>Vincular la cuenta a una Página de Facebook y tener rol admin en ella.</li>
+        {% endif %}
+        <li>Para recibir <code>comments</code>/<code>mentions</code>, poner la cuenta en público.</li>
+      </ol>
+    </div>
+  </div>
+</div>
+{% else %}
+<div class="alert alert-secondary">Todavía no hay cuentas de Instagram conectadas.</div>
+{% endfor %}
+
+<script src="/static/instagram_smoke_test.js"></script>
+{% endblock %}

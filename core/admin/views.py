@@ -1824,6 +1824,287 @@ async def meta_connection_pagina_routing(request: Request, connection_id: str, p
     return RedirectResponse(f"{url}?flash=Guardado", status_code=303)
 
 
+# ------------------------------------------------------------------ conexión de Instagram
+_IG_STATE_COOKIE = "ac_ig_oauth_state"
+
+
+@router.get("/conexiones/wizard/instagram", response_class=HTMLResponse)
+async def instagram_wizard_page(request: Request):
+    """Selector de ruta: ¿la cuenta está vinculada a una Página de Facebook?
+    Se sugiere la ruta (a) si el tenant ya tiene Messenger/WhatsApp
+    conectado (probablemente ya usa Páginas), pero la elección es siempre
+    manual -- nunca se infiere sin preguntar."""
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+
+    from core.db.models import IgAccount, MetaConnection
+
+    settings = get_settings()
+    fb_login_configured = bool(settings.meta_app_id and settings.meta_app_secret and settings.meta_config_id_instagram)
+    ig_login_configured = bool(settings.instagram_app_id and settings.instagram_app_secret)
+
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        has_messenger_or_whatsapp = (
+            await session.execute(
+                select(MetaConnection).where(
+                    MetaConnection.tenant_id == tid, MetaConnection.channel.in_(["messenger", "whatsapp"]),
+                    MetaConnection.status == "connected",
+                )
+            )
+        ).scalars().first() is not None
+        connection = (
+            await session.execute(
+                select(MetaConnection).where(MetaConnection.tenant_id == tid, MetaConnection.channel == "instagram")
+            )
+        ).scalars().first()
+        accounts = (
+            await session.execute(select(IgAccount).where(IgAccount.connection_id == connection.id, IgAccount.tenant_id == tid))
+        ).scalars().all() if connection else []
+
+    ctx.update(
+        fb_login_configured=fb_login_configured, ig_login_configured=ig_login_configured,
+        suggests_route_a=has_messenger_or_whatsapp, connection=connection, accounts=accounts,
+        meta_app_id=settings.meta_app_id, meta_config_id_instagram=settings.meta_config_id_instagram,
+        graph_api_version=settings.graph_api_version,
+    )
+    return _render("meta_wizard_instagram.html", ctx)
+
+
+@router.post("/conexiones/wizard/instagram/exchange")
+async def instagram_wizard_exchange_route_a(request: Request):
+    """Ruta (a): mismo patrón JSON que Messenger -- el `code` viene del
+    diálogo de Facebook Login con la Login Configuration DEDICADA de
+    Instagram (nunca la de Messenger/WhatsApp)."""
+    from core.db.models import MetaConnection
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_instagram import (
+        InstagramError,
+        connect_ig_facebook_login,
+        discover_ig_via_pages,
+        ensure_ig_connection,
+    )
+    from core.gateway.meta_onboarding import fetch_exchange_token
+
+    admin = await current_admin(request)
+    if admin is None:
+        return JSONResponse({"error": "no autenticado"}, status_code=401)
+
+    body = await request.json()
+    code = body.get("code")
+    if not code:
+        return JSONResponse({"error": "falta code"}, status_code=400)
+
+    settings = get_settings()
+    if not settings.meta_config_id_instagram:
+        return JSONResponse({"error": "META_CONFIG_ID_INSTAGRAM no configurado"}, status_code=500)
+
+    tid = get_current_tenant_id()
+    try:
+        connection = await ensure_ig_connection(tid, settings)
+        params = {"client_id": settings.meta_app_id, "client_secret": settings.meta_app_secret, "code": str(code)}
+        user_token, _used = await fetch_exchange_token(settings.graph_api_version, params, settings)
+        candidates = await discover_ig_via_pages(user_token, settings.meta_app_secret, settings.graph_api_version, connection.id)
+
+        connected, skipped = [], []
+        for candidate in candidates:
+            if candidate.insufficient_permission or not candidate.ig_user_id:
+                skipped.append({"pageId": candidate.page_id, "reason": candidate.reason})
+                continue
+            account = await connect_ig_facebook_login(connection.id, tid, candidate)
+            connected.append(account.ig_user_id)
+        if connected:
+            async with get_session() as session:
+                db_connection = await session.get(MetaConnection, connection.id)
+                db_connection.status = "connected"
+                db_connection.connected_at = utcnow()
+                db_connection.connected_by = admin.id
+    except (GraphError, InstagramError) as exc:
+        detail = exc.message if isinstance(exc, GraphError) else str(exc)
+        return JSONResponse({"error": detail}, status_code=502)
+
+    return JSONResponse({"connectionId": str(connection.id), "connectedAccounts": connected, "skippedPages": skipped})
+
+
+@router.get("/conexiones/wizard/instagram/ig-login/iniciar")
+async def instagram_ig_login_iniciar(request: Request):
+    """Ruta (b): redirect 302 directo a Instagram -- sin SDK de JS de por
+    medio, es un login de navegador estándar."""
+    from core.gateway.meta_instagram import build_authorize_url, sign_state
+
+    admin = await current_admin(request)
+    if admin is None:
+        return _login_redirect()
+
+    settings = get_settings()
+    if not settings.instagram_app_id or not settings.instagram_app_secret:
+        return RedirectResponse(
+            "/admin/conexiones/wizard/instagram?flash=INSTAGRAM_APP_ID/INSTAGRAM_APP_SECRET no configurados&flash_type=danger",
+            status_code=303,
+        )
+
+    tid = get_current_tenant_id()
+    redirect_uri = f"{settings.public_base_url.rstrip('/')}/admin/conexiones/wizard/instagram/ig-login/callback"
+    state = sign_state(tid, admin.id)
+    authorize_url = build_authorize_url(redirect_uri, state)
+
+    response = RedirectResponse(authorize_url, status_code=302)
+    response.set_cookie(
+        _IG_STATE_COOKIE, state, httponly=True, samesite="lax", max_age=600,
+        secure=settings.app_env == "production",
+    )
+    return response
+
+
+@router.get("/conexiones/wizard/instagram/ig-login/callback")
+async def instagram_ig_login_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_instagram import InstagramError, connect_instagram_login, verify_state
+
+    admin = await current_admin(request)
+    if admin is None:
+        return _login_redirect()
+
+    url = "/admin/conexiones/wizard/instagram"
+    if error or not code or not state:
+        return RedirectResponse(f"{url}?flash=Instagram canceló o rechazó la conexión&flash_type=danger", status_code=303)
+
+    cookie_value = request.cookies.get(_IG_STATE_COOKIE)
+    try:
+        tenant_id = verify_state(state, cookie_value, expected_admin_id=admin.id)
+        if tenant_id != get_current_tenant_id():
+            raise InstagramError("El state fue emitido para otro tenant -- posible CSRF, reiniciá la conexión")
+        settings = get_settings()
+        redirect_uri = f"{settings.public_base_url.rstrip('/')}/admin/conexiones/wizard/instagram/ig-login/callback"
+        await connect_instagram_login(tenant_id, code, redirect_uri, admin_id=admin.id)
+    except (GraphError, InstagramError) as exc:
+
+        detail = exc.message if isinstance(exc, GraphError) else str(exc)
+        return RedirectResponse(f"{url}?flash={detail[:140]}&flash_type=danger", status_code=303)
+
+    response = RedirectResponse(f"{url}?flash=Cuenta de Instagram conectada", status_code=303)
+    response.delete_cookie(_IG_STATE_COOKIE)
+    return response
+
+
+@router.get("/conexiones/meta/{connection_id}/cuentas-ig", response_class=HTMLResponse)
+async def meta_connection_cuentas_ig_page(request: Request, connection_id: str):
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+
+    from core.db.models import IgAccount, MetaConnection
+
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+        if connection is None:
+            return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+        accounts = (
+            await session.execute(
+                select(IgAccount).where(IgAccount.connection_id == connection.id, IgAccount.tenant_id == tid)
+            )
+        ).scalars().all()
+
+    ctx.update(connection=connection, accounts=accounts)
+    return _render("meta_cuentas_ig.html", ctx)
+
+
+@router.post("/conexiones/meta/{connection_id}/cuentas-ig/{ig_user_id}/re-verificar")
+async def meta_connection_cuenta_ig_reverificar(request: Request, connection_id: str, ig_user_id: str):
+    from core.db.models import IgAccount, MetaConnection
+    from core.gateway import meta_token_store
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_instagram import IG_LONG_LIVED_TOKEN_KIND
+    from core.gateway.meta_messenger import PAGE_TOKEN_KIND
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    url = f"/admin/conexiones/meta/{connection_id}/cuentas-ig"
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+        if connection is None:
+            return RedirectResponse(f"{url}?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+        account = (
+            await session.execute(
+                select(IgAccount).where(IgAccount.ig_user_id == ig_user_id, IgAccount.connection_id == connection.id, IgAccount.tenant_id == tid)
+            )
+        ).scalar_one_or_none()
+    if account is None:
+        return RedirectResponse(f"{url}?flash=Cuenta no encontrada&flash_type=danger", status_code=303)
+
+    if account.login_route == "ig_facebook_login":
+        token = await meta_token_store.get_token(connection.id, PAGE_TOKEN_KIND, account.linked_page_id or "", tenant_id=tid)
+    else:
+        token = await meta_token_store.get_token(connection.id, IG_LONG_LIVED_TOKEN_KIND, ig_user_id, tenant_id=tid)
+    if not token:
+        return RedirectResponse(f"{url}?flash=No hay token guardado para esta cuenta&flash_type=danger", status_code=303)
+
+    from core.gateway.meta_instagram import subscribe_ig_webhook
+
+    try:
+        subscribed, missing_restricted = await subscribe_ig_webhook(
+            ig_user_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid
+        )
+    except GraphError as exc:
+        return RedirectResponse(f"{url}?flash={exc.message[:140]}&flash_type=danger", status_code=303)
+
+    if not subscribed:
+        return RedirectResponse(f"{url}?flash=Meta no confirmó la suscripción&flash_type=danger", status_code=303)
+    if missing_restricted:
+        flash = f"Suscrito, pero falta: {', '.join(missing_restricted)} (Advanced Access o cuenta no pública)"
+        return RedirectResponse(f"{url}?flash={flash}&flash_type=danger", status_code=303)
+    return RedirectResponse(f"{url}?flash=Suscripción confirmada", status_code=303)
+
+
+@router.get("/conexiones/meta/{connection_id}/instagram/{ig_user_id}/diagnostico-estado")
+async def instagram_diagnostico_estado(request: Request, connection_id: str, ig_user_id: str):
+    """Prueba de humo: único diagnóstico fiable del toggle "Allow access to
+    messages" -- si está apagado, los webhooks NUNCA llegan y Meta no
+    devuelve ningún error, así que la única forma de detectarlo es esperar
+    un mensaje de prueba real. El cliente hace polling a este endpoint
+    (cada ~3s, hasta 90s) en vez de bloquear una request larga.
+
+    La consulta al log de webhooks vive en `core/gateway/webhooks.py`
+    (`check_recent_instagram_webhook`), nunca acá -- ADR-0028 exige que
+    solo ese módulo toque esa tabla.
+
+    `check_recent_instagram_webhook` no filtra por tenant (el log de
+    webhooks es preresolución de tenant, ADR-0028) -- por eso acá se
+    valida primero que `ig_user_id` pertenezca a una `IgAccount` de ESTE
+    tenant bajo ESTA conexión antes de contestar, para no exponer un
+    oráculo de existencia de actividad de una cuenta ajena (hallazgo
+    auditor-multitenant, 2026-09-24, severidad media)."""
+    from core.db.models import IgAccount, MetaConnection
+    from core.gateway.webhooks import check_recent_instagram_webhook
+
+    if await current_admin(request) is None:
+        return JSONResponse({"error": "no autenticado"}, status_code=401)
+
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+        if connection is None:
+            return JSONResponse({"error": "conexión no encontrada"}, status_code=404)
+        account = (
+            await session.execute(
+                select(IgAccount).where(
+                    IgAccount.connection_id == connection.id,
+                    IgAccount.ig_user_id == ig_user_id,
+                    IgAccount.tenant_id == tid,
+                )
+            )
+        ).scalar_one_or_none()
+        if account is None:
+            return JSONResponse({"error": "cuenta de Instagram no encontrada"}, status_code=404)
+
+    llego = await check_recent_instagram_webhook(ig_user_id)
+    return JSONResponse({"llego": llego})
+
+
 # ------------------------------------------------------------------ costos
 @router.get("/costos", response_class=HTMLResponse)
 async def costs_page(request: Request):
