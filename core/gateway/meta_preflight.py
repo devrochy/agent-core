@@ -130,8 +130,32 @@ MANUAL_STEPS: list[dict[str, str]] = [
         "label": "Completar Business Verification",
         "link_suffix": "",
     },
-    {"key": "app_review", "label": "Pasar App Review de los permisos necesarios", "link_suffix": "app-review/permissions/"},
+    {
+        "key": "app_review",
+        "label": (
+            "Pasar App Review de los permisos necesarios -- Meta pide DOS videos "
+            "((1) mensajes creados/enviados desde el panel y recibidos en WhatsApp, "
+            "(2) creación de plantillas desde el panel); también acepta scripts cURL "
+            "o grabaciones de WhatsApp Manager como alternativa. Anotar los links de "
+            "los videos/grabaciones en las notas de este paso."
+        ),
+        "link_suffix": "app-review/permissions/",
+    },
+    {
+        "key": "advanced_access",
+        "label": (
+            "Conceder Advanced Access a whatsapp_business_messaging y "
+            "whatsapp_business_management -- sin esto, los permisos NO aparecen en "
+            "el diálogo de signup de los clientes."
+        ),
+        "link_suffix": "app-review/permissions/",
+    },
     {"key": "live_mode", "label": "Pasar la app a Live Mode", "link_suffix": "settings/basic/"},
+    {
+        "key": "payment_method",
+        "label": "Asociar un método de pago al WABA de cada cliente en WhatsApp Manager",
+        "link_suffix": "",
+    },
 ]
 
 

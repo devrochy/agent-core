@@ -2145,6 +2145,82 @@ async def meta_manual_connection_submit(
     return RedirectResponse("/admin/conexiones/salud?flash=Conexión manual creada", status_code=303)
 
 
+# ------------------------------------------------------------------ checklist de promoción a producción
+async def _production_manual_steps(tid: uuid.UUID) -> list[dict[str, Any]]:
+    from core.db.models import MetaSetupChecklist
+    from core.gateway.meta_preflight import MANUAL_STEPS, resolve_app_credentials
+
+    config = await resolve_app_credentials(tid)
+    app_dashboard_base = (
+        f"https://developers.facebook.com/apps/{config.app_id}/" if config else "https://developers.facebook.com/apps/"
+    )
+    async with get_session() as session:
+        done_rows = (
+            await session.execute(select(MetaSetupChecklist).where(MetaSetupChecklist.tenant_id == tid))
+        ).scalars().all()
+    done_by_key = {row.step_key: row for row in done_rows}
+
+    return [
+        {
+            "key": step["key"],
+            "label": step["label"],
+            "link": app_dashboard_base + step["link_suffix"] if config else "https://developers.facebook.com/apps/",
+            "done": done_by_key[step["key"]].done if step["key"] in done_by_key else False,
+            "notes": done_by_key[step["key"]].notes if step["key"] in done_by_key else "",
+        }
+        for step in MANUAL_STEPS
+    ]
+
+
+@router.get("/conexiones/produccion", response_class=HTMLResponse)
+async def meta_produccion_page(request: Request):
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    manual_steps = await _production_manual_steps(tid)
+    ctx.update(manual_steps=manual_steps, auto_checks=None)
+    return _render("meta_produccion.html", ctx)
+
+
+@router.post("/conexiones/produccion/ejecutar", response_class=HTMLResponse)
+async def meta_produccion_ejecutar(request: Request):
+    """Corre los 9 checks automáticos on-demand. La mayoría solo dan una
+    respuesta con sentido contra un despliegue de producción real -- en
+    cualquier otro entorno (incluida esta misma instancia si no es
+    producción) van a dar `False`/`None`, y el panel lo muestra tal cual,
+    sin disfrazarlo."""
+    from core.gateway import meta_production_readiness as readiness
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    settings = get_settings()
+    callback_url = f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"
+    verify_token = settings.whatsapp_verify_token
+
+    auto_checks = []
+    auto_checks.append(await readiness.check_webhook_handshake(callback_url, verify_token))
+    auto_checks.append(await readiness.check_app_subscriptions_complete(settings.meta_app_id))
+    auto_checks.append(readiness.check_prod_secret_differs_from_dev(settings.meta_app_secret))
+    auto_checks.append(readiness.check_token_keys_configured())
+    auto_checks.append(await readiness.check_worker_heartbeat_and_dlq())
+    auto_checks.append(await readiness.check_rls_forced())
+    auto_checks.append(readiness.check_rls_tests_pass())
+    auto_checks.append(readiness.check_no_secret_leak_in_templates())
+    auto_checks.append(await readiness.check_connections_health_except_billing(tid))
+
+    manual_steps = await _production_manual_steps(tid)
+    ctx.update(manual_steps=manual_steps, auto_checks=[c.model_dump(mode="json") for c in auto_checks])
+    return _render("meta_produccion.html", ctx)
+
+
 # ------------------------------------------------------------------ costos
 @router.get("/costos", response_class=HTMLResponse)
 async def costs_page(request: Request):

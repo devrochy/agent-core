@@ -120,6 +120,36 @@ celery.conf.beat_schedule[_META_HEALTH_CHECK_TASK] = {
     "schedule": crontab(minute="30"),
 }
 
+# Heartbeat del worker (cada 1 min) -- la única forma de que el checklist
+# de promoción a producción (core/gateway/meta_production_readiness.py::
+# check_worker_heartbeat_and_dlq) sepa que el worker de Celery está vivo,
+# no solo que existe la cola.
+_WORKER_HEARTBEAT_TASK = "core.worker_heartbeat"
+_WORKER_HEARTBEAT_KEY = "worker:heartbeat"
+_WORKER_HEARTBEAT_TTL_S = 180
+
+
+@celery.task(name=_WORKER_HEARTBEAT_TASK)
+def _worker_heartbeat() -> None:
+    async def _set_heartbeat() -> None:
+        from datetime import UTC, datetime
+
+        from core.memory.working import get_redis
+
+        redis = get_redis()
+        await redis.set(_WORKER_HEARTBEAT_KEY, datetime.now(UTC).isoformat(), ex=_WORKER_HEARTBEAT_TTL_S)
+
+    try:
+        asyncio.run(_set_heartbeat())
+    except Exception:
+        log.exception("cron_task_failed", task=_WORKER_HEARTBEAT_TASK)
+
+
+celery.conf.beat_schedule[_WORKER_HEARTBEAT_TASK] = {
+    "task": _WORKER_HEARTBEAT_TASK,
+    "schedule": crontab(minute="*/1"),
+}
+
 
 @worker_init.connect
 def _load_plugins_on_worker_start(**_kwargs: object) -> None:
