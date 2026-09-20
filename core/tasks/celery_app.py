@@ -58,6 +58,26 @@ celery.conf.beat_schedule[_META_SUBSCRIPTIONS_HEALTH_TASK] = {
     "schedule": crontab(minute="*/15"),
 }
 
+# Sync de plantillas de WhatsApp (cada hora): el webhook `message_template_
+# status_update` es la fuente de verdad real, esto es solo el fallback.
+_MESSAGE_TEMPLATE_SYNC_TASK = "core.message_template_sync"
+
+
+@celery.task(name=_MESSAGE_TEMPLATE_SYNC_TASK)
+def _message_template_sync() -> None:
+    from core.tasks.message_template_sync import sync_all_waba_templates
+
+    try:
+        asyncio.run(sync_all_waba_templates())
+    except Exception:
+        log.exception("cron_task_failed", task=_MESSAGE_TEMPLATE_SYNC_TASK)
+
+
+celery.conf.beat_schedule[_MESSAGE_TEMPLATE_SYNC_TASK] = {
+    "task": _MESSAGE_TEMPLATE_SYNC_TASK,
+    "schedule": crontab(minute="0"),
+}
+
 
 @worker_init.connect
 def _load_plugins_on_worker_start(**_kwargs: object) -> None:
