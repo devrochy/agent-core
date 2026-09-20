@@ -1,10 +1,11 @@
 """Parseo y persistencia del uso de Graph API (`X-App-Usage`, `X-Business-Use-Case-Usage`).
 
-Al 80% de cualquier porcentaje reportado por Meta, alerta (único canal real
-de "esto es grave" en este repo: `log.warning`/`log.error` vía structlog --
-no hay Sentry/Slack integrados). Al 90%, además prende un flag en Redis que
-`core/gateway/sender.py` consulta antes de enviar un mensaje, para frenar
-antes de que Meta corte el acceso.
+Al 80% de cualquier porcentaje reportado por Meta, alerta Y pausa
+`meta:outbound` -- antes el corte era al 90%, se bajó a 80% (ticket de
+health/alertas, criterio explícito: "worst_pct de cuota >= 80 -> pausar
+meta:outbound"). Warn y pause convergen en el mismo número a propósito: no
+tiene sentido solo avisar sin frenar cuando ya se cruzó el umbral que el
+propio ticket marca como el de corte.
 """
 
 from __future__ import annotations
@@ -22,20 +23,15 @@ from core.db.models import GraphApiUsage
 from core.db.session import get_session
 from core.memory.working import get_redis
 from core.shared.logger import get_logger
+from core.shared.redact import (
+    safe_headers as safe_log_headers,  # re-exportado, no romper call-sites
+)
 
 log = get_logger(__name__)
 
 WARN_THRESHOLD_PCT = 80
-PAUSE_THRESHOLD_PCT = 90
-PAUSE_TTL_S = 15 * 60  # se re-arma solo si el próximo record_usage sigue >=90
-
-# Allowlist de headers logueables -- nunca Authorization/Cookie (criterio de
-# aceptación explícito del ticket).
-_LOGGABLE_HEADERS = {"x-business-use-case-usage", "x-app-usage", "x-fb-trace-id"}
-
-
-def safe_log_headers(headers: httpx.Headers) -> dict[str, str]:
-    return {k: v for k, v in headers.items() if k.lower() in _LOGGABLE_HEADERS}
+PAUSE_THRESHOLD_PCT = 80
+PAUSE_TTL_S = 15 * 60  # se re-arma solo si el próximo record_usage sigue >=80
 
 
 @dataclass
