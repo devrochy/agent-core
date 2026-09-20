@@ -103,6 +103,19 @@ class Settings(BaseSettings):
     # connections.py::verify_meta_credentials (envío de mensajes en producción).
     graph_api_version: str = Field(default="v21.0", alias="META_GRAPH_VERSION")
 
+    # Instagram Login (ruta b): app de Meta DISTINTA (App ID numérico propio,
+    # host graph.instagram.com/api.instagram.com) -- nunca reusar
+    # meta_app_id/meta_app_secret acá, son credenciales de apps diferentes.
+    instagram_app_id: str = Field(default="", alias="INSTAGRAM_APP_ID")
+    instagram_app_secret: str = Field(default="", alias="INSTAGRAM_APP_SECRET")
+    # Login Configuration DEDICADA para Instagram vía Facebook Login (ruta a):
+    # nunca reusar meta_config_id (Messenger/WhatsApp) -- mezclar los dos
+    # juegos de permisos en el mismo config_id rompe el consentimiento.
+    meta_config_id_instagram: str = Field(default="", alias="META_CONFIG_ID_INSTAGRAM")
+    # Feature flag: el envío directo de la ruta (b) (graph.instagram.com/
+    # {ig_user_id}/messages) no está verificado contra doc primaria de 2026.
+    instagram_direct_send_enabled: bool = Field(default=False, alias="INSTAGRAM_DIRECT_SEND_ENABLED")
+
     # --- Comportamiento ---
     debounce_mode: DebounceMode = Field(default="natural", alias="DEBOUNCE_MODE")
     max_agent_iterations: int = Field(default=6, alias="MAX_AGENT_ITERATIONS")
