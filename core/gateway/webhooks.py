@@ -371,3 +371,31 @@ async def _try_process_media(message: Any) -> Any:
         # procesador de medios para los demás tenants.
         await plugin_manager.auto_disable_for_tenant(get_current_tenant_id(), "mod_media_processor", str(exc))
         return message
+
+
+async def check_recent_instagram_webhook(ig_user_id: str, *, within_minutes: int = 5) -> bool:
+    """Prueba de humo de Instagram (`core/admin/views.py`): único
+    diagnóstico fiable del toggle "Allow access to messages" -- si está
+    apagado, los webhooks NUNCA llegan y Meta no devuelve ningún error. La
+    única forma de detectarlo es ver si algo llegó a `webhook_events`
+    recientemente para esta cuenta. Único lugar fuera de este módulo que
+    puede necesitar leer esta tabla -- se resuelve acá, no en `views.py`,
+    para no romper el aislamiento de ADR-0028 (`tests/
+    test_webhook_events_solo_desde_webhooks.py`)."""
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from core.db.models import WebhookEvent, utcnow
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                select(WebhookEvent).where(
+                    WebhookEvent.object_type == "instagram",
+                    WebhookEvent.received_at > utcnow() - timedelta(minutes=within_minutes),
+                )
+            )
+        ).scalars().all()
+    return any(row.payload and ig_user_id in str(row.payload) for row in rows)

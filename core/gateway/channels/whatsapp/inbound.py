@@ -4,20 +4,19 @@ hay credenciales de firma distintas por producto).
 
 Verificación: HMAC-SHA256 del body crudo con el App Secret (X-Hub-Signature-256).
 Identidad canónica del cliente: "whatsapp:+E164" (el wa_id de Meta llega en
-dígitos pelados; se normaliza aquí — ADR-033 de agent-sale). Para Messenger/
-Instagram: "messenger:<PSID>" / "instagram:<IGSID>" (mismo criterio de
-prefijo por canal).
+dígitos pelados; se normaliza aquí — ADR-033 de agent-sale). Para Messenger:
+"messenger:<PSID>". Para Instagram: "instagram:<IG_USER_ID>:<IGSID>" --
+el IGSID es único SOLO por cuenta profesional, no global (el mismo usuario
+final tiene IGSIDs distintos frente a cuentas de Instagram distintas), así
+que el `ig_user_id` (el `entry_id` del webhook) va incluido en la clave
+para no cruzar clientes entre dos cuentas de IG del mismo tenant.
 
 Medios: se toleran sin romper (se capturan id/tipo). El plugin
 mod-media-processor los descarga y transcribe/analiza antes del orchestrator.
 
-Messenger/Instagram son SOLO de entrada en esta tanda: no hay
-`OutboundAdapter` para esos canales todavía (`core/gateway/channels/registry.py`
-indexa por `provider`, no por canal). Una conversación de esos canales se
-crea y persiste normal; el intento de RESPONDER usa el adapter de WhatsApp
-por compartir `provider="meta"`, falla con `ChannelError` (endpoint/formato
-de id equivocado), y `core/gateway/sender.py` ya captura esa excepción hoy
-(marca el mensaje `failed`, no rompe el turno) -- degradado, no un crash.
+Messenger e Instagram ya tienen `OutboundAdapter` propio (`core/gateway/
+channels/messenger/`, `core/gateway/channels/instagram/`), registrados por
+`(provider, channel)` en `core/gateway/channels/registry.py`.
 """
 
 from __future__ import annotations
@@ -120,12 +119,21 @@ class WhatsAppMetaInbound(InboundAdapter):
                             content = payload_obj.get("caption") or payload_obj.get("title") or ""
                     else:
                         media.append({"type": att.get("type", ""), "id": "", "url": payload_obj.get("url", "")})
+                # Instagram: el IGSID es único SOLO por cuenta profesional --
+                # se incluye entry_id (el ig_user_id) en la clave para no
+                # cruzar clientes entre dos cuentas de IG del mismo tenant.
+                # Messenger no tiene este problema documentado en el ticket
+                # (el PSID ya viaja implícitamente ligado a la Página vía
+                # connection_external_id), se deja como estaba.
+                customer_external_id = (
+                    f"{id_prefix}:{entry_id}:{sender_id}" if channel == "instagram" else f"{id_prefix}:{sender_id}"
+                )
                 messages.append(
                     InboundMessage(
                         provider=self.provider,
                         channel=channel,
                         external_message_id=message.get("mid", ""),
-                        customer_external_id=f"{id_prefix}:{sender_id}",
+                        customer_external_id=customer_external_id,
                         customer_name=None,
                         content=content,
                         connection_external_id=entry_id,
