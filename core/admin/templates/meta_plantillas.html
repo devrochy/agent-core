@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Plantillas de WhatsApp{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4 d-flex justify-content-between align-items-center">
+  Plantillas de WhatsApp
+  <a href="/admin/conexiones/wizard/whatsapp" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left"></i> Volver
+  </a>
+</h1>
+
+{% if sync_error %}
+<div class="alert alert-warning">No se pudo actualizar desde Meta: {{ sync_error }}. Mostrando lo último guardado.</div>
+{% endif %}
+{% if not waba %}
+<div class="alert alert-secondary">Esta conexión todavía no tiene una WABA asociada.</div>
+{% endif %}
+
+{% if waba and waba.message_template_limit %}
+<div class="alert alert-secondary d-flex justify-content-between align-items-center">
+  <span>{{ waba.message_template_count or 0 }} / {{ waba.message_template_limit }} plantillas usadas</span>
+  {% if waba.are_translations_complete is not none %}
+  <span class="badge {{ 'text-bg-success' if waba.are_translations_complete else 'text-bg-warning' }}">
+    {{ 'traducciones completas' if waba.are_translations_complete else 'traducciones incompletas' }}
+  </span>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="card mb-4">
+  <div class="card-body">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Nombre</th>
+          <th>Idioma</th>
+          <th>Categoría</th>
+          <th>Estado</th>
+          <th>Calidad</th>
+          <th>Motivo / recomendación</th>
+          <th class="text-end">Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in templates %}
+        <tr>
+          <td>{{ t.name }}</td>
+          <td>{{ t.language }}</td>
+          <td>
+            {{ t.category or "—" }}
+            {% if t.category_changed_at %}
+            <span class="badge text-bg-info" title="antes: {{ t.previous_category }}">
+              categoría cambiada por Meta ({{ t.category_changed_at.strftime("%Y-%m-%d") }})
+            </span>
+            {% endif %}
+          </td>
+          <td>
+            {% if t.status == "APPROVED" %}
+              <span class="badge text-bg-success">{{ t.status }}</span>
+            {% elif t.status in ("REJECTED", "DISABLED", "FLAGGED") %}
+              <span class="badge text-bg-danger">{{ t.status }}</span>
+            {% elif t.status == "PENDING" %}
+              <span class="badge text-bg-secondary">{{ t.status }}</span>
+            {% else %}
+              <span class="badge text-bg-warning">{{ t.status }}</span>
+            {% endif %}
+          </td>
+          <td>{{ t.quality_score or "—" }}</td>
+          <td class="small">
+            {% if t.rejected_reason %}<div>{{ t.rejected_reason }}</div>{% endif %}
+            {% if t.rejection_recommendation %}<div class="text-secondary">{{ t.rejection_recommendation }}</div>{% endif %}
+            {% if t.disable_date %}<div>Deshabilitada desde {{ t.disable_date.strftime("%Y-%m-%d") }}</div>{% endif %}
+            {% if t.other_info_title %}<div>{{ t.other_info_title }}: {{ t.other_info_description }}</div>{% endif %}
+          </td>
+          <td class="text-end">
+            <div class="d-flex gap-2 justify-content-end flex-wrap">
+              {% if t.status in ("APPROVED", "REJECTED", "PAUSED") %}
+              <form method="post" action="/admin/conexiones/meta/{{ connection.id }}/plantillas/{{ t.id }}/editar">
+                <button class="btn btn-sm btn-outline-primary">Editar categoría</button>
+              </form>
+              {% endif %}
+              <form method="post" action="/admin/conexiones/meta/{{ connection.id }}/plantillas/{{ t.id }}/eliminar-traduccion"
+                    onsubmit="return confirm('¿Eliminar la traducción {{ t.language }} de {{ t.name }}?');">
+                <button class="btn btn-sm btn-outline-warning">Eliminar traducción</button>
+              </form>
+              <form method="post" action="/admin/conexiones/meta/{{ connection.id }}/plantillas/{{ t.id }}/eliminar"
+                    onsubmit="return confirm('¿Eliminar {{ t.name }} en TODOS los idiomas?');">
+                <button class="btn btn-sm btn-outline-danger">Eliminar (todos los idiomas)</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="text-secondary">Todavía no hay plantillas.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="d-flex gap-2">
+  {% if at_limit %}
+  <button class="btn btn-primary" disabled title="Se alcanzó el límite de plantillas de esta WABA">Nueva plantilla</button>
+  <span class="text-danger align-self-center small">Límite de plantillas alcanzado.</span>
+  {% elif waba %}
+  <a href="/admin/conexiones/meta/{{ connection.id }}/plantillas/nueva" class="btn btn-primary">Nueva plantilla</a>
+  {% endif %}
+  {% if waba %}
+  <form method="post" action="/admin/conexiones/meta/{{ connection.id }}/plantillas/sync">
+    <button class="btn btn-outline-secondary">Sincronizar ahora</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

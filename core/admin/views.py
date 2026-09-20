@@ -1678,6 +1678,307 @@ async def meta_connection_numeros_verificar(request: Request, connection_id: str
     return RedirectResponse(f"{url}?flash=Número verificado", status_code=303)
 
 
+# ---------------------------------------------------------- plantillas de WhatsApp
+@router.get("/conexiones/meta/{connection_id}/plantillas", response_class=HTMLResponse)
+async def meta_connection_plantillas_page(request: Request, connection_id: str):
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+
+    from core.db.models import MessageTemplate
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_template_sync import acquire_sync_lock, sync_templates
+
+    tid = get_current_tenant_id()
+    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    if connection is None:
+        return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+
+    sync_error = None
+    if waba is not None and token and await acquire_sync_lock(waba.waba_id):
+        try:
+            await sync_templates(
+                waba.waba_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid
+            )
+        except GraphError as exc:
+            sync_error = exc.message
+
+    templates: list[MessageTemplate] = []
+    if waba is not None:
+        async with get_session() as session:
+            templates = (
+                await session.execute(
+                    select(MessageTemplate)
+                    .where(MessageTemplate.waba_account_id == waba.id, MessageTemplate.tenant_id == tid)
+                    .order_by(MessageTemplate.name, MessageTemplate.language)
+                )
+            ).scalars().all()
+
+    at_limit = bool(
+        waba is not None and waba.message_template_limit is not None
+        and (waba.message_template_count or 0) >= waba.message_template_limit
+    )
+
+    ctx.update(connection=connection, waba=waba, templates=templates, sync_error=sync_error, at_limit=at_limit)
+    return _render("meta_plantillas.html", ctx)
+
+
+@router.get("/conexiones/meta/{connection_id}/plantillas/nueva", response_class=HTMLResponse)
+async def meta_connection_plantilla_nueva_page(request: Request, connection_id: str):
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    connection, waba, _token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    if connection is None or waba is None:
+        return RedirectResponse(
+            f"/admin/conexiones/meta/{connection_id}/plantillas?flash=No hay WABA lista todavía&flash_type=danger",
+            status_code=303,
+        )
+
+    ctx.update(connection=connection, waba=waba)
+    return _render("meta_plantilla_nueva.html", ctx)
+
+
+def _build_template_components(form: dict[str, str]) -> list[dict[str, Any]]:
+    """Arma `components` a partir de los campos planos del formulario --
+    permite validar param_name<->texto ANTES de serializar nada."""
+    import json
+
+    components: list[dict[str, Any]] = []
+    parameter_format = form.get("parameter_format") or None
+
+    header_format = form.get("header_format", "NONE")
+    if header_format == "TEXT" and form.get("header_text"):
+        header: dict[str, Any] = {"type": "HEADER", "format": "TEXT", "text": form["header_text"]}
+        if parameter_format == "NAMED" and form.get("header_param_name"):
+            header["example"] = {
+                "header_text_named_params": [
+                    {"param_name": form["header_param_name"], "example": form.get("header_param_example", "")}
+                ]
+            }
+        elif form.get("header_param_example"):
+            header["example"] = {"header_text": [form["header_param_example"]]}
+        components.append(header)
+    elif header_format in ("IMAGE", "VIDEO", "DOCUMENT") and form.get("header_handle"):
+        components.append(
+            {"type": "HEADER", "format": header_format, "example": {"header_handle": [form["header_handle"]]}}
+        )
+
+    body: dict[str, Any] = {"type": "BODY", "text": form.get("body_text", "")}
+    if parameter_format == "NAMED" and form.get("body_param_names"):
+        names = [n.strip() for n in form["body_param_names"].split(",") if n.strip()]
+        examples = [e.strip() for e in form.get("body_param_examples", "").split(",")]
+        body["example"] = {
+            "body_text_named_params": [
+                {"param_name": name, "example": examples[i] if i < len(examples) else ""}
+                for i, name in enumerate(names)
+            ]
+        }
+    elif form.get("body_param_examples"):
+        examples = [e.strip() for e in form["body_param_examples"].split(",") if e.strip()]
+        if examples:
+            body["example"] = {"body_text": [examples]}
+    components.append(body)
+
+    if form.get("footer_text"):
+        components.append({"type": "FOOTER", "text": form["footer_text"]})
+
+    buttons_json = form.get("buttons_json")
+    if buttons_json:
+        buttons = json.loads(buttons_json)
+        if buttons:
+            components.append({"type": "BUTTONS", "buttons": buttons})
+
+    return components
+
+
+@router.post("/conexiones/meta/{connection_id}/plantillas/nueva")
+async def meta_connection_plantilla_crear(request: Request, connection_id: str):
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_preflight import resolve_app_credentials
+    from core.gateway.meta_subscriptions import fetch_app_access_token
+    from core.gateway.meta_template_upload import (
+        TemplateUploadError,
+        start_upload_session,
+        upload_file_chunk,
+    )
+    from core.gateway.meta_templates import (
+        TemplateRateLimitError,
+        TemplateValidationError,
+        create_template,
+    )
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    url = f"/admin/conexiones/meta/{connection_id}/plantillas"
+    if connection is None or waba is None or not token:
+        return RedirectResponse(f"{url}?flash=No hay conexión/WABA lista todavía&flash_type=danger", status_code=303)
+
+    form = dict(await request.form())
+    header_format = form.get("header_format", "NONE")
+
+    try:
+        if header_format in ("IMAGE", "VIDEO", "DOCUMENT"):
+            upload = form.get("header_file")
+            if upload is None or not hasattr(upload, "read"):
+                raise TemplateValidationError("HEADER: falta el archivo de cabecera")
+            file_bytes = await upload.read()
+            app_creds = await resolve_app_credentials(tid, channel="whatsapp")
+            if app_creds is None:
+                raise TemplateValidationError("no hay credenciales de app configuradas para subir la cabecera")
+            app_access_token = await fetch_app_access_token(
+                app_creds.app_id, app_creds.app_secret, app_creds.graph_api_version
+            )
+            upload_id = await start_upload_session(
+                app_creds.app_id, app_access_token, app_creds.app_secret, app_creds.graph_api_version, connection.id,
+                file_name=upload.filename or "cabecera", file_length=len(file_bytes),
+                file_type=upload.content_type or "application/octet-stream",
+            )
+            handle = await upload_file_chunk(upload_id, app_access_token, file_bytes)
+            form["header_handle"] = handle
+
+        components = _build_template_components(form)
+        await create_template(
+            waba.waba_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid,
+            waba.id, name=form["name"], language=form["language"], category=form["category"],
+            components=components, parameter_format=form.get("parameter_format") or None,
+        )
+    except (TemplateValidationError, TemplateRateLimitError, TemplateUploadError) as exc:
+        return RedirectResponse(f"{url}?flash={str(exc)[:200]}&flash_type=danger", status_code=303)
+    except GraphError as exc:
+        return RedirectResponse(f"{url}?flash={exc.message[:200]}&flash_type=danger", status_code=303)
+
+    return RedirectResponse(f"{url}?flash=Plantilla creada, pendiente de revisión de Meta", status_code=303)
+
+
+@router.post("/conexiones/meta/{connection_id}/plantillas/{template_id}/editar")
+async def meta_connection_plantilla_editar(request: Request, connection_id: str, template_id: str, category: str = Form(None)):
+    from core.db.models import MessageTemplate
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_templates import TemplateValidationError, update_template
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    connection, _waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    url = f"/admin/conexiones/meta/{connection_id}/plantillas"
+    if connection is None or not token:
+        return RedirectResponse(f"{url}?flash=No hay conexión lista todavía&flash_type=danger", status_code=303)
+
+    async with get_session() as session:
+        row = await get_owned(session, MessageTemplate, uuid.UUID(template_id), tid)
+    if row is None or not row.meta_template_id:
+        return RedirectResponse(f"{url}?flash=Plantilla no encontrada&flash_type=danger", status_code=303)
+
+    try:
+        await update_template(
+            row.meta_template_id, token, get_settings().meta_app_secret, connection.graph_api_version,
+            connection.id, tid, category=category or None,
+        )
+    except TemplateValidationError as exc:
+        return RedirectResponse(f"{url}?flash={str(exc)[:200]}&flash_type=danger", status_code=303)
+    except GraphError as exc:
+        return RedirectResponse(f"{url}?flash={exc.message[:200]}&flash_type=danger", status_code=303)
+
+    return RedirectResponse(f"{url}?flash=Plantilla actualizada", status_code=303)
+
+
+@router.post("/conexiones/meta/{connection_id}/plantillas/{template_id}/eliminar")
+async def meta_connection_plantilla_eliminar(request: Request, connection_id: str, template_id: str):
+    """Borra TODAS las versiones de idioma de la plantilla."""
+    from core.db.models import MessageTemplate
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_templates import delete_template_all_languages
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    url = f"/admin/conexiones/meta/{connection_id}/plantillas"
+    if connection is None or waba is None or not token:
+        return RedirectResponse(f"{url}?flash=No hay conexión/WABA lista todavía&flash_type=danger", status_code=303)
+
+    async with get_session() as session:
+        row = await get_owned(session, MessageTemplate, uuid.UUID(template_id), tid)
+    if row is None:
+        return RedirectResponse(f"{url}?flash=Plantilla no encontrada&flash_type=danger", status_code=303)
+
+    try:
+        await delete_template_all_languages(
+            waba.waba_id, row.name, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid
+        )
+    except GraphError as exc:
+        return RedirectResponse(f"{url}?flash={exc.message[:200]}&flash_type=danger", status_code=303)
+
+    return RedirectResponse(f"{url}?flash=Plantilla eliminada (todos los idiomas)", status_code=303)
+
+
+@router.post("/conexiones/meta/{connection_id}/plantillas/{template_id}/eliminar-traduccion")
+async def meta_connection_plantilla_eliminar_traduccion(request: Request, connection_id: str, template_id: str):
+    """Borra SOLO esta versión de idioma."""
+    from core.db.models import MessageTemplate
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_templates import delete_template_one_language
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    url = f"/admin/conexiones/meta/{connection_id}/plantillas"
+    if connection is None or waba is None or not token:
+        return RedirectResponse(f"{url}?flash=No hay conexión/WABA lista todavía&flash_type=danger", status_code=303)
+
+    async with get_session() as session:
+        row = await get_owned(session, MessageTemplate, uuid.UUID(template_id), tid)
+    if row is None or not row.meta_template_id:
+        return RedirectResponse(f"{url}?flash=Plantilla no encontrada&flash_type=danger", status_code=303)
+
+    try:
+        await delete_template_one_language(
+            waba.waba_id, row.name, row.meta_template_id, token, get_settings().meta_app_secret,
+            connection.graph_api_version, connection.id, tid,
+        )
+    except GraphError as exc:
+        return RedirectResponse(f"{url}?flash={exc.message[:200]}&flash_type=danger", status_code=303)
+
+    return RedirectResponse(f"{url}?flash=Traducción eliminada ({row.language})", status_code=303)
+
+
+@router.post("/conexiones/meta/{connection_id}/plantillas/sync")
+async def meta_connection_plantillas_sync(request: Request, connection_id: str):
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_template_sync import acquire_sync_lock, sync_templates
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    url = f"/admin/conexiones/meta/{connection_id}/plantillas"
+    if connection is None or waba is None or not token:
+        return RedirectResponse(f"{url}?flash=No hay conexión/WABA lista todavía&flash_type=danger", status_code=303)
+
+    if not await acquire_sync_lock(waba.waba_id):
+        return RedirectResponse(f"{url}?flash=Ya se sincronizó en la última hora&flash_type=danger", status_code=303)
+
+    try:
+        await sync_templates(
+            waba.waba_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid
+        )
+    except GraphError as exc:
+        return RedirectResponse(f"{url}?flash={exc.message[:200]}&flash_type=danger", status_code=303)
+
+    return RedirectResponse(f"{url}?flash=Sincronizado", status_code=303)
+
+
 # ------------------------------------------------------------------ costos
 @router.get("/costos", response_class=HTMLResponse)
 async def costs_page(request: Request):
