@@ -58,6 +58,26 @@ celery.conf.beat_schedule[_META_SUBSCRIPTIONS_HEALTH_TASK] = {
     "schedule": crontab(minute="*/15"),
 }
 
+# Refresco diario de tokens de larga duración de Instagram Login (ruta b) --
+# mismo criterio que arriba: capacidad de core, entrada directa.
+_INSTAGRAM_TOKEN_REFRESH_TASK = "core.instagram_token_refresh"
+
+
+@celery.task(name=_INSTAGRAM_TOKEN_REFRESH_TASK)
+def _instagram_token_refresh() -> None:
+    from core.tasks.instagram_token_refresh import refresh_instagram_tokens
+
+    try:
+        asyncio.run(refresh_instagram_tokens())
+    except Exception:
+        log.exception("cron_task_failed", task=_INSTAGRAM_TOKEN_REFRESH_TASK)
+
+
+celery.conf.beat_schedule[_INSTAGRAM_TOKEN_REFRESH_TASK] = {
+    "task": _INSTAGRAM_TOKEN_REFRESH_TASK,
+    "schedule": crontab(minute="0", hour="4"),  # diario, madrugada
+}
+
 
 @worker_init.connect
 def _load_plugins_on_worker_start(**_kwargs: object) -> None:
