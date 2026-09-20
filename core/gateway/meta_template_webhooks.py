@@ -110,6 +110,14 @@ async def handle_template_status_update(payload: dict[str, Any]) -> None:
             if parsed.event == "REJECTED" and parsed.rejection_info:
                 db_row.rejected_reason = parsed.rejection_info.get("reason")
                 db_row.rejection_recommendation = parsed.rejection_info.get("recommendation")
+
+                from core.shared.alerts import send_alert
+
+                await send_alert(
+                    f"Plantilla rechazada: {parsed.message_template_name or parsed.message_template_id}",
+                    parsed.rejection_info.get("recommendation") or parsed.rejection_info.get("reason") or "Sin detalle de Meta.",
+                    severity="warning",
+                )
             if parsed.event == "DISABLED" and parsed.disable_info:
                 db_row.disable_date = parsed.disable_info.get("disable_date")
             if parsed.other_info:

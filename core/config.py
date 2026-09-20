@@ -135,6 +135,16 @@ class Settings(BaseSettings):
     otel_exporter_endpoint: str = Field(default="", alias="OTEL_EXPORTER_OTLP_ENDPOINT")
     otel_service_name: str = Field(default="agent-core", alias="OTEL_SERVICE_NAME")
 
+    # --- Alertas (salud de conexiones Meta) ---
+    # Sin webhook configurado, send_alert() solo loguea (nunca fue un canal
+    # real hasta este ticket -- antes todo esto era log.error a secas).
+    slack_alerts_webhook_url: str = Field(default="", alias="SLACK_ALERTS_WEBHOOK_URL")
+    # Sentry es OPCIONAL, mismo patrón que OTEL: sin DSN, configure_sentry()
+    # es no-op. before_send redacta tokens de Meta como red de última
+    # instancia, no como primera línea de defensa.
+    sentry_enabled: bool = Field(default=False, alias="SENTRY_ENABLED")
+    sentry_dsn: str = Field(default="", alias="SENTRY_DSN")
+
 
 @lru_cache
 def get_settings() -> Settings:

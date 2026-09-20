@@ -38,6 +38,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     log.info("starting", app=settings.app_name, env=settings.app_env)
 
+    from core.observability.sentry_setup import configure_sentry
+
+    configure_sentry()  # no-op sin SENTRY_ENABLED/SENTRY_DSN
+
     # 1. Detectar y registrar plugins (entry_points)
     plugin_manager.scan()
     await plugin_manager.sync_registry()

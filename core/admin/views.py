@@ -40,6 +40,7 @@ from core.db.models import (
     Message,
     MessageCost,
     MetaConnection,
+    PhoneNumber,
     PluginConfig,
     PluginRecord,
     PluginTenantState,
@@ -1981,6 +1982,167 @@ async def meta_connection_plantillas_sync(request: Request, connection_id: str):
         return RedirectResponse(f"{url}?flash={exc.message[:200]}&flash_type=danger", status_code=303)
 
     return RedirectResponse(f"{url}?flash=Sincronizado", status_code=303)
+
+
+# ------------------------------------------------------------------ salud de conexiones Meta
+@router.get("/conexiones/salud", response_class=HTMLResponse)
+async def meta_health_page(request: Request):
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        connections = (
+            await session.execute(select(MetaConnection).where(MetaConnection.tenant_id == tid))
+        ).scalars().all()
+
+    ctx.update(connections=connections)
+    return _render("meta_salud.html", ctx)
+
+
+@router.post("/conexiones/salud/{connection_id}/diagnosticar")
+async def meta_health_diagnosticar(request: Request, connection_id: str):
+    """Diagnóstico on-demand -- corre los 7 checks síncrono (debe responder
+    en <10s para 1 WABA + 2 números, criterio de aceptación del ticket)."""
+    from core.gateway.meta_health import decide_status, run_health_checks
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    url = "/admin/conexiones/salud"
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+    if connection is None:
+        return RedirectResponse(f"{url}?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+
+    checks = await run_health_checks(connection, tid)
+    new_status, reason = decide_status(checks)
+
+    async with get_session() as session:
+        db_connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+        if db_connection is not None:
+            db_connection.health = checks
+            db_connection.status = new_status
+            db_connection.status_reason = reason
+            db_connection.last_health_check_at = utcnow()
+
+    return RedirectResponse(f"{url}?flash=Diagnóstico completo", status_code=303)
+
+
+@router.post("/conexiones/salud/{connection_id}/resubscribe-waba")
+async def meta_health_resubscribe_waba(request: Request, connection_id: str):
+    """Reparación INLINE del check `webhook_subscribed` -- reencola SOLO
+    la suscripción de la WABA, nunca el wizard de OAuth completo."""
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_onboarding import _subscribe_waba_to_app
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    url = "/admin/conexiones/salud"
+    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    if connection is None or waba is None or not token:
+        return RedirectResponse(f"{url}?flash=No hay conexión/WABA lista todavía&flash_type=danger", status_code=303)
+
+    try:
+        await _subscribe_waba_to_app(
+            token, waba.waba_id, connection.graph_api_version, connection.id, get_settings().meta_app_secret, tid
+        )
+    except GraphError as exc:
+        return RedirectResponse(f"{url}?flash={exc.message[:200]}&flash_type=danger", status_code=303)
+    except Exception as exc:
+        return RedirectResponse(f"{url}?flash={str(exc)[:200]}&flash_type=danger", status_code=303)
+
+    return RedirectResponse(f"{url}?flash=WABA re-suscripta", status_code=303)
+
+
+@router.post("/conexiones/salud/{connection_id}/billing")
+async def meta_health_set_billing_status(request: Request, connection_id: str, manual_status: str = Form(...)):
+    """El único "repair" que no llama a Meta -- billing no tiene API, esto
+    solo persiste lo que un admin marcó a mano después de configurarlo en
+    WhatsApp Manager (ver /admin/costos/meta/creditos)."""
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    url = "/admin/conexiones/salud"
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+        if connection is None:
+            return RedirectResponse(f"{url}?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+        health = dict(connection.health or {})
+        health["billing"] = {"manual_status": manual_status}
+        connection.health = health
+
+    return RedirectResponse(f"{url}?flash=Estado de facturación actualizado", status_code=303)
+
+
+@router.get("/conexiones/manual", response_class=HTMLResponse)
+async def meta_manual_connection_page(request: Request):
+    """Ruta de escape: cargar waba_id/phone_number_id/token a mano cuando
+    el Embedded Signup falla -- deliberadamente frágil, es la salida en
+    self-hosted cuando el wizard normal no funciona."""
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+    return _render("meta_manual.html", ctx)
+
+
+@router.post("/conexiones/manual")
+async def meta_manual_connection_submit(
+    request: Request, waba_id: str = Form(...), phone_number_id: str = Form(...),
+    token: str = Form(...), business_id: str = Form(""),
+):
+    from core.gateway import meta_token_store
+    from core.gateway.meta_health import check_token_valid
+    from core.gateway.meta_onboarding import TOKEN_KIND
+
+    admin = await current_admin(request)
+    if admin is None:
+        return _login_redirect()
+
+    from core.gateway.meta_preflight import resolve_app_credentials
+
+    tid = get_current_tenant_id()
+    url = "/admin/conexiones/manual"
+    settings = get_settings()
+
+    # `debug_token` necesita las credenciales de LA APP que emitió el
+    # token -- si el tenant es BYOK (tiene su propia app configurada), se
+    # usan esas; si no, cae a la app compartida de `.env` (hallazgo
+    # auditor-multitenant 2026-09-20: antes usaba siempre la global sin
+    # considerar BYOK).
+    app_creds = await resolve_app_credentials(tid, "whatsapp")
+    app_id = app_creds.app_id if app_creds else settings.meta_app_id
+    app_secret = app_creds.app_secret if app_creds else settings.meta_app_secret
+
+    # Valida el token ANTES de guardar nada -- no se persiste un token roto a ciegas.
+    check = await check_token_valid(token, app_id, app_secret, settings.graph_api_version)
+    if check.ok is False:
+        return RedirectResponse(f"{url}?flash={check.detail[:200]}&flash_type=danger", status_code=303)
+
+    async with get_session() as session:
+        connection = MetaConnection(
+            tenant_id=tid, channel="whatsapp", meta_app_id=app_id,
+            business_id=business_id or None, status="connected", connected_by=admin.id,
+            connected_at=utcnow(),
+        )
+        session.add(connection)
+        await session.flush()
+        waba = WabaAccount(tenant_id=tid, connection_id=connection.id, waba_id=waba_id)
+        session.add(waba)
+        await session.flush()
+        session.add(
+            PhoneNumber(tenant_id=tid, connection_id=connection.id, waba_account_id=waba.id, phone_number_id=phone_number_id)
+        )
+        connection_id = connection.id
+
+    await meta_token_store.put_token(connection_id, TOKEN_KIND, business_id or str(connection_id), token, tenant_id=tid)
+
+    return RedirectResponse("/admin/conexiones/salud?flash=Conexión manual creada", status_code=303)
 
 
 # ------------------------------------------------------------------ costos

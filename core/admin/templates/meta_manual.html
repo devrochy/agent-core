@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Configurar conexión manualmente{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4 d-flex justify-content-between align-items-center">
+  Configurar conexión manualmente
+  <a href="/admin/conexiones/salud" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left"></i> Volver
+  </a>
+</h1>
+
+<div class="alert alert-warning">
+  Ruta de escape para cuando el Embedded Signup no funciona (frecuente en despliegues
+  self-hosted). Necesitás haber generado un token de sistema/negocio válido a mano en
+  Meta Business Suite -- esto NO reemplaza el flujo de OAuth, solo permite cargar
+  credenciales ya obtenidas por otro medio. El token se valida contra Meta antes de
+  guardarse.
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="post" action="/admin/conexiones/manual" class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label">WABA ID</label>
+        <input type="text" name="waba_id" class="form-control" required>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Phone Number ID</label>
+        <input type="text" name="phone_number_id" class="form-control" required>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Business ID (opcional)</label>
+        <input type="text" name="business_id" class="form-control">
+      </div>
+      <div class="col-12">
+        <label class="form-label">Token de sistema/negocio</label>
+        <input type="password" name="token" class="form-control" required autocomplete="off">
+      </div>
+      <div class="col-12">
+        <button class="btn btn-primary">Guardar conexión</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

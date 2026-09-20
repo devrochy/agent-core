@@ -99,12 +99,35 @@ celery.conf.beat_schedule[_META_PRICING_SYNC_TASK] = {
     "schedule": crontab(hour="2", minute="0"),
 }
 
+# Salud completa de conexiones Meta (horaria) -- `app_subscription_active`
+# (15 min) sigue siendo `core.meta_subscriptions_health_check`, este cron
+# solo LEE ese resultado, nunca repite el GET.
+_META_HEALTH_CHECK_TASK = "core.meta_health_check"
+
+
+@celery.task(name=_META_HEALTH_CHECK_TASK)
+def _meta_health_check() -> None:
+    from core.tasks.meta_health_check import check_all_connections_health
+
+    try:
+        asyncio.run(check_all_connections_health())
+    except Exception:
+        log.exception("cron_task_failed", task=_META_HEALTH_CHECK_TASK)
+
+
+celery.conf.beat_schedule[_META_HEALTH_CHECK_TASK] = {
+    "task": _META_HEALTH_CHECK_TASK,
+    "schedule": crontab(minute="30"),
+}
+
 
 @worker_init.connect
 def _load_plugins_on_worker_start(**_kwargs: object) -> None:
     """El worker necesita los plugins cargados para resolver sus tareas."""
+    from core.observability.sentry_setup import configure_sentry
     from core.plugin_manager import plugin_manager
 
+    configure_sentry()  # no-op sin SENTRY_ENABLED/SENTRY_DSN -- el worker también reporta
     plugin_manager.scan()
     # Importa los módulos de jobs para que los decoradores corran
     import core.tasks.decorators  # noqa: F401
