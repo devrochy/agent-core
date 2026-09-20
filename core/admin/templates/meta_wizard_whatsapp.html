@@ -12,6 +12,32 @@
 <div class="alert alert-danger">{{ setup_error }}</div>
 {% else %}
 
+{% if wizard.environment == "sandbox" %}
+<span class="badge text-bg-info mb-3"><i class="bi bi-flask"></i> Modo prueba</span>
+{% else %}
+<span class="badge text-bg-dark mb-3"><i class="bi bi-rocket-takeoff"></i> Modo producción</span>
+{% endif %}
+
+{% if production_requisitos_completos is not none and not production_requisitos_completos %}
+<div class="alert alert-warning">
+  Todavía faltan requisitos de Meta para producción --
+  <a href="/admin/conexiones/meta-requisitos">ver checklist</a>. Meta va a rechazar por su
+  cuenta lo que no esté habilitado (por ejemplo, envío a números no verificados en
+  Development Mode); esto no bloquea el wizard, pero conviene completarlo antes de operar
+  con clientes reales.
+</div>
+{% endif %}
+
+<div class="d-flex flex-wrap gap-2 mb-4">
+  {% for step in wizard_steps %}
+  {% set is_done = step in wizard.completed_steps %}
+  {% set is_current = step == wizard.current_step %}
+  <span class="badge {% if is_done %}text-bg-success{% elif is_current %}text-bg-primary{% else %}text-bg-secondary{% endif %}">
+    {% if is_done %}<i class="bi bi-check-lg"></i>{% endif %} {{ step }}
+  </span>
+  {% endfor %}
+</div>
+
 {% if wizard.last_error and wizard.current_step != 'done' %}
 <div class="alert alert-warning">
   La conexión anterior se interrumpió{% if wizard.last_error.message %}: {{ wizard.last_error.message }}{% endif %}.
@@ -53,6 +79,27 @@
       <div class="alert alert-success">
         <i class="bi bi-check-circle"></i> Conexión completa. Pasos hechos: {{ wizard.completed_steps | join(', ') }}.
       </div>
+
+      <h5 class="fs-6">Resumen de la configuración</h5>
+      <table class="table table-sm mb-3">
+        <tbody>
+          <tr><td class="text-secondary">Canal</td><td>WhatsApp</td></tr>
+          <tr><td class="text-secondary">Entorno</td><td>{{ "Prueba" if wizard.environment == "sandbox" else "Producción" }}</td></tr>
+          {% if summary_waba %}
+          <tr><td class="text-secondary">Cuenta de WhatsApp Business</td><td>{{ summary_waba.name or summary_waba.waba_id }}</td></tr>
+          {% endif %}
+          {% if summary_phone %}
+          <tr><td class="text-secondary">Número</td><td>{{ summary_phone.display_phone_number or summary_phone.phone_number_id }}</td></tr>
+          <tr><td class="text-secondary">Calidad</td><td>{{ summary_phone.quality_rating or "sin datos" }}</td></tr>
+          {% endif %}
+          <tr><td class="text-secondary">Plantillas sincronizadas</td><td>{{ summary_template_count or 0 }}</td></tr>
+        </tbody>
+      </table>
+
+      <form method="post" action="/admin/conexiones/wizard/whatsapp/probar-conexion" class="d-inline">
+        <input type="hidden" name="connection_id" value="{{ wizard.connection_id }}">
+        <button class="btn btn-outline-success"><i class="bi bi-wifi"></i> Probar conexión</button>
+      </form>
       <a href="/admin/conexiones/meta/{{ wizard.connection_id }}/numeros" class="btn btn-outline-primary">
         <i class="bi bi-telephone"></i> Ver/agregar números
       </a>

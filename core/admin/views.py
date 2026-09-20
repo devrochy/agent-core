@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from agentcore_contracts import AgentSpec
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
@@ -32,6 +32,7 @@ from core.admin.view_registry import view_registry
 from core.agents.spec import CORE_PACK_ID, enabled_packs, load_active_spec
 from core.config import get_settings
 from core.db.models import (
+    WIZARD_STEPS,
     AgentSpecRecord,
     AppSettings,
     Conversation,
@@ -39,6 +40,7 @@ from core.db.models import (
     Escalation,
     Message,
     MessageCost,
+    MessageTemplate,
     MetaConnection,
     PhoneNumber,
     PluginConfig,
@@ -1394,11 +1396,26 @@ async def meta_webhooks_register(request: Request, channel: str = Form(...)):
 
 
 # ------------------------------------------------------------------ wizard de Embedded Signup (WhatsApp)
-@router.get("/conexiones/wizard/whatsapp", response_class=HTMLResponse)
-async def meta_wizard_whatsapp_page(request: Request):
+@router.get("/conexiones/wizard/whatsapp/elegir-entorno", response_class=HTMLResponse)
+async def meta_wizard_whatsapp_elegir_entorno(request: Request):
+    """Pantalla previa al wizard: sin efecto secundario, solo deja elegir
+    si esta conexión es de prueba (número gratis de Meta, sin requisitos
+    de revisión) o de producción (número real, requiere el checklist de
+    /admin/conexiones/meta-requisitos)."""
     ctx = await _base_context(request, "connections")
     if ctx is None:
         return _login_redirect()
+    return _render("meta_wizard_elegir_entorno.html", ctx)
+
+
+@router.get("/conexiones/wizard/whatsapp", response_class=HTMLResponse)
+async def meta_wizard_whatsapp_page(request: Request, environment: str = Query(default="production")):
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+
+    if environment not in ("sandbox", "production"):
+        return RedirectResponse("/admin/conexiones/wizard/whatsapp/elegir-entorno", status_code=303)
 
     from core.gateway.meta_onboarding import (
         WizardError,
@@ -1410,7 +1427,9 @@ async def meta_wizard_whatsapp_page(request: Request):
     tid = get_current_tenant_id()
 
     try:
-        wizard = await start_or_resume_wizard(tid, "whatsapp", admin_id=admin.id if admin else None)
+        wizard = await start_or_resume_wizard(
+            tid, "whatsapp", environment=environment, admin_id=admin.id if admin else None
+        )
         wizard = await run_automatic_steps(wizard.id)
     except WizardError as exc:
         ctx.update(setup_error=str(exc), wizard=None)
@@ -1420,11 +1439,86 @@ async def meta_wizard_whatsapp_page(request: Request):
     ctx.update(
         setup_error=None,
         wizard=wizard,
+        wizard_steps=list(WIZARD_STEPS),
         meta_app_id=settings.meta_app_id,
         meta_config_id=settings.meta_config_id,
         graph_api_version=settings.graph_api_version,
     )
+
+    if environment == "production":
+        manual_steps = await _production_manual_steps(tid)
+        ctx.update(production_requisitos_completos=all(step["done"] for step in manual_steps))
+    else:
+        ctx.update(production_requisitos_completos=None)
+
+    if wizard.current_step == "done" and wizard.connection_id is not None:
+        async with get_session() as session:
+            waba = (
+                await session.execute(
+                    select(WabaAccount).where(
+                        WabaAccount.connection_id == wizard.connection_id, WabaAccount.tenant_id == tid
+                    )
+                )
+            ).scalars().first()
+            phone = (
+                await session.execute(
+                    select(PhoneNumber).where(
+                        PhoneNumber.connection_id == wizard.connection_id, PhoneNumber.tenant_id == tid
+                    )
+                )
+            ).scalars().first()
+            template_count = (
+                await session.execute(
+                    select(func.count()).select_from(MessageTemplate).where(
+                        MessageTemplate.waba_account_id == waba.id
+                    )
+                )
+            ).scalar() if waba is not None else 0
+        ctx.update(summary_waba=waba, summary_phone=phone, summary_template_count=template_count)
+
     return _render("meta_wizard_whatsapp.html", ctx)
+
+
+@router.post("/conexiones/wizard/whatsapp/probar-conexion")
+async def meta_wizard_whatsapp_probar_conexion(request: Request, connection_id: str = Form(...)):
+    """Verificación real bajo demanda (no espera al cron de salud): handshake
+    de webhook en vivo + los 7 health checks de la conexión (mismo criterio
+    que el botón "Diagnosticar" de /admin/conexiones/salud, reusa las mismas
+    funciones -- no se agrega ningún check nuevo)."""
+    from core.gateway import meta_production_readiness as readiness
+    from core.gateway.meta_health import decide_status, run_health_checks
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    url = "/admin/conexiones/wizard/whatsapp"
+
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+    if connection is None:
+        return RedirectResponse(f"{url}?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+
+    settings = get_settings()
+    callback_url = f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"
+    handshake = await readiness.check_webhook_handshake(callback_url, settings.whatsapp_verify_token)
+    checks = await run_health_checks(connection, tid)
+    new_status, reason = decide_status(checks)
+
+    async with get_session() as session:
+        db_connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+        if db_connection is not None:
+            db_connection.health = checks
+            db_connection.status = new_status
+            db_connection.status_reason = reason
+            db_connection.last_health_check_at = utcnow()
+
+    todo_ok = handshake.ok is True and all(v.get("ok") is True for v in checks.values() if v.get("key") != "billing")
+    flash = "Prueba de conexión OK" if todo_ok else "La prueba de conexión encontró problemas -- revisá el resumen"
+    flash_type = "success" if todo_ok else "warning"
+    return RedirectResponse(
+        f"{url}?environment={connection.environment}&flash={flash}&flash_type={flash_type}", status_code=303
+    )
 
 
 @router.post("/conexiones/wizard/whatsapp/exchange")

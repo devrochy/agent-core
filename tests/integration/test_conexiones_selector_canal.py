@@ -71,5 +71,5 @@ async def test_solo_whatsapp_meta_es_clickeable_hacia_el_wizard(app_client):
 
     r = await app_client.get("/admin/conexiones", headers={"Cookie": cookie})
     assert r.status_code == 200
-    assert 'href="/admin/conexiones/wizard/whatsapp"' in r.text
+    assert 'href="/admin/conexiones/wizard/whatsapp/elegir-entorno"' in r.text
     assert r.text.count('aria-disabled="true"') == 4
