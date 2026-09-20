@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Conectar WhatsApp{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4 d-flex justify-content-between align-items-center">
+  Conectar WhatsApp
+  <a href="/admin/conexiones" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left"></i> Volver a conexiones
+  </a>
+</h1>
+<p class="text-secondary mb-4">Elegí el modo antes de empezar -- cada uno pide requisitos distintos de Meta.</p>
+
+<div class="row row-cols-1 row-cols-md-2 g-3">
+  <div class="col">
+    <a href="/admin/conexiones/wizard/whatsapp?environment=sandbox" class="card text-decoration-none text-body h-100 p-3">
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <i class="bi bi-flask fs-3"></i>
+        <h5 class="mb-0">Modo prueba</h5>
+      </div>
+      <p class="text-secondary small mb-0">
+        Meta te da un número de prueba gratis (hasta 5 destinatarios verificados). No hace
+        falta Business Verification, App Review, Advanced Access, Live Mode ni medio de pago
+        -- ideal para probar el asistente antes de ir a producción.
+      </p>
+    </a>
+  </div>
+  <div class="col">
+    <a href="/admin/conexiones/wizard/whatsapp?environment=production" class="card text-decoration-none text-body h-100 p-3">
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <i class="bi bi-rocket-takeoff fs-3"></i>
+        <h5 class="mb-0">Modo producción</h5>
+      </div>
+      <p class="text-secondary small mb-0">
+        Conecta un número real de WhatsApp Business. Requiere el checklist completo de Meta
+        (Business Verification, App Review, Advanced Access, Live Mode, medio de pago) --
+        ver <a href="/admin/conexiones/meta-requisitos">Requisitos de Meta</a>.
+      </p>
+    </a>
+  </div>
+</div>
+{% endblock %}
