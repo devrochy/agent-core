@@ -244,6 +244,8 @@ async def _process_payload(
             total_enqueued += enqueued
             total_duplicates += duplicates
 
+            await _dispatch_template_events(entry_events)
+
     if not any_entry_processed:
         # Todos los entries se saltaron (sin tenant resuelto o inactivo) --
         # mismo contrato que el código anterior: "ignored", no "ok" con 0.
@@ -348,6 +350,36 @@ async def _dispatch_entry_messages(
         enqueued += 1
 
     return enqueued, duplicates
+
+
+_TEMPLATE_WEBHOOK_FIELDS = {
+    "message_template_status_update", "template_category_update", "message_template_quality_update",
+}
+
+
+async def _dispatch_template_events(entry_events: list[FlattenedEvent]) -> None:
+    """Máquina de estados de plantillas -- vive en un módulo aparte
+    (`core/gateway/meta_template_webhooks.py`), NUNCA toca `WebhookEvent`
+    (ya se logueó en el loop de `_process_payload` antes de llegar acá,
+    ADR-0028 intacto)."""
+    from core.gateway.meta_template_webhooks import (
+        handle_template_category_update,
+        handle_template_quality_update,
+        handle_template_status_update,
+    )
+
+    handlers = {
+        "message_template_status_update": handle_template_status_update,
+        "template_category_update": handle_template_category_update,
+        "message_template_quality_update": handle_template_quality_update,
+    }
+    for event in entry_events:
+        if event.field not in _TEMPLATE_WEBHOOK_FIELDS:
+            continue
+        try:
+            await handlers[event.field](event.value)
+        except Exception:
+            log.exception("template_webhook_handler_fallo", field=event.field)
 
 
 async def _try_process_media(message: Any) -> Any:
