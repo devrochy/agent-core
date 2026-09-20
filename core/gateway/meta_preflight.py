@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 
 import httpx
 from pydantic import BaseModel
@@ -92,6 +93,14 @@ class PreflightCheck(BaseModel):
     key: str
     ok: bool | None  # None = "unknown" (rate limit u otro motivo no concluyente)
     detail: str
+    # Extensión para health checks de conexión (core/gateway/meta_health.py):
+    # `checked_at` marca cuándo corrió ESTE check puntual (los 7 checks de
+    # salud no corren todos en el mismo instante si alguno se reintenta);
+    # `repair_action` es un id corto que la UI mapea a un botón/ruta
+    # concreta -- nunca una URL cruda acá, para no acoplar el dominio a
+    # rutas del panel.
+    checked_at: datetime | None = None
+    repair_action: str | None = None
 
 
 # Pasos MANUALES: nadie los puede automatizar (viven en developers.facebook.com).
