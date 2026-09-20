@@ -119,6 +119,16 @@ class Settings(BaseSettings):
     max_concurrent_turns: int = Field(default=8, alias="MAX_CONCURRENT_TURNS")
     max_turns_per_tenant: int = Field(default=2, alias="MAX_TURNS_PER_TENANT")
 
+    # --- Costos de Meta ---
+    # Franquicia de 1000 mensajes de servicio gratis/mes por número: cifra
+    # de FUENTE SECUNDARIA, la página oficial de Meta no la menciona. Se
+    # muestra en el panel como HIPÓTESIS A VALIDAR contra la primera
+    # factura real, nunca se resta del `cost` autoritativo. Default
+    # apagado -- se prende explícitamente para probarla.
+    meta_service_message_allowance_hypothesis_enabled: bool = Field(
+        default=False, alias="META_SERVICE_MESSAGE_ALLOWANCE_HYPOTHESIS_ENABLED"
+    )
+
     # --- Observabilidad ---
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     otel_enabled: bool = Field(default=False, alias="OTEL_ENABLED")
