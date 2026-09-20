@@ -15,7 +15,7 @@ from typing import Any
 
 from agentcore_contracts import AgentSpec
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -44,7 +44,7 @@ from core.db.models import (
     UsageLedger,
     utcnow,
 )
-from core.db.session import get_session
+from core.db.session import get_owned, get_session
 from core.gateway.connections import (
     delete_connection,
     list_connections,
@@ -1386,6 +1386,296 @@ async def meta_webhooks_register(request: Request, channel: str = Form(...)):
         )
 
     return RedirectResponse("/admin/conexiones/webhooks?flash=Suscripción registrada", status_code=303)
+
+
+# ------------------------------------------------------------------ wizard de Embedded Signup (WhatsApp)
+@router.get("/conexiones/wizard/whatsapp", response_class=HTMLResponse)
+async def meta_wizard_whatsapp_page(request: Request):
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+
+    from core.gateway.meta_onboarding import (
+        WizardError,
+        run_automatic_steps,
+        start_or_resume_wizard,
+    )
+
+    admin = await current_admin(request)
+    tid = get_current_tenant_id()
+
+    try:
+        wizard = await start_or_resume_wizard(tid, "whatsapp", admin_id=admin.id if admin else None)
+        wizard = await run_automatic_steps(wizard.id)
+    except WizardError as exc:
+        ctx.update(setup_error=str(exc), wizard=None)
+        return _render("meta_wizard_whatsapp.html", ctx)
+
+    settings = get_settings()
+    ctx.update(
+        setup_error=None,
+        wizard=wizard,
+        meta_app_id=settings.meta_app_id,
+        meta_config_id=settings.meta_config_id,
+        graph_api_version=settings.graph_api_version,
+    )
+    return _render("meta_wizard_whatsapp.html", ctx)
+
+
+@router.post("/conexiones/wizard/whatsapp/exchange")
+async def meta_wizard_whatsapp_exchange(request: Request):
+    """Llamada por el listener de `postMessage` apenas llega el evento
+    `FINISH*` -- el `code` de Meta tiene TTL de 30s, así que esto tiene que
+    responder rápido. Nunca devuelve el token, solo `{connectionId, nextStep}`."""
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_onboarding import WizardError, exchange_code, persist_finish_payload
+
+    if await current_admin(request) is None:
+        return JSONResponse({"error": "no autenticado"}, status_code=401)
+
+    body = await request.json()
+    wizard_id = body.get("wizard_id")
+    code = body.get("code")
+    event_type = body.get("event_type", "FINISH")
+    if not wizard_id or not code:
+        return JSONResponse({"error": "faltan wizard_id/code"}, status_code=400)
+
+    try:
+        wizard_id_uuid = uuid.UUID(str(wizard_id))
+        view = await persist_finish_payload(
+            wizard_id_uuid,
+            event_type,
+            waba_id=body.get("waba_id"),
+            phone_number_id=body.get("phone_number_id"),
+            business_id=body.get("business_id"),
+        )
+        view = await exchange_code(view.id, str(code))
+    except WizardError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except GraphError as exc:
+        from core.gateway.meta_subscriptions import humanize_subscription_error
+
+        return JSONResponse(
+            {"error": humanize_subscription_error(exc), "fbtraceId": exc.fbtrace_id}, status_code=502
+        )
+
+    return JSONResponse({"connectionId": str(view.connection_id), "nextStep": view.current_step})
+
+
+@router.post("/conexiones/wizard/whatsapp/cancelar-evento")
+async def meta_wizard_whatsapp_cancel(request: Request):
+    """Beacon del listener en el evento `CANCEL` -- analítica de abandono,
+    nunca lleva `code` ni token (la función de destino ni acepta esos campos)."""
+    from core.gateway.meta_onboarding import record_cancel_or_progress
+
+    if await current_admin(request) is None:
+        return JSONResponse({"error": "no autenticado"}, status_code=401)
+
+    body = await request.json()
+    wizard_id = body.get("wizard_id")
+    if not wizard_id:
+        return JSONResponse({"error": "falta wizard_id"}, status_code=400)
+
+    await record_cancel_or_progress(
+        uuid.UUID(str(wizard_id)),
+        current_step=body.get("current_step"),
+        error_code=body.get("error_code"),
+        error_message=body.get("error_message"),
+        error_id=body.get("error_id"),
+        session_id=body.get("session_id"),
+    )
+    return JSONResponse({"status": "ok"})
+
+
+@router.post("/conexiones/wizard/whatsapp/registrar-numero")
+async def meta_wizard_whatsapp_register_number(request: Request, wizard_id: str = Form(...)):
+    """El PIN lo genera el sistema -- este form no lleva ningún campo de
+    PIN, solo confirma la acción. El PIN nunca aparece en esta respuesta."""
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_onboarding import WizardError, register_number_step, run_automatic_steps
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    try:
+        view = await register_number_step(uuid.UUID(wizard_id))
+        await run_automatic_steps(view.id)
+    except (WizardError, GraphError) as exc:
+        detail = exc.message if isinstance(exc, GraphError) else str(exc)
+        return RedirectResponse(
+            f"/admin/conexiones/wizard/whatsapp?flash={detail[:140]}&flash_type=danger", status_code=303
+        )
+
+    return RedirectResponse("/admin/conexiones/wizard/whatsapp", status_code=303)
+
+
+@router.post("/conexiones/wizard/whatsapp/fijar-pin-nuevo")
+async def meta_wizard_whatsapp_set_new_pin(request: Request, wizard_id: str = Form(...)):
+    """Remediación manual de un 133005 (PIN mismatch) -- nunca automática."""
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_onboarding import WizardError, run_automatic_steps, set_new_pin_step
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    try:
+        view = await set_new_pin_step(uuid.UUID(wizard_id))
+        await run_automatic_steps(view.id)
+    except (WizardError, GraphError) as exc:
+        detail = exc.message if isinstance(exc, GraphError) else str(exc)
+        return RedirectResponse(
+            f"/admin/conexiones/wizard/whatsapp?flash={detail[:140]}&flash_type=danger", status_code=303
+        )
+
+    return RedirectResponse("/admin/conexiones/wizard/whatsapp?flash=PIN nuevo fijado", status_code=303)
+
+
+# ------------------------------------------------------------------ números adicionales de una WABA
+# Prefijo "meta/" para no chocar con /conexiones/{connection_id}/... de
+# arriba, que son rutas de ChannelConnection (modelo viejo/distinto).
+async def _resolve_waba_and_token(connection_id: uuid.UUID, tenant_id: uuid.UUID | None):
+    from core.db.models import MetaConnection, WabaAccount
+    from core.gateway import meta_token_store
+    from core.gateway.meta_onboarding import TOKEN_KIND
+
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, connection_id, tenant_id)
+        if connection is None:
+            return None, None, None
+        waba = (
+            await session.execute(select(WabaAccount).where(WabaAccount.connection_id == connection_id))
+        ).scalars().first()
+    if waba is None:
+        return connection, None, None
+    token = await meta_token_store.get_token(
+        connection_id, TOKEN_KIND, connection.business_id or str(connection_id), tenant_id=tenant_id
+    )
+    return connection, waba, token
+
+
+@router.get("/conexiones/meta/{connection_id}/numeros", response_class=HTMLResponse)
+async def meta_connection_numeros_page(request: Request, connection_id: str):
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+
+    from core.db.models import PhoneNumber
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_phone_numbers import sync_phone_numbers
+
+    tid = get_current_tenant_id()
+    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    if connection is None:
+        return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+
+    sync_error = None
+    if waba is not None and token:
+        try:
+            await sync_phone_numbers(
+                waba.waba_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid
+            )
+        except GraphError as exc:
+            sync_error = exc.message
+
+    async with get_session() as session:
+        numbers = (
+            await session.execute(
+                select(PhoneNumber).where(PhoneNumber.connection_id == connection.id, PhoneNumber.tenant_id == tid)
+            )
+        ).scalars().all()
+
+    ctx.update(connection=connection, waba=waba, numbers=numbers, sync_error=sync_error)
+    return _render("meta_numeros.html", ctx)
+
+
+@router.post("/conexiones/meta/{connection_id}/numeros/agregar")
+async def meta_connection_numeros_agregar(
+    request: Request, connection_id: str, cc: str = Form(...), phone_number: str = Form(...), verified_name: str = Form(...)
+):
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_phone_numbers import add_phone_number
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    url = f"/admin/conexiones/meta/{connection_id}/numeros"
+    if connection is None or waba is None or not token:
+        return RedirectResponse(f"{url}?flash=No hay conexión/WABA lista todavía&flash_type=danger", status_code=303)
+
+    try:
+        await add_phone_number(
+            waba.waba_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid,
+            cc=cc, phone_number=phone_number, verified_name=verified_name,
+        )
+    except GraphError as exc:
+        return RedirectResponse(f"{url}?flash={exc.message[:140]}&flash_type=danger", status_code=303)
+
+    return RedirectResponse(f"{url}?flash=Número agregado", status_code=303)
+
+
+@router.post("/conexiones/meta/{connection_id}/numeros/{phone_number_id}/solicitar-codigo")
+async def meta_connection_numeros_solicitar_codigo(
+    request: Request, connection_id: str, phone_number_id: str, code_method: str = Form(...), language: str = Form(default="es")
+):
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_phone_numbers import request_verification_code
+    from core.memory.working import get_redis
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    connection, _waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    url = f"/admin/conexiones/meta/{connection_id}/numeros"
+    if connection is None or not token:
+        return RedirectResponse(f"{url}?flash=No hay conexión lista todavía&flash_type=danger", status_code=303)
+
+    redis = get_redis()
+    # Namespaced por tenant -- phone_number_id es único global en Meta pero
+    # no queremos que un tenant pueda interferir el rate limit de otro
+    # (hallazgo auditor-multitenant, 2026-09-22, severidad media).
+    rate_limit_key = f"verify_code_resend:{tid}:{phone_number_id}"
+    if await redis.get(rate_limit_key):
+        return RedirectResponse(f"{url}?flash=Esperá un momento antes de reenviar el código&flash_type=danger", status_code=303)
+
+    try:
+        await request_verification_code(
+            phone_number_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id,
+            code_method=code_method, language=language,
+        )
+    except GraphError as exc:
+        return RedirectResponse(f"{url}?flash={exc.message[:140]}&flash_type=danger", status_code=303)
+
+    await redis.set(rate_limit_key, "1", ex=60)
+    return RedirectResponse(f"{url}?flash=Código enviado", status_code=303)
+
+
+@router.post("/conexiones/meta/{connection_id}/numeros/{phone_number_id}/verificar")
+async def meta_connection_numeros_verificar(request: Request, connection_id: str, phone_number_id: str, code: str = Form(...)):
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_phone_numbers import verify_code
+
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    connection, _waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    url = f"/admin/conexiones/meta/{connection_id}/numeros"
+    if connection is None or not token:
+        return RedirectResponse(f"{url}?flash=No hay conexión lista todavía&flash_type=danger", status_code=303)
+
+    try:
+        ok = await verify_code(
+            phone_number_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid, code=code
+        )
+    except GraphError as exc:
+        return RedirectResponse(f"{url}?flash={exc.message[:140]}&flash_type=danger", status_code=303)
+
+    if not ok:
+        return RedirectResponse(f"{url}?flash=Código incorrecto&flash_type=danger", status_code=303)
+    return RedirectResponse(f"{url}?flash=Número verificado", status_code=303)
 
 
 # ------------------------------------------------------------------ costos

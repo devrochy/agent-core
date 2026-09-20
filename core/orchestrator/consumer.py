@@ -30,6 +30,7 @@ from core.db.models import (
     Conversation,
     Customer,
     Message,
+    PhoneNumber,
     ProcessedEvent,
 )
 from core.db.session import get_session
@@ -312,6 +313,23 @@ async def _resolve_conversation(
             )
         ).scalar_one_or_none()
 
+        # Puente para conexiones del wizard de Embedded Signup (ADR-0030):
+        # no tienen fila en channel_connections, pero sí una en phone_numbers.
+        # Corre EN PARALELO al lookup de arriba, nunca lo reemplaza.
+        # tenant_id explícito además de la unicidad global de phone_number_id
+        # (defensa en profundidad, mismo criterio que get_owned() -- hallazgo
+        # auditor-multitenant, 2026-09-22: la unicidad global es hoy la única
+        # garantía real, no depender solo de eso).
+        meta_phone = (
+            await session.execute(
+                select(PhoneNumber).where(
+                    PhoneNumber.phone_number_id == connection_external_id,
+                    PhoneNumber.tenant_id == tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        meta_connection_id = meta_phone.connection_id if meta_phone else None
+
         conversation = (
             await session.execute(
                 select(Conversation)
@@ -333,11 +351,15 @@ async def _resolve_conversation(
                 customer_id=customer.id,
                 channel=channel,
                 connection_id=connection.id if connection else None,
+                meta_connection_id=meta_connection_id,
             )
             session.add(conversation)
             await session.flush()
-        elif connection and conversation.connection_id != connection.id:
-            conversation.connection_id = connection.id  # responder por donde escribió
+        else:
+            if connection and conversation.connection_id != connection.id:
+                conversation.connection_id = connection.id  # responder por donde escribió
+            if meta_connection_id and conversation.meta_connection_id != meta_connection_id:
+                conversation.meta_connection_id = meta_connection_id
 
     if is_new:
         await event_bus.emit(

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Conectar WhatsApp{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4 d-flex justify-content-between align-items-center">
+  Conectar WhatsApp (Embedded Signup)
+  <a href="/admin/conexiones" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left"></i> Volver a conexiones
+  </a>
+</h1>
+
+{% if setup_error %}
+<div class="alert alert-danger">{{ setup_error }}</div>
+{% else %}
+
+{% if wizard.last_error and wizard.current_step != 'done' %}
+<div class="alert alert-warning">
+  La conexión anterior se interrumpió{% if wizard.last_error.message %}: {{ wizard.last_error.message }}{% endif %}.
+  Podés continuar donde la dejaste.
+</div>
+{% endif %}
+
+<div class="card mb-4" id="embedded-signup-root"
+     data-wizard-id="{{ wizard.id }}"
+     data-config-id="{{ meta_config_id }}"
+     data-app-id="{{ meta_app_id }}"
+     data-graph-version="{{ graph_api_version }}">
+  <div class="card-body">
+    {% if wizard.current_step in ['select_channel', 'launch_oauth'] %}
+      <p class="text-secondary">Hacé clic para conectar tu cuenta de WhatsApp Business con Meta.</p>
+      <button id="embedded-signup-button" class="btn btn-success" disabled>
+        <i class="bi bi-whatsapp"></i> Conectar
+      </button>
+    {% elif wizard.current_step == 'register_number' %}
+      <p class="text-secondary">Ya conectamos tu cuenta. Hacé clic para activar el número (el PIN de verificación en dos pasos lo genera el sistema, no hace falta que lo escribas).</p>
+      <form method="post" action="/admin/conexiones/wizard/whatsapp/registrar-numero" class="d-inline">
+        <input type="hidden" name="wizard_id" value="{{ wizard.id }}">
+        <button class="btn btn-primary">Registrar número</button>
+      </form>
+      {% if wizard.last_error and wizard.last_error.code == 133005 %}
+      <div class="alert alert-warning mt-3">
+        Este número ya tenía verificación en dos pasos con otro PIN. Opciones:
+        <ul class="mb-2">
+          <li>Fijar un PIN nuevo para este número (recomendado si tenés acceso a la cuenta).</li>
+          <li>Pedirle al cliente que resetee el PIN desde WhatsApp Manager.</li>
+        </ul>
+        <form method="post" action="/admin/conexiones/wizard/whatsapp/fijar-pin-nuevo" class="d-inline">
+          <input type="hidden" name="wizard_id" value="{{ wizard.id }}">
+          <button class="btn btn-sm btn-outline-primary">Fijar PIN nuevo</button>
+        </form>
+      </div>
+      {% endif %}
+    {% elif wizard.current_step == 'done' %}
+      <div class="alert alert-success">
+        <i class="bi bi-check-circle"></i> Conexión completa. Pasos hechos: {{ wizard.completed_steps | join(', ') }}.
+      </div>
+      <a href="/admin/conexiones/meta/{{ wizard.connection_id }}/numeros" class="btn btn-outline-primary">
+        <i class="bi bi-telephone"></i> Ver/agregar números
+      </a>
+    {% else %}
+      <p class="text-secondary">Procesando el paso <code>{{ wizard.current_step }}</code>... recargá la página en unos segundos.</p>
+    {% endif %}
+    <div id="embedded-signup-status" class="text-secondary small mt-2"></div>
+  </div>
+</div>
+
+<script src="/static/embedded_signup.js"></script>
+{% endif %}
+{% endblock %}
