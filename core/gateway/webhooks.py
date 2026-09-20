@@ -101,6 +101,7 @@ async def receive_whatsapp(request: Request) -> Response:
 
         if not verify_signature(raw_body, headers.get("x-hub-signature-256", ""), app_secret):
             log.warning("webhook_signature_invalid")
+            await _alert_on_invalid_signature(settings.meta_app_id)
             return Response(status_code=401)
 
     try:
@@ -110,6 +111,22 @@ async def receive_whatsapp(request: Request) -> Response:
         return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
 
     return await _process_payload(payload, known_tenant_id=None, dev_fallback=True)
+
+
+async def _alert_on_invalid_signature(meta_app_id: str) -> None:
+    """Más de 5 firmas inválidas en 5 min -- alerta EXACTAMENTE una vez al
+    cruzar el umbral (no una por cada intento extra)."""
+    from core.gateway.webhook_verify import _INVALID_SIG_ALERT_THRESHOLD, record_invalid_signature
+    from core.shared.alerts import send_alert
+
+    count = await record_invalid_signature(meta_app_id or "default")
+    if count == _INVALID_SIG_ALERT_THRESHOLD + 1:
+        await send_alert(
+            "Firmas de webhook inválidas repetidas",
+            f"Más de {_INVALID_SIG_ALERT_THRESHOLD} intentos con firma inválida en 5 min para "
+            f"meta_app_id={meta_app_id} -- App Secret rotado o intento de spoofing.",
+            severity="critical",
+        )
 
 
 @router.post("/whatsapp/{slug}")
@@ -144,6 +161,7 @@ async def receive_whatsapp_tenant(request: Request, slug: str) -> Response:
 
             if not verify_signature(raw_body, headers.get("x-hub-signature-256", ""), app_secret):
                 log.warning("webhook_signature_invalid", tenant_id=str(tenant_id))
+                await _alert_on_invalid_signature(creds.get("app_id") or settings.meta_app_id)
                 return Response(status_code=401)
 
     try:
@@ -247,6 +265,12 @@ async def _process_payload(
             await _dispatch_template_events(entry_events)
             await _dispatch_status_events(entry_events)
 
+            # Marca processed_at DESPUÉS de que los tres dispatch terminaron
+            # sin excepción -- es la señal que usa el check de "worker
+            # caído" del cron de salud (`count_stalled_webhook_events`).
+            # Antes de este ticket, `processed_at` no lo escribía nadie.
+            await _mark_entry_processed(meta_app_id, entry_events)
+
     if not any_entry_processed:
         # Todos los entries se saltaron (sin tenant resuelto o inactivo) --
         # mismo contrato que el código anterior: "ignored", no "ok" con 0.
@@ -297,6 +321,33 @@ async def _log_webhook_event(
     except Exception:
         log.exception("webhook_events_insert_error", meta_app_id=meta_app_id, external_id=event.external_id)
         return False
+
+
+async def _mark_entry_processed(meta_app_id: str, entry_events: list[FlattenedEvent]) -> None:
+    """Best-effort: si esto falla, el evento queda `processed_at is null`
+    para siempre -- aceptable (el check de "worker caído" lo detectaría
+    igual, y `_log_webhook_event` ya es la única red de seguridad real de
+    ADR-0028), nunca se re-lanza para no tumbar la respuesta 200 al
+    webhook por un fallo puramente de esta marca secundaria."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy import update
+
+    from core.db.models import WebhookEvent
+    from core.db.session import get_session
+
+    try:
+        async with get_session() as session:
+            await session.execute(
+                update(WebhookEvent)
+                .where(
+                    WebhookEvent.meta_app_id == meta_app_id,
+                    WebhookEvent.external_id.in_([event.external_id for event in entry_events]),
+                )
+                .values(processed_at=datetime.now(UTC))
+            )
+    except Exception:
+        log.exception("webhook_events_mark_processed_fallo", meta_app_id=meta_app_id)
 
 
 async def _dispatch_entry_messages(
@@ -404,6 +455,30 @@ async def _dispatch_status_events(entry_events: list[FlattenedEvent]) -> None:
                 await apply_status_update(status, phone_number_id=phone_number_id)
             except Exception:
                 log.exception("status_update_handler_fallo", external_id=event.external_id)
+
+
+async def count_stalled_webhook_events(older_than_minutes: int = 5) -> int:
+    """`webhook_events` con `processed_at is null` y `received_at` más
+    viejo que `older_than_minutes` -- señal de "worker caído" (el cron de
+    salud, `core/tasks/meta_health_check.py`, la chequea cada hora y
+    alerta si es > 0). Vive acá porque ADR-0028 exige que solo este módulo
+    toque esa tabla."""
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import func, select
+
+    from core.db.models import WebhookEvent
+    from core.db.session import get_session
+
+    cutoff = datetime.now(UTC) - timedelta(minutes=older_than_minutes)
+    async with get_session() as session:
+        return (
+            await session.execute(
+                select(func.count(WebhookEvent.id)).where(
+                    WebhookEvent.processed_at.is_(None), WebhookEvent.received_at < cutoff
+                )
+            )
+        ).scalar() or 0
 
 
 async def _try_process_media(message: Any) -> Any:
