@@ -1544,6 +1544,7 @@ async def meta_wizard_whatsapp_byok_guardar(
     app_secret: str = Form(...),
     phone_number_id: str = Form(...),
     access_token: str = Form(...),
+    verify_token: str = Form(default=""),
 ):
     """Alta de una conexión de WhatsApp con la app PROPIA del tenant (BYOK)
     para modo prueba -- a diferencia del wizard de Embedded Signup, acá no
@@ -1563,6 +1564,7 @@ async def meta_wizard_whatsapp_byok_guardar(
     try:
         await save_byok_connection(
             tid, admin.id, app_id.strip(), app_secret.strip(), phone_number_id.strip(), access_token.strip(),
+            verify_token=verify_token.strip() or None,
         )
     except ByokError as exc:
         return RedirectResponse(f"{elegir_url}?flash={str(exc)[:140]}&flash_type=danger", status_code=303)

@@ -15,6 +15,13 @@ producto WhatsApp), por eso acá no hace falta el paso de PIN de
 el token que emite el flujo OAuth de Embedded Signup) -- no hay ningún
 candado de `kind` en el store, así que reusarlo con un string propio es
 seguro.
+
+`WEBHOOK_VERIFY_TOKEN_KIND`/`resolve_webhook_verify_token`: por defecto
+el handshake de `core/gateway/webhooks.py` usa `settings.whatsapp_
+verify_token` (global). Si el admin generó/escribió uno propio en el
+paso de webhook del wizard, se guarda acá y `webhooks.py` lo prioriza
+antes de caer al global -- opcional, dejarlo vacío no cambia nada del
+comportamiento actual.
 """
 
 from __future__ import annotations
@@ -31,6 +38,7 @@ from core.shared.exceptions import AgentCoreError
 
 APP_SECRET_KIND = "app_access"
 CLOUD_API_ACCESS_TOKEN_KIND = "cloud_api_access_token"
+WEBHOOK_VERIFY_TOKEN_KIND = "webhook_verify_token"
 
 
 class ByokError(AgentCoreError):
@@ -45,6 +53,7 @@ async def save_byok_connection(
     phone_number_id: str,
     access_token: str,
     environment: str = "sandbox",
+    verify_token: str | None = None,
 ) -> MetaConnection:
     """Verifica las credenciales contra Graph API y recién después
     persiste -- nunca guarda a ciegas. Reentrante: volver a correrlo con
@@ -110,6 +119,10 @@ async def save_byok_connection(
         await meta_token_store.put_token(
             connection_id, CLOUD_API_ACCESS_TOKEN_KIND, app_id, access_token, tenant_id=tenant_id
         )
+        if verify_token:
+            await meta_token_store.put_token(
+                connection_id, WEBHOOK_VERIFY_TOKEN_KIND, app_id, verify_token, tenant_id=tenant_id
+            )
     except Exception as exc:
         # Las credenciales YA fueron verificadas contra Graph -- este
         # except cubre un fallo de infraestructura al guardar el token
@@ -126,3 +139,28 @@ async def save_byok_connection(
         db_connection = await session.get(MetaConnection, connection_id)
         db_connection.status = "connected"
         return db_connection
+
+
+async def resolve_webhook_verify_token(tenant_id: uuid.UUID) -> str | None:
+    """`None` si el tenant no tiene una `MetaConnection` de WhatsApp
+    conectada, o si no guardó un verify_token propio -- en ambos casos
+    `webhooks.py` cae a `settings.whatsapp_verify_token` (comportamiento
+    sin cambios). Filtra por `tenant_id` explícito, nunca confía solo en
+    RLS (mismo criterio que el resto del módulo)."""
+    async with get_session() as session:
+        connection = (
+            await session.execute(
+                select(MetaConnection)
+                .where(
+                    MetaConnection.tenant_id == tenant_id,
+                    MetaConnection.channel == "whatsapp",
+                    MetaConnection.status == "connected",
+                )
+                .order_by(MetaConnection.connected_at.desc())
+            )
+        ).scalars().first()
+    if connection is None:
+        return None
+    return await meta_token_store.get_token(
+        connection.id, WEBHOOK_VERIFY_TOKEN_KIND, connection.meta_app_id, tenant_id=tenant_id
+    )
