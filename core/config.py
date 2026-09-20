@@ -103,6 +103,13 @@ class Settings(BaseSettings):
     # connections.py::verify_meta_credentials (envío de mensajes en producción).
     graph_api_version: str = Field(default="v21.0", alias="META_GRAPH_VERSION")
 
+    # --- Checklist de promoción a producción ---
+    # Hash SHA-256 (hex) del META_APP_SECRET de DESARROLLO, copiado UNA VEZ a
+    # mano a las env vars de producción (ver docs/despliegue-coolify.md) --
+    # nunca se comparan los secretos en texto plano, solo hashes. Vacío =
+    # check no configurado (`ok=None`, nunca `True` por default).
+    dev_app_secret_hash: str = Field(default="", alias="DEV_APP_SECRET_HASH")
+
     # --- Comportamiento ---
     debounce_mode: DebounceMode = Field(default="natural", alias="DEBOUNCE_MODE")
     max_agent_iterations: int = Field(default=6, alias="MAX_AGENT_ITERATIONS")
