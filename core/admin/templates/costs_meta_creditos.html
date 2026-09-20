@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Líneas de crédito{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4 d-flex justify-content-between align-items-center">
+  Paso manual de facturación
+  <a href="/admin/costos" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left"></i> Volver
+  </a>
+</h1>
+
+<div class="alert alert-secondary">
+  El alta del método de pago del cliente no tiene API -- Meta solo permite
+  <strong>leer</strong> líneas de crédito ya existentes
+  (<code>GET /{business_id}/extendedcredits</code>). No hay forma de crear, actualizar
+  ni borrar una desde acá, ni de confirmar con certeza si el método de pago ya está
+  configurado: esta pantalla muestra lo que Meta devuelva, tal cual.
+</div>
+
+<div class="card mb-4">
+  <div class="card-body">
+    <h5 class="card-title fs-6">1. Configurar el método de pago (manual)</h5>
+    <p class="text-secondary small">
+      Abrí Business Manager y desde ahí navegá a WhatsApp Manager / Business Settings ->
+      Métodos de pago para agregarlo. La ruta exacta dentro de Business Settings puede
+      variar según la cuenta -- este botón lleva al punto de entrada general, no a una
+      URL profunda verificada.
+    </p>
+    <a href="https://business.facebook.com/{{ '?business_id=' ~ connections[0].business_id if connections and connections[0].business_id else '' }}"
+       target="_blank" rel="noopener" class="btn btn-primary btn-sm">
+      Abrir Business Manager
+    </a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <h5 class="card-title fs-6">2. Verificar líneas de crédito existentes</h5>
+    {% for connection in connections %}
+    <form method="post" action="/admin/costos/meta/creditos/{{ connection.id }}/verificar" class="d-inline">
+      <button class="btn btn-outline-primary btn-sm mb-2">
+        Verificar ({{ connection.business_id }})
+      </button>
+    </form>
+    {% else %}
+    <p class="text-secondary">Ninguna conexión de este tenant tiene <code>business_id</code> configurado.</p>
+    {% endfor %}
+
+    {% if credits_error %}
+    <div class="alert alert-danger mt-3">{{ credits_error }}</div>
+    {% elif checked_connection_id %}
+    <table class="table mt-3 mb-0">
+      <thead><tr><th>id</th><th>legal_entity_name</th><th>currency</th><th>datos crudos</th></tr></thead>
+      <tbody>
+        {% for line in credits %}
+        <tr>
+          <td>{{ line.get("id", "—") }}</td>
+          <td>{{ line.get("legal_entity_name", "—") }}</td>
+          <td>{{ line.get("currency", "—") }}</td>
+          <td><code class="small">{{ line }}</code></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="text-secondary text-center py-4">Meta no devolvió ninguna línea de crédito.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
