@@ -395,12 +395,13 @@ async def _dispatch_status_events(entry_events: list[FlattenedEvent]) -> None:
     for event in entry_events:
         if event.object_type != "whatsapp_business_account":
             continue
+        phone_number_id = (event.value or {}).get("metadata", {}).get("phone_number_id")
         for status in (event.value or {}).get("statuses", []):
             candidate_id = f"{status.get('id', '')}:{status.get('status', '')}"
             if candidate_id != event.external_id:
                 continue
             try:
-                await apply_status_update(status)
+                await apply_status_update(status, phone_number_id=phone_number_id)
             except Exception:
                 log.exception("status_update_handler_fallo", external_id=event.external_id)
 

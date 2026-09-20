@@ -29,6 +29,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -772,6 +773,79 @@ class MessageTemplate(Base):
     components: Mapped[Any | None] = mapped_column(JSONB)
     synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sync_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class MessageCost(Base):
+    """Ingesta de costos por webhook (`statuses[].pricing`) -- factual pero
+    SIN dólares: este objeto nunca trae un monto, solo metadata de
+    facturación (`billable`/`pricing_model`/categoría). El monto real vive
+    en `PricingDaily.cost` (única fuente autoritativa, `pricing_analytics`).
+    NO única sobre `external_message_id`: Meta puede mandar el mismo wamid
+    en más de un status con pricing -- cada evento es un hecho nuevo."""
+
+    __tablename__ = "message_costs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    message_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"))
+    external_message_id: Mapped[str] = mapped_column(Text)
+    waba_account_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("waba_accounts.id", ondelete="SET NULL"))
+    phone_number_id: Mapped[str | None] = mapped_column(Text)
+    billable: Mapped[bool | None] = mapped_column(Boolean)
+    pricing_model: Mapped[str | None] = mapped_column(Text)
+    pricing_type: Mapped[str | None] = mapped_column(Text)
+    pricing_category: Mapped[str | None] = mapped_column(Text)
+    # Id de conversación de META (ventana de facturación) -- DISTINTO de
+    # `conversations.id` interno, nombre separado a propósito.
+    meta_conversation_id: Mapped[str | None] = mapped_column(Text)
+    conversation_origin_type: Mapped[str | None] = mapped_column(Text)
+    conversation_expiration_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str | None] = mapped_column(Text)
+    event_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PricingDaily(Base):
+    """Ingesta diaria desde `pricing_analytics` -- `cost` es el valor
+    AUTORITATIVO (regla innegociable: nunca se calcula localmente con una
+    tabla de tarifas propia; los volume tiers se agregan a nivel de
+    business portfolio, no de WABA, así que un panel multi-tenant no puede
+    predecir la tarifa unitaria de un tenant)."""
+
+    __tablename__ = "pricing_daily"
+    __table_args__ = (
+        # Índice de EXPRESIÓN con coalesce -- las dimensiones nullable
+        # participan de la igualdad de todos modos, para que el upsert sea
+        # determinístico incluso cuando Meta omite alguna dimensión (creado
+        # como SQL crudo en la migración 0028; declarado acá con `text()`
+        # para que el metadata de SQLAlchemy coincida con la DB real).
+        # `tenant_id` participa de la clave como defensa en profundidad
+        # además de RLS (hallazgo auditor-multitenant, 2026-09-20).
+        Index(
+            "uq_pricing_daily_dimensions", "tenant_id", "waba_account_id", "date",
+            text("coalesce(phone_number, '')"), text("coalesce(country, '')"), text("coalesce(tier, '')"),
+            text("coalesce(pricing_type, '')"), text("coalesce(pricing_category, '')"),
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    waba_account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("waba_accounts.id", ondelete="CASCADE"))
+    date: Mapped[Any] = mapped_column(Date)
+    phone_number: Mapped[str | None] = mapped_column(Text)
+    country: Mapped[str | None] = mapped_column(Text)
+    # "<LOWER>:<UPPER>" tal cual lo manda Meta -- no se parsea a número.
+    tier: Mapped[str | None] = mapped_column(Text)
+    pricing_type: Mapped[str | None] = mapped_column(Text)
+    pricing_category: Mapped[str | None] = mapped_column(Text)
+    volume: Mapped[int] = mapped_column(Integer)
+    cost: Mapped[Any] = mapped_column(Numeric(12, 6))
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 

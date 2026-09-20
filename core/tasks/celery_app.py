@@ -78,6 +78,27 @@ celery.conf.beat_schedule[_MESSAGE_TEMPLATE_SYNC_TASK] = {
     "schedule": crontab(minute="0"),
 }
 
+# Sync de `pricing_analytics` (diario, de madrugada): el webhook `statuses`
+# (con su objeto `pricing`) llega en tiempo real pero NUNCA trae un monto
+# en dólares -- esto es lo único que sincroniza el `cost` autoritativo.
+_META_PRICING_SYNC_TASK = "core.meta_pricing_sync"
+
+
+@celery.task(name=_META_PRICING_SYNC_TASK)
+def _meta_pricing_sync() -> None:
+    from core.tasks.meta_pricing_sync import sync_all_waba_pricing
+
+    try:
+        asyncio.run(sync_all_waba_pricing())
+    except Exception:
+        log.exception("cron_task_failed", task=_META_PRICING_SYNC_TASK)
+
+
+celery.conf.beat_schedule[_META_PRICING_SYNC_TASK] = {
+    "task": _META_PRICING_SYNC_TASK,
+    "schedule": crontab(hour="2", minute="0"),
+}
+
 
 @worker_init.connect
 def _load_plugins_on_worker_start(**_kwargs: object) -> None:
