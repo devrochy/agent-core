@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -29,9 +30,11 @@ from core.db.models import (
     ChannelConnection,
     Conversation,
     Customer,
+    FbPage,
     Message,
     PhoneNumber,
     ProcessedEvent,
+    utcnow,
 )
 from core.db.session import get_session
 from core.gateway.sender import send_to_conversation
@@ -330,6 +333,22 @@ async def _resolve_conversation(
         ).scalar_one_or_none()
         meta_connection_id = meta_phone.connection_id if meta_phone else None
 
+        # Messenger: connection_external_id es el Page ID -- resuelve
+        # exactamente qué FbPage corresponde (una MetaConnection de
+        # Messenger puede agrupar varias Páginas, hallazgo
+        # auditor-multitenant 2026-09-23).
+        fb_page = None
+        if channel == "messenger":
+            fb_page = (
+                await session.execute(
+                    select(FbPage).where(
+                        FbPage.page_id == connection_external_id, FbPage.tenant_id == tenant_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if fb_page is not None:
+                meta_connection_id = fb_page.connection_id
+
         conversation = (
             await session.execute(
                 select(Conversation)
@@ -345,6 +364,9 @@ async def _resolve_conversation(
         ).scalar_one_or_none()
 
         is_new = conversation is None
+        # Ventana de servicio de 24h (Messenger): se refresca en cada
+        # inbound, tanto si la conversación es nueva como si ya existía.
+        service_window_expires_at = utcnow() + timedelta(hours=24) if channel == "messenger" else None
         if conversation is None:
             conversation = Conversation(
                 tenant_id=tenant_id,
@@ -352,6 +374,8 @@ async def _resolve_conversation(
                 channel=channel,
                 connection_id=connection.id if connection else None,
                 meta_connection_id=meta_connection_id,
+                fb_page_id=fb_page.id if fb_page else None,
+                service_window_expires_at=service_window_expires_at,
             )
             session.add(conversation)
             await session.flush()
@@ -360,6 +384,10 @@ async def _resolve_conversation(
                 conversation.connection_id = connection.id  # responder por donde escribió
             if meta_connection_id and conversation.meta_connection_id != meta_connection_id:
                 conversation.meta_connection_id = meta_connection_id
+            if fb_page is not None and conversation.fb_page_id != fb_page.id:
+                conversation.fb_page_id = fb_page.id
+            if service_window_expires_at is not None:
+                conversation.service_window_expires_at = service_window_expires_at
 
     if is_new:
         await event_bus.emit(

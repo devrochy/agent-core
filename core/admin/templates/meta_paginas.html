@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Páginas de Messenger{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4 d-flex justify-content-between align-items-center">
+  Páginas de Messenger
+  <a href="/admin/conexiones/wizard/messenger" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left"></i> Volver
+  </a>
+</h1>
+
+<p class="small text-secondary mb-3">
+  Los <code>fields</code> suscritos que se muestran acá son los que Meta
+  CONFIRMA con <code>GET /{page_id}/subscribed_apps</code> -- no
+  necesariamente los que pedimos. Si aparece "ninguno" en verde/rojo,
+  ningún webhook está llegando de esa Página.
+</p>
+
+{% for p in pages %}
+<div class="card mb-3">
+  <div class="card-body">
+    <h5 class="card-title fs-6 d-flex justify-content-between align-items-center">
+      <span>{{ p.name }} <code class="text-secondary">{{ p.page_id }}</code></span>
+      {% if p.subscribed_fields %}
+        <span class="badge text-bg-success">suscrita</span>
+      {% else %}
+        <span class="badge text-bg-danger">sin confirmar</span>
+      {% endif %}
+    </h5>
+    <p class="small mb-2">
+      {% for f in p.subscribed_fields %}<span class="badge text-bg-light border me-1">{{ f }}</span>{% endfor %}
+      {% if not p.subscribed_fields %}<span class="text-secondary">Ningún field confirmado todavía.</span>{% endif %}
+    </p>
+    <form method="post" action="/admin/conexiones/meta/{{ connection.id }}/paginas/{{ p.page_id }}/re-verificar" class="d-inline">
+      <button class="btn btn-sm btn-outline-primary"><i class="bi bi-arrow-repeat"></i> Re-verificar</button>
+    </form>
+    <form method="post" action="/admin/conexiones/meta/{{ connection.id }}/paginas/{{ p.page_id }}/routing" class="d-inline ms-2">
+      <div class="form-check form-check-inline">
+        <input type="checkbox" name="enabled" class="form-check-input" id="routing-{{ p.page_id }}"
+               onchange="this.form.submit()" {% if p.conversation_routing_enabled %}checked{% endif %}>
+        <label class="form-check-label small" for="routing-{{ p.page_id }}">Conversation Routing activo en esta Página</label>
+      </div>
+    </form>
+    <div class="form-text">
+      La designación de app por defecto / Primary Receiver no es automatizable --
+      se configura en Meta Business Suite. Este toggle solo le dice a nuestro
+      panel que chequee quién controla el hilo antes de responder.
+    </div>
+  </div>
+</div>
+{% else %}
+<div class="alert alert-secondary">Todavía no hay Páginas conectadas.</div>
+{% endfor %}
+{% endblock %}

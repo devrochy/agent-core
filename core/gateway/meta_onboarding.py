@@ -283,7 +283,7 @@ async def exchange_code(wizard_id: uuid.UUID, code: str) -> ConnectionWizardView
     params = {"client_id": settings.meta_app_id, "client_secret": settings.meta_app_secret, "code": code}
     call_started_at = time.monotonic()
 
-    token, used_redirect_uri = await _fetch_exchange_token(version, params, settings)
+    token, used_redirect_uri = await fetch_exchange_token(version, params, settings)
 
     latency_ms = int((time.monotonic() - started_at) * 1000)
     dispatch_ms = int((call_started_at - started_at) * 1000)
@@ -316,7 +316,7 @@ async def exchange_code(wizard_id: uuid.UUID, code: str) -> ConnectionWizardView
         return _to_view(wizard)
 
 
-async def _fetch_exchange_token(version: str, params: dict[str, str], settings: Any) -> tuple[str, bool]:
+async def fetch_exchange_token(version: str, params: dict[str, str], settings: Any) -> tuple[str, bool]:
     async def _call(extra_params: dict[str, str]) -> httpx.Response:
         async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
             return await client.get(f"{GRAPH_BASE}/{version}/oauth/access_token", params={**params, **extra_params})

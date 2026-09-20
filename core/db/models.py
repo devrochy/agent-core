@@ -213,6 +213,15 @@ class Conversation(Base):
     # conexiones manuales viejas. `sender.py::resolve_credentials` prueba
     # este primero, cae al de arriba si es None.
     meta_connection_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("meta_connections.id", ondelete="SET NULL"))
+    # Qué Página de Messenger específica corresponde a esta conversación --
+    # una MetaConnection de Messenger puede agrupar varias FbPage (se
+    # conectan todas las que el admin puede manejar de una), así que
+    # meta_connection_id solo no alcanza para saber cuál usar al responder
+    # (hallazgo auditor-multitenant, 2026-09-23).
+    fb_page_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("fb_pages.id", ondelete="SET NULL"))
+    # Ventana de servicio de 24h (Messenger): se refresca en cada inbound.
+    # None = sin ventana abierta (canal sin este concepto, o nunca hubo inbound).
+    service_window_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     bot_paused: Mapped[bool] = mapped_column(Boolean, default=False)  # kill-switch por conversación
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -652,6 +661,10 @@ class FbPage(Base):
     name: Mapped[str | None] = mapped_column(Text)
     category: Mapped[str | None] = mapped_column(Text)
     subscribed_fields: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    # Conversation Routing es opt-in por Página, activado a mano en Meta
+    # Business Suite (no automatizable) -- el admin marca esto en nuestro
+    # panel para que se chequee thread_owner antes de cada envío.
+    conversation_routing_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     raw: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
