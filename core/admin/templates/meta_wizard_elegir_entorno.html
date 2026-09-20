@@ -11,17 +11,18 @@
 
 <div class="row row-cols-1 row-cols-md-2 g-3">
   <div class="col">
-    <a href="/admin/conexiones/wizard/whatsapp?environment=sandbox" class="card text-decoration-none text-body h-100 p-3">
+    <button type="button" class="card text-decoration-none text-body h-100 p-3 w-100 text-start border-0"
+            data-bs-toggle="modal" data-bs-target="#modal-byok-test">
       <div class="d-flex align-items-center gap-2 mb-2">
         <i class="bi bi-flask fs-3"></i>
         <h5 class="mb-0">Modo prueba</h5>
       </div>
       <p class="text-secondary small mb-0">
-        Meta te da un número de prueba gratis (hasta 5 destinatarios verificados). No hace
-        falta Business Verification, App Review, Advanced Access, Live Mode ni medio de pago
-        -- ideal para probar el asistente antes de ir a producción.
+        Usá tu propia app de Meta con el número de prueba gratis (hasta 5 destinatarios
+        verificados). No hace falta Business Verification, App Review, Advanced Access, Live
+        Mode ni medio de pago -- ideal para probar el asistente antes de ir a producción.
       </p>
-    </a>
+    </button>
   </div>
   <div class="col">
     <a href="/admin/conexiones/wizard/whatsapp?environment=production" class="card text-decoration-none text-body h-100 p-3">
@@ -37,4 +38,112 @@
     </a>
   </div>
 </div>
+
+<div class="modal fade" id="modal-byok-test" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <form method="post" action="/admin/conexiones/wizard/whatsapp-byok/guardar" id="form-byok-test">
+        <div class="modal-header">
+          <h5 class="modal-title">Conectar WhatsApp de prueba (tu propia app de Meta)</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+
+          <div class="d-flex gap-2 mb-3" id="byok-stepper">
+            <span class="badge text-bg-primary byok-step-badge" data-step="1">1. Crear la app</span>
+            <span class="badge text-bg-secondary byok-step-badge" data-step="2">2. App ID / Secret</span>
+            <span class="badge text-bg-secondary byok-step-badge" data-step="3">3. Número de prueba</span>
+            <span class="badge text-bg-secondary byok-step-badge" data-step="4">4. Webhook</span>
+          </div>
+
+          <div class="byok-step" data-step="1">
+            <p>
+              Creá una app en <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">Meta for Developers</a>
+              y agregá el producto <strong>WhatsApp</strong>. Meta te asigna automáticamente un
+              número de prueba verificado, sin costo.
+            </p>
+          </div>
+
+          <div class="byok-step d-none" data-step="2">
+            <p class="text-secondary small">App Dashboard → Settings → Basic.</p>
+            <div class="mb-3">
+              <label class="form-label">App ID</label>
+              <input type="text" name="app_id" class="form-control" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">App Secret</label>
+              <input type="password" name="app_secret" class="form-control" required>
+            </div>
+          </div>
+
+          <div class="byok-step d-none" data-step="3">
+            <p class="text-secondary small">
+              App Dashboard → WhatsApp → API Setup: ahí Meta ya te da un número de prueba
+              verificado (<code>phone_number_id</code>) y un token de acceso temporal (24hs).
+            </p>
+            <div class="mb-3">
+              <label class="form-label">Phone Number ID</label>
+              <input type="text" name="phone_number_id" class="form-control" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Access Token (temporal)</label>
+              <input type="password" name="access_token" class="form-control" required>
+            </div>
+          </div>
+
+          <div class="byok-step d-none" data-step="4">
+            <p class="text-secondary small">
+              Pegá esto en App Dashboard → WhatsApp → Configuration → Webhook.
+            </p>
+            <div class="input-group input-group-sm mb-2">
+              <span class="input-group-text">Callback URL</span>
+              <input type="text" class="form-control font-monospace" value="{{ webhook_url }}" readonly onclick="this.select()">
+            </div>
+            <div class="input-group input-group-sm">
+              <span class="input-group-text">Verify token</span>
+              <input type="text" class="form-control font-monospace" value="{{ whatsapp_verify_token }}" readonly onclick="this.select()">
+            </div>
+          </div>
+
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+          <button type="button" class="btn btn-outline-secondary d-none" id="byok-btn-atras">Atrás</button>
+          <button type="button" class="btn btn-primary" id="byok-btn-siguiente">Siguiente</button>
+          <button type="submit" class="btn btn-success d-none" id="byok-btn-guardar">
+            <i class="bi bi-check-lg"></i> Guardar y verificar
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var total = 4;
+  var current = 1;
+  var steps = document.querySelectorAll('#form-byok-test .byok-step');
+  var badges = document.querySelectorAll('#form-byok-test .byok-step-badge');
+  var btnAtras = document.getElementById('byok-btn-atras');
+  var btnSiguiente = document.getElementById('byok-btn-siguiente');
+  var btnGuardar = document.getElementById('byok-btn-guardar');
+
+  function render() {
+    steps.forEach(function (el) { el.classList.toggle('d-none', Number(el.dataset.step) !== current); });
+    badges.forEach(function (el) {
+      var isCurrent = Number(el.dataset.step) === current;
+      el.classList.toggle('text-bg-primary', isCurrent);
+      el.classList.toggle('text-bg-secondary', !isCurrent);
+    });
+    btnAtras.classList.toggle('d-none', current === 1);
+    btnSiguiente.classList.toggle('d-none', current === total);
+    btnGuardar.classList.toggle('d-none', current !== total);
+  }
+
+  btnSiguiente.addEventListener('click', function () { if (current < total) { current += 1; render(); } });
+  btnAtras.addEventListener('click', function () { if (current > 1) { current -= 1; render(); } });
+  render();
+})();
+</script>
 {% endblock %}
