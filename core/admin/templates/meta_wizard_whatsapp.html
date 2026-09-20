@@ -56,6 +56,9 @@
       <a href="/admin/conexiones/meta/{{ wizard.connection_id }}/numeros" class="btn btn-outline-primary">
         <i class="bi bi-telephone"></i> Ver/agregar números
       </a>
+      <a href="/admin/conexiones/meta/{{ wizard.connection_id }}/plantillas" class="btn btn-outline-primary">
+        <i class="bi bi-file-earmark-text"></i> Plantillas
+      </a>
     {% else %}
       <p class="text-secondary">Procesando el paso <code>{{ wizard.current_step }}</code>... recargá la página en unos segundos.</p>
     {% endif %}

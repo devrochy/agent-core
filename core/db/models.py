@@ -608,6 +608,14 @@ class WabaAccount(Base):
     message_template_namespace: Mapped[str | None] = mapped_column(Text)
     account_review_status: Mapped[str | None] = mapped_column(Text)
     subscribed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Cacheados desde el `summary` de `GET /{waba_id}/message_templates`
+    # (nunca hardcodear 250 ni 6000 -- el límite real depende del tier de la
+    # cuenta) -- refrescados en cada sync, leídos por el panel para
+    # habilitar/deshabilitar "Nueva plantilla".
+    message_template_count: Mapped[int | None] = mapped_column(Integer)
+    message_template_limit: Mapped[int | None] = mapped_column(Integer)
+    are_translations_complete: Mapped[bool | None] = mapped_column(Boolean)
+    template_limits_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     raw: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -697,7 +705,8 @@ class MessageTemplate(Base):
         ),
         CheckConstraint(
             "status in ('DRAFT','PENDING','APPROVED','REJECTED','PAUSED','DISABLED','IN_APPEAL',"
-            "'ARCHIVED','LOCKED','LIMIT_EXCEEDED','FLAGGED','REINSTATED','PENDING_DELETION','DELETED')",
+            "'ARCHIVED','LOCKED','LIMIT_EXCEEDED','FLAGGED','REINSTATED','PENDING_DELETION','DELETED',"
+            "'UNARCHIVED')",
             name="ck_message_templates_status",
         ),
     )
@@ -714,6 +723,20 @@ class MessageTemplate(Base):
     rejected_reason: Mapped[str | None] = mapped_column(Text)
     rejection_recommendation: Mapped[str | None] = mapped_column(Text)
     quality_score: Mapped[str | None] = mapped_column(Text)
+    # `disable_info`/`other_info` de `message_template_status_update`, y el
+    # rastro de recategorización de `template_category_update` -- afecta al
+    # costo desde el 1/oct/2026, tiene que ser visible en el panel.
+    disable_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    other_info_title: Mapped[str | None] = mapped_column(Text)
+    other_info_description: Mapped[str | None] = mapped_column(Text)
+    category_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    previous_category: Mapped[str | None] = mapped_column(Text)
+    previous_quality_score: Mapped[str | None] = mapped_column(Text)
+    # Límite de Meta: 1 edición/día, 10/mes -- `edits_month_key` ("yyyy-MM")
+    # resetea `edits_this_month` al cambiar de mes sin necesitar un cron aparte.
+    last_edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    edits_this_month: Mapped[int] = mapped_column(Integer, default=0)
+    edits_month_key: Mapped[str | None] = mapped_column(Text)
     components: Mapped[Any | None] = mapped_column(JSONB)
     synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sync_error: Mapped[str | None] = mapped_column(Text)
