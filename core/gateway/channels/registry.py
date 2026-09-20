@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from core.config import get_settings
 from core.gateway.channels.base import InboundAdapter, OutboundAdapter
+from core.gateway.channels.instagram.outbound import InstagramOutbound
 from core.gateway.channels.messenger.outbound import FacebookMessengerOutbound
 from core.gateway.channels.whatsapp.inbound import WhatsAppMetaInbound
 from core.gateway.channels.whatsapp.outbound import WhatsAppMetaOutbound
@@ -29,6 +30,7 @@ _INBOUND: dict[str, InboundAdapter] = {
 _OUTBOUND: dict[tuple[str, str], OutboundAdapter] = {
     ("meta", "whatsapp"): WhatsAppMetaOutbound(),
     ("meta", "messenger"): FacebookMessengerOutbound(),
+    ("meta", "instagram"): InstagramOutbound(),
 }
 
 

@@ -97,6 +97,29 @@ async def get_token(
     return plaintext.decode()
 
 
+async def get_token_expiry(
+    connection_id: uuid.UUID, kind: str, subject_id: str, *, tenant_id: uuid.UUID | None = None
+) -> datetime | None:
+    """Lee `expires_at` sin descifrar (barato: sin AES-GCM) -- para crons que
+    solo necesitan decidir SI hace falta refrescar un token antes de pagar
+    el costo de `get_token`. `None` si no existe/fue revocado, o si nunca se
+    guardó `expires_at`."""
+    tid = tenant_id if tenant_id is not None else get_current_tenant_id()
+    async with get_session() as session:
+        row = (
+            await session.execute(
+                select(MetaToken.expires_at).where(
+                    MetaToken.tenant_id == tid,
+                    MetaToken.connection_id == connection_id,
+                    MetaToken.kind == kind,
+                    MetaToken.subject_id == subject_id,
+                    MetaToken.revoked_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+    return row
+
+
 async def revoke_token(
     connection_id: uuid.UUID, kind: str, subject_id: str, *, tenant_id: uuid.UUID | None = None
 ) -> None:

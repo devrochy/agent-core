@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Conectar Instagram{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4 d-flex justify-content-between align-items-center">
+  Conectar Instagram
+  <a href="/admin/conexiones" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left"></i> Volver a conexiones
+  </a>
+</h1>
+
+<p class="text-secondary mb-4">
+  Instagram soporta dos formas de conectar la cuenta -- elegí la que
+  corresponda. <strong>Nunca combines las dos</strong> en un mismo intento:
+  cada una pide un juego de permisos distinto y mezclarlos rompe el
+  consentimiento del usuario.
+</p>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-6">
+    <div class="card h-100">
+      <div class="card-body" id="ig-facebook-login-root"
+           data-config-id="{{ meta_config_id_instagram }}"
+           data-app-id="{{ meta_app_id }}"
+           data-graph-version="{{ graph_api_version }}">
+        <h5 class="card-title fs-6">
+          Ruta (a): la cuenta está vinculada a una Página de Facebook
+          {% if suggests_route_a %}<span class="badge text-bg-success ms-1">sugerida</span>{% endif %}
+        </h5>
+        <p class="small text-secondary">
+          Usá esta si ya conectaste Messenger o WhatsApp, o si tu cuenta de
+          Instagram tiene una Página de Facebook vinculada.
+        </p>
+        {% if not fb_login_configured %}
+        <div class="alert alert-warning small mb-2">META_CONFIG_ID_INSTAGRAM no está configurado.</div>
+        <button class="btn btn-primary" disabled><i class="bi bi-facebook"></i> Conectar con Facebook</button>
+        {% else %}
+        <button id="ig-facebook-login-button" class="btn btn-primary" disabled>
+          <i class="bi bi-facebook"></i> Conectar con Facebook
+        </button>
+        {% endif %}
+        <div id="ig-facebook-login-status" class="text-secondary small mt-2"></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card h-100">
+      <div class="card-body">
+        <h5 class="card-title fs-6">Ruta (b): la cuenta NO está vinculada a ninguna Página</h5>
+        <p class="small text-secondary">
+          Instagram Login directo -- necesitás una app de Instagram separada
+          (App ID/Secret propios, distintos de los de Facebook).
+        </p>
+        {% if not ig_login_configured %}
+        <div class="alert alert-warning small mb-2">INSTAGRAM_APP_ID/INSTAGRAM_APP_SECRET no están configurados.</div>
+        {% endif %}
+        <a href="/admin/conexiones/wizard/instagram/ig-login/iniciar"
+           class="btn btn-primary {% if not ig_login_configured %}disabled{% endif %}">
+          <i class="bi bi-instagram"></i> Conectar con Instagram
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if accounts %}
+<div class="card">
+  <div class="card-body">
+    <h5 class="card-title fs-6">Cuentas conectadas</h5>
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th>Cuenta</th><th>Ruta</th><th>Estado</th><th class="text-end">Acciones</th></tr></thead>
+      <tbody>
+        {% for a in accounts %}
+        <tr>
+          <td>@{{ a.username or a.ig_user_id }}</td>
+          <td>{{ "Facebook Login" if a.login_route == "ig_facebook_login" else "Instagram Login" }}</td>
+          <td>
+            {% if a.status == "connected" %}<span class="badge text-bg-success">conectada</span>
+            {% else %}<span class="badge text-bg-danger">Reconexión requerida</span>{% endif %}
+          </td>
+          <td class="text-end">
+            <a href="/admin/conexiones/meta/{{ connection.id }}/cuentas-ig" class="btn btn-sm btn-outline-primary">Gestionar</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<script src="/static/facebook_login_instagram.js"></script>
+{% endblock %}

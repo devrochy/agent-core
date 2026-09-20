@@ -219,6 +219,9 @@ class Conversation(Base):
     # meta_connection_id solo no alcanza para saber cuál usar al responder
     # (hallazgo auditor-multitenant, 2026-09-23).
     fb_page_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("fb_pages.id", ondelete="SET NULL"))
+    # Mismo criterio que fb_page_id -- una MetaConnection de Instagram puede
+    # agrupar varias IgAccount (ruta Instagram Login especialmente).
+    ig_account_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ig_accounts.id", ondelete="SET NULL"))
     # Ventana de servicio de 24h (Messenger): se refresca en cada inbound.
     # None = sin ventana abierta (canal sin este concepto, o nunca hubo inbound).
     service_window_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -680,6 +683,7 @@ class IgAccount(Base):
             "login_route is null or login_route in ('ig_facebook_login','ig_instagram_login')",
             name="ck_ig_accounts_login_route",
         ),
+        CheckConstraint("status in ('connected','degraded')", name="ck_ig_accounts_status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -689,6 +693,12 @@ class IgAccount(Base):
     username: Mapped[str | None] = mapped_column(Text)
     linked_page_id: Mapped[str | None] = mapped_column(Text)
     login_route: Mapped[str | None] = mapped_column(Text)
+    # Granularidad por CUENTA, no por conexión -- una MetaConnection puede
+    # agrupar varias IgAccount, el cron de refresco (ruta b) puede degradar
+    # una sin afectar a las demás.
+    status: Mapped[str] = mapped_column(Text, default="connected")
+    status_reason: Mapped[str | None] = mapped_column(Text)
+    subscribed_fields: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
     raw: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

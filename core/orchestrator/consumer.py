@@ -31,6 +31,7 @@ from core.db.models import (
     Conversation,
     Customer,
     FbPage,
+    IgAccount,
     Message,
     PhoneNumber,
     ProcessedEvent,
@@ -349,6 +350,22 @@ async def _resolve_conversation(
             if fb_page is not None:
                 meta_connection_id = fb_page.connection_id
 
+        # Instagram: connection_external_id es el ig_user_id (entry_id del
+        # webhook) -- resuelve exactamente qué IgAccount corresponde (una
+        # MetaConnection de Instagram puede agrupar varias cuentas, mismo
+        # criterio que fb_page_id, ADR-0031).
+        ig_account = None
+        if channel == "instagram":
+            ig_account = (
+                await session.execute(
+                    select(IgAccount).where(
+                        IgAccount.ig_user_id == connection_external_id, IgAccount.tenant_id == tenant_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if ig_account is not None:
+                meta_connection_id = ig_account.connection_id
+
         conversation = (
             await session.execute(
                 select(Conversation)
@@ -364,9 +381,11 @@ async def _resolve_conversation(
         ).scalar_one_or_none()
 
         is_new = conversation is None
-        # Ventana de servicio de 24h (Messenger): se refresca en cada
-        # inbound, tanto si la conversación es nueva como si ya existía.
-        service_window_expires_at = utcnow() + timedelta(hours=24) if channel == "messenger" else None
+        # Ventana de servicio de 24h (Messenger/Instagram): se refresca en
+        # cada inbound, tanto si la conversación es nueva como si ya existía.
+        service_window_expires_at = (
+            utcnow() + timedelta(hours=24) if channel in ("messenger", "instagram") else None
+        )
         if conversation is None:
             conversation = Conversation(
                 tenant_id=tenant_id,
@@ -375,6 +394,7 @@ async def _resolve_conversation(
                 connection_id=connection.id if connection else None,
                 meta_connection_id=meta_connection_id,
                 fb_page_id=fb_page.id if fb_page else None,
+                ig_account_id=ig_account.id if ig_account else None,
                 service_window_expires_at=service_window_expires_at,
             )
             session.add(conversation)
@@ -386,6 +406,8 @@ async def _resolve_conversation(
                 conversation.meta_connection_id = meta_connection_id
             if fb_page is not None and conversation.fb_page_id != fb_page.id:
                 conversation.fb_page_id = fb_page.id
+            if ig_account is not None and conversation.ig_account_id != ig_account.id:
+                conversation.ig_account_id = ig_account.id
             if service_window_expires_at is not None:
                 conversation.service_window_expires_at = service_window_expires_at
 

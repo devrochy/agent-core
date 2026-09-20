@@ -19,6 +19,7 @@ from core.db.models import (
     Conversation,
     Customer,
     FbPage,
+    IgAccount,
     Message,
     MetaConnection,
     PhoneNumber,
@@ -104,6 +105,54 @@ async def _resolve_messenger_credentials(
     }
 
 
+async def _resolve_instagram_credentials(
+    meta_connection_id: uuid.UUID, connection: MetaConnection, conversation: Conversation
+) -> dict[str, str] | None:
+    """Resuelve la `IgAccount` EXACTA vía `conversation.ig_account_id`
+    (mismo criterio que `fb_page_id` -- una `MetaConnection` de Instagram
+    puede agrupar varias cuentas). Según `login_route`: ruta (a) reusa el
+    token de la `FbPage` vinculada (`linked_page_id`, kind `page_access`,
+    mismo mecanismo que Messenger); ruta (b) usa el token propio de la
+    cuenta (kind `long_lived_user`, subject_id=`ig_user_id`)."""
+    from core.gateway import meta_token_store
+    from core.gateway.meta_instagram import IG_LONG_LIVED_TOKEN_KIND
+    from core.gateway.meta_messenger import PAGE_TOKEN_KIND
+
+    async with get_session() as session:
+        account = None
+        if conversation.ig_account_id is not None:
+            account = await session.get(IgAccount, conversation.ig_account_id)
+            if account is not None and (account.connection_id != meta_connection_id or account.tenant_id != connection.tenant_id):
+                account = None
+        if account is None:
+            account = (
+                await session.execute(
+                    select(IgAccount).where(IgAccount.connection_id == meta_connection_id, IgAccount.tenant_id == connection.tenant_id)
+                )
+            ).scalars().first()
+    if account is None:
+        return None
+
+    base = {
+        "login_route": account.login_route or "",
+        "connection_id": str(meta_connection_id),
+        "graph_api_version": connection.graph_api_version,
+        "service_window_expires_at": conversation.service_window_expires_at.isoformat() if conversation.service_window_expires_at else "",
+    }
+    if account.login_route == "ig_facebook_login":
+        if not account.linked_page_id:
+            return None
+        token = await meta_token_store.get_token(meta_connection_id, PAGE_TOKEN_KIND, account.linked_page_id, tenant_id=connection.tenant_id)
+        if not token:
+            return None
+        return {**base, "page_id": account.linked_page_id, "access_token": token}
+
+    token = await meta_token_store.get_token(meta_connection_id, IG_LONG_LIVED_TOKEN_KIND, account.ig_user_id, tenant_id=connection.tenant_id)
+    if not token:
+        return None
+    return {**base, "ig_user_id": account.ig_user_id, "access_token": token}
+
+
 async def _resolve_meta_connection_credentials(
     meta_connection_id: uuid.UUID, expected_tenant_id: uuid.UUID | None, conversation: Conversation | None = None
 ) -> dict[str, str] | None:
@@ -135,6 +184,8 @@ async def _resolve_meta_connection_credentials(
 
     if connection.channel == "messenger" and conversation is not None:
         return await _resolve_messenger_credentials(meta_connection_id, connection, conversation)
+    if connection.channel == "instagram" and conversation is not None:
+        return await _resolve_instagram_credentials(meta_connection_id, connection, conversation)
     return await _resolve_whatsapp_credentials(meta_connection_id, connection)
 
 
