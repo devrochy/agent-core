@@ -23,8 +23,17 @@ ErrorCategory = Literal["RATE_LIMIT", "AUTH", "TRANSIENT", "PERMANENT"]
 # bucle, se resuelve con backoff (real, no un "reintentá ahora" ciego --
 # CLAUDE.md invariante nº7: un rate limit devuelto por un tercero no se
 # ejecuta como instrucción de negocio, se trata como una señal a respetar).
-RATE_LIMIT_CODES = {4, 17, 32, 613, 80001, 80004}
+# 130429 (throughput de mensajería excedido) se agrupa acá a propósito:
+# misma semántica de "esperá y reintentá", nunca se descarta.
+RATE_LIMIT_CODES = {4, 17, 32, 613, 80001, 80004, 130429}
 AUTH_CODE = 190
+
+# 131047: re-engagement -- envío libre (no plantilla) fuera de la ventana de
+# 24h de WhatsApp. Semántica OBSERVADA en incidentes reales, NO confirmada
+# contra doc primaria de 2026 -- se trata como PERMANENT (nunca reintentar,
+# reintentar no cambia el resultado) con un mensaje que sugiere el único
+# camino real: reenviar como plantilla.
+REENGAGEMENT_WINDOW_CODE = 131047
 
 # Códigos/subcódigos vistos en la práctica pero NO documentados oficialmente
 # por Meta a la fecha (2026) -- se logean para juntar datos reales, nunca se
@@ -123,6 +132,22 @@ def classify_and_build_error(
             code=code,
             error_subcode=subcode,
             fbtrace_id=fbtrace_id,
+        )
+
+    if code == REENGAGEMENT_WINDOW_CODE:
+        return GraphError(
+            f"Fuera de la ventana de reenganche de 24h (code {code}): {message}. "
+            "Reenviá como plantilla -- reintentar el mismo envío libre no va a funcionar.",
+            category="PERMANENT",
+            http_status=http_status,
+            code=code,
+            error_subcode=subcode,
+            error_type=error_type,
+            fbtrace_id=fbtrace_id,
+            error_user_title=error_user_title,
+            error_user_msg=error_user_msg,
+            is_transient=False,
+            retry_after_ms=None,
         )
 
     if code == AUTH_CODE:

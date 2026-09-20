@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -32,6 +33,7 @@ from core.db.models import (
     Message,
     PhoneNumber,
     ProcessedEvent,
+    utcnow,
 )
 from core.db.session import get_session
 from core.gateway.sender import send_to_conversation
@@ -368,6 +370,9 @@ async def _resolve_conversation(
     return conversation, customer, app_settings
 
 
+_SERVICE_WINDOW_HOURS = 24
+
+
 async def _persist_inbound(
     conversation_id: uuid.UUID, fields: dict[str, str], effective_message: str
 ) -> bool:
@@ -387,6 +392,13 @@ async def _persist_inbound(
                     idempotency_key=fields.get("external_message_id") or None,
                 )
             )
+            # Ventana de 24h de WhatsApp: cada inbound la refresca --
+            # validada por `sender.py::validate_service_window` antes de
+            # encolar un envío libre.
+            if fields.get("provider") == "meta" and fields.get("channel") == "whatsapp":
+                conversation = await session.get(Conversation, conversation_id)
+                if conversation is not None:
+                    conversation.service_window_expires_at = utcnow() + timedelta(hours=_SERVICE_WINDOW_HOURS)
         return True
     except IntegrityError:
         log.info("inbound_duplicate_ignored", message_id=fields.get("external_message_id"))

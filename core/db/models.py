@@ -214,6 +214,11 @@ class Conversation(Base):
     # este primero, cae al de arriba si es None.
     meta_connection_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("meta_connections.id", ondelete="SET NULL"))
     bot_paused: Mapped[bool] = mapped_column(Boolean, default=False)  # kill-switch por conversación
+    # Ventana de 24h de WhatsApp: se refresca en cada inbound
+    # (`consumer.py::_persist_inbound`), se valida antes de encolar un envío
+    # libre (`sender.py::validate_service_window`) -- fuera de ventana solo
+    # se puede enviar una plantilla.
+    service_window_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -229,6 +234,23 @@ class Message(Base):
             unique=True,
             postgresql_where=text("deleted_at is null AND idempotency_key IS NOT NULL"),
         ),
+        Index(
+            "uq_messages_tenant_client_message_id",
+            "tenant_id",
+            "client_message_id",
+            unique=True,
+            postgresql_where=text("client_message_id is not null"),
+        ),
+        Index(
+            "uq_messages_tenant_external_message_id",
+            "tenant_id",
+            "external_message_id",
+            unique=True,
+            postgresql_where=text("external_message_id is not null"),
+        ),
+        CheckConstraint(
+            "status in ('queued','sent','delivered','read','failed')", name="ck_messages_status"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -237,13 +259,23 @@ class Message(Base):
     direction: Mapped[str] = mapped_column(Text)      # inbound | outbound
     sender_type: Mapped[str] = mapped_column(Text)    # customer | agent | human
     content: Mapped[str] = mapped_column(Text, default="")
-    status: Mapped[str] = mapped_column(Text, default="sent")  # sent | failed (outbound)
+    status: Mapped[str] = mapped_column(Text, default="sent")  # queued|sent|delivered|read|failed (outbound)
     tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     # Soporte de medios (mod-media-processor los transforma antes del orchestrator)
     media_type: Mapped[str | None] = mapped_column(Text)          # "audio/ogg", "image/jpeg"
     media_url: Mapped[str | None] = mapped_column(Text)           # URL original (auditoría)
     media_transcription: Mapped[str | None] = mapped_column(Text)  # resultado STT/vision
     idempotency_key: Mapped[str | None] = mapped_column(Text)  # message_id del canal (UNIQUE parcial por tenant)
+    # Cola de salida (idempotencia): generado ANTES de encolar la tarea
+    # Celery -- un reintento de la tarea con el mismo id nunca duplica el
+    # envío. `external_message_id` es el wamid que devuelve Meta al enviar.
+    client_message_id: Mapped[str | None] = mapped_column(Text)
+    external_message_id: Mapped[str | None] = mapped_column(Text)
+    error_code: Mapped[int | None] = mapped_column(Integer)
+    error_subcode: Mapped[int | None] = mapped_column(Integer)
+    error_fbtrace_id: Mapped[str | None] = mapped_column(Text)
+    error_reason: Mapped[str | None] = mapped_column(Text)
+    status_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

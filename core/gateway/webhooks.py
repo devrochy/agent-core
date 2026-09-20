@@ -245,6 +245,7 @@ async def _process_payload(
             total_duplicates += duplicates
 
             await _dispatch_template_events(entry_events)
+            await _dispatch_status_events(entry_events)
 
     if not any_entry_processed:
         # Todos los entries se saltaron (sin tenant resuelto o inactivo) --
@@ -380,6 +381,28 @@ async def _dispatch_template_events(entry_events: list[FlattenedEvent]) -> None:
             await handlers[event.field](event.value)
         except Exception:
             log.exception("template_webhook_handler_fallo", field=event.field)
+
+
+async def _dispatch_status_events(entry_events: list[FlattenedEvent]) -> None:
+    """`statuses` (sent/delivered/read/failed) de WhatsApp -- NUNCA se
+    encolan al stream de inbound (no son mensajes de cliente, no deben
+    pasar por el LLM). Cada `FlattenedEvent` de tipo status trae el
+    `value` COMPLETO del `change` (puede incluir varios `statuses`); se
+    procesa solo el status cuyo `external_id` coincide con el de ESTE
+    evento puntual, para no reaplicar el resto N veces."""
+    from core.gateway.meta_message_status import apply_status_update
+
+    for event in entry_events:
+        if event.object_type != "whatsapp_business_account":
+            continue
+        for status in (event.value or {}).get("statuses", []):
+            candidate_id = f"{status.get('id', '')}:{status.get('status', '')}"
+            if candidate_id != event.external_id:
+                continue
+            try:
+                await apply_status_update(status)
+            except Exception:
+                log.exception("status_update_handler_fallo", external_id=event.external_id)
 
 
 async def _try_process_media(message: Any) -> Any:

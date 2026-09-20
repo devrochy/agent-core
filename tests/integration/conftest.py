@@ -98,7 +98,9 @@ def recorded() -> list[str]:
 @pytest.fixture(autouse=True)
 def _stub_llm_and_outbound(recorded: list[str], monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("core.orchestrator.loop.resolve_provider", lambda *a, **k: FakeProvider(recorded))
-    monkeypatch.setattr("core.gateway.sender.outbound_adapter_for", lambda *a, **k: FakeOutbound())
+    # El envío real ahora pasa por la tarea Celery (`core/tasks/outbound_send.py`),
+    # no por `sender.py` directamente -- se parchea ahí.
+    monkeypatch.setattr("core.tasks.outbound_send.outbound_adapter_for", lambda *a, **k: FakeOutbound())
     return recorded
 
 

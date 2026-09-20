@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 
 from core.gateway.channels.base import OutboundAdapter
+from core.gateway.meta_errors import classify_and_build_error
 from core.shared.exceptions import ChannelError
 
 GRAPH_API = "https://graph.facebook.com/v21.0"
@@ -49,7 +50,18 @@ class WhatsAppMetaOutbound(OutboundAdapter):
                 headers={"Authorization": f"Bearer {access_token}"},
             )
         if response.status_code >= 400:
-            raise ChannelError(f"Meta Graph API {response.status_code}: {response.text[:300]}")
+            # Se re-lanza el GraphError CLASIFICADO (no un ChannelError
+            # genérico): la tarea de envío (`core/tasks/outbound_send.py`)
+            # necesita el `category`/`code`/`retry_after_ms` reales para
+            # decidir si reintenta, cuándo, o si es un fallo permanente
+            # (131047, re-engagement) que no vale la pena reintentar.
+            try:
+                body = response.json()
+            except Exception:
+                body = None
+            raise classify_and_build_error(
+                http_status=response.status_code, body=body, headers=response.headers, raw_text=response.text
+            )
         data = response.json()
         try:
             message_id = data["messages"][0]["id"]
