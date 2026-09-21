@@ -1070,7 +1070,11 @@ async def connections_page(request: Request):
     if tid is not None:
         async with get_session() as session:
             meta_connections = (
-                await session.execute(select(MetaConnection).where(MetaConnection.tenant_id == tid))
+                await session.execute(
+                    select(MetaConnection).where(
+                        MetaConnection.tenant_id == tid, MetaConnection.deleted_at.is_(None)
+                    )
+                )
             ).scalars().all()
             phones_by_connection: dict[uuid.UUID, str] = {}
             if meta_connections:
@@ -2183,11 +2187,67 @@ async def meta_health_page(request: Request):
     tid = get_current_tenant_id()
     async with get_session() as session:
         connections = (
-            await session.execute(select(MetaConnection).where(MetaConnection.tenant_id == tid))
+            await session.execute(
+                select(MetaConnection).where(
+                    MetaConnection.tenant_id == tid, MetaConnection.deleted_at.is_(None)
+                )
+            )
         ).scalars().all()
 
     ctx.update(connections=connections)
     return _render("meta_salud.html", ctx)
+
+
+@router.post("/conexiones/meta/{connection_id}/activar")
+async def meta_connection_activar(request: Request, connection_id: str):
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+        if connection is None:
+            return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+        connection.status = "connected"
+        connection.status_reason = None
+
+    return RedirectResponse("/admin/conexiones?flash=Conexión activada", status_code=303)
+
+
+@router.post("/conexiones/meta/{connection_id}/desactivar")
+async def meta_connection_desactivar(request: Request, connection_id: str):
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+        if connection is None:
+            return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+        connection.status = "revoked"
+        connection.status_reason = "Desactivada a mano desde el panel"
+
+    return RedirectResponse("/admin/conexiones?flash=Conexión desactivada", status_code=303)
+
+
+@router.post("/conexiones/meta/{connection_id}/eliminar")
+async def meta_connection_eliminar(request: Request, connection_id: str):
+    """Soft-delete (invariante nº8 de CLAUDE.md) -- nunca borra la fila,
+    solo la saca de la lista y libera el `meta_app_id` para poder
+    reconectar la misma app después (índice único parcial, migración
+    0032)."""
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+        if connection is None:
+            return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+        connection.deleted_at = utcnow()
+        connection.status = "revoked"
+
+    return RedirectResponse("/admin/conexiones?flash=Conexión eliminada", status_code=303)
 
 
 @router.post("/conexiones/salud/{connection_id}/diagnosticar")

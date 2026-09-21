@@ -94,9 +94,24 @@
       </td>
       <td class="text-end">
         {% if c.tipo == "meta_connection" %}
-        <a href="{{ c.detail_url }}" class="btn btn-outline-secondary btn-sm" title="Ver salud / diagnosticar">
-          <i class="bi bi-heart-pulse"></i> Ver salud
-        </a>
+        <div class="dt-actions-row">
+          <a href="{{ c.detail_url }}" class="btn btn-outline-secondary" title="Ver salud / diagnosticar">
+            <i class="bi bi-heart-pulse"></i>
+          </a>
+          {% if c.active %}
+          <form method="post" action="/admin/conexiones/meta/{{ c.id }}/desactivar" class="d-inline">
+            <button class="btn btn-outline-secondary" title="Desactivar"><i class="bi bi-pause-circle"></i></button>
+          </form>
+          {% else %}
+          <form method="post" action="/admin/conexiones/meta/{{ c.id }}/activar" class="d-inline">
+            <button class="btn btn-outline-success" title="Activar"><i class="bi bi-play-circle"></i></button>
+          </form>
+          {% endif %}
+          <form method="post" action="/admin/conexiones/meta/{{ c.id }}/eliminar" class="d-inline"
+                onsubmit="return confirm('¿Eliminar esta conexión? Va a dejar de recibir mensajes.');">
+            <button class="btn btn-outline-danger" title="Eliminar"><i class="bi bi-trash"></i></button>
+          </form>
+        </div>
         {% else %}
         <div class="dt-actions-row">
           {% if c.active and not c.is_primary %}
