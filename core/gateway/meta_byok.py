@@ -245,10 +245,20 @@ async def save_byok_connection(
 
 async def resolve_webhook_verify_token(tenant_id: uuid.UUID) -> str | None:
     """`None` si el tenant no tiene una `MetaConnection` de WhatsApp
-    conectada, o si no guardó un verify_token propio -- en ambos casos
-    `webhooks.py` cae a `settings.whatsapp_verify_token` (comportamiento
-    sin cambios). Filtra por `tenant_id` explícito, nunca confía solo en
-    RLS (mismo criterio que el resto del módulo)."""
+    conectada (o a mitad de guardarse), o si no guardó un verify_token
+    propio -- en ambos casos `webhooks.py` cae a `settings.whatsapp_
+    verify_token` (comportamiento sin cambios). Filtra por `tenant_id`
+    explícito, nunca confía solo en RLS (mismo criterio que el resto del
+    módulo).
+
+    Incluye `status="pending"` además de `"connected"` -- bug real
+    encontrado en vivo: el propio self-check de `upsert_app_subscription`
+    (llamado DESDE `save_byok_connection`, mientras la conexión todavía
+    está en `"pending"`) le pega a este mismo webhook para probarse a sí
+    mismo, y si el filtro exigía `"connected"` no se encontraba a sí
+    misma -- caía al `.env` global (vacío) y el propio self-check de Meta
+    fallaba con 403, marcando la conexión en `"error"` a pesar de que las
+    credenciales eran correctas."""
     async with get_session() as session:
         connection = (
             await session.execute(
@@ -256,7 +266,7 @@ async def resolve_webhook_verify_token(tenant_id: uuid.UUID) -> str | None:
                 .where(
                     MetaConnection.tenant_id == tenant_id,
                     MetaConnection.channel == "whatsapp",
-                    MetaConnection.status == "connected",
+                    MetaConnection.status.in_(("connected", "pending")),
                 )
                 .order_by(MetaConnection.connected_at.desc())
             )
