@@ -61,8 +61,9 @@
   <thead>
     <tr>
       <th class="dt-sortable" data-sort-key="label">Conexión</th>
-      <th class="dt-sortable" data-sort-key="phone">Phone Number ID</th>
-      <th class="dt-sortable" data-sort-key="canal">Canal / Proveedor</th>
+      <th class="dt-sortable" data-sort-key="origen">Origen</th>
+      <th class="dt-sortable" data-sort-key="phone">Número / App ID</th>
+      <th class="dt-sortable" data-sort-key="canal">Canal</th>
       <th class="dt-sortable" data-sort-key="fecha">Creada</th>
       <th class="dt-sortable" data-sort-key="estado">Estado</th>
       <th class="text-end">Acciones</th>
@@ -70,19 +71,33 @@
   </thead>
   <tbody>
     {% for c in connections %}
-    <tr data-search="{{ c.label }} {{ c.external_id }} {{ c.channel }} {{ c.provider }} {{ 'activa' if c.active else 'inactiva' }}"
+    <tr data-search="{{ c.label }} {{ c.external_id }} {{ c.channel }} {{ c.origen }} {{ 'activa' if c.active else 'inactiva' }}"
         data-filter-estado="{{ c.active|string|lower }}" data-filter-principal="{{ c.is_primary|string|lower }}"
-        data-sort-label="{{ c.label }}" data-sort-phone="{{ c.external_id }}" data-sort-canal="{{ c.channel }} {{ c.provider }}"
+        data-sort-label="{{ c.label }}" data-sort-origen="{{ c.origen }}" data-sort-phone="{{ c.external_id }}" data-sort-canal="{{ c.channel }}"
         data-sort-fecha="{{ c.created_at.strftime('%Y-%m-%d %H:%M') if c.created_at }}" data-sort-estado="{{ c.active|string|lower }}">
       <td class="fw-semibold">{{ c.label }}</td>
+      <td>
+        {% if c.tipo == "channel_connection" %}
+        <span class="badge text-bg-secondary" title="Formulario manual de WhatsApp Cloud API">{{ c.origen }}</span>
+        {% elif c.origen == "Embedded Signup" %}
+        <span class="badge text-bg-primary" title="OAuth con la app del framework">{{ c.origen }}</span>
+        {% else %}
+        <span class="badge text-bg-info" title="App de Meta propia del tenant">{{ c.origen }}</span>
+        {% endif %}
+      </td>
       <td><code>{{ c.external_id }}</code></td>
-      <td>{{ c.channel }} · {{ c.provider }}</td>
+      <td>{{ c.channel }}</td>
       <td class="small text-secondary">{{ c.created_at.strftime('%Y-%m-%d %H:%M') if c.created_at }}</td>
       <td>
         {% if c.active %}<span class="badge text-bg-success">activa</span>{% else %}<span class="badge text-bg-secondary">inactiva</span>{% endif %}
         {% if c.is_primary %}<span class="badge text-bg-primary">principal</span>{% endif %}
       </td>
       <td class="text-end">
+        {% if c.tipo == "meta_connection" %}
+        <a href="{{ c.detail_url }}" class="btn btn-outline-secondary btn-sm" title="Ver salud / diagnosticar">
+          <i class="bi bi-heart-pulse"></i> Ver salud
+        </a>
+        {% else %}
         <div class="dt-actions-row">
           {% if c.active and not c.is_primary %}
           <form method="post" action="/admin/conexiones/{{ c.id }}/primaria" class="d-inline">
@@ -103,6 +118,7 @@
             <button class="btn btn-outline-danger" title="Eliminar"><i class="bi bi-trash"></i></button>
           </form>
         </div>
+        {% endif %}
       </td>
     </tr>
     {% endfor %}

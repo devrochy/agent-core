@@ -23,10 +23,16 @@ CREDENTIAL_KEYS = ("phone_number_id", "app_secret", "access_token", "verify_toke
 
 
 async def list_connections() -> list[ChannelConnection]:
+    """Filtra por `tenant_id` explícito además de RLS (defensa en
+    profundidad, hallazgo del auditor-multitenant -- deuda preexistente
+    corregida al retocar `/admin/conexiones`)."""
     async with get_session() as session:
         result = await session.execute(
             select(ChannelConnection)
-            .where(ChannelConnection.deleted_at.is_(None))
+            .where(
+                ChannelConnection.deleted_at.is_(None),
+                ChannelConnection.tenant_id == get_current_tenant_id(),
+            )
             .order_by(ChannelConnection.created_at)
         )
         return list(result.scalars().all())

@@ -1040,7 +1040,7 @@ async def connections_page(request: Request):
     connections = await list_connections()
 
     # URL del webhook por tenant (cada app tiene el suyo: /webhooks/whatsapp/<slug>).
-    from core.db.models import Tenant
+    from core.db.models import PhoneNumber, Tenant
     from core.tenants import tenant_webhook_url
 
     tenant_slug = ""
@@ -1050,21 +1050,61 @@ async def connections_page(request: Request):
             tenant = await session.get(Tenant, tid)
             tenant_slug = tenant.slug if tenant else ""
 
+    rows = [
+        {
+            "id": c.id,
+            "tipo": "channel_connection",
+            "origen": "Manual",
+            "channel": c.channel,
+            "label": c.label or c.external_id,
+            "external_id": c.external_id,
+            "active": c.active,
+            "is_primary": c.is_primary,
+            "created_at": c.created_at,
+            "detail_url": None,
+        }
+        for c in connections
+    ]
+
+    settings = get_settings()
+    if tid is not None:
+        async with get_session() as session:
+            meta_connections = (
+                await session.execute(select(MetaConnection).where(MetaConnection.tenant_id == tid))
+            ).scalars().all()
+            phones_by_connection: dict[uuid.UUID, str] = {}
+            if meta_connections:
+                phone_rows = (
+                    await session.execute(
+                        select(PhoneNumber).where(
+                            PhoneNumber.tenant_id == tid,
+                            PhoneNumber.connection_id.in_([mc.id for mc in meta_connections]),
+                        )
+                    )
+                ).scalars().all()
+                for p in phone_rows:
+                    phones_by_connection.setdefault(p.connection_id, p.display_phone_number or p.phone_number_id)
+
+        for mc in meta_connections:
+            origen = "Embedded Signup" if mc.meta_app_id == settings.meta_app_id else "BYOK (app propia)"
+            rows.append({
+                "id": mc.id,
+                "tipo": "meta_connection",
+                "origen": origen,
+                "channel": mc.channel,
+                "label": f"{mc.channel} · {mc.environment}",
+                "external_id": phones_by_connection.get(mc.id, mc.meta_app_id),
+                "active": mc.status == "connected",
+                "is_primary": False,
+                "created_at": mc.created_at,
+                "detail_url": "/admin/conexiones/salud",
+            })
+
+    rows.sort(key=lambda r: r["created_at"] or utcnow(), reverse=True)
+
     ctx.update(
-        connections=[
-            {
-                "id": c.id,
-                "channel": c.channel,
-                "provider": c.provider,
-                "label": c.label or c.external_id,
-                "active": c.active,
-                "is_primary": c.is_primary,
-                "external_id": c.external_id,
-                "created_at": c.created_at,
-            }
-            for c in connections
-        ],
-        has_connection=bool(connections),
+        connections=rows,
+        has_connection=bool(rows),
         webhook_url=tenant_webhook_url(tenant_slug) if tenant_slug else "",
     )
     return _render("conexiones.html", ctx)
