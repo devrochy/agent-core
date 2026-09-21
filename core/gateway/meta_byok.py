@@ -31,7 +31,7 @@ import uuid
 from sqlalchemy import select
 
 from core.config import get_settings
-from core.db.models import MetaConnection, PhoneNumber, WabaAccount, utcnow
+from core.db.models import MetaConnection, PhoneNumber, Tenant, WabaAccount, utcnow
 from core.db.session import get_session
 from core.gateway import meta_token_store
 from core.gateway.connections import verify_meta_credentials
@@ -184,6 +184,33 @@ async def save_byok_connection(
             ).scalar_one_or_none()
             if db_waba is not None:
                 db_waba.subscribed = True
+
+        # Suscripción de CAMPOS a nivel de app ("messages", etc.) -- distinta
+        # de la suscripción de OBJETO por WABA de arriba. Configurarla a mano
+        # en el App Dashboard es frágil (el admin puede guardar el callback/
+        # verify_token sin tildar el checkbox de "messages"): bug real
+        # encontrado en vivo, el subscriptions GET mostraba `active=true` sin
+        # ningún `fields`. Se hace por API para no depender de eso, mismo
+        # mecanismo que usa Embedded Signup (`meta_onboarding.py`).
+        from core.gateway.meta_preflight import AppCredentials
+        from core.gateway.meta_subscriptions import SubscriptionError, upsert_app_subscription
+        from core.tenants import tenant_webhook_url
+
+        async with get_session() as session:
+            tenant = await session.get(Tenant, tenant_id)
+        if tenant is not None:
+            config = AppCredentials(
+                app_id=app_id, app_secret=app_secret, config_id="", graph_api_version=settings.graph_api_version,
+                connection_id=connection_id,
+            )
+            try:
+                await upsert_app_subscription(
+                    config, "whatsapp_business_account",
+                    callback_url=tenant_webhook_url(tenant.slug),
+                    verify_token=verify_token or settings.whatsapp_verify_token,
+                )
+            except SubscriptionError as exc:
+                raise ByokError(f"No se pudo suscribir los campos de webhook en Meta: {exc}") from exc
     except Exception as exc:
         # Las credenciales YA fueron verificadas contra Graph -- este
         # except cubre un fallo de infraestructura al guardar el token o al
