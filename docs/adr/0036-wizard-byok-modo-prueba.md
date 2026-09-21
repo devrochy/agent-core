@@ -106,3 +106,36 @@ MetaConnection+tokens" en vez de duplicar el patrón por canal.
   `webhook_url`/`whatsapp_verify_token`).
 - `core/admin/templates/meta_wizard_elegir_entorno.html` (modal BYOK).
 - `alembic/versions/0030_meta_tokens_kind_cloud_api.py`.
+
+## Corrección post-mortem (2026-09-21): faltaba suscribir la WABA a la app
+
+Encontrado probando en vivo: la conexión se guardaba, el handshake del
+webhook pasaba (GET con `verify_token` correcto), pero **cero mensajes**
+llegaban -- `webhook_events` se quedaba en 0 filas siempre. Causa: el
+diseño original de este ADR no contemplaba `POST /{waba_id}/
+subscribed_apps` (la suscripción de OBJETO -- distinta de la suscripción
+de APP que el admin configura a mano en el App Dashboard de Meta). Sin
+esa suscripción, Meta nunca entrega eventos de mensajes de esa WABA,
+sin importar qué tan bien esté configurado el resto.
+
+Corregido agregando:
+- Un campo nuevo en el wizard: WABA ID (visible en la misma pantalla
+  "API Setup" de Meta que ya usaban `phone_number_id`/`access_token`).
+- `_subscribe_waba_to_app` -- mismo patrón que
+  `meta_onboarding.py::_subscribe_waba_to_app` de Embedded Signup (POST
+  + GET de verificación inmediata, nunca confiar en `{"success": true}`
+  del POST solo).
+- Se crea/actualiza `WabaAccount` (el diseño original de este ADR no
+  contemplaba esa tabla para el camino BYOK).
+- Si Meta no confirma la suscripción, la conexión queda en `"error"` en
+  vez de `"connected"` -- ya no puede aparentar estar operativa sin
+  poder recibir mensajes.
+
+**Lección**: los tres módulos que tocan Meta (Embedded Signup, BYOK, y
+en el futuro cualquier canal nuevo) comparten el mismo checklist real
+de qué hace falta para que un mensaje efectivamente llegue -- verificar
+credenciales, guardar tokens, Y suscribir el objeto correcto a la app.
+Diseñar un módulo nuevo mirando solo "qué pide el formulario" en vez de
+"qué necesita Meta para entregar tráfico real" es el error de fondo que
+causó este bug -- se verificó en vivo contra Meta real recién después
+de mergear, no antes.

@@ -108,8 +108,18 @@
           <div class="byok-step d-none" data-step="4">
             <p class="text-secondary small">
               App Dashboard → WhatsApp → API Setup: ahí Meta ya te da un número de prueba
-              verificado (<code>phone_number_id</code>) y un token de acceso temporal (24hs).
+              verificado (<code>phone_number_id</code>), el ID de la cuenta de WhatsApp
+              Business (<code>WABA ID</code>, arriba del selector de número) y un token de
+              acceso temporal (24hs).
             </p>
+            <div class="mb-3">
+              <label class="form-label">WhatsApp Business Account ID (WABA ID)</label>
+              <input type="text" name="waba_id" class="form-control" required>
+              <div class="form-text">
+                Sin esto no se puede suscribir la cuenta a la app -- si falta, Meta nunca va
+                a mandar los mensajes entrantes aunque el webhook esté bien configurado.
+              </div>
+            </div>
             <div class="mb-3">
               <label class="form-label">Phone Number ID</label>
               <input type="text" name="phone_number_id" class="form-control" required>

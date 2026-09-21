@@ -63,7 +63,7 @@ async def test_elegir_entorno_muestra_el_modal_byok(app_client):
 
 async def test_guardar_byok_con_credenciales_validas_crea_conexion_y_redirige_a_salud(app_client, monkeypatch):
     import core.gateway.meta_byok as byok_mod
-    from core.db.models import MetaConnection, PhoneNumber
+    from core.db.models import MetaConnection, PhoneNumber, WabaAccount
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -76,12 +76,23 @@ async def test_guardar_byok_con_credenciales_validas_crea_conexion_y_redirige_a_
 
     monkeypatch.setattr(byok_mod, "verify_meta_credentials", _fake_verify)
 
+    async def _fake_graph_fetch(path, *, method="GET", **kwargs):
+        if method == "POST":
+            return {"success": True}
+        return {"data": [{"whatsapp_business_api_data": {"id": "app-x"}}]}
+
+    monkeypatch.setattr(byok_mod, "graph_fetch", _fake_graph_fetch)
+
     app_id = _uniq("app-byok")
     phone_number_id = _uniq("phone-byok")
+    waba_id = _uniq("waba-byok")
     r = await app_client.post(
         "/admin/conexiones/wizard/whatsapp-byok/guardar",
         headers={"Cookie": cookie},
-        data={"app_id": app_id, "app_secret": "secret-byok", "phone_number_id": phone_number_id, "access_token": "tok-byok"},
+        data={
+            "app_id": app_id, "app_secret": "secret-byok", "phone_number_id": phone_number_id,
+            "access_token": "tok-byok", "waba_id": waba_id,
+        },
     )
     assert r.status_code == 303
     assert r.headers["location"].startswith("/admin/conexiones/salud?flash=")
@@ -96,11 +107,66 @@ async def test_guardar_byok_con_credenciales_validas_crea_conexion_y_redirige_a_
             phone = (
                 await session.execute(select(PhoneNumber).where(PhoneNumber.connection_id == connection.id))
             ).scalar_one()
+            waba = (
+                await session.execute(select(WabaAccount).where(WabaAccount.connection_id == connection.id))
+            ).scalar_one()
 
     assert connection.status == "connected"
     assert connection.environment == "sandbox"
     assert phone.phone_number_id == phone_number_id
     assert phone.registered is True
+    assert waba.waba_id == waba_id
+    assert waba.subscribed is True
+
+
+async def test_guardar_byok_sin_suscripcion_confirmada_queda_en_error(app_client, monkeypatch):
+    """Bug real encontrado en vivo: el handshake del webhook pasaba pero
+    nunca llegaba ningún mensaje -- faltaba suscribir la WABA a la app
+    (POST /{waba_id}/subscribed_apps). Si Meta no confirma la suscripción
+    (GET devuelve vacío), la conexión debe quedar en "error", no "connected"."""
+    import core.gateway.meta_byok as byok_mod
+    from core.db.models import MetaConnection
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid = await _new_tenant()
+    session_cookie = await _login(app_client)
+    cookie = await _switch_tenant(app_client, session_cookie, tid)
+
+    async def _fake_verify(phone_number_id, access_token, app_secret):
+        return True, "ok", {"display_phone_number": "+1 555 0100", "verified_name": "Mi Negocio Test"}
+
+    monkeypatch.setattr(byok_mod, "verify_meta_credentials", _fake_verify)
+
+    async def _fake_graph_fetch_no_confirma(path, *, method="GET", **kwargs):
+        if method == "POST":
+            return {"success": True}
+        return {"data": []}  # Meta acepta el POST pero no confirma la suscripción.
+
+    monkeypatch.setattr(byok_mod, "graph_fetch", _fake_graph_fetch_no_confirma)
+
+    app_id = _uniq("app-byok-sinsub")
+    r = await app_client.post(
+        "/admin/conexiones/wizard/whatsapp-byok/guardar",
+        headers={"Cookie": cookie},
+        data={
+            "app_id": app_id, "app_secret": "secret-byok", "phone_number_id": _uniq("phone-byok"),
+            "access_token": "tok-byok", "waba_id": _uniq("waba-byok"),
+        },
+    )
+    assert r.status_code == 303
+    assert "elegir-entorno" in r.headers["location"]
+    assert "flash_type=danger" in r.headers["location"]
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            connection = (
+                await session.execute(
+                    select(MetaConnection).where(MetaConnection.tenant_id == tid, MetaConnection.meta_app_id == app_id)
+                )
+            ).scalar_one()
+    assert connection.status == "error"
+    assert "suscripción" in (connection.status_reason or "")
 
 
 async def test_guardar_byok_con_credenciales_invalidas_no_crea_nada(app_client, monkeypatch):
@@ -121,7 +187,10 @@ async def test_guardar_byok_con_credenciales_invalidas_no_crea_nada(app_client, 
     r = await app_client.post(
         "/admin/conexiones/wizard/whatsapp-byok/guardar",
         headers={"Cookie": cookie},
-        data={"app_id": "app-byok-2", "app_secret": "secret-x", "phone_number_id": "phone-x", "access_token": "tok-x"},
+        data={
+            "app_id": "app-byok-2", "app_secret": "secret-x", "phone_number_id": "phone-x",
+            "access_token": "tok-x", "waba_id": "waba-x",
+        },
     )
     assert r.status_code == 303
     assert "elegir-entorno" in r.headers["location"]
