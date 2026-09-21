@@ -131,12 +131,14 @@
             <div class="input-group input-group-sm mb-1">
               <span class="input-group-text">Verify token</span>
               <input type="text" name="verify_token" id="byok-verify-token" class="form-control font-monospace"
-                     placeholder="{{ whatsapp_verify_token }}">
+                     value="{{ whatsapp_verify_token }}" onclick="this.select()">
               <button type="button" class="btn btn-outline-secondary" id="byok-btn-generar-token">Generar código</button>
             </div>
             <div class="form-text">
-              Generá un código nuevo o escribí el que quieras y pegalo en Meta -- si lo dejás
-              vacío, se usa el token global de este framework (<code>{{ whatsapp_verify_token }}</code>).
+              Ya viene precargado con el token global de este framework -- copialo tal cual, o
+              apretá "Generar código" para uno propio de esta conexión. Pegá EXACTAMENTE lo que
+              hay en este campo en Meta -- si no coinciden, Meta va a rechazar la verificación
+              del webhook.
             </div>
           </div>
 
