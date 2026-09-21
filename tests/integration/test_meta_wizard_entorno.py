@@ -68,7 +68,8 @@ async def test_pantalla_elegir_entorno_muestra_las_dos_opciones(app_client):
     assert r.status_code == 200
     assert "Modo prueba" in r.text
     assert "Modo producción" in r.text
-    assert 'href="/admin/conexiones/wizard/whatsapp?environment=sandbox"' in r.text
+    # Modo prueba ahora abre el modal BYOK (no navega directo a Embedded Signup).
+    assert 'data-bs-target="#modal-byok-test"' in r.text
     assert 'href="/admin/conexiones/wizard/whatsapp?environment=production"' in r.text
 
 

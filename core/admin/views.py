@@ -1405,6 +1405,22 @@ async def meta_wizard_whatsapp_elegir_entorno(request: Request):
     ctx = await _base_context(request, "connections")
     if ctx is None:
         return _login_redirect()
+
+    from core.db.models import Tenant
+    from core.tenants import tenant_webhook_url
+
+    tenant_slug = ""
+    tid = get_current_tenant_id()
+    if tid is not None:
+        async with get_session() as session:
+            tenant = await session.get(Tenant, tid)
+            tenant_slug = tenant.slug if tenant else ""
+
+    settings = get_settings()
+    ctx.update(
+        webhook_url=tenant_webhook_url(tenant_slug) if tenant_slug else "",
+        whatsapp_verify_token=settings.whatsapp_verify_token,
+    )
     return _render("meta_wizard_elegir_entorno.html", ctx)
 
 
@@ -1518,6 +1534,42 @@ async def meta_wizard_whatsapp_probar_conexion(request: Request, connection_id: 
     flash_type = "success" if todo_ok else "warning"
     return RedirectResponse(
         f"{url}?environment={connection.environment}&flash={flash}&flash_type={flash_type}", status_code=303
+    )
+
+
+@router.post("/conexiones/wizard/whatsapp-byok/guardar")
+async def meta_wizard_whatsapp_byok_guardar(
+    request: Request,
+    app_id: str = Form(...),
+    app_secret: str = Form(...),
+    phone_number_id: str = Form(...),
+    access_token: str = Form(...),
+):
+    """Alta de una conexión de WhatsApp con la app PROPIA del tenant (BYOK)
+    para modo prueba -- a diferencia del wizard de Embedded Signup, acá no
+    hay OAuth: se verifican las credenciales contra Graph API y se guardan
+    directo (mismo criterio que el modal legado de ChannelConnection, pero
+    persistiendo en MetaConnection para que el resto del panel -- salud,
+    promoción a producción -- la vea igual que una conexión de Embedded Signup."""
+    from core.gateway.meta_byok import ByokError, save_byok_connection
+
+    admin = await current_admin(request)
+    if admin is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    elegir_url = "/admin/conexiones/wizard/whatsapp/elegir-entorno"
+
+    try:
+        await save_byok_connection(
+            tid, admin.id, app_id.strip(), app_secret.strip(), phone_number_id.strip(), access_token.strip(),
+        )
+    except ByokError as exc:
+        return RedirectResponse(f"{elegir_url}?flash={str(exc)[:140]}&flash_type=danger", status_code=303)
+
+    return RedirectResponse(
+        "/admin/conexiones/salud?flash=Conexión de prueba guardada -- probála con \"Diagnosticar\"",
+        status_code=303,
     )
 
 
