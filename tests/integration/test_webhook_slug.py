@@ -147,6 +147,46 @@ async def test_post_por_slug_procesa(app_client, recorded) -> None:
     assert n == 1, "la conversación se crea bajo el tenant del slug"
 
 
+async def test_handshake_por_slug_usa_verify_token_byok_sin_channel_connection(app_client, monkeypatch) -> None:
+    """Si el tenant no tiene `ChannelConnection` (caso BYOK vía
+    `MetaConnection`) pero sí guardó un `verify_token` propio en el
+    wizard BYOK, el handshake lo prioriza antes de caer al `.env` global."""
+    from core.db.models import MetaConnection
+    from core.db.session import get_session
+    from core.gateway import meta_byok
+    from core.onboarding import onboard_tenant
+    from core.shared.tenant import tenant_scope
+
+    slug = f"wh-byok-{uuid.uuid4().hex[:6]}"
+    tid, _ = await onboard_tenant(name=f"Webhook BYOK {slug}", slug=slug, persona={"tone": "cercano"})
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            connection = MetaConnection(
+                tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id="app-byok-slug",
+                status="connected",
+            )
+            session.add(connection)
+            await session.flush()
+            connection_id = connection.id
+
+        await meta_byok.meta_token_store.put_token(
+            connection_id, meta_byok.WEBHOOK_VERIFY_TOKEN_KIND, "app-byok-slug", "mi-token-byok", tenant_id=tid,
+        )
+
+    r = await app_client.get(
+        "/webhooks/whatsapp/" + slug,
+        params={"hub.mode": "subscribe", "hub.verify_token": "mi-token-byok", "hub.challenge": "CHAL-BYOK"},
+    )
+    assert r.status_code == 200 and r.text == "CHAL-BYOK"
+
+    r2 = await app_client.get(
+        "/webhooks/whatsapp/" + slug,
+        params={"hub.mode": "subscribe", "hub.verify_token": "otro-token", "hub.challenge": "CHAL-BYOK"},
+    )
+    assert r2.status_code == 403
+
+
 async def test_tone_invalido_rechazado() -> None:
     """El onboarding NO persiste un spec fuera del contrato (evita el 500 en /admin/spec)."""
     from core.onboarding import onboard_tenant

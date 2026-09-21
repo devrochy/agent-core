@@ -11,7 +11,13 @@ from types import SimpleNamespace
 import pytest
 
 import core.gateway.meta_byok as byok_mod
-from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND, ByokError, save_byok_connection
+from core.gateway.meta_byok import (
+    CLOUD_API_ACCESS_TOKEN_KIND,
+    WEBHOOK_VERIFY_TOKEN_KIND,
+    ByokError,
+    resolve_webhook_verify_token,
+    save_byok_connection,
+)
 
 
 class _ScalarResult:
@@ -134,6 +140,80 @@ async def test_credenciales_validas_crea_conexion_telefono_y_tokens(monkeypatch)
     kinds = {call[1] for call in put_calls}
     assert kinds == {"app_access", CLOUD_API_ACCESS_TOKEN_KIND}
     assert all(call[0] == connection.id for call in put_calls)
+
+
+@pytest.mark.asyncio
+async def test_verify_token_vacio_no_guarda_nada_nuevo(monkeypatch):
+    """Dejar el campo vacío no debe cambiar el comportamiento actual --
+    el handshake sigue cayendo al `.env` global."""
+    _mock_verify_ok(monkeypatch)
+    put_calls = _mock_token_store(monkeypatch)
+    session = FakeSession()
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(session))
+
+    await save_byok_connection(uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", verify_token=None)
+
+    kinds = {call[1] for call in put_calls}
+    assert WEBHOOK_VERIFY_TOKEN_KIND not in kinds
+
+
+@pytest.mark.asyncio
+async def test_verify_token_con_valor_se_guarda_con_el_kind_nuevo(monkeypatch):
+    _mock_verify_ok(monkeypatch)
+    put_calls = _mock_token_store(monkeypatch)
+    session = FakeSession()
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(session))
+
+    connection = await save_byok_connection(
+        uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", verify_token="mi-token-propio",
+    )
+
+    matching = [call for call in put_calls if call[1] == WEBHOOK_VERIFY_TOKEN_KIND]
+    assert len(matching) == 1
+    assert matching[0][0] == connection.id
+    assert matching[0][3] == "mi-token-propio"
+
+
+@pytest.mark.asyncio
+async def test_resolve_webhook_verify_token_sin_conexion_conectada_da_none(monkeypatch):
+    session = FakeSession()
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(session))
+
+    result = await resolve_webhook_verify_token(uuid.uuid4())
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_webhook_verify_token_con_conexion_pero_sin_token_da_none(monkeypatch):
+    connection = SimpleNamespace(id=uuid.uuid4(), meta_app_id="app-1")
+    session = FakeSession(existing_connection=connection)
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(session))
+
+    async def _fake_get_token(*a, **k):
+        return None
+
+    monkeypatch.setattr(byok_mod.meta_token_store, "get_token", _fake_get_token)
+
+    result = await resolve_webhook_verify_token(uuid.uuid4())
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_webhook_verify_token_con_token_guardado_lo_devuelve(monkeypatch):
+    connection = SimpleNamespace(id=uuid.uuid4(), meta_app_id="app-1")
+    session = FakeSession(existing_connection=connection)
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(session))
+
+    async def _fake_get_token(connection_id, kind, subject_id, **kwargs):
+        assert connection_id == connection.id
+        assert kind == WEBHOOK_VERIFY_TOKEN_KIND
+        assert subject_id == "app-1"
+        return "mi-token-propio"
+
+    monkeypatch.setattr(byok_mod.meta_token_store, "get_token", _fake_get_token)
+
+    result = await resolve_webhook_verify_token(uuid.uuid4())
+    assert result == "mi-token-propio"
 
 
 @pytest.mark.asyncio
