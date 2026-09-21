@@ -94,3 +94,85 @@ async def test_lista_muestra_conexion_manual_y_meta_con_su_origen(app_client, mo
     assert "BYOK (app propia)" in r2.text
     assert "Embedded Signup" in r2.text
     assert 'href="/admin/conexiones/salud"' in r2.text
+
+
+async def test_activar_desactivar_y_eliminar_conexion_meta(app_client):
+    from core.db.models import MetaConnection
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid = await _new_tenant()
+    session_cookie = await _login(app_client)
+    cookie = await _switch_tenant(app_client, session_cookie, tid)
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            connection = MetaConnection(
+                tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id="app-gestionable",
+                status="connected",
+            )
+            session.add(connection)
+            await session.flush()
+            connection_id = connection.id
+
+    r = await app_client.post(
+        f"/admin/conexiones/meta/{connection_id}/desactivar", headers={"Cookie": cookie},
+    )
+    assert r.status_code == 303
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            row = await session.get(MetaConnection, connection_id)
+    assert row.status == "revoked"
+
+    r2 = await app_client.post(
+        f"/admin/conexiones/meta/{connection_id}/activar", headers={"Cookie": cookie},
+    )
+    assert r2.status_code == 303
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            row = await session.get(MetaConnection, connection_id)
+    assert row.status == "connected"
+
+    r3 = await app_client.post(
+        f"/admin/conexiones/meta/{connection_id}/eliminar", headers={"Cookie": cookie},
+    )
+    assert r3.status_code == 303
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            row = await session.get(MetaConnection, connection_id)
+    assert row is not None  # soft-delete -- la fila sigue existiendo
+    assert row.deleted_at is not None
+
+    # Ya no aparece en la lista unificada.
+    r4 = await app_client.get("/admin/conexiones", headers={"Cookie": cookie})
+    assert "app-gestionable" not in r4.text
+
+
+async def test_no_se_puede_gestionar_conexion_meta_de_otro_tenant(app_client):
+    from core.db.models import MetaConnection
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tenant_a = await _new_tenant()
+    async with tenant_scope(tenant_a):
+        async with get_session() as session:
+            connection = MetaConnection(
+                tenant_id=tenant_a, channel="whatsapp", environment="sandbox", meta_app_id="app-de-otro",
+                status="connected",
+            )
+            session.add(connection)
+            await session.flush()
+            connection_id = connection.id
+
+    tenant_b = await _new_tenant()
+    session_cookie = await _login(app_client)
+    cookie = await _switch_tenant(app_client, session_cookie, tenant_b)
+
+    r = await app_client.post(f"/admin/conexiones/meta/{connection_id}/eliminar", headers={"Cookie": cookie})
+    assert r.status_code == 303
+    assert "flash_type=danger" in r.headers["location"]
+
+    async with tenant_scope(tenant_a):
+        async with get_session() as session:
+            row = await session.get(MetaConnection, connection_id)
+    assert row.deleted_at is None
