@@ -49,22 +49,51 @@
         </div>
         <div class="modal-body">
 
-          <div class="d-flex gap-2 mb-3" id="byok-stepper">
-            <span class="badge text-bg-primary byok-step-badge" data-step="1">1. Crear la app</span>
-            <span class="badge text-bg-secondary byok-step-badge" data-step="2">2. App ID / Secret</span>
-            <span class="badge text-bg-secondary byok-step-badge" data-step="3">3. Número de prueba</span>
-            <span class="badge text-bg-secondary byok-step-badge" data-step="4">4. Webhook</span>
+          <div class="d-flex gap-2 mb-3 flex-wrap" id="byok-stepper">
+            <span class="badge text-bg-primary byok-step-badge" data-step="1">1. Business Portfolio</span>
+            <span class="badge text-bg-secondary byok-step-badge" data-step="2">2. Crear la app</span>
+            <span class="badge text-bg-secondary byok-step-badge" data-step="3">3. App ID / Secret</span>
+            <span class="badge text-bg-secondary byok-step-badge" data-step="4">4. Número de prueba</span>
+            <span class="badge text-bg-secondary byok-step-badge" data-step="5">5. Webhook</span>
           </div>
 
           <div class="byok-step" data-step="1">
+            <p>
+              Meta exige tener un <strong>Business Portfolio</strong> (Business Manager) para poder
+              solicitar un número de WhatsApp -- creá uno en
+              <a href="https://business.facebook.com/overview" target="_blank" rel="noopener">business.facebook.com/overview</a>
+              si todavía no tenés.
+            </p>
+            <p class="text-secondary small mb-0">
+              Si ya administrás otro cliente/tenant, podés reusar el MISMO Business Portfolio
+              (agrega varios negocios adentro) en vez de crear uno nuevo cada vez.
+            </p>
+          </div>
+
+          <div class="byok-step d-none" data-step="2">
             <p>
               Creá una app en <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">Meta for Developers</a>
               y agregá el producto <strong>WhatsApp</strong>. Meta te asigna automáticamente un
               número de prueba verificado, sin costo.
             </p>
+            <div class="border rounded p-3 bg-body-tertiary small">
+              <strong>Lo que Meta te va a preguntar, en orden:</strong>
+              <ol class="mb-2">
+                <li>Tipo de app: elegí "Otro" (o "Business" si aparece esa opción).</li>
+                <li>Caso de uso: elegí "Otro" -- no hace falta un caso de uso específico para WhatsApp de prueba.</li>
+                <li>Nombre de la app: usá algo reconocible (ej. el nombre del cliente/tenant).</li>
+                <li>Business Portfolio: elegí el que creaste en el paso anterior.</li>
+                <li>Email de contacto de la app.</li>
+              </ol>
+              <strong>Sugerencias:</strong>
+              <ul class="mb-0">
+                <li>Anotá el <strong>App ID</strong> apenas se crea la app -- lo vas a necesitar en el siguiente paso.</li>
+                <li>El Business Portfolio se asocia EN este paso, no se puede cambiar fácil después.</li>
+              </ul>
+            </div>
           </div>
 
-          <div class="byok-step d-none" data-step="2">
+          <div class="byok-step d-none" data-step="3">
             <p class="text-secondary small">App Dashboard → Settings → Basic.</p>
             <div class="mb-3">
               <label class="form-label">App ID</label>
@@ -76,7 +105,7 @@
             </div>
           </div>
 
-          <div class="byok-step d-none" data-step="3">
+          <div class="byok-step d-none" data-step="4">
             <p class="text-secondary small">
               App Dashboard → WhatsApp → API Setup: ahí Meta ya te da un número de prueba
               verificado (<code>phone_number_id</code>) y un token de acceso temporal (24hs).
@@ -91,7 +120,7 @@
             </div>
           </div>
 
-          <div class="byok-step d-none" data-step="4">
+          <div class="byok-step d-none" data-step="5">
             <p class="text-secondary small">
               Pegá esto en App Dashboard → WhatsApp → Configuration → Webhook.
             </p>
@@ -99,9 +128,15 @@
               <span class="input-group-text">Callback URL</span>
               <input type="text" class="form-control font-monospace" value="{{ webhook_url }}" readonly onclick="this.select()">
             </div>
-            <div class="input-group input-group-sm">
+            <div class="input-group input-group-sm mb-1">
               <span class="input-group-text">Verify token</span>
-              <input type="text" class="form-control font-monospace" value="{{ whatsapp_verify_token }}" readonly onclick="this.select()">
+              <input type="text" name="verify_token" id="byok-verify-token" class="form-control font-monospace"
+                     placeholder="{{ whatsapp_verify_token }}">
+              <button type="button" class="btn btn-outline-secondary" id="byok-btn-generar-token">Generar código</button>
+            </div>
+            <div class="form-text">
+              Generá un código nuevo o escribí el que quieras y pegalo en Meta -- si lo dejás
+              vacío, se usa el token global de este framework (<code>{{ whatsapp_verify_token }}</code>).
             </div>
           </div>
 
@@ -121,13 +156,21 @@
 
 <script>
 (function () {
-  var total = 4;
+  var total = 5;
   var current = 1;
   var steps = document.querySelectorAll('#form-byok-test .byok-step');
   var badges = document.querySelectorAll('#form-byok-test .byok-step-badge');
   var btnAtras = document.getElementById('byok-btn-atras');
   var btnSiguiente = document.getElementById('byok-btn-siguiente');
   var btnGuardar = document.getElementById('byok-btn-guardar');
+  var btnGenerarToken = document.getElementById('byok-btn-generar-token');
+
+  btnGenerarToken.addEventListener('click', function () {
+    var bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    var hex = Array.from(bytes, function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+    document.getElementById('byok-verify-token').value = hex;
+  });
 
   function render() {
     steps.forEach(function (el) { el.classList.toggle('d-none', Number(el.dataset.step) !== current); });

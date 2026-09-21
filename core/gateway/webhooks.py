@@ -71,6 +71,7 @@ async def verify_webhook_tenant(
     `agent-core tenant webhook <slug>`). El verify_token se toma de la conexión
     del tenant (o del `.env`).
     """
+    from core.gateway.meta_byok import resolve_webhook_verify_token
     from core.tenants import resolve_tenant_by_slug
 
     settings = get_settings()
@@ -79,7 +80,10 @@ async def verify_webhook_tenant(
         return Response(status_code=403)
     async with tenant_scope(tenant_id):
         creds = await effective_credentials()
-    verify_token = creds.get("verify_token") or settings.whatsapp_verify_token
+        byok_verify_token = None if creds.get("verify_token") else await resolve_webhook_verify_token(tenant_id)
+    # Orden: ChannelConnection (conexión manual) -> MetaConnection BYOK
+    # (verify_token propio generado en el wizard) -> `.env` (global).
+    verify_token = creds.get("verify_token") or byok_verify_token or settings.whatsapp_verify_token
     if hub_mode == "subscribe" and verify_token and constant_time_equal(hub_verify_token, verify_token):
         return Response(content=hub_challenge, media_type="text/plain; charset=utf-8")
     return Response(status_code=403)
