@@ -139,3 +139,28 @@ Diseñar un módulo nuevo mirando solo "qué pide el formulario" en vez de
 "qué necesita Meta para entregar tráfico real" es el error de fondo que
 causó este bug -- se verificó en vivo contra Meta real recién después
 de mergear, no antes.
+
+## Corrección post-mortem #2 (2026-09-21): faltaba suscribir los campos de webhook a nivel de app
+
+Con la WABA ya suscripta (corrección anterior), seguían sin llegar
+mensajes. Consultando `GET /{app_id}/subscriptions` directo contra
+Graph API se confirmó: la suscripción quedaba `active=true` pero **sin
+ningún `fields`** -- el admin había configurado el callback_url/
+verify_token a mano en el App Dashboard, pero el checkbox de
+"messages" nunca quedó tildado (Meta permite guardar la URL sin
+seleccionar ningún campo, sin avisar que eso la deja inútil).
+
+Corregido agregando una llamada a
+`core/gateway/meta_subscriptions.py::upsert_app_subscription` (POST
+`/{app_id}/subscriptions` con `fields=messages,...`, mismo mecanismo
+que ya usa Embedded Signup vía `meta_onboarding.py::
+_subscribe_webhook_step`) -- ya no depende de que el admin tilde el
+checkbox correcto a mano.
+
+**Lección repetida**: dos bugs seguidos por confiar en un paso manual
+de Meta (tildar checkboxes en su dashboard) en vez de forzarlo por
+API cuando la API lo permite. Para cualquier flujo BYOK futuro:
+preferir SIEMPRE la suscripción programática sobre pedirle al admin
+que configure algo a mano en developers.facebook.com, salvo los pasos
+que Meta exige que sean manuales de verdad (Business Verification, App
+Review).

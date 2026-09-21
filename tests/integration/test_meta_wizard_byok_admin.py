@@ -83,6 +83,20 @@ async def test_guardar_byok_con_credenciales_validas_crea_conexion_y_redirige_a_
 
     monkeypatch.setattr(byok_mod, "graph_fetch", _fake_graph_fetch)
 
+    import core.gateway.meta_subscriptions as subs_mod
+
+    app_sub_calls = []
+
+    async def _fake_upsert_app_subscription(config, object_, *, callback_url, verify_token):
+        app_sub_calls.append((config.app_id, object_, callback_url))
+
+        class _Status:
+            pass
+
+        return _Status()
+
+    monkeypatch.setattr(subs_mod, "upsert_app_subscription", _fake_upsert_app_subscription)
+
     app_id = _uniq("app-byok")
     phone_number_id = _uniq("phone-byok")
     waba_id = _uniq("waba-byok")
@@ -96,6 +110,9 @@ async def test_guardar_byok_con_credenciales_validas_crea_conexion_y_redirige_a_
     )
     assert r.status_code == 303
     assert r.headers["location"].startswith("/admin/conexiones/salud?flash=")
+    assert len(app_sub_calls) == 1
+    assert app_sub_calls[0][0] == app_id
+    assert app_sub_calls[0][1] == "whatsapp_business_account"
 
     async with tenant_scope(tid):
         async with get_session() as session:
