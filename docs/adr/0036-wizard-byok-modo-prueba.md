@@ -164,3 +164,32 @@ preferir SIEMPRE la suscripción programática sobre pedirle al admin
 que configure algo a mano en developers.facebook.com, salvo los pasos
 que Meta exige que sean manuales de verdad (Business Verification, App
 Review).
+
+## Corrección post-mortem #3 (2026-09-21): `resolve_webhook_verify_token` no se encontraba a sí misma
+
+Con la corrección #2 aplicada, el self-check interno de
+`upsert_app_subscription` (una llamada real GET a nuestro propio
+webhook, disparada DESDE `save_byok_connection` mientras esa misma
+conexión todavía está en `status="pending"`) empezó a fallar con 403.
+Causa: `resolve_webhook_verify_token` filtraba
+`MetaConnection.status == "connected"` -- en el momento exacto del
+self-check, la conexión que se está guardando todavía NO es
+`"connected"` (eso pasa recién al final de la función), así que no se
+encontraba a sí misma, caía al `.env` global (vacío en este entorno) y
+el propio self-check de Meta rechazaba el handshake -- marcando la
+conexión en `"error"` a pesar de que las credenciales eran correctas.
+
+Corregido ampliando el filtro a
+`MetaConnection.status.in_(("connected", "pending"))` -- el
+`verify_token` ya está persistido en `meta_token_store` en ese punto
+del flujo (los `put_token` corren antes en la misma función), así que
+no había ninguna razón real para excluir `"pending"`. `tenant_id` y
+`channel` siguen siendo filtros obligatorios y explícitos -- confirmado
+por auditor-multitenant que ampliar el filtro de estado no abre
+ninguna fuga entre tenants.
+
+**Lección**: un módulo que se auto-verifica (self-check) tiene que
+poder verse a sí mismo en CUALQUIER estado intermedio válido de su
+propio flujo, no solo en el estado final -- filtrar por el estado
+"terminado" es una trampa clásica cuando el propio proceso que llega a
+ese estado necesita leer sus datos ANTES de llegar ahí.
