@@ -77,10 +77,10 @@ class FakeSessionCM:
     separadas), pero todas comparten `known`/`added` para poder inspeccionar
     el resultado final desde el test."""
 
-    def __init__(self, shared_added, existing_connection=None, existing_phone=None, existing_waba=None):
+    def __init__(self, shared_added, existing_connection=None, existing_phone=None, existing_waba=None, tenant=None):
         self._shared_added = shared_added
         self._known = {}
-        for row in (existing_connection, existing_phone, existing_waba):
+        for row in (existing_connection, existing_phone, existing_waba, tenant):
             if row is not None and getattr(row, "id", None) is not None:
                 self._known[row.id] = row
         self._queue = [existing_connection, existing_phone, existing_waba]
@@ -210,6 +210,42 @@ async def test_credenciales_validas_crea_conexion_telefono_waba_y_suscribe(monke
     # POST /{waba_id}/subscribed_apps + GET de verificación.
     assert ("/waba-1/subscribed_apps", "POST") in graph_calls
     assert ("/waba-1/subscribed_apps", "GET") in graph_calls
+
+
+@pytest.mark.asyncio
+async def test_suscribe_tambien_los_campos_de_webhook_a_nivel_de_app(monkeypatch):
+    """Bug real encontrado en vivo: la suscripción de OBJETO por WABA no
+    alcanza -- si el admin configuró el webhook a mano en el App Dashboard
+    sin tildar el checkbox de "messages", Meta la deja `active=true` pero
+    sin ningún `fields`. `save_byok_connection` ahora la suscribe por API
+    (mismo mecanismo que Embedded Signup), sin depender de ese checkbox."""
+    from types import SimpleNamespace as NS
+
+    _mock_verify_ok(monkeypatch)
+    _mock_token_store(monkeypatch)
+    _mock_subscribe_ok(monkeypatch)
+
+    tenant_id = uuid.uuid4()
+    tenant = NS(id=tenant_id, slug="mi-tenant")
+    added: list = []
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added, tenant=tenant))
+    monkeypatch.setattr("core.tenants.tenant_webhook_url", lambda slug: f"https://x.test/webhooks/whatsapp/{slug}")
+
+    calls = []
+
+    async def _fake_upsert(config, object_, *, callback_url, verify_token):
+        calls.append((config.app_id, object_, callback_url, verify_token))
+        return NS()
+
+    monkeypatch.setattr("core.gateway.meta_subscriptions.upsert_app_subscription", _fake_upsert)
+
+    await save_byok_connection(tenant_id, uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1")
+
+    assert len(calls) == 1
+    app_id, object_, callback_url, _verify_token = calls[0]
+    assert app_id == "app-1"
+    assert object_ == "whatsapp_business_account"
+    assert callback_url == "https://x.test/webhooks/whatsapp/mi-tenant"
 
 
 @pytest.mark.asyncio
