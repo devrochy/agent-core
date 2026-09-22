@@ -3,6 +3,7 @@
 Comandos:
   agent-core init                         Bootstrap de una instalación nueva (.env + sdd/ + BD + admin)
   agent-core tenant create|list|seed|docs|deactivate|activate|purge  Alta y operación de tenants (multi-tenant)
+  agent-core admin create|link|grant|revoke|password|list   Admins del panel y sus permisos (ADR-0047)
   agent-core status                       Estado del sistema
   agent-core configure [tone|llm]         Reconfiguración puntual
   agent-core plugin list|install|remove|scaffold
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import typer
 
+from cli.commands.admin import app as admin_app
 from cli.commands.agent import app as agent_app
 from cli.commands.configure import app as configure_app
 from cli.commands.db import app as db_app
@@ -39,6 +41,7 @@ app.add_typer(db_app, name="db", help="Base de datos")
 app.add_typer(sdd_app, name="sdd", help="System Design Document vivo")
 app.add_typer(agent_app, name="agent", help="Releases y rollback del AgentSpec (ADR-0009/0016)")
 app.add_typer(tenant_app, name="tenant", help="Alta y operación de tenants (multi-tenant, ADR-0001)")
+app.add_typer(admin_app, name="admin", help="Admins del panel: alta y permisos (ADR-0047)")
 app.add_typer(meta_app, name="meta", help="Diagnóstico de WhatsApp Cloud API (Meta)")
 
 

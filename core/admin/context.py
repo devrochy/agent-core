@@ -57,6 +57,9 @@ async def base_context(request: Request, section: str) -> dict[str, Any] | None:
 
     tenant_id = get_current_tenant_id()
     billing = await dashboard_billing_summary(tenant_id) if tenant_id else None
+    from core.admin.permissions import catalog, permissions_for
+
+    perms = await permissions_for(admin, catalog(plugin_manager.active_ids()))
     return {
         "request": request,
         "section": section,
@@ -66,6 +69,7 @@ async def base_context(request: Request, section: str) -> dict[str, Any] | None:
         "tenants": await admin_tenant_options(admin.id),
         "active_tenant_id": str(get_current_tenant_id()) if get_current_tenant_id() else "",
         "billing": billing,
+        "perms": perms,
         "flash": request.query_params.get("flash"),
         "flash_type": request.query_params.get("flash_type"),
     }

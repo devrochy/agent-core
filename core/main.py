@@ -14,10 +14,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from core.admin.auth import SESSION_COOKIE, TENANT_COOKIE, current_admin
+from core.admin.permissions import effective_access, pack_prefixes, required_section
 from core.admin.views import router as admin_router
 from core.config import get_settings
 from core.gateway.webhooks import router as webhooks_router
@@ -84,6 +85,17 @@ for _module in plugin_manager.list_modules():
     if plugin_router is not None:
         app.include_router(plugin_router)
 
+# Prefijos de UI admin de los packs (ej. /crm → pack_commerce), para el gate por
+# sección del middleware (ADR-0047). Se calcula una vez, tras el scan.
+_PACK_PREFIXES = pack_prefixes(plugin_manager.list_modules())
+
+
+def _forbidden(request: Request):
+    """403 del gate de sección; JSON si la ruta lo pide, HTML si no."""
+    if request.url.path.endswith(".json") or "application/json" in request.headers.get("accept", ""):
+        return JSONResponse({"detail": "Sin permiso para esta sección."}, status_code=403)
+    return HTMLResponse("Sin permiso para esta sección.", status_code=403)
+
 
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
@@ -92,31 +104,54 @@ async def healthz() -> dict[str, str]:
 
 @app.middleware("http")
 async def tenant_context_middleware(request: Request, call_next):
-    """Establece el contexto de tenant (ADR-0012) para rutas autenticadas.
+    """Establece el contexto de tenant (ADR-0012) y aplica el gate de sección (ADR-0047).
 
     Allowlist de rutas públicas (webhooks, healthz, login, estáticos); para todo
-    lo demás, si hay cookie de sesión, resuelve admin -> tenant_user -> tenant_scope.
-    Así cubre el panel (/admin), los routers de plugins (/crm, /calendar) y cualquier
-    ruta futura sin tener que acordarse de registrar prefijos.
+    lo demás, si hay cookie de sesión, resuelve admin -> tenant_user -> tenant_scope
+    y, salvo `master`, exige el permiso de la sección de la ruta (read para GET,
+    write para el resto). Así cubre el panel (/admin), los routers de plugins
+    (/crm, /calendar) y cualquier ruta futura sin tener que acordarse de prefijos.
     """
     path = request.url.path
-    if path == "/" or path.startswith(("/webhooks", "/healthz", "/admin/login", "/static")):
+    if path == "/" or path.startswith(
+        (
+            "/webhooks",
+            "/healthz",
+            "/admin/login",
+            "/admin/logout",
+            "/admin/switch-tenant",
+            "/static",
+        )
+    ):
         return await call_next(request)
     if SESSION_COOKIE not in request.cookies:
         return await call_next(request)
     admin = await current_admin(request)
-    if admin is not None:
-        tenants = await admin_tenants(admin.id)
-        if tenants:
-            # Selector de tenant (C3, Sprint 4): la cookie ac_tenant decide el
-            # tenant activo del panel; si no es válida o falta, el primero.
-            target = str(tenants[0][0])
-            cookie_tenant = request.cookies.get(TENANT_COOKIE)
-            if cookie_tenant and any(str(t[0]) == cookie_tenant for t in tenants):
-                target = cookie_tenant
-            async with tenant_scope(uuid.UUID(target)):
-                return await call_next(request)
-    return await call_next(request)
+    if admin is None:
+        return await call_next(request)
+
+    tenants = await admin_tenants(admin.id)
+    target: uuid.UUID | None = None
+    if tenants:
+        # Selector de tenant (C3, Sprint 4): la cookie ac_tenant decide el
+        # tenant activo del panel; si no es válida o falta, el primero.
+        target = tenants[0][0]
+        cookie_tenant = request.cookies.get(TENANT_COOKIE)
+        if cookie_tenant and any(str(t[0]) == cookie_tenant for t in tenants):
+            target = uuid.UUID(cookie_tenant)
+
+    required = required_section(path, request.method, _PACK_PREFIXES)
+    async with tenant_scope(target):
+        # Default-deny: cualquier ruta autenticada que no esté mapeada a una
+        # sección se rechaza (las públicas ya salieron por la allowlist de arriba).
+        if required is None:
+            return _forbidden(request)
+        if admin.role != "master":
+            section, write = required
+            access = await effective_access(admin, section, target)
+            if access is None or (write and access != "write"):
+                return _forbidden(request)
+        return await call_next(request)
 
 
 @app.get("/")

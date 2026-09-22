@@ -443,6 +443,10 @@ class PluginManager:
     def is_active(self, plugin_id: str) -> bool:
         return plugin_id in self._active
 
+    def active_ids(self) -> set[str]:
+        """Ids de los plugins activos en el proceso (para el catálogo de secciones)."""
+        return set(self._active)
+
     def list_modules(self) -> list[BaseModule]:
         return list(self._modules.values())
 
@@ -467,6 +471,7 @@ class PluginManager:
             if module and module.admin_menu:
                 groups.append(
                     {
+                        "id": plugin_id,
                         "name": module.name or plugin_id,
                         "items": list(module.admin_menu),
                     }
