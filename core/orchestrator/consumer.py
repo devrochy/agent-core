@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 
 from core.agents.responses import load_response
 from core.agents.spec import load_active_spec
+from core.billing.enforcement import QuotaExceeded, enforce_metric
 from core.config import DEBOUNCE_DELAY_MS, get_settings
 from core.db.models import (
     AppSettings,
@@ -138,13 +139,13 @@ async def handle_inbound(fields: dict[str, str]) -> bool:
         return False
 
     async with tenant_scope(tenant_id):
-        # Ciclo de vida: mensajes de un tenant suspendido/eliminado se descartan
-        # (ACK) sin procesar — cubre eventos ya encolados antes de la suspensión.
-        from core.tenants import is_tenant_active
+        # Ciclo de vida + billing: mensajes de un tenant suspendido/eliminado o
+        # con el plan vencido se descartan (ACK) sin procesar (ADR-0001/0045).
+        from core.billing.enforcement import is_tenant_operational
 
-        if not await is_tenant_active(uuid.UUID(tenant_id)):
+        if not await is_tenant_operational(uuid.UUID(tenant_id)):
             log.warning(
-                "inbound_tenant_not_active",
+                "inbound_tenant_not_operational",
                 tenant_id=tenant_id,
                 message_id=fields.get("external_message_id"),
             )
@@ -186,7 +187,18 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
     media_context = fields.get("media_context", "")
     effective_message = f"{content}\n{media_context}".strip() if media_context else content
 
-    conversation, customer, app_settings = await _resolve_conversation(fields)
+    try:
+        conversation, customer, app_settings = await _resolve_conversation(fields)
+    except QuotaExceeded as exc:
+        # Bloqueo duro de cuota (ADR-0045): se descarta el inbound sin procesar.
+        log.warning(
+            "inbound_quota_exceeded",
+            tenant_id=get_current_tenant_id(),
+            metric=exc.metric,
+            used=exc.used,
+            limit=exc.limit,
+        )
+        return
 
     # ---------------- kill-switch en 3 niveles
     paused = (
@@ -277,6 +289,10 @@ async def _resolve_conversation(
             )
         ).scalar_one_or_none()
         if customer is None:
+            # Cuota de clientes (ADR-0045): solo bloquea el ALTA de un cliente
+            # nuevo; los clientes existentes se siguen atendiendo. Se pasa la
+            # sesión abierta para no anidar otra (RLS es transaction-scoped).
+            await enforce_metric(tenant_id, "clientes", session=session)
             contact_phone = external_id.removeprefix("whatsapp:") if channel == "whatsapp" else None
             try:
                 async with session.begin_nested():
@@ -348,6 +364,10 @@ async def _resolve_conversation(
 
         is_new = conversation is None
         if conversation is None:
+            # Cuota de conversaciones (ADR-0045): solo bloquea ABRIR una nueva;
+            # las conversaciones ya abiertas siguen respondiendo. Sesión abierta
+            # reutilizada (mismo criterio que el gate de clientes).
+            await enforce_metric(tenant_id, "conversaciones", session=session)
             conversation = Conversation(
                 tenant_id=tenant_id,
                 customer_id=customer.id,

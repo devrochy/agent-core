@@ -16,7 +16,7 @@ import os
 import uuid
 
 import pytest
-from conftest import PHONE, TEST_ALPHA_ID, FakeProvider, _meta_payload
+from conftest import PHONE, TEST_ALPHA_ID, FakeProvider, _meta_payload, _meta_request
 from sqlalchemy import func, select
 
 pytestmark = [
@@ -83,10 +83,11 @@ async def test_cinco_webhooks_identicos_un_turno(app_client, tenant_setup, recor
     recorded.clear()
 
     msg_id = f"wamid.DEDUPE.{uuid.uuid4().hex[:8]}"
+    body, headers = _meta_request(_meta_payload(PHONE, "wa-555", msg_id, "hola"))
     results = []
     for _ in range(5):
         resp = await app_client.post(
-            "/webhooks/whatsapp", json=_meta_payload(PHONE, "wa-555", msg_id, "hola")
+            "/webhooks/whatsapp", content=body, headers=headers
         )
         results.append(resp.json())
     assert results[0]["enqueued"] == 1
@@ -106,9 +107,13 @@ async def test_tres_mensajes_en_2s_un_turno(app_client, tenant_setup, recorded):
     recorded.clear()
 
     for i in range(3):
+        body, headers = _meta_request(
+            _meta_payload(PHONE, "wa-777", f"wamid.BURST.{i}.{uuid.uuid4().hex[:6]}", f"msg {i}")
+        )
         await app_client.post(
             "/webhooks/whatsapp",
-            json=_meta_payload(PHONE, "wa-777", f"wamid.BURST.{i}.{uuid.uuid4().hex[:6]}", f"msg {i}"),
+            content=body,
+            headers=headers,
         )
 
     await _run_background(6)
@@ -177,14 +182,22 @@ async def test_tenant_ruidoso_no_bloquea_a_otro(app_client, tenant_setup, record
 
     # tenant A (ruidoso): 20 conversaciones distintas
     for i in range(20):
+        body, headers = _meta_request(
+            _meta_payload(PHONE, f"wa-A{i}", f"wamid.A{i}.{uuid.uuid4().hex[:6]}", f"A-{i}")
+        )
         await app_client.post(
             "/webhooks/whatsapp",
-            json=_meta_payload(PHONE, f"wa-A{i}", f"wamid.A{i}.{uuid.uuid4().hex[:6]}", f"A-{i}"),
+            content=body,
+            headers=headers,
         )
     # tenant B: 1 mensaje
+    body, headers = _meta_request(
+        _meta_payload("999", "wa-B1", f"wamid.B1.{uuid.uuid4().hex[:6]}", "B-1")
+    )
     await app_client.post(
         "/webhooks/whatsapp",
-        json=_meta_payload("999", "wa-B1", f"wamid.B1.{uuid.uuid4().hex[:6]}", "B-1"),
+        content=body,
+        headers=headers,
     )
 
     async def _b_served() -> bool:

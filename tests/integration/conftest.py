@@ -118,6 +118,95 @@ async def _clean_redis():
     yield
 
 
+@pytest.fixture(autouse=True)
+async def _reset_test_tenants_state():
+    """Prepara los tenants de PRUEBA para un arranque limpio.
+
+    Contrarresta la contaminación de una BD local reusada entre corridas:
+    1. Un test anterior deja `conversations.status='escalated'`/`bot_paused` para
+       un `customer_external_id` fijo (wa-555, wa-777, ...), y el consumidor
+       descarta el inbound nuevo de ese contacto sin procesarlo.
+    2. El tenant de prueba acumula miles de `customers`/`conversations` de
+       corridas previas, superando la cuota del plan `free` (ADR-0045) y haciendo
+       que el gate de billing bloquee turnos legítimos del test.
+
+    Solo toca los UUIDs reservados de test, nunca tenants reales.
+    """
+    from sqlalchemy import select
+
+    from core.db.models import ChannelConnection, Conversation, Customer, TenantSubscription
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    test_ids = (TEST_ALPHA_ID, TEST_BETA_ID)
+
+    async def _reset() -> None:
+        for tid in test_ids:
+            async with tenant_scope(tid):
+                async with get_session() as session:
+                    # Conexiones primarias duplicadas: `resolve_credentials`
+                    # (`sender.py`) usa `scalar_one_or_none` y revienta con
+                    # `MultipleResultsFound` si quedan varias de corridas previas.
+                    # Se deja UNA primaria (la de `tenant_setup`, external_id=PHONE).
+                    primaries = (
+                        await session.execute(
+                            select(ChannelConnection).where(
+                                ChannelConnection.tenant_id == tid,
+                                ChannelConnection.is_primary.is_(True),
+                                ChannelConnection.active.is_(True),
+                                ChannelConnection.deleted_at.is_(None),
+                            )
+                        )
+                    ).scalars().all()
+                    if len(primaries) > 1:
+                        keeper = next(
+                            (c for c in primaries if c.external_id == PHONE), primaries[0]
+                        )
+                        for conn in primaries:
+                            if conn.id != keeper.id:
+                                conn.is_primary = False
+                    for conv in (
+                        await session.execute(
+                            select(Conversation).where(
+                                Conversation.tenant_id == tid,
+                                Conversation.status.in_(["open", "escalated"]),
+                            )
+                        )
+                    ).scalars().all():
+                        conv.status = "closed"
+                        conv.bot_paused = False
+                    for cust in (
+                        await session.execute(
+                            select(Customer).where(Customer.tenant_id == tid, Customer.bot_paused.is_(True))
+                        )
+                    ).scalars().all():
+                        cust.bot_paused = False
+                    # Plan de prueba con período largo: el enforcement de cuotas
+                    # se prueba en `test_billing_*`, no debe gatear los tests de
+                    # pipeline que reusan el tenant acumulado.
+                    sub = (
+                        await session.execute(
+                            select(TenantSubscription).where(
+                                TenantSubscription.tenant_id == tid,
+                                TenantSubscription.deleted_at.is_(None),
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if sub is not None:
+                        # Plan empresarial (ilimitado): los tests de pipeline no
+                        # deben gatearse por cuotas acumuladas de corridas previas.
+                        sub.plan_id = "empresarial"
+                        sub.status = "active"
+                        from datetime import UTC, datetime, timedelta
+
+                        sub.period_end = datetime.now(UTC) + timedelta(days=3650)
+                        sub.trial_ends_at = None
+
+    await _reset()
+    yield
+    await _reset()
+
+
 @pytest.fixture(scope="module")
 async def app_client() -> AsyncIterator[httpx.AsyncClient]:
     from core.main import app
@@ -275,3 +364,33 @@ def _meta_payload(phone_id: str, wa_id: str, message_id: str, body: str) -> dict
             }
         ],
     }
+
+
+def _sign_meta(body: bytes, secret: str) -> dict[str, str]:
+    """Cabecera `X-Hub-Signature-256` con el HMAC del App Secret efectivo.
+
+    El webhook GENÉRICO (`/webhooks/whatsapp`) verifica la firma cuando hay un
+    App Secret configurado (`.env` `WHATSAPP_APP_SECRET` o BYOK del tenant). Los
+    tests que postean sin firmar dan 401 en cuanto el entorno tiene el secreto
+    (BYOK E2E en `.env`) -- antes pasaban solo porque el `.env` local no lo
+    tenía. Helper compartido para no repetir el HMAC en cada test.
+    """
+    import hashlib
+    import hmac
+
+    digest = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return {"X-Hub-Signature-256": f"sha256={digest}"}
+
+
+def _meta_request(payload: dict[str, Any]) -> tuple[bytes, dict[str, str]]:
+    """Cuerpo crudo + headers firmados con el App Secret de `.env` (webhook genérico)."""
+    import json as _json
+
+    from core.config import get_settings
+
+    body = _json.dumps(payload).encode()
+    secret = get_settings().whatsapp_app_secret or get_settings().meta_app_secret or ""
+    headers = {"Content-Type": "application/json"}
+    if secret:
+        headers.update(_sign_meta(body, secret))
+    return body, headers

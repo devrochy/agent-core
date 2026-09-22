@@ -53,6 +53,10 @@ async def base_context(request: Request, section: str) -> dict[str, Any] | None:
     from core.agents.spec import enabled_packs, load_active_spec
 
     tenant_enabled = enabled_packs(await load_active_spec())
+    from core.admin.plan_view import dashboard_billing_summary
+
+    tenant_id = get_current_tenant_id()
+    billing = await dashboard_billing_summary(tenant_id) if tenant_id else None
     return {
         "request": request,
         "section": section,
@@ -61,6 +65,7 @@ async def base_context(request: Request, section: str) -> dict[str, Any] | None:
         "plugin_menu": plugin_manager.active_admin_menu(tenant_enabled),
         "tenants": await admin_tenant_options(admin.id),
         "active_tenant_id": str(get_current_tenant_id()) if get_current_tenant_id() else "",
+        "billing": billing,
         "flash": request.query_params.get("flash"),
         "flash_type": request.query_params.get("flash_type"),
     }

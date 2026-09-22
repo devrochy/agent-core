@@ -484,6 +484,92 @@ class UsageLedger(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+# ------------------------------------------------- planes y facturación (ADR-0045 / ADR-0046)
+class Plan(Base):
+    """Catálogo de planes. Tabla de SISTEMA (sin RLS, sin `tenant_id`).
+
+    Excepción deliberada a la invariante #1 (ADR-0045), mismo criterio que
+    `webhook_events` (ADR-0028): el catálogo es global y compartido. La fuente
+    de verdad es `core/billing/plans.py`; esta tabla la espeja para el panel y
+    las FKs, y `sync_plans()` la mantiene al día.
+    """
+
+    __tablename__ = "plans"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)  # free|basic|premium|empresarial
+    name: Mapped[str] = mapped_column(Text)
+    price_cop: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
+    currency: Mapped[str] = mapped_column(Text, default="COP")
+    interval_days: Mapped[int] = mapped_column(Integer, default=30)
+    trial_days: Mapped[int] = mapped_column(Integer, default=0)
+    limits: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    features: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_public: Mapped[bool] = mapped_column(Boolean, default=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class TenantSubscription(Base):
+    """Relación de un tenant con un plan (negocio: RLS).
+
+    Una sola suscripción activa por tenant (índice único parcial sobre
+    `deleted_at is null`). `status`: trialing | active | past_due | expired |
+    canceled. El plan free es también el trial: `trial_ends_at` marca su fin.
+    """
+
+    __tablename__ = "tenant_subscriptions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("plans.id"))
+    status: Mapped[str] = mapped_column(Text, default="trialing")
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider: Mapped[str | None] = mapped_column(Text)
+    provider_reference: Mapped[str | None] = mapped_column(Text)
+    canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class SubscriptionPayment(Base):
+    """Un intento de cobro del plan de un tenant (negocio: RLS).
+
+    Idempotente por `(tenant_id, provider_reference)` (índice único parcial):
+    el webhook de Wompi puede reintentar el mismo evento sin duplicar el pago.
+    `status`: pendiente | aprobado | rechazado | anulado.
+    """
+
+    __tablename__ = "subscription_payments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenant_subscriptions.id"))
+    plan_id: Mapped[str] = mapped_column(ForeignKey("plans.id"))
+    amount_cop: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
+    currency: Mapped[str] = mapped_column(Text, default="COP")
+    status: Mapped[str] = mapped_column(Text, default="pendiente")
+    provider: Mapped[str] = mapped_column(Text)
+    provider_reference: Mapped[str] = mapped_column(Text)
+    checkout_url: Mapped[str | None] = mapped_column(Text)
+    period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class ProcessedEvent(Base):
     """Claim de idempotencia (ADR-0007) revocable (ADR-0013).
 

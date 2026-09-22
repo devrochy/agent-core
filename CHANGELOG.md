@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.5.0 — Planes y facturación de tenants (2026-09-22)
+
+Cada tenant opera 1 mes gratis y después se vincula a un plan (basic, premium,
+empresarial) con cuotas y cobro por Wompi. Ver `docs/BILLING.md`, ADR-0045/0046,
+HU-011.
+
+### Planes y cuotas (ADR-0045)
+- Catálogo de planes en código (`core/billing/plans.py`) espejado a la tabla de
+  sistema `plans` (`sync_plans()` al arrancar). 4 planes con límites de clientes,
+  conversaciones, audio, OCR, plugins, mensajes y costo LLM del período.
+- `tenant_subscriptions` (RLS): todo tenant nuevo arranca en `free` con 30 días de
+  trial; backfill de la migración `0034` para los existentes (30 días desde la migración).
+- Medición derivada de las tablas fuente (`core/billing/metrics.py`): sin contador
+  paralelo, consistente con `usage_ledger` (ADR-0008).
+- Enforcement de bloqueo duro (`core/billing/enforcement.py`): tenant no operacional
+  si el trial/período venció (webhook + consumer); cuota alcanzada bloquea la nueva
+  unidad de la métrica (cliente, conversación, audio/OCR, pack, turno).
+- Cron `core.billing_lifecycle` (diario) normaliza `trialing→expired`/`active→past_due`.
+
+### Panel
+- `/admin/plan`: plan actual, estado, días restantes, barras de progreso por métrica,
+  planes disponibles e historial de pagos.
+- Banners globales de cuota (80%/100%) y servicio detenido; resumen en el dashboard.
+- `/admin/tenants` (master): plan de cada tenant + cambio de plan/ extensión de
+  período con registro en `audit_log`.
+
+### Cobro con Wompi (ADR-0046)
+- `core/billing/providers/wompi.py` (cliente propio de la plataforma, replica el
+  algoritmo probado de `pack-payments`): link de pago por período, firma de webhook
+  verificada, correlación por `payment_link_id`, mínimo real de 150.000 COP.
+- `POST /admin/plan/subscribe` + `POST /webhooks/billing/wompi` (firma + idempotencia).
+- Débito recurrente automático: **diferido y documentado** (la interfaz queda lista).
+
+### Infra / fixes de tests
+- `.env.example`: bloque de billing (`BILLING_PROVIDER`, `WOMPI_BILLING_*`).
+- Tests de integración: helper compartido `_meta_request` firma los webhooks con el
+  App Secret de `.env` (antes fallaban 401 con el secret configurado); fixture
+  `_reset_test_tenants_state` cierra conversaciones de los tenants de prueba para
+  que una BD local reusada entre corridas no contamine los tests.
+
 ## v0.4.0 — BYOK de WhatsApp productivo (2026-09-22)
 
 Deja el flujo BYOK (app propia de Meta) funcionando de punta a punta: mensaje entra →

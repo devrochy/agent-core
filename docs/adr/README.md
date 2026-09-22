@@ -52,3 +52,5 @@ Se crean con `/adr`.
 | 0042 | Worker Celery: `include` de tasks + puente async con loop persistente | aceptado |
 | 0043 | Alta de tenant conecta WhatsApp por el flujo BYOK | aceptado |
 | 0044 | Registro de crons de packs (import de `jobs` + `beat_init`) | aceptado |
+| 0045 | Planes y cuotas por tenant: catálogo versionado, medición derivada y bloqueo duro | aceptado |
+| 0046 | Cobro de la suscripción de plataforma vía Wompi (link por período) | aceptado |

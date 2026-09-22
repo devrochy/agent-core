@@ -173,6 +173,27 @@ celery.conf.beat_schedule[_WORKER_HEARTBEAT_TASK] = {
     "schedule": crontab(minute="*/1"),
 }
 
+# Normalización de suscripciones vencidas (diaria): pasa `trialing`->`expired` y
+# `active`->`past_due` para que el panel refleje el estado real (ADR-0045). El
+# bloqueo efectivo NO depende de este cron (se evalúa en vivo en webhook/consumer).
+_BILLING_LIFECYCLE_TASK = "core.billing_lifecycle"
+
+
+@celery.task(name=_BILLING_LIFECYCLE_TASK)
+def _billing_lifecycle() -> None:
+    from core.tasks.billing_lifecycle import normalize_expired_subscriptions
+
+    try:
+        run_async(normalize_expired_subscriptions())
+    except Exception:
+        log.exception("cron_task_failed", task=_BILLING_LIFECYCLE_TASK)
+
+
+celery.conf.beat_schedule[_BILLING_LIFECYCLE_TASK] = {
+    "task": _BILLING_LIFECYCLE_TASK,
+    "schedule": crontab(hour="4", minute="0"),
+}
+
 
 def _load_plugins() -> None:
     """Carga los plugins (entry_points) e importa los jobs para que corran los

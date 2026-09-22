@@ -137,14 +137,12 @@ async def receive_whatsapp_tenant(request: Request, slug: str) -> Response:
     """Webhook por tenant: `/webhooks/whatsapp/<slug>`. El slug identifica al
     tenant -- un solo tenant posible por diseño (una app dedicada = un slug),
     a diferencia del genérico."""
-    from core.tenants import is_tenant_active, resolve_tenant_by_slug
+    from core.billing.enforcement import is_tenant_operational
+    from core.tenants import resolve_tenant_by_slug
 
     tenant_id = await resolve_tenant_by_slug(slug)
     if tenant_id is None:
         log.warning("webhook_tenant_not_found", slug=slug)
-        return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
-    if not await is_tenant_active(tenant_id):
-        log.warning("webhook_tenant_not_active", tenant_id=str(tenant_id), slug=slug)
         return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
 
     raw_body = await request.body()
@@ -167,6 +165,12 @@ async def receive_whatsapp_tenant(request: Request, slug: str) -> Response:
                 await _alert_on_invalid_signature(get_settings().meta_app_id or str(tenant_id))
                 return Response(status_code=401)
 
+    # Gate de billing DESPUÉS de la firma: antes filtraría el estado de
+    # facturación de un tenant a quien no está autenticado (401 vs. 200).
+    if not await is_tenant_operational(tenant_id):
+        log.warning("webhook_tenant_not_operational", tenant_id=str(tenant_id), slug=slug)
+        return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
+
     try:
         payload = json.loads(raw_body)
     except json.JSONDecodeError:
@@ -187,7 +191,7 @@ async def _process_payload(
     `dev_fallback`: solo el endpoint GENÉRICO en APP_ENV=development cae al
     `default_tenant()` si no resuelve nada (bootstrap sin conexión real
     registrada) -- comportamiento preexistente, nunca en producción."""
-    from core.tenants import is_tenant_active
+    from core.billing.enforcement import is_tenant_operational
 
     events = flatten_payload(payload)
     settings = get_settings()
@@ -244,11 +248,11 @@ async def _process_payload(
             log.warning("webhook_unresolved_tenant", object_type=entry_events[0].object_type, entry_id=entry_id)
             continue
 
-        if not await is_tenant_active(tenant_id):
-            log.warning("webhook_tenant_not_active", tenant_id=str(tenant_id))
+        if not await is_tenant_operational(tenant_id):
+            log.warning("webhook_tenant_not_operational", tenant_id=str(tenant_id))
             for event in entry_events:
                 ok = await _log_webhook_event(
-                    meta_app_id, event, tenant_id=tenant_id, process_error="tenant_not_active"
+                    meta_app_id, event, tenant_id=tenant_id, process_error="tenant_not_operational"
                 )
                 if not ok:
                     return _webhook_events_failure_response()
@@ -385,7 +389,11 @@ async def _dispatch_entry_messages(
             continue
 
         if message.media:
-            message = await _try_process_media(message)
+            processed = await _try_process_media(message)
+            if processed is None:
+                # Cuota de audio/OCR agotada: se descarta el mensaje (ADR-0045).
+                continue
+            message = processed
 
         await redis.xadd(
             INBOUND_STREAM,
@@ -488,11 +496,34 @@ async def count_stalled_webhook_events(older_than_minutes: int = 5) -> int:
         ).scalar() or 0
 
 
+def _media_metric(message: Any) -> str | None:
+    """Métrica de cuota que consume un mensaje multimedia (audio u OCR)."""
+    for item in getattr(message, "media", []) or []:
+        mime = str(item.get("type", ""))
+        if mime.startswith("audio"):
+            return "conversaciones_audio"
+        if mime.startswith("image"):
+            return "conversaciones_ocr"
+    return None
+
+
 async def _try_process_media(message: Any) -> Any:
     """Si mod-media-processor está activo, transforma audio/imagen a texto ANTES de encolar.
 
+    Devuelve None si la cuota de audio/OCR del plan está agotada: el mensaje se
+    descarta (bloqueo duro, ADR-0045) y no se encola.
+
     Llamada de función Python en el mismo proceso — cero red (docs/MONOLITH-MODEL.md).
     """
+    metric = _media_metric(message)
+    tenant_id = get_current_tenant_id()
+    if metric is not None and tenant_id is not None:
+        from core.billing.enforcement import check_metric
+
+        if not await check_metric(tenant_id, metric):
+            log.warning("media_quota_exceeded", tenant_id=str(tenant_id), metric=metric)
+            return None
+
     from core.plugin_manager import plugin_manager
 
     module = plugin_manager.get("mod_media_processor")
@@ -509,3 +540,53 @@ async def _try_process_media(message: Any) -> Any:
         # procesador de medios para los demás tenants.
         await plugin_manager.auto_disable_for_tenant(get_current_tenant_id(), "mod_media_processor", str(exc))
         return message
+
+
+# ---------------------------------------------------------------- webhook de billing (ADR-0046)
+@router.post("/billing/wompi")
+async def receive_billing_wompi(request: Request) -> Response:
+    """Webhook del pago de la SUSCRIPCIÓN de plataforma (Wompi).
+
+    Punto de entrada de SISTEMA (no de tenant): el pago no trae `tenant_id` en el
+    payload, se resuelve por `provider_reference` (id del link) contra
+    `subscription_payments`. Verifica la firma con el `events_secret` de la
+    plataforma (`.env`), nunca con credenciales de un tenant.
+    """
+    from core.billing.providers import get_billing_provider
+
+    provider = get_billing_provider()
+    if provider is None:
+        log.warning("billing_webhook_no_provider")
+        return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
+
+    raw_body = await request.body()
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError:
+        return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
+
+    if not provider.verify_webhook_signature(payload):
+        log.warning("billing_webhook_signature_invalid")
+        return Response(status_code=401)
+
+    event = provider.parse_webhook_event(payload)
+    if not event.provider_reference:
+        log.warning("billing_webhook_sin_referencia")
+        return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
+
+    from core.billing.checkout import apply_payment
+
+    try:
+        updated = await apply_payment(
+            provider_reference=event.provider_reference, status=event.status
+        )
+    except Exception:
+        log.exception("billing_webhook_apply_failed")
+        # 500 a propósito: Wompi reintenta el evento.
+        return Response(status_code=500)
+
+    return Response(
+        status_code=200,
+        content=json.dumps({"status": "ok", "updated": updated, "payment": event.status}),
+        media_type="application/json",
+    )

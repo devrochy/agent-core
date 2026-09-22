@@ -18,7 +18,7 @@ import os
 import uuid
 
 import pytest
-from conftest import PHONE, TEST_ALPHA_ID, _meta_payload
+from conftest import PHONE, TEST_ALPHA_ID, _meta_payload, _meta_request
 from sqlalchemy import select
 
 pytestmark = [
@@ -123,9 +123,11 @@ async def test_guardrail_max_retries_0_escala_en_la_primera_llamada(
     await _set_behavior(t1, debounce_mode="inmediato", guardrail_max_retries=0, disabled_guardrails=[])
     recorded.clear()
 
+    body, headers = _meta_request(_meta_payload(PHONE, f"wa-grmax0-{uuid.uuid4().hex[:6]}", f"wamid.GRMAX0.{uuid.uuid4().hex[:6]}", "hola"))
     resp = await app_client.post(
         "/webhooks/whatsapp",
-        json=_meta_payload(PHONE, f"wa-grmax0-{uuid.uuid4().hex[:6]}", f"wamid.GRMAX0.{uuid.uuid4().hex[:6]}", "hola"),
+        content=body,
+        headers=headers,
     )
     assert resp.json()["enqueued"] == 1
     await _run_background(2)
@@ -143,9 +145,11 @@ async def test_guardrail_max_retries_2_reintenta_dos_veces(
     await _set_behavior(t1, debounce_mode="inmediato", guardrail_max_retries=2, disabled_guardrails=[])
     recorded.clear()
 
+    body, headers = _meta_request(_meta_payload(PHONE, f"wa-grmax2-{uuid.uuid4().hex[:6]}", f"wamid.GRMAX2.{uuid.uuid4().hex[:6]}", "hola"))
     resp = await app_client.post(
         "/webhooks/whatsapp",
-        json=_meta_payload(PHONE, f"wa-grmax2-{uuid.uuid4().hex[:6]}", f"wamid.GRMAX2.{uuid.uuid4().hex[:6]}", "hola"),
+        content=body,
+        headers=headers,
     )
     assert resp.json()["enqueued"] == 1
     await _run_background(2)
@@ -171,9 +175,11 @@ async def test_guardrail_individual_desactivado_no_reintenta(
         )
         recorded.clear()
 
+        body, headers = _meta_request(_meta_payload(PHONE, f"wa-grdis-{uuid.uuid4().hex[:6]}", f"wamid.GRDIS.{uuid.uuid4().hex[:6]}", "hola"))
         resp = await app_client.post(
             "/webhooks/whatsapp",
-            json=_meta_payload(PHONE, f"wa-grdis-{uuid.uuid4().hex[:6]}", f"wamid.GRDIS.{uuid.uuid4().hex[:6]}", "hola"),
+            content=body,
+            headers=headers,
         )
         assert resp.json()["enqueued"] == 1
         await _run_background(2)

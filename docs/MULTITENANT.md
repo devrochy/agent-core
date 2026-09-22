@@ -30,6 +30,7 @@ Un tenant es un cliente con su asistente. En la BD:
 | Su identidad | `app_settings` | nombre, negocio, idioma, BYOK, kill-switch |
 | Su canal | `channel_connections` | credenciales cifradas (Fernet) |
 | Su vertical | `plugin_configs` + enablement | config del pack por tenant |
+| Su plan | `tenant_subscriptions` | plan + período + trial (ADR-0045) |
 | Acceso del admin | `tenant_user` | quién opera el tenant en el panel |
 
 Aislamiento: **toda** tabla de negocio lleva `tenant_id uuid not null`, RLS con
@@ -90,6 +91,16 @@ bajas temporales, impago, o incidentes. La enforcement es defensa en profundidad
 el webhook no encola (`core/gateway/webhooks.py`) y el consumer descarta eventos
 ya encolados (`core/orchestrator/consumer.py`) vía `core.tenants.is_tenant_active`.
 
+**Billing: operativo vs. no operativo (ADR-0045).** Independiente de `status`
+(`active|suspended`), un tenant tiene un estado de billing dado por su plan y su
+suscripción (`tenant_subscriptions`): todo tenant nuevo arranca en `free` con 30
+días de trial. Si el trial/período vence o el pago no está activo, el tenant deja
+de procesar mensajes (mismo gate webhook/consumer, vía `is_tenant_operational`),
+sin borrar datos. Un tenant `active` puede estar así no operativo por falta de
+pago. Ver `docs/BILLING.md`. El backfill de la migración `0034` dio a todos los
+tenants existentes una suscripción `free` con 30 días desde la migración (no
+desde `created_at`), para no cortarles el servicio de golpe.
+
 **Eliminación** (`tenant purge`): exige confirmar exactamente la frase
 `ELIMINAR <slug>` y rol `master`. Es la **excepción deliberada a la invariante #8**
 (sin borrado físico): el ciclo de vida del tenant la requiere (tipo GDPR /
@@ -103,5 +114,7 @@ historial inmutable (`usage_ledger`, `audit_log`) del tenant.
 - ADR-0001 multi-tenant pooled + RLS (`docs/adr/0001-multitenant-pooled-rls.md`)
 - ADR-0012 contexto de tenant (auth/RLS) · ADR-0014 AgentSpec/playbooks
 - ADR-0019 enablement por packs · ADR-0018 numeración por tenant
+- ADR-0045 planes/cuotas/enforcement · ADR-0046 cobro de suscripción (Wompi)
+- `docs/BILLING.md` — planes, cuotas y facturación
 - `core/onboarding.py` — el servicio de alta (usado por CLI y panel)
 - `cli/commands/tenant.py` — comandos `tenant create|list|seed|docs`

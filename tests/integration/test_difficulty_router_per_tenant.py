@@ -19,7 +19,7 @@ import os
 import uuid
 
 import pytest
-from conftest import PHONE, TEST_ALPHA_ID, _meta_payload
+from conftest import PHONE, TEST_ALPHA_ID, _meta_payload, _meta_request
 from sqlalchemy import select
 
 pytestmark = [
@@ -124,11 +124,15 @@ async def test_loop_resuelve_umbrales_custom_desde_behavior_config(
         )
         recorded.clear()
 
+        body, headers = _meta_request(
+            _meta_payload(
+                PHONE, f"wa-diff-{uuid.uuid4().hex[:6]}", f"wamid.DIFF.{uuid.uuid4().hex[:6]}", "hola"
+            )
+        )
         resp = await app_client.post(
             "/webhooks/whatsapp",
-            json=_meta_payload(
-                PHONE, f"wa-diff-{uuid.uuid4().hex[:6]}", f"wamid.DIFF.{uuid.uuid4().hex[:6]}", "hola"
-            ),
+            content=body,
+            headers=headers,
         )
         assert resp.json()["enqueued"] == 1
         await _run_background(2)
@@ -161,14 +165,18 @@ async def test_loop_clampea_valores_fuera_de_rango(
         )
         recorded.clear()
 
-        resp = await app_client.post(
-            "/webhooks/whatsapp",
-            json=_meta_payload(
+        body, headers = _meta_request(
+            _meta_payload(
                 PHONE,
                 f"wa-diffclamp-{uuid.uuid4().hex[:6]}",
                 f"wamid.DIFFC.{uuid.uuid4().hex[:6]}",
                 "hola",
-            ),
+            )
+        )
+        resp = await app_client.post(
+            "/webhooks/whatsapp",
+            content=body,
+            headers=headers,
         )
         assert resp.json()["enqueued"] == 1
         await _run_background(2)

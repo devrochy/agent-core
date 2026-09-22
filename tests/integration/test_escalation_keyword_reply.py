@@ -19,7 +19,7 @@ import os
 import uuid
 
 import pytest
-from conftest import PHONE, TEST_ALPHA_ID, _meta_payload
+from conftest import PHONE, TEST_ALPHA_ID, _meta_payload, _meta_request
 from sqlalchemy import select
 
 pytestmark = [
@@ -73,11 +73,15 @@ async def test_escalamiento_por_keyword_entrega_el_texto_del_playbook(
     recorded.clear()
 
     wa_id = f"wa-esc-{uuid.uuid4().hex[:6]}"
+    body, headers = _meta_request(
+        _meta_payload(
+            PHONE, wa_id, f"wamid.ESC.{uuid.uuid4().hex[:6]}", "quiero hablar con un asesor"
+        )
+    )
     resp = await app_client.post(
         "/webhooks/whatsapp",
-        json=_meta_payload(
-            PHONE, wa_id, f"wamid.ESC.{uuid.uuid4().hex[:6]}", "quiero hablar con un asesor"
-        ),
+        content=body,
+        headers=headers,
     )
     assert resp.json()["enqueued"] == 1
 

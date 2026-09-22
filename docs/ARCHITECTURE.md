@@ -40,6 +40,7 @@ flowchart TB
         end
         subgraph Orchestrator
             CONS[Consumer<br/>Redis Stream group]
+            BILL{Gate billing<br/>operacional + cuotas}
             KS{Kill-switch<br/>3 niveles}
             KW{Keywords<br/>escalación}
             DEB[Debounce<br/>Redis ZSet]
@@ -61,17 +62,19 @@ flowchart TB
             L3[(L3 pgvector<br/>semántica: RAG)]
         end
         ADMIN[Panel Admin<br/>Jinja2 + Bootstrap 5]
+        BILLING[Billing<br/>planes · cuotas · /admin/plan]
         CELERY[Celery Worker + Beat<br/>@register_cron]
     end
 
     U --> META --> WH --> IDEM -->|Redis Stream| CONS
-    CONS --> KS --> KW --> DEB --> LOOP
+    CONS --> BILL --> KS --> KW --> DEB --> LOOP
     LOOP <--> L1 & L2 & L3
     LOOP <--> REG
     REG <--> CRM & CAL
     REG --> TRANS <--> LLM
     LOOP --> GUARD --> SAFE --> SPLIT --> META --> U
     ADMIN -.configura.-> Plugins
+    ADMIN --> BILLING
     CELERY -.ejecuta cron de.-> Plugins
 ```
 

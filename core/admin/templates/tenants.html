@@ -15,6 +15,7 @@
             <th>Nombre</th>
             <th>Slug</th>
             <th>Estado</th>
+            <th>Plan</th>
             <th>Creado</th>
             <th class="text-end">Acciones</th>
           </tr>
@@ -27,6 +28,11 @@
             <td>
               <span class="badge text-bg-{{ 'success' if t.status == 'active' else 'warning' }}">
                 {{ 'activo' if t.status == 'active' else 'suspendido' }}
+              </span>
+            </td>
+            <td>
+              <span class="badge text-bg-{{ 'danger' if not t.operational else 'secondary' }}">
+                {{ t.plan_name }}{% if t.plan_status == 'trialing' %} (prueba){% endif %}
               </span>
             </td>
             <td>{{ t.created_at.strftime('%Y-%m-%d') if t.created_at }}</td>
@@ -44,6 +50,10 @@
                 <button class="btn btn-sm btn-outline-success">Reactivar</button>
               </form>
               {% endif %}
+              <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal"
+                      data-bs-target="#plan-modal"
+                      data-tid="{{ t.id }}" data-name="{{ t.name }}"
+                      data-plan="{{ t.plan_name }}">Plan</button>
               <button class="btn btn-sm btn-outline-danger" data-bs-toggle="modal"
                       data-bs-target="#purge-modal"
                       data-slug="{{ t.slug }}" data-name="{{ t.name }}">Eliminar</button>
@@ -83,6 +93,39 @@
     </div>
   </div>
 </div>
+
+<!-- Modal de cambio de plan (soporte, solo master) -->
+<div class="modal fade" id="plan-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" action="" id="plan-form">
+        <div class="modal-header">
+          <h5 class="modal-title">Cambiar plan</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <p>Tenant: <strong id="pm2-name"></strong> — plan actual: <span id="pm2-plan"></span></p>
+          <div class="mb-3">
+            <label class="form-label">Nuevo plan</label>
+            <select name="plan_id" class="form-select">
+              {% for p in plans %}
+              <option value="{{ p.id }}">{{ p.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Extender período (días, opcional)</label>
+            <input type="number" name="extend_days" class="form-control" value="0" min="0">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -100,6 +143,19 @@
       form.action = '/admin/tenants/' + btn.closest('tr').dataset.tid + '/purge';
       phraseInput.value = '';
       phraseInput.placeholder = 'ELIMINAR ' + slug;
+    });
+  });
+})();
+
+(function () {
+  var modal = document.getElementById('plan-modal');
+  if (!modal) return;
+  var form = document.getElementById('plan-form');
+  document.querySelectorAll('[data-bs-target="#plan-modal"]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.getElementById('pm2-name').textContent = btn.dataset.name;
+      document.getElementById('pm2-plan').textContent = btn.dataset.plan;
+      form.action = '/admin/tenants/' + btn.closest('tr').dataset.tid + '/plan';
     });
   });
 })();

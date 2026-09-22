@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+from conftest import _meta_request
 from sqlalchemy import func, select, text
 
 pytestmark = [
@@ -124,9 +125,13 @@ async def test_suspendido_no_procesa_webhook(app_client) -> None:
     tid, _slug = await _onboard(_uniq("susp-webhook"), whatsapp_phone=phone)
     await deactivate_tenant(str(tid))
 
+    body, headers = _meta_request(
+        _meta_payload(phone, "wa-susp", f"wamid.susp.{uuid.uuid4().hex[:6]}", "hola")
+    )
     r = await app_client.post(
         "/webhooks/whatsapp",
-        json=_meta_payload(phone, "wa-susp", f"wamid.susp.{uuid.uuid4().hex[:6]}", "hola"),
+        content=body,
+        headers=headers,
     )
     assert r.json().get("status") == "ignored", "un tenant suspendido no encola mensajes"
 
