@@ -31,21 +31,44 @@
     </form>
     {% endif %}
     <ul class="nav nav-pills flex-column gap-1">
+      {% if perms and perms.get('dashboard') %}
       <li><a class="nav-link {% if section == 'dashboard' %}active{% endif %}" href="/admin">Dashboard</a></li>
+      {% endif %}
+      {% if perms and perms.get('conversations') %}
       <li><a class="nav-link {% if section == 'conversations' %}active{% endif %}" href="/admin/conversaciones">Conversaciones</a></li>
+      {% endif %}
+      {% if perms and perms.get('escalations') %}
       <li><a class="nav-link {% if section == 'escalations' %}active{% endif %}" href="/admin/escalaciones">Escalaciones</a></li>
+      {% endif %}
+      {% if perms and perms.get('connections') %}
       <li><a class="nav-link {% if section == 'connections' %}active{% endif %}" href="/admin/conexiones">Conexiones</a></li>
+      {% endif %}
+      {% if perms and perms.get('plugins') %}
       <li><a class="nav-link {% if section == 'plugins' %}active{% endif %}" href="/admin/plugins">Plugins</a></li>
+      {% endif %}
+      {% if perms and perms.get('spec') %}
       <li><a class="nav-link {% if section == 'spec' %}active{% endif %}" href="/admin/spec">AgentSpec</a></li>
+      {% endif %}
+      {% if perms and perms.get('costs') %}
       <li><a class="nav-link {% if section == 'costs' %}active{% endif %}" href="/admin/costos">Costos LLM</a></li>
-      {% if admin and admin.role == 'master' %}
+      {% endif %}
+      {% if perms and perms.get('plan') %}
+      <li><a class="nav-link {% if section == 'plan' %}active{% endif %}" href="/admin/plan">Plan y consumo</a></li>
+      {% endif %}
+      {% if perms and perms.get('tenants') %}
       <li><a class="nav-link {% if section == 'tenants' %}active{% endif %}" href="/admin/tenants">Tenants</a></li>
       {% endif %}
+      {% if perms and perms.get('admins') %}
+      <li><a class="nav-link {% if section == 'admins' %}active{% endif %}" href="/admin/admins">Administradores</a></li>
+      {% endif %}
+      {% if perms and perms.get('settings') %}
       <li><a class="nav-link {% if section == 'settings' %}active{% endif %}" href="/admin/configuracion">Configuración</a></li>
+      {% endif %}
     </ul>
     {% if plugin_menu %}
     <hr class="text-secondary">
     {% for group in plugin_menu %}
+    {% if not perms or perms.get(group['id']) %}
     <div class="text-secondary text-uppercase small px-2 mb-1">{{ group['name'] }}</div>
     <ul class="nav nav-pills flex-column gap-1 mb-2">
       {% for item in group['items'] %}
@@ -55,6 +78,7 @@
       <li><a class="nav-link {% if is_active %}active{% endif %}" href="{{ item['path'] }}">{{ item['label'] }}</a></li>
       {% endfor %}
     </ul>
+    {% endif %}
     {% endfor %}
     {% endif %}
     <div class="mt-auto pt-3">

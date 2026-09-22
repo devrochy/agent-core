@@ -17,10 +17,17 @@ from agentcore_contracts import AgentSpec
 from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
-from core.admin.auth import SESSION_COOKIE, TENANT_COOKIE, current_admin, login, logout
+from core.admin.auth import (
+    SESSION_COOKIE,
+    TENANT_COOKIE,
+    current_admin,
+    hash_password,
+    login,
+    logout,
+)
 from core.admin.context import base_context as _base_context
 from core.admin.form_generator import (
     parse_form_values,
@@ -28,12 +35,15 @@ from core.admin.form_generator import (
     render_form_fields,
     render_json_schema_form,
 )
+from core.admin.permissions import catalog as sections_catalog
 from core.admin.view_registry import view_registry
 from core.agents.spec import CORE_PACK_ID, enabled_packs, load_active_spec
 from core.billing.enforcement import QuotaExceeded, can_activate_plugin
 from core.config import get_settings
 from core.db.models import (
     WIZARD_STEPS,
+    Admin,
+    AdminPermission,
     AgentSpecRecord,
     AppSettings,
     Conversation,
@@ -48,6 +58,8 @@ from core.db.models import (
     PluginRecord,
     PluginTenantState,
     PricingDaily,
+    Tenant,
+    TenantUser,
     UsageLedger,
     WabaAccount,
     utcnow,
@@ -499,6 +511,279 @@ async def tenants_purge(request: Request, tenant_id: uuid.UUID, confirm_phrase: 
             status_code=303,
         )
     return RedirectResponse("/admin/tenants?flash=tenant_eliminado&flash_type=success", status_code=303)
+
+
+# ------------------------------------------------------------------ admins (RBAC, ADR-0047)
+async def _require_admins(request: Request, *, write: bool = False) -> bool:
+    """Gestión de admins: SOLO master.
+
+    El middleware ya exige la sección `admins`, pero esa sección es otorgable:
+    sin este chequeo, un no-master con `admins:write` podría crearse un `master`,
+    auto-concederse permisos globales o resetear la contraseña de un master
+    (auto-escalada). La administración de identidades es de plataforma.
+    """
+    admin = await current_admin(request)
+    return admin is not None and admin.role == "master"
+
+
+def _audit(action: str, actor: str, target: str, **detail: Any) -> None:
+    """Rastro de cambios de RBAC en el log estructurado (el AuditLog de negocio
+    exige `tenant_id` y esto es de plataforma)."""
+    log.info("admin_rbac_change", action=action, actor=actor, target=target, **detail)
+
+
+def _admins_redirect(flash: str, flash_type: str = "success") -> RedirectResponse:
+    return RedirectResponse(f"/admin/admins?flash={flash}&flash_type={flash_type}", status_code=303)
+
+
+async def _resolve_tenant_id(slug: str) -> uuid.UUID | None:
+    async with get_session() as session:
+        return (
+            await session.execute(select(Tenant.id).where(Tenant.slug == slug))
+        ).scalar_one_or_none()
+
+
+async def _admins_context(request: Request) -> dict[str, Any] | None:
+    ctx = await _base_context(request, "admins")
+    if ctx is None:
+        return None
+    async with get_session() as session:
+        admins = (await session.execute(select(Admin).order_by(Admin.email))).scalars().all()
+        perms = (
+            await session.execute(
+                select(
+                    AdminPermission.admin_id,
+                    AdminPermission.section,
+                    AdminPermission.access,
+                    Tenant.slug,
+                ).join(Tenant, Tenant.id == AdminPermission.tenant_id, isouter=True)
+            )
+        ).all()
+        links = (
+            await session.execute(
+                select(TenantUser.admin_id, TenantUser.role, Tenant.slug, Tenant.name)
+                .join(Tenant, Tenant.id == TenantUser.tenant_id)
+                .order_by(Tenant.name)
+            )
+        ).all()
+        tenants = (await session.execute(select(Tenant).order_by(Tenant.name))).scalars().all()
+
+    perms_by_admin: dict[uuid.UUID, list[dict[str, str]]] = {}
+    for admin_id, section, access, slug in perms:
+        perms_by_admin.setdefault(admin_id, []).append(
+            {"section": section, "access": access, "scope": slug or "*"}
+        )
+    links_by_admin: dict[uuid.UUID, list[dict[str, str]]] = {}
+    for admin_id, role, slug, name in links:
+        links_by_admin.setdefault(admin_id, []).append({"role": role, "slug": slug, "name": name})
+
+    ctx["admins_rows"] = [
+        {
+            "id": str(a.id),
+            "email": a.email,
+            "role": a.role,
+            "active": a.active,
+            "perms": sorted(
+                perms_by_admin.get(a.id, []), key=lambda p: (p["section"], p["scope"])
+            ),
+            "links": links_by_admin.get(a.id, []),
+        }
+        for a in admins
+    ]
+    ctx["sections"] = sections_catalog(plugin_manager.active_ids())
+    ctx["tenants_options"] = [{"slug": t.slug, "name": t.name} for t in tenants]
+    return ctx
+
+
+@router.get("/admins", response_class=HTMLResponse)
+async def admins_list(request: Request):
+    ctx = await _admins_context(request)
+    if ctx is None:
+        return _login_redirect()
+    if not await _require_admins(request):
+        return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
+    return _render("admins.html", ctx)
+
+
+@router.post("/admins")
+async def admins_create(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+    role: str = Form(default="colaborador"),
+    username: str = Form(default=""),
+):
+    if await current_admin(request) is None:
+        return _login_redirect()
+    if not await _require_admins(request, write=True):
+        return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
+    me = await current_admin(request)
+    email = email.strip().lower()
+    if not email or not password:
+        return _admins_redirect("email y contraseña son obligatorios", "danger")
+    if role not in ("master", "colaborador"):
+        return _admins_redirect("rol inválido", "danger")
+    async with get_session() as session:
+        existing = (
+            await session.execute(select(Admin).where(Admin.email == email))
+        ).scalar_one_or_none()
+        if existing is not None:
+            return _admins_redirect(f"el admin {email} ya existe", "danger")
+        session.add(
+            Admin(
+                email=email,
+                username=username.strip() or None,
+                password_hash=hash_password(password),
+                role=role,
+            )
+        )
+    _audit("create_admin", me.email if me else "?", email, role=role)
+    return _admins_redirect(f"admin {email} creado")
+
+
+@router.post("/admins/{admin_id}/password")
+async def admins_password(request: Request, admin_id: uuid.UUID, password: str = Form(...)):
+    if await current_admin(request) is None:
+        return _login_redirect()
+    if not await _require_admins(request, write=True):
+        return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
+    if not password:
+        return _admins_redirect("la contraseña no puede estar vacía", "danger")
+    async with get_session() as session:
+        admin = await session.get(Admin, admin_id)
+        if admin is None:
+            return _admins_redirect("admin no encontrado", "danger")
+        admin.password_hash = hash_password(password)
+    me = await current_admin(request)
+    _audit("reset_password", me.email if me else "?", str(admin_id))
+    return _admins_redirect("contraseña actualizada")
+
+
+@router.post("/admins/{admin_id}/grant")
+async def admins_grant(
+    request: Request,
+    admin_id: uuid.UUID,
+    section: str = Form(...),
+    access: str = Form(default="read"),
+    tenant: str = Form(default=""),
+):
+    if await current_admin(request) is None:
+        return _login_redirect()
+    if not await _require_admins(request, write=True):
+        return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
+    if section not in sections_catalog(plugin_manager.active_ids()):
+        return _admins_redirect("sección inválida", "danger")
+    if access not in ("read", "write"):
+        return _admins_redirect("acceso inválido", "danger")
+    tenant_id = await _resolve_tenant_id(tenant) if tenant else None
+    if tenant and tenant_id is None:
+        return _admins_redirect("tenant no encontrado", "danger")
+    async with get_session() as session:
+        row = (
+            await session.execute(
+                select(AdminPermission).where(
+                    AdminPermission.admin_id == admin_id,
+                    AdminPermission.section == section,
+                    AdminPermission.tenant_id.is_(None)
+                    if tenant_id is None
+                    else AdminPermission.tenant_id == tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            session.add(
+                AdminPermission(
+                    admin_id=admin_id, section=section, access=access, tenant_id=tenant_id
+                )
+            )
+        else:
+            row.access = access
+    me = await current_admin(request)
+    _audit(
+        "grant", me.email if me else "?", str(admin_id),
+        section=section, access=access, scope=tenant or "*",
+    )
+    return _admins_redirect(f"permiso {section} → {access} concedido")
+
+
+@router.post("/admins/{admin_id}/revoke")
+async def admins_revoke(
+    request: Request,
+    admin_id: uuid.UUID,
+    section: str = Form(...),
+    tenant: str = Form(default=""),
+):
+    if await current_admin(request) is None:
+        return _login_redirect()
+    if not await _require_admins(request, write=True):
+        return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
+    tenant_id = await _resolve_tenant_id(tenant) if tenant else None
+    async with get_session() as session:
+        await session.execute(
+            delete(AdminPermission).where(
+                AdminPermission.admin_id == admin_id,
+                AdminPermission.section == section,
+                AdminPermission.tenant_id.is_(None)
+                if tenant_id is None
+                else AdminPermission.tenant_id == tenant_id,
+            )
+        )
+    me = await current_admin(request)
+    _audit("revoke", me.email if me else "?", str(admin_id), section=section, scope=tenant or "*")
+    return _admins_redirect(f"permiso {section} revocado")
+
+
+@router.post("/admins/{admin_id}/link")
+async def admins_link(
+    request: Request,
+    admin_id: uuid.UUID,
+    tenant: str = Form(...),
+    role: str = Form(default="owner"),
+):
+    if await current_admin(request) is None:
+        return _login_redirect()
+    if not await _require_admins(request, write=True):
+        return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
+    if role not in ("owner", "colaborador"):
+        return _admins_redirect("rol inválido", "danger")
+    tenant_id = await _resolve_tenant_id(tenant)
+    if tenant_id is None:
+        return _admins_redirect("tenant no encontrado", "danger")
+    async with get_session() as session:
+        row = (
+            await session.execute(
+                select(TenantUser).where(
+                    TenantUser.admin_id == admin_id, TenantUser.tenant_id == tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            session.add(TenantUser(tenant_id=tenant_id, admin_id=admin_id, role=role))
+        else:
+            row.role = role
+    me = await current_admin(request)
+    _audit("link", me.email if me else "?", str(admin_id), tenant=tenant, role=role)
+    return _admins_redirect(f"vinculado a {tenant} ({role})")
+
+
+@router.post("/admins/{admin_id}/toggle")
+async def admins_toggle(request: Request, admin_id: uuid.UUID):
+    if await current_admin(request) is None:
+        return _login_redirect()
+    if not await _require_admins(request, write=True):
+        return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
+    me = await current_admin(request)
+    if me is not None and me.id == admin_id:
+        return _admins_redirect("no podés desactivar tu propio usuario", "danger")
+    async with get_session() as session:
+        admin = await session.get(Admin, admin_id)
+        if admin is None:
+            return _admins_redirect("admin no encontrado", "danger")
+        admin.active = not admin.active
+        state = "activado" if admin.active else "desactivado"
+        active = admin.active
+    _audit("toggle", me.email if me else "?", str(admin_id), active=active)
+    return _admins_redirect(f"admin {state}")
 
 
 # ------------------------------------------------------------------ AgentSpec
