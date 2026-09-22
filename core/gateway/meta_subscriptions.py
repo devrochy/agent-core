@@ -194,6 +194,11 @@ def humanize_subscription_error(exc: GraphError) -> str:
             "expuesto públicamente todavía (falta túnel/DNS en desarrollo), o (2) el proceso tardó "
             "más que el timeout de Meta en responder (cold start)."
         )
+    if "verification failed" in text or "ssl" in text or "curl_errno" in text:
+        return (
+            "Meta no pudo verificar el webhook: falló la conexión TLS a la URL pública "
+            "(SSL/conexión rechazada). Reintentá el registro; si persiste, revisá el túnel/dominio público."
+        )
     if "callback" in text and ("uri" in text or "url" in text):
         return "La URL de callback no es válida: revisá que sea HTTPS y que no tenga un error de tipeo."
     if exc.category == "AUTH":

@@ -93,21 +93,36 @@
         <div class="form-text">También puedes conectarlo después en Conexiones.</div>
       </div>
       <div id="wa_fields" class="d-none">
+        <p class="text-secondary small">
+          App Dashboard → WhatsApp → API Setup: de ahí salen el <code>App ID</code>, el
+          <code>App Secret</code>, el <code>WABA ID</code> y el <code>Phone Number ID</code>.
+          El tenant se crea igual aunque el WhatsApp falle (te aviso y lo conectás después en
+          Conexiones).
+        </p>
         <div class="mb-3">
-          <label class="form-label">Etiqueta</label>
-          <input type="text" name="wa_label" class="form-control" placeholder="Ventas WhatsApp">
+          <label class="form-label">App ID</label>
+          <input type="text" name="wa_app_id" class="form-control">
         </div>
         <div class="mb-3">
-          <label class="form-label">phone_number_id</label>
-          <input type="text" name="wa_phone_number_id" class="form-control">
-        </div>
-        <div class="mb-3">
-          <label class="form-label">App secret</label>
+          <label class="form-label">App Secret</label>
           <input type="password" name="wa_app_secret" class="form-control">
         </div>
         <div class="mb-3">
-          <label class="form-label">Access token</label>
-          <input type="password" name="wa_access_token" class="form-control">
+          <label class="form-label">WhatsApp Business Account ID (WABA ID)</label>
+          <input type="text" name="wa_waba_id" class="form-control">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Phone Number ID</label>
+          <input type="text" name="wa_phone_number_id" class="form-control">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Access Token</label>
+          <div class="input-group input-group-sm">
+            <input type="password" name="wa_access_token" id="wa_access_token" class="form-control font-monospace">
+            <button type="button" class="btn btn-outline-secondary" id="wa-btn-extender">Extender a 60 días</button>
+            <button type="button" class="btn btn-outline-secondary" id="wa-btn-verificar">Verificar</button>
+          </div>
+          <div id="wa-token-status" class="form-text"></div>
         </div>
         <div class="mb-3">
           <label class="form-label">Verify token</label>
@@ -190,6 +205,69 @@
   });
 
   show(0);
+})();
+</script>
+<script>
+(function () {
+  var btnExt = document.getElementById('wa-btn-extender');
+  var btnVer = document.getElementById('wa-btn-verificar');
+  var statusEl = document.getElementById('wa-token-status');
+  var tokenInput = document.getElementById('wa_access_token');
+  if (!btnExt || !tokenInput) return;
+
+  function setStatus(html, cls) {
+    statusEl.className = 'form-text ' + (cls || '');
+    statusEl.innerHTML = html;
+  }
+  function esc(s) {
+    var d = document.createElement('div');
+    d.textContent = String(s == null ? '' : s);
+    return d.innerHTML;
+  }
+  function form() {
+    var fd = new FormData();
+    fd.append('app_id', document.querySelector('[name=wa_app_id]').value);
+    fd.append('app_secret', document.querySelector('[name=wa_app_secret]').value);
+    fd.append('access_token', tokenInput.value);
+    return fd;
+  }
+  btnExt.addEventListener('click', function () {
+    if (!tokenInput.value.trim()) { setStatus('Pegá primero un token temporal.', 'text-danger'); return; }
+    setStatus('Extendiendo…');
+    fetch('/admin/conexiones/wizard/whatsapp-byok/token/extend', { method: 'POST', body: form() })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { setStatus('Error: ' + esc(d.error), 'text-danger'); return; }
+        tokenInput.value = d.access_token;
+        var dias = d.expires_in ? Math.round(d.expires_in / 86400) : '?';
+        setStatus('Token extendido (~' + dias + ' días). Ahora verificá.', 'text-success');
+      })
+      .catch(function () { setStatus('Error de red al extender.', 'text-danger'); });
+  });
+  btnVer.addEventListener('click', function () {
+    if (!tokenInput.value.trim()) { setStatus('Pegá primero un token.', 'text-danger'); return; }
+    setStatus('Verificando…');
+    fetch('/admin/conexiones/wizard/whatsapp-byok/token/inspect', { method: 'POST', body: form() })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { setStatus('Error: ' + esc(d.error), 'text-danger'); return; }
+        var parts = [];
+        parts.push(d.is_valid
+          ? '<span class="badge text-bg-success">válido</span>'
+          : '<span class="badge text-bg-danger">inválido</span>');
+        if (d.never_expires) {
+          parts.push('<span class="badge text-bg-success">no expira</span>');
+        } else if (d.expires_at) {
+          parts.push('<span class="badge text-bg-warning">vence ' +
+            new Date(d.expires_at * 1000).toLocaleString() + '</span>');
+        }
+        parts.push(d.has_whatsapp_scopes
+          ? '<span class="badge text-bg-success">permisos WhatsApp OK</span>'
+          : '<span class="badge text-bg-danger">faltan permisos de WhatsApp</span>');
+        setStatus(parts.join(' '));
+      })
+      .catch(function () { setStatus('Error de red al verificar.', 'text-danger'); });
+  });
 })();
 </script>
 {% endblock %}

@@ -19,7 +19,6 @@ import httpx
 from pydantic import BaseModel
 
 from core.config import get_settings
-from core.gateway.connections import effective_credentials
 from core.gateway.meta_errors import GraphError, classify_and_build_error
 from core.gateway.meta_graph import graph_fetch
 from core.shared.tenant import tenant_scope
@@ -255,10 +254,16 @@ def _check_config_id(config: AppCredentials) -> PreflightCheck:
     return PreflightCheck(key="config_id", ok=False, detail="META_CONFIG_ID vacío o con formato inválido")
 
 
-async def _check_webhook_handshake(client: httpx.AsyncClient, tenant_slug: str) -> PreflightCheck:
+async def _check_webhook_handshake(
+    client: httpx.AsyncClient, tenant_id, tenant_slug: str
+) -> PreflightCheck:
+    from core.gateway.connections import resolve_effective_verify_token
     from core.tenants import tenant_webhook_url
 
-    verify_token = (await effective_credentials()).get("verify_token", "")
+    # Mismo token que el handler del webhook del tenant resuelve
+    # (manual -> BYOK -> .env): con `effective_credentials()` un tenant BYOK
+    # reportaba un falso negativo (el handler acepta el token BYOK, no el global).
+    verify_token = await resolve_effective_verify_token(tenant_id)
     if not verify_token:
         return PreflightCheck(
             key="webhook_handshake", ok=False, detail="No hay verify_token configurado (ni en la conexión ni en .env)"
@@ -298,13 +303,11 @@ async def run_preflight(tenant_id, tenant_slug: str) -> list[PreflightCheck]:
     no se pudo correr (config faltante) se reporta como `ok=False`, no rompe
     el resto de la checklist.
 
-    Envuelve todo en `tenant_scope(tenant_id)`: `resolve_app_credentials` ya
-    toma `tenant_id` explícito, pero `_check_webhook_handshake` resuelve el
-    `verify_token` vía `effective_credentials()`, que depende del contextvar
-    *ambiente* (no de un parámetro). Sin este `tenant_scope`, un caller futuro
-    que invoque `run_preflight(tenant_id_de_B, ...)` desde un contexto cuyo
-    tenant ambiente siga siendo A probaría el webhook de B con credenciales de
-    A -- hallazgo del auditor-multitenant, 2026-09-19."""
+    Envuelve todo en `tenant_scope(tenant_id)`: los checks resuelven secretos
+    vía `get_session`/RLS; el `tenant_id` va además explícito a cada helper.
+    Sin este scope, un caller que invoque `run_preflight(tenant_id_de_B, ...)`
+    desde un contexto cuyo tenant ambiente siga siendo A podría mezclar
+    credenciales -- hallazgo del auditor-multitenant, 2026-09-19."""
     async with tenant_scope(tenant_id):
         config = await resolve_app_credentials(tenant_id)
         version = config.graph_api_version if config else get_settings().graph_api_version
@@ -315,7 +318,7 @@ async def run_preflight(tenant_id, tenant_slug: str) -> list[PreflightCheck]:
                 PreflightCheck(key="app_info", ok=False, detail="Meta App no configurada para este tenant"),
                 PreflightCheck(key="app_subscriptions", ok=False, detail="Meta App no configurada para este tenant"),
                 PreflightCheck(key="config_id", ok=False, detail="META_CONFIG_ID vacío o con formato inválido"),
-                await _run_webhook_check_only(tenant_slug),
+                await _run_webhook_check_only(tenant_id, tenant_slug),
             ]
 
         checks: list[PreflightCheck] = []
@@ -332,10 +335,10 @@ async def run_preflight(tenant_id, tenant_slug: str) -> list[PreflightCheck]:
 
         checks.append(_check_config_id(config))
         async with httpx.AsyncClient(timeout=15) as client:
-            checks.append(await _check_webhook_handshake(client, tenant_slug))
+            checks.append(await _check_webhook_handshake(client, tenant_id, tenant_slug))
         return checks
 
 
-async def _run_webhook_check_only(tenant_slug: str) -> PreflightCheck:
+async def _run_webhook_check_only(tenant_id, tenant_slug: str) -> PreflightCheck:
     async with httpx.AsyncClient(timeout=15) as client:
-        return await _check_webhook_handshake(client, tenant_slug)
+        return await _check_webhook_handshake(client, tenant_id, tenant_slug)

@@ -22,6 +22,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 
+# Importar `jobs` a nivel de módulo registra los `@register_cron` en Celery
+# (worker y beat) apenas se escanea el plugin -- no dentro de `on_activate()`,
+# que solo corre en el proceso API y dejaba los crons de los packs sin
+# programar/registrar en el worker. La ejecución sigue condicionada a que el
+# plugin esté activo (guard del decorador).
+import pack_commerce.jobs  # noqa: F401
 from core.db.session import get_owned, get_session
 from core.mcp.types import BaseModule, GuardrailResult
 from core.shared.events import ON_CONVERSATION_STARTED
@@ -1021,8 +1027,9 @@ class CRMModule(BaseModule):
         host.subscribe("payment.confirmed", self._on_payment_confirmed)
         host.subscribe("payment.rejected", self._on_payment_rejected)
 
-        # importar jobs.py registra los @register_cron en Celery Beat
-        import pack_commerce.jobs  # noqa: F401
+        # Los `@register_cron` de `jobs.py` se registran al importar el módulo
+        # (ver import a nivel de módulo arriba), no acá -- así el worker y el
+        # beat también los registran al escanear el plugin.
 
     def _register_views(self) -> None:
         from core.admin.view_registry import (

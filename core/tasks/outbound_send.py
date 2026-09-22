@@ -17,7 +17,6 @@ sin simular un `self` de Celery real.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from dataclasses import dataclass
 from typing import Literal
@@ -27,6 +26,7 @@ from core.db.session import get_session
 from core.gateway.channels.registry import outbound_adapter_for
 from core.gateway.meta_errors import REENGAGEMENT_WINDOW_CODE, GraphError
 from core.gateway.sender import resolve_credentials
+from core.shared.async_bridge import run_async
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from core.tasks.celery_app import celery
@@ -149,7 +149,7 @@ async def _mark_failed(message_id: uuid.UUID, tenant_id: uuid.UUID, exc: GraphEr
 
 @celery.task(bind=True, max_retries=MAX_ATTEMPTS, name="core.outbound_send")
 def outbound_send_task(self, message_id: str, tenant_id: str) -> None:
-    error = asyncio.run(_send_one(uuid.UUID(message_id), uuid.UUID(tenant_id)))
+    error = run_async(_send_one(uuid.UUID(message_id), uuid.UUID(tenant_id)))
     if error is None:
         return
 
@@ -158,4 +158,4 @@ def outbound_send_task(self, message_id: str, tenant_id: str) -> None:
         raise self.retry(exc=error, countdown=decision.countdown_s)
 
     dlq = self.request.retries >= MAX_ATTEMPTS and error.category not in ("PERMANENT", "AUTH")
-    asyncio.run(_mark_failed(uuid.UUID(message_id), uuid.UUID(tenant_id), error, dlq=dlq))
+    run_async(_mark_failed(uuid.UUID(message_id), uuid.UUID(tenant_id), error, dlq=dlq))

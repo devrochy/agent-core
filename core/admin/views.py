@@ -74,6 +74,10 @@ from core.shared.tenant import admin_tenants, get_current_tenant_id, tenant_scop
 log = get_logger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
 
+# Respuestas que pueden transportar secretos (p.ej. el token extendido del
+# wizard): nunca cachear en navegador/proxies.
+_NO_STORE = {"Cache-Control": "no-store"}
+
 INBOUND_STREAM = "agent_core:inbound"
 DLQ_STREAM = "agent_core:inbound:dlq"
 
@@ -280,9 +284,10 @@ async def tenants_create(
     packs: list[str] = Form(default=[]),  # noqa: B008
     escalation_triggers: str = Form(default=""),
     connect_whatsapp: bool = Form(default=False),
-    wa_label: str = Form(default=""),
-    wa_phone_number_id: str = Form(default=""),
+    wa_app_id: str = Form(default=""),
     wa_app_secret: str = Form(default=""),
+    wa_waba_id: str = Form(default=""),
+    wa_phone_number_id: str = Form(default=""),
     wa_access_token: str = Form(default=""),
     wa_verify_token: str = Form(default=""),
 ):
@@ -299,21 +304,6 @@ async def tenants_create(
             status_code=303,
         )
 
-    whatsapp = None
-    if connect_whatsapp:
-        whatsapp = {
-            "label": wa_label or name,
-            "phone_number_id": wa_phone_number_id,
-            "app_secret": wa_app_secret,
-            "access_token": wa_access_token,
-            "verify_token": wa_verify_token,
-        }
-        ok, msg, _info = await verify_meta_credentials(wa_phone_number_id, wa_access_token, wa_app_secret)
-        if not ok:
-            return RedirectResponse(
-                f"/admin/tenants/nuevo?flash=WhatsApp: {msg[:120]}&flash_type=danger", status_code=303
-            )
-
     triggers = [t.strip() for t in escalation_triggers.split(",") if t.strip()]
     try:
         from core.onboarding import onboard_tenant
@@ -327,18 +317,52 @@ async def tenants_create(
             escalation_triggers=triggers or None,
             packs=packs or None,
             admin_email=admin.email,
-            whatsapp=whatsapp,
+            whatsapp=None,
         )
     except Exception as exc:
         log.exception("tenant_create_failed")
         return RedirectResponse(
-            f"/admin/tenants/nuevo?flash=Error al crear: {str(exc)[:140]}&flash_type=danger",
-            status_code=303,
+            f"/admin/tenants/nuevo?flash=Error al crear: {str(exc)[:140]}&flash_type=danger", status_code=303
         )
 
-    response = RedirectResponse(
-        f"/admin/spec?flash=tenant {tenant_slug} creado&flash_type=success", status_code=303
-    )
+    # WhatsApp opcional vía el flujo BYOK (MetaConnection + suscripción app/WABA),
+    # el mismo que /admin/conexiones: valida credenciales, registra la suscripción
+    # y maneja la expiración del token. Si falla, el tenant YA quedó creado: se
+    # avisa y se redirige a Conexiones para reintentar (no se aborta el alta).
+    wa_error: str | None = None
+    if connect_whatsapp:
+        from core.gateway.meta_byok import ByokError, save_byok_connection
+
+        try:
+            async with tenant_scope(tid):
+                await save_byok_connection(
+                    tid,
+                    admin.id,
+                    wa_app_id.strip(),
+                    wa_app_secret.strip(),
+                    wa_phone_number_id.strip(),
+                    wa_access_token.strip(),
+                    wa_waba_id.strip(),
+                    environment="sandbox",
+                    verify_token=wa_verify_token.strip() or None,
+                )
+        except ByokError as exc:
+            wa_error = str(exc)
+        except Exception as exc:  # red/infra no clasificada
+            log.exception("tenant_create_whatsapp_failed")
+            wa_error = str(exc)[:180]
+
+    if wa_error:
+        response = RedirectResponse(
+            f"/admin/conexiones?flash=Tenant {tenant_slug} creado, pero WhatsApp falló: "
+            f"{wa_error[:200]}&flash_type=danger",
+            status_code=303,
+        )
+    else:
+        extra = " con WhatsApp" if connect_whatsapp else ""
+        response = RedirectResponse(
+            f"/admin/spec?flash=tenant {tenant_slug} creado{extra}&flash_type=success", status_code=303
+        )
     response.set_cookie(
         TENANT_COOKIE,
         str(tid),
@@ -1070,7 +1094,11 @@ async def connections_page(request: Request):
     if tid is not None:
         async with get_session() as session:
             meta_connections = (
-                await session.execute(select(MetaConnection).where(MetaConnection.tenant_id == tid))
+                await session.execute(
+                    select(MetaConnection).where(
+                        MetaConnection.tenant_id == tid, MetaConnection.deleted_at.is_(None)
+                    )
+                )
             ).scalars().all()
             phones_by_connection: dict[uuid.UUID, str] = {}
             if meta_connections:
@@ -1389,7 +1417,6 @@ async def meta_webhooks_json(request: Request):
 
 @router.post("/conexiones/webhooks/registrar")
 async def meta_webhooks_register(request: Request, channel: str = Form(...)):
-    from core.gateway.connections import effective_credentials
     from core.gateway.meta_preflight import resolve_app_credentials
     from core.gateway.meta_subscriptions import (
         OBJECT_TO_CHANNEL,
@@ -1418,7 +1445,13 @@ async def meta_webhooks_register(request: Request, channel: str = Form(...)):
 
     settings = get_settings()
     callback_url = f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"
-    verify_token = (await effective_credentials()).get("verify_token", "") or settings.whatsapp_verify_token
+    # Esta ruta registra sobre el webhook GENÉRICO (sin slug). Ese handler
+    # (`webhooks.py::verify_webhook`) corre sin scope de tenant (ruta pública)
+    # y resuelve solo `settings.whatsapp_verify_token` -- el token por tenant
+    # vive en la URL por slug y lo maneja el wizard BYOK. Registrar acá el
+    # token de la conexión del tenant produce un 403 en el self-check (el
+    # handler genérico no lo conoce).
+    verify_token = settings.whatsapp_verify_token
 
     try:
         async with tenant_scope(tid):
@@ -1614,6 +1647,53 @@ async def meta_wizard_whatsapp_byok_guardar(
         "/admin/conexiones/salud?flash=Conexión de prueba guardada -- probála con \"Diagnosticar\"",
         status_code=303,
     )
+
+
+@router.post("/conexiones/wizard/whatsapp-byok/token/inspect")
+async def meta_byok_token_inspect(
+    request: Request,
+    app_id: str = Form(...),
+    app_secret: str = Form(...),
+    access_token: str = Form(...),
+):
+    """Verifica un access token contra Meta (`/debug_token`): validez,
+    expiración (0 = no expira) y scopes. Para el asistente del wizard BYOK.
+    Nunca loguea el token."""
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_token_tools import inspect_token
+
+    if await current_admin(request) is None:
+        return JSONResponse({"ok": False, "error": "no autenticado"}, status_code=401)
+    if not app_id.strip() or not app_secret.strip() or not access_token.strip():
+        return JSONResponse({"ok": False, "error": "Faltan App ID, App Secret o token"}, status_code=200)
+    try:
+        info = await inspect_token(app_id.strip(), app_secret.strip(), access_token.strip())
+    except GraphError as exc:
+        return JSONResponse({"ok": False, "error": exc.message}, headers=_NO_STORE)
+    return JSONResponse({"ok": True, **info}, headers=_NO_STORE)
+
+
+@router.post("/conexiones/wizard/whatsapp-byok/token/extend")
+async def meta_byok_token_extend(
+    request: Request,
+    app_id: str = Form(...),
+    app_secret: str = Form(...),
+    access_token: str = Form(...),
+):
+    """Canjea un token temporal por uno long-lived (~60 días). Devuelve el
+    token nuevo para que el wizard lo ponga en el campo (nunca se loguea)."""
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_token_tools import extend_token
+
+    if await current_admin(request) is None:
+        return JSONResponse({"ok": False, "error": "no autenticado"}, status_code=401)
+    if not app_id.strip() or not app_secret.strip() or not access_token.strip():
+        return JSONResponse({"ok": False, "error": "Faltan App ID, App Secret o token"}, status_code=200)
+    try:
+        result = await extend_token(app_id.strip(), app_secret.strip(), access_token.strip())
+    except GraphError as exc:
+        return JSONResponse({"ok": False, "error": exc.message}, headers=_NO_STORE)
+    return JSONResponse({"ok": True, **result}, headers=_NO_STORE)
 
 
 @router.post("/conexiones/wizard/whatsapp/exchange")
@@ -2183,11 +2263,83 @@ async def meta_health_page(request: Request):
     tid = get_current_tenant_id()
     async with get_session() as session:
         connections = (
-            await session.execute(select(MetaConnection).where(MetaConnection.tenant_id == tid))
+            await session.execute(
+                select(MetaConnection).where(
+                    MetaConnection.tenant_id == tid, MetaConnection.deleted_at.is_(None)
+                )
+            )
         ).scalars().all()
 
-    ctx.update(connections=connections)
+    # Expiración del access token por conexión (badge de aviso antes de que venza).
+    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
+    from core.gateway.meta_onboarding import TOKEN_KIND
+    from core.gateway.meta_token_store import get_token_expires_at
+
+    token_expiry: dict = {}
+    for connection in connections:
+        exp = await get_token_expires_at(
+            connection.id, CLOUD_API_ACCESS_TOKEN_KIND, connection.meta_app_id, tenant_id=tid
+        )
+        if exp is None:
+            exp = await get_token_expires_at(
+                connection.id, TOKEN_KIND, connection.business_id or str(connection.id), tenant_id=tid
+            )
+        token_expiry[connection.id] = exp
+
+    ctx.update(connections=connections, token_expiry=token_expiry, now=datetime.now(UTC))
     return _render("meta_salud.html", ctx)
+
+
+@router.post("/conexiones/meta/{connection_id}/activar")
+async def meta_connection_activar(request: Request, connection_id: str):
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+        if connection is None:
+            return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+        connection.status = "connected"
+        connection.status_reason = None
+
+    return RedirectResponse("/admin/conexiones?flash=Conexión activada", status_code=303)
+
+
+@router.post("/conexiones/meta/{connection_id}/desactivar")
+async def meta_connection_desactivar(request: Request, connection_id: str):
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+        if connection is None:
+            return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+        connection.status = "revoked"
+        connection.status_reason = "Desactivada a mano desde el panel"
+
+    return RedirectResponse("/admin/conexiones?flash=Conexión desactivada", status_code=303)
+
+
+@router.post("/conexiones/meta/{connection_id}/eliminar")
+async def meta_connection_eliminar(request: Request, connection_id: str):
+    """Soft-delete (invariante nº8 de CLAUDE.md) -- nunca borra la fila,
+    solo la saca de la lista y libera el `meta_app_id` para poder
+    reconectar la misma app después (índice único parcial, migración
+    0032)."""
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
+        if connection is None:
+            return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+        connection.deleted_at = utcnow()
+        connection.status = "revoked"
+
+    return RedirectResponse("/admin/conexiones?flash=Conexión eliminada", status_code=303)
 
 
 @router.post("/conexiones/salud/{connection_id}/diagnosticar")

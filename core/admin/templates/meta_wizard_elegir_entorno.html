@@ -107,10 +107,9 @@
 
           <div class="byok-step d-none" data-step="4">
             <p class="text-secondary small">
-              App Dashboard → WhatsApp → API Setup: ahí Meta ya te da un número de prueba
-              verificado (<code>phone_number_id</code>), el ID de la cuenta de WhatsApp
-              Business (<code>WABA ID</code>, arriba del selector de número) y un token de
-              acceso temporal (24hs).
+              App Dashboard → WhatsApp → API Setup: ahí Meta te da un número de prueba
+              verificado (<code>phone_number_id</code>) y el ID de la cuenta de WhatsApp
+              Business (<code>WABA ID</code>, arriba del selector de número).
             </p>
             <div class="mb-3">
               <label class="form-label">WhatsApp Business Account ID (WABA ID)</label>
@@ -124,9 +123,36 @@
               <label class="form-label">Phone Number ID</label>
               <input type="text" name="phone_number_id" class="form-control" required>
             </div>
-            <div class="mb-3">
-              <label class="form-label">Access Token (temporal)</label>
-              <input type="password" name="access_token" class="form-control" required>
+
+            <div class="border rounded p-3">
+              <div class="fw-semibold mb-2">Access Token</div>
+              <div class="btn-group btn-group-sm mb-2" role="group">
+                <input type="radio" class="btn-check" name="token_mode" id="tok-temp" value="temp" checked>
+                <label class="btn btn-outline-secondary" for="tok-temp">Temporal (extender a 60 días)</label>
+                <input type="radio" class="btn-check" name="token_mode" id="tok-perm" value="perm">
+                <label class="btn btn-outline-secondary" for="tok-perm">Permanente (System User)</label>
+              </div>
+
+              <div id="byok-token-perm-help" class="d-none border rounded bg-body-tertiary p-3 small mb-2">
+                <p class="mb-2"><strong>Token permanente (no expira):</strong></p>
+                <ol class="mb-2">
+                  <li>Entrá a
+                    <a href="https://business.facebook.com/settings/system-users" target="_blank" rel="noopener">Business Settings → Usuarios del sistema</a>.
+                  </li>
+                  <li>Creá (o elegí) un <strong>System User</strong> y asignale esta app de Meta con <strong>acceso completo</strong>.</li>
+                  <li>Generá un token con los permisos <code>whatsapp_business_messaging</code> y <code>whatsapp_business_management</code>.</li>
+                  <li>Copialo y pegalo abajo. (Meta no permite generarlo por API -- solo desde Business Settings.)</li>
+                </ol>
+                <p class="text-secondary mb-0">Al verificar debe decir <strong>"no expira"</strong> y traer los dos permisos.</p>
+              </div>
+
+              <div class="input-group input-group-sm mb-2">
+                <span class="input-group-text">Access Token</span>
+                <input type="password" name="access_token" id="byok-access-token" class="form-control font-monospace" required>
+                <button type="button" class="btn btn-outline-secondary" id="byok-btn-extender">Extender a 60 días</button>
+                <button type="button" class="btn btn-outline-secondary" id="byok-btn-verificar">Verificar</button>
+              </div>
+              <div id="byok-token-status" class="small"></div>
             </div>
           </div>
 
@@ -199,6 +225,82 @@
   btnSiguiente.addEventListener('click', function () { if (current < total) { current += 1; render(); } });
   btnAtras.addEventListener('click', function () { if (current > 1) { current -= 1; render(); } });
   render();
+})();
+</script>
+<script>
+(function () {
+  var btnExt = document.getElementById('byok-btn-extender');
+  var btnVer = document.getElementById('byok-btn-verificar');
+  var statusEl = document.getElementById('byok-token-status');
+  var tokenInput = document.getElementById('byok-access-token');
+  var modeTemp = document.getElementById('tok-temp');
+  var modePerm = document.getElementById('tok-perm');
+  var permHelp = document.getElementById('byok-token-perm-help');
+
+  function setStatus(html, cls) {
+    statusEl.className = 'small ' + (cls || '');
+    statusEl.innerHTML = html;
+  }
+  // `d.error` es contenido externo (mensaje de Meta): NUNCA se inserta crudo.
+  function esc(s) {
+    var d = document.createElement('div');
+    d.textContent = String(s == null ? '' : s);
+    return d.innerHTML;
+  }
+  function form() {
+    var fd = new FormData();
+    fd.append('app_id', document.querySelector('#form-byok-test [name=app_id]').value);
+    fd.append('app_secret', document.querySelector('#form-byok-test [name=app_secret]').value);
+    fd.append('access_token', tokenInput.value);
+    return fd;
+  }
+  function renderMode() {
+    permHelp.classList.toggle('d-none', !modePerm.checked);
+    btnExt.classList.toggle('d-none', modePerm.checked);
+  }
+  modeTemp.addEventListener('change', renderMode);
+  modePerm.addEventListener('change', renderMode);
+
+  btnExt.addEventListener('click', function () {
+    if (!tokenInput.value.trim()) { setStatus('Pegá primero un token temporal.', 'text-danger'); return; }
+    setStatus('Extendiendo…');
+    fetch('/admin/conexiones/wizard/whatsapp-byok/token/extend', { method: 'POST', body: form() })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { setStatus('Error: ' + esc(d.error), 'text-danger'); return; }
+        tokenInput.value = d.access_token;
+        var dias = d.expires_in ? Math.round(d.expires_in / 86400) : '?';
+        setStatus('Token extendido (~' + dias + ' días). Ahora verificá.', 'text-success');
+      })
+      .catch(function () { setStatus('Error de red al extender.', 'text-danger'); });
+  });
+
+  btnVer.addEventListener('click', function () {
+    if (!tokenInput.value.trim()) { setStatus('Pegá primero un token.', 'text-danger'); return; }
+    setStatus('Verificando…');
+    fetch('/admin/conexiones/wizard/whatsapp-byok/token/inspect', { method: 'POST', body: form() })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { setStatus('Error: ' + esc(d.error), 'text-danger'); return; }
+        var parts = [];
+        parts.push(d.is_valid
+          ? '<span class="badge text-bg-success">válido</span>'
+          : '<span class="badge text-bg-danger">inválido</span>');
+        if (d.never_expires) {
+          parts.push('<span class="badge text-bg-success">no expira</span>');
+        } else if (d.expires_at) {
+          parts.push('<span class="badge text-bg-warning">vence ' +
+            new Date(d.expires_at * 1000).toLocaleString() + '</span>');
+        }
+        parts.push(d.has_whatsapp_scopes
+          ? '<span class="badge text-bg-success">permisos WhatsApp OK</span>'
+          : '<span class="badge text-bg-danger">faltan permisos de WhatsApp</span>');
+        setStatus(parts.join(' '));
+      })
+      .catch(function () { setStatus('Error de red al verificar.', 'text-danger'); });
+  });
+
+  renderMode();
 })();
 </script>
 {% endblock %}

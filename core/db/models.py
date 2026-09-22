@@ -535,8 +535,11 @@ class MetaConnection(Base):
 
     __tablename__ = "meta_connections"
     __table_args__ = (
-        UniqueConstraint(
-            "tenant_id", "channel", "environment", "meta_app_id", name="uq_meta_connections_tenant_app"
+        Index(
+            "uq_meta_connections_tenant_app",
+            "tenant_id", "channel", "environment", "meta_app_id",
+            unique=True,
+            postgresql_where=text("deleted_at is null"),
         ),
         CheckConstraint(
             "channel in ('whatsapp','messenger','instagram','facebook_page')",
@@ -564,6 +567,7 @@ class MetaConnection(Base):
     connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_health_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     health: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 

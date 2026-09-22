@@ -32,6 +32,18 @@
       {% if connection.status_reason %}
       <span class="text-secondary small">-- {{ connection.status_reason }}</span>
       {% endif %}
+      {% set exp = token_expiry.get(connection.id) %}
+      {% if exp %}
+        {% if exp < now %}
+        <span class="badge text-bg-danger" title="El access token venció -- reconectá la app">token vencido</span>
+        {% elif (exp - now).days <= 7 %}
+        <span class="badge text-bg-warning" title="El access token vence pronto">token vence en {{ (exp - now).days }}d</span>
+        {% else %}
+        <span class="badge text-bg-secondary" title="Vencimiento del access token">token vence {{ exp.strftime('%Y-%m-%d') }}</span>
+        {% endif %}
+      {% else %}
+        <span class="badge text-bg-light border" title="Sin expiración registrada (token permanente, o conexión anterior al registro de expiración)">token sin vencimiento</span>
+      {% endif %}
     </span>
     <span class="d-flex gap-2 align-items-center">
       <span class="text-secondary small">

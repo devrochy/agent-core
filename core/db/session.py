@@ -9,7 +9,6 @@ la corrutina en asyncio.run() — un solo engine y un solo estilo de código.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
@@ -60,8 +59,12 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 
 
 def run_async(coro: Coroutine[Any, Any, Any]) -> Any:
-    """Puente para tareas Celery: ejecuta una corrutina en contexto síncrono."""
-    return asyncio.run(coro)
+    """Puente para tareas Celery: ejecuta la corrutina en el loop persistente
+    del proceso (ver `core/shared/async_bridge.py`) -- NO `asyncio.run`, que
+    recrearía el loop por task y rompería el engine/cliente Redis cacheados."""
+    from core.shared.async_bridge import run_async as _run_async
+
+    return _run_async(coro)
 
 
 async def get_owned(

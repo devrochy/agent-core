@@ -498,6 +498,90 @@ async def test_panel_lista_tenants_y_crea_uno_nuevo(app_client, moto_setup) -> N
     assert r2.status_code == 303
 
 
+async def test_alta_con_whatsapp_usa_flujo_byok(app_client, monkeypatch) -> None:
+    """El wizard de alta conecta WhatsApp con el flujo BYOK
+    (`save_byok_connection`: MetaConnection + suscripción), no con el
+    `ChannelConnection` legacy."""
+    import uuid
+
+    cookie = await _login(app_client)
+    headers = {"Cookie": cookie}
+    calls: list[tuple] = []
+
+    async def _fake_save(
+        tid, admin_id, app_id, app_secret, phone, token, waba, *, environment="sandbox", verify_token=None
+    ):
+        calls.append((tid, app_id, waba, environment, verify_token))
+
+    monkeypatch.setattr("core.gateway.meta_byok.save_byok_connection", _fake_save)
+
+    r = await app_client.post(
+        "/admin/tenants/nuevo",
+        headers=headers,
+        data={
+            "name": f"Byok Alta {uuid.uuid4().hex[:6]}",
+            "language": "es",
+            "tone": "cercano",
+            "connect_whatsapp": "true",
+            "wa_app_id": "app-x",
+            "wa_app_secret": "secret-x",
+            "wa_waba_id": "waba-x",
+            "wa_phone_number_id": "phone-x",
+            "wa_access_token": "token-x",
+            "wa_verify_token": "vt-x",
+        },
+    )
+    assert r.status_code == 303
+    assert "/admin/spec" in r.headers["location"]
+    assert calls and calls[0][1] == "app-x" and calls[0][2] == "waba-x" and calls[0][3] == "sandbox"
+
+
+async def test_alta_con_whatsapp_fallido_deja_tenant_y_avisa(app_client, monkeypatch) -> None:
+    """Si el WhatsApp falla, el tenant YA creado se conserva y se avisa
+    (redirige a Conexiones), en vez de abortar el alta."""
+    import uuid
+
+    from core.gateway.meta_byok import ByokError
+
+    cookie = await _login(app_client)
+    headers = {"Cookie": cookie}
+
+    async def _fail(*a, **k):
+        raise ByokError("El access token está vencido o es inválido")
+
+    monkeypatch.setattr("core.gateway.meta_byok.save_byok_connection", _fail)
+
+    slug = f"byokfail-{uuid.uuid4().hex[:6]}"
+    r = await app_client.post(
+        "/admin/tenants/nuevo",
+        headers=headers,
+        data={
+            "name": "Byok Fail",
+            "slug": slug,
+            "language": "es",
+            "tone": "cercano",
+            "connect_whatsapp": "true",
+            "wa_app_id": "a",
+            "wa_app_secret": "s",
+            "wa_waba_id": "w",
+            "wa_phone_number_id": "p",
+            "wa_access_token": "t",
+        },
+    )
+    assert r.status_code == 303
+    assert "/admin/conexiones" in r.headers["location"]
+    assert "creado" in r.headers["location"]
+
+    from sqlalchemy import select
+
+    from core.db.models import Tenant
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        row = (await session.execute(select(Tenant).where(Tenant.slug == slug))).scalar_one_or_none()
+    assert row is not None, "el tenant debe quedar creado aunque WhatsApp falle"
+
+
 async def test_wizard_escalation_triggers_va_a_escalation_config(app_client) -> None:
     """`escalation_triggers` del wizard debe terminar en
     `AppSettings.escalation_config` (lo que el orchestrator REALMENTE lee,

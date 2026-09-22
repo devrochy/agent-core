@@ -27,6 +27,7 @@ comportamiento actual.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 
@@ -46,6 +47,22 @@ WEBHOOK_VERIFY_TOKEN_KIND = "webhook_verify_token"
 
 class ByokError(AgentCoreError):
     """Credenciales BYOK rechazadas por Meta o incompletas."""
+
+
+async def _token_expiry(app_id: str, app_secret: str, access_token: str) -> datetime | None:
+    """Expiración del access token según `/debug_token`, o `None` si no expira
+    (`expires_at == 0`) o si Meta no la reporta. Best-effort: nunca bloquea el
+    alta de la conexión."""
+    from core.gateway.meta_token_tools import inspect_token
+
+    try:
+        info = await inspect_token(app_id, app_secret, access_token)
+    except GraphError:
+        return None
+    expires_at = info.get("expires_at")
+    if not expires_at:  # None o 0 (0 = "no expira" en Meta)
+        return None
+    return datetime.fromtimestamp(expires_at, UTC)
 
 
 async def _subscribe_waba_to_app(
@@ -100,6 +117,13 @@ async def save_byok_connection(
                     MetaConnection.channel == "whatsapp",
                     MetaConnection.environment == environment,
                     MetaConnection.meta_app_id == app_id,
+                    # No reutilizar una conexión soft-deleted: la migración 0032
+                    # hizo el unique PARCIAL (`where deleted_at is null`) justo
+                    # para reconectar la misma app creando una fila NUEVA. Sin
+                    # este filtro se resucitaba la vieja sin limpiar `deleted_at`
+                    # -> quedaba con status "pending" pero borrada, invisible al
+                    # resolver del webhook (403 en el self-check).
+                    MetaConnection.deleted_at.is_(None),
                 )
             )
         ).scalar_one_or_none()
@@ -120,15 +144,17 @@ async def save_byok_connection(
         connection.connected_at = utcnow()
         connection_id = connection.id
 
-        # Defensa en profundidad: `connection_id` ya nació filtrado por
-        # `tenant_id` arriba, pero el filtro explícito acá evita que un
-        # futuro refactor que reciba `connection_id` de otro origen abra
-        # una fuga entre tenants (mismo criterio que `meta_token_store`).
+        # `phone_number_id` es único GLOBAL (lo asigna Meta): al reconectar la
+        # misma app el número ya existe apuntando a la conexión vieja, así que
+        # hay que REUTILIZAR la fila y reasignarla a la conexión nueva. Filtrar
+        # por `connection_id` haría un INSERT y violaría
+        # `phone_numbers_phone_number_id_key` (bug real del flujo reconnect).
+        # Filtro explícito de `tenant_id` (defensa en profundidad): un conexión
+        # de otro tenant no puede reclamar el número de este.
         phone = (
             await session.execute(
                 select(PhoneNumber).where(
                     PhoneNumber.tenant_id == tenant_id,
-                    PhoneNumber.connection_id == connection_id,
                     PhoneNumber.phone_number_id == phone_number_id,
                 )
             )
@@ -136,6 +162,8 @@ async def save_byok_connection(
         if phone is None:
             phone = PhoneNumber(tenant_id=tenant_id, connection_id=connection_id, phone_number_id=phone_number_id)
             session.add(phone)
+        else:
+            phone.connection_id = connection_id
         phone.display_phone_number = info.get("display_phone_number")
         phone.verified_name = info.get("verified_name")
         phone.registered = True
@@ -155,8 +183,12 @@ async def save_byok_connection(
 
     try:
         await meta_token_store.put_token(connection_id, APP_SECRET_KIND, app_id, app_secret, tenant_id=tenant_id)
+        # Guardar la expiración del access token (si Meta la reporta) para poder
+        # avisar en el panel antes de que venza -- best-effort, nunca bloquea el alta.
+        token_expires_at = await _token_expiry(app_id, app_secret, access_token)
         await meta_token_store.put_token(
-            connection_id, CLOUD_API_ACCESS_TOKEN_KIND, app_id, access_token, tenant_id=tenant_id
+            connection_id, CLOUD_API_ACCESS_TOKEN_KIND, app_id, access_token,
+            tenant_id=tenant_id, expires_at=token_expires_at,
         )
         if verify_token:
             await meta_token_store.put_token(
@@ -209,7 +241,10 @@ async def save_byok_connection(
                     callback_url=tenant_webhook_url(tenant.slug),
                     verify_token=verify_token or settings.whatsapp_verify_token,
                 )
-            except SubscriptionError as exc:
+            except (SubscriptionError, GraphError) as exc:
+                # `upsert_app_subscription` re-lanza el `GraphError` de Meta (p.ej.
+                # `#2200 Callback verification failed`); sin capturarlo acá, escapaba
+                # hasta la ruta del panel (que solo captura `ByokError`) -> 500.
                 raise ByokError(f"No se pudo suscribir los campos de webhook en Meta: {exc}") from exc
     except Exception as exc:
         # Las credenciales YA fueron verificadas contra Graph -- este
@@ -243,22 +278,22 @@ async def save_byok_connection(
         return db_connection
 
 
-async def resolve_webhook_verify_token(tenant_id: uuid.UUID) -> str | None:
-    """`None` si el tenant no tiene una `MetaConnection` de WhatsApp
-    conectada (o a mitad de guardarse), o si no guardó un verify_token
-    propio -- en ambos casos `webhooks.py` cae a `settings.whatsapp_
-    verify_token` (comportamiento sin cambios). Filtra por `tenant_id`
-    explícito, nunca confía solo en RLS (mismo criterio que el resto del
-    módulo).
+async def _resolve_byok_token(tenant_id: uuid.UUID, kind: str) -> str | None:
+    """Token (del `kind` pedido) de la `MetaConnection` de WhatsApp del tenant.
 
-    Incluye `status="pending"` además de `"connected"` -- bug real
-    encontrado en vivo: el propio self-check de `upsert_app_subscription`
-    (llamado DESDE `save_byok_connection`, mientras la conexión todavía
-    está en `"pending"`) le pega a este mismo webhook para probarse a sí
-    mismo, y si el filtro exigía `"connected"` no se encontraba a sí
-    misma -- caía al `.env` global (vacío) y el propio self-check de Meta
-    fallaba con 403, marcando la conexión en `"error"` a pesar de que las
-    credenciales eran correctas."""
+    `None` si el tenant no tiene una conexión (o está a mitad de guardarse) o si
+    no guardó ese token -- el llamador decide el fallback. Filtra `tenant_id`
+    explícito, nunca confía solo en RLS (mismo criterio que el resto del módulo).
+
+    Incluye `status="pending"` además de `"connected"` -- bug real encontrado en
+    vivo: el self-check de `upsert_app_subscription` (llamado DESDE
+    `save_byok_connection`, mientras la conexión todavía está `"pending"`) le pega
+    a este mismo webhook para probarse a sí mismo, y si el filtro exigía
+    `"connected"` no se encontraba a sí misma -- caía al `.env` global (vacío) y
+    el self-check fallaba con 403.
+
+    Excluye `deleted_at` (invariante nº8): una conexión borrada no presta tokens.
+    """
     async with get_session() as session:
         connection = (
             await session.execute(
@@ -267,6 +302,7 @@ async def resolve_webhook_verify_token(tenant_id: uuid.UUID) -> str | None:
                     MetaConnection.tenant_id == tenant_id,
                     MetaConnection.channel == "whatsapp",
                     MetaConnection.status.in_(("connected", "pending")),
+                    MetaConnection.deleted_at.is_(None),
                 )
                 .order_by(MetaConnection.connected_at.desc())
             )
@@ -274,5 +310,19 @@ async def resolve_webhook_verify_token(tenant_id: uuid.UUID) -> str | None:
     if connection is None:
         return None
     return await meta_token_store.get_token(
-        connection.id, WEBHOOK_VERIFY_TOKEN_KIND, connection.meta_app_id, tenant_id=tenant_id
+        connection.id, kind, connection.meta_app_id, tenant_id=tenant_id
     )
+
+
+async def resolve_webhook_verify_token(tenant_id: uuid.UUID) -> str | None:
+    """`verify_token` propio del wizard BYOK del tenant, o `None` (el llamador
+    cae a `settings.whatsapp_verify_token`)."""
+    return await _resolve_byok_token(tenant_id, WEBHOOK_VERIFY_TOKEN_KIND)
+
+
+async def resolve_byok_app_secret(tenant_id: uuid.UUID) -> str | None:
+    """App Secret de la app de Meta del tenant (cargado por el wizard BYOK),
+    o `None` (el llamador cae al `.env`). Se usa para validar la firma HMAC de
+    los webhooks entrantes: la app dedicada del tenant firma con ESTE secreto,
+    no con el global."""
+    return await _resolve_byok_token(tenant_id, APP_SECRET_KIND)

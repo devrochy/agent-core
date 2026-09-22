@@ -54,13 +54,18 @@ async def find_by_external_id(external_id: str) -> ChannelConnection | None:
         return result.scalar_one_or_none()
 
 
-async def primary_connection() -> ChannelConnection | None:
+async def primary_connection(tenant_id: uuid.UUID | None = None) -> ChannelConnection | None:
+    tid = tenant_id if tenant_id is not None else get_current_tenant_id()
     async with get_session() as session:
         result = await session.execute(
             select(ChannelConnection)
             .where(
                 ChannelConnection.active.is_(True),
                 ChannelConnection.is_primary.is_(True),
+                # Filtro EXPLÍCITO de tenant además de RLS (defensa en
+                # profundidad, invariante nº1): `tid is None` no matchea nada
+                # (fail-closed), nunca "sin filtrar".
+                ChannelConnection.tenant_id == tid,
             )
             .limit(1)
         )
@@ -82,9 +87,9 @@ async def resolve_credentials_for_external(external_id: str) -> dict[str, str] |
     return decrypt_credentials(connection)
 
 
-async def resolve_primary_credentials() -> dict[str, str] | None:
+async def resolve_primary_credentials(tenant_id: uuid.UUID | None = None) -> dict[str, str] | None:
     """Credenciales de la conexión primaria activa, o None si no hay."""
-    connection = await primary_connection()
+    connection = await primary_connection(tenant_id)
     if connection is None:
         return None
     return decrypt_credentials(connection)
@@ -110,6 +115,50 @@ async def effective_credentials(external_id: str = "") -> dict[str, str]:
     if creds:
         return creds
     return env_credentials()
+
+
+async def resolve_effective_verify_token(tenant_id: uuid.UUID) -> str:
+    """Token que el webhook del tenant acepta en el handshake GET.
+
+    Orden: `ChannelConnection` (conexión manual) -> BYOK (`MetaConnection`,
+    verify_token propio del wizard) -> `.env` (`WHATSAPP_VERIFY_TOKEN`).
+
+    No usar `effective_credentials()` para decidir si hay token manual: su
+    fallback a `env_credentials()` hace que `creds["verify_token"]` sea
+    SIEMPRE truthy cuando el `.env` trae token global, dejando muerta la rama
+    BYOK (bug real: el self-check del wizard BYOK respondía 403 porque el
+    handler validaba con el token global).
+
+    Lo usa `webhooks.py::verify_webhook_tenant`. Cualquier ruta que registre
+    una suscripción apuntando a la URL POR TENANT (`tenant_webhook_url(slug)`,
+    como el wizard BYOK) debe registrar este mismo token, o Meta queda
+    registrado con un token que el handshake rechaza. La ruta genérica
+    (`/admin/conexiones/webhooks/registrar`) es la excepción: apunta al
+    webhook genérico sin slug, que resuelve solo `effective_credentials()`.
+    El `tenant_id` va explícito a la resolución manual; el contexto
+    (`tenant_scope`) sigue haciendo falta para RLS en la rama BYOK.
+    """
+    from core.gateway.meta_byok import resolve_webhook_verify_token
+
+    manual = (await resolve_primary_credentials(tenant_id) or {}).get("verify_token")
+    byok = await resolve_webhook_verify_token(tenant_id)
+    return manual or byok or get_settings().whatsapp_verify_token or ""
+
+
+async def resolve_effective_app_secret(tenant_id: uuid.UUID) -> str:
+    """App Secret con el que se valida la firma HMAC de los webhooks del tenant.
+
+    Mismo orden que `resolve_effective_verify_token`: `ChannelConnection`
+    (conexión manual) -> BYOK (`MetaConnection`, app secret cargado en el
+    wizard) -> `.env`. No usar `effective_credentials()` a secas: su fallback a
+    `env_credentials()` enmascara el secreto de la app dedicada del tenant y
+    hace que toda firma de Meta se rechace con 401 (bug real)."""
+    from core.gateway.meta_byok import resolve_byok_app_secret
+
+    manual = (await resolve_primary_credentials(tenant_id) or {}).get("app_secret")
+    byok = await resolve_byok_app_secret(tenant_id)
+    settings = get_settings()
+    return manual or byok or settings.whatsapp_app_secret or settings.meta_app_secret or ""
 
 
 async def save_connection(
@@ -228,6 +277,15 @@ async def verify_meta_credentials(
             query={"fields": "id,verified_name,display_phone_number"},
         )
     except GraphError as exc:
+        text = f"{exc.message} {exc.error_user_msg or ''}".lower()
+        expired = exc.code == 190 or "session has expired" in text or ("expired" in text and "token" in text)
+        if expired:
+            return (
+                False,
+                "El access token está vencido o es inválido. Generá uno nuevo y usá "
+                "\"Extender a 60 días\" (o un token permanente de System User).",
+                {},
+            )
         return False, f"Meta rechazó las credenciales: {exc.message}", {}
     except Exception as exc:
         return False, f"Error de red con Meta: {str(exc)[:120]}", {}
