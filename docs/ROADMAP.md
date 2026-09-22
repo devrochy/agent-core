@@ -4,7 +4,7 @@ Este fichero es el tablero. Se actualiza al cerrar cada sprint. Claude lo lee pa
 en qué estamos.
 
 **Sprint activo:** Sprint 4
-**Última actualización:** 2026-08-26
+**Última actualización:** 2026-09-22
 
 ---
 
@@ -81,6 +81,11 @@ configurado). **El hito se cierra en producción, no en el código.**
       sistema real (agent-sale) la "compatibilidad técnica" es un motivo de escalación
       a humano, no una tabla de reglas. Se cubre con configuración: trigger de
       escalación "compatibilidad" + copy. (Ver docs/audit o ADR-0020 para el razonamiento.)
+- [x] **Conexión WhatsApp BYOK end-to-end** (2026-09-22): firma/`verify_token`/`app_secret`
+      por tenant (ADR-0040), asistente de token + expiración (ADR-0041), reconexión tras
+      soft-delete, crons de Meta cross-tenant (migración `0033`, ADR-0039), worker
+      (`include` + loop persistente, ADR-0042) y crons de packs (ADR-0044), alta de tenant
+      por BYOK (ADR-0043). Verificado en vivo (mensaje → respuesta → celular).
 
 **Salida:** dar de alta un tercer cliente de comercio toma menos de un día y es 100%
 configuración. **Cronometrarlo.** Ese número es la métrica de negocio principal.

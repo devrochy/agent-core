@@ -149,6 +149,13 @@ y reinicia la API. El webhook del tenant será
 Secret, Access Token y un Verify Token propio, ej. `miToken123`). El core valida
 contra Meta antes de guardar.
 
+> **Tokens que expiran (importante):** el token temporal del App Dashboard vence (~24 h)
+> y el agente deja de responder en silencio (error `190/463`). En el wizard BYOK usá
+> **"Extender a 60 días"** (canjea a un token long-lived) o un **token permanente de
+> System User** (Business Settings → Usuarios del sistema), y **"Verificar"** para
+> confirmar "no expira" + permisos de WhatsApp. El panel muestra el vencimiento en
+> `/admin/conexiones/salud` y un cron diario avisa antes de que venza. Ver ADR-0041.
+
 **4. Registra el webhook en Meta:** tu app → **WhatsApp → Configuration**:
 - **Callback URL**: `https://<aleatorio>.trycloudflare.com/webhooks/whatsapp/<slug>`
 - **Verify token**: el mismo del paso 3

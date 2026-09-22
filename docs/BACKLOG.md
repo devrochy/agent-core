@@ -9,6 +9,17 @@ Cuando arregles uno, bórralo de aquí y menciónalo en el commit.
 
 ## Alta
 
+**No hay dominio público estable para el webhook de Meta**
+La app `agent-core-test` de Coolify solo tiene el dominio *default*
+`http://<app-id>.186.82.102.11.sslip.io` (**HTTP, sin TLS**), y los puertos **80/443 del
+host están cerrados/filtrados** desde internet → Coolify/Traefik no puede servir HTTPS ni
+validar Let's Encrypt (los dominios Coolify existentes también están caídos:
+`test.formotos.com` → 521, `app.formotos.com` → 000). Por eso el repo usa la **Funnel de
+Tailscale** (outbound), pero su **DNS público se cayó** (`NXDOMAIN` en resolvers públicos)
+hasta reiniciar `tailscaled` → Meta no puede verificar ni entregar. **Decisión pendiente:**
+Cloudflare Tunnel (`agentcore.formotos.com`, outbound, requiere `cloudflared tunnel login`
+en la cuenta dueña de `formotos.com`) vs abrir 80/443 y usar el dominio de Coolify.
+
 **Los costos de Anthropic siempre se registran como 0.0**
 `core/orchestrator/loop.py:_record_usage` importa el diccionario `PRICING` de
 `core/llm/openai_compatible.py`, que solo contiene modelos de DeepSeek y OpenAI. Los
@@ -85,6 +96,17 @@ justo la parte delicada (el `version_table` separado del ADR-005). La misma prom
 repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev.md`.
 
 ## Baja
+
+**Follow-ups de auditoría diferidos (BYOK / token)**
+- `core/gateway/meta_token_tools.py::extend_token` usa `httpx` directo → no queda en
+  `graph_api_calls`/`graph_api_usage` (endpoint público de tokens, sin `appsecret_proof`).
+- Rutas `POST /admin/conexiones/wizard/whatsapp-byok/token/inspect|extend` no validan que
+  `app_id` pertenezca al tenant (en el alta inicial la conexión todavía no existe).
+- `core/shared/events.py::emit_nowait` (fallback sync) no propaga el tenant (hoy sin callers).
+- `meta_token_store.get_token` no filtra `tenant_id` en el WHERE (preexistente; el AAD falla
+  cerrado).
+- `ix_meta_tokens_tenant` no es índice compuesto (preexistente).
+- `save_byok_connection` tiene un branch de "tenant mismatch" inalcanzable (RLS lo filtra antes).
 
 **Código muerto**
 `MCPHost.register_resource()` y `MCPResource` (registrados, nunca leídos);
