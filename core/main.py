@@ -45,6 +45,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 1. Detectar y registrar plugins (entry_points)
     plugin_manager.scan()
     await plugin_manager.sync_registry()
+    # 1b. Espejar el catálogo de planes a la tabla `plans` (ADR-0045)
+    from core.billing.plans import sync_plans
+
+    await sync_plans()
     # 2. Activar los que estaban configurados/activos
     await plugin_manager.activate_all_configured()
     # 3. Crash recovery del debounce

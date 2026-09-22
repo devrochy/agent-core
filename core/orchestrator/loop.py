@@ -64,6 +64,14 @@ FALLBACK_REPLY = (
     "Ya avisé a nuestro equipo para que te atienda una persona."
 )
 
+# Se agotó una cuota del período (mensajes o costo LLM). El texto real vive en
+# core/playbooks/respuestas.md (`## quota_exhausted`); esto es el fallback
+# determinístico si el playbook no está disponible (mismo patrón que FALLBACK_REPLY).
+QUOTA_EXHAUSTED_REPLY = (
+    "Por ahora no puedo seguir atendiendo esta conversación. "
+    "Un asesor humano puede continuar la atención."
+)
+
 # WhatsApp y canales similares no interpretan Markdown: un cliente ve
 # "**Pollo Broaster**" literal, asteriscos incluidos, no negrita. La regla ya
 # está en core/playbooks/reglas-operacion.md, pero confiar solo en que el LLM
@@ -169,6 +177,24 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
 
     # ---------------- 0. AgentSpec del tenant (Sprint 2, ADR-0014)
     spec = await load_active_spec()
+
+    # Cuota de turno (ADR-0045): si el período agotó `mensajes` o
+    # `costo_llm_usd`, se corta el turno antes de gastar LLM. El bloqueo por
+    # clientes/conversaciones/audio/OCR ocurre en el consumer/webhook (acción).
+    tenant_id = get_current_tenant_id()
+    if tenant_id is not None:
+        from core.billing.enforcement import turn_quota_metric
+
+        blocked = await turn_quota_metric(tenant_id)
+        if blocked is not None:
+            log.warning(
+                "turn_quota_exceeded",
+                tenant_id=str(tenant_id),
+                metric=blocked,
+                conversation_id=str(conversation_id),
+            )
+            closure = await load_response(spec, "quota_exhausted") or QUOTA_EXHAUSTED_REPLY
+            return TurnResult(text=closure)
 
     # Presupuesto agotado (ADR-0015): no se gasta más LLM en esta conversación
     # hasta que un admin suba el presupuesto o lo resetee.

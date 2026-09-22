@@ -117,6 +117,35 @@ documentos, no con promesas.
 
 ---
 
+## Sprint 7 — Planes y facturación · (activo)
+
+**Objetivo:** que cada tenant opere 1 mes gratis y después se suscriba a un plan
+(basic/premium/empresarial) con cuotas, cobrado por Wompi. Ver `docs/BILLING.md`,
+ADR-0045 y ADR-0046.
+
+- [x] Fase 0 — Diseño: ADR-0045 (planes/cuotas/enforcement), ADR-0046 (cobro Wompi),
+      HU-011, `docs/BILLING.md`
+- [x] Fase 1 — Datos: migración `0034` (`plans` sistema + `tenant_subscriptions` +
+      `subscription_payments` con RLS), modelos, catálogo `core/billing/plans.py`,
+      suscripción free al alta + backfill de tenants existentes
+- [x] Fase 2 — Medición y enforcement: `core/billing/metrics.py` +
+      `enforcement.py`; gate en webhook/consumer; cota de packs en `plugin_manager`;
+      cron `billing_lifecycle`
+- [x] Fase 3 — Panel: `/admin/plan` con barra de progreso por métrica, banners 80/100%,
+      resumen en el dashboard, plan + override en `/admin/tenants` (master)
+- [x] Fase 4 — Pasarela Wompi: `core/billing/providers/`, `POST /admin/plan/subscribe`,
+      webhook `POST /webhooks/billing/wompi` (firma + idempotencia), renovación e historial
+- [x] Fase 5 — Cierre: docs (`MULTITENANT.md`, C4, `ARCHITECTURE.md`, `CHANGELOG.md`,
+      `BACKLOG.md`, `.env.example`, `CLAUDE.md`), `auditor-multitenant`, `ruff` + `pytest`
+
+**Diferido (documentado):** débito recurrente automático, prorrateo, excedentes,
+proveedor internacional (Stripe).
+
+**Salida:** un tenant nuevo opera 30 días gratis, ve su consumo, y puede pagar su plan
+sin intervención manual; al vencer sin pago el servicio se corta sin perder datos.
+
+---
+
 ## Deuda registrada
 
 | Fecha | Deuda | Origen | Prioridad |

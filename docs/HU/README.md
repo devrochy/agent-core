@@ -16,3 +16,4 @@ verificables. Roles: **Developer** (construye/opera la plataforma), **Admin**
 | [HU-008](HU-008-costos-llm.md) | Visibilidad de costos LLM | Admin |
 | [HU-009](HU-009-importar-bd.md) | Importar datos de una BD existente | Developer |
 | [HU-010](HU-010-memoria-largo-plazo.md) | Memoria de largo plazo | Cliente |
+| [HU-011](HU-011-planes-suscripcion.md) | Planes, cuotas y suscripción | Admin |

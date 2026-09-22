@@ -39,6 +39,7 @@ core/                  monolito modular (todo el runtime en un proceso)
   agents/              AgentSpec (BD), playbooks (allowlist)
   onboarding.py        alta de tenants (usado por CLI `tenant create` y el panel)
   memory/              working (Redis) + recall (pgvector)
+  billing/             planes, cuotas, enforcement, cobro Wompi (ADR-0045/0046)
   admin/               panel SSR + auth propia + data-table + editor spec + wizard tenants
   db/                  tenant_scope→set_config, RLS, migraciones
   tasks/               celery (crons), colas

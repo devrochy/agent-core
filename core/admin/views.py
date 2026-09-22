@@ -30,6 +30,7 @@ from core.admin.form_generator import (
 )
 from core.admin.view_registry import view_registry
 from core.agents.spec import CORE_PACK_ID, enabled_packs, load_active_spec
+from core.billing.enforcement import QuotaExceeded, can_activate_plugin
 from core.config import get_settings
 from core.db.models import (
     WIZARD_STEPS,
@@ -249,17 +250,89 @@ async def tenants_list(request: Request):
         rows = (
             await session.execute(select(Tenant).order_by(Tenant.created_at))
         ).scalars().all()
-    ctx["tenants_rows"] = [
-        {
-            "id": str(t.id),
-            "name": t.name,
-            "slug": t.slug,
-            "status": t.status,
-            "created_at": t.created_at,
-        }
-        for t in rows
+    from core.admin.plan_view import subscription_overview_or_none
+
+    tenant_rows = []
+    for t in rows:
+        overview = await subscription_overview_or_none(t.id)
+        tenant_rows.append(
+            {
+                "id": str(t.id),
+                "name": t.name,
+                "slug": t.slug,
+                "status": t.status,
+                "created_at": t.created_at,
+                "plan_name": overview.plan_name if overview else "—",
+                "plan_status": overview.status if overview else "sin_suscripcion",
+                "operational": overview.operational if overview else True,
+            }
+        )
+    ctx["tenants_rows"] = tenant_rows
+    from core.billing.plans import public_plans
+
+    ctx["plans"] = [
+        {"id": p.id, "name": p.name, "is_free": p.is_free} for p in public_plans()
     ]
     return _render("tenants.html", ctx)
+
+
+@router.post("/tenants/{tenant_id}/plan")
+async def tenants_set_plan(
+    request: Request,
+    tenant_id: str,
+    plan_id: str = Form(...),
+    extend_days: int = Form(default=0),
+):
+    """Cambia el plan de un tenant (soporte, solo master) y registra en audit_log (ADR-0045)."""
+    if await current_admin(request) is None:
+        return _login_redirect()
+    if not await _require_master(request):
+        return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
+
+    from datetime import timedelta
+
+    from core.db.models import AuditLog, TenantSubscription
+
+    try:
+        tid = uuid.UUID(tenant_id)
+    except ValueError:
+        return RedirectResponse("/admin/tenants?flash=Tenant inválido&flash_type=danger", status_code=303)
+
+    from core.billing.plans import get_plan
+
+    if get_plan(plan_id) is None:
+        return RedirectResponse("/admin/tenants?flash=Plan desconocido&flash_type=danger", status_code=303)
+
+    async with tenant_scope(str(tid)):
+        async with get_session() as session:
+            sub = (
+                await session.execute(
+                    select(TenantSubscription).where(
+                        TenantSubscription.tenant_id == tid,
+                        TenantSubscription.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if sub is None:
+                from core.billing.service import ensure_free_subscription
+
+                sub = await ensure_free_subscription(session, tid)
+            sub.plan_id = plan_id
+            sub.status = "active"
+            if extend_days:
+                base = sub.period_end if sub.period_end and sub.period_end > utcnow() else utcnow()
+                sub.period_end = base + timedelta(days=extend_days)
+                sub.trial_ends_at = None
+            session.add(
+                AuditLog(
+                    tenant_id=tid,
+                    actor="admin:master",
+                    action="billing.set_plan",
+                    input={"plan_id": plan_id, "extend_days": extend_days},
+                )
+            )
+            await session.commit()
+    return RedirectResponse("/admin/tenants?flash=Plan actualizado", status_code=303)
 
 
 @router.get("/tenants/nuevo", response_class=HTMLResponse)
@@ -997,15 +1070,33 @@ async def plugin_config_save(request: Request, plugin_id: str):
             f"/admin/plugins?flash=Error: {str(exc)[:120]}&flash_type=danger", status_code=303
         )
     # Configurarlo implica que este tenant lo quiere usar.
-    await _enable_pack_for_tenant(plugin_id)
+    try:
+        await _enable_pack_for_tenant(plugin_id)
+    except QuotaExceeded as exc:
+        return _quota_redirect(exc)
     return RedirectResponse("/admin/plugins?flash=Plugin configurado y activado", status_code=303)
 
 
+def _quota_redirect(exc: QuotaExceeded) -> RedirectResponse:
+    return RedirectResponse(
+        f"/admin/plugins?flash=Tu plan no permite habilitar más plugins "
+        f"({exc.used}/{exc.limit}). Mejorá tu plan en /admin/plan.&flash_type=danger",
+        status_code=303,
+    )
+
+
 async def _enable_pack_for_tenant(pack: str) -> int | None:
-    """Agrega `pack` a `AgentSpec.packs` del tenant actual (nueva versión)."""
+    """Agrega `pack` a `AgentSpec.packs` del tenant actual (nueva versión).
+
+    Aplica la cuota de plugins del plan (ADR-0045): si ya está en el límite y el
+    pack no estaba habilitado, levanta `QuotaExceeded`.
+    """
     spec = await load_active_spec()
     if pack in spec.packs:
         return None
+    tenant_id = get_current_tenant_id()
+    if tenant_id is not None and not await can_activate_plugin(tenant_id):
+        raise QuotaExceeded("plugins", len(spec.packs), len(spec.packs))
     new_spec = spec.model_copy(update={"packs": sorted({*spec.packs, pack})})
     return await _save_spec_version(new_spec)
 
@@ -1030,7 +1121,10 @@ async def plugin_activate(request: Request, plugin_id: str):
     error = await _ensure_pack_activated(plugin_id)
     if error is not None:
         return RedirectResponse(f"/admin/plugins?flash=Error: {error}&flash_type=danger", status_code=303)
-    await _enable_pack_for_tenant(plugin_id)
+    try:
+        await _enable_pack_for_tenant(plugin_id)
+    except QuotaExceeded as exc:
+        return _quota_redirect(exc)
     return RedirectResponse("/admin/plugins?flash=Plugin activado para este tenant", status_code=303)
 
 
@@ -2857,6 +2951,82 @@ async def costs_meta_creditos_verificar(request: Request, connection_id: str):
 
     ctx.update(connections=connections, credits=credits, credits_error=credits_error, checked_connection_id=connection_id)
     return _render("costs_meta_creditos.html", ctx)
+
+
+# ------------------------------------------------------------------ plan / billing
+@router.get("/plan", response_class=HTMLResponse)
+async def plan_page(request: Request):
+    """Plan, consumo y suscripción del tenant actual (ADR-0045)."""
+    ctx = await _base_context(request, "plan")
+    if ctx is None:
+        return _login_redirect()
+    tenant_id = get_current_tenant_id()
+    overview, usage, payments = await _billing_snapshot(tenant_id)
+    ctx.update(
+        overview=overview,
+        usage=usage,
+        payments=payments,
+        plans=_renderable_plans(overview.plan_id),
+    )
+    return _render("plan.html", ctx)
+
+
+async def _billing_snapshot(tenant_id):
+    """(overview, usage, payments) del tenant, sin romper si falta el schema."""
+    from core.admin.plan_view import (
+        billing_payments,
+        billing_usage,
+        subscription_overview_or_none,
+    )
+
+    if tenant_id is None:
+        return None, [], []
+    overview = await subscription_overview_or_none(tenant_id)
+    usage = await billing_usage(tenant_id, overview)
+    payments = await billing_payments(tenant_id)
+    return overview, usage, payments
+
+
+def _renderable_plans(current_plan_id: str | None) -> list[dict]:
+    from core.billing.plans import public_plans
+
+    result = []
+    for plan in public_plans():
+        result.append(
+            {
+                "id": plan.id,
+                "name": plan.name,
+                "price_cop": plan.price_cop,
+                "is_free": plan.is_free,
+                "current": plan.id == current_plan_id,
+                "limits": plan.limits,
+                "features": plan.features,
+            }
+        )
+    return result
+
+
+@router.post("/plan/subscribe")
+async def plan_subscribe(request: Request, plan_id: str = Form(...)):
+    """Inicia la suscripción a un plan pago: crea el link de pago del proveedor."""
+    if await current_admin(request) is None:
+        return _login_redirect()
+    from core.billing.checkout import start_subscription
+
+    try:
+        checkout_url = await start_subscription(plan_id)
+    except Exception as exc:
+        log.exception("plan_subscribe_failed", plan=plan_id)
+        return RedirectResponse(
+            f"/admin/plan?flash=No se pudo iniciar el pago: {str(exc)[:140]}&flash_type=danger",
+            status_code=303,
+        )
+    if checkout_url is None:
+        return RedirectResponse(
+            "/admin/plan?flash=La pasarela de pago no está configurada&flash_type=danger",
+            status_code=303,
+        )
+    return RedirectResponse(checkout_url, status_code=303)
 
 
 # ------------------------------------------------------------------ configuración

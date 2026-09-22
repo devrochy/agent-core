@@ -136,6 +136,20 @@ class Settings(BaseSettings):
         default=False, alias="META_SERVICE_MESSAGE_ALLOWANCE_HYPOTHESIS_ENABLED"
     )
 
+    # --- Planes y facturación de tenants (ADR-0045 / ADR-0046) ---
+    # Cobro de la SUSCRIPCIÓN de plataforma (el tenant nos paga a nosotros), no
+    # el cobro del negocio del tenant (eso es pack-payments). Credenciales
+    # propias de la plataforma; sin ellas, la pasarela queda deshabilitada.
+    billing_provider: Literal["none", "wompi"] = Field(default="none", alias="BILLING_PROVIDER")
+    billing_currency: str = Field(default="COP", alias="BILLING_CURRENCY")
+    billing_trial_days: int = Field(default=30, alias="BILLING_TRIAL_DAYS")
+    wompi_billing_public_key: str = Field(default="", alias="WOMPI_BILLING_PUBLIC_KEY")
+    wompi_billing_private_key: str = Field(default="", alias="WOMPI_BILLING_PRIVATE_KEY")
+    wompi_billing_events_secret: str = Field(default="", alias="WOMPI_BILLING_EVENTS_SECRET")
+    # Sandbox por default (mismo criterio que pack-payments): producción se
+    # habilita explícitamente.
+    wompi_billing_sandbox: bool = Field(default=True, alias="WOMPI_BILLING_SANDBOX")
+
     # --- Observabilidad ---
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     otel_enabled: bool = Field(default=False, alias="OTEL_ENABLED")

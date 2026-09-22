@@ -315,6 +315,10 @@ async def onboard_tenant(
                     steps.append("conexión WhatsApp creada")
                 else:
                     steps.append("conexión WhatsApp ya existía")
+            from core.billing.service import ensure_free_subscription
+
+            await ensure_free_subscription(session, tenant_id)
+            steps.append("suscripción free creada")
             await session.commit()
 
     for pack in packs or []:

@@ -27,6 +27,17 @@
       <div class="value">${{ "%.4f"|format(kpi.cost_30d) }}</div>
     </div></div>
   </div>
+  {% if billing and billing.has_plan %}
+  <div class="col-md-3">
+    <div class="card kpi-card"><div class="card-body">
+      <div class="text-secondary small">Plan</div>
+      <div class="value">{{ billing.plan_name }}</div>
+      <div class="small text-muted">
+        {% if billing.days_left is not none %}{{ billing.days_left }} días restantes{% else %}{{ billing.status }}{% endif %}
+      </div>
+    </div></div>
+  </div>
+  {% endif %}
 </div>
 
 <div class="row g-3">
