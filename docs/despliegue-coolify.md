@@ -36,6 +36,16 @@ API funcionan perfecto; para operar se usa el CLI dentro del contenedor o se
 verifica por BD/logs. Cuando agent-core tenga su propio hostname de 443 (VPS en
 el tailnet, ADR-0010, o DNS de Cloudflare), el panel vuelve a la raíz.
 
+> **Riesgo / pendiente de dominio estable (2026-09-22):** el **DNS público de la
+> Funnel de Tailscale se cayó** (`NXDOMAIN` en resolvers públicos) hasta reiniciar
+> `tailscaled` → Meta no puede verificar ni entregar mientras tanto. Además, el
+> dominio *default* de Coolify para la app es `http://<app>.186.82.102.11.sslip.io`
+> (**HTTP, sin TLS**) y los **puertos 80/443 del host están cerrados** desde internet,
+> así que Coolify/Traefik no puede servir HTTPS ni validar Let's Encrypt. **Decisión
+> pendiente** (ver `docs/BACKLOG.md`): Cloudflare Tunnel (`agentcore.formotos.com`,
+> outbound, requiere `cloudflared tunnel login` en la cuenta dueña de `formotos.com`)
+> vs abrir 80/443 y usar el dominio de Coolify.
+
 ## Variables de entorno (App, por API/UI de Coolify)
 
 | Variable | Valor |

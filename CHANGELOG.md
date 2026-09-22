@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.4.0 — BYOK de WhatsApp productivo (2026-09-22)
+
+Deja el flujo BYOK (app propia de Meta) funcionando de punta a punta: mensaje entra →
+LLM responde → llega al celular.
+
+### Webhook y credenciales por tenant (ADR-0040)
+- El webhook resuelve `verify_token` y `app_secret` por tenant
+  (`ChannelConnection` manual → BYOK → `.env`); antes caían al `.env` y daban 403/401.
+- El sender usa el `access_token` BYOK (`cloud_api_access_token`); ya no cae al `.env`.
+
+### Asistente de token y expiración (ADR-0041)
+- Wizard BYOK: "Extender a 60 días" (`fb_exchange_token`) y "Verificar" (`debug_token`);
+  se persiste `expires_at`, badge en `/conexiones/salud` y cron diario de vencimiento.
+- Mensaje claro para token vencido/inválido (`190/463`).
+
+### Reconexión y crons de Meta
+- Reconectar una app tras "eliminar" crea una conexión nueva y reasigna el
+  `phone_number_id` (unique global) en vez de duplicar.
+- Crons de Meta (`subscriptions_health`, `template_sync`, `pricing_sync`,
+  `health_check`) enumeran cross-tenant vía funciones `SECURITY DEFINER`
+  (migración `0033`, ADR-0039); antes eran no-op silencioso por RLS.
+
+### Worker / Celery (ADR-0042, ADR-0044)
+- Se registra `core.outbound_send` (`include`) y se reemplaza `asyncio.run()` por un
+  puente async con **loop persistente** (`core/shared/async_bridge.py`).
+- El beat escanea plugins (`beat_init`) y los crons de los packs se registran al importar
+  el módulo del pack → `pack_commerce.follow_up_leads/quotes` quedan programados.
+
+### Alta de tenant (ADR-0043)
+- `/admin/tenants/nuevo` conecta WhatsApp por el flujo BYOK (MetaConnection +
+  suscripción app/WABA); si falla, conserva el tenant y avisa.
+
+### Infra
+- La Funnel de Tailscale funciona tras reinstalar/configurar; **dominio estable pendiente**
+  (ver `docs/BACKLOG.md`).
+
 ## v0.3.0 — Sprint 3 (2026-08-26)
 
 ### CULTO migrado (tenant #1)

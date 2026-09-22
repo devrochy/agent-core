@@ -36,3 +36,19 @@ Se crean con `/adr`.
 | 0026 | Playbooks: override de contenido por tenant vía filesystem | aceptado |
 | 0027 | Cifrado de secretos en BD: AES-256-GCM con rotación de claves | aceptado |
 | 0028 | `webhook_events` como tabla de sistema (excepción a invariante nº1) | aceptado |
+| 0029 | `meta_app_subscriptions` como tabla de sistema (excepción a invariante nº1) | aceptado |
+| 0030 | `connection_wizards`: máquina de estados reanudable del Embedded Signup | aceptado |
+| 0031 | Ciclo de vida de plantillas de WhatsApp: máquina de estados por webhook y resolución de tenant sin RLS | aceptado |
+| 0032 | Cola de salida vía Celery, idempotencia por `client_message_id` y máquina de estados de mensajes | aceptado |
+| 0033 | Contabilidad de costes de Meta: dos tablas, dos fuentes de verdad, nunca una tarifa local | aceptado |
+| 0034 | Health checks, diagnóstico y alertas de conexiones Meta | aceptado |
+| 0035 | Checklist de promoción a producción: 9 checks automáticos reales + manuales persistidos | aceptado |
+| 0036 | Wizard BYOK (app propia) para modo prueba de WhatsApp | aceptado |
+| 0037 | `verify_token` propio por conexión BYOK en el handshake del webhook | aceptado |
+| 0038 | Activar/desactivar/eliminar conexiones de Meta (soft-delete) | aceptado |
+| 0039 | Enumeración cross-tenant de assets de Meta para crons (SECURITY DEFINER) | aceptado |
+| 0040 | Resolución de credenciales de webhook por tenant (manual → BYOK → `.env`) | aceptado |
+| 0041 | Asistente de token del wizard BYOK (extender/verificar) y expiración | aceptado |
+| 0042 | Worker Celery: `include` de tasks + puente async con loop persistente | aceptado |
+| 0043 | Alta de tenant conecta WhatsApp por el flujo BYOK | aceptado |
+| 0044 | Registro de crons de packs (import de `jobs` + `beat_init`) | aceptado |
