@@ -23,20 +23,28 @@ from collections.abc import Coroutine
 from typing import Any
 
 _loop: asyncio.AbstractEventLoop | None = None
+_thread: threading.Thread | None = None
 _lock = threading.Lock()
 
 
 def _ensure_loop() -> asyncio.AbstractEventLoop:
-    global _loop
+    global _loop, _thread
     with _lock:
-        if _loop is None or _loop.is_closed():
+        if (
+            _loop is None
+            or _loop.is_closed()
+            or _thread is None
+            or not _thread.is_alive()
+        ):
             loop = asyncio.new_event_loop()
-            threading.Thread(
+            thread = threading.Thread(
                 target=loop.run_forever,
                 name="agent-core-async-bridge",
                 daemon=True,
-            ).start()
+            )
+            thread.start()
             _loop = loop
+            _thread = thread
         return _loop
 
 

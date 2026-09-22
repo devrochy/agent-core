@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import worker_init
+from celery.signals import beat_init, worker_init
 
 from core.config import get_settings
 from core.shared.async_bridge import run_async
@@ -174,9 +174,9 @@ celery.conf.beat_schedule[_WORKER_HEARTBEAT_TASK] = {
 }
 
 
-@worker_init.connect
-def _load_plugins_on_worker_start(**_kwargs: object) -> None:
-    """El worker necesita los plugins cargados para resolver sus tareas."""
+def _load_plugins() -> None:
+    """Carga los plugins (entry_points) e importa los jobs para que corran los
+    `@register_cron` de los packs. Necesario tanto en el worker como en el beat."""
     from core.observability.sentry_setup import configure_sentry
     from core.plugin_manager import plugin_manager
 
@@ -184,3 +184,17 @@ def _load_plugins_on_worker_start(**_kwargs: object) -> None:
     plugin_manager.scan()
     # Importa los módulos de jobs para que los decoradores corran
     import core.tasks.decorators  # noqa: F401
+
+
+@worker_init.connect
+def _load_plugins_on_worker_start(**_kwargs: object) -> None:
+    """El worker necesita los plugins cargados para resolver sus tareas."""
+    _load_plugins()
+
+
+@beat_init.connect
+def _load_plugins_on_beat_start(**_kwargs: object) -> None:
+    """El beat NO ejecuta `worker_init`: sin este escaneo, los `@register_cron`
+    de los packs nunca entran al `beat_schedule` y sus crons (p. ej. los
+    follow-ups de pack-commerce) no se programan."""
+    _load_plugins()

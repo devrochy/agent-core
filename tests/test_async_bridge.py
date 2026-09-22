@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 
 def test_outbound_send_esta_en_include_de_celery() -> None:
     from core.tasks.celery_app import celery
@@ -44,3 +46,38 @@ def test_run_async_no_se_llama_desde_un_loop() -> None:
             coro.close()
 
     asyncio.run(_inner())
+
+
+def test_run_async_recrea_loop_si_el_thread_murio() -> None:
+    import threading
+
+    from core.shared import async_bridge
+
+    stale_loop = asyncio.new_event_loop()
+    dead = threading.Thread(target=lambda: None)
+    dead.start()
+    dead.join()
+    async_bridge._loop = stale_loop
+    async_bridge._thread = dead
+
+    async def _loop_id() -> int:
+        return id(asyncio.get_running_loop())
+
+    try:
+        assert isinstance(async_bridge.run_async(_loop_id()), int)
+    finally:
+        stale_loop.close()
+
+
+def test_beat_scan_registra_crons_de_packs() -> None:
+    """El beat debe escanear plugins (`beat_init`) para programar los crons de
+    los packs; sin eso, `follow_up_leads`/`follow_up_quotes` nunca corren."""
+    import importlib.util
+
+    if importlib.util.find_spec("pack_commerce") is None:
+        pytest.skip("pack_commerce no instalado")
+
+    from core.tasks import celery_app as app
+
+    app._load_plugins()
+    assert "pack_commerce.follow_up_leads" in app.celery.conf.beat_schedule
