@@ -277,6 +277,15 @@ async def verify_meta_credentials(
             query={"fields": "id,verified_name,display_phone_number"},
         )
     except GraphError as exc:
+        text = f"{exc.message} {exc.error_user_msg or ''}".lower()
+        expired = exc.code == 190 or "session has expired" in text or ("expired" in text and "token" in text)
+        if expired:
+            return (
+                False,
+                "El access token está vencido o es inválido. Generá uno nuevo y usá "
+                "\"Extender a 60 días\" (o un token permanente de System User).",
+                {},
+            )
         return False, f"Meta rechazó las credenciales: {exc.message}", {}
     except Exception as exc:
         return False, f"Error de red con Meta: {str(exc)[:120]}", {}

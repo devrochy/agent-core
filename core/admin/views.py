@@ -284,9 +284,10 @@ async def tenants_create(
     packs: list[str] = Form(default=[]),  # noqa: B008
     escalation_triggers: str = Form(default=""),
     connect_whatsapp: bool = Form(default=False),
-    wa_label: str = Form(default=""),
-    wa_phone_number_id: str = Form(default=""),
+    wa_app_id: str = Form(default=""),
     wa_app_secret: str = Form(default=""),
+    wa_waba_id: str = Form(default=""),
+    wa_phone_number_id: str = Form(default=""),
     wa_access_token: str = Form(default=""),
     wa_verify_token: str = Form(default=""),
 ):
@@ -303,21 +304,6 @@ async def tenants_create(
             status_code=303,
         )
 
-    whatsapp = None
-    if connect_whatsapp:
-        whatsapp = {
-            "label": wa_label or name,
-            "phone_number_id": wa_phone_number_id,
-            "app_secret": wa_app_secret,
-            "access_token": wa_access_token,
-            "verify_token": wa_verify_token,
-        }
-        ok, msg, _info = await verify_meta_credentials(wa_phone_number_id, wa_access_token, wa_app_secret)
-        if not ok:
-            return RedirectResponse(
-                f"/admin/tenants/nuevo?flash=WhatsApp: {msg[:120]}&flash_type=danger", status_code=303
-            )
-
     triggers = [t.strip() for t in escalation_triggers.split(",") if t.strip()]
     try:
         from core.onboarding import onboard_tenant
@@ -331,18 +317,52 @@ async def tenants_create(
             escalation_triggers=triggers or None,
             packs=packs or None,
             admin_email=admin.email,
-            whatsapp=whatsapp,
+            whatsapp=None,
         )
     except Exception as exc:
         log.exception("tenant_create_failed")
         return RedirectResponse(
-            f"/admin/tenants/nuevo?flash=Error al crear: {str(exc)[:140]}&flash_type=danger",
-            status_code=303,
+            f"/admin/tenants/nuevo?flash=Error al crear: {str(exc)[:140]}&flash_type=danger", status_code=303
         )
 
-    response = RedirectResponse(
-        f"/admin/spec?flash=tenant {tenant_slug} creado&flash_type=success", status_code=303
-    )
+    # WhatsApp opcional vía el flujo BYOK (MetaConnection + suscripción app/WABA),
+    # el mismo que /admin/conexiones: valida credenciales, registra la suscripción
+    # y maneja la expiración del token. Si falla, el tenant YA quedó creado: se
+    # avisa y se redirige a Conexiones para reintentar (no se aborta el alta).
+    wa_error: str | None = None
+    if connect_whatsapp:
+        from core.gateway.meta_byok import ByokError, save_byok_connection
+
+        try:
+            async with tenant_scope(tid):
+                await save_byok_connection(
+                    tid,
+                    admin.id,
+                    wa_app_id.strip(),
+                    wa_app_secret.strip(),
+                    wa_phone_number_id.strip(),
+                    wa_access_token.strip(),
+                    wa_waba_id.strip(),
+                    environment="sandbox",
+                    verify_token=wa_verify_token.strip() or None,
+                )
+        except ByokError as exc:
+            wa_error = str(exc)
+        except Exception as exc:  # red/infra no clasificada
+            log.exception("tenant_create_whatsapp_failed")
+            wa_error = str(exc)[:180]
+
+    if wa_error:
+        response = RedirectResponse(
+            f"/admin/conexiones?flash=Tenant {tenant_slug} creado, pero WhatsApp falló: "
+            f"{wa_error[:200]}&flash_type=danger",
+            status_code=303,
+        )
+    else:
+        extra = " con WhatsApp" if connect_whatsapp else ""
+        response = RedirectResponse(
+            f"/admin/spec?flash=tenant {tenant_slug} creado{extra}&flash_type=success", status_code=303
+        )
     response.set_cookie(
         TENANT_COOKIE,
         str(tid),
