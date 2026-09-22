@@ -74,6 +74,10 @@ from core.shared.tenant import admin_tenants, get_current_tenant_id, tenant_scop
 log = get_logger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
 
+# Respuestas que pueden transportar secretos (p.ej. el token extendido del
+# wizard): nunca cachear en navegador/proxies.
+_NO_STORE = {"Cache-Control": "no-store"}
+
 INBOUND_STREAM = "agent_core:inbound"
 DLQ_STREAM = "agent_core:inbound:dlq"
 
@@ -1393,7 +1397,6 @@ async def meta_webhooks_json(request: Request):
 
 @router.post("/conexiones/webhooks/registrar")
 async def meta_webhooks_register(request: Request, channel: str = Form(...)):
-    from core.gateway.connections import effective_credentials
     from core.gateway.meta_preflight import resolve_app_credentials
     from core.gateway.meta_subscriptions import (
         OBJECT_TO_CHANNEL,
@@ -1422,7 +1425,13 @@ async def meta_webhooks_register(request: Request, channel: str = Form(...)):
 
     settings = get_settings()
     callback_url = f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"
-    verify_token = (await effective_credentials()).get("verify_token", "") or settings.whatsapp_verify_token
+    # Esta ruta registra sobre el webhook GENÉRICO (sin slug). Ese handler
+    # (`webhooks.py::verify_webhook`) corre sin scope de tenant (ruta pública)
+    # y resuelve solo `settings.whatsapp_verify_token` -- el token por tenant
+    # vive en la URL por slug y lo maneja el wizard BYOK. Registrar acá el
+    # token de la conexión del tenant produce un 403 en el self-check (el
+    # handler genérico no lo conoce).
+    verify_token = settings.whatsapp_verify_token
 
     try:
         async with tenant_scope(tid):
@@ -1618,6 +1627,53 @@ async def meta_wizard_whatsapp_byok_guardar(
         "/admin/conexiones/salud?flash=Conexión de prueba guardada -- probála con \"Diagnosticar\"",
         status_code=303,
     )
+
+
+@router.post("/conexiones/wizard/whatsapp-byok/token/inspect")
+async def meta_byok_token_inspect(
+    request: Request,
+    app_id: str = Form(...),
+    app_secret: str = Form(...),
+    access_token: str = Form(...),
+):
+    """Verifica un access token contra Meta (`/debug_token`): validez,
+    expiración (0 = no expira) y scopes. Para el asistente del wizard BYOK.
+    Nunca loguea el token."""
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_token_tools import inspect_token
+
+    if await current_admin(request) is None:
+        return JSONResponse({"ok": False, "error": "no autenticado"}, status_code=401)
+    if not app_id.strip() or not app_secret.strip() or not access_token.strip():
+        return JSONResponse({"ok": False, "error": "Faltan App ID, App Secret o token"}, status_code=200)
+    try:
+        info = await inspect_token(app_id.strip(), app_secret.strip(), access_token.strip())
+    except GraphError as exc:
+        return JSONResponse({"ok": False, "error": exc.message}, headers=_NO_STORE)
+    return JSONResponse({"ok": True, **info}, headers=_NO_STORE)
+
+
+@router.post("/conexiones/wizard/whatsapp-byok/token/extend")
+async def meta_byok_token_extend(
+    request: Request,
+    app_id: str = Form(...),
+    app_secret: str = Form(...),
+    access_token: str = Form(...),
+):
+    """Canjea un token temporal por uno long-lived (~60 días). Devuelve el
+    token nuevo para que el wizard lo ponga en el campo (nunca se loguea)."""
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_token_tools import extend_token
+
+    if await current_admin(request) is None:
+        return JSONResponse({"ok": False, "error": "no autenticado"}, status_code=401)
+    if not app_id.strip() or not app_secret.strip() or not access_token.strip():
+        return JSONResponse({"ok": False, "error": "Faltan App ID, App Secret o token"}, status_code=200)
+    try:
+        result = await extend_token(app_id.strip(), app_secret.strip(), access_token.strip())
+    except GraphError as exc:
+        return JSONResponse({"ok": False, "error": exc.message}, headers=_NO_STORE)
+    return JSONResponse({"ok": True, **result}, headers=_NO_STORE)
 
 
 @router.post("/conexiones/wizard/whatsapp/exchange")
@@ -2194,7 +2250,23 @@ async def meta_health_page(request: Request):
             )
         ).scalars().all()
 
-    ctx.update(connections=connections)
+    # Expiración del access token por conexión (badge de aviso antes de que venza).
+    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
+    from core.gateway.meta_onboarding import TOKEN_KIND
+    from core.gateway.meta_token_store import get_token_expires_at
+
+    token_expiry: dict = {}
+    for connection in connections:
+        exp = await get_token_expires_at(
+            connection.id, CLOUD_API_ACCESS_TOKEN_KIND, connection.meta_app_id, tenant_id=tid
+        )
+        if exp is None:
+            exp = await get_token_expires_at(
+                connection.id, TOKEN_KIND, connection.business_id or str(connection.id), tenant_id=tid
+            )
+        token_expiry[connection.id] = exp
+
+    ctx.update(connections=connections, token_expiry=token_expiry, now=datetime.now(UTC))
     return _render("meta_salud.html", ctx)
 
 

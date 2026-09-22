@@ -16,8 +16,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
-
 from core.db.models import MetaConnection, WabaAccount
 from core.db.session import get_session
 from core.gateway import meta_token_store
@@ -33,15 +31,22 @@ _SYNC_WINDOW_DAYS = 3
 
 
 async def _connected_wabas() -> list[tuple[WabaAccount, MetaConnection]]:
-    async with get_session() as session:
-        rows = (
-            await session.execute(
-                select(WabaAccount, MetaConnection)
-                .join(MetaConnection, MetaConnection.id == WabaAccount.connection_id)
-                .where(MetaConnection.status == "connected")
-            )
-        ).all()
-    return [(waba, connection) for waba, connection in rows]
+    """WABAs de conexiones `connected` de TODOS los tenants (ids cross-tenant
+    vía `admin_connected_waba_ids`, SECURITY DEFINER; hidratación bajo el
+    `tenant_scope` de cada tenant)."""
+    from core.db.admin_enum import admin_connected_waba_ids
+
+    out: list[tuple[WabaAccount, MetaConnection]] = []
+    for waba_id, tenant_id in await admin_connected_waba_ids():
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                waba = await session.get(WabaAccount, waba_id)
+                if waba is None:
+                    continue
+                connection = await session.get(MetaConnection, waba.connection_id)
+                if connection is not None and connection.status == "connected":
+                    out.append((waba, connection))
+    return out
 
 
 async def _sync_one(waba: WabaAccount, connection: MetaConnection) -> None:

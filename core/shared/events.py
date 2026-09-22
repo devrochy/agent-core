@@ -16,6 +16,7 @@ from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from core.shared.async_bridge import run_async
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
@@ -64,7 +65,7 @@ class EventBus:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            asyncio.run(self.emit(event, **payload))
+            run_async(self.emit(event, **payload))
             return
         # Guardar la referencia: sin ella el recolector puede llevarse la task
         # antes de que termine y el evento se pierde en silencio.

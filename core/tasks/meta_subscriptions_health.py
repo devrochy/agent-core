@@ -12,8 +12,6 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import select
-
 from core.db.models import MetaConnection
 from core.db.session import get_session
 from core.gateway import meta_token_store
@@ -45,14 +43,23 @@ async def _group_connected_apps() -> list[_AppGroup]:
     """Una fila por `meta_app_id` distinto con al menos una `MetaConnection`
     `connected`, guardando TODAS sus conexiones (necesarias para poder
     degradar cada una bajo su propio `tenant_scope` más abajo -- una misma
-    app puede estar en uso por tenants distintos, BYOK real)."""
-    async with get_session() as session:
-        rows = (
-            await session.execute(select(MetaConnection).where(MetaConnection.status == "connected"))
-        ).scalars().all()
+    app puede estar en uso por tenants distintos, BYOK real).
+
+    Enumera ids cross-tenant vía `admin_meta_connection_ids` (SECURITY DEFINER,
+    migración 0033) y luego hidrata cada fila bajo el `tenant_scope` de su
+    tenant -- un `select` plano sin scope devolvería 0 filas por RLS."""
+    from core.db.admin_enum import admin_meta_connection_ids
+
+    all_connections: list[MetaConnection] = []
+    for connection_id, tenant_id in await admin_meta_connection_ids(["connected"]):
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                connection = await session.get(MetaConnection, connection_id)
+                if connection is not None:
+                    all_connections.append(connection)
 
     by_app: dict[str, list[MetaConnection]] = {}
-    for row in rows:
+    for row in all_connections:
         by_app.setdefault(row.meta_app_id, []).append(row)
 
     groups: list[_AppGroup] = []

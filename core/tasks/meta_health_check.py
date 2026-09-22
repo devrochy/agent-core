@@ -15,8 +15,6 @@ del DLQ de entrada y el log de webhooks sin procesar hace más de 5 min
 
 from __future__ import annotations
 
-from sqlalchemy import select
-
 from core.db.models import MetaConnection
 from core.db.session import get_session
 from core.gateway.meta_health import decide_status, run_health_checks
@@ -30,10 +28,22 @@ _CONNECTIONS_TO_CHECK = ("connected", "degraded")
 
 
 async def _connections_to_check() -> list[MetaConnection]:
-    async with get_session() as session:
-        return (
-            await session.execute(select(MetaConnection).where(MetaConnection.status.in_(_CONNECTIONS_TO_CHECK)))
-        ).scalars().all()
+    """Conexiones `connected`/`degraded` de TODOS los tenants.
+
+    Enumera ids cross-tenant vía `admin_meta_connection_ids` (SECURITY DEFINER,
+    migración 0033) y luego hidrata cada fila bajo el `tenant_scope` de su
+    tenant -- un `select` plano sin scope devolvería 0 filas por RLS (el cron
+    correría como no-op silencioso)."""
+    from core.db.admin_enum import admin_meta_connection_ids
+
+    out: list[MetaConnection] = []
+    for connection_id, tenant_id in await admin_meta_connection_ids(list(_CONNECTIONS_TO_CHECK)):
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                connection = await session.get(MetaConnection, connection_id)
+                if connection is not None:
+                    out.append(connection)
+    return out
 
 
 async def _check_one(connection: MetaConnection) -> None:

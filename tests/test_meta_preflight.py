@@ -84,10 +84,10 @@ def _patch_common(monkeypatch, oauth_handler, *, verify_token="tok-verify", grap
     if graph_fetch_impl is not None:
         monkeypatch.setattr(preflight_mod, "graph_fetch", graph_fetch_impl)
 
-    async def _fake_credentials(*a, **k):
-        return {"verify_token": verify_token}
+    async def _fake_verify_token(*a, **k):
+        return verify_token
 
-    monkeypatch.setattr(preflight_mod, "effective_credentials", _fake_credentials)
+    monkeypatch.setattr("core.gateway.connections.resolve_effective_verify_token", _fake_verify_token)
     monkeypatch.setattr("core.tenants.tenant_webhook_url", lambda slug: "https://example.test/webhooks/whatsapp/x")
 
 
@@ -192,10 +192,10 @@ async def test_preflight_sin_config_no_rompe(monkeypatch):
 
     monkeypatch.setattr(preflight_mod, "resolve_app_credentials", _no_config)
 
-    async def _fake_credentials(*a, **k):
-        return {"verify_token": "tok"}
+    async def _fake_verify_token(*a, **k):
+        return "tok"
 
-    monkeypatch.setattr(preflight_mod, "effective_credentials", _fake_credentials)
+    monkeypatch.setattr("core.gateway.connections.resolve_effective_verify_token", _fake_verify_token)
     monkeypatch.setattr("core.tenants.tenant_webhook_url", lambda slug: "https://example.test/webhooks/whatsapp/x")
     monkeypatch.setattr(
         preflight_mod.httpx,

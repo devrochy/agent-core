@@ -97,6 +97,27 @@ async def get_token(
     return plaintext.decode()
 
 
+async def get_token_expires_at(
+    connection_id: uuid.UUID, kind: str, subject_id: str, *, tenant_id: uuid.UUID | None = None
+) -> datetime | None:
+    """Expiración del token (o `None` si no expira/no existe). NO descifra el
+    token -- solo lee `expires_at` para avisar en el panel."""
+    tid = tenant_id if tenant_id is not None else get_current_tenant_id()
+    async with get_session() as session:
+        row = (
+            await session.execute(
+                select(MetaToken).where(
+                    MetaToken.tenant_id == tid,
+                    MetaToken.connection_id == connection_id,
+                    MetaToken.kind == kind,
+                    MetaToken.subject_id == subject_id,
+                    MetaToken.revoked_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+    return row.expires_at if row is not None else None
+
+
 async def revoke_token(
     connection_id: uuid.UUID, kind: str, subject_id: str, *, tenant_id: uuid.UUID | None = None
 ) -> None:

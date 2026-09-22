@@ -269,6 +269,35 @@ async def test_subscripcion_no_confirmada_marca_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_graph_error_al_suscribir_se_envuelve_en_byok(monkeypatch):
+    """`upsert_app_subscription` re-lanza el `GraphError` de Meta (p.ej. `#2200
+    Callback verification failed`): debe salir como `ByokError` (flash en el
+    panel), no propagar `GraphError` (que la ruta del wizard no captura -> 500)."""
+    from core.gateway.meta_errors import GraphError
+
+    _mock_verify_ok(monkeypatch)
+    _mock_token_store(monkeypatch)
+    _mock_subscribe_ok(monkeypatch)
+    added: list = []
+    tenant_id = uuid.uuid4()
+    tenant = SimpleNamespace(id=tenant_id, slug="acme")
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added, tenant=tenant))
+
+    async def _upsert_fail(*a, **k):
+        raise GraphError("(#2200) Callback verification failed", category="PERMANENT")
+
+    monkeypatch.setattr("core.gateway.meta_subscriptions.upsert_app_subscription", _upsert_fail)
+
+    with pytest.raises(ByokError, match="No se pudo suscribir"):
+        await save_byok_connection(
+            tenant_id, uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1"
+        )
+
+    connection_rows = [obj for obj in added if hasattr(obj, "meta_app_id")]
+    assert connection_rows and connection_rows[0].status == "error"
+
+
+@pytest.mark.asyncio
 async def test_verify_token_vacio_no_guarda_nada_nuevo(monkeypatch):
     """Dejar el campo vacío no debe cambiar el comportamiento actual --
     el handshake sigue cayendo al `.env` global."""

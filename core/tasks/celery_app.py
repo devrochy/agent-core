@@ -6,13 +6,12 @@ plugins para que sus tareas @register_cron queden registradas.
 
 from __future__ import annotations
 
-import asyncio
-
 from celery import Celery
 from celery.schedules import crontab
 from celery.signals import worker_init
 
 from core.config import get_settings
+from core.shared.async_bridge import run_async
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
@@ -22,6 +21,11 @@ celery = Celery(
     "agent_core",
     broker=settings.redis_url,
     backend=settings.redis_url,
+    # `include` (no un import suelto): garantiza que el worker registre las
+    # tasks definidas en estos módulos al finalizar el arranque. Sin esto,
+    # `core.outbound_send` quedaba como "unregistered task" y los mensajes de
+    # salida nunca se enviaban.
+    include=["core.tasks.outbound_send"],
 )
 celery.conf.update(
     task_serializer="json",
@@ -48,7 +52,7 @@ def _meta_subscriptions_health_check() -> None:
     from core.tasks.meta_subscriptions_health import check_all_subscriptions_health
 
     try:
-        asyncio.run(check_all_subscriptions_health())
+        run_async(check_all_subscriptions_health())
     except Exception:
         log.exception("cron_task_failed", task=_META_SUBSCRIPTIONS_HEALTH_TASK)
 
@@ -68,7 +72,7 @@ def _message_template_sync() -> None:
     from core.tasks.message_template_sync import sync_all_waba_templates
 
     try:
-        asyncio.run(sync_all_waba_templates())
+        run_async(sync_all_waba_templates())
     except Exception:
         log.exception("cron_task_failed", task=_MESSAGE_TEMPLATE_SYNC_TASK)
 
@@ -89,7 +93,7 @@ def _meta_pricing_sync() -> None:
     from core.tasks.meta_pricing_sync import sync_all_waba_pricing
 
     try:
-        asyncio.run(sync_all_waba_pricing())
+        run_async(sync_all_waba_pricing())
     except Exception:
         log.exception("cron_task_failed", task=_META_PRICING_SYNC_TASK)
 
@@ -110,7 +114,7 @@ def _meta_health_check() -> None:
     from core.tasks.meta_health_check import check_all_connections_health
 
     try:
-        asyncio.run(check_all_connections_health())
+        run_async(check_all_connections_health())
     except Exception:
         log.exception("cron_task_failed", task=_META_HEALTH_CHECK_TASK)
 
@@ -118,6 +122,25 @@ def _meta_health_check() -> None:
 celery.conf.beat_schedule[_META_HEALTH_CHECK_TASK] = {
     "task": _META_HEALTH_CHECK_TASK,
     "schedule": crontab(minute="30"),
+}
+
+# Alerta de access tokens de Meta vencidos/por vencer (diaria, de madrugada).
+_META_TOKEN_EXPIRY_TASK = "core.meta_token_expiry_check"
+
+
+@celery.task(name=_META_TOKEN_EXPIRY_TASK)
+def _meta_token_expiry_check() -> None:
+    from core.tasks.meta_token_expiry_check import check_tokens_expiry
+
+    try:
+        run_async(check_tokens_expiry())
+    except Exception:
+        log.exception("cron_task_failed", task=_META_TOKEN_EXPIRY_TASK)
+
+
+celery.conf.beat_schedule[_META_TOKEN_EXPIRY_TASK] = {
+    "task": _META_TOKEN_EXPIRY_TASK,
+    "schedule": crontab(hour="3", minute="15"),
 }
 
 # Heartbeat del worker (cada 1 min) -- la única forma de que el checklist
@@ -140,7 +163,7 @@ def _worker_heartbeat() -> None:
         await redis.set(_WORKER_HEARTBEAT_KEY, datetime.now(UTC).isoformat(), ex=_WORKER_HEARTBEAT_TTL_S)
 
     try:
-        asyncio.run(_set_heartbeat())
+        run_async(_set_heartbeat())
     except Exception:
         log.exception("cron_task_failed", task=_WORKER_HEARTBEAT_TASK)
 

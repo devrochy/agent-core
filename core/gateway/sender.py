@@ -60,10 +60,20 @@ async def _resolve_meta_connection_credentials(
 
     async with get_session() as session:
         connection = await session.get(MetaConnection, meta_connection_id)
+        if connection is None:
+            return None
+        # Filtro explícito de tenant además de RLS (defensa en profundidad,
+        # invariante nº1): el número nunca se lee sin atarlo a su conexión
+        # (mismo criterio que `meta_byok.save_byok_connection`).
         phone = (
-            await session.execute(select(PhoneNumber).where(PhoneNumber.connection_id == meta_connection_id))
+            await session.execute(
+                select(PhoneNumber).where(
+                    PhoneNumber.connection_id == meta_connection_id,
+                    PhoneNumber.tenant_id == connection.tenant_id,
+                )
+            )
         ).scalars().first()
-    if connection is None or phone is None:
+    if phone is None:
         return None
     if expected_tenant_id is not None and connection.tenant_id != expected_tenant_id:
         log.error(
@@ -73,9 +83,25 @@ async def _resolve_meta_connection_credentials(
             expected_tenant_id=str(expected_tenant_id),
         )
         return None
+    # El token vive bajo distinto `kind`/`subject` según el flujo que creó la
+    # conexión: BYOK (`save_byok_connection`) usa `cloud_api_access_token` con
+    # `subject=meta_app_id`; Embedded Signup usa `TOKEN_KIND`
+    # (`business_integration_system_user`) con `subject=business_id` (o el id de
+    # la conexión). Se prueban ambos: con el kind/subject equivocado, un envío
+    # BYOK no encontraba su token y caía al fallback del `.env`
+    # (otro número/credenciales).
+    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
+
     token = await meta_token_store.get_token(
-        meta_connection_id, TOKEN_KIND, connection.business_id or str(meta_connection_id), tenant_id=connection.tenant_id
+        meta_connection_id, CLOUD_API_ACCESS_TOKEN_KIND, connection.meta_app_id, tenant_id=connection.tenant_id
     )
+    if not token:
+        token = await meta_token_store.get_token(
+            meta_connection_id,
+            TOKEN_KIND,
+            connection.business_id or str(meta_connection_id),
+            tenant_id=connection.tenant_id,
+        )
     if not token:
         return None
     return {"phone_number_id": phone.phone_number_id, "access_token": token}

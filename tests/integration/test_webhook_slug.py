@@ -7,6 +7,9 @@ se verifica que los mensajes POST se procesan con el tenant resuelto por slug.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
+import json
 import os
 import uuid
 
@@ -19,6 +22,11 @@ pytestmark = [
         reason="tests de integración: requiere AGENT_CORE_INTEGRATION=1 y el stack local",
     ),
 ]
+
+
+def _sign(body: bytes, secret: str) -> dict[str, str]:
+    digest = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return {"X-Hub-Signature-256": f"sha256={digest}"}
 
 
 def _meta_payload(phone_id: str, wa_id: str, message_id: str, body: str) -> dict:
@@ -113,9 +121,18 @@ async def test_post_por_slug_procesa(app_client, recorded) -> None:
 
     recorded.clear()
 
+    # Firmar como Meta (HMAC del App Secret efectivo del tenant) -- si no, el
+    # test depende de que `WHATSAPP_APP_SECRET` esté vacío en el entorno.
+    from core.config import get_settings
+
+    body = json.dumps(
+        _meta_payload("cualquiera", "wa-slug", f"wamid.slug.{uuid.uuid4().hex[:6]}", "hola slug")
+    ).encode()
+    secret = get_settings().whatsapp_app_secret or get_settings().meta_app_secret
     r = await app_client.post(
         f"/webhooks/whatsapp/{slug}",
-        json=_meta_payload("cualquiera", "wa-slug", f"wamid.slug.{uuid.uuid4().hex[:6]}", "hola slug"),
+        content=body,
+        headers={**_sign(body, secret), "Content-Type": "application/json"} if secret else {},
     )
     assert r.json().get("status") == "ok" and r.json().get("enqueued") == 1
 
@@ -187,6 +204,147 @@ async def test_handshake_por_slug_usa_verify_token_byok_sin_channel_connection(a
     assert r2.status_code == 403
 
 
+async def test_handshake_por_slug_prioriza_byok_sobre_token_global(app_client, monkeypatch) -> None:
+    """Regresión: con `WHATSAPP_VERIFY_TOKEN` global NO vacío, el token BYOK del
+    tenant debe seguir ganando. Antes `effective_credentials()` (que cae al
+    `.env`) tapaba la rama BYOK y el self-check del wizard respondía 403."""
+    from core.config import get_settings
+    from core.db.models import MetaConnection
+    from core.db.session import get_session
+    from core.gateway import meta_byok
+    from core.onboarding import onboard_tenant
+    from core.shared.tenant import tenant_scope
+
+    # El token global del .env es justo la condición que disparaba el bug.
+    monkeypatch.setattr(get_settings(), "whatsapp_verify_token", "token-global-env")
+
+    slug = f"wh-byok-global-{uuid.uuid4().hex[:6]}"
+    tid, _ = await onboard_tenant(
+        name=f"Webhook BYOK global {slug}", slug=slug, persona={"tone": "cercano"}
+    )
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            connection = MetaConnection(
+                tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id="app-byok-global",
+                # "pending" es el estado real durante el self-check del wizard BYOK.
+                status="pending",
+            )
+            session.add(connection)
+            await session.flush()
+            connection_id = connection.id
+
+        await meta_byok.meta_token_store.put_token(
+            connection_id, meta_byok.WEBHOOK_VERIFY_TOKEN_KIND, "app-byok-global", "mi-token-byok",
+            tenant_id=tid,
+        )
+
+    # El token BYOK gana sobre el global del .env.
+    r = await app_client.get(
+        "/webhooks/whatsapp/" + slug,
+        params={"hub.mode": "subscribe", "hub.verify_token": "mi-token-byok", "hub.challenge": "CHAL-BYOK"},
+    )
+    assert r.status_code == 200 and r.text == "CHAL-BYOK"
+
+    # El token global del .env NO debe aceptarse para este tenant.
+    r2 = await app_client.get(
+        "/webhooks/whatsapp/" + slug,
+        params={"hub.mode": "subscribe", "hub.verify_token": "token-global-env", "hub.challenge": "CHAL-BYOK"},
+    )
+    assert r2.status_code == 403
+
+
+async def test_handshake_por_slug_rechaza_token_de_otro_tenant(app_client) -> None:
+    """Aislamiento: el token BYOK de un tenant NO debe validar el slug de otro."""
+    from core.db.models import MetaConnection
+    from core.db.session import get_session
+    from core.gateway import meta_byok
+    from core.onboarding import onboard_tenant
+    from core.shared.tenant import tenant_scope
+
+    slug_a = f"whct-a-{uuid.uuid4().hex[:6]}"
+    slug_b = f"whct-b-{uuid.uuid4().hex[:6]}"
+    tid_a, _ = await onboard_tenant(name=f"A {slug_a}", slug=slug_a, persona={"tone": "cercano"})
+    tid_b, _ = await onboard_tenant(name=f"B {slug_b}", slug=slug_b, persona={"tone": "cercano"})
+
+    async def _seed(tid, app_id: str, token: str) -> None:
+        async with tenant_scope(tid):
+            async with get_session() as session:
+                connection = MetaConnection(
+                    tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id=app_id,
+                    status="connected",
+                )
+                session.add(connection)
+                await session.flush()
+                connection_id = connection.id
+            await meta_byok.meta_token_store.put_token(
+                connection_id, meta_byok.WEBHOOK_VERIFY_TOKEN_KIND, app_id, token, tenant_id=tid
+            )
+
+    await _seed(tid_a, "app-ct-a", "token-ct-a")
+    await _seed(tid_b, "app-ct-b", "token-ct-b")
+
+    # Token de A contra el slug de B -> 403 (no hay fuga entre tenants).
+    r = await app_client.get(
+        "/webhooks/whatsapp/" + slug_b,
+        params={"hub.mode": "subscribe", "hub.verify_token": "token-ct-a", "hub.challenge": "X"},
+    )
+    assert r.status_code == 403
+
+    # Cada tenant con su propio token -> 200.
+    r2 = await app_client.get(
+        "/webhooks/whatsapp/" + slug_b,
+        params={"hub.mode": "subscribe", "hub.verify_token": "token-ct-b", "hub.challenge": "X"},
+    )
+    assert r2.status_code == 200 and r2.text == "X"
+
+
+async def test_handshake_por_slug_precedencia_manual_sobre_byok(app_client) -> None:
+    """Contrato de precedencia: conexión manual (ChannelConnection) > BYOK > .env."""
+    from core.db.models import MetaConnection
+    from core.db.session import get_session
+    from core.gateway import meta_byok
+    from core.gateway.connections import save_connection
+    from core.onboarding import onboard_tenant
+    from core.shared.tenant import tenant_scope
+
+    slug = f"whprec-{uuid.uuid4().hex[:6]}"
+    tid, _ = await onboard_tenant(name=f"Prec {slug}", slug=slug, persona={"tone": "cercano"})
+
+    async with tenant_scope(tid):
+        # Conexión manual primaria, con su propio verify_token.
+        await save_connection(
+            label=slug,
+            credentials={"phone_number_id": f"55{uuid.uuid4().hex[:8]}", "verify_token": "token-manual"},
+        )
+        # Y ADEMÁS una conexión BYOK con otro token.
+        async with get_session() as session:
+            connection = MetaConnection(
+                tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id="app-prec",
+                status="connected",
+            )
+            session.add(connection)
+            await session.flush()
+            connection_id = connection.id
+        await meta_byok.meta_token_store.put_token(
+            connection_id, meta_byok.WEBHOOK_VERIFY_TOKEN_KIND, "app-prec", "token-byok", tenant_id=tid
+        )
+
+    # Gana el token de la conexión manual.
+    r = await app_client.get(
+        "/webhooks/whatsapp/" + slug,
+        params={"hub.mode": "subscribe", "hub.verify_token": "token-manual", "hub.challenge": "M"},
+    )
+    assert r.status_code == 200 and r.text == "M"
+
+    # El token BYOK queda tapado por el manual.
+    r2 = await app_client.get(
+        "/webhooks/whatsapp/" + slug,
+        params={"hub.mode": "subscribe", "hub.verify_token": "token-byok", "hub.challenge": "M"},
+    )
+    assert r2.status_code == 403
+
+
 async def test_tone_invalido_rechazado() -> None:
     """El onboarding NO persiste un spec fuera del contrato (evita el 500 en /admin/spec)."""
     from core.onboarding import onboard_tenant
@@ -197,3 +355,146 @@ async def test_tone_invalido_rechazado() -> None:
             slug=f"tone-{uuid.uuid4().hex[:6]}",
             persona={"tone": "calido"},
         )
+
+
+async def test_post_por_slug_valida_firma_con_app_secret_byok(app_client) -> None:
+    """Regresión: la firma HMAC del POST se valida con el App Secret del BYOK.
+
+    Antes se usaba `effective_credentials()` (que cae al `.env`), así que con
+    `WHATSAPP_APP_SECRET` global seteado toda entrega de Meta daba 401 y el
+    agente nunca respondía."""
+    from core.db.models import MetaConnection
+    from core.db.session import get_session
+    from core.gateway import meta_token_store
+    from core.onboarding import onboard_tenant
+    from core.shared.tenant import tenant_scope
+
+    slug = f"whsig-{uuid.uuid4().hex[:6]}"
+    tid, _ = await onboard_tenant(name=f"Sig {slug}", slug=slug, persona={"tone": "cercano"})
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            connection = MetaConnection(
+                tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id="app-sig",
+                status="connected",
+            )
+            session.add(connection)
+            await session.flush()
+            connection_id = connection.id
+        await meta_token_store.put_token(
+            connection_id, "app_access", "app-sig", "byok-secret", tenant_id=tid
+        )
+
+    body = json.dumps(
+        _meta_payload("phone-sig", "wa-sig", f"wamid.sig.{uuid.uuid4().hex[:6]}", "hola")
+    ).encode()
+
+    # Firma con el App Secret del BYOK -> aceptada (no 401).
+    r = await app_client.post(
+        "/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "byok-secret")
+    )
+    assert r.status_code != 401, r.text
+
+    # Firma con un secreto que NO es el del tenant -> 401.
+    r2 = await app_client.post(
+        "/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-equivocado")
+    )
+    assert r2.status_code == 401
+
+
+async def test_post_por_slug_precedencia_app_secret_manual_sobre_byok(app_client) -> None:
+    """Contrato: conexión manual (ChannelConnection) > BYOK > .env, también
+    para el App Secret con el que se valida la firma."""
+    from core.db.models import MetaConnection
+    from core.db.session import get_session
+    from core.gateway import meta_token_store
+    from core.gateway.connections import save_connection
+    from core.onboarding import onboard_tenant
+    from core.shared.tenant import tenant_scope
+
+    slug = f"whsigp-{uuid.uuid4().hex[:6]}"
+    tid, _ = await onboard_tenant(name=f"SigP {slug}", slug=slug, persona={"tone": "cercano"})
+
+    async with tenant_scope(tid):
+        await save_connection(
+            label=slug,
+            credentials={
+                "phone_number_id": f"55{uuid.uuid4().hex[:8]}",
+                "app_secret": "manual-secret",
+                "verify_token": "vt",
+            },
+        )
+        async with get_session() as session:
+            connection = MetaConnection(
+                tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id="app-sigp",
+                status="connected",
+            )
+            session.add(connection)
+            await session.flush()
+            connection_id = connection.id
+        await meta_token_store.put_token(
+            connection_id, "app_access", "app-sigp", "byok-secret", tenant_id=tid
+        )
+
+    body = json.dumps(
+        _meta_payload("phone-sigp", "wa-sigp", f"wamid.sigp.{uuid.uuid4().hex[:6]}", "hola")
+    ).encode()
+
+    # Gana el secreto de la conexión manual.
+    r = await app_client.post(
+        "/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "manual-secret")
+    )
+    assert r.status_code != 401, r.text
+
+    # El secreto BYOK queda tapado por el manual.
+    r2 = await app_client.post(
+        "/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "byok-secret")
+    )
+    assert r2.status_code == 401
+
+async def test_post_por_slug_rechaza_firma_de_otro_tenant(app_client) -> None:
+    """Aislamiento: el App Secret de un tenant NO valida la firma del webhook
+    de otro tenant."""
+    from core.db.models import MetaConnection
+    from core.db.session import get_session
+    from core.gateway import meta_token_store
+    from core.onboarding import onboard_tenant
+    from core.shared.tenant import tenant_scope
+
+    slug_a = f"whsigct-a-{uuid.uuid4().hex[:6]}"
+    slug_b = f"whsigct-b-{uuid.uuid4().hex[:6]}"
+    tid_a, _ = await onboard_tenant(name=f"A {slug_a}", slug=slug_a, persona={"tone": "cercano"})
+    tid_b, _ = await onboard_tenant(name=f"B {slug_b}", slug=slug_b, persona={"tone": "cercano"})
+
+    async def _seed(tid, app_id: str, secret: str) -> None:
+        async with tenant_scope(tid):
+            async with get_session() as session:
+                connection = MetaConnection(
+                    tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id=app_id,
+                    status="connected",
+                )
+                session.add(connection)
+                await session.flush()
+                connection_id = connection.id
+            await meta_token_store.put_token(
+                connection_id, "app_access", app_id, secret, tenant_id=tid
+            )
+
+    await _seed(tid_a, "app-sigct-a", "secreto-a")
+    await _seed(tid_b, "app-sigct-b", "secreto-b")
+
+    body = json.dumps(
+        _meta_payload("phone-ct", "wa-ct", f"wamid.ct.{uuid.uuid4().hex[:6]}", "hola")
+    ).encode()
+
+    # Secreto de A contra el slug de B -> 401.
+    r = await app_client.post(
+        "/webhooks/whatsapp/" + slug_b, content=body, headers=_sign(body, "secreto-a")
+    )
+    assert r.status_code == 401
+
+    # El secreto propio de B -> aceptado.
+    r2 = await app_client.post(
+        "/webhooks/whatsapp/" + slug_b, content=body, headers=_sign(body, "secreto-b")
+    )
+    assert r2.status_code != 401, r2.text

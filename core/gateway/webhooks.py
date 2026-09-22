@@ -71,19 +71,18 @@ async def verify_webhook_tenant(
     `agent-core tenant webhook <slug>`). El verify_token se toma de la conexión
     del tenant (o del `.env`).
     """
-    from core.gateway.meta_byok import resolve_webhook_verify_token
+    from core.gateway.connections import resolve_effective_verify_token
     from core.tenants import resolve_tenant_by_slug
 
-    settings = get_settings()
     tenant_id = await resolve_tenant_by_slug(slug)
     if tenant_id is None:
         return Response(status_code=403)
-    async with tenant_scope(tenant_id):
-        creds = await effective_credentials()
-        byok_verify_token = None if creds.get("verify_token") else await resolve_webhook_verify_token(tenant_id)
     # Orden: ChannelConnection (conexión manual) -> MetaConnection BYOK
-    # (verify_token propio generado en el wizard) -> `.env` (global).
-    verify_token = creds.get("verify_token") or byok_verify_token or settings.whatsapp_verify_token
+    # (verify_token propio generado en el wizard) -> `.env` (global). Misma
+    # resolución que usa el registro (`/admin/conexiones`), para que el token
+    # registrado en Meta sea el que este handler acepta.
+    async with tenant_scope(tenant_id):
+        verify_token = await resolve_effective_verify_token(tenant_id)
     if hub_mode == "subscribe" and verify_token and constant_time_equal(hub_verify_token, verify_token):
         return Response(content=hub_challenge, media_type="text/plain; charset=utf-8")
     return Response(status_code=403)
@@ -157,15 +156,15 @@ async def receive_whatsapp_tenant(request: Request, slug: str) -> Response:
     # _process_payload -- no muevas lógica sensible fuera de ese `async with`
     # de más abajo asumiendo que este de acá arriba todavía la cubre.
     async with tenant_scope(tenant_id):
-        settings = get_settings()
-        creds = await effective_credentials()
-        app_secret = creds.get("app_secret") or settings.whatsapp_app_secret
+        from core.gateway.connections import resolve_effective_app_secret
+
+        app_secret = await resolve_effective_app_secret(tenant_id)
         if app_secret:
             from core.gateway.webhook_verify import verify_signature
 
             if not verify_signature(raw_body, headers.get("x-hub-signature-256", ""), app_secret):
                 log.warning("webhook_signature_invalid", tenant_id=str(tenant_id))
-                await _alert_on_invalid_signature(creds.get("app_id") or settings.meta_app_id)
+                await _alert_on_invalid_signature(get_settings().meta_app_id or str(tenant_id))
                 return Response(status_code=401)
 
     try:
@@ -466,7 +465,11 @@ async def count_stalled_webhook_events(older_than_minutes: int = 5) -> int:
     viejo que `older_than_minutes` -- señal de "worker caído" (el cron de
     salud, `core/tasks/meta_health_check.py`, la chequea cada hora y
     alerta si es > 0). Vive acá porque ADR-0028 exige que solo este módulo
-    toque esa tabla."""
+    toque esa tabla.
+
+    `webhook_events` es tabla de SISTEMA sin RLS (tenant_id nullable a
+    propósito), así que este `select` sin `tenant_scope` ve todos los tenants
+    -- no hace falta función SECURITY DEFINER."""
     from datetime import UTC, datetime, timedelta
 
     from sqlalchemy import func, select
