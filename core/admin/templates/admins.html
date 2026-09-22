@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}Administradores{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h1 class="fs-3 mb-0">Administradores</h1>
+  <button class="btn btn-primary" data-bs-toggle="collapse" data-bs-target="#nuevo-admin">
+    + Nuevo admin
+  </button>
+</div>
+
+<div class="collapse mb-4" id="nuevo-admin">
+  <div class="card">
+    <div class="card-header">Nuevo administrador</div>
+    <div class="card-body">
+      <form method="post" action="/admin/admins" class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label">Email</label>
+          <input type="email" name="email" class="form-control" required>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Usuario (opcional)</label>
+          <input type="text" name="username" class="form-control" autocomplete="off">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Contraseña</label>
+          <input type="text" name="password" class="form-control" required autocomplete="new-password">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">Rol</label>
+          <select name="role" class="form-select">
+            <option value="colaborador">colaborador</option>
+            <option value="master">master</option>
+          </select>
+        </div>
+        <div class="col-12">
+          <p class="text-muted small mb-2">
+            <strong>master</strong> es superusuario (acceso total). Un <strong>colaborador</strong>
+            accede según sus permisos de sección; sin permisos explícitos hereda el rol del
+            tenant al que se le vincule.
+          </p>
+          <button class="btn btn-primary">Crear admin</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% for a in admins_rows %}
+<div class="card mb-3">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <div>
+      <strong>{{ a.email }}</strong>
+      <span class="badge text-bg-{{ 'dark' if a.role == 'master' else 'secondary' }} ms-1">{{ a.role }}</span>
+      <span class="badge text-bg-{{ 'success' if a.active else 'warning' }} ms-1">
+        {{ 'activo' if a.active else 'inactivo' }}
+      </span>
+    </div>
+    <form method="post" action="/admin/admins/{{ a.id }}/toggle">
+      <button class="btn btn-sm btn-outline-{{ 'warning' if a.active else 'success' }}">
+        {{ 'Desactivar' if a.active else 'Reactivar' }}
+      </button>
+    </form>
+  </div>
+  <div class="card-body">
+    <div class="row g-4">
+      <div class="col-md-5">
+        <h6 class="text-uppercase text-muted small">Permisos explícitos</h6>
+        <ul class="list-group mb-2">
+          {% for p in a.perms %}
+          <li class="list-group-item d-flex justify-content-between align-items-center py-1">
+            <span>
+              <code>{{ p.section }}</code>
+              <span class="badge text-bg-{{ 'primary' if p.access == 'write' else 'light text-dark' }}">{{ p.access }}</span>
+              <span class="text-muted small">{{ 'global (todos)' if p.scope == '*' else p.scope }}</span>
+            </span>
+            <form method="post" action="/admin/admins/{{ a.id }}/revoke">
+              <input type="hidden" name="section" value="{{ p.section }}">
+              <input type="hidden" name="tenant" value="{{ '' if p.scope == '*' else p.scope }}">
+              <button class="btn btn-sm btn-outline-danger py-0">Quitar</button>
+            </form>
+          </li>
+          {% else %}
+          <li class="list-group-item text-muted small py-1">Sin permisos explícitos (usa el rol del tenant).</li>
+          {% endfor %}
+        </ul>
+        <form method="post" action="/admin/admins/{{ a.id }}/grant" class="row g-2">
+          <div class="col-5">
+            <select name="section" class="form-select form-select-sm">
+              {% for key, label in sections.items() if key not in ('tenants', 'admins') %}
+              <option value="{{ key }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-3">
+            <select name="access" class="form-select form-select-sm">
+              <option value="read">read</option>
+              <option value="write">write</option>
+            </select>
+          </div>
+          <div class="col-4">
+            <select name="tenant" class="form-select form-select-sm">
+              <option value="">global (todos)</option>
+              {% for t in tenants_options %}
+              <option value="{{ t.slug }}">{{ t.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-sm btn-outline-primary">Conceder permiso</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="col-md-4">
+        <h6 class="text-uppercase text-muted small">Tenants vinculados</h6>
+        <ul class="list-group mb-2">
+          {% for l in a.links %}
+          <li class="list-group-item py-1 d-flex justify-content-between">
+            <span>{{ l.name }}</span>
+            <span class="badge text-bg-{{ 'info' if l.role == 'owner' else 'secondary' }}">{{ l.role }}</span>
+          </li>
+          {% else %}
+          <li class="list-group-item text-muted small py-1">Ninguno.</li>
+          {% endfor %}
+        </ul>
+        <form method="post" action="/admin/admins/{{ a.id }}/link" class="row g-2">
+          <div class="col-7">
+            <select name="tenant" class="form-select form-select-sm">
+              {% for t in tenants_options %}
+              <option value="{{ t.slug }}">{{ t.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-5">
+            <select name="role" class="form-select form-select-sm">
+              <option value="owner">owner</option>
+              <option value="colaborador">colaborador</option>
+            </select>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-sm btn-outline-primary">Vincular</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="col-md-3">
+        <h6 class="text-uppercase text-muted small">Contraseña</h6>
+        <form method="post" action="/admin/admins/{{ a.id }}/password" class="row g-2">
+          <div class="col-12">
+            <input type="text" name="password" class="form-control form-control-sm"
+                   placeholder="Nueva contraseña" required autocomplete="new-password">
+          </div>
+          <div class="col-12">
+            <button class="btn btn-sm btn-outline-secondary">Resetear</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}

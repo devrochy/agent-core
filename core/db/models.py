@@ -396,6 +396,33 @@ class AdminSession(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class AdminPermission(Base):
+    """Permiso de sección de un admin (RBAC configurable, ADR-0047).
+
+    Tabla de SISTEMA (sin RLS): se consulta al autenticar, antes de conocer el
+    tenant. `tenant_id` null = el permiso vale para TODOS los tenants (global);
+    con valor = solo ese tenant. `access` es `read | write`.
+    """
+
+    __tablename__ = "admin_permissions"
+    __table_args__ = (
+        Index(
+            "uq_admin_permission_scope",
+            "admin_id",
+            "section",
+            text("coalesce(tenant_id, '00000000-0000-0000-0000-000000000000'::uuid)"),
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("admins.id"))
+    section: Mapped[str] = mapped_column(Text)
+    access: Mapped[str] = mapped_column(Text, default="read")  # read | write
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("tenants.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 # ---------------------------------------------------------------- escalamiento
 class Escalation(Base):
     """Handoff a humano — mecanismo NATIVO del core (los plugins lo disparan vía MCPHost).
