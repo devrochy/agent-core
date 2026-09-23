@@ -1027,6 +1027,14 @@ def _parse_business_ranges(text: str) -> list[dict[str, Any]]:
     return ranges
 
 
+def _declarative_tools_json(spec) -> str:  # type: ignore[no-untyped-def]
+    """Definiciones declarativas del tenant a JSON editable (ADR-0052)."""
+    import json as _json
+
+    tools = (spec.extensions or {}).get("tools") or []
+    return _json.dumps(tools, indent=2, ensure_ascii=False) if tools else ""
+
+
 async def _recent_eval_runs(limit: int = 10) -> list[dict[str, Any]]:
     """Últimas corridas de evals del tenant (ADR-0051)."""
     from core.db.models import EvalRun
@@ -3596,6 +3604,7 @@ async def settings_page(request: Request):
         spec=spec.model_dump(mode="json"),
         versions=await _spec_versions(),
         guardrails_text=_format_custom_guardrails((spec.extensions or {}).get("guardrails") or []),
+        declarative_tools_json=_declarative_tools_json(spec),
         eval_runs=await _recent_eval_runs(),
         config_tabs=await config_tabs(request),
         all_tools=[
@@ -3686,6 +3695,25 @@ async def settings_skills_save(request: Request):
         extensions["guardrails"] = validate_custom_rules(
             _parse_custom_guardrails(str(form.get("guardrails_text") or ""))
         )
+        data["extensions"] = extensions
+    # Tools declarativas del tenant (ADR-0052): JSON en extensions["tools"].
+    if form.get("declarative_tools_json") is not None:
+        import json as _json
+
+        from core.mcp.declarative import validate_declarative_tools
+
+        extensions = dict(data.get("extensions") or {})
+        raw = str(form.get("declarative_tools_json") or "").strip()
+        parsed: object = []
+        if raw:
+            try:
+                parsed = _json.loads(raw)
+            except _json.JSONDecodeError as exc:
+                return RedirectResponse(
+                    f"/admin/configuracion?tab=habilidades&flash=JSON de tools inválido: {str(exc)[:120]}&flash_type=danger",
+                    status_code=303,
+                )
+        extensions["tools"] = validate_declarative_tools(parsed)
         data["extensions"] = extensions
     return await _save_spec_from_form(request, data, "habilidades")
 
