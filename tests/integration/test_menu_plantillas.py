@@ -1,8 +1,9 @@
-"""Entrada de menú `/admin/plantillas` (ADR-0031).
+"""Plantillas de WhatsApp: acceso desde la conexión (ADR-0031).
 
-Resuelve las conexiones del tenant actual y redirige a la más reciente; con más
-de una muestra un selector; sin ninguna, invita a conectar. Las plantillas son
-por conexión (WABA), así que la navegación es por conexión, nunca global.
+La entrada del menú lateral se quitó a pedido. El acceso es por el botón
+"Plantillas" de cada fila de `MetaConnection` en `/conexiones`; la ruta
+`/admin/plantillas` sigue existiendo (resuelve las conexiones del tenant y, con
+varias, muestra un selector). Las plantillas son por conexión (WABA).
 """
 
 from __future__ import annotations
@@ -115,9 +116,22 @@ async def test_aislamiento_entre_tenants(app_client):
     assert str(conn_b) not in r.text
 
 
-async def test_boton_menu_visible(app_client):
+async def test_plantillas_no_esta_en_el_menu_lateral(app_client):
+    """La entrada del menú se quitó a pedido: el acceso es por la fila de la conexión."""
     tid = await _new_tenant()
     cookie = await _switch_tenant(app_client, await _login(app_client), tid)
     r = await app_client.get("/admin", headers={"Cookie": cookie})
     assert r.status_code == 200
-    assert 'href="/admin/plantillas"' in r.text
+    assert 'href="/admin/plantillas"' not in r.text
+
+
+async def test_boton_plantillas_por_fila_en_conexiones(app_client):
+    """El botón de plantillas aparece por fila de MetaConnection y apunta a ESA conexión."""
+    tid = await _new_tenant()
+    conn_id = await _add_meta_connection(tid)
+    cookie = await _switch_tenant(app_client, await _login(app_client), tid)
+
+    r = await app_client.get("/admin/conexiones", headers={"Cookie": cookie})
+    assert r.status_code == 200
+    assert f"/admin/conexiones/meta/{conn_id}/plantillas" in r.text
+
