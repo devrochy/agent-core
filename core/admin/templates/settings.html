@@ -3,25 +3,7 @@
 {% block content %}
 <h1 class="fs-3 mb-1">Configuración</h1>
 
-<nav class="nav nav-tabs mb-4" aria-label="Secciones de configuración">
-  <a class="nav-link {% if tab == 'identidad' %}active{% endif %}"
-     {% if tab == 'identidad' %}aria-current="page"{% endif %}
-     href="/admin/configuracion">Identidad</a>
-  <a class="nav-link {% if tab == 'cerebro' %}active{% endif %}"
-     {% if tab == 'cerebro' %}aria-current="page"{% endif %}
-     href="/admin/configuracion?tab=cerebro">Cerebro</a>
-  <a class="nav-link {% if tab == 'memoria' %}active{% endif %}"
-     {% if tab == 'memoria' %}aria-current="page"{% endif %}
-     href="/admin/configuracion?tab=memoria">Memoria</a>
-  <a class="nav-link {% if tab == 'habilidades' %}active{% endif %}"
-     {% if tab == 'habilidades' %}aria-current="page"{% endif %}
-     href="/admin/configuracion?tab=habilidades">Habilidades</a>
-  {% if payments_enabled %}
-  <a class="nav-link {% if tab == 'pagos' %}active{% endif %}"
-     {% if tab == 'pagos' %}aria-current="page"{% endif %}
-     href="/admin/plugins/pack_payments/config">Pagos</a>
-  {% endif %}
-</nav>
+{% include "_config_tabs.html" %}
 
 {% if tab == 'identidad' %}
 <div class="row g-3">
@@ -51,6 +33,43 @@
               {% endfor %}
             </select>
           </div>
+          <hr>
+          <p class="text-secondary small mb-2">Personalidad del agente (AgentSpec)</p>
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Tono del AgentSpec</label>
+              <select name="persona_tone" class="form-select">
+                {% for t in ['formal', 'neutral', 'cercano', 'informal'] %}
+                <option value="{{ t }}" {% if spec['persona']['tone'] == t %}selected{% endif %}>{{ t }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Calidez (0-5)</label>
+              <input class="form-control" type="number" min="0" max="5" name="persona_warmth"
+                     value="{{ spec['persona']['warmth'] }}">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Emojis</label>
+              <select name="persona_emojis" class="form-select">
+                {% for e in ['none', 'sparse', 'free'] %}
+                <option value="{{ e }}" {% if spec['persona']['emojis'] == e %}selected{% endif %}>{{ e }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Longitud máx. de respuesta</label>
+              <input class="form-control" type="number" name="persona_max_length" min="0"
+                     value="{{ spec['persona']['maxLength'] }}">
+              <div class="form-text">0 = sin límite.</div>
+            </div>
+            <div class="col-md-8">
+              <label class="form-label">Frases prohibidas (separadas por coma)</label>
+              <input class="form-control" name="persona_forbidden"
+                     value="{{ spec['persona']['forbiddenPhrases'] | join(', ') }}">
+            </div>
+          </div>
+          <hr>
           <div class="mb-3">
             <label class="form-label">Velocidad de respuesta</label>
             <select name="debounce_mode" class="form-select">
@@ -315,6 +334,58 @@
       </div>
       <button class="btn btn-primary">Guardar habilidades</button>
     </form>
+  </div>
+</div>
+{% endif %}
+
+{% if tab == 'avanzado' %}
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header fw-semibold">AgentSpec (JSON crudo) <span class="text-secondary small">— modo avanzado</span></div>
+      <div class="card-body">
+        <p class="text-secondary small">
+          La configuración normal del agente se edita en las pestañas
+          <a href="/admin/configuracion">Identidad</a>, <a href="/admin/configuracion?tab=cerebro">Cerebro</a>,
+          <a href="/admin/configuracion?tab=memoria">Memoria</a> y <a href="/admin/configuracion?tab=habilidades">Habilidades</a>.
+          Este editor es para ajustes finos: si lo llenás, <b>reemplaza todo el formulario</b>
+          (debe ser un AgentSpec válido, contrato v2). Guardar crea y activa una versión nueva.
+        </p>
+        <form method="post" action="/admin/spec">
+          <textarea class="form-control font-monospace" name="raw_json" rows="14"
+                    placeholder='{"id": "...", "version": "1.0.0", "tenantId": "...", "persona": {...}, ...}'></textarea>
+          <div class="d-flex justify-content-between align-items-center mt-3">
+            <span class="text-secondary small">Guardar y activar nueva versión</span>
+            <button class="btn btn-primary">Guardar AgentSpec</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header fw-semibold">Versiones del AgentSpec</div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0">
+          <thead><tr><th>Versión</th><th>Activa</th><th>Creada</th></tr></thead>
+          <tbody>
+            {% for v in versions %}
+            <tr>
+              <td>{{ v.version }}</td>
+              <td>{% if v.is_active %}<span class="badge bg-success">activa</span>{% else %}—{% endif %}</td>
+              <td class="text-secondary small">{{ v.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3" class="text-secondary small">Sin versiones.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="alert alert-light border small mt-3 mb-0">
+      Las <b>extensions</b> (personalización por tenant) y otros campos sin UI se editan
+      aquí en el JSON. Los <b>packs</b> se habilitan en <a href="/admin/plugins">Plugins</a>.
+    </div>
   </div>
 </div>
 {% endif %}

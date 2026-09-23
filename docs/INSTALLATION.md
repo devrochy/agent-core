@@ -101,7 +101,7 @@ agent-core tenant create
 **B. Panel:** `/admin/tenants` → **+ Nuevo tenant** → el mismo wizard en 5 pasos.
 
 Al terminar, el tenant aparece en el selector del panel y su `AgentSpec` es
-editable en `/admin/spec`. Si el cliente tiene datos (catálogo, servicios):
+editable en `/admin/configuracion`. Si el cliente tiene datos (catálogo, servicios):
 
 ```bash
 # copia/crea TENANTS_ROOT/<slug>/catalog.json y luego:
@@ -176,7 +176,7 @@ agent-core plugin install pack-commerce
 ```
 
 Los packs se habilitan **por tenant** desde su `AgentSpec` (checkbox en el wizard
-de alta o editor `/admin/spec`). El mismo pack sirve a N clientes.
+de alta o editor `/admin/configuracion`). El mismo pack sirve a N clientes.
 
 ## Solución de problemas
 

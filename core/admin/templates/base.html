@@ -46,9 +46,6 @@
       {% if perms and perms.get('plugins') %}
       <li><a class="nav-link {% if section == 'plugins' %}active{% endif %}" href="/admin/plugins">Plugins</a></li>
       {% endif %}
-      {% if perms and perms.get('spec') %}
-      <li><a class="nav-link {% if section == 'spec' %}active{% endif %}" href="/admin/spec">AgentSpec</a></li>
-      {% endif %}
       {% if perms and perms.get('costs') %}
       <li><a class="nav-link {% if section == 'costs' %}active{% endif %}" href="/admin/costos">Costos LLM</a></li>
       {% endif %}

@@ -1,0 +1,10 @@
+{# Barra de pestañas de Configuración. Fuente única compartida por el core y los
+   packs (ADR-0049/0050): `config_tabs` (core) arma la lista; acá solo se pinta.
+   Variables: config_tabs (lista de {id,label,href}) y tab (activa). #}
+<nav class="nav nav-tabs mb-4" aria-label="Secciones de configuración">
+  {% for t in config_tabs %}
+  <a class="nav-link {% if t.id == tab %}active{% endif %}"
+     {% if t.id == tab %}aria-current="page"{% endif %}
+     href="{{ t.href }}">{{ t.label }}</a>
+  {% endfor %}
+</nav>

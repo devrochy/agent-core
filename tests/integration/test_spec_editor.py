@@ -74,9 +74,16 @@ async def test_editor_crea_version_nueva_y_activa(app_client, moto_setup) -> Non
     session, ac_tenant = await _cookies(app_client, t2)
     headers = {"Cookie": f"{session}; {ac_tenant}"}
 
-    r = await app_client.get("/admin/spec", headers=headers)
+    # El editor vive ahora en la tab "Avanzado" de Configuración (ADR-0050); la
+    # ruta /admin/spec redirige allí.
+    r = await app_client.get("/admin/spec", headers=headers, follow_redirects=False)
+    assert r.status_code == 307
+    assert "tab=avanzado" in r.headers["location"]
+
+    r = await app_client.get("/admin/configuracion?tab=avanzado", headers=headers)
     assert r.status_code == 200
     assert "AgentSpec" in r.text
+    assert "Versiones del AgentSpec" in r.text
 
     antes = await _active_versions(t2)
     r = await app_client.post("/admin/spec", headers=headers, data=_payload())

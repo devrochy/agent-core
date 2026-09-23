@@ -2,10 +2,7 @@
 {% block title %}Pagos{% endblock %}
 {% block content %}
 <h1 class="fs-3 mb-1">Configuración</h1>
-<nav class="nav nav-tabs mb-4" aria-label="Secciones de configuración">
-  <a class="nav-link" href="/admin/configuracion">Identidad</a>
-  <a class="nav-link active" aria-current="page" href="#">Pagos</a>
-</nav>
+{% include "_config_tabs.html" %}
 
 <div class="row g-3">
   <div class="col-lg-7">

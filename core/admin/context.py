@@ -30,6 +30,45 @@ async def admin_tenant_options(admin_id) -> list[dict[str, str]]:
     ]
 
 
+# Pestañas de Configuración (ADR-0049/0050). Fuente ÚNICA: la barra se renderiza
+# con un partial compartido (`_config_tabs.html`) que usan el core Y los packs, así
+# que agregar una pestaña es tocar solo esta lista (no cada plantilla).
+CONFIG_TABS: tuple[tuple[str, str, str], ...] = (
+    ("identidad", "Identidad", "/admin/configuracion"),
+    ("cerebro", "Cerebro", "/admin/configuracion?tab=cerebro"),
+    ("memoria", "Memoria", "/admin/configuracion?tab=memoria"),
+    ("habilidades", "Habilidades", "/admin/configuracion?tab=habilidades"),
+    ("avanzado", "Avanzado", "/admin/configuracion?tab=avanzado"),
+)
+
+# Pestañas que aportan packs (id de pestaña → label + href). Solo se listan si el
+# pack está habilitado para el tenant (ej. Pagos con pack_payments).
+PACK_CONFIG_TABS: dict[str, tuple[str, str]] = {
+    "pack_payments": ("pagos", "Pagos", "/admin/plugins/pack_payments/config"),
+}
+
+
+async def config_tabs(request: Request) -> list[dict[str, str]]:
+    """Lista de pestañas de Configuración visibles para el tenant activo.
+
+    Las del core siempre; las de packs solo si el pack está habilitado
+    (`AgentSpec.packs`). El pack NO hardcodea la barra: la arma el core.
+    """
+    from core.agents.spec import enabled_packs, load_active_spec
+
+    tabs = [{"id": i, "label": label, "href": href} for (i, label, href) in CONFIG_TABS]
+
+    enabled: set[str] = set()
+    try:
+        enabled = enabled_packs(await load_active_spec())
+    except Exception:
+        enabled = set()
+    for plugin_id, (tab_id, label, href) in PACK_CONFIG_TABS.items():
+        if plugin_id in enabled:
+            tabs.append({"id": tab_id, "label": label, "href": href})
+    return tabs
+
+
 async def base_context(request: Request, section: str) -> dict[str, Any] | None:
     """Contexto común. None => redirigir a login."""
     from core.admin.auth import current_admin
