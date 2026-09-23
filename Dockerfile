@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir -e packages/contracts \
        done
 
 COPY scripts ./scripts
-RUN chmod +x scripts/entrypoint.sh || true
+RUN chmod +x scripts/entrypoint.sh scripts/entrypoint-worker.sh scripts/entrypoint-beat.sh || true
 
 EXPOSE 8000
 
