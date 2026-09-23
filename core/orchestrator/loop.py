@@ -446,8 +446,14 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # `maxLength` (tope de longitud) usan el mismo mecanismo de reintento
         # correctivo -> escalar.
         persona_verdict = _persona_guard(response.content, spec)
+        # Reglas declarativas del tenant (ADR-0051): `spec.extensions["guardrails"]`.
+        custom_rules = (spec.extensions or {}).get("guardrails") if spec.extensions else None
         verdict = persona_verdict or await run_guardrails(
-            response.content, [*history_tool_results, *all_tool_results], enabled, disabled_guardrails
+            response.content,
+            [*history_tool_results, *all_tool_results],
+            enabled,
+            disabled_guardrails,
+            custom_rules=custom_rules,
         )
         if not verdict.passed:
             if guardrail_retries < guardrail_max_retries:
@@ -455,7 +461,11 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                 messages.append(LLMMessage(role="assistant", content=response.content))
                 messages.append(LLMMessage(role="user", content=f"[SISTEMA] {verdict.retry_instruction}"))
                 continue
-            await escalate(conversation_id, reason="guardrail", summary=verdict.reason)
+            # `verdict.reason` puede traer fragmentos de la respuesta del LLM
+            # (montos, datos del cliente): se persiste solo el identificador del
+            # guardrail, no el texto completo (evita PII en `escalations.summary`).
+            guardrail_id = verdict.reason.split(":", 1)[0][:120]
+            await escalate(conversation_id, reason="guardrail", summary=guardrail_id)
             usage.escalated = True
             await _write_usage_ledger(conversation_id, spec, usage, turn_span)
             escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
@@ -464,7 +474,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # ---- respuesta final
         extras = extract_safe_extras(all_tool_results)
         final_text = apply_safe_extras(strip_markdown(response.content), extras)
-        await _finish_turn(
+        unresolved = await _finish_turn(
             conversation_id,
             final_text,
             latest_message,
@@ -472,6 +482,19 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             short_term_turns=spec.memory.shortTermTurns,
         )
         await _write_usage_ledger(conversation_id, spec, usage, turn_span)
+        # Autoescalado por turnos sin resolver (ADR-0051, operativo en AppSettings).
+        auto_after = (app_settings.escalation_config or {}).get("auto_escalate_after_turns") if app_settings else None
+        try:
+            threshold = min(20, int(auto_after)) if auto_after else 0
+        except (TypeError, ValueError):
+            threshold = 0
+        if threshold > 0 and unresolved >= threshold:
+            await escalate(
+                conversation_id, reason="turns_unresolved", summary=f"{unresolved} turnos sin resolver"
+            )
+            usage.escalated = True
+            escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
+            return TurnResult(text=final_text + "\n\n" + escalation_text, escalated=True, image_url=extras.image_url)
         return TurnResult(text=final_text, image_url=extras.image_url)
 
     # Se agotaron las iteraciones
@@ -613,7 +636,10 @@ async def _execute_tool_safely(
         action="execute",
         conversation_id=conversation.id,
         input_data=tool_call.arguments,
-        output_data=result,
+        # Se incluye `_tool_name` para que `_historical_tool_results` pueda
+        # reconstruir qué tools se llamaron en turnos anteriores (lo usa el
+        # guardrail declarativo `required_tool`, ADR-0051).
+        output_data={**result, TOOL_NAME_KEY: tool_call.name},
     )
     return result
 
@@ -760,7 +786,8 @@ async def _finish_turn(
     user_message: str,
     resolved: bool,
     short_term_turns: int | None = None,
-) -> None:
+) -> int:
+    """Cierra el turno y devuelve `turnos_sin_resolver` (para autoescalado, ADR-0051)."""
     await working_memory.append_turn(
         conversation_id, "user", user_message, max_turns=short_term_turns
     )
@@ -768,11 +795,13 @@ async def _finish_turn(
         conversation_id, "assistant", response_text, max_turns=short_term_turns
     )
 
+    unresolved = 0
     async with get_session() as session:
         conversation = await session.get(Conversation, conversation_id)
         if conversation is not None:
             state = dict(conversation.state)
-            state["turnos_sin_resolver"] = 0 if resolved else int(state.get("turnos_sin_resolver", 0)) + 1
+            unresolved = 0 if resolved else int(state.get("turnos_sin_resolver", 0)) + 1
+            state["turnos_sin_resolver"] = unresolved
             conversation.state = state
 
     # Memoria semántica: guardar el intercambio para recall futuro (best-effort)
@@ -780,6 +809,7 @@ async def _finish_turn(
         content=f"Cliente: {user_message[:300]} | Asistente: {response_text[:300]}",
         conversation_id=conversation_id,
     )
+    return unresolved
 
 
 def _response_cost(provider, response) -> float:  # type: ignore[no-untyped-def]

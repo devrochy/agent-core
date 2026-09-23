@@ -211,3 +211,51 @@ async def load_active_spec(tenant_id: uuid.UUID | None = None) -> AgentSpec:
     await _migrate_legacy_escalation(tenant_id, row.spec)
     spec = AgentSpec.model_validate(_drop_legacy_fields(row.spec))
     return await _ensure_default_playbooks(tenant_id, spec)
+
+
+async def activate_spec_version(
+    tenant_id: uuid.UUID, version: str | None = None, *, record_id: uuid.UUID | None = None
+) -> str:
+    """Activa una versión del AgentSpec del tenant (rollback/activación, ADR-0051).
+
+    Sin `version` ni `record_id`, revierte a la versión inmediatamente anterior a la
+    activa. Desactiva la actual e inserta el flip en la misma transacción (índice
+    único: una sola activa por tenant). Devuelve la versión activada. Lanza
+    `ValueError` si no existe. Fuente única para el CLI y el panel.
+    """
+    async with get_session() as session:
+        rows = sorted(
+            (
+                await session.execute(
+                    select(AgentSpecRecord).where(
+                        AgentSpecRecord.tenant_id == tenant_id,
+                        AgentSpecRecord.deleted_at.is_(None),
+                    )
+                )
+            ).scalars().all(),
+            key=lambda r: r.created_at,
+        )
+        if not rows:
+            raise ValueError("Sin AgentSpec para el tenant")
+        current = next((r for r in rows if r.is_active), rows[-1])
+
+        if record_id is not None:
+            target = next((r for r in rows if r.id == record_id), None)
+        elif version is not None:
+            target = next((r for r in rows if r.version == version), None)
+        else:
+            target = next((r for r in reversed(rows) if r.created_at < current.created_at), None)
+            if target is None:
+                raise ValueError("No hay versión anterior para revertir")
+
+        if target is None:
+            raise ValueError(f"Versión no existe: {version or record_id}")
+        if target.is_active:
+            return target.version
+
+        # Dos fases (el índice único parcial exige que no haya dos activas a la vez).
+        for r in rows:
+            r.is_active = False
+        await session.flush()
+        target.is_active = True
+    return target.version

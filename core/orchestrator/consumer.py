@@ -45,6 +45,7 @@ from core.orchestrator.escalation import (
     ESCALATION_REPLY,
     escalate,
     matches_escalation_keywords,
+    within_business_hours,
 )
 from core.orchestrator.loop import process_conversation
 from core.orchestrator.turn_gate import run_turn
@@ -223,7 +224,8 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
         return
 
     # ---------------- escalamiento por keywords
-    keywords = list((app_settings.escalation_config if app_settings else {}).get("keywords", []))
+    escalation_cfg = dict(app_settings.escalation_config or {}) if app_settings else {}
+    keywords = list(escalation_cfg.get("keywords", []))
     if matches_escalation_keywords(effective_message, keywords or None):
         # Resolver el texto ANTES de escalar (auditor-multitenant): si
         # load_active_spec falla (ej. BD caída), no queremos dejar la
@@ -238,6 +240,28 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
         escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
         await escalate(conversation.id, reason="keyword", summary=effective_message[:200])
         await send_to_conversation(conversation.id, escalation_text)
+        return
+
+    # ---------------- horario de atención (ADR-0051)
+    # Fuera de horario: se responde el mensaje configurado y NO se procesa el turno
+    # con el LLM (ahorra costo y evita prometer atención que no hay). Sin config,
+    # `within_business_hours` devuelve True (fail-open).
+    business_hours = escalation_cfg.get("business_hours")
+    if business_hours and not within_business_hours(business_hours):
+        out_msg = str(escalation_cfg.get("out_of_hours_message") or "").strip()
+        if out_msg:
+            text = out_msg
+            for key, value in (
+                ("{assistant_name}", app_settings.assistant_name if app_settings else ""),
+                ("{business_description}", app_settings.business_description if app_settings else ""),
+            ):
+                text = text.replace(key, value or "")
+            delivered = await send_to_conversation(conversation.id, text)
+            if not delivered:
+                # Mismo criterio que el camino inmediato: si el envío falla, se
+                # escala para que una persona retome (el claim de idempotencia ya
+                # se quemó, no habrá reintento).
+                await escalate(conversation.id, reason="send_failed", summary=text[:200])
         return
 
     # ---------------- velocidad de respuesta
