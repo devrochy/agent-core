@@ -204,12 +204,16 @@ async def _count_media(session, tenant_id: uuid.UUID, prefix: str, period_start:
 
 
 async def _count_plugins(tenant_id: uuid.UUID) -> int:
-    """Packs habilitados: el enablement real por tenant vive en `AgentSpec.packs`."""
-    from core.agents.spec import enabled_packs, load_active_spec
+    """Packs de NEGOCIO habilitados del tenant (sin el core, ADR-0045).
+
+    El core es plomería del framework y no consume cuota. Fuente única del
+    conteo: `count_tenant_packs` (mismo valor que el KPI del panel).
+    """
+    from core.agents.spec import count_tenant_packs, load_active_spec
 
     async with tenant_scope(tenant_id):
         spec = await load_active_spec(tenant_id)
-    return len(enabled_packs(spec))
+    return count_tenant_packs(spec)
 
 
 async def usage_snapshot(

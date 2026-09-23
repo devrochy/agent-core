@@ -141,3 +141,55 @@ async def test_quota_decision_ilimitado_no_bloquea():
         assert await check_metric(tid, "conversaciones") is True
     finally:
         PLANS_BY_ID["free"] = original
+
+
+async def _set_packs(tenant_id, packs: list[str]) -> None:
+    from core.db.models import AgentSpecRecord
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(AgentSpecRecord).where(
+                        AgentSpecRecord.tenant_id == tenant_id,
+                        AgentSpecRecord.is_active.is_(True),
+                        AgentSpecRecord.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one()
+            spec = dict(row.spec)
+            spec["packs"] = packs
+            row.spec = spec
+            await session.commit()
+
+
+async def test_cuota_plugins_cuenta_packs_de_negocio_no_el_core():
+    """Con `free` (límite 1): el primer pack de negocio entra; el segundo se bloquea.
+
+    El gate se evalúa ANTES de agregar (`_enable_pack_for_tenant`), así que
+    `used=0` con límite 1 permite el primero, y `used=1` bloquea el segundo.
+    Antes del fix, `enabled_packs()` sumaba el core y un tenant recién creado ya
+    veía `used=1` (2/1 si tenía un pack) → bloqueado sin poder habilitar nada.
+    """
+    from core.billing.enforcement import quota_decision
+
+    tid = await _onboard(_uniq("enf-pkg"))
+
+    # Sin packs de negocio: hay cupo para habilitar el primero.
+    d0 = await quota_decision(tid, "plugins")
+    assert d0.allowed is True and d0.used == 0 and d0.limit == 1
+
+    # Con 1 pack de negocio: la métrica NO suma el core (used==1, no 2), y ya no
+    # hay cupo para un segundo pack (el gate se evalúa antes de agregar).
+    await _set_packs(tid, ["pack_commerce"])
+    d1 = await quota_decision(tid, "plugins")
+    assert d1.used == 1, "el core no debe sumar a la métrica"
+    assert d1.allowed is False
+
+    # Con 2 packs: agotado igualmente.
+    await _set_packs(tid, ["pack_commerce", "pack_calendar"])
+    d2 = await quota_decision(tid, "plugins")
+    assert d2.used == 2 and d2.allowed is False
+

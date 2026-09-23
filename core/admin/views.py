@@ -40,7 +40,7 @@ from core.admin.permissions import OWNER_GRANTABLE_SECTIONS
 from core.admin.permissions import catalog as sections_catalog
 from core.admin.view_registry import view_registry
 from core.agents.spec import CORE_PACK_ID, activate_spec_version, enabled_packs, load_active_spec
-from core.billing.enforcement import QuotaExceeded, can_activate_plugin
+from core.billing.enforcement import QuotaExceeded
 from core.config import get_settings
 from core.db.models import (
     WIZARD_STEPS,
@@ -1324,14 +1324,19 @@ async def dashboard(request: Request):
     llm_provider = (app_settings.llm_provider if app_settings else None) or settings.llm_provider
     llm_model = (app_settings.llm_model if app_settings else None) or settings.llm_model
 
+    # Packs de negocio habilitados del tenant (sin el core): mismo valor que la
+    # métrica `plugins` del plan y que la lista `/admin/plugins` (ADR-0045).
+    from core.agents.spec import count_tenant_packs
+
+    tenant_packs = count_tenant_packs(await load_active_spec())
+
     ctx.update(
         kpi={
             "conversations_7d": conversations_7d,
             "messages_7d": messages_7d,
             "pending_escalations": pending,
             "cost_30d": float(cost_30d),
-            "active_plugins": len([p for p in plugin_manager.list_modules()
-                                   if plugin_manager.is_active(p.id)]),
+            "active_plugins": tenant_packs,
         },
         bot_paused=app_settings.bot_paused if app_settings else False,
         llm_label=f"{llm_provider} · {llm_model}",
@@ -1631,8 +1636,15 @@ async def _enable_pack_for_tenant(pack: str) -> int | None:
     if pack in spec.packs:
         return None
     tenant_id = get_current_tenant_id()
-    if tenant_id is not None and not await can_activate_plugin(tenant_id):
-        raise QuotaExceeded("plugins", len(spec.packs), len(spec.packs))
+    if tenant_id is not None:
+        from core.agents.spec import count_tenant_packs
+        from core.billing.enforcement import quota_decision
+
+        decision = await quota_decision(tenant_id, "plugins")
+        if not decision.allowed:
+            raise QuotaExceeded(
+                "plugins", count_tenant_packs(spec), decision.limit or 0
+            )
     new_spec = spec.model_copy(update={"packs": sorted({*spec.packs, pack})})
     return await _save_spec_version(new_spec)
 

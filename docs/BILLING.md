@@ -48,13 +48,19 @@ paralelo, ADR-0045). El registro vive en `core/billing/metrics.py`.
 | `conversaciones` | conversaciones iniciadas | `conversations.started_at` | período |
 | `conversaciones_audio` | audios entrantes procesados | `messages` inbound con `media_type like 'audio/%'` | período |
 | `conversaciones_ocr` | imágenes entrantes procesadas | `messages` inbound con `media_type like 'image/%'` | período |
-| `plugins` | packs habilitados | `AgentSpec.packs` / packs activos | lifetime |
+| `plugins` | packs **de negocio** habilitados (sin el core) | `AgentSpec.packs` | lifetime |
 | `mensajes` | mensajes salientes enviados | `messages` outbound | período |
 | `costo_llm_usd` | gasto LLM del período | `SUM(usage_ledger.cost_usd)` (ADR-0008) | período |
 
 El conteo del camino caliente (webhook) se cachea en Redis con TTL corto. La definición
 de cada métrica (tabla, filtro, alcance) es la única fuente; el panel y el enforcement
 la consumen.
+
+> **El core no consume cuota.** La métrica `plugins` (y el KPI "Plugins habilitados" del
+> dashboard) cuentan solo los packs **de negocio** del tenant (`count_tenant_packs`,
+> `core/agents/spec.py`). El pack `core` es plomería del framework, siempre presente, y
+> no se lista en `/admin/plugins` ni ocupa un cupo del plan. Por eso `free` con límite 1
+> permite 1 pack de negocio real.
 
 ## 4. Enforcement (bloqueo duro)
 
