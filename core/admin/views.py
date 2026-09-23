@@ -2595,6 +2595,70 @@ async def meta_connection_numeros_verificar(request: Request, connection_id: str
 
 
 # ---------------------------------------------------------- plantillas de WhatsApp
+@router.get("/plantillas", response_class=HTMLResponse)
+async def plantillas_page(request: Request):
+    """Entrada de menú a las plantillas de WhatsApp.
+
+    Las plantillas son por conexión (WABA): esta ruta resuelve las conexiones del
+    tenant actual (RLS) y redirige a la más reciente. Con más de una, muestra un
+    selector para elegir cuál; sin ninguna, invita a conectar WhatsApp.
+    """
+    ctx = await _base_context(request, "plantillas")
+    if ctx is None:
+        return _login_redirect()
+
+    tid = get_current_tenant_id()
+    from core.db.models import MetaConnection
+
+    async with get_session() as session:
+        meta_connections = (
+            await session.execute(
+                select(MetaConnection)
+                .where(MetaConnection.tenant_id == tid, MetaConnection.deleted_at.is_(None))
+                .order_by(MetaConnection.created_at.desc())
+            )
+        ).scalars().all()
+        phones_by_connection: dict[uuid.UUID, str] = {}
+        if meta_connections:
+            phone_rows = (
+                await session.execute(
+                    select(PhoneNumber).where(
+                        PhoneNumber.tenant_id == tid,
+                        PhoneNumber.connection_id.in_([mc.id for mc in meta_connections]),
+                    )
+                )
+            ).scalars().all()
+            for p in phone_rows:
+                phones_by_connection.setdefault(
+                    p.connection_id, p.display_phone_number or p.phone_number_id
+                )
+
+    if not meta_connections:
+        return RedirectResponse(
+            "/admin/conexiones?flash=Primero conectá WhatsApp para gestionar plantillas&flash_type=warning",
+            status_code=303,
+        )
+    if len(meta_connections) == 1:
+        return RedirectResponse(
+            f"/admin/conexiones/meta/{meta_connections[0].id}/plantillas", status_code=303
+        )
+
+    ctx.update(
+        connections=[
+            {
+                "id": mc.id,
+                "channel": mc.channel,
+                "environment": mc.environment,
+                "status": mc.status,
+                "number": phones_by_connection.get(mc.id, mc.meta_app_id),
+                "created_at": mc.created_at,
+            }
+            for mc in meta_connections
+        ]
+    )
+    return _render("plantillas_conexiones.html", ctx)
+
+
 @router.get("/conexiones/meta/{connection_id}/plantillas", response_class=HTMLResponse)
 async def meta_connection_plantillas_page(request: Request, connection_id: str):
     ctx = await _base_context(request, "connections")

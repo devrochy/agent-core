@@ -95,6 +95,9 @@
       <td class="text-end">
         {% if c.tipo == "meta_connection" %}
         <div class="dt-actions-row">
+          <a href="/admin/conexiones/meta/{{ c.id }}/plantillas" class="btn btn-outline-primary" title="Plantillas de esta conexión">
+            <i class="bi bi-file-earmark-text"></i>
+          </a>
           <a href="{{ c.detail_url }}" class="btn btn-outline-secondary" title="Ver salud / diagnosticar">
             <i class="bi bi-heart-pulse"></i>
           </a>
