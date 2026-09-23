@@ -10,7 +10,8 @@
     <li class="breadcrumb-item" data-step="1">2 · Packs</li>
     <li class="breadcrumb-item" data-step="2">3 · Escalación</li>
     <li class="breadcrumb-item" data-step="3">4 · WhatsApp</li>
-    <li class="breadcrumb-item" data-step="4">5 · Revisión</li>
+    <li class="breadcrumb-item" data-step="4">5 · Administrador</li>
+    <li class="breadcrumb-item" data-step="5">6 · Revisión</li>
   </ol>
 
   <div class="card mb-3">
@@ -131,8 +132,27 @@
       </div>
     </div>
 
-    <!-- PASO 5 · Revisión -->
+    <!-- PASO 5 · Administrador del tenant -->
     <div class="card-body d-none" data-panel="4">
+      <h2 class="fs-5 mb-3">Administrador del negocio</h2>
+      <p class="text-secondary small">
+        Credenciales del administrador propio de este negocio: con ellas se entra al panel
+        viendo <strong>solo este tenant</strong> (a diferencia de un master, que ve todos).
+        Mínimo 8 caracteres. Se puede cambiar después desde Colaboradores.
+      </p>
+      <div class="mb-3">
+        <label class="form-label">Email del administrador *</label>
+        <input type="email" name="admin_email" id="admin_email" class="form-control" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Contraseña *</label>
+        <input type="text" name="admin_password" id="admin_password" class="form-control"
+               minlength="8" required autocomplete="new-password">
+      </div>
+    </div>
+
+    <!-- PASO 6 · Revisión -->
+    <div class="card-body d-none" data-panel="5">
       <h2 class="fs-5 mb-3">Revisión</h2>
       <ul class="list-group list-group-flush">
         <li class="list-group-item d-flex justify-content-between"><span>Negocio</span><strong id="r_name"></strong></li>
@@ -141,6 +161,7 @@
         <li class="list-group-item d-flex justify-content-between"><span>Packs</span><span id="r_packs"></span></li>
         <li class="list-group-item d-flex justify-content-between"><span>Triggers</span><code id="r_triggers"></code></li>
         <li class="list-group-item d-flex justify-content-between"><span>WhatsApp</span><span id="r_wa"></span></li>
+        <li class="list-group-item d-flex justify-content-between"><span>Administrador</span><span id="r_admin"></span></li>
       </ul>
     </div>
   </div>
@@ -156,7 +177,7 @@
 {% block scripts %}
 <script>
 (function () {
-  var step = 0, TOTAL = 5;
+  var step = 0, TOTAL = 6;
   var panels = document.querySelectorAll('[data-panel]');
   var steps = document.querySelectorAll('#steps [data-step]');
   var prev = document.getElementById('prev');
@@ -190,12 +211,20 @@
       document.querySelector('[name=escalation_triggers]').value || '—';
     var wa = document.getElementById('connect_wa').checked;
     document.getElementById('r_wa').textContent = wa ? 'conectar' : 'luego';
+    document.getElementById('r_admin').textContent =
+      document.getElementById('admin_email').value || '—';
   }
 
   prev.addEventListener('click', function () { if (step > 0) show(step - 1); });
   next.addEventListener('click', function () {
     if (step === 0 && !document.getElementById('name').value) {
       document.getElementById('name').focus(); return;
+    }
+    if (step === 4) {
+      var ae = document.getElementById('admin_email');
+      var ap = document.getElementById('admin_password');
+      if (!ae.value) { ae.focus(); return; }
+      if (!ap.value || ap.value.length < 8) { ap.focus(); return; }
     }
     if (step < TOTAL - 1) show(step + 1);
   });

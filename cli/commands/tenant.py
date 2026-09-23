@@ -46,7 +46,10 @@ def create(
     packs: str = typer.Option("", "--packs", help="Coma-separado, ej: pack_commerce"),
     escalation_triggers: str = typer.Option("", "--escalation-triggers",
                                             help="Coma-separado (default: asesor, humano, persona real, reclamo, queja)"),
-    admin_email: str = typer.Option("", "--admin-email", help="Email de un admin existente (opcional)"),
+    admin_email: str = typer.Option("", "--admin-email", help="Email del admin del tenant (opcional)"),
+    admin_password: str = typer.Option(
+        "", "--admin-password", help="Contraseña del admin (crea el admin si no existe)"
+    ),
     wa_label: str = typer.Option("", "--wa-label", help="Etiqueta de la conexión WhatsApp"),
     wa_phone_number_id: str = typer.Option("", "--wa-phone-number-id", help="phone_number_id de Meta"),
     wa_app_secret: str = typer.Option("", "--wa-app-secret", help="App secret de Meta"),
@@ -71,6 +74,7 @@ def create(
             "packs": [p.strip() for p in packs.split(",") if p.strip()],
             "escalation_triggers": [t.strip() for t in escalation_triggers.split(",") if t.strip()],
             "admin_email": admin_email,
+            "admin_password": admin_password,
             "whatsapp": {
                 "label": wa_label,
                 "phone_number_id": wa_phone_number_id,
@@ -137,8 +141,13 @@ def _ask_interactive(available_packs: list[str]) -> dict:
     )
 
     admin_email = questionary.text(
-        "Email de un admin existente para darle acceso (Enter para omitir):"
+        "Email del administrador del tenant (Enter para omitir):"
     ).ask() or ""
+    admin_password = ""
+    if admin_email:
+        admin_password = (
+            questionary.password("Contraseña del administrador (Enter para generar):").ask() or ""
+        )
 
     connect_wa = questionary.confirm("¿Conectar WhatsApp ahora? (puedes hacerlo luego en /admin/conexiones)", default=False).ask()
     whatsapp = None
@@ -160,6 +169,7 @@ def _ask_interactive(available_packs: list[str]) -> dict:
         "packs": selected_packs,
         "escalation_triggers": list(DEFAULT_TRIGGERS),
         "admin_email": admin_email,
+        "admin_password": admin_password,
         "whatsapp": whatsapp,
     }
 
@@ -173,9 +183,18 @@ async def _verify_whatsapp(whatsapp: dict) -> tuple[bool, str, dict]:
 
 
 async def _onboard(answers: dict) -> tuple[uuid.UUID, list[str]]:
+    import secrets
+
     from core.onboarding import onboard_tenant
 
-    return await onboard_tenant(
+    admin_email = answers.get("admin_email") or None
+    admin_password = answers.get("admin_password") or None
+    generated = False
+    if admin_email and not admin_password:
+        admin_password = secrets.token_urlsafe(12)
+        generated = True
+
+    tid, steps = await onboard_tenant(
         name=answers["name"],
         slug=answers["slug"],
         business_description=answers["business"],
@@ -183,9 +202,15 @@ async def _onboard(answers: dict) -> tuple[uuid.UUID, list[str]]:
         persona={"role": "asistente", "tone": answers["tone"], "locale": f"es-{answers['language'].upper()}"},
         escalation_triggers=answers["escalation_triggers"],
         packs=answers["packs"],
-        admin_email=answers["admin_email"] or None,
+        admin_email=admin_email,
+        admin_password=admin_password,
         whatsapp=answers["whatsapp"],
     )
+    if generated:
+        console.print(
+            f"  [green]Admin del tenant:[/green] {admin_email} / [bold]{admin_password}[/bold]"
+        )
+    return tid, steps
 
 
 def _maybe_seed(slug: str, tenant_id: uuid.UUID) -> None:
@@ -515,3 +540,81 @@ def purge(
         console.print(f"[red]✗ {exc}[/red]")
         raise typer.Exit(1) from exc
     console.print(f"✓ [red]{slug} eliminado por completo[/red] (irreversible)")
+
+
+@app.command()
+def admins(
+    all_tenants: bool = typer.Option(
+        False, "--all", help="Todos los tenants (default: solo los que no tienen admin)"
+    ),
+    slug: str = typer.Option("", "--slug", help="Un tenant puntual"),
+    include_with_admin: bool = typer.Option(
+        False, "--incluir-con-admin", help="Crear aunque el tenant ya tenga admin"
+    ),
+    email_domain: str = typer.Option(
+        "gmail.com", "--email-domain", help="Dominio del email generado (<slug>@<dominio>)"
+    ),
+    password_length: int = typer.Option(16, "--password-length", help="Largo de la contraseña"),
+    out: str = typer.Option("", "--out", help="Ruta de CSV para volcar las credenciales"),
+) -> None:
+    """Crea un administrador owner por tenant y devuelve sus credenciales (ADR-0048).
+
+    Idempotente: por defecto solo a tenants SIN admin; con --incluir-con-admin también
+    a los que ya tienen. Si el email `<slug>@<dominio>` ya existe, se omite.
+    """
+    import csv
+    import secrets
+
+    from core.admin.auth import hash_password
+    from core.db.models import Admin, Tenant, TenantUser
+    from core.db.session import get_session
+
+    async def _run() -> list[tuple[str, str, str, str]]:
+        async with get_session() as session:
+            query = select(Tenant).where(Tenant.deleted_at.is_(None))
+            if slug:
+                query = query.where(Tenant.slug == slug)
+            tenants = (await session.execute(query.order_by(Tenant.created_at))).scalars().all()
+            with_admin = set(
+                (await session.execute(select(TenantUser.tenant_id).distinct())).scalars().all()
+            )
+
+        rows: list[tuple[str, str, str, str]] = []
+        for tenant in tenants:
+            if not include_with_admin and tenant.id in with_admin:
+                continue
+            email = f"{tenant.slug}@{email_domain}"
+            async with get_session() as session:
+                if (
+                    await session.execute(select(Admin).where(Admin.email == email))
+                ).scalar_one_or_none() is not None:
+                    continue
+                password = secrets.token_urlsafe(password_length)[:password_length]
+                new_admin = Admin(
+                    email=email, password_hash=hash_password(password), role="colaborador"
+                )
+                session.add(new_admin)
+                await session.flush()
+                session.add(TenantUser(tenant_id=tenant.id, admin_id=new_admin.id, role="owner"))
+            rows.append((tenant.slug, tenant.name or "", email, password))
+        return rows
+
+    rows = asyncio.run(_run())
+    if not rows:
+        console.print("[yellow]Nada para crear (ya tenían admin o el email ya existía).[/yellow]")
+        return
+    table = Table(title="Credenciales de administradores de tenant")
+    table.add_column("Tenant")
+    table.add_column("Nombre")
+    table.add_column("Email")
+    table.add_column("Contraseña")
+    for slug_, name_, email_, password_ in rows:
+        table.add_row(slug_, name_, email_, password_)
+    console.print(table)
+    if out:
+        with open(out, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["tenant", "nombre", "email", "password"])
+            writer.writerows(rows)
+        console.print(f"[dim]Credenciales escritas en {out}[/dim]")
+    console.print("[yellow]Guardá estas contraseñas: no se vuelven a mostrar.[/yellow]")

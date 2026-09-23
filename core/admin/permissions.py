@@ -7,8 +7,8 @@ acceso efectivo combinando, por orden de prioridad:
 2. Permiso explícito en `admin_permissions` para (admin, sección), global
    (`tenant_id is null`) o del tenant activo; gana el máximo (`write > read`).
 3. Rol por defecto del `tenant_user` del tenant activo: `owner` → `write`,
-   `colaborador` → `read`, salvo en las secciones de plataforma (`tenants`,
-   `admins`), que exigen master o permiso explícito.
+   `colaborador` → `read`, salvo en las secciones de plataforma (`tenants`) y en
+   las de gestión de cuentas (`collaborators`), que exigen owner o master.
 
 El catálogo de secciones vive en código (no en tabla): las del core más una por
 pack, con el `id` del plugin como clave.
@@ -38,13 +38,20 @@ CORE_SECTIONS: dict[str, str] = {
     "plan": "Plan y consumo",
     "settings": "Configuración",
     "tenants": "Tenants",
-    "admins": "Administradores",
+    "collaborators": "Colaboradores",
 }
 
 # Secciones que NUNCA se heredan del rol del `tenant_user`: son de master o de
-# permiso explícito. El resto (core y packs) sí heredan del rol por defecto:
-# `owner` → `write`, `colaborador` → `read`.
-GLOBAL_ONLY_SECTIONS: frozenset[str] = frozenset({"tenants", "admins"})
+# permiso explícito (gestión de plataforma).
+GLOBAL_ONLY_SECTIONS: frozenset[str] = frozenset({"tenants"})
+
+# Secciones que solo el `owner` del tenant (o master) puede usar: el `colaborador`
+# no las hereda. Gestionar cuentas no es una capacidad de colaborador.
+OWNER_ONLY_SECTIONS: frozenset[str] = frozenset({"collaborators"})
+
+# Secciones que un `owner` puede otorgar a un colaborador de su tenant: el
+# catálogo menos las de plataforma y la propia gestión de cuentas.
+OWNER_GRANTABLE_SECTIONS: frozenset[str] = GLOBAL_ONLY_SECTIONS | OWNER_ONLY_SECTIONS
 
 _ACCESS_RANK = {"read": 1, "write": 2}
 
@@ -83,28 +90,38 @@ async def explicit_access(
     return best
 
 
+async def _tenant_user_role(admin_id: uuid.UUID, tenant_id: uuid.UUID | None) -> str | None:
+    if tenant_id is None:
+        return None
+    async with get_session() as session:
+        return (
+            await session.execute(
+                select(TenantUser.role).where(
+                    TenantUser.admin_id == admin_id, TenantUser.tenant_id == tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+
+
 async def effective_access(
     admin: Admin, section: str, tenant_id: uuid.UUID | None
 ) -> str | None:
     """Acceso efectivo del admin a una sección en el tenant activo (`None` = denegado)."""
     if admin.role == "master":
         return "write"
+    role = await _tenant_user_role(admin.id, tenant_id)
+    # Gestionar cuentas nunca se hereda por grant: es del `owner` del tenant.
+    if section in OWNER_ONLY_SECTIONS:
+        return "write" if role == "owner" else None
     explicit = await explicit_access(admin.id, section, tenant_id)
     if explicit is not None:
         return explicit
-    if section not in GLOBAL_ONLY_SECTIONS and tenant_id is not None:
-        async with get_session() as session:
-            role = (
-                await session.execute(
-                    select(TenantUser.role).where(
-                        TenantUser.admin_id == admin.id, TenantUser.tenant_id == tenant_id
-                    )
-                )
-            ).scalar_one_or_none()
-        if role == "owner":
-            return "write"
-        if role == "colaborador":
-            return "read"
+    if tenant_id is None or section in GLOBAL_ONLY_SECTIONS:
+        return None
+    if role == "owner":
+        return "write"
+    if role == "colaborador":
+        return "read"
     return None
 
 
@@ -146,12 +163,14 @@ async def permissions_for(admin: Admin, sections: Iterable[str]) -> dict[str, st
 
     result: dict[str, str | None] = {}
     for section in sections:
-        if section in explicit:
+        if section in OWNER_ONLY_SECTIONS:
+            result[section] = "write" if role == "owner" else None
+        elif section in explicit:
             result[section] = explicit[section]
-        elif section not in GLOBAL_ONLY_SECTIONS and default is not None:
-            result[section] = default
-        else:
+        elif default is None or section in GLOBAL_ONLY_SECTIONS:
             result[section] = None
+        else:
+            result[section] = default
     return result
 
 
@@ -178,7 +197,8 @@ _SKIP_PREFIXES = ("/admin/login", "/admin/logout", "/admin/switch-tenant")
 
 _CORE_PREFIXES: tuple[tuple[str, str], ...] = (
     ("/admin/tenants", "tenants"),
-    ("/admin/admins", "admins"),
+    ("/admin/colaboradores", "collaborators"),
+    ("/admin/admins", "collaborators"),
     ("/admin/conversaciones", "conversations"),
     ("/admin/escalaciones", "escalations"),
     ("/admin/conexiones", "connections"),

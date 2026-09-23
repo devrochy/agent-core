@@ -145,6 +145,7 @@ def _default_spec_for(
 async def _resolve_admin(email: str | None) -> Admin | None:
     if not email:
         return None
+    email = email.strip().lower()
     async with get_session() as session:
         return (
             await session.execute(select(Admin).where(Admin.email == email))
@@ -181,6 +182,7 @@ async def onboard_tenant(
     escalation_triggers: list[str] | None = None,
     packs: list[str] | None = None,
     admin_email: str | None = None,
+    admin_password: str | None = None,
     whatsapp: dict | None = None,
     tenant_id: uuid.UUID | None = None,
 ) -> tuple[uuid.UUID, list[str]]:
@@ -207,7 +209,25 @@ async def onboard_tenant(
     plugin_manager.scan()
     await plugin_manager.sync_registry()
 
+    admin_email = admin_email.strip().lower() if admin_email else None
+    if admin_password is not None and len(admin_password) < 8:
+        raise ValueError("La contraseña del administrador necesita 8+ caracteres")
     admin = await _resolve_admin(admin_email)
+    if admin is None and admin_email and admin_password:
+        # Alta del administrador del tenant (ADR-0048): si el email no existe y
+        # se dio contraseña, se crea. Sin contraseña, se mantiene el
+        # comportamiento histórico (solo vincula un admin preexistente).
+        from core.admin.auth import hash_password
+
+        async with get_session() as session:
+            admin = Admin(
+                email=admin_email,
+                password_hash=hash_password(admin_password),
+                role="colaborador",
+            )
+            session.add(admin)
+            await session.flush()
+        steps.append("admin del tenant creado")
 
     async with get_session() as session:
         tenant = (
