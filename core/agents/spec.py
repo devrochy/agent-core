@@ -28,6 +28,23 @@ def enabled_packs(spec: AgentSpec) -> set[str]:
     """
     return set(spec.packs) | {CORE_PACK_ID}
 
+
+def enabled_business_packs(spec: AgentSpec) -> set[str]:
+    """Packs de NEGOCIO del tenant, SIN el core.
+
+    Es la cuenta que consumen las cuotas de plan (ADR-0045, métrica `plugins`) y
+    el KPI del panel: el core es plomería del framework, no un pack que el tenant
+    habilite, así que no consume cuota ni se lista en `/admin/plugins`.
+    Fuente única para que la métrica del plan y el dashboard no diverjan.
+    """
+    return set(spec.packs)
+
+
+def count_tenant_packs(spec: AgentSpec) -> int:
+    """Cuántos packs de negocio tiene habilitados el tenant (sin el core)."""
+    return len(enabled_business_packs(spec))
+
+
 DEFAULT_VERSION = "1.0.0"
 
 # Spec default SIN texto de prompts (ADR-0014): identidad/tono/reglas viven en los

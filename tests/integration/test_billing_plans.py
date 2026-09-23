@@ -127,3 +127,30 @@ async def test_suscripcion_aislada_entre_tenants():
                 await session.execute(select(TenantSubscription.tenant_id))
             ).scalars().all()
     assert rows and all(t == b for t in rows)
+
+
+async def test_metrica_plugins_no_cuenta_el_core():
+    """El core es plomería del framework: no consume cuota (ADR-0045)."""
+    from core.agents.spec import (
+        count_tenant_packs,
+        enabled_business_packs,
+        enabled_packs,
+        load_active_spec,
+    )
+    from core.billing.metrics import count_metric
+    from core.shared.tenant import tenant_scope
+
+    tid = await _onboard(_uniq("pkgnocore"))
+
+    async with tenant_scope(tid):
+        spec = await load_active_spec(tid)
+
+    # `enabled_packs` (filtrado de tools) SÍ incluye el core...
+    assert "core" in enabled_packs(spec)
+    # ...pero la cuenta que consumen las cuotas no.
+    assert "core" not in enabled_business_packs(spec)
+    assert count_tenant_packs(spec) == len(set(spec.packs))
+    assert count_tenant_packs(spec) == 0  # onboarding sin packs de negocio
+
+    assert await count_metric(tid, "plugins") == 0
+
