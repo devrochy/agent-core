@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Plantillas{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4">Plantillas de WhatsApp</h1>
+<p class="text-secondary mb-4">
+  Las plantillas pertenecen a una conexión (WABA). Este negocio tiene más de una:
+  elegí con cuál trabajar.
+</p>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Conexión</th>
+          <th>Número / App ID</th>
+          <th>Estado</th>
+          <th>Creada</th>
+          <th class="text-end">Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in connections %}
+        <tr>
+          <td class="fw-semibold">{{ c.channel }} · {{ c.environment }}</td>
+          <td><code>{{ c.number }}</code></td>
+          <td>
+            {% if c.status == 'connected' %}
+            <span class="badge text-bg-success">conectada</span>
+            {% else %}
+            <span class="badge text-bg-secondary">{{ c.status }}</span>
+            {% endif %}
+          </td>
+          <td class="small text-secondary">{{ c.created_at.strftime('%Y-%m-%d %H:%M') if c.created_at }}</td>
+          <td class="text-end">
+            <a href="/admin/conexiones/meta/{{ c.id }}/plantillas" class="btn btn-sm btn-primary">
+              <i class="bi bi-file-earmark-text"></i> Ver plantillas
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
