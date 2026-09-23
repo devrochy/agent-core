@@ -53,6 +53,31 @@ class ToolContext:
     http: ScopedHttp | None = None
 
 
+def _is_private_host(host: str) -> bool:
+    """True si el host es una IP interna/loopback/link-local o metadata de cloud.
+
+    Bloquea el vector SSRF aunque la allowlist del tenant la incluya (ADR-0052).
+    Los nombres que resuelven a IP privada quedan fuera de este chequeo (no se
+    resuelve DNS); se documenta como limitación.
+    """
+    import ipaddress
+
+    if host in ("localhost", "metadata.google.internal"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
 class ScopedHttp:
     """Cliente HTTP acotado a una allowlist de dominios (ADR-0052).
 
@@ -67,8 +92,15 @@ class ScopedHttp:
     def _allowed_host(self, url: str) -> bool:
         from urllib.parse import urlparse
 
-        host = (urlparse(url).hostname or "").lower()
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        host = (parsed.hostname or "").lower()
         if not host:
+            return False
+        # Nunca permitir direcciones internas/link-local/loopback ni metadata de
+        # cloud (SSRF), aunque estuvieran en la allowlist (ADR-0052).
+        if _is_private_host(host):
             return False
         return any(host == d or host.endswith("." + d) for d in self._allowed)
 

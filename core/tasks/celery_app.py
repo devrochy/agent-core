@@ -143,6 +143,25 @@ celery.conf.beat_schedule[_META_TOKEN_EXPIRY_TASK] = {
     "schedule": crontab(hour="3", minute="15"),
 }
 
+# Retención de la memoria semántica (ADR-0053; no-op si MEMORY_RETENTION_DAYS=0).
+_MEMORY_RETENTION_TASK = "core.memory_retention"
+
+
+@celery.task(name=_MEMORY_RETENTION_TASK)
+def _memory_retention() -> None:
+    from core.tasks.memory_retention import purge_expired_memory
+
+    try:
+        run_async(purge_expired_memory())
+    except Exception:
+        log.exception("cron_task_failed", task=_MEMORY_RETENTION_TASK)
+
+
+celery.conf.beat_schedule[_MEMORY_RETENTION_TASK] = {
+    "task": _MEMORY_RETENTION_TASK,
+    "schedule": crontab(hour="3", minute="45"),
+}
+
 # Heartbeat del worker (cada 1 min) -- la única forma de que el checklist
 # de promoción a producción (core/gateway/meta_production_readiness.py::
 # check_worker_heartbeat_and_dlq) sepa que el worker de Celery está vivo,

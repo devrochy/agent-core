@@ -552,13 +552,12 @@ async def _execute_tool_safely(
     from core.mcp.types import ScopedHttp
     from core.plugin_manager import plugin_manager
 
-    # ScopedHttp (ADR-0052): única salida a red, acotada a la allowlist declarada
-    # por el tenant. Sin tools declarativas, no hay allowlist → toda salida se
-    # rechaza (fail-closed), salvo que la tool Python no use `context.http`.
+    # ScopedHttp (ADR-0052): única salida a red. Se acota a la allowlist de LA tool
+    # que se ejecuta (no la unión de todas), para que una tool no pueda llamar a
+    # dominios autorizados para otra. Una tool Python que no use `context.http` no
+    # queda afectada.
     declarative = {t.name: t for t in tools_for_spec(spec)} if spec is not None else {}
-    allowed: list[str] = []
-    for t in declarative.values():
-        allowed.extend(getattr(t, "_allowed_domains", []) or [])
+    allowed = list(getattr(declarative.get(tool_call.name), "_allowed_domains", []) or [])
     context = new_tool_context(
         conversation_id=conversation.id,
         customer_id=customer.id,
@@ -635,7 +634,9 @@ async def _execute_tool_safely(
                 row.state = state
 
     try:
-        if tool_call.name in declarative:
+        # Prioridad al host: una tool declarativa NO puede shadowear una tool
+        # registrada (evita que un tenant redefina una tool nativa/pack).
+        if tool_call.name in declarative and mcp_host.get_tool(tool_call.name) is None:
             # Tool declarativa del tenant (ADR-0052): se ejecuta con su handler
             # (ScopedHttp acotado), no vía mcp_host (que no la conoce).
             result = await declarative[tool_call.name].handler(tool_call.arguments, context)

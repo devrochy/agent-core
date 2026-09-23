@@ -50,6 +50,17 @@ async def test_scoped_http_deniega_dominio_no_autorizado() -> None:
     assert "error" in r2
 
 
+async def test_scoped_http_bloquea_ssrf() -> None:
+    """Aunque el tenant ponga la IP en la allowlist, no se permite (SSRF)."""
+    from core.mcp.types import ScopedHttp
+
+    # Metadata de cloud, loopback y rangos privados: bloqueados.
+    h = ScopedHttp(["169.254.169.254", "localhost", "10.0.0.5"])
+    for url in ("http://169.254.169.254/latest", "http://localhost/x", "http://10.0.0.5/x"):
+        r = await h.request("GET", url)
+        assert "error" in r, url
+
+
 async def test_declarative_tool_ejecuta_con_http_mockeado(monkeypatch) -> None:
     import core.mcp.declarative as dec
 

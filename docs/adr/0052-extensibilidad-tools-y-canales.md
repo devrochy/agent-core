@@ -71,10 +71,19 @@ en `ToolContext` quedan reservados (no implementados). Sin cambio de contrato.
 ruteo de entrada propio (webhook dedicado).
 
 ## Impacto en el código
-
-`core/gateway/channels/registry.py` (scan de entry_points), `core/gateway/
 channels/base.py` (contrato de registro), `core/gateway/webhooks.py` (resolver por
 proveedor), `core/mcp/types.py` (`ScopedHttp`) + `core/mcp/host.py` (ToolContext),
 `core/mcp/declarative.py` (nuevo: tools declarativas), `core/orchestrator/loop.py`
 (`_tool_denial`/ejecución), `core/agents/spec.py` (`extensions["tools"]`), UI (tab
 Habilidades). Tests por pieza. **Sin cambio de contrato congelado.**
+
+## Correcciones post-auditoría (`auditor-multitenant`)
+
+- **SSRF (alto)**: `ScopedHttp` bloquea IPs internas/loopback/link-local/rangos
+  reservados y metadata de cloud, **aunque** estén en la allowlist; solo `http(s)`
+  y el host debe resolver a la allowlist. (DNS que resuelve a IP privada queda como
+  limitación documentada.)
+- **Allowlist por turno (medio)**: el `ScopedHttp` del turno se acota a la allowlist
+  de **la tool que se ejecuta**, no a la unión de todas.
+- **Shadowing (medio)**: una tool declarativa no puede pisar una tool ya registrada
+  (prioridad al host).
