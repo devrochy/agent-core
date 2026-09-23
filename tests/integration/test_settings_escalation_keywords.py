@@ -144,7 +144,9 @@ async def test_settings_save_escribe_escalation_config_no_el_spec_muerto(
         assert "Configuraci" in r.headers["location"]
 
         after = await _snapshot(t2)
-        assert after["escalation_config"] == {"keywords": ["gerente", "supervisor"]}
+        # ADR-0051: `escalation_config` ahora también lleva horarios/autoescalado;
+        # se valida el subconjunto que este test controla.
+        assert after["escalation_config"]["keywords"] == ["gerente", "supervisor"]
         assert after["behavior_config"] == expected_behavior, "no debe resetear el resto de la config"
     finally:
         await _restore(t2, snapshot)

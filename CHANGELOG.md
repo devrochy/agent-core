@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.7.0 — Operación y gobierno del agente (2026-09-23)
+
+Capacidades empresariales de operación sobre lo construido en ADR-0049/0050. Ver ADR-0051.
+
+### Rollback de AgentSpec en el panel
+- Botón "Activar" por versión en el tab Avanzado; helper único
+  `activate_spec_version` (CLI y panel). Sin canary (ADR-0016).
+
+### Horarios y autoescalado
+- `AppSettings.escalation_config` gana `business_hours` (tz + franjas), mensaje fuera
+  de horario y `auto_escalate_after_turns`. Evaluación con `zoneinfo`, fail-safe ante
+  config corrupta. UI en el tab Identidad.
+
+### Guardrails declarativos por tenant
+- Motor de reglas (DSL seguro, sin regex crudo) en `AgentSpec.extensions["guardrails"]`:
+  `forbidden_phrase`, `required_tool`, `max_length`, con acción `retry`/`escalate`.
+  UI en el tab Habilidades.
+
+### Evals por versión de spec
+- Tablas `eval_runs` / `eval_results` (migración 0036, RLS); el runner persiste cada
+  corrida atada a `spec_version` y el tab Avanzado muestra el historial de calidad.
+
 ## v0.6.0 — Configuración por pestañas, pagos BYOK y AgentSpec v2 (2026-09-23)
 
 Panel configurable por secciones, cobro BYOK del tenant y un contrato de agente

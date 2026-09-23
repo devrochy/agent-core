@@ -124,6 +124,33 @@
               persona real, reclamo, queja).
             </div>
           </div>
+          <hr>
+          <p class="text-secondary small mb-2">Horario de atención</p>
+          <div class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label">Zona horaria</label>
+              <input type="text" name="business_tz" class="form-control"
+                     placeholder="America/Bogota" value="{{ escalation.business_hours.tz or '' }}">
+            </div>
+            <div class="col-md-8">
+              <label class="form-label">Franjas (una por línea: día 0-6, HH:MM-HH:MM)</label>
+              <textarea name="business_ranges" class="form-control font-monospace" rows="4"
+                        placeholder="0 08:00-18:00&#10;1 08:00-18:00">{{ escalation_ranges_text }}</textarea>
+              <div class="form-text">Día: 0=lunes … 6=domingo. Vacío = siempre abierto.</div>
+            </div>
+            <div class="col-12">
+              <label class="form-label">Mensaje fuera de horario</label>
+              <textarea name="out_of_hours_message" class="form-control" rows="2"
+                        placeholder="¡Gracias por escribirnos! Nuestro horario es...">{{ escalation.out_of_hours_message or '' }}</textarea>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Autoescalar tras N turnos sin resolver</label>
+              <input type="number" name="auto_escalate_after_turns" class="form-control" min="0" max="20"
+                     value="{{ escalation.auto_escalate_after_turns or 0 }}">
+              <div class="form-text">0 = desactivado.</div>
+            </div>
+          </div>
+          <hr>
           {% if all_guardrails %}
           <div class="mb-3">
             <label class="form-label">Guardrails desactivados</label>
@@ -336,6 +363,23 @@
     </form>
   </div>
 </div>
+
+<div class="card mt-3">
+  <div class="card-header fw-semibold">Guardrails propios del negocio</div>
+  <div class="card-body">
+    <p class="text-secondary small">
+      Reglas propias además de los guardrails de los packs. Una regla por línea:
+      <code>forbidden_phrase | frase1, frase2 | retry|escalate</code>,
+      <code>required_tool | frase que afirma | nombre_tool | retry|escalate</code> o
+      <code>max_length | 500 | retry|escalate</code>. Se guardan en el AgentSpec.
+    </p>
+    <form method="post" action="/admin/configuracion/habilidades">
+      <textarea name="guardrails_text" class="form-control font-monospace" rows="5"
+                placeholder="forbidden_phrase | garantizado, 100% seguro | retry">{{ guardrails_text }}</textarea>
+      <button class="btn btn-primary mt-2">Guardar guardrails</button>
+    </form>
+  </div>
+</div>
 {% endif %}
 
 {% if tab == 'avanzado' %}
@@ -367,16 +411,25 @@
       <div class="card-header fw-semibold">Versiones del AgentSpec</div>
       <div class="card-body p-0">
         <table class="table table-sm table-hover mb-0">
-          <thead><tr><th>Versión</th><th>Activa</th><th>Creada</th></tr></thead>
+          <thead><tr><th>Versión</th><th>Activa</th><th>Creada</th><th></th></tr></thead>
           <tbody>
             {% for v in versions %}
             <tr>
               <td>{{ v.version }}</td>
               <td>{% if v.is_active %}<span class="badge bg-success">activa</span>{% else %}—{% endif %}</td>
               <td class="text-secondary small">{{ v.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+              <td class="text-end">
+                {% if not v.is_active %}
+                <form method="post" action="/admin/configuracion/spec/activar" class="d-inline"
+                      onsubmit="return confirm('¿Activar la versión {{ v.version }}? Reemplaza la activa.');">
+                  <input type="hidden" name="record_id" value="{{ v.id }}">
+                  <button class="btn btn-sm btn-outline-primary py-0">Activar</button>
+                </form>
+                {% endif %}
+              </td>
             </tr>
             {% else %}
-            <tr><td colspan="3" class="text-secondary small">Sin versiones.</td></tr>
+            <tr><td colspan="4" class="text-secondary small">Sin versiones.</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -385,6 +438,30 @@
     <div class="alert alert-light border small mt-3 mb-0">
       Las <b>extensions</b> (personalización por tenant) y otros campos sin UI se editan
       aquí en el JSON. Los <b>packs</b> se habilitan en <a href="/admin/plugins">Plugins</a>.
+    </div>
+    <div class="card mt-3">
+      <div class="card-header fw-semibold">Calidad (evals)</div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Spec</th><th>Ref</th><th>Resultado</th><th>Fecha</th></tr></thead>
+          <tbody>
+            {% for e in eval_runs %}
+            <tr>
+              <td>v{{ e.spec_version }}</td>
+              <td class="text-secondary small">{{ e.git_ref }}</td>
+              <td>
+                <span class="badge text-bg-{{ 'success' if e.total and e.passed == e.total else 'warning' }}">
+                  {{ e.passed }}/{{ e.total }}
+                </span>
+              </td>
+              <td class="text-secondary small">{{ e.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="text-secondary small">Sin corridas. Corré <code>python evals/runner.py --tenant &lt;slug&gt;</code>.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 </div>

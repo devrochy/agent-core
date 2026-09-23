@@ -244,6 +244,7 @@ async def main() -> int:
     tenant_id = await _tenant_id(args.tenant) if args.tenant else TENANT1
     print(f"Corriendo {len(paths)} escenarios ({label}, ref {_git_ref()})...\n")
     exit_code = 0
+    results: list[tuple[str, bool, str]] = []
     for path in paths:
         try:
             name, ok, detail = await run_scenario(path, spec, tenant_id)
@@ -251,10 +252,52 @@ async def main() -> int:
             name, ok, detail = path.stem, False, f"excepción: {exc}"
         status = "✓ PASS" if ok else "✗ FAIL"
         print(f"  {status}  {name}" + (f"  — {detail}" if detail else ""))
+        results.append((name, ok, detail))
         if not ok:
             exit_code = 1
     print(f"\nGolden set: {len(paths)} escenarios · spec {label} · ref {_git_ref()}")
+
+    # Persistir la corrida atada a la versión del AgentSpec (ADR-0051). Solo con
+    # tenant real (el framework no escribe en la BD de un cliente).
+    if args.tenant:
+        await _persist_run(tenant_id, spec.version, results)
     return exit_code
+
+
+async def _persist_run(
+    tenant_id: uuid.UUID, spec_version: str | None, results: list[tuple[str, bool, str]]
+) -> None:
+    """Guarda `eval_runs` + `eval_results` del tenant (best-effort, no rompe el gate)."""
+    try:
+        from core.db.models import EvalResult, EvalRun
+        from core.db.session import get_session
+        from core.shared.tenant import tenant_scope
+
+        passed = sum(1 for _, ok, _ in results if ok)
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                run = EvalRun(
+                    tenant_id=tenant_id,
+                    spec_version=spec_version,
+                    git_ref=_git_ref(),
+                    passed=passed,
+                    total=len(results),
+                )
+                session.add(run)
+                await session.flush()
+                for name, ok, detail in results:
+                    session.add(
+                        EvalResult(
+                            tenant_id=tenant_id,
+                            run_id=run.id,
+                            scenario=name,
+                            ok=ok,
+                            detail=(detail or "")[:500],
+                        )
+                    )
+        print(f"  (corrida guardada: {passed}/{len(results)}, spec v{spec_version})")
+    except Exception as exc:
+        print(f"  (no se pudo persistir la corrida: {exc})")
 
 
 if __name__ == "__main__":

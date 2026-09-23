@@ -39,7 +39,7 @@ from core.admin.form_generator import (
 from core.admin.permissions import OWNER_GRANTABLE_SECTIONS
 from core.admin.permissions import catalog as sections_catalog
 from core.admin.view_registry import view_registry
-from core.agents.spec import CORE_PACK_ID, enabled_packs, load_active_spec
+from core.agents.spec import CORE_PACK_ID, activate_spec_version, enabled_packs, load_active_spec
 from core.billing.enforcement import QuotaExceeded, can_activate_plugin
 from core.config import get_settings
 from core.db.models import (
@@ -992,7 +992,65 @@ async def _spec_versions() -> list[dict[str, Any]]:
             )
         ).scalars().all()
     return [
-        {"version": r.version, "is_active": r.is_active, "created_at": r.created_at}
+        {
+            "id": str(r.id),
+            "version": r.version,
+            "is_active": r.is_active,
+            "created_at": r.created_at,
+        }
+        for r in rows
+    ]
+
+
+def _format_business_ranges(escalation_config: dict) -> str:
+    """Franjas de horario a texto editable ("día HH:MM-HH:MM" por línea)."""
+    ranges = ((escalation_config or {}).get("business_hours") or {}).get("ranges") or []
+    lines = []
+    for r in ranges:
+        day = r.get("day")
+        start = r.get("from")
+        end = r.get("to")
+        if day is not None and start and end:
+            lines.append(f"{day} {start}-{end}")
+    return "\n".join(lines)
+
+
+def _parse_business_ranges(text: str) -> list[dict[str, Any]]:
+    """Parsea "día HH:MM-HH:MM" por línea a la forma del contrato. Ignora basura."""
+    import re as _re
+
+    ranges: list[dict[str, Any]] = []
+    for line in (text or "").splitlines():
+        m = _re.fullmatch(r"([0-6])\s+(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})", line.strip())
+        if m:
+            ranges.append({"day": int(m.group(1)), "from": m.group(2), "to": m.group(3)})
+    return ranges
+
+
+async def _recent_eval_runs(limit: int = 10) -> list[dict[str, Any]]:
+    """Últimas corridas de evals del tenant (ADR-0051)."""
+    from core.db.models import EvalRun
+
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                select(EvalRun)
+                .where(
+                    EvalRun.tenant_id == get_current_tenant_id(),
+                    EvalRun.deleted_at.is_(None),
+                )
+                .order_by(EvalRun.created_at.desc())
+                .limit(limit)
+            )
+        ).scalars().all()
+    return [
+        {
+            "spec_version": r.spec_version or "—",
+            "git_ref": r.git_ref or "—",
+            "passed": r.passed,
+            "total": r.total,
+            "created_at": r.created_at,
+        }
         for r in rows
     ]
 
@@ -3531,10 +3589,14 @@ async def settings_page(request: Request):
         behavior=dict(app_settings.behavior_config),
         all_guardrails=all_guardrails,
         escalation_keywords=list((app_settings.escalation_config or {}).get("keywords", [])),
+        escalation=dict(app_settings.escalation_config or {}),
+        escalation_ranges_text=_format_business_ranges(app_settings.escalation_config or {}),
         payments_enabled="pack_payments" in enabled,
         # Cerebro / memoria / habilidades (ADR-0050): lo versionable del spec.
         spec=spec.model_dump(mode="json"),
         versions=await _spec_versions(),
+        guardrails_text=_format_custom_guardrails((spec.extensions or {}).get("guardrails") or []),
+        eval_runs=await _recent_eval_runs(),
         config_tabs=await config_tabs(request),
         all_tools=[
             {"name": t.name, "plugin_id": t.plugin_id, "description": t.description}
@@ -3616,7 +3678,66 @@ async def settings_skills_save(request: Request):
         binding["requiresConfirmation"] = form.get(f"tool_requires:{tool_name}") is not None
         bindings_by_tool[tool_name] = binding
     data["tools"] = list(bindings_by_tool.values())
+    # Guardrails propios del tenant (ADR-0051): DSL seguro en extensions["guardrails"].
+    if form.get("guardrails_text") is not None:
+        from core.orchestrator.guardrails import validate_custom_rules
+
+        extensions = dict(data.get("extensions") or {})
+        extensions["guardrails"] = validate_custom_rules(
+            _parse_custom_guardrails(str(form.get("guardrails_text") or ""))
+        )
+        data["extensions"] = extensions
     return await _save_spec_from_form(request, data, "habilidades")
+
+
+def _parse_custom_guardrails(text: str) -> list[dict[str, Any]]:
+    """Parsea guardrails propios, una regla por línea:
+
+    `forbidden_phrase | frase1, frase2 | retry|escalate`
+    `required_tool | frase1, frase2 | tool_name | retry|escalate`
+    `max_length | 500 | retry|escalate`
+    """
+    rules: list[dict[str, Any]] = []
+    for line in (text or "").splitlines():
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 2:
+            continue
+        kind = parts[0]
+        if kind == "max_length":
+            try:
+                value = int(parts[1])
+            except ValueError:
+                continue
+            action = parts[2] if len(parts) > 2 else "retry"
+            rules.append({"kind": kind, "value": value, "action": action})
+        elif kind == "required_tool":
+            if len(parts) < 3:
+                continue
+            phrases = [p.strip() for p in parts[1].split(",") if p.strip()]
+            action = parts[3] if len(parts) > 3 else "retry"
+            rules.append(
+                {"kind": kind, "phrases": phrases, "tool": parts[2], "action": action}
+            )
+        elif kind == "forbidden_phrase":
+            phrases = [p.strip() for p in parts[1].split(",") if p.strip()]
+            action = parts[2] if len(parts) > 2 else "retry"
+            rules.append({"kind": kind, "phrases": phrases, "action": action})
+    return rules
+
+
+def _format_custom_guardrails(rules: list[dict[str, Any]]) -> str:
+    lines = []
+    for r in rules or []:
+        kind = r.get("kind")
+        if kind == "max_length":
+            lines.append(f"max_length | {r.get('value')} | {r.get('action', 'retry')}")
+        elif kind == "required_tool":
+            phrases = ", ".join(r.get("phrases") or [])
+            lines.append(f"required_tool | {phrases} | {r.get('tool')} | {r.get('action', 'retry')}")
+        elif kind == "forbidden_phrase":
+            phrases = ", ".join(r.get("phrases") or [])
+            lines.append(f"forbidden_phrase | {phrases} | {r.get('action', 'retry')}")
+    return "\n".join(lines)
 
 
 async def _save_spec_from_form(request: Request, data: dict, tab: str) -> RedirectResponse:
@@ -3669,6 +3790,10 @@ async def settings_save(
     difficulty_turnos_sin_resolver_threshold: int = Form(default=TURNOS_SIN_RESOLVER_THRESHOLD),
     difficulty_score_threshold: int = Form(default=DIFFICULTY_SCORE_THRESHOLD),
     escalation_keywords: str = Form(default=""),
+    business_tz: str = Form(default=""),
+    business_ranges: str = Form(default=""),
+    out_of_hours_message: str = Form(default=""),
+    auto_escalate_after_turns: int = Form(default=0),
     persona_tone: str = Form(default=""),
     persona_warmth: int = Form(default=3),
     persona_emojis: str = Form(default="sparse"),
@@ -3713,9 +3838,16 @@ async def settings_save(
         )
         app_settings.behavior_config = behavior
         keywords = [t.strip() for t in escalation_keywords.split(",") if t.strip()]
+        ranges = _parse_business_ranges(business_ranges)
+        business_hours: dict[str, Any] | None = None
+        if ranges:
+            business_hours = {"tz": business_tz.strip() or "UTC", "ranges": ranges}
         app_settings.escalation_config = {
             **dict(app_settings.escalation_config or {}),
             "keywords": keywords,
+            "business_hours": business_hours,
+            "out_of_hours_message": out_of_hours_message.strip(),
+            "auto_escalate_after_turns": max(0, auto_escalate_after_turns),
         }
     # Personalidad del AgentSpec (ADR-0050): se persiste como versión nueva del
     # spec (versionable), no en AppSettings.
@@ -3731,6 +3863,32 @@ async def settings_save(
     )
     await _save_spec_if_changed(spec, persona_data)
     return RedirectResponse("/admin/configuracion?flash=Configuración guardada", status_code=303)
+
+
+@router.post("/configuracion/spec/activar")
+async def spec_activate(request: Request, record_id: str = Form(...)):
+    """Activa una versión concreta del AgentSpec (rollback, ADR-0051)."""
+    me = await current_admin(request)
+    if me is None:
+        return _login_redirect()
+    tid = get_current_tenant_id()
+    if tid is None:
+        return RedirectResponse(
+            "/admin/configuracion?tab=avanzado&flash=sin tenant activo&flash_type=danger",
+            status_code=303,
+        )
+    try:
+        version = await activate_spec_version(tid, record_id=uuid.UUID(record_id))
+    except ValueError as exc:
+        return RedirectResponse(
+            f"/admin/configuracion?tab=avanzado&flash=No se pudo activar: {str(exc)[:120]}&flash_type=danger",
+            status_code=303,
+        )
+    _audit("spec_activate", me.email, str(tid), version=version)
+    return RedirectResponse(
+        f"/admin/configuracion?tab=avanzado&flash=versión {version} activada&flash_type=success",
+        status_code=303,
+    )
 
 
 @router.post("/configuracion/toggle-bot")
