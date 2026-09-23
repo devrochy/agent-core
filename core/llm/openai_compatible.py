@@ -100,12 +100,15 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         messages: list[LLMMessage],
         tools: list[LLMToolSchema] | None = None,
         max_tokens: int = 4096,
+        temperature: float | None = None,
     ) -> LLMResponse:
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": self._serialize_messages(system_blocks, messages),
             "max_tokens": max_tokens,
         }
+        if temperature is not None:
+            payload["temperature"] = temperature
         if tools:
             payload["tools"] = self._serialize_tools(tools)
             payload["tool_choice"] = "auto"
@@ -160,6 +163,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         messages: list[LLMMessage],
         tools: list[LLMToolSchema] | None = None,
         max_tokens: int = 4096,
+        temperature: float | None = None,
     ) -> AsyncIterator[str]:
         payload: dict[str, Any] = {
             "model": self.model,
@@ -167,6 +171,8 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             "max_tokens": max_tokens,
             "stream": True,
         }
+        if temperature is not None:
+            payload["temperature"] = temperature
         async with httpx.AsyncClient(timeout=120) as client:
             async with client.stream(
                 "POST",

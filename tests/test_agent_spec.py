@@ -31,15 +31,12 @@ def make_spec(playbooks: list[dict[str, str]] | None = None) -> AgentSpec:
             "emojis": "sparse",
             "maxLength": 500,
             "forbiddenPhrases": [],
-            "locale": "es-CO",
         },
         model={"primary": "deepseek-chat", "temperature": 0.3},
-        memory={"shortTermTurns": 30, "summarize": True},
+        memory={"shortTermTurns": 30},
         playbooks=playbooks if playbooks is not None else DEFAULT_PLAYBOOKS,
         tools=[],
         policies={
-            "escalation": {"triggers": []},
-            "confirmBeforeWrite": True,
             "maxToolCallsPerTurn": 10,
         },
         packs=[],
@@ -161,3 +158,33 @@ async def test_ensamblador_respeta_orden_del_indice() -> None:
     blocks = await build_system_blocks(spec, ctx)
     assert "## Reglas de operación" in blocks[0]
     assert "Eres A" in blocks[1]
+
+# --------------------------------------------------------------------- v2.0.0 (ADR-0050)
+@pytest.mark.asyncio
+async def test_persona_llega_como_variables_de_plantilla() -> None:
+    """El tono/calidez/emojis del spec se sustituyen en los playbooks (ADR-0050)."""
+    ctx = PromptContext(
+        assistant_name="A",
+        business_description="B",
+        tone="informal",
+        warmth=5,
+        emojis="free",
+        max_length=300,
+    )
+    vars_ = ctx.template_vars
+    assert vars_["tone"] == "informal"
+    assert vars_["warmth"] == "5"
+    assert "emojis" in vars_["emojis"]
+    assert vars_["max_length"] == "300"
+
+
+def test_persona_guard_frases_prohibidas_y_longitud() -> None:
+    from core.orchestrator.loop import _persona_guard
+
+    spec = make_spec()
+    spec.persona.forbiddenPhrases = ["garantizado"]
+    spec.persona.maxLength = 20
+
+    assert _persona_guard("Está garantizado el resultado", spec) is not None
+    assert _persona_guard("Respuesta corta", spec) is None
+    assert _persona_guard("X" * 30, spec) is not None

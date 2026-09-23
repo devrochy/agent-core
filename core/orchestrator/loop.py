@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from core.agents.responses import load_response
 from core.agents.spec import enabled_packs, load_active_spec
@@ -37,6 +37,7 @@ from core.llm.prompt_builder import PromptContext, build_system_blocks
 from core.llm.types import LLMMessage, LLMToolCall
 from core.mcp.host import mcp_host, new_tool_context
 from core.mcp.translator import skills_summary, to_llm_schemas
+from core.mcp.types import GuardrailResult
 from core.memory import entity as entity_memory
 from core.memory import vector as vector_memory
 from core.memory import working as working_memory
@@ -207,8 +208,15 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     history_tool_results = await _historical_tool_results(conversation_id)
 
     profile = await entity_memory.get_profile(customer.id)
+    rag = spec.memory.rag
     recalled = await vector_memory.recall(
-        latest_message, customer_id=customer.id, conversation_id=conversation_id
+        latest_message,
+        customer_id=customer.id,
+        conversation_id=conversation_id,
+        top_k=rag.topK if rag else 3,
+        # `minScore` es similitud (1.0 = idéntico); `recall` usa distancia coseno,
+        # así que se invierte (ADR-0050).
+        max_distance=(1.0 - rag.minScore) if rag else 0.6,
     )
 
     from core.plugin_manager import plugin_manager
@@ -233,6 +241,9 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         business_description=app_settings.business_description if app_settings else "",
         language=app_settings.language if app_settings else "es",
         tone=spec.persona.tone,
+        warmth=spec.persona.warmth,
+        emojis=spec.persona.emojis,
+        max_length=spec.persona.maxLength,
         brand_voice=app_settings.brand_voice if app_settings else "",
         active_skills_summary=skills_summary(active_tools),
         recalled_memories=recalled,
@@ -271,7 +282,9 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         message=latest_message,
         turnos_sin_resolver=turnos_sin_resolver,
         default_model=_resolved_model(app_settings, spec, settings.llm_model),
-        reasoning_model=settings.llm_model_reasoning,
+        # v2.0.0 (ADR-0050): el modelo de razonamiento es por tenant
+        # (`spec.model.router`); cae al global del .env si no está seteado.
+        reasoning_model=spec.model.router or settings.llm_model_reasoning,
         routing_enabled=settings.difficulty_routing,
         requires_tools=bool(active_tools),
         long_message_threshold=difficulty_long_message_threshold,
@@ -280,6 +293,9 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     )
     provider = _resolved_provider(app_settings, routing.model)
     tool_schemas = to_llm_schemas(active_tools) if routing.allow_tools else None
+    # v2.0.0 (ADR-0050): temperatura del tenant (clampeada -- el raw_json de
+    # /admin/spec puede traer cualquier float).
+    temperature = max(0.0, min(2.0, spec.model.temperature))
 
     # Reintentos de guardrail antes de escalar de verdad (pedido explícito del
     # usuario: "intentos fallidos" configurable por tenant, mismo patrón exacto
@@ -320,7 +336,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         agent_spec_version=spec.version,
     )
 
-    for _iteration in range(spec.policies.maxToolCallsPerTurn):
+    max_iterations = max(1, min(50, spec.policies.maxToolCallsPerTurn))
+    for _iteration in range(max_iterations):
         # Presupuesto (ADR-0015): se mide ANTES de llamar al LLM, en la cabecera.
         if budget is not None:
             spent = await conversation_spent(conversation_id) + turn_cost
@@ -336,6 +353,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                     messages=messages,
                     tools=tool_schemas,
                     max_tokens=settings.llm_max_tokens,
+                    temperature=temperature,
                 )
                 span_attributes(
                     llm_span,
@@ -345,12 +363,37 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                     cost_usd=_response_cost(provider, response),
                 )
         except LLMProviderError:
-            log.exception("llm_call_failed", conversation_id=str(conversation_id))
-            await escalate(conversation_id, reason="llm_error", summary="Fallo del proveedor LLM")
-            usage.escalated = True
-            await _write_usage_ledger(conversation_id, spec, usage, turn_span)
-            fallback_text = await load_response(spec, "fallback") or FALLBACK_REPLY
-            return TurnResult(text=fallback_text, escalated=True)
+            # v2.0.0 (ADR-0050): fallback real. Si el proveedor/modelo primario
+            # falla y el tenant definió `spec.model.fallback` (distinto), se
+            # intenta UNA vez con ese modelo antes de escalar.
+            fallback_model = spec.model.fallback
+            recovered = None
+            if fallback_model and fallback_model != routing.model:
+                try:
+                    fallback_provider = _resolved_provider_fallback(app_settings, fallback_model)
+                    recovered = await fallback_provider.generate(
+                        system_blocks=system_blocks,
+                        messages=messages,
+                        tools=tool_schemas,
+                        max_tokens=settings.llm_max_tokens,
+                        temperature=temperature,
+                    )
+                    provider = fallback_provider
+                    log.warning(
+                        "llm_call_fallback_ok",
+                        conversation_id=str(conversation_id),
+                        fallback=fallback_model,
+                    )
+                except LLMProviderError:
+                    log.exception("llm_call_fallback_failed", conversation_id=str(conversation_id))
+            if recovered is None:
+                log.exception("llm_call_failed", conversation_id=str(conversation_id))
+                await escalate(conversation_id, reason="llm_error", summary="Fallo del proveedor LLM")
+                usage.escalated = True
+                await _write_usage_ledger(conversation_id, spec, usage, turn_span)
+                fallback_text = await load_response(spec, "fallback") or FALLBACK_REPLY
+                return TurnResult(text=fallback_text, escalated=True)
+            response = recovered
 
         turn_cost += _response_cost(provider, response)
         usage.add(provider, response)
@@ -398,7 +441,12 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # turno actual) porque ese sí alimenta `extract_safe_extras` más abajo --
         # si se mezclara ahí, un _safe_append viejo (ej. un link de pago vencido)
         # podría reaparecer en la respuesta de un turno nuevo sin relación.
-        verdict = await run_guardrails(
+        # v2.0.0 (ADR-0050): validaciones de persona del spec, ANTES de los
+        # guardrails de packs. `forbiddenPhrases` (frases prohibidas) y
+        # `maxLength` (tope de longitud) usan el mismo mecanismo de reintento
+        # correctivo -> escalar.
+        persona_verdict = _persona_guard(response.content, spec)
+        verdict = persona_verdict or await run_guardrails(
             response.content, [*history_tool_results, *all_tool_results], enabled, disabled_guardrails
         )
         if not verdict.passed:
@@ -416,7 +464,13 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # ---- respuesta final
         extras = extract_safe_extras(all_tool_results)
         final_text = apply_safe_extras(strip_markdown(response.content), extras)
-        await _finish_turn(conversation_id, final_text, latest_message, resolved=bool(all_tool_results))
+        await _finish_turn(
+            conversation_id,
+            final_text,
+            latest_message,
+            resolved=bool(all_tool_results),
+            short_term_turns=spec.memory.shortTermTurns,
+        )
         await _write_usage_ledger(conversation_id, spec, usage, turn_span)
         return TurnResult(text=final_text, image_url=extras.image_url)
 
@@ -429,6 +483,39 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
 
 
 # ------------------------------------------------------------------ helpers
+def _persona_guard(response_text: str, spec) -> GuardrailResult | None:  # type: ignore[no-untyped-def]
+    """Validaciones de persona del spec (ADR-0050): frases prohibidas y longitud.
+
+    Devuelve un `GuardrailResult` fallido (con instrucción correctiva) o None si
+    la respuesta pasa. Es barato y determinista, por eso corre antes de los
+    guardrails de packs.
+    """
+    lowered = response_text.lower()
+    for idx, phrase in enumerate(spec.persona.forbiddenPhrases):
+        if phrase and phrase.lower() in lowered:
+            # No se interpola la frase cruda en la instrucción (evita inyectar
+            # contenido admin-controlado con prefijo [SISTEMA]): se referencia por
+            # posición.
+            return GuardrailResult(
+                passed=False,
+                reason="persona_forbidden_phrase",
+                retry_instruction=(
+                    "Tu respuesta usó una frase prohibida para este negocio "
+                    f"(la #{idx + 1} de la lista). Reformulala sin frases prohibidas."
+                ),
+            )
+    if spec.persona.maxLength and len(response_text) > spec.persona.maxLength:
+        return GuardrailResult(
+            passed=False,
+            reason="persona_max_length",
+            retry_instruction=(
+                f"Tu respuesta supera el largo máximo permitido ({spec.persona.maxLength} "
+                "caracteres). Resumila sin perder información importante."
+            ),
+        )
+    return None
+
+
 async def _execute_tool_safely(
     conversation: Conversation, customer: Customer, tool_call: LLMToolCall, spec=None  # type: ignore[no-untyped-def]
 ) -> dict[str, Any]:
@@ -448,7 +535,7 @@ async def _execute_tool_safely(
     # una tool deshabilitada por binding. La denegación es un error de negocio
     # limpio, SIN auto_disable.
     if spec is not None:
-        denial = await _tool_denial(spec, tool_call.name)
+        denial = await _tool_denial(spec, tool_call.name, conversation.id)
         if denial is not None:
             result = {"error": denial}
             await record_audit(
@@ -459,6 +546,55 @@ async def _execute_tool_safely(
                 output_data=result,
             )
             return result
+
+    # v2.0.0 (ADR-0050): human-in-the-loop. Un binding con `requiresConfirmation`
+    # no ejecuta de una: la primera vez deja el pedido pendiente y se lo devuelve
+    # al modelo para que pida confirmación al cliente; la siguiente llamada con
+    # los MISMOS argumentos (el cliente ya dijo "sí") sí ejecuta.
+    # El objeto `conversation` se actualiza en memoria para que la repetición
+    # dentro del MISMO turno ya cuente como confirmada (no re-lee de BD).
+    if spec is not None and _binding_requires_confirmation(spec, tool_call.name):
+        pending = dict(conversation.state.get("pending_confirmation") or {})
+        already = (
+            pending.get("tool") == tool_call.name
+            and pending.get("arguments") == tool_call.arguments
+        )
+        if not already:
+            state = dict(conversation.state)
+            state["pending_confirmation"] = {
+                "tool": tool_call.name,
+                "arguments": tool_call.arguments,
+            }
+            conversation.state = state
+            async with get_session() as session:
+                row = await session.get(Conversation, conversation.id)
+                if row is not None:
+                    row.state = state
+            result = {
+                "status": "confirmation_required",
+                "message": (
+                    f"Antes de ejecutar '{tool_call.name}' pedile confirmación explícita "
+                    "al cliente y, si acepta, volvé a llamar la herramienta con los "
+                    "mismos argumentos."
+                ),
+            }
+            await record_audit(
+                actor=f"tool:{tool_call.name}",
+                action="confirmation_required",
+                conversation_id=conversation.id,
+                input_data=tool_call.arguments,
+                output_data=result,
+            )
+            return result
+        # Ya confirmada: se ejecuta y se limpia el pendiente (no queda vivo para
+        # siempre -- una llamada futura pide confirmación de nuevo).
+        state = dict(conversation.state)
+        state.pop("pending_confirmation", None)
+        conversation.state = state
+        async with get_session() as session:
+            row = await session.get(Conversation, conversation.id)
+            if row is not None:
+                row.state = state
 
     try:
         result = await mcp_host.execute_tool(tool_call.name, tool_call.arguments, context)
@@ -482,8 +618,10 @@ async def _execute_tool_safely(
     return result
 
 
-async def _tool_denial(spec, tool_name: str) -> str | None:
-    """Razón de denegación de una tool según el AgentSpec (ADR-0019), o None si corre.
+async def _tool_denial(
+    spec, tool_name: str, conversation_id: uuid.UUID | None = None
+) -> str | None:
+    """Razón de denegación de una tool según el AgentSpec (ADR-0019/ADR-0050), o None.
 
     - La tool de un pack NO habilitado se deniega: defensa en profundidad, el
       prompt ya filtra skills pero un tool_call fuera de schema (inyección) no
@@ -493,6 +631,9 @@ async def _tool_denial(spec, tool_name: str) -> str | None:
       anterior, para un tool_call fuera de schema.
     - Si hay ToolBinding con enabled=false se deniega. Fail-open transitorio:
       sin binding, la tool corre (las migraciones de bindings van después).
+    - v2.0.0 (ADR-0050): un binding con `maxCallsPerConversation` limita cuántas
+      veces puede llamarse esa tool en la MISMA conversación (corta abuso/costo);
+      `scopes` es autorización fina que un guardrail/pack puede exigir.
     """
     from core.plugin_manager import plugin_manager
 
@@ -504,9 +645,56 @@ async def _tool_denial(spec, tool_name: str) -> str | None:
         if tenant_id is not None and await plugin_manager.is_disabled_for_tenant(tenant_id, tool.plugin_id):
             return f"La herramienta '{tool_name}' no está disponible en este momento."
     for binding in spec.tools:
-        if binding.tool == tool_name and not binding.enabled:
+        if binding.tool != tool_name:
+            continue
+        if not binding.enabled:
             return f"La herramienta '{tool_name}' está deshabilitada para este tenant."
+        # v2.0.0 (ADR-0050): autorización fina. Si la tool declara scopes que
+        # requiere y el binding del tenant no los concede, se deniega.
+        if tool is not None and tool.scopes:
+            granted = set(binding.scopes or [])
+            missing = [s for s in tool.scopes if s not in granted]
+            if missing:
+                return (
+                    f"La herramienta '{tool_name}' requiere permisos que este negocio "
+                    f"no tiene concedidos ({', '.join(missing)})."
+                )
+        if binding.maxCallsPerConversation is not None and conversation_id is not None:
+            used = await _tool_calls_in_conversation(conversation_id, tool_name)
+            if used >= binding.maxCallsPerConversation:
+                return (
+                    f"Llegaste al máximo de llamadas a '{tool_name}' en esta conversación "
+                    f"({binding.maxCallsPerConversation})."
+                )
     return None
+
+
+def _binding_requires_confirmation(spec, tool_name: str) -> bool:  # type: ignore[no-untyped-def]
+    for binding in spec.tools:
+        if binding.tool == tool_name:
+            return bool(binding.requiresConfirmation)
+    return False
+
+
+async def _tool_calls_in_conversation(conversation_id: uuid.UUID, tool_name: str) -> int:
+    """Cuántas veces se EJECUTÓ `tool_name` en esta conversación (audit_log, ADR-0050).
+
+    Solo cuenta `action="execute"`: las denegaciones y los pedidos de confirmación
+    no deben consumir el cupo de `maxCallsPerConversation`.
+    """
+    async with get_session() as session:
+        return (
+            await session.execute(
+                select(func.count())
+                .select_from(AuditLog)
+                .where(
+                    AuditLog.tenant_id == get_current_tenant_id(),
+                    AuditLog.conversation_id == conversation_id,
+                    AuditLog.actor == f"tool:{tool_name}",
+                    AuditLog.action == "execute",
+                )
+            )
+        ).scalar_one()
 
 
 async def _historical_tool_results(conversation_id: uuid.UUID) -> list[dict[str, Any]]:
@@ -549,7 +737,11 @@ async def _load_history(conversation_id: uuid.UUID) -> list[LLMMessage]:
     async with get_session() as session:
         result = await session.execute(
             select(Message)
-            .where(Message.conversation_id == conversation_id)
+            .where(
+                Message.conversation_id == conversation_id,
+                # tenant_id explícito -- defensa en profundidad además de RLS.
+                Message.tenant_id == get_current_tenant_id(),
+            )
             .order_by(Message.created_at)
             .limit(40)
         )
@@ -563,10 +755,18 @@ async def _load_history(conversation_id: uuid.UUID) -> list[LLMMessage]:
 
 
 async def _finish_turn(
-    conversation_id: uuid.UUID, response_text: str, user_message: str, resolved: bool
+    conversation_id: uuid.UUID,
+    response_text: str,
+    user_message: str,
+    resolved: bool,
+    short_term_turns: int | None = None,
 ) -> None:
-    await working_memory.append_turn(conversation_id, "user", user_message)
-    await working_memory.append_turn(conversation_id, "assistant", response_text)
+    await working_memory.append_turn(
+        conversation_id, "user", user_message, max_turns=short_term_turns
+    )
+    await working_memory.append_turn(
+        conversation_id, "assistant", response_text, max_turns=short_term_turns
+    )
 
     async with get_session() as session:
         conversation = await session.get(Conversation, conversation_id)
@@ -614,6 +814,22 @@ def _resolved_model(app_settings: AppSettings | None, spec, env_model: str) -> s
 
 def _resolved_provider(app_settings: AppSettings | None, model: str):  # type: ignore[no-untyped-def]
     """BYOK: la config de BD (panel) tiene prioridad sobre el .env."""
+    provider_key = None
+    api_key = None
+    if app_settings and app_settings.llm_provider:
+        provider_key = app_settings.llm_provider
+        if app_settings.llm_api_key_encrypted:
+            api_key = get_secret_box().decrypt(app_settings.llm_api_key_encrypted)
+    return resolve_provider(provider_key=provider_key, api_key=api_key, model=model)
+
+
+def _resolved_provider_fallback(app_settings: AppSettings | None, model: str):  # type: ignore[no-untyped-def]
+    """Provider para el modelo de fallback (ADR-0050).
+
+    Reusa la MISMA config del primario (BYOK del panel o .env) y solo cambia el
+    modelo. No se clona el provider: se resuelve de nuevo con
+    `resolve_provider`, que arma un provider válido para ese modelo.
+    """
     provider_key = None
     api_key = None
     if app_settings and app_settings.llm_provider:

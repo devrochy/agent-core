@@ -7,6 +7,15 @@
   <a class="nav-link {% if tab == 'identidad' %}active{% endif %}"
      {% if tab == 'identidad' %}aria-current="page"{% endif %}
      href="/admin/configuracion">Identidad</a>
+  <a class="nav-link {% if tab == 'cerebro' %}active{% endif %}"
+     {% if tab == 'cerebro' %}aria-current="page"{% endif %}
+     href="/admin/configuracion?tab=cerebro">Cerebro</a>
+  <a class="nav-link {% if tab == 'memoria' %}active{% endif %}"
+     {% if tab == 'memoria' %}aria-current="page"{% endif %}
+     href="/admin/configuracion?tab=memoria">Memoria</a>
+  <a class="nav-link {% if tab == 'habilidades' %}active{% endif %}"
+     {% if tab == 'habilidades' %}aria-current="page"{% endif %}
+     href="/admin/configuracion?tab=habilidades">Habilidades</a>
   {% if payments_enabled %}
   <a class="nav-link {% if tab == 'pagos' %}active{% endif %}"
      {% if tab == 'pagos' %}aria-current="page"{% endif %}
@@ -160,6 +169,152 @@
         </form>
       </div>
     </div>
+  </div>
+</div>
+{% endif %}
+
+{% if tab == 'cerebro' %}
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header fw-semibold">Modelo del agente</div>
+      <div class="card-body">
+        <form method="post" action="/admin/configuracion/cerebro" class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Modelo primario</label>
+            <input class="form-control" name="model_primary" value="{{ spec['model']['primary'] }}">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Temperatura (0-2)</label>
+            <input class="form-control" type="number" step="0.1" min="0" max="2"
+                   name="model_temperature" value="{{ spec['model']['temperature'] }}">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Máx. tools por turno</label>
+            <input class="form-control" type="number" min="1" max="50"
+                   name="policy_max_tool_calls" value="{{ spec['policies']['maxToolCallsPerTurn'] }}">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Modelo de fallback (opcional)</label>
+            <input class="form-control" name="model_fallback" value="{{ spec['model']['fallback'] or '' }}"
+                   placeholder="se usa si el primario falla">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Modelo de razonamiento (opcional)</label>
+            <input class="form-control" name="model_router" value="{{ spec['model']['router'] or '' }}"
+                   placeholder="para turnos difíciles (difficulty router)">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Presupuesto USD/conversación</label>
+            <input class="form-control" type="number" step="0.01" min="0"
+                   name="policy_budget" value="{{ spec['policies']['budgetUsdPerConversation'] or 0 }}">
+          </div>
+          <div class="col-12">
+            <button class="btn btn-primary">Guardar cerebro</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="alert alert-light border small mb-0">
+      <strong>Modelo de IA (BYOK)</strong> (proveedor/api key) se configura en la pestaña
+      <a href="/admin/configuracion">Identidad</a>. El modelo de razonamiento por defecto
+      viene del <code>.env</code>; acá lo definís por tenant.
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if tab == 'memoria' %}
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header fw-semibold">Memoria del agente</div>
+      <div class="card-body">
+        <form method="post" action="/admin/configuracion/memoria" class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Turnos de contexto (working memory)</label>
+            <input class="form-control" type="number" min="1" max="200"
+                   name="memory_short_term_turns" value="{{ spec['memory']['shortTermTurns'] }}">
+            <div class="form-text">Cuántos turnos recientes ve el modelo. Default: 30.</div>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Recall: topK</label>
+            <input class="form-control" type="number" min="0" max="20"
+                   name="rag_top_k" value="{{ (spec['memory']['rag'] or {}).get('topK', 0) }}">
+            <div class="form-text">0 = desactivado.</div>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Recall: similitud mínima</label>
+            <input class="form-control" type="number" step="0.05" min="0" max="1"
+                   name="rag_min_score" value="{{ (spec['memory']['rag'] or {}).get('minScore', 0.6) }}">
+            <div class="form-text">0.6 = recall permisivo; 0.9 = solo coincidencias muy cercanas.</div>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-primary">Guardar memoria</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="alert alert-light border small mb-0">
+      La memoria semántica (recall) requiere un proveedor de embeddings configurado
+      en el <code>.env</code> (<code>EMBEDDING_PROVIDER</code>). Sin él, el recall
+      queda inactivo aunque esté configurado acá.
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if tab == 'habilidades' %}
+<div class="card">
+  <div class="card-header fw-semibold">Habilidades (tools)</div>
+  <div class="card-body">
+    <p class="text-secondary small">
+      Habilitá o deshabilitá tools del asistente y poné límites. Los <b>packs</b>
+      (conjuntos de capacidades) se gestionan en <a href="/admin/plugins">Plugins</a>.
+    </p>
+    <form method="post" action="/admin/configuracion/habilidades">
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead>
+            <tr><th>Tool</th><th>Pack</th><th>Activa</th><th>Máx./conversación</th><th>Requiere confirmar</th></tr>
+          </thead>
+          <tbody>
+            {% set bindings = {} %}
+            {% for b in spec['tools'] %}{% set _ = bindings.update({b['tool']: b}) %}{% endfor %}
+            {% for t in all_tools %}
+            {% set b = bindings.get(t.name, {}) %}
+            <tr>
+              <td>
+                <code>{{ t.name }}</code>
+                <div class="text-secondary small">{{ t.description[:90] }}</div>
+              </td>
+              <td><span class="badge text-bg-secondary">{{ t.plugin_id }}</span></td>
+              <td>
+                <input type="checkbox" class="form-check-input" name="tool_enabled:{{ t.name }}"
+                       {% if b.get('enabled', true) %}checked{% endif %}>
+              </td>
+              <td>
+                <input type="number" class="form-control form-control-sm" style="max-width:100px"
+                       min="0" name="tool_maxcalls:{{ t.name }}"
+                       value="{{ b.get('maxCallsPerConversation') or 0 }}">
+              </td>
+              <td>
+                <input type="checkbox" class="form-check-input" name="tool_requires:{{ t.name }}"
+                       {% if b.get('requiresConfirmation') %}checked{% endif %}>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="text-secondary">No hay tools registradas.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <button class="btn btn-primary">Guardar habilidades</button>
+    </form>
   </div>
 </div>
 {% endif %}
