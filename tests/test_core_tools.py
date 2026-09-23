@@ -35,15 +35,12 @@ def make_spec(playbooks: list[dict[str, str]]) -> AgentSpec:
             "emojis": "sparse",
             "maxLength": 500,
             "forbiddenPhrases": [],
-            "locale": "es-CO",
         },
         model={"primary": "deepseek-chat", "temperature": 0.3},
-        memory={"shortTermTurns": 30, "summarize": True},
+        memory={"shortTermTurns": 30},
         playbooks=playbooks,
         tools=[],
         policies={
-            "escalation": {"triggers": []},
-            "confirmBeforeWrite": True,
             "maxToolCallsPerTurn": 10,
         },
         packs=[],
@@ -210,3 +207,52 @@ def test_calendar_skill_sin_estado_por_tenant() -> None:
     assert hasattr(skill, "_tenant_config")
     tools = skill.get_tools()
     assert {t.name for t in tools} == {"create_calendar_event", "check_availability"}
+
+@pytest.mark.asyncio
+async def test_tool_binding_scopes_maxcalls_requires_confirmation(monkeypatch) -> None:
+    """ADR-0050: el motor real de ToolBinding. `enabled` ya existía; acá se cubren
+    maxCallsPerConversation, requiresConfirmation y que scopes no rompa."""
+    import uuid as _uuid
+
+    from agentcore_contracts.contracts import ToolBinding
+
+    from core.mcp.types import MCPTool
+    from core.orchestrator.loop import _binding_requires_confirmation, _tool_denial
+
+    spec = make_spec([])
+    spec.packs = ["core"]
+
+    tool = MCPTool(
+        name="safe_tool",
+        description="t",
+        parameters={},
+        handler=lambda *a, **k: {"ok": True},
+        plugin_id="core",
+    )
+    import core.orchestrator.loop as loop_mod
+
+    monkeypatch.setattr(
+        loop_mod.mcp_host, "get_tool", lambda name: tool if name == tool.name else None
+    )
+
+    # scopes presentes no bloquean por sí solos (autorización la aplica el pack/guardrail)
+    spec.tools = [ToolBinding(tool="safe_tool", enabled=True, scopes=["orders:write"])]
+    assert await _tool_denial(spec, "safe_tool") is None
+
+    # requiresConfirmation se detecta
+    spec.tools = [ToolBinding(tool="safe_tool", enabled=True, scopes=[], requiresConfirmation=True)]
+    assert _binding_requires_confirmation(spec, "safe_tool") is True
+    assert _binding_requires_confirmation(spec, "otra") is False
+
+    # maxCallsPerConversation: con `audit_log` de 2 llamadas y tope 2 → niega
+    spec.tools = [
+        ToolBinding(tool="safe_tool", enabled=True, scopes=[], maxCallsPerConversation=2)
+    ]
+    conv_id = _uuid.uuid4()
+
+    async def _fake_count(conversation_id, tool_name):
+        return 2
+
+    monkeypatch.setattr(loop_mod, "_tool_calls_in_conversation", _fake_count)
+    denial = await _tool_denial(spec, "safe_tool", conv_id)
+    assert denial is not None and "máximo" in denial

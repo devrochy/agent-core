@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.6.0 — Configuración por pestañas, pagos BYOK y AgentSpec v2 (2026-09-23)
+
+Panel configurable por secciones, cobro BYOK del tenant y un contrato de agente
+que deja de prometer en vano. Ver ADR-0047/0048/0049/0050.
+
+### RBAC y colaboradores (ADR-0047/0048)
+- Permisos de sección configurables (`admin_permissions`, global o por tenant).
+- Admin por tenant (`TenantUser.owner`) con login propio; página "Colaboradores".
+- CLI `agent-core admin` y alta de tenant con credenciales del administrador.
+
+### Configuración por pestañas y pagos BYOK (ADR-0049)
+- `/admin/configuracion` en pestañas: **Identidad** y **Pagos** (esta última si el
+  pack `pack-payments` está habilitado).
+- Pantalla de pagos: credenciales Wompi por tenant cifradas, "Probar y guardar"
+  (link real por el mínimo), URL del webhook.
+- `BaseModule.extra_admin_routers()`: packs aportan pestañas admin sin tocar el core.
+
+### AgentSpec v2.0.0 (ADR-0050)
+- El contrato pasa a v2.0.0: campos antes muertos pasan a tener efecto real o se
+  eliminan. `temperature`, `model.fallback`/`router`, `memory.shortTermTurns`,
+  `rag.topK`/`minScore`, `persona.tone`/`warmth`/`emojis`/`forbiddenPhrases`/`maxLength`
+  y el motor real de `ToolBinding.scopes`/`maxCallsPerConversation`/`requiresConfirmation`.
+- Nuevo bloque `extensions` (personalización por tenant sin fork).
+- `load_active_spec` tolerante: los specs v1 guardados siguen cargando (los campos
+  eliminados se descartan, los nuevos toman default).
+
 ## v0.5.0 — Planes y facturación de tenants (2026-09-22)
 
 Cada tenant opera 1 mes gratis y después se vincula a un plan (basic, premium,

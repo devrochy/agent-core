@@ -1,4 +1,4 @@
-"""@agentcore/contracts — v1.0.0 (Python).
+"""@agentcore/contracts — v2.0.0 (Python).
 
 Contratos congelados de agent-core. Ver docs/adr/0011-contratos-python.md.
 """
@@ -46,7 +46,7 @@ from agentcore_contracts.contracts import (
     Usage,
 )
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 
 __all__ = [
     "AgentMemory",
