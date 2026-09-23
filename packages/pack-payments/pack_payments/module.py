@@ -18,6 +18,7 @@ from core.mcp.types import BaseModule
 from core.shared.exceptions import PluginError
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, tenant_scope
+from pack_payments.admin import router as admin_config_router
 from pack_payments.config import PaymentsConfig
 from pack_payments.models import PaymentTransaction
 from pack_payments.providers.base import WebhookEvent
@@ -130,3 +131,7 @@ class PaymentsModule(BaseModule):
 
             raise PluginConfigError(PLUGIN_ID, "Config inválida o ausente")
         host.register_skill(PaymentSkill())
+
+    def extra_admin_routers(self) -> list[APIRouter]:
+        """Router de la pestaña "Pagos" de Configuración (ADR-0049)."""
+        return [admin_config_router]

@@ -3532,10 +3532,12 @@ async def settings_page(request: Request):
         if g.plugin_id in enabled
     ]
     ctx.update(
+        tab="identidad",
         s=app_settings,
         behavior=dict(app_settings.behavior_config),
         all_guardrails=all_guardrails,
         escalation_keywords=list((app_settings.escalation_config or {}).get("keywords", [])),
+        payments_enabled="pack_payments" in enabled,
     )
     return _render("settings.html", ctx)
 
