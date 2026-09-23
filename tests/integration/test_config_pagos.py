@@ -197,3 +197,54 @@ async def test_colaborador_sin_settings_write_rechaza(app_client, tenant_setup) 
     assert r.status_code in (303, 403)
     if r.status_code == 303:
         assert "sin_permiso" in r.headers["location"]
+
+
+async def test_tabs_cerebro_memoria_habilidades_renderizan(app_client) -> None:
+    session = await _login(app_client)
+    for tab, marker in (
+        ("identidad", "Asistente"),
+        ("cerebro", "Modelo del agente"),
+        ("memoria", "Memoria del agente"),
+        ("habilidades", "Habilidades (tools)"),
+    ):
+        r = await app_client.get(f"/admin/configuracion?tab={tab}", headers={"Cookie": session})
+        assert r.status_code == 200, tab
+        assert marker in r.text, f"tab {tab} no renderizó: {marker}"
+
+
+async def test_guardar_cerebro_y_memoria_persiste_en_spec(app_client) -> None:
+    from core.agents.spec import load_active_spec
+    from core.shared.tenant import tenant_scope
+
+    tid = await _tenant_id()
+    session = await _login(app_client)
+    headers = {"Cookie": await _switch(app_client, session, tid)}
+
+    r = await app_client.post(
+        "/admin/configuracion/cerebro",
+        headers=headers,
+        data={
+            "model_primary": "deepseek-chat",
+            "model_fallback": "deepseek-reasoner",
+            "model_router": "deepseek-reasoner",
+            "model_temperature": "0.7",
+            "policy_max_tool_calls": "8",
+            "policy_budget": "0.25",
+        },
+    )
+    assert r.status_code == 303
+
+    r = await app_client.post(
+        "/admin/configuracion/memoria",
+        headers=headers,
+        data={"memory_short_term_turns": "12", "rag_top_k": "5", "rag_min_score": "0.4"},
+    )
+    assert r.status_code == 303
+
+    async with tenant_scope(tid):
+        spec = await load_active_spec()
+    assert spec.model.temperature == 0.7
+    assert spec.model.fallback == "deepseek-reasoner"
+    assert spec.model.router == "deepseek-reasoner"
+    assert spec.memory.shortTermTurns == 12
+    assert spec.memory.rag is not None and spec.memory.rag.topK == 5

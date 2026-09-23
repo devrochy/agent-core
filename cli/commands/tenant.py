@@ -199,7 +199,7 @@ async def _onboard(answers: dict) -> tuple[uuid.UUID, list[str]]:
         slug=answers["slug"],
         business_description=answers["business"],
         language=answers["language"],
-        persona={"role": "asistente", "tone": answers["tone"], "locale": f"es-{answers['language'].upper()}"},
+        persona={"role": "asistente", "tone": answers["tone"]},
         escalation_triggers=answers["escalation_triggers"],
         packs=answers["packs"],
         admin_email=admin_email,

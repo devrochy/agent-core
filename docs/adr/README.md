@@ -57,3 +57,4 @@ Se crean con `/adr`.
 | 0047 | Autorización del panel por permisos de sección (RBAC configurable) | aceptado |
 | 0048 | Administrador por tenant, colaboradores y alta con credenciales | aceptado |
 | 0049 | Configuración del agente por pestañas y pagos BYOK en el pack | aceptado |
+| 0050 | AgentSpec v2.0.0: contrato que no miente y agente configurable | aceptado |

@@ -408,7 +408,7 @@ async def tenants_create(
             slug=tenant_slug,
             business_description=business,
             language=language,
-            persona={"role": "asistente", "tone": tone, "locale": f"es-{language.upper()}"},
+            persona={"role": "asistente", "tone": tone},
             escalation_triggers=triggers or None,
             packs=packs or None,
             admin_email=admin_email or admin.email,
@@ -3532,14 +3532,116 @@ async def settings_page(request: Request):
         if g.plugin_id in enabled
     ]
     ctx.update(
-        tab="identidad",
+        tab=request.query_params.get("tab", "identidad"),
         s=app_settings,
         behavior=dict(app_settings.behavior_config),
         all_guardrails=all_guardrails,
         escalation_keywords=list((app_settings.escalation_config or {}).get("keywords", [])),
         payments_enabled="pack_payments" in enabled,
+        # Cerebro / memoria / habilidades (ADR-0050): lo versionable del spec.
+        spec=spec.model_dump(mode="json"),
+        all_tools=[
+            {"name": t.name, "plugin_id": t.plugin_id, "description": t.description}
+            for t in mcp_host.get_tools()
+            if t.plugin_id in enabled or t.plugin_id == "core"
+        ],
     )
     return _render("settings.html", ctx)
+
+
+@router.post("/configuracion/cerebro")
+async def settings_brain_save(
+    request: Request,
+    model_primary: str = Form(default=""),
+    model_fallback: str = Form(default=""),
+    model_router: str = Form(default=""),
+    model_temperature: float = Form(default=0.3),
+    policy_max_tool_calls: int = Form(default=10),
+    policy_budget: float = Form(default=0.5),
+):
+    """Modelo del agente (ADR-0050): primario, fallback, razonamiento y temperatura."""
+    if await current_admin(request) is None:
+        return _login_redirect()
+    current = await load_active_spec()
+    data = current.model_dump(mode="json")
+    if model_primary:
+        data["model"]["primary"] = model_primary.strip()
+    data["model"]["fallback"] = model_fallback.strip() or None
+    data["model"]["router"] = model_router.strip() or None
+    data["model"]["temperature"] = max(0.0, min(2.0, model_temperature))
+    data["policies"]["maxToolCallsPerTurn"] = max(1, min(50, policy_max_tool_calls))
+    data["policies"]["budgetUsdPerConversation"] = max(0.0, policy_budget)
+    return await _save_spec_from_form(request, data, "cerebro")
+
+
+@router.post("/configuracion/memoria")
+async def settings_memory_save(
+    request: Request,
+    memory_short_term_turns: int = Form(default=30),
+    rag_top_k: int = Form(default=0),
+    rag_min_score: float = Form(default=0.6),
+):
+    """Memoria del agente (ADR-0050): turnos de contexto y recall RAG."""
+    if await current_admin(request) is None:
+        return _login_redirect()
+    current = await load_active_spec()
+    data = current.model_dump(mode="json")
+    data["memory"]["shortTermTurns"] = max(1, min(200, memory_short_term_turns))
+    if rag_top_k and rag_top_k > 0:
+        data["memory"]["rag"] = {"topK": max(1, min(20, rag_top_k)), "minScore": max(0.0, min(1.0, rag_min_score))}
+    else:
+        data["memory"]["rag"] = None
+    return await _save_spec_from_form(request, data, "memoria")
+
+
+@router.post("/configuracion/habilidades")
+async def settings_skills_save(request: Request):
+    """Tools on/off + límites por tool (ADR-0050): edita `spec.tools`."""
+    if await current_admin(request) is None:
+        return _login_redirect()
+    form = await request.form()
+    current = await load_active_spec()
+    data = current.model_dump(mode="json")
+    enabled = enabled_packs(current)
+
+    # Solo se editan tools de packs HABILITADOS (mismo criterio que el GET): así
+    # no se pisan los bindings de packs deshabilitados ni se persiste basura.
+    editable = {t.name for t in mcp_host.get_tools() if t.plugin_id in enabled}
+    bindings_by_tool = {b["tool"]: dict(b) for b in data.get("tools", [])}
+    for tool_name in editable:
+        max_calls_raw = str(form.get(f"tool_maxcalls:{tool_name}", "") or "").strip()
+        try:
+            max_calls = int(max_calls_raw)
+        except ValueError:
+            max_calls = 0
+        binding = bindings_by_tool.get(tool_name, {"tool": tool_name, "scopes": []})
+        binding["enabled"] = form.get(f"tool_enabled:{tool_name}") is not None
+        binding["maxCallsPerConversation"] = max_calls if max_calls > 0 else None
+        binding["requiresConfirmation"] = form.get(f"tool_requires:{tool_name}") is not None
+        bindings_by_tool[tool_name] = binding
+    data["tools"] = list(bindings_by_tool.values())
+    return await _save_spec_from_form(request, data, "habilidades")
+
+
+async def _save_spec_from_form(request: Request, data: dict, tab: str) -> RedirectResponse:
+    """Valida y guarda una versión nueva del spec; redirige a la tab de origen."""
+    try:
+        new_spec = AgentSpec.model_validate(data)
+    except Exception as exc:
+        return RedirectResponse(
+            f"/admin/configuracion?flash=spec_invalido: {str(exc)[:140]}&flash_type=danger",
+            status_code=303,
+        )
+    version = await _save_spec_version(new_spec)
+    if version is None:
+        return RedirectResponse(
+            "/admin/configuracion?flash=hubo una edición concurrente, reintenta&flash_type=danger",
+            status_code=303,
+        )
+    return RedirectResponse(
+        f"/admin/configuracion?flash={tab} guardado (v{version})&flash_type=success",
+        status_code=303,
+    )
 
 
 @router.post("/configuracion/asistente")

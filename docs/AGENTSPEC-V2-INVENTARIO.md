@@ -1,9 +1,13 @@
 # AgentSpec v2 — Inventario campo a campo para la Tanda 2
 
+> **Estado: DECIDIDO e IMPLEMENTADO (ADR-0050).** Este documento queda como registro
+> del análisis; las decisiones se aplicaron al contrato v2.0.0. Ver
+> `docs/adr/0050-agentspec-v2-contrato-configurable.md`.
+>
 > Documento de trabajo para decidir qué hacer con cada campo del contrato `AgentSpec`
-> (opción B aprobada: cambiar el contrato). El contrato es congelado v1.0.0
-> (`packages/contracts/agentcore_contracts/contracts.py`, ADR-0011): cualquier cambio
-> de forma requiere ADR nuevo y **bump major (v2.0.0)**.
+> (opción B aprobada: cambiar el contrato). El contrato era congelado v1.0.0
+> (`packages/contracts/agentcore_contracts/contracts.py`, ADR-0011): el cambio de
+> forma se hizo con ADR-0050 y **bump major (v2.0.0)**.
 
 ## Criterio
 

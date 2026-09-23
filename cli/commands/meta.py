@@ -394,7 +394,7 @@ async def _create_minimal_tenant(slug: str):
         slug=slug,
         business_description=business or "",
         language="es",
-        persona={"role": "asistente", "tone": "cercano", "locale": "es-ES"},
+        persona={"role": "asistente", "tone": "cercano"},
         escalation_triggers=["asesor", "humano", "persona real", "reclamo", "queja"],
         packs=[],
     )

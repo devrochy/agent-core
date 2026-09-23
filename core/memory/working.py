@@ -35,7 +35,16 @@ def get_redis() -> aioredis.Redis:
 
 
 def _key(conversation_id: uuid.UUID) -> str:
-    return f"wm:{conversation_id}"
+    """Clave Redis con namespace de tenant (defensa en profundidad, ADR-0012).
+
+    Sin el tenant, un `conversation_id` filtrado permitiría leer/escribir memoria
+    de otro tenant. El UUID ya lo hace improbable, pero el aislamiento no debe
+    depender solo de eso.
+    """
+    from core.shared.tenant import get_current_tenant_id
+
+    tid = get_current_tenant_id()
+    return f"wm:{tid}:{conversation_id}" if tid else f"wm:{conversation_id}"
 
 
 async def append_turn(
@@ -43,13 +52,15 @@ async def append_turn(
     role: str,
     content: str,
     tool_calls: list[dict[str, Any]] | None = None,
+    max_turns: int | None = None,
 ) -> None:
     try:
         r = get_redis()
         entry = json.dumps({"role": role, "content": content, "tool_calls": tool_calls or []})
+        limit = max_turns if max_turns and max_turns > 0 else MAX_TURNS
         pipe = r.pipeline()
         pipe.rpush(_key(conversation_id), entry)
-        pipe.ltrim(_key(conversation_id), -MAX_TURNS, -1)
+        pipe.ltrim(_key(conversation_id), -limit, -1)
         pipe.expire(_key(conversation_id), WORKING_MEMORY_TTL_S)
         await pipe.execute()
     except Exception:

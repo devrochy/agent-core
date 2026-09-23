@@ -128,6 +128,10 @@ class MCPHost:
         aplicar el enablement por tenant en la costura de ejecución (ADR-0019)."""
         return self._tools.get(tool_name)
 
+    def get_tools(self) -> list[MCPTool]:
+        """Todas las tools registradas (para la pestaña Habilidades, ADR-0050)."""
+        return list(self._tools.values())
+
     def get_guardrails(self) -> list[Guardrail]:
         return list(self._guardrails)
 

@@ -29,6 +29,9 @@ class PromptContext:
     business_description: str
     language: str = "es"
     tone: str = "cercano"
+    warmth: int = 3
+    emojis: str = "sparse"
+    max_length: int = 500
     brand_voice: str = ""
     active_skills_summary: str = ""   # descripción de las skills activas del turno
     recalled_memories: list[str] = field(default_factory=list)  # Capa 3 (RAG)
@@ -37,10 +40,21 @@ class PromptContext:
     @property
     def template_vars(self) -> dict[str, str]:
         language_names = {"es": "español", "en": "inglés", "pt": "portugués"}
+        emoji_names = {
+            "none": "no uses emojis",
+            "sparse": "usa emojis con moderación",
+            "free": "podés usar emojis libremente",
+        }
         return {
             "assistant_name": self.assistant_name,
             "business_description": self.business_description,
             "language": language_names.get(self.language, self.language),
+            # v2.0.0 (ADR-0050): la persona llega a los playbooks como variables,
+            # así el tono/calidez/emojis configurados tienen efecto real.
+            "tone": self.tone,
+            "warmth": str(self.warmth),
+            "emojis": emoji_names.get(self.emojis, self.emojis),
+            "max_length": str(self.max_length),
         }
 
 

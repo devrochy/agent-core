@@ -133,7 +133,8 @@ class EscalationPolicy(BaseModel):
 
 
 class RagConfig(BaseModel):
-    collections: list[str]
+    # v2.0.0 (ADR-0050): `collections` se eliminó (sin caso de uso). El recall se
+    # parametriza por `topK` y `minScore`.
     topK: int
     minScore: float
 
@@ -141,9 +142,13 @@ class RagConfig(BaseModel):
 class ToolBinding(BaseModel):
     tool: str
     enabled: bool
-    scopes: list[str]
+    # v2.0.0 (ADR-0050): `scopes`, `maxCallsPerConversation` y
+    # `requiresConfirmation` tienen efecto real en el loop (autorización fina,
+    # tope por conversación y human-in-the-loop). Defaults seguros para no
+    # romper specs v1.
+    scopes: list[str] = []
     maxCallsPerConversation: int | None = None
-    requiresConfirmation: bool | None = None
+    requiresConfirmation: bool = False
 
 
 class Persona(BaseModel):
@@ -153,19 +158,20 @@ class Persona(BaseModel):
     emojis: Literal["none", "sparse", "free"]
     maxLength: int
     forbiddenPhrases: list[str]
-    locale: str
+    # v2.0.0 (ADR-0050): `locale` se eliminó (el idioma vive en AppSettings.language).
 
 
 class AgentModel(BaseModel):
     primary: str
     fallback: str | None = None
     router: str | None = None
-    temperature: float
+    temperature: float = 0.3
 
 
 class AgentMemory(BaseModel):
-    shortTermTurns: int
-    summarize: bool
+    # v2.0.0 (ADR-0050): `shortTermTurns` y `rag` tienen efecto real; `summarize`
+    # se eliminó (sin caso de uso).
+    shortTermTurns: int = 30
     rag: RagConfig | None = None
 
 
@@ -176,8 +182,8 @@ class PlaybookRef(BaseModel):
 
 
 class AgentPolicies(BaseModel):
-    escalation: EscalationPolicy
-    confirmBeforeWrite: bool
+    # v2.0.0 (ADR-0050): `escalation` y `confirmBeforeWrite` se eliminaron (la
+    # escalación operativa vive en AppSettings; horarios/SLA son Tanda 3).
     maxToolCallsPerTurn: int
     budgetUsdPerConversation: float | None = None
 
@@ -193,6 +199,10 @@ class AgentSpec(BaseModel):
     tools: list[ToolBinding]
     policies: AgentPolicies
     packs: list[str]
+    # v2.0.0 (ADR-0050): extensibilidad por tenant sin fork. Datos libres que un
+    # motor de hooks/guardrails declarativos consumirá (Tanda 3). RESERVADO: hoy
+    # se persiste y viaja en el spec, pero ningún motor lo lee todavía.
+    extensions: dict[str, Any] = {}
 
 
 # ─────────────────────────────────────────────────────────────
