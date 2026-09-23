@@ -67,11 +67,11 @@ async def _link(admin_id: uuid.UUID, tenant_id: uuid.UUID, role: str) -> None:
         session.add(TenantUser(tenant_id=tenant_id, admin_id=admin_id, role=role))
 
 
-async def test_master_entra_a_admins(app_client) -> None:
+async def test_master_entra_a_colaboradores(app_client) -> None:
     cookie = await _login(app_client, "admin@local", "admin123")
-    r = await app_client.get("/admin/admins", headers={"Cookie": cookie})
+    r = await app_client.get("/admin/colaboradores", headers={"Cookie": cookie})
     assert r.status_code == 200
-    assert "Administradores" in r.text
+    assert "Colaboradores" in r.text
 
 
 async def test_master_crea_admin_y_concede_permiso(app_client, moto_setup) -> None:
@@ -79,7 +79,7 @@ async def test_master_crea_admin_y_concede_permiso(app_client, moto_setup) -> No
     email = _uniq("nuevo-admin")
 
     r = await app_client.post(
-        "/admin/admins",
+        "/admin/colaboradores",
         headers={"Cookie": cookie},
         data={"email": email, "password": PASSWORD, "role": "colaborador"},
     )
@@ -94,7 +94,7 @@ async def test_master_crea_admin_y_concede_permiso(app_client, moto_setup) -> No
         ).scalar_one()
 
     r = await app_client.post(
-        f"/admin/admins/{admin.id}/grant",
+        f"/admin/colaboradores/{admin.id}/grant",
         headers={"Cookie": cookie},
         data={"section": "costs", "access": "read", "tenant": ""},
     )
@@ -198,23 +198,23 @@ async def test_gate_de_pack_por_seccion(app_client, moto_setup) -> None:
 
 
 async def test_no_master_no_gestiona_admins(app_client) -> None:
-    """Un no-master con `admins:write` no puede entrar a la gestión ni crear un
-    master (auto-escalada): la administración de identidades es solo de master."""
+    """Un no-master con `collaborators:write` no puede entrar a la gestión ni crear
+    un master (auto-escalada): la administración de identidades es de master u owner."""
     email = _uniq("gestor")
     admin_id = await _make_admin(email)
-    await _grant(admin_id, "admins", "write")
+    await _grant(admin_id, "collaborators", "write")
     cookie = await _login(app_client, email)
     headers = {"Cookie": cookie}
 
-    assert (await app_client.get("/admin/admins", headers=headers)).status_code == 303
+    assert (await app_client.get("/admin/colaboradores", headers=headers)).status_code == 403
 
     target = _uniq("escalada")
     r = await app_client.post(
-        "/admin/admins",
+        "/admin/colaboradores",
         headers=headers,
         data={"email": target, "password": PASSWORD, "role": "master"},
     )
-    assert r.status_code == 303
+    assert r.status_code == 403
 
     from core.db.models import Admin
     from core.db.session import get_session
@@ -224,3 +224,137 @@ async def test_no_master_no_gestiona_admins(app_client) -> None:
             await session.execute(select(Admin).where(Admin.email == target))
         ).scalar_one_or_none()
     assert created is None
+
+
+async def test_login_por_tenant(app_client) -> None:
+    """Un admin owner creado en el alta entra y ve solo su tenant (login por tenant)."""
+    from core.onboarding import onboard_tenant
+
+    slug = f"rbac-tenant-{uuid.uuid4().hex[:6]}"
+    email = _uniq("owner-tenant")
+    await onboard_tenant(
+        name="Negocio RBAC",
+        slug=slug,
+        business_description="Alta con credenciales (ADR-0048).",
+        persona={"tone": "cercano"},
+        admin_email=email,
+        admin_password=PASSWORD,
+    )
+
+    cookie = await _login(app_client, email)
+    headers = {"Cookie": cookie}
+
+    # Entra al panel de su negocio y puede gestionar sus colaboradores.
+    assert (await app_client.get("/admin", headers=headers)).status_code == 200
+    assert (await app_client.get("/admin/colaboradores", headers=headers)).status_code == 200
+    # No es master: no entra a la gestión de plataforma.
+    assert (await app_client.get("/admin/tenants", headers=headers)).status_code == 403
+    # El selector solo lista su tenant.
+    r = await app_client.get("/admin", headers=headers)
+    assert "Negocio RBAC" in r.text
+
+
+async def test_colaborador_no_entra_a_colaboradores(app_client, tenant_setup) -> None:
+    """Un colaborador (no owner) no administra cuentas."""
+    t1, _t2 = tenant_setup
+    email = _uniq("colab-cuentas")
+    admin_id = await _make_admin(email)
+    await _link(admin_id, t1, "colaborador")
+    cookie = await _login(app_client, email)
+    assert (
+        await app_client.get("/admin/colaboradores", headers={"Cookie": cookie})
+    ).status_code == 403
+
+
+async def test_owner_gestiona_colaborador_de_su_tenant(app_client, tenant_setup) -> None:
+    """Un owner SÍ administra cuentas exclusivas de su tenant: crea y resetea."""
+    t1, _t2 = tenant_setup
+    owner_email = _uniq("owner-ok")
+    owner_id = await _make_admin(owner_email)
+    await _link(owner_id, t1, "owner")
+    cookie = await _login(app_client, owner_email)
+    headers = {"Cookie": cookie}
+
+    nuevo = _uniq("nuevo-colab")
+    r = await app_client.post(
+        "/admin/colaboradores",
+        headers=headers,
+        data={"email": nuevo, "password": PASSWORD, "role": "colaborador"},
+    )
+    assert r.status_code == 303
+
+    from core.db.models import Admin, TenantUser
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        created = (
+            await session.execute(select(Admin).where(Admin.email == nuevo))
+        ).scalar_one()
+        link = (
+            await session.execute(
+                select(TenantUser).where(
+                    TenantUser.admin_id == created.id, TenantUser.tenant_id == t1
+                )
+            )
+        ).scalar_one_or_none()
+    assert link is not None and link.role == "colaborador"
+
+    # Reset de contraseña de un colaborador de su tenant: permitido.
+    r = await app_client.post(
+        f"/admin/colaboradores/{created.id}/password",
+        headers=headers,
+        data={"password": "nueva-clave-123"},
+    )
+    assert r.status_code == 303
+    assert (
+        await app_client.post(
+            "/admin/login", data={"email": nuevo, "password": "nueva-clave-123"}
+        )
+    ).status_code == 303
+
+
+async def test_owner_no_secuestra_cuenta_compartida(app_client, tenant_setup) -> None:
+    """Un owner no puede resetear/desactivar una cuenta multi-tenant o con permisos
+    globales co-vinculada a su tenant (evita secuestro horizontal)."""
+    t1, t2 = tenant_setup
+
+    shared_email = _uniq("compartido")
+    shared_id = await _make_admin(shared_email)
+    await _grant(shared_id, "costs", "read")  # permiso global
+    await _link(shared_id, t2, "owner")  # owner de OTRO tenant
+    await _link(shared_id, t1, "colaborador")  # co-vinculado al tenant del owner
+
+    owner_email = _uniq("owner-a")
+    owner_id = await _make_admin(owner_email)
+    await _link(owner_id, t1, "owner")
+    cookie = await _login(app_client, owner_email)
+    headers = {"Cookie": cookie}
+
+    # Intento de secuestro por reset de contraseña: bloqueado.
+    r = await app_client.post(
+        f"/admin/colaboradores/{shared_id}/password",
+        headers=headers,
+        data={"password": "intento-secuestro-1"},
+    )
+    assert r.status_code == 303
+    # La contraseña original sigue válida y la nueva no.
+    assert (
+        await app_client.post(
+            "/admin/login", data={"email": shared_email, "password": PASSWORD}
+        )
+    ).status_code == 303
+    assert (
+        await app_client.post(
+            "/admin/login", data={"email": shared_email, "password": "intento-secuestro-1"}
+        )
+    ).status_code == 401
+
+    # Tampoco puede desactivar la cuenta compartida.
+    await app_client.post(f"/admin/colaboradores/{shared_id}/toggle", headers=headers)
+
+    from core.db.models import Admin
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        target = await session.get(Admin, shared_id)
+    assert target is not None and target.active is True

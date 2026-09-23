@@ -38,6 +38,32 @@ async def _pack_views_activo():
         # sea vacía) antes de poder activarse para este tenant.
         await plugin_manager.save_config("pack_commerce", {})
         await plugin_manager.activate("pack_commerce")
+        # El spec del tenant por defecto debe habilitar el pack: la vista por
+        # descriptor solo se sirve si el pack está en `spec.packs` (ADR-0019),
+        # y el seed base no crea spec con packs.
+        from sqlalchemy import select
+
+        from core.agents.spec import load_active_spec
+        from core.db.models import AgentSpecRecord
+        from core.db.session import get_session
+
+        await load_active_spec()
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(AgentSpecRecord)
+                    .where(
+                        AgentSpecRecord.tenant_id == tenant_id,
+                        AgentSpecRecord.is_active.is_(True),
+                        AgentSpecRecord.deleted_at.is_(None),
+                    )
+                    .order_by(AgentSpecRecord.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one()
+            data = dict(row.spec)
+            data["packs"] = sorted(set(data.get("packs", [])) | {"pack_commerce"})
+            row.spec = data
     yield
 
 

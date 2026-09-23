@@ -58,8 +58,8 @@
       {% if perms and perms.get('tenants') %}
       <li><a class="nav-link {% if section == 'tenants' %}active{% endif %}" href="/admin/tenants">Tenants</a></li>
       {% endif %}
-      {% if perms and perms.get('admins') %}
-      <li><a class="nav-link {% if section == 'admins' %}active{% endif %}" href="/admin/admins">Administradores</a></li>
+      {% if perms and perms.get('collaborators') %}
+      <li><a class="nav-link {% if section == 'collaborators' %}active{% endif %}" href="/admin/colaboradores">Colaboradores</a></li>
       {% endif %}
       {% if perms and perms.get('settings') %}
       <li><a class="nav-link {% if section == 'settings' %}active{% endif %}" href="/admin/configuracion">Configuración</a></li>

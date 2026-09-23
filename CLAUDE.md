@@ -41,6 +41,7 @@ core/                  monolito modular (todo el runtime en un proceso)
   memory/              working (Redis) + recall (pgvector)
   billing/             planes, cuotas, enforcement, cobro Wompi (ADR-0045/0046)
   admin/               panel SSR + auth propia + data-table + editor spec + wizard tenants
+                       + RBAC por permisos de sección y Colaboradores por tenant (ADR-0047/0048)
   db/                  tenant_scope→set_config, RLS, migraciones
   tasks/               celery (crons), colas
 packages/contracts     tipos compartidos (pydantic), congelados, sin dependencias

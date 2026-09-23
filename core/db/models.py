@@ -380,7 +380,7 @@ class Admin(Base):
     email: Mapped[str] = mapped_column(Text, unique=True)
     username: Mapped[str | None] = mapped_column(Text, unique=True)
     password_hash: Mapped[str] = mapped_column(Text)
-    role: Mapped[str] = mapped_column(Text, default="master")  # master | colaborador
+    role: Mapped[str] = mapped_column(Text, default="colaborador")  # master | colaborador
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

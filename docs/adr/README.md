@@ -55,3 +55,4 @@ Se crean con `/adr`.
 | 0045 | Planes y cuotas por tenant: catálogo versionado, medición derivada y bloqueo duro | aceptado |
 | 0046 | Cobro de la suscripción de plataforma vía Wompi (link por período) | aceptado |
 | 0047 | Autorización del panel por permisos de sección (RBAC configurable) | aceptado |
+| 0048 | Administrador por tenant, colaboradores y alta con credenciales | aceptado |
