@@ -532,7 +532,7 @@ async def test_alta_con_whatsapp_usa_flujo_byok(app_client, monkeypatch) -> None
         },
     )
     assert r.status_code == 303
-    assert "/admin/spec" in r.headers["location"]
+    assert "/admin/configuracion" in r.headers["location"]
     assert calls and calls[0][1] == "app-x" and calls[0][2] == "waba-x" and calls[0][3] == "sandbox"
 
 

@@ -206,10 +206,31 @@ async def test_tabs_cerebro_memoria_habilidades_renderizan(app_client) -> None:
         ("cerebro", "Modelo del agente"),
         ("memoria", "Memoria del agente"),
         ("habilidades", "Habilidades (tools)"),
+        ("avanzado", "Versiones del AgentSpec"),
     ):
         r = await app_client.get(f"/admin/configuracion?tab={tab}", headers={"Cookie": session})
         assert r.status_code == 200, tab
         assert marker in r.text, f"tab {tab} no renderizó: {marker}"
+
+
+async def test_barra_de_tabs_completa_en_identidad_y_pagos(app_client) -> None:
+    """La barra de tabs es un partial compartido: desde Identidad y desde Pagos se
+    ven las mismas pestañas (el bug era que Pagos solo mostraba dos)."""
+    tid = await _tenant_id()
+    await _set_pack(tid, "pack_payments", True)
+    session = await _login(app_client)
+    headers = {"Cookie": await _switch(app_client, session, tid)}
+
+    core_tabs = ("Identidad", "Cerebro", "Memoria", "Habilidades", "Avanzado")
+
+    r = await app_client.get("/admin/configuracion", headers=headers)
+    for label in (*core_tabs, "Pagos"):
+        assert label in r.text, f"Identidad no muestra {label}"
+
+    r = await app_client.get("/admin/plugins/pack_payments/config", headers=headers)
+    assert r.status_code == 200
+    for label in (*core_tabs, "Pagos"):
+        assert label in r.text, f"Pagos no muestra {label}"
 
 
 async def test_guardar_cerebro_y_memoria_persiste_en_spec(app_client) -> None:

@@ -33,7 +33,6 @@ CORE_SECTIONS: dict[str, str] = {
     "escalations": "Escalaciones",
     "connections": "Conexiones",
     "plugins": "Plugins",
-    "spec": "AgentSpec",
     "costs": "Costos LLM",
     "plan": "Plan y consumo",
     "settings": "Configuración",
@@ -206,7 +205,7 @@ _CORE_PREFIXES: tuple[tuple[str, str], ...] = (
     # prefijo del plugin pero pertenecen a la sección "settings".
     ("/admin/plugins/pack_payments/config", "settings"),
     ("/admin/plugins", "plugins"),
-    ("/admin/spec", "spec"),
+    ("/admin/spec", "settings"),
     ("/admin/costos", "costs"),
     ("/admin/plan", "plan"),
     ("/admin/configuracion", "settings"),

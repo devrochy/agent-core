@@ -77,9 +77,20 @@ requiresConfirmation), `core/memory/working.py` y `vector.py` (memoria/rag),
 y pestañas. Fixtures/tests: `tests/test_agent_spec.py` y los que construyen `AgentSpec`.
 Ver `docs/AGENTSPEC-V2-INVENTARIO.md`.
 
-## Correcciones post-auditoría (`auditor-multitenant`)
+## Coherencia de la navegación (misma tanda)
 
-Sin hallazgos críticos/altos; se corrigieron los medios detectados:
+El editor `/admin/spec` se movió a la pestaña **"Avanzado"** de Configuración
+(historial de versiones + `raw_json`). `/admin/spec` se conserva como ruta que
+redirige al tab (compatibilidad con enlaces/docs); la sección RBAC `spec` se
+absorbe en `settings`. La pestaña **Identidad** gana los campos de persona que solo
+estaban en `raw_json` (`role`/`warmth`/`emojis`/`forbiddenPhrases`/`maxLength`).
+
+La barra de pestañas pasa a ser un **partial compartido del core**
+(`_config_tabs.html`) alimentado por `config_tabs()` (fuente única): antes la
+pestaña "Pagos" (del pack) dibujaba su propia barra con solo dos pestañas, así que
+al abrirla "desaparecían" las del core. Ahora el pack no hardcodea la barra.
+
+## Correcciones post-auditoría (`auditor-multitenant`)
 
 - **Fallback real**: `_resolved_provider_fallback` ahora usa `resolve_provider` (el
   clon por `__dict__` fallaba siempre y reintentaba el primario).

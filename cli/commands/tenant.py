@@ -113,7 +113,7 @@ def create(
         "",
         "Siguientes pasos:",
         "  1. Abre el panel y cambia al tenant en el selector (http://localhost:8000/admin).",
-        "  2. Configura el AgentSpec: /admin/spec (persona, playbooks, políticas).",
+        "  2. Configura el agente: /admin/configuracion (identidad, cerebro, memoria, habilidades).",
         "  3. Conecta WhatsApp en /admin/conexiones (o repite con el wizard + credenciales).",
         f"  4. Registra el webhook en Meta: {tenant_webhook_url(answers['slug'])} "
         "(ver: agent-core tenant webhook)",

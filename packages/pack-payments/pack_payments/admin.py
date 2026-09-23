@@ -96,6 +96,7 @@ async def payments_config_page(request: Request):
     if not await _pack_enabled():
         return RedirectResponse("/admin/configuracion?flash=El pack de pagos no está habilitado&flash_type=danger", status_code=303)
 
+    from core.admin.context import config_tabs
     from core.plugin_manager import plugin_manager
 
     configured = False
@@ -110,6 +111,7 @@ async def payments_config_page(request: Request):
 
     ctx.update(
         tab="pagos",
+        config_tabs=await config_tabs(request),
         configured=configured,
         public_key=public_key,
         webhook_url=await _wompi_webhook_url(),

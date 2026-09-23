@@ -29,6 +29,7 @@ from core.admin.auth import (
     logout,
 )
 from core.admin.context import base_context as _base_context
+from core.admin.context import config_tabs
 from core.admin.form_generator import (
     parse_form_values,
     parse_json_schema_form,
@@ -461,7 +462,7 @@ async def tenants_create(
     else:
         extra = " con WhatsApp" if connect_whatsapp else ""
         response = RedirectResponse(
-            f"/admin/spec?flash=tenant {tenant_slug} creado{extra}&flash_type=success", status_code=303
+            f"/admin/configuracion?flash=tenant {tenant_slug} creado{extra}&flash_type=success", status_code=303
         )
     response.set_cookie(
         TENANT_COOKIE,
@@ -1012,18 +1013,11 @@ async def _next_spec_version() -> str:
     return ".".join(str(x) for x in base)
 
 
-@router.get("/spec", response_class=HTMLResponse)
-async def spec_editor(request: Request) -> HTMLResponse:
-    """Editor del AgentSpec del tenant activo (C4, Sprint 4). Form por secciones
-    + vista JSON cruda validada (fallback de poder). Guardar crea una versión
-    nueva y la activa (misma semántica que `agent-core agent activate`)."""
-    ctx = await _base_context(request, "spec")
-    if ctx is None:
-        return _login_redirect()
-    spec = await load_active_spec()
-    ctx["spec"] = spec.model_dump(mode="json")
-    ctx["versions"] = await _spec_versions()
-    return _render("spec.html", ctx)
+@router.get("/spec")
+async def spec_editor() -> RedirectResponse:
+    """El editor de AgentSpec vive ahora en la tab "Avanzado" de Configuración
+    (ADR-0050). Se conserva la ruta por compatibilidad con enlaces/docs."""
+    return RedirectResponse("/admin/configuracion?tab=avanzado", status_code=307)
 
 
 async def _ensure_pack_activated(pack: str) -> str | None:
@@ -1168,7 +1162,7 @@ async def spec_save(request: Request):
             new_spec = AgentSpec.model_validate(data)
     except Exception as exc:
         return RedirectResponse(
-            f"/admin/spec?flash=spec_invalido: {exc}&flash_type=danger", status_code=303
+            f"/admin/configuracion?tab=avanzado&flash=spec_invalido: {exc}&flash_type=danger", status_code=303
         )
 
     # `raw_json` es el único camino que puede seguir tocando `packs` (fallback
@@ -1182,17 +1176,17 @@ async def spec_save(request: Request):
     version = await _save_spec_version(new_spec)
     if version is None:
         return RedirectResponse(
-            "/admin/spec?flash=hubo una edición concurrente, reintenta&flash_type=danger",
+            "/admin/configuracion?tab=avanzado&flash=hubo una edición concurrente, reintenta&flash_type=danger",
             status_code=303,
         )
     if activation_errors:
         return RedirectResponse(
-            f"/admin/spec?flash=spec guardado (v{version}), pero no se pudo activar: "
+            f"/admin/configuracion?tab=avanzado&flash=spec guardado (v{version}), pero no se pudo activar: "
             f"{'; '.join(activation_errors)}&flash_type=danger",
             status_code=303,
         )
     return RedirectResponse(
-        f"/admin/spec?flash=spec guardado y activado (v{version})&flash_type=success",
+        f"/admin/configuracion?tab=avanzado&flash=spec guardado y activado (v{version})&flash_type=success",
         status_code=303,
     )
 
@@ -3540,6 +3534,8 @@ async def settings_page(request: Request):
         payments_enabled="pack_payments" in enabled,
         # Cerebro / memoria / habilidades (ADR-0050): lo versionable del spec.
         spec=spec.model_dump(mode="json"),
+        versions=await _spec_versions(),
+        config_tabs=await config_tabs(request),
         all_tools=[
             {"name": t.name, "plugin_id": t.plugin_id, "description": t.description}
             for t in mcp_host.get_tools()
@@ -3644,6 +3640,21 @@ async def _save_spec_from_form(request: Request, data: dict, tab: str) -> Redire
     )
 
 
+async def _save_spec_if_changed(current: AgentSpec, data: dict) -> int | None:
+    """Guarda una versión nueva del spec SOLO si `data` difiere de `current`.
+
+    Evita crear una versión en cada guardado de la tab Identidad cuando lo único
+    que cambió fue AppSettings (nombre, tono, debounce, etc.).
+    """
+    try:
+        new_spec = AgentSpec.model_validate(data)
+    except Exception:
+        return None
+    if new_spec.model_dump(mode="json") == current.model_dump(mode="json"):
+        return None
+    return await _save_spec_version(new_spec)
+
+
 @router.post("/configuracion/asistente")
 async def settings_save(
     request: Request,
@@ -3658,6 +3669,11 @@ async def settings_save(
     difficulty_turnos_sin_resolver_threshold: int = Form(default=TURNOS_SIN_RESOLVER_THRESHOLD),
     difficulty_score_threshold: int = Form(default=DIFFICULTY_SCORE_THRESHOLD),
     escalation_keywords: str = Form(default=""),
+    persona_tone: str = Form(default=""),
+    persona_warmth: int = Form(default=3),
+    persona_emojis: str = Form(default="sparse"),
+    persona_max_length: int = Form(default=500),
+    persona_forbidden: str = Form(default=""),
 ):
     if await current_admin(request) is None:
         return _login_redirect()
@@ -3701,6 +3717,19 @@ async def settings_save(
             **dict(app_settings.escalation_config or {}),
             "keywords": keywords,
         }
+    # Personalidad del AgentSpec (ADR-0050): se persiste como versión nueva del
+    # spec (versionable), no en AppSettings.
+    persona_data = spec.model_dump(mode="json")
+    persona_data["persona"].update(
+        {
+            "tone": persona_tone or persona_data["persona"]["tone"],
+            "warmth": max(0, min(5, persona_warmth)),
+            "emojis": persona_emojis or persona_data["persona"]["emojis"],
+            "maxLength": max(0, persona_max_length),
+            "forbiddenPhrases": [p.strip() for p in persona_forbidden.split(",") if p.strip()],
+        }
+    )
+    await _save_spec_if_changed(spec, persona_data)
     return RedirectResponse("/admin/configuracion?flash=Configuración guardada", status_code=303)
 
 
