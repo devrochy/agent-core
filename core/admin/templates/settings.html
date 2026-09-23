@@ -1,7 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Configuración{% endblock %}
 {% block content %}
-<h1 class="fs-3 mb-4">Configuración</h1>
+<h1 class="fs-3 mb-1">Configuración</h1>
+
+<nav class="nav nav-tabs mb-4" aria-label="Secciones de configuración">
+  <a class="nav-link {% if tab == 'identidad' %}active{% endif %}"
+     {% if tab == 'identidad' %}aria-current="page"{% endif %}
+     href="/admin/configuracion">Identidad</a>
+  {% if payments_enabled %}
+  <a class="nav-link {% if tab == 'pagos' %}active{% endif %}"
+     {% if tab == 'pagos' %}aria-current="page"{% endif %}
+     href="/admin/plugins/pack_payments/config">Pagos</a>
+  {% endif %}
+</nav>
+
+{% if tab == 'identidad' %}
 <div class="row g-3">
   <div class="col-md-6">
     <div class="card mb-3">
@@ -106,18 +119,21 @@
   </div>
   <div class="col-md-6">
     <div class="card mb-3">
-      <div class="card-header fw-semibold">Kill-switch global</div>
+      <div class="card-header fw-semibold">Pausar el agente</div>
       <div class="card-body">
-        <p class="text-secondary small">Si pausas el bot, los mensajes se guardan pero nadie recibe respuesta automática.</p>
+        <p class="text-secondary small">
+          Si pausás el bot, los mensajes se guardan pero nadie recibe respuesta automática
+          (aplica solo a este negocio).
+        </p>
         <form method="post" action="/admin/configuracion/toggle-bot">
           <button class="btn btn-{{ 'success' if s.bot_paused else 'danger' }}">
-            {{ 'Reanudar bot' if s.bot_paused else 'Pausar bot globalmente' }}
+            {{ 'Reanudar bot' if s.bot_paused else 'Pausar bot' }}
           </button>
         </form>
       </div>
     </div>
     <div class="card">
-      <div class="card-header fw-semibold">LLM (BYOK)</div>
+      <div class="card-header fw-semibold">Modelo de IA (BYOK)</div>
       <div class="card-body">
         <form method="post" action="/admin/configuracion/llm">
           <div class="mb-3">
@@ -138,12 +154,13 @@
             <label class="form-label">API Key</label>
             <input type="password" name="llm_api_key" class="form-control"
                    placeholder="{{ '••••••••' if s.llm_api_key_encrypted else 'sk-...' }}">
-            <div class="form-text">Se guarda cifrada (Fernet). Vacío = conservar la actual.</div>
+            <div class="form-text">Se guarda cifrada. Vacío = conservar la actual.</div>
           </div>
-          <button class="btn btn-primary">Guardar LLM</button>
+          <button class="btn btn-primary">Guardar modelo</button>
         </form>
       </div>
     </div>
   </div>
 </div>
+{% endif %}
 {% endblock %}

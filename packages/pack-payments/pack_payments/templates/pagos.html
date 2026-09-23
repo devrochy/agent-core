@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Pagos{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Configuración</h1>
+<nav class="nav nav-tabs mb-4" aria-label="Secciones de configuración">
+  <a class="nav-link" href="/admin/configuracion">Identidad</a>
+  <a class="nav-link active" aria-current="page" href="#">Pagos</a>
+</nav>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+        <span>Pasarela de pagos (Wompi)</span>
+        <span class="badge text-bg-{{ 'success' if configured else 'secondary' }}">
+          {{ 'Conectado' if configured else 'Sin configurar' }}
+        </span>
+      </div>
+      <div class="card-body">
+        <p class="text-secondary small">
+          Cada negocio cobra a <strong>sus</strong> clientes con su propia cuenta de Wompi.
+          El ambiente se deduce del prefijo de la llave privada
+          (<code>prv_test_</code> = pruebas, <code>prv_prod_</code> = producción).
+        </p>
+        <form method="post" action="/admin/plugins/pack_payments/config">
+          <div class="mb-3">
+            <label class="form-label">Llave pública</label>
+            <input type="text" name="public_key" class="form-control font-monospace"
+                   value="{{ public_key }}" placeholder="pub_test_... o pub_prod_...">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Llave privada</label>
+            <input type="password" name="private_key" class="form-control font-monospace"
+                   placeholder="{{ '••••••••' if configured else 'prv_test_... o prv_prod_...' }}"
+                   autocomplete="new-password">
+            <div class="form-text">Vacío = conservar la actual. Se guarda cifrada.</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Secreto de eventos</label>
+            <input type="password" name="events_secret" class="form-control font-monospace"
+                   placeholder="{{ '••••••••' if configured else 'test_events_... o prod_events_...' }}"
+                   autocomplete="new-password">
+            <div class="form-text">Valida la firma de los webhooks de Wompi.</div>
+          </div>
+          <div class="form-check mb-3">
+            <input type="checkbox" class="form-check-input" id="test" name="test" value="1">
+            <label class="form-check-label" for="test">
+              Probar la conexión antes de guardar (crea un link real por el mínimo de
+              ${{ "{:,}".format(min_amount) }} COP; con llave de producción es un cobro real)
+            </label>
+          </div>
+          <button class="btn btn-primary">Probar y guardar</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header fw-semibold">Webhook de validación de pago</div>
+      <div class="card-body">
+        <p class="text-secondary small">
+          En Wompi → Configuración → Eventos, suscribí el evento
+          <code>transaction.updated</code> a esta URL:
+        </p>
+        <div class="input-group">
+          <input type="text" class="form-control font-monospace" value="{{ webhook_url }}" readonly>
+          <button class="btn btn-outline-secondary" type="button"
+                  onclick="navigator.clipboard.writeText('{{ webhook_url }}')">Copiar</button>
+        </div>
+        <p class="text-secondary small mt-3 mb-0">
+          Verifica la firma con el <strong>secreto de eventos</strong> de arriba. Sin este
+          webhook, el cliente paga pero el pedido no se confirma solo.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

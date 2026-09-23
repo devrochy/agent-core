@@ -84,6 +84,14 @@ for _module in plugin_manager.list_modules():
     plugin_router = getattr(_module, "admin_router", None)
     if plugin_router is not None:
         app.include_router(plugin_router)
+    # Routers admin extra (pestañas de Configuración, ADR-0049): por contrato el
+    # prefijo debe quedar bajo /admin para que el gate del panel aplique.
+    for _extra in _module.extra_admin_routers():
+        _prefix = getattr(_extra, "prefix", "")
+        if not _prefix.startswith("/admin"):
+            log.warning("extra_admin_router_fuera_de_admin", plugin=_module.id, prefix=_prefix)
+            continue
+        app.include_router(_extra)
 
 # Prefijos de UI admin de los packs (ej. /crm → pack_commerce), para el gate por
 # sección del middleware (ADR-0047). Se calcula una vez, tras el scan.

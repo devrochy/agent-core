@@ -202,6 +202,9 @@ _CORE_PREFIXES: tuple[tuple[str, str], ...] = (
     ("/admin/conversaciones", "conversations"),
     ("/admin/escalaciones", "escalations"),
     ("/admin/conexiones", "connections"),
+    # Pestañas de configuración aportadas por packs (ADR-0049): van bajo el
+    # prefijo del plugin pero pertenecen a la sección "settings".
+    ("/admin/plugins/pack_payments/config", "settings"),
     ("/admin/plugins", "plugins"),
     ("/admin/spec", "spec"),
     ("/admin/costos", "costs"),

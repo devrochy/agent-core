@@ -120,6 +120,16 @@ class BaseModule(ABC):
     admin_menu: list[dict[str, str]] = []
     # [{"label": "Leads", "path": "/crm/leads"}]
 
+    def extra_admin_routers(self) -> list[Any]:
+        """Routers admin adicionales del pack (ej. pestañas de Configuración).
+
+        Además del `admin_router` principal, un pack puede aportar routers
+        propios que el core incluye al arrancar (ADR-0049). El prefijo DEBE
+        empezar por `/admin` para quedar bajo el gate del panel; el core ignora
+        (con warning) cualquiera que no lo cumpla. Default: ninguno.
+        """
+        return []
+
     def __init__(self) -> None:
         self.config: BasePluginConfig | None = None
 
