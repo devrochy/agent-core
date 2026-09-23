@@ -130,7 +130,7 @@
             <div class="col-md-4">
               <label class="form-label">Zona horaria</label>
               <input type="text" name="business_tz" class="form-control"
-                     placeholder="America/Bogota" value="{{ escalation.business_hours.tz or '' }}">
+                     placeholder="America/Bogota" value="{{ (escalation.business_hours or {}).get('tz', '') }}">
             </div>
             <div class="col-md-8">
               <label class="form-label">Franjas (una por línea: día 0-6, HH:MM-HH:MM)</label>

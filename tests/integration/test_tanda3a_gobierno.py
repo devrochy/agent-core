@@ -15,7 +15,6 @@ import pytest
 from sqlalchemy import select
 
 pytestmark = [
-    pytest.mark.asyncio(loop_scope="session"),
     pytest.mark.skipif(
         os.environ.get("AGENT_CORE_INTEGRATION") != "1",
         reason="tests de integración: requiere AGENT_CORE_INTEGRATION=1 y el stack local",
