@@ -22,6 +22,7 @@ from core.mcp.types import (
     GuardrailFn,
     MCPResource,
     MCPTool,
+    ScopedHttp,
     SkillInfo,
     ToolContext,
 )
@@ -167,11 +168,16 @@ mcp_host = MCPHost()
 
 
 def new_tool_context(
-    conversation_id: uuid.UUID, customer_id: uuid.UUID, idempotency_key: str, channel: str
+    conversation_id: uuid.UUID,
+    customer_id: uuid.UUID,
+    idempotency_key: str,
+    channel: str,
+    http: ScopedHttp | None = None,
 ) -> ToolContext:
     return ToolContext(
         conversation_id=conversation_id,
         customer_id=customer_id,
         idempotency_key=idempotency_key,
         channel=channel,
+        http=http,
     )

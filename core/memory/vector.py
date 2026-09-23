@@ -13,6 +13,7 @@ pgvector quedó instalado pero sin uso). Proveedores soportados:
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any, Protocol
 
@@ -92,12 +93,21 @@ async def store_memory(
     conversation_id: uuid.UUID | None = None,
     meta: dict[str, Any] | None = None,
 ) -> None:
-    """Guarda un hecho con su embedding. No-op si la capa está desactivada."""
+    """Guarda un hecho con su embedding. No-op si la capa está desactivada.
+
+    El contenido se redacta (PII) antes de embeber (ADR-0053): la fuente de verdad
+    (el mensaje) queda intacta en `messages`; lo que se guarda acá es la versión sin
+    datos sensibles evidentes.
+    """
     provider = get_embedding_provider()
     if provider is None:
         return
     try:
-        embedding = await provider.embed(content)
+        # Se redacta ANTES de persistir y de embeber: `memory_vectors` no debe
+        # guardar PII. La fuente de verdad (el mensaje sin redactar) sigue en
+        # `messages`, que es donde se audita.
+        redacted = redact_pii(content)
+        embedding = await provider.embed(redacted)
         from core.db.models import MemoryVector
         from core.db.session import get_session
 
@@ -107,13 +117,75 @@ async def store_memory(
                     tenant_id=get_current_tenant_id(),
                     customer_id=customer_id,
                     conversation_id=conversation_id,
-                    content=content,
+                    content=redacted,
                     embedding=embedding,
                     meta=meta or {},
                 )
             )
     except Exception:
         log.exception("vector_store_failed")
+
+
+# Patrones amplios de PII (ADR-0053). Sin regex catastrófica: clases acotadas.
+_PII_PATTERNS = (
+    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "[email]"),
+    (re.compile(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)"), "[teléfono]"),
+    (re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)"), "[número]"),
+)
+
+
+def redact_pii(text: str) -> str:
+    """Enmascara emails, teléfonos y secuencias tipo tarjeta (best-effort)."""
+    if not text:
+        return text
+    redacted = text
+    for pattern, replacement in _PII_PATTERNS:
+        redacted = pattern.sub(replacement, redacted)
+    return redacted
+
+
+async def purge_memory(
+    customer_id: uuid.UUID | None = None,
+    conversation_id: uuid.UUID | None = None,
+) -> int:
+    """Borra (lógico) la memoria semántica de un cliente/conversación (ADR-0053).
+
+    Devuelve cuántas filas afectó. Exige al menos un criterio para no borrar todo
+    el tenant por accidente. Limpia también la working memory (Redis) si es por
+    conversación.
+    """
+    if customer_id is None and conversation_id is None:
+        raise ValueError("purge_memory requiere customer_id o conversation_id")
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        raise ValueError("purge_memory requiere contexto de tenant")
+
+    from sqlalchemy import select, update
+
+    from core.db.models import MemoryVector, utcnow
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        stmt = select(MemoryVector).where(
+            MemoryVector.tenant_id == tenant_id, MemoryVector.deleted_at.is_(None)
+        )
+        if customer_id is not None:
+            stmt = stmt.where(MemoryVector.customer_id == customer_id)
+        if conversation_id is not None:
+            stmt = stmt.where(MemoryVector.conversation_id == conversation_id)
+        ids = (await session.execute(stmt)).scalars().all()
+        if ids:
+            await session.execute(
+                update(MemoryVector)
+                .where(MemoryVector.id.in_([row.id for row in ids]))
+                .values(deleted_at=utcnow())
+            )
+
+    if conversation_id is not None:
+        from core.memory import working as working_memory
+
+        await working_memory.clear(conversation_id)
+    return len(ids)
 
 
 async def recall(

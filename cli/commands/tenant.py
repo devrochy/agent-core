@@ -618,3 +618,54 @@ def admins(
             writer.writerows(rows)
         console.print(f"[dim]Credenciales escritas en {out}[/dim]")
     console.print("[yellow]Guardá estas contraseñas: no se vuelven a mostrar.[/yellow]")
+
+@app.command()
+def memoria_purgar(
+    slug: str = typer.Option(..., "--slug", help="Slug del tenant"),
+    email: str = typer.Option("", "--email", help="Email del cliente a olvidar (opcional)"),
+    conversation: str = typer.Option("", "--conversation", help="UUID de conversación (opcional)"),
+) -> None:
+    """Olvida la memoria semántica de un cliente/conversación (ADR-0053).
+
+    Borrado LÓGICO de `memory_vectors` (invariante #8) del tenant indicado.
+    Exige `--email` (resuelve el customer) o `--conversation`.
+    """
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    from core.db.models import Customer, Tenant
+    from core.db.session import get_session
+
+    async def _run() -> int:
+        from core.memory.vector import purge_memory
+        from core.shared.tenant import tenant_scope
+
+        async with get_session() as session:
+            tenant_id = (
+                await session.execute(select(Tenant.id).where(Tenant.slug == slug))
+            ).scalar_one_or_none()
+        if tenant_id is None:
+            console.print(f"[red]Tenant no encontrado:[/red] {slug}")
+            raise typer.Exit(1)
+
+        async with tenant_scope(tenant_id):
+            customer_id = None
+            if email:
+                async with get_session() as session:
+                    customer_id = (
+                        await session.execute(
+                            select(Customer.id).where(Customer.tenant_id == tenant_id, Customer.external_id == email)
+                        )
+                    ).scalar_one_or_none()
+                if customer_id is None:
+                    console.print(f"[red]Cliente no encontrado:[/red] {email}")
+                    raise typer.Exit(1)
+            conv_id = _uuid.UUID(conversation) if conversation else None
+            return await purge_memory(customer_id=customer_id, conversation_id=conv_id)
+
+    if not (email or conversation):
+        console.print("[red]Indicá --email o --conversation[/red]")
+        raise typer.Exit(1)
+    n = asyncio.run(_run())
+    console.print(f"✓ [green]{n} recuerdos olvidados[/green] para {slug}")

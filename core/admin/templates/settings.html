@@ -365,6 +365,23 @@
 </div>
 
 <div class="card mt-3">
+  <div class="card-header fw-semibold">Tools declarativas (HTTP)</div>
+  <div class="card-body">
+    <p class="text-secondary small">
+      Definí tools del negocio sin escribir código (ADR-0052): cada una llama a un
+      endpoint HTTP autorizado. JSON con <code>name</code>, <code>description</code>,
+      <code>method</code> (GET/POST), <code>url</code> (con <code>{param}</code>),
+      <code>allowed_domains</code>, y opcional <code>headers</code>/<code>parameters</code>/<code>body</code>.
+    </p>
+    <form method="post" action="/admin/configuracion/habilidades">
+      <textarea name="declarative_tools_json" class="form-control font-monospace" rows="8"
+                placeholder='[{"name": "consultar_pedido", "description": "Estado de pedido", "method": "GET", "url": "https://api.negocio.com/orders/{order_id}", "allowed_domains": ["api.negocio.com"]}]'>{{ declarative_tools_json }}</textarea>
+      <button class="btn btn-primary mt-2">Guardar tools declarativas</button>
+    </form>
+  </div>
+</div>
+
+<div class="card mt-3">
   <div class="card-header fw-semibold">Guardrails propios del negocio</div>
   <div class="card-body">
     <p class="text-secondary small">

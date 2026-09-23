@@ -59,3 +59,5 @@ Se crean con `/adr`.
 | 0049 | Configuración del agente por pestañas y pagos BYOK en el pack | aceptado |
 | 0050 | AgentSpec v2.0.0: contrato que no miente y agente configurable | aceptado |
 | 0051 | Operación y gobierno del agente (rollback, horarios, guardrails declarativos, evals) | aceptado |
+| 0052 | Extensibilidad de capacidades: tools declarativas y canales por entry_points | aceptado |
+| 0053 | Memoria: retención, purga por cliente y redacción de PII | aceptado |

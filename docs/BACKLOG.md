@@ -73,6 +73,11 @@ En `core/db/models.py` y en la migración `0001_initial_schema.py`, mientras
 (1536) exige editar el código y escribir una migración a mano. El docstring de
 `core/memory/vector.py:14` lo reconoce.
 
+**Embeddings por tenant (BYOK)**
+Hoy `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL` son globales del despliegue. Que cada
+tenant traiga su proveedor de embeddings exige claves por tenant + dimensión por
+proveedor (amarrado al punto anterior). Diferido en ADR-0053.
+
 **63 avisos de longitud de línea**
 `E501` está excluido en `pyproject.toml` porque activarlo hoy exigía un reformateo
 masivo mezclado con el arreglo del arranque. Abordar aparte, en una rama solo de

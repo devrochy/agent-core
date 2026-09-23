@@ -235,6 +235,11 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     ]
     selected_names = select_relevant_skills(latest_message, recent_context, available_skills)
     active_tools = mcp_host.get_skill_tools(selected_names)
+    # Tools declarativas del tenant (ADR-0052): se suman a las del tenant. El
+    # enablement por `ToolBinding` y el deny de packs aplican igual (abajo).
+    from core.mcp.declarative import tools_for_spec
+
+    active_tools = [*active_tools, *tools_for_spec(spec)]
 
     prompt_ctx = PromptContext(
         assistant_name=app_settings.assistant_name if app_settings else settings.app_name,
@@ -543,13 +548,22 @@ async def _execute_tool_safely(
     conversation: Conversation, customer: Customer, tool_call: LLMToolCall, spec=None  # type: ignore[no-untyped-def]
 ) -> dict[str, Any]:
     """Ejecuta una tool aislando el error: un plugin roto se desactiva, el turno sigue."""
+    from core.mcp.declarative import tools_for_spec
+    from core.mcp.types import ScopedHttp
     from core.plugin_manager import plugin_manager
 
+    # ScopedHttp (ADR-0052): única salida a red. Se acota a la allowlist de LA tool
+    # que se ejecuta (no la unión de todas), para que una tool no pueda llamar a
+    # dominios autorizados para otra. Una tool Python que no use `context.http` no
+    # queda afectada.
+    declarative = {t.name: t for t in tools_for_spec(spec)} if spec is not None else {}
+    allowed = list(getattr(declarative.get(tool_call.name), "_allowed_domains", []) or [])
     context = new_tool_context(
         conversation_id=conversation.id,
         customer_id=customer.id,
         idempotency_key=f"{conversation.id}:{tool_call.id}",
         channel=conversation.channel,
+        http=ScopedHttp(allowed),
     )
 
     # Enablement + consentimiento de la tool por tenant (ADR-0019). Aunque las
@@ -620,7 +634,14 @@ async def _execute_tool_safely(
                 row.state = state
 
     try:
-        result = await mcp_host.execute_tool(tool_call.name, tool_call.arguments, context)
+        # Prioridad al host: una tool declarativa NO puede shadowear una tool
+        # registrada (evita que un tenant redefina una tool nativa/pack).
+        if tool_call.name in declarative and mcp_host.get_tool(tool_call.name) is None:
+            # Tool declarativa del tenant (ADR-0052): se ejecuta con su handler
+            # (ScopedHttp acotado), no vía mcp_host (que no la conoce).
+            result = await declarative[tool_call.name].handler(tool_call.arguments, context)
+        else:
+            result = await mcp_host.execute_tool(tool_call.name, tool_call.arguments, context)
     except PluginError as exc:
         # Las tools del CORE ("core") no se auto-desactivan: el core no se apaga a sí mismo.
         if exc.plugin_id != "core":
@@ -661,9 +682,15 @@ async def _tool_denial(
       veces puede llamarse esa tool en la MISMA conversación (corta abuso/costo);
       `scopes` es autorización fina que un guardrail/pack puede exigir.
     """
+    from core.mcp.declarative import tools_for_spec
     from core.plugin_manager import plugin_manager
 
     tool = mcp_host.get_tool(tool_name)
+    declarative_names = {t.name for t in tools_for_spec(spec)}
+    if tool is None and tool_name not in declarative_names:
+        # No es una tool registrada ni declarativa del tenant: no debe ejecutarse
+        # (defensa en profundidad ante un tool_call fuera de schema).
+        return f"La herramienta '{tool_name}' no está disponible para este tenant."
     if tool is not None:
         if tool.plugin_id not in enabled_packs(spec):
             return f"La herramienta '{tool_name}' no está disponible para este tenant."
