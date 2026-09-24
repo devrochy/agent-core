@@ -182,6 +182,33 @@ def test_lead_provider_registra_columnas() -> None:
     assert cols == ["saldo", "mora", "riesgo"]
 
 
+def test_api_gestor_rutas_f1() -> None:
+    """ADR-0065: la API del gestor expone el contrato de la APK (F1: auth + perfil)."""
+    from pack_cobranza import api_gestor
+
+    rutas = {(r.path, tuple(sorted(getattr(r, "methods", set())))) for r in api_gestor.router.routes}
+    assert ("/api/pack/pack_cobranza/auth/gestor/login", ("POST",)) in rutas
+    assert ("/api/pack/pack_cobranza/auth/propietario/login", ("POST",)) in rutas
+    assert ("/api/pack/pack_cobranza/auth/refresh", ("POST",)) in rutas
+    assert ("/api/pack/pack_cobranza/perfil", ("PATCH",)) in rutas
+
+
+def test_api_gestor_par_de_tokens() -> None:
+    import uuid
+
+    from pack_cobranza.api_gestor import _par_tokens
+    from pack_cobranza.auth import verify_token
+    from pack_cobranza.models import Gestor
+
+    gestor = Gestor(tenant_id=uuid.uuid4(), nombre="Luis", usuario="luis")
+    gestor.id = uuid.uuid4()
+    pair = _par_tokens("secreto", gestor)
+    access = verify_token(pair["accessToken"], "secreto")
+    refresh = verify_token(pair["refreshToken"], "secreto")
+    assert access is not None and access["typ"] == "access" and access["gestor_id"] == str(gestor.id)
+    assert refresh is not None and refresh["typ"] == "refresh"
+
+
 def test_trayecto_vecino_mas_cercano() -> None:
     """El orden del trayecto encadena por vecino más cercano desde el inicio."""
     from pack_cobranza.admin import _haversine_km, _ordenar_trayecto
