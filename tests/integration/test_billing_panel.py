@@ -68,9 +68,22 @@ async def test_pagina_plan_muestra_trial_y_barras(app_client):
     assert "Basic" in body and "Premium" in body and "Empresarial" in body
 
 
-async def test_pagina_plan_marca_limite_alcanzado(app_client):
+async def test_pagina_plan_marca_limite_superado(app_client):
+    """Rojo solo al SUPERAR el límite (used > limit), no al estar justo en el tope."""
     tid = await _new_tenant()
     cookie = await _switch_tenant(app_client, await _login(app_client), tid)
+
+    # Un cliente con límite 0: used (1) > limit (0) => superado.
+    from core.db.models import Customer
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            session.add(
+                Customer(tenant_id=tid, channel="whatsapp", external_id=f"wa:{_uniq('plan')}")
+            )
+            await session.commit()
 
     from core.billing import plans as plans_module
     from core.billing.plans import Plan
@@ -84,6 +97,29 @@ async def test_pagina_plan_marca_limite_alcanzado(app_client):
         r = await app_client.get("/admin/plan", headers={"Cookie": cookie})
         assert r.status_code == 200
         assert "Límite alcanzado" in r.text or "bg-danger" in r.text
+    finally:
+        plans_module.PLANS_BY_ID["free"] = original
+
+
+async def test_pagina_plan_no_marca_danger_en_el_tope(app_client):
+    """Estar justo en el tope (used == limit) NO es excedido: sin rojo."""
+    tid = await _new_tenant()
+    cookie = await _switch_tenant(app_client, await _login(app_client), tid)
+
+    from core.billing import plans as plans_module
+    from core.billing.plans import Plan
+
+    original = plans_module.PLANS_BY_ID["free"]
+    # Límite 0 y 0 clientes del tenant nuevo: used (0) == limit (0).
+    plans_module.PLANS_BY_ID["free"] = Plan(
+        id="free", name="Free", price_cop=0, trial_days=30,
+        limits={**original.limits, "clientes": 0},
+    )
+    try:
+        r = await app_client.get("/admin/plan", headers={"Cookie": cookie})
+        assert r.status_code == 200
+        assert "Límite alcanzado" not in r.text
+        assert "bg-danger" not in r.text
     finally:
         plans_module.PLANS_BY_ID["free"] = original
 

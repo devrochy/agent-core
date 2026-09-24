@@ -103,7 +103,9 @@
     </div>
     {% elif billing and billing.warning_metric %}
     <div class="alert alert-warning d-flex justify-content-between align-items-center">
-      <span><strong>Cerca del límite:</strong> {{ billing.warning_metric.label }} al {{ billing.warning_metric.percent }}%.</span>
+      <span><strong>Cerca del límite:</strong> te {{ 'queda' if billing.warning_metric.remaining == 1 else 'quedan' }}
+        {{ billing.warning_metric.remaining }}
+        {{ billing.warning_metric.unit }} de {{ billing.warning_metric.label }} en tu plan.</span>
       <a class="btn btn-sm btn-light" href="/admin/plan">Ver plan</a>
     </div>
     {% endif %}

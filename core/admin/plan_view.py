@@ -86,8 +86,19 @@ async def dashboard_billing_summary(tenant_id: uuid.UUID) -> dict[str, Any]:
     """Resumen compacto para el dashboard: plan, días restantes, alerta de cuota."""
     overview = await subscription_overview_or_none(tenant_id)
     usage = await billing_usage(tenant_id, overview)
+    # Rojo: SUPERÓ el límite (no basta con estar en el tope).
     alert = next((u for u in usage if u["exceeded"]), None)
-    warning = next((u for u in usage if u["percent"] is not None and u["percent"] >= 80), None)
+    # Ámbar: dependiente de los usos RESTANTES -- avisa cuando queda poco margen
+    # (<= 1 uso, o <= 20% del límite), nunca si ya no queda ninguno (0 = tope o
+    # excedido). `remaining` se adjunta para que el banner sea accionable.
+    warning = None
+    for u in usage:
+        if u["limit"] is None or u["exceeded"]:
+            continue
+        remaining = u["limit"] - u["used"]
+        if remaining > 0 and (remaining <= 1 or remaining <= u["limit"] * 0.2):
+            warning = {**u, "remaining": remaining}
+            break
     return {
         "plan_name": overview.plan_name if overview else "—",
         "status": overview.status if overview else "sin_suscripcion",

@@ -55,6 +55,7 @@
                  aria-valuenow="{{ u.percent if u.percent is not none else 0 }}"
                  aria-valuemin="0" aria-valuemax="100">
               {% if u.percent is not none %}
+              {# rojo solo si SUPERÓ el límite; en el tope exacto (100%) es ámbar #}
               <div class="progress-bar {{ 'bg-danger' if u.exceeded else ('bg-warning' if u.percent >= 80 else 'bg-primary') }}"
                    style="width: {{ u.percent }}%"></div>
               {% else %}
