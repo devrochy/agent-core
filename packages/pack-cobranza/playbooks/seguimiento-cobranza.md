@@ -1,5 +1,5 @@
 ---
-name: seguimiento
+name: seguimiento-cobranza
 description: Reglas de seguimiento y recordatorios de cobranza
 ---
 ## Seguimiento y recordatorios
