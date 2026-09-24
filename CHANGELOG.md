@@ -43,6 +43,15 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
 - **Editar cuota**: formulario completo (valor, vencimiento, estatus) con auditoría.
 - **Conversación del cliente**: acceso directo desde el detalle del cliente a la
   conversación del core (si el cliente está enlazado a un `Customer`).
+- **Auditoría**: pantalla de `AuditoriaCartera` (imborrable) con filtros por entidad,
+  operación y rango de fechas.
+- **Promesas**: listado filtrable por estado + marcar cumplida/incumplida (con auditoría).
+- **Caja** (pestaña de la cartera): saldo inicial/actual + libro de movimientos
+  (pagos, abonos, inyecciones, gastos aprobados, préstamos y ajustes) + **ajuste manual**
+  con motivo. Ahora **inyecciones y gastos aprobados mueven el saldo de caja**, para que
+  el libro cuadre.
+- **Eventos de sincronización** de la app de campo en la pantalla **Dispositivos**
+  (`SyncEvento`, con los `error` resaltados).
 - **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
   cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
   Las operaciones de administración (gasto, inyección, visita, liquidación) viven

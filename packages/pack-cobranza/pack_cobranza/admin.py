@@ -59,6 +59,7 @@ from pack_cobranza.models import (
     Promesa,
     ReglaNegociacion,
     ReporteDiario,
+    SyncEvento,
 )
 from pack_cobranza.permisos import GESTOR_PERMISOS
 
@@ -546,10 +547,14 @@ async def _dispositivos_data(ctx: dict[str, Any]) -> None:
         devices = (await session.execute(select(Device).where(Device.tenant_id == tid, Device.deleted_at.is_(None)).order_by(Device.created_at.desc()))).scalars().all()
         gestores = {g.id: f"{g.nombre} {g.apellido or ''}".strip() for g in (await session.execute(select(Gestor).where(Gestor.tenant_id == tid))).scalars().all()}
         intentos = (await session.execute(select(IntentoAcceso).where(IntentoAcceso.tenant_id == tid).order_by(IntentoAcceso.created_at.desc()).limit(20))).scalars().all()
+        eventos = (await session.execute(select(SyncEvento).where(SyncEvento.tenant_id == tid).order_by(SyncEvento.created_at.desc()).limit(50))).scalars().all()
+        device_gestor = {d.id: (gestores.get(d.gestor_id, "—") if d.gestor_id else "—") for d in devices}
         ctx.update(
             dispositivos=[{"id": str(d.id), "codigo": d.codigo, "gestor": gestores.get(d.gestor_id, "—") if d.gestor_id else "—", "imei": d.imei or "", "estado": d.estado} for d in devices],
             gestores=[{"id": str(gid), "nombre": nombre} for gid, nombre in gestores.items()],
             intentos=[{"resultado": i.resultado, "motivo": i.motivo or "", "imei": i.imei or "", "fecha": i.created_at.strftime("%Y-%m-%d %H:%M") if i.created_at else ""} for i in intentos],
+            eventos=[{"fecha": e.created_at.strftime("%Y-%m-%d %H:%M") if e.created_at else "", "tipo": e.tipo, "estado": e.estado, "gestor": device_gestor.get(e.device_id, "—") if e.device_id else "—", "evento": e.evento_id_cliente[:8], "critico": e.estado != "aplicado"} for e in eventos],
+            eventos_error=sum(1 for e in eventos if e.estado != "aplicado"),
         )
 
 
@@ -708,6 +713,170 @@ async def cuota_editar_save(request: Request, record_id: str) -> RedirectRespons
     return RedirectResponse(f"{destino}?flash=Cuota actualizada&flash_type=success", status_code=303)
 
 
+# --------------------------------------------------------------- auditoría
+@router.get("/auditoria", response_class=HTMLResponse)
+async def auditoria(request: Request) -> HTMLResponse:
+    ctx = await base_context(request, SECTION)
+    if ctx is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=False):
+        return RedirectResponse("/admin?flash=sin_pack&flash_type=danger", status_code=303)
+    qp = request.query_params
+    f_entidad = (qp.get("entidad") or "").strip()
+    f_operacion = (qp.get("operacion") or "").strip()
+    f_desde = (qp.get("desde") or "").strip()
+    f_hasta = (qp.get("hasta") or "").strip()
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        q = select(AuditoriaCartera).where(AuditoriaCartera.tenant_id == tid)
+        if f_entidad:
+            q = q.where(AuditoriaCartera.entidad == f_entidad)
+        if f_operacion:
+            q = q.where(AuditoriaCartera.operacion == f_operacion)
+        for valor, es_desde in ((f_desde, True), (f_hasta, False)):
+            if not valor:
+                continue
+            try:
+                dia = date.fromisoformat(valor)
+            except ValueError:
+                continue
+            limite = datetime.combine(dia if es_desde else dia + timedelta(days=1), datetime.min.time(), tzinfo=UTC)
+            q = q.where(AuditoriaCartera.created_at >= limite) if es_desde else q.where(AuditoriaCartera.created_at < limite)
+        filas = (await session.execute(q.order_by(AuditoriaCartera.created_at.desc()).limit(200))).scalars().all()
+        entidades = sorted({e for (e,) in (await session.execute(select(AuditoriaCartera.entidad).where(AuditoriaCartera.tenant_id == tid).distinct())).all() if e})
+        operaciones = sorted({o for (o,) in (await session.execute(select(AuditoriaCartera.operacion).where(AuditoriaCartera.tenant_id == tid).distinct())).all() if o})
+    ctx.update(
+        filas=[{"fecha": r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "", "entidad": r.entidad, "id_corto": str(r.entidad_id)[:8], "operacion": r.operacion, "antes": r.valores_antes, "despues": r.valores_despues, "actor": r.actor_rol or "—", "motivo": r.motivo or ""} for r in filas],
+        entidades=entidades, operaciones=operaciones, f_entidad=f_entidad, f_operacion=f_operacion, f_desde=f_desde, f_hasta=f_hasta,
+    )
+    return _render("cobranza/auditoria.html", ctx)
+
+
+# --------------------------------------------------------------- promesas
+_ESTADOS_PROMESA = ["pendiente", "cumplida", "incumplida"]
+
+
+@router.get("/promesas", response_class=HTMLResponse)
+async def promesas(request: Request) -> HTMLResponse:
+    ctx = await base_context(request, SECTION)
+    if ctx is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=False):
+        return RedirectResponse("/admin?flash=sin_pack&flash_type=danger", status_code=303)
+    tid = get_current_tenant_id()
+    f_estado = (request.query_params.get("estado") or "").strip()
+    async with get_session() as session:
+        q = select(Promesa).where(Promesa.tenant_id == tid, Promesa.deleted_at.is_(None))
+        if f_estado:
+            q = q.where(Promesa.estado == f_estado)
+        filas = (await session.execute(q.order_by(Promesa.fecha_prometida.desc()).limit(200))).scalars().all()
+        nombres = {c.id: f"{c.nombre} {c.apellido or ''}".strip() for c in (await session.execute(select(Cliente).where(Cliente.tenant_id == tid))).scalars().all()}
+    ctx.update(
+        promesas=[{"id": str(p.id), "cliente": nombres.get(p.cliente_id, "—"), "fecha": p.fecha_prometida.isoformat(), "valor": float(p.valor_prometido), "tipo": p.tipo, "estado": p.estado, "origen": p.creado_por, "vencida": p.estado == "pendiente" and p.fecha_prometida < date.today()} for p in filas],
+        f_estado=f_estado, estados=_ESTADOS_PROMESA,
+    )
+    return _render("cobranza/promesas.html", ctx)
+
+
+@router.post("/promesas/{record_id}/estado")
+async def promesa_estado(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    form = await request.form()
+    nuevo = str(form.get("estado") or "")
+    if nuevo not in _ESTADOS_PROMESA:
+        return RedirectResponse("/cobranza/promesas?flash=Estado inválido&flash_type=danger", status_code=303)
+    if rid is not None:
+        async with get_session() as session:
+            promesa = await get_owned(session, Promesa, rid)
+            if promesa is not None:
+                antes = promesa.estado
+                promesa.estado = nuevo
+                _auditar(session, "promesa", promesa.id, "editar", antes={"estado": antes}, despues={"estado": nuevo})
+    return RedirectResponse("/cobranza/promesas?flash=Promesa actualizada&flash_type=success", status_code=303)
+
+
+# --------------------------------------------------------------- caja
+async def _caja_ledger(session, cartera_id: uuid.UUID) -> tuple[Caja, list[dict[str, Any]]]:
+    """Saldo de la caja + libro de movimientos (cuadra con `saldo_actual`)."""
+    tid = get_current_tenant_id()
+    caja = await _caja_de(session, cartera_id)
+    movs: list[dict[str, Any]] = []
+    cliente_ids = [c.id for c in (await session.execute(select(Cliente).where(Cliente.tenant_id == tid, Cliente.cartera_id == cartera_id))).scalars().all()]
+    if cliente_ids:
+        for p in (await session.execute(select(Pago).where(Pago.tenant_id == tid, Pago.cliente_id.in_(cliente_ids), Pago.deleted_at.is_(None)))).scalars().all():
+            movs.append({"fecha": p.fecha_hora, "tipo": "Pago", "signo": "+", "valor": float(p.valor), "detalle": p.metodo_pago or "efectivo"})
+        for a in (await session.execute(select(Abono).where(Abono.tenant_id == tid, Abono.cliente_id.in_(cliente_ids), Abono.deleted_at.is_(None)))).scalars().all():
+            movs.append({"fecha": a.fecha_hora, "tipo": "Abono", "signo": "+", "valor": float(a.valor), "detalle": a.metodo_pago or "efectivo"})
+    for pr in (await session.execute(select(Prestamo).where(Prestamo.tenant_id == tid, Prestamo.cartera_id == cartera_id, Prestamo.deleted_at.is_(None)))).scalars().all():
+        movs.append({"fecha": pr.created_at, "tipo": "Préstamo", "signo": "-", "valor": float(pr.valor), "detalle": "Desembolso"})
+    for i in (await session.execute(select(Inyeccion).where(Inyeccion.tenant_id == tid, Inyeccion.cartera_id == cartera_id, Inyeccion.deleted_at.is_(None)))).scalars().all():
+        movs.append({"fecha": i.fecha_hora, "tipo": "Inyección", "signo": "+", "valor": float(i.valor), "detalle": i.comentario or "Aporte de capital"})
+    for g in (await session.execute(select(Gasto).where(Gasto.tenant_id == tid, Gasto.cartera_id == cartera_id, Gasto.deleted_at.is_(None), Gasto.aprobado.is_(True)))).scalars().all():
+        movs.append({"fecha": g.created_at, "tipo": "Gasto", "signo": "-", "valor": float(g.valor), "detalle": g.descripcion or ""})
+    for aj in (await session.execute(select(CajaAjuste).where(CajaAjuste.tenant_id == tid, CajaAjuste.caja_id == caja.id))).scalars().all():
+        delta = float(aj.valor_nuevo) - float(aj.valor_anterior)
+        movs.append({"fecha": aj.created_at, "tipo": "Ajuste", "signo": "+" if delta >= 0 else "-", "valor": abs(delta), "detalle": aj.motivo})
+    movs = [m for m in movs if m["fecha"] is not None]
+    movs.sort(key=lambda m: m["fecha"], reverse=True)
+    for m in movs:
+        m["fecha"] = m["fecha"].strftime("%Y-%m-%d %H:%M")
+    return caja, movs
+
+
+@router.get("/carteras/{record_id}/caja", response_class=HTMLResponse)
+async def cartera_caja(request: Request, record_id: str) -> HTMLResponse:
+    ctx = await base_context(request, SECTION)
+    if ctx is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=False):
+        return RedirectResponse("/admin?flash=sin_pack&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    async with get_session() as session:
+        cartera = await get_owned(session, Cartera, rid) if rid else None
+        if cartera is None:
+            return RedirectResponse("/cobranza/carteras?flash=No encontrada&flash_type=danger", status_code=303)
+        caja, movimientos = await _caja_ledger(session, cartera.id)
+        ctx.update(
+            record_id=record_id, tab="caja", cartera=cartera.nombre,
+            saldo_inicial=float(caja.saldo_inicial), saldo_actual=float(caja.saldo_actual),
+            entradas=sum(m["valor"] for m in movimientos if m["signo"] == "+"),
+            salidas=sum(m["valor"] for m in movimientos if m["signo"] == "-"),
+            movimientos=movimientos,
+        )
+    return _render("cobranza/cartera_caja.html", ctx)
+
+
+@router.post("/carteras/{record_id}/caja/ajuste")
+async def caja_ajuste(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    destino = f"/cobranza/carteras/{record_id}/caja"
+    form = await request.form()
+    try:
+        valor_nuevo = Decimal(str(form.get("valor_nuevo") or 0))
+    except Exception:
+        return RedirectResponse(f"{destino}?flash=Valor inválido&flash_type=danger", status_code=303)
+    motivo = str(form.get("motivo") or "").strip()
+    if rid is None or not motivo:
+        return RedirectResponse(f"{destino}?flash=Indica el motivo del ajuste&flash_type=danger", status_code=303)
+    async with get_session() as session:
+        if await get_owned(session, Cartera, rid) is None:
+            return RedirectResponse("/cobranza/carteras?flash=No encontrada&flash_type=danger", status_code=303)
+        caja = await _caja_de(session, rid)
+        anterior = caja.saldo_actual
+        caja.saldo_actual = valor_nuevo
+        session.add(CajaAjuste(tenant_id=get_current_tenant_id(), caja_id=caja.id, valor_anterior=anterior, valor_nuevo=valor_nuevo, motivo=motivo, actor_rol="admin"))
+        _auditar(session, "caja", caja.id, "editar", antes={"saldo": float(anterior)}, despues={"saldo": float(valor_nuevo)}, motivo=motivo)
+    return RedirectResponse(f"{destino}?flash=Caja ajustada&flash_type=success", status_code=303)
+
+
 # --------------------------------------------------------------- CRUD genérico
 @router.get("/{entity}", response_class=HTMLResponse)
 async def entity_list(request: Request, entity: str) -> HTMLResponse:
@@ -793,8 +962,11 @@ async def gasto_aprobar(request: Request, record_id: str) -> RedirectResponse:
     if rid is not None:
         async with get_session() as session:
             gasto = await get_owned(session, Gasto, rid)
-            if gasto is not None:
+            if gasto is not None and not gasto.aprobado:
                 gasto.aprobado = True
+                caja = await _caja_de(session, gasto.cartera_id)
+                caja.saldo_actual = caja.saldo_actual - gasto.valor
+                _auditar(session, "gasto", gasto.id, "editar", antes={"aprobado": False}, despues={"aprobado": True}, motivo="Gasto aprobado")
     return RedirectResponse("/cobranza/gastos?flash=Gasto aprobado&flash_type=success", status_code=303)
 
 
@@ -1020,7 +1192,12 @@ async def cartera_inyeccion(request: Request, record_id: str) -> RedirectRespons
     if rid is not None and valor > 0:
         async with get_session() as session:
             if await get_owned(session, Cartera, rid) is not None:
-                session.add(Inyeccion(tenant_id=get_current_tenant_id(), cartera_id=rid, valor=valor, comentario=str(form.get("comentario") or "").strip() or None))
+                inyeccion = Inyeccion(tenant_id=get_current_tenant_id(), cartera_id=rid, valor=valor, comentario=str(form.get("comentario") or "").strip() or None)
+                session.add(inyeccion)
+                await session.flush()
+                caja = await _caja_de(session, rid)
+                caja.saldo_actual = caja.saldo_actual + valor
+                _auditar(session, "inyeccion", inyeccion.id, "crear", despues={"valor": float(valor)}, motivo="Aporte de capital")
     return RedirectResponse(f"/cobranza/carteras/{record_id}/inyecciones?flash=Inyección registrada&flash_type=success", status_code=303)
 
 

@@ -53,4 +53,22 @@
     {% endfor %}
   </tbody>
 </table>
+
+<h2 class="fs-5 mt-4">Eventos de sincronización
+  {% if eventos_error %}<span class="badge bg-danger">{{ eventos_error }} con error</span>{% endif %}
+</h2>
+<table class="table table-sm table-hover">
+  <thead><tr><th>Fecha</th><th>Tipo</th><th>Gestor</th><th>Evento</th><th>Estado</th></tr></thead>
+  <tbody>
+    {% for e in eventos %}
+    <tr class="{{ 'table-danger' if e.critico else '' }}">
+      <td>{{ e.fecha }}</td><td>{{ e.tipo }}</td><td>{{ e.gestor }}</td>
+      <td><code>{{ e.evento }}</code></td>
+      <td><span class="badge bg-{{ 'danger' if e.critico else 'success' }}">{{ e.estado }}</span></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="text-secondary">Sin eventos de sincronización</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
 {% endblock %}
