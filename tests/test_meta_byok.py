@@ -7,10 +7,12 @@ en vez de duplicar."""
 
 from __future__ import annotations
 
+import sys
 import uuid
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 import core.gateway.meta_byok as byok_mod
 from core.gateway.meta_byok import (
@@ -173,6 +175,41 @@ async def test_falta_waba_id_no_persiste_nada(monkeypatch):
 
     assert added == []
     assert put_calls == []
+
+
+@pytest.mark.asyncio
+async def test_numero_de_otro_tenant_da_byok_error_limpio(monkeypatch):
+    """El `phone_number_id` es único GLOBAL: si otro tenant ya lo reclamó, el
+    INSERT del PhoneNumber viola el unique. Debe salir un `ByokError` legible
+    (no un IntegrityError crudo que el wizard muestra como 500)."""
+
+    class _ConflictFakeSession(FakeSession):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._n_flush = 0
+
+        async def flush(self):
+            self._n_flush += 1
+            # 1er flush: la MetaConnection. 2do: el PhoneNumber -> conflicto.
+            if self._n_flush >= 2:
+                raise IntegrityError(
+                    "INSERT INTO phone_numbers",
+                    {},
+                    Exception('duplicate key value violates unique constraint "phone_numbers_phone_number_id_key"'),
+                )
+
+    _mock_verify_ok(monkeypatch)
+    _mock_token_store(monkeypatch)
+    added: list = []
+    monkeypatch.setattr(sys.modules[__name__], "FakeSession", _ConflictFakeSession)
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added))
+
+    with pytest.raises(ByokError) as exc:
+        await save_byok_connection(
+            uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-dup", "tok-1", "waba-1"
+        )
+
+    assert "ya está asociado a otra conexión" in str(exc.value)
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,7 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from core.config import get_settings
 from core.db.models import MetaConnection, PhoneNumber, Tenant, WabaAccount, utcnow
@@ -167,6 +168,18 @@ async def save_byok_connection(
         phone.display_phone_number = info.get("display_phone_number")
         phone.verified_name = info.get("verified_name")
         phone.registered = True
+
+        # `phone_number_id` es único GLOBAL y RLS impide ver la fila de OTRO
+        # tenant: si el número ya lo reclamó otro tenant, el conflicto recién
+        # aparece acá. Se traduce a un error de negocio limpio (el wizard y el
+        # alta lo muestran como flash) en vez de un IntegrityError crudo (500).
+        try:
+            await session.flush()
+        except IntegrityError as exc:
+            raise ByokError(
+                f"El número de WhatsApp {phone_number_id} ya está asociado a otra conexión. "
+                "Desconectalo desde el tenant que lo tiene, o usá otro número."
+            ) from exc
 
         waba = (
             await session.execute(

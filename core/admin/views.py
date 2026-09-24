@@ -2307,6 +2307,14 @@ async def meta_wizard_whatsapp_byok_guardar(
         )
     except ByokError as exc:
         return RedirectResponse(f"{elegir_url}?flash={str(exc)[:140]}&flash_type=danger", status_code=303)
+    except IntegrityError as exc:
+        # Red de seguridad: nunca un 500 crudo por una violación de unique.
+        log.warning("byok_guardar_integrity_error", error=str(exc)[:200])
+        return RedirectResponse(
+            f"{elegir_url}?flash=No se pudo guardar la conexión: el número o la app "
+            "ya están asociados a otra conexión&flash_type=danger",
+            status_code=303,
+        )
 
     return RedirectResponse(
         "/admin/conexiones/salud?flash=Conexión de prueba guardada -- probála con \"Diagnosticar\"",
@@ -3067,6 +3075,24 @@ async def meta_connection_eliminar(request: Request, connection_id: str):
             return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
         connection.deleted_at = utcnow()
         connection.status = "revoked"
+        # Liberar los assets de Meta de esta conexión para que el número/WABA se
+        # puedan reclamar de nuevo (por este tenant al reconectar, o por otro):
+        # `phone_number_id` es único GLOBAL y `resolve_tenant_for_waba` no filtra
+        # por estado, así que una fila colgada de una conexión revocada bloquea o
+        # rutea mal. No tienen hijos que las referencien (solo FK hacia afuera);
+        # la conexión en sí queda soft-deleted (invariante #8).
+        await session.execute(
+            PhoneNumber.__table__.delete().where(
+                PhoneNumber.connection_id == connection.id,
+                PhoneNumber.tenant_id == tid,
+            )
+        )
+        await session.execute(
+            WabaAccount.__table__.delete().where(
+                WabaAccount.connection_id == connection.id,
+                WabaAccount.tenant_id == tid,
+            )
+        )
 
     return RedirectResponse("/admin/conexiones?flash=Conexión eliminada", status_code=303)
 
