@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Reportes{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Reportes</h1>
+<p class="text-secondary">Consolidado de todas las carteras del propietario.</p>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-2"><div class="card"><div class="card-body"><div class="text-secondary small">Clientes</div><div class="fs-4">{{ totales.clientes }}</div></div></div></div>
+  <div class="col-md-2"><div class="card"><div class="card-body"><div class="text-secondary small">Saldo</div><div class="fs-4">{{ "{:,.0f}".format(totales.saldo) }}</div></div></div></div>
+  <div class="col-md-2"><div class="card"><div class="card-body"><div class="text-secondary small">Cobrado</div><div class="fs-4">{{ "{:,.0f}".format(totales.cobrado) }}</div></div></div></div>
+  <div class="col-md-2"><div class="card"><div class="card-body"><div class="text-secondary small">Caja</div><div class="fs-4">{{ "{:,.0f}".format(totales.caja) }}</div></div></div></div>
+  <div class="col-md-2"><div class="card"><div class="card-body"><div class="text-secondary small">Gastos</div><div class="fs-4">{{ "{:,.0f}".format(totales.gastos) }}</div></div></div></div>
+  <div class="col-md-2"><div class="card"><div class="card-body"><div class="text-secondary small">Cuotas vencidas</div><div class="fs-4 text-danger">{{ totales.vencidas }}</div></div></div></div>
+</div>
+
+<h2 class="fs-5">Por cartera</h2>
+<div class="card mb-4"><div class="card-body p-0">
+<table class="table table-hover mb-0">
+  <thead><tr><th>Cartera</th><th class="text-end">Clientes</th><th class="text-end">Préstamos</th><th class="text-end">Saldo</th><th class="text-end">Cobrado</th><th class="text-end">Caja</th><th class="text-end">Gastos</th><th class="text-end">Vencidas</th></tr></thead>
+  <tbody>
+    {% for f in filas %}
+    <tr>
+      <td>{{ f.cartera }}</td>
+      <td class="text-end">{{ f.clientes }}</td>
+      <td class="text-end">{{ f.prestamos }}</td>
+      <td class="text-end">{{ "{:,.0f}".format(f.saldo) }}</td>
+      <td class="text-end">{{ "{:,.0f}".format(f.cobrado) }}</td>
+      <td class="text-end">{{ "{:,.0f}".format(f.caja) }}</td>
+      <td class="text-end">{{ "{:,.0f}".format(f.gastos) }}</td>
+      <td class="text-end text-danger">{{ f.vencidas }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" class="text-secondary text-center py-3">Sin carteras</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div></div>
+
+<h2 class="fs-5">Liquidaciones recientes</h2>
+<div class="card"><div class="card-body p-0">
+<table class="table table-sm mb-0">
+  <thead><tr><th>Fecha</th><th>Cartera</th><th>Periodo</th><th class="text-end">Cobrado</th><th class="text-end">Gastos</th><th class="text-end">Comisión</th></tr></thead>
+  <tbody>
+    {% for l in liquidaciones %}
+    <tr><td>{{ l.fecha }}</td><td>{{ l.cartera }}</td><td>{{ l.periodo }}</td><td class="text-end">{{ "{:,.0f}".format(l.cobrado) }}</td><td class="text-end">{{ "{:,.0f}".format(l.gastos) }}</td><td class="text-end">{{ "{:,.0f}".format(l.comision) }}</td></tr>
+    {% else %}
+    <tr><td colspan="6" class="text-secondary text-center py-3">Sin liquidaciones</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div></div>
+{% endblock %}

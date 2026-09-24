@@ -44,6 +44,11 @@ jobs:
           pip install -e packages/contracts
           pip install -e ".[dev]"
           bash scripts/install_plugins.sh
+      - name: Postgres del CI con PostGIS (lo exige pack-cobranza, ADR-0058)
+        run: |
+          docker exec ${{ job.services.postgres.id }} \
+            bash -c "apt-get update -qq && apt-get install -y -qq postgresql-16-postgis-3"
+
       - name: Migrar y sembrar
         run: |
           agent-core db migrate

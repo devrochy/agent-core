@@ -1,0 +1,11 @@
+<ul class="nav nav-tabs mb-3 flex-wrap">
+  <li class="nav-item"><a class="nav-link {% if tab == 'resumen' %}active{% endif %}" href="/cobranza/carteras/{{ record_id }}">Resumen</a></li>
+  <li class="nav-item"><a class="nav-link {% if tab == 'clientes' %}active{% endif %}" href="/cobranza/carteras/{{ record_id }}/clientes">Clientes</a></li>
+  <li class="nav-item"><a class="nav-link {% if tab == 'trayecto' %}active{% endif %}" href="/cobranza/carteras/{{ record_id }}/trayecto">Trayecto diario</a></li>
+  <li class="nav-item"><a class="nav-link {% if tab == 'gastos' %}active{% endif %}" href="/cobranza/carteras/{{ record_id }}/gastos">Gastos</a></li>
+  <li class="nav-item"><a class="nav-link {% if tab == 'inyecciones' %}active{% endif %}" href="/cobranza/carteras/{{ record_id }}/inyecciones">Inyecciones</a></li>
+  <li class="nav-item"><a class="nav-link {% if tab == 'liquidaciones' %}active{% endif %}" href="/cobranza/carteras/{{ record_id }}/liquidaciones">Liquidaciones</a></li>
+  <li class="nav-item"><a class="nav-link {% if tab == 'notas' %}active{% endif %}" href="/cobranza/carteras/{{ record_id }}/notas">Notas</a></li>
+  <li class="nav-item"><a class="nav-link {% if tab == 'estadisticas' %}active{% endif %}" href="/cobranza/carteras/{{ record_id }}/estadisticas">Estadísticas</a></li>
+  <li class="nav-item"><a class="nav-link {% if tab == 'config' %}active{% endif %}" href="/cobranza/carteras/{{ record_id }}/config">Configuración</a></li>
+</ul>

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pack-cobranza"
+version = "0.1.0"
+description = "Pack de cobranza (cartera, préstamos, rutas y negociación) para agent-core"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.entry-points."agent_core.plugins"]
+pack_cobranza = "pack_cobranza.module:CobranzaModule"
+
+[tool.setuptools.packages.find]
+include = ["pack_cobranza*"]
+
+[tool.agent_core.plugin]
+# v1 no sale a red. La API móvil (v2) declarará aquí sus dominios.
+
+# Entidades que gestiona el pack (para el wizard de importación, ADR-0019).
+[tool.agent_core.plugin.entities]
+pack_cobranza_clientes = ["nombre", "apellido", "telefono_whatsapp", "saldo", "mora_dias"]
+pack_cobranza_prestamos = ["cliente_id", "valor", "saldo", "estatus"]
+pack_cobranza_promesas = ["prestamo_id", "fecha_prometida", "valor_prometido", "estado"]

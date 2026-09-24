@@ -1,5 +1,76 @@
 # Changelog
 
+## Sin versión — pack de cobranza (2026-09-24)
+
+Nuevo vertical **`pack-cobranza`**: carteras, préstamos y negociación de cobranza
+por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
+
+> **Alineado a `app-cobranza` develop** (ADR-0060): vocabulario **Propietario →
+> Cartera → Cliente → Préstamo** (no socios/rutas), con mapeo de compatibilidad
+> 1:1 documentado. 20 tablas en v1.
+
+### Pack (`packages/pack-cobranza/`)
+- **21 tablas** `pack_cobranza_*` con `tenant_id` + RLS + FORCE RLS; PostGIS para
+  la geografía de clientes (extensión + `geography(Point,4326)` + trigger + GIST).
+- **Bloque A (operación)**: crear préstamo (genera cuotas), registrar pago y abono
+  (mueven caja y saldo), detalle de cliente con cuotas/abonos, y **auditoría
+  imborrable** (`pack_cobranza_auditoria`) de las operaciones. Tablas de cambios de
+  cliente y evidencias de cliente.
+- **Bloque B (operación de cartera)**: pestañas **Notas** (CRUD), **Estadísticas**
+  (KPIs por cartera) y **Trayecto diario** con mapa (Leaflet/OSM), apertura del día
+  y registro de posiciones. Tablas `cartera_notas`, `carteras_aperturas`,
+  `posicion_gestor`, `reportes_diarios`, `cartera_estadisticas`, `cartera_optimizada`.
+- **Bloque C (monitoreo)**: sección **Monitoreo** con **Reglas de negociación**
+  (edita la fila por tenant que usa el motor determinista) y **Monitoreo IA**
+  (conversaciones/escalaciones del core + promesas del asistente).
+- **Bloque E (cobros al propietario, Épica 9)**: pantalla **Cobros** (generar el
+  cobro del periodo, registrar pago, crear link de pago). Tablas
+  `cobros_propietario` y `links_pago`.
+- **Bloque F (RBAC por sub-sección, ADR-0063)**: los items de `admin_menu` declaran
+  `section_key`; el RBAC resuelve por sub-sección (`pack_cobranza:carteras`,
+  `:clientes`, `:cobros`, …), así un colaborador puede tener write en unas y read
+  en otras vía grants.
+- **Bloque D (API de campo, ADR-0057)**: `public_routes()` en `BaseModule` + API
+  pública `/api/pack/pack_cobranza` con **JWT propio del pack** (HS256, sin deps).
+  Endpoints: login de dispositivo, mis-carteras, clientes-del-día y **sync offline
+  idempotente** (visita/pago/abono). Tablas `devices`, `intentos_acceso`,
+  `sync_eventos` + `gestores.password_hash`. Pantalla **Dispositivos** (genera
+  código + API key, ver intentos de acceso).
+- **Reportes globales**: consolidado multi-cartera (clientes, préstamos, saldo,
+  cobrado, caja, gastos, cuotas vencidas) + liquidaciones recientes.
+- **Alertas de acceso** (sección Seguridad): intentos de acceso de la app de campo
+  con los denegados resaltados.
+- **Editar cuota**: formulario completo (valor, vencimiento, estatus) con auditoría.
+- **Conversación del cliente**: acceso directo desde el detalle del cliente a la
+  conversación del core (si el cliente está enlazado a un `Customer`).
+- **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
+  cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
+  Las operaciones de administración (gasto, inyección, visita, liquidación) viven
+  en el panel, no en el asistente del deudor (auditoría M3). Guardrail
+  `cob_promesa_check` y cron `marcar_mora`.
+- **Panel propio (`admin_router`, `/cobranza/…`)**: Resumen con KPIs, CRUD de
+  Gestores/Carteras/Clientes, matriz de **permisos del gestor** (14) y **detalle de
+  cartera con pestañas** (Resumen · Configuración · Clientes · Gastos · Inyecciones ·
+  Liquidaciones). `cartera-config` con los 32 flags.
+- **El propietario ES el tenant** (ADR-0062): sin entidad `propietarios` ni
+  `propietario_id`; su config vive en `CobranzaConfig` y sus permisos en el RBAC
+  del core (owner=write, colaborador=read).
+- `flow.json` con las secciones de atención.
+
+### Core
+- **ADR-0056**: leads globales con `LeadProvider` (`core/admin/lead_registry.py`),
+  sección `leads` y vista `/admin/leads` que combina `Customer` + columnas por pack.
+- **ADR-0058**: imagen de Postgres con **PostGIS + pgvector** (`docker/postgres/Dockerfile`).
+- **ADR-0057/0059**: diseño de rutas públicas de pack e identidad de pack, y
+  aislamiento multi-tenant del pack (1 tenant = 1 propietario).
+- **ADR-0060**: alineación del pack al modelo de dominio de `app-cobranza`
+  develop (mapeo de compatibilidad Propietario/Gestor/Cartera).
+- **ADR-0061**: `admin_menu` de packs por **secciones** (`section`) y visibilidad
+  por rol (`master_only`); el menú del pack replica la IA del panel de referencia.
+- **ADR-0062**: el propietario es el tenant; el pack no duplica identidad.
+- **ADR-0063**: RBAC por sub-sección de pack (`section_key` en `admin_menu`).
+- Menú de packs **desplegable** en el panel (`core/admin/templates/base.html`).
+
 ## v0.7.0 — Operación y gobierno del agente (2026-09-23)
 
 Capacidades empresariales de operación sobre lo construido en ADR-0049/0050. Ver ADR-0051.

@@ -108,6 +108,78 @@ def _render(name: str, ctx: dict[str, Any], status_code: int = 200):  # type: ig
     return templates.TemplateResponse(ctx["request"], name, ctx, status_code=status_code)
 
 
+# ------------------------------------------------------------------ leads globales
+@router.get("/leads", response_class=HTMLResponse)
+async def leads_global(request: Request) -> HTMLResponse:
+    """Vista global de leads (ADR-0056): `Customer` + columnas que aportan los packs.
+
+    Un lead es un `Customer` (ADR-0022). Cada pack habilitado para el tenant
+    registra un `LeadProvider` (columnas + resolver) en `lead_registry`; aquí se
+    combinan. El core NO importa packs (invariante nº5).
+    """
+    from sqlalchemy import select as _select
+
+    from core.admin.lead_registry import lead_registry
+    from core.admin.permissions import require_section
+    from core.agents.spec import enabled_packs, load_active_spec
+    from core.db.models import Customer
+    from core.db.session import get_session
+    from core.shared.tenant import get_current_tenant_id
+
+    ctx = await _base_context(request, "leads")
+    if ctx is None:
+        return _login_redirect()
+    if not await require_section(request, "leads"):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        customers = (
+            await session.execute(
+                _select(Customer)
+                .where(Customer.tenant_id == tid, Customer.deleted_at.is_(None))
+                .order_by(Customer.created_at.desc())
+                .limit(500)
+            )
+        ).scalars().all()
+
+    try:
+        enabled = enabled_packs(await load_active_spec())
+    except Exception:
+        enabled = set()
+    providers = lead_registry.providers_for(enabled)
+    pack_values: dict[Any, dict[str, Any]] = {}
+    for provider in providers:
+        if provider.resolver is None:
+            continue
+        try:
+            result = await provider.resolver([c.id for c in customers])
+        except Exception:
+            continue
+        for cid, values in (result or {}).items():
+            pack_values.setdefault(cid, {}).update(values)
+
+    columns = [
+        {"key": "cliente", "label": "Cliente"},
+        {"key": "canal", "label": "Canal"},
+        {"key": "alta", "label": "Alta"},
+    ] + [{"key": col.key, "label": col.label} for provider in providers for col in provider.columns]
+
+    rows = []
+    for c in customers:
+        row: dict[str, Any] = {
+            "cliente": c.name or c.external_id,
+            "canal": c.channel,
+            "alta": c.created_at.strftime("%Y-%m-%d") if c.created_at else "—",
+            "search": f"{c.name or ''} {c.external_id} {c.channel}",
+        }
+        row.update(pack_values.get(c.id, {}))
+        rows.append(row)
+
+    ctx.update(columns=columns, rows=rows, has_packs=bool(providers))
+    return _render("leads.html", ctx)
+
+
 # ------------------------------------------------------------------ auth
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request) -> HTMLResponse:

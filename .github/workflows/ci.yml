@@ -53,6 +53,14 @@ jobs:
       - name: Lint
         run: ruff check core cli scripts alembic evals tests
 
+      - name: Postgres del CI con PostGIS (lo exige pack-cobranza, ADR-0058)
+        # El servicio arranca de `pgvector/pgvector:pg16` (sin PostGIS). El pack
+        # de cobranza necesita la extensión, así que se instala en el contenedor
+        # antes de migrar. En producción se usa docker/postgres/Dockerfile.
+        run: |
+          docker exec ${{ job.services.postgres.id }} \
+            bash -c "apt-get update -qq && apt-get install -y -qq postgresql-16-postgis-3"
+
       - name: Migrar y sembrar
         env:
           # Password determinística solo para que los tests de integración puedan

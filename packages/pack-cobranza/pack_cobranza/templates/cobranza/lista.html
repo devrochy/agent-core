@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% from "_datatable.html" import datatable %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="fs-3 mb-0">{{ title }}</h1>
+  <a class="btn btn-primary" href="/cobranza/{{ entity }}/nuevo"><i class="bi bi-plus-lg"></i> Nuevo</a>
+</div>
+
+{% call datatable(page_size=20) %}
+  <thead>
+    <tr>
+      {% for k, label in columns %}
+      <th class="dt-sortable" data-sort-key="{{ k }}">{{ label }}</th>
+      {% endfor %}
+      <th class="text-end">Acciones</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr data-search="{% for k, _ in columns %}{{ row.get(k, '') }} {% endfor %}">
+      {% for k, _ in columns %}
+      <td>
+        {% if k == 'nombre' and entity == 'carteras' %}
+        <a href="/cobranza/carteras/{{ row['_id'] }}">{{ row.get(k, '') }}</a>
+        {% elif k == 'nombre' and entity == 'clientes' %}
+        <a href="/cobranza/clientes/{{ row['_id'] }}">{{ row.get(k, '') }}</a>
+        {% else %}{{ row.get(k, '') }}{% endif %}
+      </td>
+      {% endfor %}
+      <td class="text-end">
+        {% if entity == 'carteras' %}
+        <a class="btn btn-sm btn-outline-secondary" href="/cobranza/carteras/{{ row['_id'] }}" title="Detalle"><i class="bi bi-eye"></i></a>
+        {% endif %}
+        <a class="btn btn-sm btn-outline-secondary" href="/cobranza/{{ entity }}/{{ row['_id'] }}/editar" title="Editar"><i class="bi bi-pencil"></i></a>
+        {% if entity == 'gestores' %}
+        <a class="btn btn-sm btn-outline-secondary" href="/cobranza/gestores/{{ row['_id'] }}/permisos" title="Permisos"><i class="bi bi-shield-lock"></i></a>
+        {% endif %}
+        {% if entity == 'gastos' and row.get('aprobado') == 'no' %}
+        <form method="post" action="/cobranza/gastos/{{ row['_id'] }}/aprobar" class="d-inline">
+          <button class="btn btn-sm btn-outline-success" title="Aprobar"><i class="bi bi-check2"></i></button>
+        </form>
+        {% endif %}
+        <form method="post" action="/cobranza/{{ entity }}/{{ row['_id'] }}/eliminar" class="d-inline"
+              onsubmit="return confirm('¿Eliminar este registro?');">
+          <button class="btn btn-sm btn-outline-danger" title="Eliminar"><i class="bi bi-trash"></i></button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+{% endcall %}
+{% endblock %}

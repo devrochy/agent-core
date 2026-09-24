@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Dispositivos{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Dispositivos</h1>
+<p class="text-secondary">Vincula la app de campo (gestores) al tenant (ADR-0057).</p>
+
+{% if nuevo_api_key %}
+<div class="alert alert-warning">
+  <strong>Credenciales del dispositivo (se muestran UNA vez):</strong>
+  <div class="mt-2">Código: <code>{{ nuevo_codigo }}</code></div>
+  <div>API key: <code>{{ nuevo_api_key }}</code></div>
+</div>
+{% endif %}
+
+<div class="card mb-3"><div class="card-body">
+  <form method="post" action="/cobranza/dispositivos/generar" class="row g-2 align-items-end">
+    <div class="col-md-3">
+      <label class="form-label">Gestor</label>
+      <select name="gestor_id" class="form-select form-select-sm">
+        <option value="">—</option>
+        {% for g in gestores %}<option value="{{ g.id }}">{{ g.nombre }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2"><label class="form-label">IMEI</label><input type="text" name="imei" class="form-control form-control-sm"></div>
+    <div class="col-md-2"><label class="form-label">WhatsApp</label><input type="text" name="whatsapp" class="form-control form-control-sm"></div>
+    <div class="col-md-3"><button class="btn btn-primary btn-sm">Generar dispositivo</button></div>
+  </form>
+</div></div>
+
+<table class="table table-hover">
+  <thead><tr><th>Código</th><th>Gestor</th><th>IMEI</th><th>Estado</th></tr></thead>
+  <tbody>
+    {% for d in dispositivos %}
+    <tr><td><code>{{ d.codigo }}</code></td><td>{{ d.gestor }}</td><td>{{ d.imei }}</td><td>{{ d.estado }}</td></tr>
+    {% else %}
+    <tr><td colspan="4" class="text-secondary">Sin dispositivos</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2 class="fs-5 mt-4">Intentos de acceso</h2>
+<table class="table table-sm">
+  <thead><tr><th>Fecha</th><th>Resultado</th><th>IMEI</th><th>Motivo</th></tr></thead>
+  <tbody>
+    {% for i in intentos %}
+    <tr>
+      <td>{{ i.fecha }}</td>
+      <td><span class="badge bg-{{ 'success' if i.resultado == 'ok' else 'danger' }}">{{ i.resultado }}</span></td>
+      <td>{{ i.imei }}</td><td>{{ i.motivo }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="text-secondary">Sin intentos</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

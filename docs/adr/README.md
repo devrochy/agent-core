@@ -62,3 +62,12 @@ Se crean con `/adr`.
 | 0052 | Extensibilidad de capacidades: tools declarativas y canales por entry_points | aceptado |
 | 0053 | Memoria: retención, purga por cliente y redacción de PII | aceptado |
 | 0054 | Flujo de atención declarativo por pack, personalizable por tenant | aceptado |
+| 0055 | Intake público de leads desde la landing | propuesto |
+| 0056 | Leads globales con contribuciones por pack (`LeadProvider`) | aceptado |
+| 0057 | Rutas públicas de pack e identidad de pack (auth de usuarios finales) | aceptado |
+| 0058 | PostGIS en el despliegue del core | aceptado |
+| 0059 | Aislamiento multi-tenant del pack de cobranza (1 tenant = 1 propietario) | aceptado |
+| 0060 | Alineación del pack-cobranza al modelo de dominio de app-cobranza (Propietario/Gestor/Cartera) | aceptado |
+| 0061 | `admin_menu` de packs por secciones y visibilidad por rol | aceptado |
+| 0062 | El propietario es el tenant: el pack no duplica la identidad | aceptado |
+| 0063 | RBAC por sub-sección de pack | aceptado |

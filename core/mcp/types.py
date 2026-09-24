@@ -200,9 +200,22 @@ class BaseModule(ABC):
     requires_config: bool = True  # False = se activa sin formulario (ej. plugins internos)
     config_schema: type[BasePluginConfig] | None = None
 
-    # Rutas del panel admin que el plugin aporta (aparecen en el menú lateral al activarse)
-    admin_menu: list[dict[str, str]] = []
-    # [{"label": "Leads", "path": "/crm/leads"}]
+    # Rutas del panel admin que el plugin aporta (aparecen en el menú lateral al
+    # activarse). Claves opcionales (ADR-0061):
+    #   - `section` (str): etiqueta de agrupación dentro del grupo del pack
+    #     ("General", "Monitoreo", "Seguridad"); se renderiza preservando el orden.
+    #   - `master_only` (bool): el item solo lo ve un admin `master`.
+    admin_menu: list[dict[str, Any]] = []
+    # [{"label": "Leads", "path": "/crm/leads", "section": "General"}]
+
+    def public_routes(self) -> list[Any]:
+        """Routers PÚBLICOS del pack (sin sesión de admin), ej. la app de campo.
+
+        El prefijo DEBE empezar por `/api/pack/` (ADR-0057): el core lo añade a la
+        allowlist del middleware y el pack autentica cada request con su propia
+        identidad. Default: ninguno.
+        """
+        return []
 
     def extra_admin_routers(self) -> list[Any]:
         """Routers admin adicionales del pack (ej. pestañas de Configuración).

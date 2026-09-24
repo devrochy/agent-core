@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Inyecciones de la cartera{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Inyecciones · {{ cartera }}</h1>
+{% include "cobranza/_cartera_nav.html" %}
+
+<div class="card mb-3"><div class="card-body">
+  <form method="post" action="/cobranza/carteras/{{ record_id }}/inyeccion" class="d-flex gap-2 flex-wrap">
+    <input type="number" step="0.01" name="valor" class="form-control" style="max-width:200px" placeholder="Valor" required>
+    <input type="text" name="comentario" class="form-control" style="max-width:320px" placeholder="Comentario (opcional)">
+    <button class="btn btn-primary">Registrar inyección</button>
+  </form>
+</div></div>
+
+<table class="table table-hover">
+  <thead><tr><th>Fecha</th><th>Valor</th><th>Comentario</th></tr></thead>
+  <tbody>
+    {% for i in inyecciones %}
+    <tr><td>{{ i.fecha }}</td><td>{{ i.valor }}</td><td>{{ i.comentario }}</td></tr>
+    {% else %}
+    <tr><td colspan="3" class="text-secondary">Sin inyecciones</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

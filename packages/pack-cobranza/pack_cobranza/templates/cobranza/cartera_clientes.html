@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% from "_datatable.html" import datatable %}
+{% block title %}Clientes de la cartera{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Clientes</h1>
+{% include "cobranza/_cartera_nav.html" %}
+<div class="d-flex justify-content-end mb-2">
+  <a class="btn btn-primary btn-sm" href="/cobranza/clientes/nuevo"><i class="bi bi-plus-lg"></i> Nuevo cliente</a>
+</div>
+{% call datatable(page_size=20) %}
+  <thead><tr>{% for k, label in columns %}<th class="dt-sortable" data-sort-key="{{ k }}">{{ label }}</th>{% endfor %}<th class="text-end">Acciones</th></tr></thead>
+  <tbody>
+    {% for row in rows %}
+    <tr data-search="{% for k, _ in columns %}{{ row.get(k, '') }} {% endfor %}">
+      {% for k, _ in columns %}<td>{{ row.get(k, '') }}</td>{% endfor %}
+      <td class="text-end">
+        <a class="btn btn-sm btn-outline-secondary" href="/cobranza/clientes/{{ row['_id'] }}/editar" title="Editar"><i class="bi bi-pencil"></i></a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+{% endcall %}
+{% endblock %}
