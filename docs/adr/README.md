@@ -70,3 +70,4 @@ Se crean con `/adr`.
 | 0060 | Alineación del pack-cobranza al modelo de dominio de app-cobranza (Propietario/Gestor/Cartera) | aceptado |
 | 0061 | `admin_menu` de packs por secciones y visibilidad por rol | aceptado |
 | 0062 | El propietario es el tenant: el pack no duplica la identidad | aceptado |
+| 0063 | RBAC por sub-sección de pack | aceptado |

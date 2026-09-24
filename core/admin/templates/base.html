@@ -75,11 +75,11 @@
     {% set current = request.url.path %}
     {% set is_master = admin and admin.role == 'master' %}
     {% for group in plugin_menu %}
-    {% if not perms or perms.get(group['id']) %}
-    {# Visibilidad por rol (ADR-0061): `master_only` solo para admin master. #}
+    {# Visibilidad por sub-sección (ADR-0063) y por rol (ADR-0061). #}
     {% set visible = [] %}
     {% for item in group['items'] %}
-    {% if is_master or not item.get('master_only') %}
+    {% set skey = item.get('section_key') or group['id'] %}
+    {% if (not perms or perms.get(skey)) and (is_master or not item.get('master_only')) %}
     {% set _ = visible.append(item) %}
     {% endif %}
     {% endfor %}
@@ -109,7 +109,6 @@
         {% endfor %}
       </ul>
     </details>
-    {% endif %}
     {% endif %}
     {% endfor %}
     {% endif %}

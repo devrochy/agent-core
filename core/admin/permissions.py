@@ -56,12 +56,29 @@ OWNER_GRANTABLE_SECTIONS: frozenset[str] = GLOBAL_ONLY_SECTIONS | OWNER_ONLY_SEC
 _ACCESS_RANK = {"read": 1, "write": 2}
 
 
-def catalog(plugin_ids: Iterable[str] | None = None) -> dict[str, str]:
-    """Catálogo de secciones: core + una por pack (id del plugin como clave)."""
+def catalog(sections: Iterable[str] | None = None) -> dict[str, str]:
+    """Catálogo de secciones: core + las que aportan los packs.
+
+    Cada clave es una sección (el `plugin_id` o una **sub-sección** de pack,
+    ADR-0063). El label por defecto es la propia clave; el menú usa el label del
+    item.
+    """
     result = dict(CORE_SECTIONS)
-    for plugin_id in plugin_ids or ():
-        result.setdefault(plugin_id, plugin_id)
+    for section in sections or ():
+        result.setdefault(section, section)
     return result
+
+
+def pack_section_keys(modules: Iterable[object]) -> set[str]:
+    """Sub-secciones que aportan los packs (ADR-0063): `section_key` o el `plugin_id`."""
+    keys: set[str] = set()
+    for module in modules:
+        plugin_id = getattr(module, "id", None)
+        if not plugin_id:
+            continue
+        for item in getattr(module, "admin_menu", None) or []:
+            keys.add(item.get("section_key") or plugin_id)
+    return keys
 
 
 def _best(current: str | None, candidate: str) -> str:
@@ -221,10 +238,13 @@ def _matches(path: str, prefix: str) -> bool:
 
 
 def pack_prefixes(modules: Iterable[object]) -> list[tuple[str, str]]:
-    """Prefijos de UI admin que aportan los packs (ej. `/crm` → `pack_commerce`).
+    """Prefijos de UI admin que aportan los packs, por **item** de menú (ADR-0063).
 
-    Solo las rutas de menú que NO viven bajo `/admin` (las de `/admin/packs/<id>`
-    se resuelven por segmento, y las de `/admin/plugins/<id>` caen en `plugins`).
+    Mapea el path COMPLETO de cada item a su `section_key` (sub-sección), no el
+    primer segmento al `plugin_id`. `required_section` elige el prefijo más largo,
+    así `/cobranza/carteras/123/config` cae en `pack_cobranza:carteras`. Solo las
+    rutas que NO viven bajo `/admin` (las de `/admin/packs/<id>` se resuelven por
+    segmento, y las de `/admin/plugins/<id>` caen en `plugins`).
     """
     result: list[tuple[str, str]] = []
     for module in modules:
@@ -235,9 +255,9 @@ def pack_prefixes(modules: Iterable[object]) -> list[tuple[str, str]]:
             path = item.get("path", "")
             if not path or path.startswith("/admin"):
                 continue
-            segment = "/" + path.strip("/").split("/")[0]
-            if segment != "/" and all(segment != existing for existing, _ in result):
-                result.append((segment, plugin_id))
+            prefix = "/" + path.strip("/")
+            if prefix != "/" and all(prefix != existing for existing, _ in result):
+                result.append((prefix, item.get("section_key") or plugin_id))
     return result
 
 

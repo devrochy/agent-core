@@ -35,5 +35,5 @@ VPS no cubre — señal para evaluar topología `dedicado` o un proveedor gestio
 
 ## Impacto en el código
 
-`docker-compose.yml` (variante de producción), scripts de backup/restauración, `docs/security.md`,
+`docker-compose.yml` (variante de producción), scripts de backup/restauración, `solvershub/security.md` (centro de lanzamiento),
 y la documentación de despliegue (`docs/INSTALLATION.md`, SDD).

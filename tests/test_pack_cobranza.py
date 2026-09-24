@@ -123,6 +123,27 @@ def test_modelos_alineados_a_develop() -> None:
     assert "pack_cobranza_links_pago" in nombres
 
 
+def test_rbac_subsecciones_por_path() -> None:
+    """ADR-0063: cada ruta del pack resuelve a su sub-sección RBAC."""
+    from pack_cobranza.module import CobranzaModule
+
+    from core.admin.permissions import pack_prefixes, required_section
+
+    prefixes = pack_prefixes([CobranzaModule()])
+    casos = {
+        "/cobranza/": "pack_cobranza:resumen",
+        "/cobranza/carteras": "pack_cobranza:carteras",
+        "/cobranza/carteras/123/config": "pack_cobranza:carteras",
+        "/cobranza/clientes/abc": "pack_cobranza:clientes",
+        "/cobranza/cobros/generar": "pack_cobranza:cobros",
+        "/cobranza/reglas": "pack_cobranza:reglas",
+        "/cobranza/monitoreo": "pack_cobranza:monitoreo",
+    }
+    for path, esperado in casos.items():
+        req = required_section(path, "GET", prefixes)
+        assert req is not None and req[0] == esperado, path
+
+
 def test_lead_provider_registra_columnas() -> None:
     import pack_cobranza.providers  # noqa: F401
 

@@ -26,6 +26,10 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
 - **Bloque E (cobros al propietario, Épica 9)**: pantalla **Cobros** (generar el
   cobro del periodo, registrar pago, crear link de pago). Tablas
   `cobros_propietario` y `links_pago`.
+- **Bloque F (RBAC por sub-sección, ADR-0063)**: los items de `admin_menu` declaran
+  `section_key`; el RBAC resuelve por sub-sección (`pack_cobranza:carteras`,
+  `:clientes`, `:cobros`, …), así un colaborador puede tener write en unas y read
+  en otras vía grants.
 - **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
   cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
   Las operaciones de administración (gasto, inyección, visita, liquidación) viven
@@ -51,6 +55,7 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
 - **ADR-0061**: `admin_menu` de packs por **secciones** (`section`) y visibilidad
   por rol (`master_only`); el menú del pack replica la IA del panel de referencia.
 - **ADR-0062**: el propietario es el tenant; el pack no duplica identidad.
+- **ADR-0063**: RBAC por sub-sección de pack (`section_key` en `admin_menu`).
 - Menú de packs **desplegable** en el panel (`core/admin/templates/base.html`).
 
 ## v0.7.0 — Operación y gobierno del agente (2026-09-23)

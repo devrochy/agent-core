@@ -43,14 +43,16 @@ class CobranzaModule(BaseModule):
     # Navegación por secciones (ADR-0061). El propietario ES el tenant (ADR-0062),
     # así que no hay item "Propietarios": su identidad y config viven en el core
     # (Tenants/Configuración del pack).
+    # `section_key` = sub-sección RBAC (ADR-0063): un colaborador puede tener
+    # write en unas y read en otras vía grants explícitos.
     admin_menu: list[dict[str, str]] = [  # noqa: RUF012
-        {"label": "Resumen", "path": "/cobranza/", "section": "General"},
-        {"label": "Gestores", "path": "/cobranza/gestores", "section": "General"},
-        {"label": "Carteras", "path": "/cobranza/carteras", "section": "General"},
-        {"label": "Clientes", "path": "/cobranza/clientes", "section": "General"},
-        {"label": "Cobros", "path": "/cobranza/cobros", "section": "General"},
-        {"label": "Reglas de negociación", "path": "/cobranza/reglas", "section": "Monitoreo"},
-        {"label": "Monitoreo IA", "path": "/cobranza/monitoreo", "section": "Monitoreo"},
+        {"label": "Resumen", "path": "/cobranza/", "section": "General", "section_key": "pack_cobranza:resumen"},
+        {"label": "Gestores", "path": "/cobranza/gestores", "section": "General", "section_key": "pack_cobranza:gestores"},
+        {"label": "Carteras", "path": "/cobranza/carteras", "section": "General", "section_key": "pack_cobranza:carteras"},
+        {"label": "Clientes", "path": "/cobranza/clientes", "section": "General", "section_key": "pack_cobranza:clientes"},
+        {"label": "Cobros", "path": "/cobranza/cobros", "section": "General", "section_key": "pack_cobranza:cobros"},
+        {"label": "Reglas de negociación", "path": "/cobranza/reglas", "section": "Monitoreo", "section_key": "pack_cobranza:reglas"},
+        {"label": "Monitoreo IA", "path": "/cobranza/monitoreo", "section": "Monitoreo", "section_key": "pack_cobranza:monitoreo"},
     ]
     admin_router = admin_router
     declared_skills: list[type] = [CobranzaSkill]  # noqa: RUF012

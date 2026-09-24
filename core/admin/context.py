@@ -96,9 +96,12 @@ async def base_context(request: Request, section: str) -> dict[str, Any] | None:
 
     tenant_id = get_current_tenant_id()
     billing = await dashboard_billing_summary(tenant_id) if tenant_id else None
-    from core.admin.permissions import catalog, permissions_for
+    from core.admin.permissions import catalog, pack_section_keys, permissions_for
 
-    perms = await permissions_for(admin, catalog(plugin_manager.active_ids()))
+    # Catálogo = secciones del core + sub-secciones que aportan los packs (ADR-0063).
+    perms = await permissions_for(
+        admin, catalog(pack_section_keys(plugin_manager.list_modules()))
+    )
     return {
         "request": request,
         "section": section,

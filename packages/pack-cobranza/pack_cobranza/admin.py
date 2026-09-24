@@ -90,10 +90,19 @@ def _uuid(value: str | None) -> uuid.UUID | None:
         return None
 
 
-async def _guard(request: Request, *, write: bool) -> bool:
+async def _guard(request: Request, section: str, *, write: bool) -> bool:
     from core.admin.permissions import require_section
 
-    return await require_section(request, SECTION, write=write)
+    return await require_section(request, section, write=write)
+
+
+def _request_section(request: Request) -> str:
+    """Sub-sección del path (ADR-0063); fallback al `plugin_id`."""
+    from core.admin.permissions import pack_prefixes, required_section
+    from core.plugin_manager import plugin_manager
+
+    req = required_section(request.url.path, request.method, pack_prefixes(plugin_manager.list_modules()))
+    return req[0] if req else SECTION
 
 
 async def _pack_enabled() -> bool:
@@ -107,7 +116,7 @@ async def _pack_enabled() -> bool:
 
 
 async def _authorized(request: Request, *, write: bool) -> bool:
-    return await _guard(request, write=write) and await _pack_enabled()
+    return await _guard(request, _request_section(request), write=write) and await _pack_enabled()
 
 
 # --------------------------------------------------------------- config de cartera
