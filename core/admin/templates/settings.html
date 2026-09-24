@@ -316,6 +316,50 @@
 
 {% if tab == 'habilidades' %}
 <div class="card">
+  <div class="card-header fw-semibold">
+    Flujo de atención
+    {% if flow_source %}<span class="badge text-bg-secondary">{{ flow_source }}</span>{% endif %}
+  </div>
+  <div class="card-body">
+    <p class="text-secondary small">
+      Base de comportamiento del pack: cada etapa agrupa las tools que corresponden
+      a ese momento de la atención. Se personaliza por tenant en
+      <code>TENANTS_ROOT/&lt;slug&gt;/flow.json</code> (agregar/quitar/reordenar tools
+      o etapas). Sincronizá con <code>agent-core flow sync &lt;slug&gt;</code>.
+    </p>
+    {% if flow_sections %}
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
+        <thead>
+          <tr><th>#</th><th>Etapa</th><th>Herramientas</th></tr>
+        </thead>
+        <tbody>
+          {% for s in flow_sections %}
+          <tr>
+            <td class="text-secondary">{{ loop.index }}</td>
+            <td>
+              <b>{{ s.label }}</b>
+              {% if s.purpose %}<div class="text-secondary small">{{ s.purpose }}</div>{% endif %}
+            </td>
+            <td>{% for t in s.tools %}<code>{{ t }}</code>{{ " " if not loop.last }}{% endfor %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if flow_unknown %}
+    <div class="alert alert-warning py-2 small mb-0">
+      Tools del flujo no disponibles para este tenant:
+      {% for t in flow_unknown %}<code>{{ t }}</code>{{ " " if not loop.last }}{% endfor %}
+    </div>
+    {% endif %}
+    {% else %}
+    <p class="text-secondary small mb-0">Sin flujo: habilitá un pack con <code>flow.json</code> o corré <code>agent-core flow sync &lt;slug&gt;</code>.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mt-3">
   <div class="card-header fw-semibold">Habilidades (tools)</div>
   <div class="card-body">
     <p class="text-secondary small">

@@ -61,3 +61,4 @@ Se crean con `/adr`.
 | 0051 | Operación y gobierno del agente (rollback, horarios, guardrails declarativos, evals) | aceptado |
 | 0052 | Extensibilidad de capacidades: tools declarativas y canales por entry_points | aceptado |
 | 0053 | Memoria: retención, purga por cliente y redacción de PII | aceptado |
+| 0054 | Flujo de atención declarativo por pack, personalizable por tenant | aceptado |

@@ -18,6 +18,7 @@ from pathlib import Path
 from agentcore_contracts import AgentSpec
 from sqlalchemy import select
 
+from core.agents.flow import seed_tenant_flow
 from core.agents.spec import DEFAULT_SPEC
 from core.config import get_settings
 from core.db.models import (
@@ -346,6 +347,15 @@ async def onboard_tenant(
             await plugin_manager.save_config(pack, {})
             await plugin_manager.activate(pack)
         steps.append(f"pack {pack} configurado y activo")
+
+    # Flujo de atención del pack (ADR-0054): al habilitar un pack, el tenant recibe
+    # una base de flujo editable en TENANTS_ROOT/<slug>/flow.json. Best-effort: un
+    # fallo de filesystem no puede tumbar el alta (el runtime cae al default del pack).
+    if packs:
+        try:
+            steps.extend(seed_tenant_flow(slug, list(packs)))
+        except Exception:
+            log.warning("tenant_flow_seed_failed", slug=slug, exc_info=True)
 
     ensure_tenant_docs(slug, name, business_description)
     return tenant_id, steps

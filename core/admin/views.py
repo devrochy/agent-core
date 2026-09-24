@@ -1646,7 +1646,30 @@ async def _enable_pack_for_tenant(pack: str) -> int | None:
                 "plugins", count_tenant_packs(spec), decision.limit or 0
             )
     new_spec = spec.model_copy(update={"packs": sorted({*spec.packs, pack})})
-    return await _save_spec_version(new_spec)
+    version = await _save_spec_version(new_spec)
+    await _seed_flow_for_current_tenant(pack)
+    return version
+
+
+async def _seed_flow_for_current_tenant(pack: str) -> None:
+    """Siembra/actualiza el flujo del pack en el `flow.json` del tenant (ADR-0054).
+
+    Best-effort: un fallo de filesystem no puede tumbar la activación (el runtime
+    cae al default del pack si el archivo no está). No pisa las secciones propias
+    del tenant ni las de otros packs.
+    """
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return
+    try:
+        from core.agents.flow import seed_tenant_flow
+        from core.shared.tenant import tenant_slug
+
+        slug = await tenant_slug(tenant_id)
+        if slug:
+            seed_tenant_flow(slug, [pack])
+    except Exception:
+        log.warning("tenant_flow_seed_failed", plugin=pack, exc_info=True)
 
 
 async def _disable_pack_for_tenant(pack: str) -> int | None:
@@ -3667,6 +3690,17 @@ async def settings_page(request: Request):
         for g in mcp_host.get_guardrails()
         if g.plugin_id in enabled
     ]
+    # Flujo de atención (ADR-0054): solo lectura en el panel (la edición es por
+    # archivo del tenant, ADR-0017/0026). `resolve_flow` cae al default del pack
+    # si el tenant todavía no tiene flow.json. Se filtra por las tools realmente
+    # habilitadas para el tenant, mismo criterio que el runtime.
+    from core.agents.flow import resolve_flow
+    from core.mcp.declarative import tools_for_spec
+
+    available_tool_names = {
+        t.name for t in mcp_host.get_tools() if t.plugin_id in enabled or t.plugin_id == "core"
+    } | {t.name for t in tools_for_spec(spec)}
+    resolved_flow = await resolve_flow(spec, available=available_tool_names)
     ctx.update(
         tab=request.query_params.get("tab", "identidad"),
         s=app_settings,
@@ -3688,6 +3722,12 @@ async def settings_page(request: Request):
             for t in mcp_host.get_tools()
             if t.plugin_id in enabled or t.plugin_id == "core"
         ],
+        flow_source=resolved_flow.source if resolved_flow else "",
+        flow_sections=[
+            {"label": s.label, "purpose": s.purpose, "tools": s.tools}
+            for s in (resolved_flow.sections if resolved_flow else [])
+        ],
+        flow_unknown=resolved_flow.unknown_tools if resolved_flow else [],
     )
     return _render("settings.html", ctx)
 

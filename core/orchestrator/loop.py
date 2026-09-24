@@ -21,6 +21,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 
+from core.agents.flow import render_flow, resolve_flow
 from core.agents.responses import load_response
 from core.agents.spec import enabled_packs, load_active_spec
 from core.config import get_settings
@@ -233,13 +234,26 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     available_skills = [
         s for s in available_skills if s.plugin_id in enabled and s.plugin_id not in disabled_for_tenant
     ]
-    selected_names = select_relevant_skills(latest_message, recent_context, available_skills)
-    active_tools = mcp_host.get_skill_tools(selected_names)
-    # Tools declarativas del tenant (ADR-0052): se suman a las del tenant. El
-    # enablement por `ToolBinding` y el deny de packs aplican igual (abajo).
+    # Candidatas: TODAS las tools de los packs habilitados (sin router por turno)
+    # más las declarativas del tenant (ADR-0052). El flujo (ADR-0054) decide el
+    # subconjunto y el orden; sin flujo, se cae al router por keywords de siempre.
+    candidate_tools = mcp_host.get_skill_tools([s.name for s in available_skills])
     from core.mcp.declarative import tools_for_spec
 
-    active_tools = [*active_tools, *tools_for_spec(spec)]
+    candidate_tools = [*candidate_tools, *tools_for_spec(spec)]
+
+    flow = await resolve_flow(
+        spec, available={t.name for t in candidate_tools}
+    )
+    if flow is not None:
+        by_name = {t.name: t for t in candidate_tools}
+        active_tools = [by_name[name] for name in flow.tool_names if name in by_name]
+        flow_summary = render_flow(flow)
+    else:
+        selected_names = select_relevant_skills(latest_message, recent_context, available_skills)
+        active_tools = mcp_host.get_skill_tools(selected_names)
+        active_tools = [*active_tools, *tools_for_spec(spec)]
+        flow_summary = ""
 
     prompt_ctx = PromptContext(
         assistant_name=app_settings.assistant_name if app_settings else settings.app_name,
@@ -250,6 +264,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         emojis=spec.persona.emojis,
         max_length=spec.persona.maxLength,
         brand_voice=app_settings.brand_voice if app_settings else "",
+        flow_summary=flow_summary,
         active_skills_summary=skills_summary(active_tools),
         recalled_memories=recalled,
         entity_profile=entity_memory.profile_to_prompt(profile),

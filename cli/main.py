@@ -21,6 +21,7 @@ from cli.commands.agent import app as agent_app
 from cli.commands.configure import app as configure_app
 from cli.commands.db import app as db_app
 from cli.commands.doctor import doctor_command
+from cli.commands.flow import app as flow_app
 from cli.commands.init import init_command
 from cli.commands.meta import app as meta_app
 from cli.commands.plugin import app as plugin_app
@@ -41,6 +42,7 @@ app.add_typer(db_app, name="db", help="Base de datos")
 app.add_typer(sdd_app, name="sdd", help="System Design Document vivo")
 app.add_typer(agent_app, name="agent", help="Releases y rollback del AgentSpec (ADR-0009/0016)")
 app.add_typer(tenant_app, name="tenant", help="Alta y operación de tenants (multi-tenant, ADR-0001)")
+app.add_typer(flow_app, name="flow", help="Flujo de atención por pack/tenant (ADR-0054)")
 app.add_typer(admin_app, name="admin", help="Admins del panel: alta y permisos (ADR-0047)")
 app.add_typer(meta_app, name="meta", help="Diagnóstico de WhatsApp Cloud API (Meta)")
 

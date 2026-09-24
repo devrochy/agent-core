@@ -33,6 +33,7 @@ class PromptContext:
     emojis: str = "sparse"
     max_length: int = 500
     brand_voice: str = ""
+    flow_summary: str = ""            # flujo de atención del tenant (ADR-0054)
     active_skills_summary: str = ""   # descripción de las skills activas del turno
     recalled_memories: list[str] = field(default_factory=list)  # Capa 3 (RAG)
     entity_profile: str = ""          # Capa 2 (perfil del cliente)
@@ -110,6 +111,16 @@ async def build_system_blocks(spec: AgentSpec, ctx: PromptContext) -> list[str]:
     # 2. Voz de marca (dato del tenant, estable por negocio)
     if ctx.brand_voice:
         blocks.append(f"## Voz de marca\n{ctx.brand_voice}")
+
+    # 2b. Flujo de atención (ADR-0054): estable por tenant, va antes de los bloques
+    # dinámicos para no invalidar el cache. Es la "base de comportamiento" del pack.
+    if ctx.flow_summary:
+        blocks.append(
+            "## Flujo de atención\n"
+            "Seguí estas etapas, en orden, según lo que pida el cliente. "
+            "Cada etapa lista las herramientas que corresponden a ese momento:\n"
+            f"{ctx.flow_summary}"
+        )
 
     # 3. Contexto dinámico del turno (va al final; no invalida el cache estable)
     dynamic_parts: list[str] = []
