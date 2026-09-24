@@ -397,6 +397,58 @@ class ReglaNegociacion(TenantMixin, Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class AuditoriaCartera(TenantMixin, Base):
+    """Auditoría imborrable de operaciones sobre cuotas/abonos/pagos/promesas."""
+
+    __tablename__ = "pack_cobranza_auditoria"
+    __table_args__ = (Index("ix_pack_cobranza_auditoria_tenant_entidad", "tenant_id", "entidad", "entidad_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    entidad: Mapped[str] = mapped_column(Text, nullable=False)  # cuota|abono|pago|promesa|prestamo
+    entidad_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    operacion: Mapped[str] = mapped_column(Text, nullable=False)  # crear|editar|eliminar
+    valores_antes: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    valores_despues: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    actor_rol: Mapped[str | None] = mapped_column(Text, default=None)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    motivo: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CambioCliente(TenantMixin, Base):
+    """Propuesta de cambio de datos de un cliente, con aprobación (HU-47)."""
+
+    __tablename__ = "pack_cobranza_cambios_cliente"
+    __table_args__ = (Index("ix_pack_cobranza_cambios_cliente_tenant_cliente", "tenant_id", "cliente_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cliente_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    campos_propuestos: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    estado: Mapped[str] = mapped_column(Text, default="pendiente")  # pendiente|aprobado|rechazado
+    solicitado_por_rol: Mapped[str | None] = mapped_column(Text, default=None)
+    solicitado_por_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    revisado_por: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    revisado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    motivo_rechazo: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ClienteEvidencia(TenantMixin, Base):
+    """Foto facial o de documento del cliente (según flags de la cartera)."""
+
+    __tablename__ = "pack_cobranza_cliente_evidencias"
+    __table_args__ = (Index("ix_pack_cobranza_cliente_evidencias_tenant_cliente", "tenant_id", "cliente_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cliente_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    tipo: Mapped[str] = mapped_column(Text, nullable=False)  # foto_facial|documento_frente|documento_reverso
+    ruta_archivo: Mapped[str] = mapped_column(Text, nullable=False)
+    nombre_original: Mapped[str | None] = mapped_column(Text, default=None)
+    mimetype: Mapped[str | None] = mapped_column(Text, default=None)
+    tamano: Mapped[int | None] = mapped_column(Integer, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Liquidacion(TenantMixin, Base):
     __tablename__ = "pack_cobranza_liquidaciones"
     __table_args__ = (Index("ix_pack_cobranza_liquidaciones_tenant_cartera", "tenant_id", "cartera_id"),)

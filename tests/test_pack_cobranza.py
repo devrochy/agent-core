@@ -104,6 +104,10 @@ def test_modelos_alineados_a_develop() -> None:
     assert "pack_cobranza_propietario_permisos" not in nombres
     assert "propietario_id" not in {c.name for c in models.Cartera.__table__.columns}
     assert "propietario_id" not in {c.name for c in models.Gestor.__table__.columns}
+    # Bloque A: auditoría, cambios de cliente y evidencias.
+    assert "pack_cobranza_auditoria" in nombres
+    assert "pack_cobranza_cambios_cliente" in nombres
+    assert "pack_cobranza_cliente_evidencias" in nombres
 
 
 def test_lead_provider_registra_columnas() -> None:

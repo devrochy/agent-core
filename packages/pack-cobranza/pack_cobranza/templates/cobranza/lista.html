@@ -23,6 +23,8 @@
       <td>
         {% if k == 'nombre' and entity == 'carteras' %}
         <a href="/cobranza/carteras/{{ row['_id'] }}">{{ row.get(k, '') }}</a>
+        {% elif k == 'nombre' and entity == 'clientes' %}
+        <a href="/cobranza/clientes/{{ row['_id'] }}">{{ row.get(k, '') }}</a>
         {% else %}{{ row.get(k, '') }}{% endif %}
       </td>
       {% endfor %}

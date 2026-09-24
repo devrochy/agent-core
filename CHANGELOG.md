@@ -10,8 +10,12 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
 > 1:1 documentado. 20 tablas en v1.
 
 ### Pack (`packages/pack-cobranza/`)
-- **20 tablas** `pack_cobranza_*` con `tenant_id` + RLS + FORCE RLS; PostGIS para
+- **21 tablas** `pack_cobranza_*` con `tenant_id` + RLS + FORCE RLS; PostGIS para
   la geografía de clientes (extensión + `geography(Point,4326)` + trigger + GIST).
+- **Bloque A (operación)**: crear préstamo (genera cuotas), registrar pago y abono
+  (mueven caja y saldo), detalle de cliente con cuotas/abonos, y **auditoría
+  imborrable** (`pack_cobranza_auditoria`) de las operaciones. Tablas de cambios de
+  cliente y evidencias de cliente.
 - **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
   cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
   Las operaciones de administración (gasto, inyección, visita, liquidación) viven

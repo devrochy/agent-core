@@ -29,8 +29,11 @@ from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from pack_cobranza.models import (
+    Abono,
+    AuditoriaCartera,
     Caja,
     CajaAjuste,
+    CambioCliente,
     Cartera,
     CarteraConfig,
     Cliente,
@@ -678,6 +681,254 @@ async def cartera_liquidacion(request: Request, record_id: str) -> RedirectRespo
     if rid is not None:
         await _generar_liquidacion(rid, periodo)
     return RedirectResponse(f"/cobranza/carteras/{record_id}/liquidaciones?flash=Liquidación generada&flash_type=success", status_code=303)
+
+
+# --------------------------------------------------------------- cliente: detalle y operaciones
+def _auditar(session, entidad: str, entidad_id: uuid.UUID, operacion: str, *, antes=None, despues=None, motivo=None) -> None:
+    session.add(
+        AuditoriaCartera(
+            tenant_id=get_current_tenant_id(),
+            entidad=entidad,
+            entidad_id=entidad_id,
+            operacion=operacion,
+            valores_antes=antes,
+            valores_despues=despues,
+            actor_rol="admin",
+            motivo=motivo,
+        )
+    )
+
+
+@router.get("/clientes/{record_id}", response_class=HTMLResponse)
+async def cliente_detalle(request: Request, record_id: str) -> HTMLResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=False):
+        return RedirectResponse("/admin?flash=sin_pack&flash_type=danger", status_code=303)
+    ctx = await base_context(request, SECTION)
+    if ctx is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    rid = _uuid(record_id)
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        cliente = await get_owned(session, Cliente, rid) if rid else None
+        if cliente is None:
+            return RedirectResponse("/cobranza/clientes?flash=No encontrado&flash_type=danger", status_code=303)
+        cartera = await get_owned(session, Cartera, cliente.cartera_id)
+        prestamos = (
+            await session.execute(
+                select(Prestamo).where(Prestamo.tenant_id == tid, Prestamo.cliente_id == cliente.id, Prestamo.deleted_at.is_(None)).order_by(Prestamo.created_at.desc())
+            )
+        ).scalars().all()
+        prestamos_data = []
+        for p in prestamos:
+            cuotas = (
+                await session.execute(
+                    select(Cuota).where(Cuota.tenant_id == tid, Cuota.prestamo_id == p.id, Cuota.deleted_at.is_(None)).order_by(Cuota.numero_cuota)
+                )
+            ).scalars().all()
+            prestamos_data.append(
+                {
+                    "id": str(p.id),
+                    "valor": float(p.valor),
+                    "saldo": float(p.saldo),
+                    "num_cuotas": p.num_cuotas,
+                    "estatus": p.estatus,
+                    "fecha": p.fecha_otorgado.isoformat(),
+                    "cuotas": [
+                        {"id": str(c.id), "numero": c.numero_cuota, "valor": float(c.valor_esperado), "vence": c.fecha_vencimiento.isoformat(), "estatus": c.estatus}
+                        for c in cuotas
+                    ],
+                }
+            )
+        abonos = (
+            await session.execute(
+                select(Abono).where(Abono.tenant_id == tid, Abono.cliente_id == cliente.id, Abono.deleted_at.is_(None)).order_by(Abono.fecha_hora.desc())
+            )
+        ).scalars().all()
+        cambios = (
+            await session.execute(
+                select(CambioCliente).where(CambioCliente.tenant_id == tid, CambioCliente.cliente_id == cliente.id, CambioCliente.estado == "pendiente")
+            )
+        ).scalars().all()
+        ctx.update(
+            record_id=record_id,
+            cliente=f"{cliente.nombre} {cliente.apellido or ''}".strip(),
+            telefono=cliente.telefono_whatsapp or "",
+            documento=f"{cliente.tipo_documento or ''} {cliente.numero_documento or ''}".strip(),
+            negocio=cliente.negocio or "",
+            riesgo=cliente.color_riesgo,
+            cartera=cartera.nombre if cartera else "—",
+            prestamos=prestamos_data,
+            abonos=[{"id": str(a.id), "valor": float(a.valor), "metodo": a.metodo_pago, "fecha": a.fecha_hora.strftime("%Y-%m-%d") if a.fecha_hora else ""} for a in abonos],
+            cambios=[{"id": str(c.id), "campos": c.campos_propuestos, "fecha": c.created_at.strftime("%Y-%m-%d") if c.created_at else ""} for c in cambios],
+        )
+    return _render("cobranza/cliente_detalle.html", ctx)
+
+
+@router.post("/clientes/{record_id}/prestamo")
+async def cliente_prestamo(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    form = await request.form()
+    try:
+        valor = Decimal(str(form.get("valor") or 0))
+        num_cuotas = int(str(form.get("num_cuotas") or 1))
+        tipo_interes = Decimal(str(form.get("tipo_interes") or 0))
+        dias = int(str(form.get("dias_entre_cuotas") or 1))
+        fecha = date.fromisoformat(str(form.get("fecha_otorgado") or date.today().isoformat()))
+    except Exception:
+        return RedirectResponse(f"/cobranza/clientes/{record_id}?flash=Datos inválidos&flash_type=danger", status_code=303)
+    if rid is None or valor <= 0 or num_cuotas < 1:
+        return RedirectResponse(f"/cobranza/clientes/{record_id}?flash=Datos inválidos&flash_type=danger", status_code=303)
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        cliente = await get_owned(session, Cliente, rid)
+        if cliente is None:
+            return RedirectResponse("/cobranza/clientes?flash=No encontrado&flash_type=danger", status_code=303)
+        total = (valor * (Decimal(1) + tipo_interes / Decimal(100))).quantize(Decimal("1"))
+        cuota_valor = (total / num_cuotas).quantize(Decimal("1"))
+        prestamo = Prestamo(tenant_id=tid, cliente_id=cliente.id, cartera_id=cliente.cartera_id, valor=valor, saldo=total, num_cuotas=num_cuotas, tipo_interes=tipo_interes, dias_entre_cuotas=dias, fecha_otorgado=fecha)
+        session.add(prestamo)
+        await session.flush()
+        for i in range(1, num_cuotas + 1):
+            session.add(Cuota(tenant_id=tid, prestamo_id=prestamo.id, numero_cuota=i, valor_esperado=cuota_valor, fecha_vencimiento=fecha + timedelta(days=i * dias)))
+        caja = await _caja_de(session, cliente.cartera_id)
+        caja.saldo_actual = caja.saldo_actual - valor
+        _auditar(session, "prestamo", prestamo.id, "crear", despues={"valor": float(valor), "num_cuotas": num_cuotas, "cliente_id": str(cliente.id)})
+    return RedirectResponse(f"/cobranza/clientes/{record_id}?flash=Préstamo creado&flash_type=success", status_code=303)
+
+
+@router.post("/prestamos/{record_id}/pago")
+async def prestamo_pago(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    form = await request.form()
+    try:
+        valor = Decimal(str(form.get("valor") or 0))
+    except Exception:
+        return RedirectResponse("/cobranza/clientes?flash=Valor inválido&flash_type=danger", status_code=303)
+    metodo = str(form.get("metodo_pago") or "efectivo")
+    cuota_id = _uuid(str(form.get("cuota_id") or ""))
+    if rid is None or valor <= 0:
+        return RedirectResponse("/cobranza/clientes?flash=Valor inválido&flash_type=danger", status_code=303)
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        prestamo = await get_owned(session, Prestamo, rid)
+        if prestamo is None:
+            return RedirectResponse("/cobranza/clientes?flash=Préstamo no encontrado&flash_type=danger", status_code=303)
+        cuota = await get_owned(session, Cuota, cuota_id) if cuota_id else None
+        session.add(Pago(tenant_id=tid, cliente_id=prestamo.cliente_id, prestamo_id=prestamo.id, cuota_id=cuota.id if cuota else None, valor=valor, metodo_pago=metodo, registrado_por="propietario"))
+        if cuota is not None and cuota.prestamo_id == prestamo.id:
+            cuota.estatus = "pagada"
+        prestamo.saldo = prestamo.saldo - valor
+        caja = await _caja_de(session, prestamo.cartera_id)
+        caja.saldo_actual = caja.saldo_actual + valor
+        _auditar(session, "pago", prestamo.id, "crear", despues={"valor": float(valor), "metodo": metodo, "cuota_id": str(cuota.id) if cuota else None})
+        cliente_id = str(prestamo.cliente_id)
+    return RedirectResponse(f"/cobranza/clientes/{cliente_id}?flash=Pago registrado&flash_type=success", status_code=303)
+
+
+@router.post("/prestamos/{record_id}/abono")
+async def prestamo_abono(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    form = await request.form()
+    try:
+        valor = Decimal(str(form.get("valor") or 0))
+    except Exception:
+        return RedirectResponse("/cobranza/clientes?flash=Valor inválido&flash_type=danger", status_code=303)
+    metodo = str(form.get("metodo_pago") or "efectivo")
+    if rid is None or valor <= 0:
+        return RedirectResponse("/cobranza/clientes?flash=Valor inválido&flash_type=danger", status_code=303)
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        prestamo = await get_owned(session, Prestamo, rid)
+        if prestamo is None:
+            return RedirectResponse("/cobranza/clientes?flash=Préstamo no encontrado&flash_type=danger", status_code=303)
+        session.add(Abono(tenant_id=tid, prestamo_id=prestamo.id, cliente_id=prestamo.cliente_id, valor=valor, metodo_pago=metodo, registrado_por="propietario"))
+        prestamo.saldo = prestamo.saldo - valor
+        caja = await _caja_de(session, prestamo.cartera_id)
+        caja.saldo_actual = caja.saldo_actual + valor
+        _auditar(session, "abono", prestamo.id, "crear", despues={"valor": float(valor), "metodo": metodo})
+        cliente_id = str(prestamo.cliente_id)
+    return RedirectResponse(f"/cobranza/clientes/{cliente_id}?flash=Abono registrado&flash_type=success", status_code=303)
+
+
+@router.post("/cuotas/{record_id}/eliminar")
+async def cuota_eliminar(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    destino = "/cobranza/clientes"
+    if rid is not None:
+        async with get_session() as session:
+            cuota = await get_owned(session, Cuota, rid)
+            if cuota is not None:
+                cuota.deleted_at = datetime.now(UTC)
+                prestamo = await get_owned(session, Prestamo, cuota.prestamo_id)
+                if prestamo is not None:
+                    destino = f"/cobranza/clientes/{prestamo.cliente_id}"
+                _auditar(session, "cuota", cuota.id, "eliminar", antes={"valor": float(cuota.valor_esperado), "numero": cuota.numero_cuota})
+    return RedirectResponse(f"{destino}?flash=Cuota eliminada&flash_type=success", status_code=303)
+
+
+@router.post("/abonos/{record_id}/eliminar")
+async def abono_eliminar(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    destino = "/cobranza/clientes"
+    if rid is not None:
+        async with get_session() as session:
+            abono = await get_owned(session, Abono, rid)
+            if abono is not None:
+                abono.deleted_at = datetime.now(UTC)
+                destino = f"/cobranza/clientes/{abono.cliente_id}"
+                _auditar(session, "abono", abono.id, "eliminar", antes={"valor": float(abono.valor)})
+    return RedirectResponse(f"{destino}?flash=Abono eliminado&flash_type=success", status_code=303)
+
+
+@router.post("/cambios/{record_id}/decision")
+async def cambio_decision(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    form = await request.form()
+    decision = str(form.get("decision") or "")
+    destino = "/cobranza/clientes"
+    if rid is not None:
+        async with get_session() as session:
+            cambio = await get_owned(session, CambioCliente, rid)
+            if cambio is not None:
+                destino = f"/cobranza/clientes/{cambio.cliente_id}"
+                if decision == "aprobar":
+                    cliente = await get_owned(session, Cliente, cambio.cliente_id)
+                    if cliente is not None:
+                        for field, value in (cambio.campos_propuestos or {}).items():
+                            if field in ("nombre", "apellido", "negocio", "telefono_whatsapp", "tipo_documento", "numero_documento") and value is not None:
+                                setattr(cliente, field, str(value))
+                    cambio.estado = "aprobado"
+                else:
+                    cambio.estado = "rechazado"
+                    cambio.motivo_rechazo = str(form.get("motivo") or "").strip() or None
+                cambio.revisado_en = datetime.now(UTC)
+    return RedirectResponse(f"{destino}?flash=Cambio {decision or 'procesado'}&flash_type=success", status_code=303)
 
 
 # --------------------------------------------------------------- helpers
