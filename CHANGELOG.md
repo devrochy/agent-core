@@ -62,6 +62,10 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
   "Generar cierre del día" e histórico en la pestaña **Estadísticas**.
 - **Optimización de trayecto** (Bloque H): orden por vecino más cercano (haversine)
   desde la apertura del día → `CarteraOptimizadaLog` + plan y ruta en el mapa.
+- **Comunicación con el propietario** (Épica 9, HU-63; ADR-0064): hilo por tenant
+  (`conversaciones_propietario` + `mensajes_propietario`) con notificaciones de cobro
+  auto-registradas, mensajes manuales saliente/entrante y enlace **wa.me** al
+  WhatsApp del propietario (`CobranzaConfig.propietario_whatsapp`).
 - **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
   cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
   Las operaciones de administración (gasto, inyección, visita, liquidación) viven

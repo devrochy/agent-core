@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Propietario{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Comunicación con el propietario</h1>
+<p class="text-secondary">Notificaciones de cobro y mensajes manuales. El propietario es el tenant (ADR-0062).</p>
+
+{% if not whatsapp %}
+<div class="alert alert-warning">
+  Configura el <strong>WhatsApp del propietario</strong> en la configuración del pack para habilitar el envío por WhatsApp.
+</div>
+{% endif %}
+
+<div class="card mb-3"><div class="card-body">
+  <form method="post" action="/cobranza/propietario/mensaje" class="row g-2 align-items-end">
+    <div class="col-md-2">
+      <label class="form-label">Dirección</label>
+      <select name="direccion" class="form-select form-select-sm">
+        <option value="saliente">Saliente (al propietario)</option>
+        <option value="entrante">Entrante (del propietario)</option>
+      </select>
+    </div>
+    <div class="col-md-7">
+      <label class="form-label">Mensaje</label>
+      <textarea name="contenido" id="contenido" class="form-control form-control-sm" rows="2" required></textarea>
+    </div>
+    <div class="col-md-3 d-flex gap-2">
+      <button class="btn btn-primary btn-sm">Registrar</button>
+      {% if whatsapp %}<a href="#" id="wa" class="btn btn-outline-success btn-sm" title="Abrir WhatsApp con este texto">WhatsApp</a>{% endif %}
+    </div>
+  </form>
+</div></div>
+
+<div class="card"><div class="card-body">
+  {% for m in mensajes %}
+  <div class="d-flex mb-2 {{ 'justify-content-end' if m.direccion == 'saliente' else '' }}">
+    <div class="p-2 rounded" style="max-width: 70%; background: {{ '#dce9ff' if m.direccion == 'saliente' else '#f1f3f5' }};">
+      <div class="small text-secondary">{{ m.fecha }} · {{ m.tipo }}{% if m.autor %} · {{ m.autor }}{% endif %}</div>
+      <div>{{ m.contenido }}</div>
+    </div>
+  </div>
+  {% else %}
+  <p class="text-secondary mb-0">Sin mensajes todavía. Genera un cobro o registra un mensaje manual.</p>
+  {% endfor %}
+</div></div>
+{% endblock %}
+
+{% block scripts %}
+{% if whatsapp %}
+<script>
+(function () {
+  var tel = "{{ whatsapp | replace('+', '') | replace(' ', '') | replace('-', '') }}";
+  document.getElementById('wa').addEventListener('click', function (e) {
+    e.preventDefault();
+    var txt = encodeURIComponent(document.getElementById('contenido').value || '');
+    window.open('https://wa.me/' + tel + '?text=' + txt, '_blank');
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}
