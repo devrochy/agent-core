@@ -9,6 +9,7 @@ Endpoints:
 - `GET  /mis-carteras` — carteras del gestor.
 - `GET  /carteras/{id}/clientes-dia` — clientes del día.
 - `POST /sync/eventos` — sincronización offline idempotente (visita|pago|abono).
+- `POST /clientes/{id}/evidencia` — sube foto facial o de documento (multipart).
 """
 
 from __future__ import annotations
@@ -27,10 +28,12 @@ from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from pack_cobranza.auth import issue_token, pack_secret, token_tenant
+from pack_cobranza.evidencias import EvidenciaError, guardar_evidencia
 from pack_cobranza.models import (
     Abono,
     Cartera,
     Cliente,
+    ClienteEvidencia,
     Cuota,
     Device,
     IntentoAcceso,
@@ -203,3 +206,39 @@ async def _aplicar_evento(session, tenant_id: uuid.UUID, tipo: str, data: dict[s
     else:  # abono
         prestamo_id = uuid.UUID(str(data.get("prestamo_id")))
         session.add(Abono(tenant_id=tenant_id, prestamo_id=prestamo_id, cliente_id=cliente.id, valor=Decimal(str(data.get("valor") or 0)), metodo_pago=str(data.get("metodo_pago") or "efectivo"), registrado_por="gestor"))
+
+
+@router.post("/clientes/{cliente_id}/evidencia")
+async def subir_evidencia(cliente_id: str, request: Request, authorization: str | None = Header(default=None)) -> JSONResponse:
+    """Registra una evidencia del cliente (foto facial o documento) subida por el gestor.
+
+    Multipart: `tipo` (foto_facial|documento_frente|documento_reverso) + `archivo`.
+    Idempotente no: cada llamada crea una evidencia nueva (el gestor puede reintentar
+    una foto distinta). El archivo se guarda en `TENANTS_ROOT/<slug>/evidencias/`.
+    """
+    auth = await _auth(authorization)
+    if auth is None:
+        return JSONResponse({"error": "no autorizado"}, status_code=401)
+    tenant_id, _payload = auth
+    try:
+        cid = uuid.UUID(cliente_id)
+    except ValueError:
+        return JSONResponse({"error": "cliente inválido"}, status_code=400)
+    form = await request.form()
+    tipo = str(form.get("tipo") or "").strip()
+    archivo = form.get("archivo")
+    if not hasattr(archivo, "read"):
+        return JSONResponse({"error": "falta el archivo"}, status_code=400)
+    contenido = await archivo.read()
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            if await get_owned(session, Cliente, cid) is None:
+                return JSONResponse({"error": "cliente no encontrado"}, status_code=404)
+            try:
+                meta = await guardar_evidencia(tenant_id, cid, tipo, getattr(archivo, "filename", None), getattr(archivo, "content_type", None), contenido)
+            except EvidenciaError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+            evidencia = ClienteEvidencia(tenant_id=tenant_id, cliente_id=cid, tipo=tipo, **meta)  # type: ignore[arg-type]
+            session.add(evidencia)
+            await session.flush()
+            return JSONResponse({"id": str(evidencia.id), "tipo": tipo, "ruta": meta["ruta_archivo"]}, status_code=201)

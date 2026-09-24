@@ -15,11 +15,12 @@ import secrets
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Request, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 
@@ -30,6 +31,7 @@ from core.db.models import Conversation, Escalation
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from pack_cobranza.evidencias import ruta_evidencia
 from pack_cobranza.models import (
     Abono,
     AuditoriaCartera,
@@ -43,6 +45,7 @@ from pack_cobranza.models import (
     CarteraNota,
     CarteraOptimizadaLog,
     Cliente,
+    ClienteEvidencia,
     CobroPropietario,
     Cuota,
     Device,
@@ -1287,6 +1290,7 @@ async def cliente_detalle(request: Request, record_id: str) -> HTMLResponse:
         if cliente.customer_id is not None:
             conv = (await session.execute(select(Conversation).where(Conversation.tenant_id == tid, Conversation.customer_id == cliente.customer_id).order_by(Conversation.started_at.desc()).limit(1))).scalar_one_or_none()
             conv_id = str(conv.id) if conv else None
+        evidencias = (await session.execute(select(ClienteEvidencia).where(ClienteEvidencia.tenant_id == tid, ClienteEvidencia.cliente_id == cliente.id).order_by(ClienteEvidencia.created_at.desc()))).scalars().all()
         ctx.update(
             record_id=record_id,
             cliente=f"{cliente.nombre} {cliente.apellido or ''}".strip(),
@@ -1295,6 +1299,7 @@ async def cliente_detalle(request: Request, record_id: str) -> HTMLResponse:
             negocio=cliente.negocio or "",
             riesgo=cliente.color_riesgo,
             cartera=cartera.nombre if cartera else "—",
+            evidencias=[{"id": str(e.id), "tipo": e.tipo, "fecha": e.created_at.strftime("%Y-%m-%d %H:%M") if e.created_at else "", "nombre": e.nombre_original or "", "es_imagen": (e.mimetype or "").startswith("image/")} for e in evidencias],
             customer_id=str(cliente.customer_id) if cliente.customer_id else "",
             conv_id=conv_id,
             prestamos=prestamos_data,
@@ -1302,6 +1307,24 @@ async def cliente_detalle(request: Request, record_id: str) -> HTMLResponse:
             cambios=[{"id": str(c.id), "campos": c.campos_propuestos, "fecha": c.created_at.strftime("%Y-%m-%d") if c.created_at else ""} for c in cambios],
         )
     return _render("cobranza/cliente_detalle.html", ctx)
+
+
+@router.get("/clientes/{record_id}/evidencia/{ev_id}")
+async def cliente_evidencia(request: Request, record_id: str, ev_id: str) -> Response:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=False):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    evid = _uuid(ev_id)
+    cli = _uuid(record_id)
+    async with get_session() as session:
+        evidencia = await get_owned(session, ClienteEvidencia, evid) if evid else None
+        if evidencia is None or (cli is not None and evidencia.cliente_id != cli):
+            return RedirectResponse("/cobranza/clientes?flash=Evidencia no encontrada&flash_type=danger", status_code=303)
+        ruta = await ruta_evidencia(get_current_tenant_id(), evidencia.ruta_archivo)
+        if ruta is None:
+            return RedirectResponse("/cobranza/clientes?flash=Archivo no disponible&flash_type=danger", status_code=303)
+        return FileResponse(ruta, media_type=evidencia.mimetype or "application/octet-stream", filename=evidencia.nombre_original or "evidencia")
 
 
 @router.post("/clientes/{record_id}/prestamo")
@@ -1546,6 +1569,8 @@ async def cartera_estadisticas(request: Request, record_id: str) -> HTMLResponse
         mora = (await session.execute(select(func.coalesce(func.sum(Cuota.valor_esperado), 0)).where(Cuota.tenant_id == tid, Cuota.prestamo_id.in_(prestamo_ids), Cuota.estatus == "atrasada", Cuota.deleted_at.is_(None)))).scalar_one()
         cobrado = (await session.execute(select(func.coalesce(func.sum(Pago.valor), 0)).where(Pago.tenant_id == tid, Pago.prestamo_id.in_(prestamo_ids), Pago.fecha_hora >= desde_mes, Pago.deleted_at.is_(None)))).scalar_one()
         gastos = (await session.execute(select(func.coalesce(func.sum(Gasto.valor), 0)).where(Gasto.tenant_id == tid, Gasto.cartera_id == cartera.id, Gasto.estado == "activo", Gasto.deleted_at.is_(None)))).scalar_one()
+        snapshots = (await session.execute(select(CarteraEstadisticasSnapshot).where(CarteraEstadisticasSnapshot.tenant_id == tid, CarteraEstadisticasSnapshot.cartera_id == cartera.id).order_by(CarteraEstadisticasSnapshot.fecha.desc()).limit(14))).scalars().all()
+        reportes = (await session.execute(select(ReporteDiario).where(ReporteDiario.tenant_id == tid, ReporteDiario.cartera_id == cartera.id).order_by(ReporteDiario.fecha.desc()).limit(14))).scalars().all()
 
     def _fmt(v: Any) -> str:
         return f"{Decimal(v):,.0f}".replace(",", ".")
@@ -1560,8 +1585,27 @@ async def cartera_estadisticas(request: Request, record_id: str) -> HTMLResponse
             {"label": "Cobrado (30 días)", "value": _fmt(cobrado)},
             {"label": "Gastos", "value": _fmt(gastos)},
         ],
+        snapshots=[{"fecha": s.fecha.isoformat(), **(s.datos or {})} for s in snapshots],
+        reportes=[{"fecha": r.fecha.isoformat(), "cobrado": float(r.cobrado), "prestado": float(r.prestado), "visitados": len(r.clientes_visitados or []), "sin_pago": len(r.clientes_sin_pago or []), "inicio": r.hora_inicio or "", "fin": r.hora_fin or ""} for r in reportes],
     )
     return _render("cobranza/cartera_estadisticas.html", ctx)
+
+
+@router.post("/carteras/{record_id}/cierre")
+async def cartera_cierre(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    if rid is not None:
+        from pack_cobranza.jobs import snapshot_cartera
+
+        async with get_session() as session:
+            cartera = await get_owned(session, Cartera, rid)
+            if cartera is not None:
+                await snapshot_cartera(session, get_current_tenant_id(), cartera)
+    return RedirectResponse(f"/cobranza/carteras/{record_id}/estadisticas?flash=Cierre del día generado&flash_type=success", status_code=303)
 
 
 async def _clientes_del_dia(session, cartera_id: uuid.UUID) -> list[dict[str, Any]]:
@@ -1581,6 +1625,37 @@ async def _clientes_del_dia(session, cartera_id: uuid.UUID) -> list[dict[str, An
     return out
 
 
+def _haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    r = 6371.0
+    dlat = radians(b[0] - a[0])
+    dlng = radians(b[1] - a[1])
+    h = sin(dlat / 2) ** 2 + cos(radians(a[0])) * cos(radians(b[0])) * sin(dlng / 2) ** 2
+    return 2 * r * asin(sqrt(h))
+
+
+def _ordenar_trayecto(clientes: list[dict[str, Any]], inicio: tuple[float, float] | None) -> tuple[list[str], float]:
+    """Orden de visita por vecino más cercano. Devuelve ids ordenados + km estimados."""
+    puntos = [c for c in clientes if c.get("lat") is not None and c.get("lng") is not None]
+    if not puntos:
+        return [], 0.0
+    restantes = list(puntos)
+    orden: list[str] = []
+    km = 0.0
+    if inicio is None:
+        primero = restantes.pop(0)
+        orden.append(primero["id"])
+        actual = (primero["lat"], primero["lng"])
+    else:
+        actual = inicio
+    while restantes:
+        sig = min(restantes, key=lambda c: _haversine_km(actual, (c["lat"], c["lng"])))
+        km += _haversine_km(actual, (sig["lat"], sig["lng"]))
+        orden.append(sig["id"])
+        actual = (sig["lat"], sig["lng"])
+        restantes.remove(sig)
+    return orden, km
+
+
 @router.get("/carteras/{record_id}/trayecto", response_class=HTMLResponse)
 async def cartera_trayecto(request: Request, record_id: str) -> HTMLResponse:
     ctx = await base_context(request, SECTION)
@@ -1597,13 +1672,43 @@ async def cartera_trayecto(request: Request, record_id: str) -> HTMLResponse:
         clientes = await _clientes_del_dia(session, cartera.id)
         aperturas = (await session.execute(select(CarteraApertura).where(CarteraApertura.tenant_id == tid, CarteraApertura.cartera_id == cartera.id).order_by(CarteraApertura.fecha.desc()).limit(10))).scalars().all()
         posiciones = (await session.execute(select(PosicionGestor).where(PosicionGestor.tenant_id == tid, PosicionGestor.cartera_id == cartera.id).order_by(PosicionGestor.registrada_en.desc()).limit(50))).scalars().all()
+        optimo = (await session.execute(select(CarteraOptimizadaLog).where(CarteraOptimizadaLog.tenant_id == tid, CarteraOptimizadaLog.cartera_id == cartera.id).order_by(CarteraOptimizadaLog.created_at.desc()).limit(1))).scalar_one_or_none()
+        por_id = {c["id"]: c for c in clientes}
+        plan = [por_id[cid] for cid in (optimo.orden_clientes or []) if cid in por_id] if optimo else []
         ctx.update(
             record_id=record_id, tab="trayecto", cartera=cartera.nombre, clientes=clientes,
             puntos=[{"lat": c["lat"], "lng": c["lng"], "cliente": c["cliente"], "riesgo": c["riesgo"]} for c in clientes if c["lat"] is not None and c["lng"] is not None],
             aperturas=[{"fecha": a.fecha.isoformat(), "hora": a.hora_inicio or ""} for a in aperturas],
             posiciones=[{"lat": p.lat, "lng": p.lng, "fecha": p.registrada_en.strftime("%Y-%m-%d %H:%M") if p.registrada_en else ""} for p in posiciones],
+            plan=plan,
+            optimo={"km": float(optimo.distancia_estimada_km or 0), "min": optimo.tiempo_estimado_min or 0, "fecha": optimo.fecha.isoformat()} if optimo else None,
         )
     return _render("cobranza/cartera_trayecto.html", ctx)
+
+
+@router.post("/carteras/{record_id}/trayecto/optimizar")
+async def cartera_optimizar(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    async with get_session() as session:
+        cartera = await get_owned(session, Cartera, rid) if rid else None
+        if cartera is None:
+            return RedirectResponse("/cobranza/carteras?flash=No encontrada&flash_type=danger", status_code=303)
+        clientes = await _clientes_del_dia(session, cartera.id)
+        apertura = (
+            await session.execute(select(CarteraApertura).where(CarteraApertura.tenant_id == get_current_tenant_id(), CarteraApertura.cartera_id == cartera.id).order_by(CarteraApertura.created_at.desc()).limit(1))
+        ).scalar_one_or_none()
+        inicio = (apertura.lat, apertura.lng) if apertura is not None and apertura.lat is not None and apertura.lng is not None else None
+        orden, km = _ordenar_trayecto(clientes, inicio)
+        if not orden:
+            return RedirectResponse(f"/cobranza/carteras/{record_id}/trayecto?flash=Sin clientes con ubicación&flash_type=danger", status_code=303)
+        tiempo = int(km / 20 * 60) + len(orden) * 5
+        session.add(CarteraOptimizadaLog(tenant_id=get_current_tenant_id(), cartera_id=cartera.id, fecha=date.today(), orden_clientes=orden, distancia_estimada_km=Decimal(str(round(km, 2))), tiempo_estimado_min=tiempo, tipo="planificada"))
+        _auditar(session, "trayecto", cartera.id, "crear", despues={"clientes": len(orden), "km": round(km, 2)})
+    return RedirectResponse(f"/cobranza/carteras/{record_id}/trayecto?flash=Trayecto optimizado&flash_type=success", status_code=303)
 
 
 @router.post("/carteras/{record_id}/apertura")
@@ -1667,8 +1772,3 @@ async def _generar_liquidacion(cartera_id: uuid.UUID, periodo: str) -> None:
         cobrado = (await session.execute(select(func.coalesce(func.sum(Pago.valor), 0)).where(Pago.tenant_id == tid, Pago.prestamo_id.in_(prestamo_ids), Pago.fecha_hora >= datetime.combine(desde, datetime.min.time()), Pago.deleted_at.is_(None)))).scalar_one()
         gastos = (await session.execute(select(func.coalesce(func.sum(Gasto.valor), 0)).where(Gasto.tenant_id == tid, Gasto.cartera_id == cartera.id, Gasto.estado == "activo", Gasto.deleted_at.is_(None)))).scalar_one()
         session.add(Liquidacion(tenant_id=tid, cartera_id=cartera.id, fecha=date.today(), periodo=periodo, total_cobrado=cobrado, total_gastos=gastos))
-
-
-# Evita imports sin uso si se recortan handlers.
-# Modelos declarados (tabla + migración) pero aún sin UI en esta tanda.
-_ = (CajaAjuste, CarteraEstadisticasSnapshot, CarteraOptimizadaLog, Promesa, ReporteDiario)

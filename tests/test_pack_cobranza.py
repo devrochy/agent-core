@@ -158,6 +158,9 @@ def test_rbac_subsecciones_por_path() -> None:
         "/cobranza/promesas/abc/estado": "pack_cobranza:promesas",
         "/cobranza/auditoria": "pack_cobranza:auditoria",
         "/cobranza/carteras/abc/caja": "pack_cobranza:carteras",
+        "/cobranza/carteras/abc/trayecto/optimizar": "pack_cobranza:carteras",
+        "/cobranza/carteras/abc/cierre": "pack_cobranza:carteras",
+        "/cobranza/clientes/abc/evidencia/xyz": "pack_cobranza:clientes",
         "/cobranza/dispositivos": "pack_cobranza:dispositivos",
     }
     for path, esperado in casos.items():
@@ -172,3 +175,32 @@ def test_lead_provider_registra_columnas() -> None:
 
     cols = [c.key for c in lead_registry.columns_for({"pack_cobranza"})]
     assert cols == ["saldo", "mora", "riesgo"]
+
+
+def test_trayecto_vecino_mas_cercano() -> None:
+    """El orden del trayecto encadena por vecino más cercano desde el inicio."""
+    from pack_cobranza.admin import _haversine_km, _ordenar_trayecto
+
+    clientes = [
+        {"id": "a", "lat": 4.60, "lng": -74.08},
+        {"id": "b", "lat": 4.70, "lng": -74.08},
+        {"id": "c", "lat": 4.601, "lng": -74.0801},
+    ]
+    orden, km = _ordenar_trayecto(clientes, (4.60, -74.08))
+    assert orden[0] == "a"  # el inicio coincide con "a"
+    assert orden[1] == "c"  # el más cercano a "a"
+    assert km > 0
+    assert _haversine_km((4.60, -74.08), (4.60, -74.08)) == 0
+
+
+def test_evidencias_valida_slug_y_mime() -> None:
+    from pack_cobranza.evidencias import TIPOS, EvidenciaError, _slug_seguro
+
+    assert "foto_facial" in TIPOS
+    assert _slug_seguro("demo-cobranza") == "demo-cobranza"
+    for malo in ("../otro", "a/b", ""):
+        try:
+            _slug_seguro(malo)
+        except EvidenciaError:
+            continue
+        raise AssertionError(f"slug aceptado: {malo!r}")

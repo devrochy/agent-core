@@ -27,6 +27,28 @@
 
 <div id="map" class="mb-3" style="height: 420px; border-radius: .5rem;"></div>
 
+<div class="d-flex justify-content-between align-items-center mb-2">
+  <h2 class="fs-5 mb-0">Plan del día</h2>
+  <form method="post" action="/cobranza/carteras/{{ record_id }}/trayecto/optimizar">
+    <button class="btn btn-primary btn-sm"><i class="bi bi-signpost-split"></i> Optimizar trayecto</button>
+  </form>
+</div>
+{% if optimo %}
+<p class="text-secondary small">Última optimización: {{ optimo.fecha }} · {{ optimo.km }} km · ~{{ optimo.min }} min</p>
+<ol class="list-group list-group-numbered mb-3">
+  {% for c in plan %}
+  <li class="list-group-item d-flex justify-content-between align-items-center">
+    <a href="/cobranza/clientes/{{ c.id }}">{{ c.cliente }}</a>
+    <span class="text-secondary small">{{ c.mora }} días de mora · saldo {{ c.saldo }}</span>
+  </li>
+  {% else %}
+  <li class="list-group-item text-secondary">La optimización no coincide con los clientes actuales.</li>
+  {% endfor %}
+</ol>
+{% else %}
+<p class="text-secondary small mb-3">Sin optimización todavía. Genera el plan para ordenar las visitas.</p>
+{% endif %}
+
 <h2 class="fs-5">Clientes del día ({{ clientes | length }})</h2>
 <table class="table table-sm table-hover">
   <thead><tr><th>Cliente</th><th>WhatsApp</th><th>Saldo</th><th>Mora (días)</th><th>Riesgo</th></tr></thead>
@@ -49,6 +71,8 @@
 <script>
 (function () {
   var puntos = {{ puntos | tojson }};
+  var plan = {{ plan | map(attribute='lat') | list | tojson }};
+  var planLng = {{ plan | map(attribute='lng') | list | tojson }};
   var map = L.map('map');
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '&copy; OpenStreetMap'
@@ -58,6 +82,9 @@
     L.marker([p.lat, p.lng]).addTo(map).bindPopup(p.cliente);
     bounds.push([p.lat, p.lng]);
   });
+  var ruta = [];
+  for (var i = 0; i < plan.length; i++) { ruta.push([plan[i], planLng[i]]); }
+  if (ruta.length > 1) { L.polyline(ruta, { color: '#172F6C', weight: 3 }).addTo(map); }
   if (bounds.length) { map.fitBounds(bounds, { padding: [30, 30] }); }
   else { map.setView([4.65, -74.05], 11); }
 })();

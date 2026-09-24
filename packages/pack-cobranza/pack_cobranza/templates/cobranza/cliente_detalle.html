@@ -109,4 +109,26 @@
     {% endfor %}
   </tbody>
 </table>
+
+<h2 class="fs-5 mt-4">Evidencias</h2>
+<p class="text-secondary small">Fotos faciales y documentos del cliente (se cargan desde la app de campo).</p>
+<div class="row g-2">
+  {% for e in evidencias %}
+  <div class="col-6 col-md-3">
+    <div class="card h-100"><div class="card-body p-2">
+      <div class="text-secondary small">{{ e.tipo }} · {{ e.fecha }}</div>
+      {% if e.es_imagen %}
+      <a href="/cobranza/clientes/{{ record_id }}/evidencia/{{ e.id }}" target="_blank">
+        <img src="/cobranza/clientes/{{ record_id }}/evidencia/{{ e.id }}" alt="{{ e.tipo }}" class="img-fluid rounded mt-1" style="max-height: 150px; object-fit: cover;">
+      </a>
+      {% else %}
+      <a href="/cobranza/clientes/{{ record_id }}/evidencia/{{ e.id }}" target="_blank" class="btn btn-sm btn-outline-secondary mt-1">Abrir documento</a>
+      {% endif %}
+      {% if e.nombre %}<div class="text-secondary small text-truncate">{{ e.nombre }}</div>{% endif %}
+    </div></div>
+  </div>
+  {% else %}
+  <p class="text-secondary">Sin evidencias.</p>
+  {% endfor %}
+</div>
 {% endblock %}
