@@ -20,6 +20,9 @@ class CobranzaConfig(BasePluginConfig):
     nombre_oficina: str = Field(
         default="", description="Remitente que verán los clientes en las notificaciones"
     )
+    propietario_whatsapp: str = Field(
+        default="", description="WhatsApp del propietario para el enlace de contacto (wa.me)"
+    )
     moneda: str = Field(default="COP", description="Moneda ISO-4217 de la cartera")
     pais: str = Field(default="", description="País de operación (ISO-3166)")
     dias_tolerancia_cobro: int = Field(

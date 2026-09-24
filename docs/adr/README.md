@@ -71,3 +71,4 @@ Se crean con `/adr`.
 | 0061 | `admin_menu` de packs por secciones y visibilidad por rol | aceptado |
 | 0062 | El propietario es el tenant: el pack no duplica la identidad | aceptado |
 | 0063 | RBAC por sub-sección de pack | aceptado |
+| 0064 | Comunicación con el propietario: bitácora por tenant con enlace wa.me | aceptado |

@@ -52,6 +52,7 @@ class CobranzaModule(BaseModule):
         {"label": "Carteras", "path": "/cobranza/carteras", "section": "General", "section_key": "pack_cobranza:carteras"},
         {"label": "Clientes", "path": "/cobranza/clientes", "section": "General", "section_key": "pack_cobranza:clientes"},
         {"label": "Cobros", "path": "/cobranza/cobros", "section": "General", "section_key": "pack_cobranza:cobros"},
+        {"label": "Propietario", "path": "/cobranza/propietario", "section": "General", "section_key": "pack_cobranza:propietario"},
         {"label": "Promesas", "path": "/cobranza/promesas", "section": "General", "section_key": "pack_cobranza:promesas"},
         {"label": "Reportes", "path": "/cobranza/reportes", "section": "General", "section_key": "pack_cobranza:reportes"},
         {"label": "Reglas de negociación", "path": "/cobranza/reglas", "section": "Monitoreo", "section_key": "pack_cobranza:reglas"},

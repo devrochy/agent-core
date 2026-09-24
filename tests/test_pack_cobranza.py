@@ -124,6 +124,9 @@ def test_modelos_alineados_a_develop() -> None:
     # Bloque D: dispositivos y offline.
     for tabla in ("pack_cobranza_devices", "pack_cobranza_intentos_acceso", "pack_cobranza_sync_eventos"):
         assert tabla in nombres
+    # Épica 9 (HU-63): conversación con el propietario.
+    assert "pack_cobranza_conversaciones_propietario" in nombres
+    assert "pack_cobranza_mensajes_propietario" in nombres
     assert "password_hash" in {c.name for c in models.Gestor.__table__.columns}
 
 
@@ -157,6 +160,8 @@ def test_rbac_subsecciones_por_path() -> None:
         "/cobranza/promesas": "pack_cobranza:promesas",
         "/cobranza/promesas/abc/estado": "pack_cobranza:promesas",
         "/cobranza/auditoria": "pack_cobranza:auditoria",
+        "/cobranza/propietario": "pack_cobranza:propietario",
+        "/cobranza/propietario/mensaje": "pack_cobranza:propietario",
         "/cobranza/carteras/abc/caja": "pack_cobranza:carteras",
         "/cobranza/carteras/abc/trayecto/optimizar": "pack_cobranza:carteras",
         "/cobranza/carteras/abc/cierre": "pack_cobranza:carteras",

@@ -643,6 +643,39 @@ class LinkPago(TenantMixin, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ConversacionPropietario(TenantMixin, Base):
+    """Hilo de comunicación con el propietario (Épica 9, HU-63).
+
+    El propietario ES el tenant (ADR-0062), así que hay un hilo por tenant.
+    """
+
+    __tablename__ = "pack_cobranza_conversaciones_propietario"
+    __table_args__ = (Index("uq_pack_cobranza_conversacion_propietario", "tenant_id", unique=True),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    asunto: Mapped[str] = mapped_column(Text, default="Comunicación con el propietario")
+    estado: Mapped[str] = mapped_column(Text, default="abierta")  # abierta|archivada
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MensajePropietario(TenantMixin, Base):
+    """Mensaje del hilo con el propietario: notificación de cobro o mensaje manual."""
+
+    __tablename__ = "pack_cobranza_mensajes_propietario"
+    __table_args__ = (Index("ix_pack_cobranza_mensajes_propietario_tenant_conversacion", "tenant_id", "conversacion_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversacion_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    direccion: Mapped[str] = mapped_column(Text, default="saliente")  # saliente|entrante
+    tipo: Mapped[str] = mapped_column(Text, default="manual")  # notificacion|manual
+    autor_rol: Mapped[str | None] = mapped_column(Text, default=None)  # admin|propietario|sistema
+    contenido: Mapped[str] = mapped_column(Text, nullable=False)
+    cobro_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)  # FK lógica
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Liquidacion(TenantMixin, Base):
     __tablename__ = "pack_cobranza_liquidaciones"
     __table_args__ = (Index("ix_pack_cobranza_liquidaciones_tenant_cartera", "tenant_id", "cartera_id"),)
