@@ -44,7 +44,11 @@ def test_plugin_dir_apunta_a_un_plugin_real() -> None:
 
 
 def test_sync_database_url_quita_el_driver_async() -> None:
-    assert "+asyncpg" not in sync_database_url()
+    """Fija psycopg2 explícito: en SQLAlchemy 2.1 el dialecto por defecto de
+    `postgresql://` pasó a psycopg (v3), que no es dependencia del repo."""
+    url = sync_database_url()
+    assert "+asyncpg" not in url
+    assert url.startswith("postgresql+psycopg2://")
 
 
 def test_sync_database_url_escapa_porcentajes() -> None:
