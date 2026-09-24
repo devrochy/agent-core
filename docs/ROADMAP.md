@@ -86,6 +86,13 @@ configurado). **El hito se cierra en producción, no en el código.**
       soft-delete, crons de Meta cross-tenant (migración `0033`, ADR-0039), worker
       (`include` + loop persistente, ADR-0042) y crons de packs (ADR-0044), alta de tenant
       por BYOK (ADR-0043). Verificado en vivo (mensaje → respuesta → celular).
+- [x] **Flujo de atención por pack y tenant** (2026-09-23, ADR-0054): cada pack declara
+      su flujo (`packages/pack-*/flow.json`) con etapas (Saludo, Cotización, Pedido,
+      Escalamiento) que agrupan tools; el alta lo siembra en `TENANTS_ROOT/<slug>/flow.json`
+      y el tenant lo personaliza (agregar/quitar/reordenar tools o etapas, incluso tools
+      declarativas, ADR-0052). Se inyecta como bloque estable del prompt y define las tools
+      del turno (`core/agents/flow.py`, `loop.py`, `prompt_builder.py`); CLI
+      `agent-core flow show|validate|sync`. Sin cambio de contrato.
 
 **Salida:** dar de alta un tercer cliente de comercio toma menos de un día y es 100%
 configuración. **Cronometrarlo.** Ese número es la métrica de negocio principal.
