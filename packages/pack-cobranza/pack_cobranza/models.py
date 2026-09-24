@@ -1,0 +1,416 @@
+"""Modelos de pack-cobranza — SQLAlchemy sobre su PROPIA Base (invariante nº5).
+
+Alineados al modelo de dominio de `app-cobranza` **develop** (ADR-0060):
+**Propietario → Cartera → Cliente → Préstamo**, con **Gestor de cartera** como
+usuario interno. La entidad principal es **Cartera** ("ruta" es solo una feature,
+`ruta_habilitada`).
+
+Aislamiento multi-tenant (ADR-0059): **1 tenant = 1 propietario**. Toda tabla
+lleva `tenant_id` (invariante nº1); las referencias al core (`customer_id`) son
+FK **lógicas** (UUID sin constraint).
+
+La geografía (`geom geography(Point,4326)`) se mantiene por un trigger definido
+en la migración `0002_postgis.py` a partir de `lat`/`lng`.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any
+
+from sqlalchemy import Boolean, Date, DateTime, Float, Index, Integer, Numeric, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from core.shared.tenant import get_current_tenant_id
+
+
+def utcnow() -> datetime:
+    from datetime import UTC
+
+    return datetime.now(UTC)
+
+
+def _tenant_or_raise() -> uuid.UUID:
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        raise RuntimeError("tenant_id requerido: usar dentro de tenant_scope()")
+    return tenant_id
+
+
+class TenantMixin:
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, default=_tenant_or_raise
+    )
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+# ------------------------------------------------------------------ identidad
+# El PROPIETARIO es el tenant (ADR-0062): no hay entidad propia. Su config
+# (moneda, país, oficina de cobro, días) vive en `CobranzaConfig`; sus permisos
+# los resuelve el RBAC del core (owner → write, colaborador → read).
+
+
+class PermisoMixin:
+    """Pivot de permisos por usuario (permiso + habilitado)."""
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    permiso: Mapped[str] = mapped_column(Text, nullable=False)
+    habilitado: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Gestor(TenantMixin, Base):
+    """Gestor de cartera (ex-cobrador): usuario interno del pack, no admin del core."""
+
+    __tablename__ = "pack_cobranza_gestores"
+    __table_args__ = (Index("ix_pack_cobranza_gestores_tenant_estatus", "tenant_id", "estatus"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    usuario: Mapped[str | None] = mapped_column(Text, default=None)
+    nombre: Mapped[str] = mapped_column(Text, nullable=False)
+    apellido: Mapped[str | None] = mapped_column(Text, default=None)
+    correo: Mapped[str | None] = mapped_column(Text, default=None)
+    telefono: Mapped[str | None] = mapped_column(Text, default=None)
+    codigo: Mapped[str | None] = mapped_column(Text, default=None)
+    estatus: Mapped[str] = mapped_column(Text, default="activo")
+    custom: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class GestorPermiso(TenantMixin, PermisoMixin, Base):
+    __tablename__ = "pack_cobranza_gestor_permisos"
+    __table_args__ = (
+        Index("uq_pack_cobranza_gestor_permiso", "tenant_id", "gestor_id", "permiso", unique=True),
+    )
+
+    gestor_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+
+
+# ------------------------------------------------------------------ cartera
+class Cartera(TenantMixin, Base):
+    """Cartera de clientes/préstamos (entidad principal). 'Ruta' es una feature."""
+
+    __tablename__ = "pack_cobranza_carteras"
+    __table_args__ = (Index("ix_pack_cobranza_carteras_tenant_estatus", "tenant_id", "estatus"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    gestor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    nombre: Mapped[str] = mapped_column(Text, nullable=False)
+    descripcion: Mapped[str | None] = mapped_column(Text, default=None)
+    tipo_interes: Mapped[Decimal] = mapped_column(Numeric(6, 3), default=0)
+    num_cuotas: Mapped[int] = mapped_column(Integer, default=1)
+    moneda: Mapped[str] = mapped_column(Text, default="COP")
+    costo_cobro: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    estatus: Mapped[str] = mapped_column(Text, default="activo")
+    custom: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CarteraConfig(TenantMixin, Base):
+    """Parámetros operativos por cartera (1:1). Los flags `*_apk` controlan la APK."""
+
+    __tablename__ = "pack_cobranza_cartera_config"
+    __table_args__ = (Index("uq_pack_cobranza_cartera_config", "tenant_id", "cartera_id", unique=True),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cartera_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    cuotas_minimas_prestamo: Mapped[int] = mapped_column(Integer, default=1)
+    cuotas_atraso_umbral: Mapped[int] = mapped_column(Integer, default=0)
+    manejo_cupo_activo: Mapped[bool] = mapped_column(Boolean, default=False)
+    cupo_default: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    recargo_activo: Mapped[bool] = mapped_column(Boolean, default=False)
+    bloquear_cambio_interes: Mapped[bool] = mapped_column(Boolean, default=False)
+    comision_activa: Mapped[bool] = mapped_column(Boolean, default=False)
+    comision_porcentaje: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)
+    mostrar_fecha_ultima_liquidada: Mapped[bool] = mapped_column(Boolean, default=True)
+    mostrar_caja: Mapped[bool] = mapped_column(Boolean, default=True)
+    mostrar_cobrado_liquidada: Mapped[bool] = mapped_column(Boolean, default=True)
+    mostrar_prestamos: Mapped[bool] = mapped_column(Boolean, default=True)
+    mostrar_cobro_estimado: Mapped[bool] = mapped_column(Boolean, default=True)
+    ocultar_cartera: Mapped[bool] = mapped_column(Boolean, default=False)
+    eliminar_prestamos_apk: Mapped[bool] = mapped_column(Boolean, default=False)
+    eliminar_pagos_apk: Mapped[bool] = mapped_column(Boolean, default=False)
+    eliminar_abonos_apk: Mapped[bool] = mapped_column(Boolean, default=False)
+    eliminar_gastos_apk: Mapped[bool] = mapped_column(Boolean, default=False)
+    eliminar_inyeccion_apk: Mapped[bool] = mapped_column(Boolean, default=False)
+    registrar_inyeccion_apk: Mapped[bool] = mapped_column(Boolean, default=False)
+    generar_reportes_apk: Mapped[bool] = mapped_column(Boolean, default=False)
+    reconocimiento_facial_activo: Mapped[bool] = mapped_column(Boolean, default=False)
+    registro_documento_cliente: Mapped[bool] = mapped_column(Boolean, default=False)
+    bloqueo_automatico_clientes: Mapped[bool] = mapped_column(Boolean, default=False)
+    borrar_clientes_sin_deuda: Mapped[bool] = mapped_column(Boolean, default=False)
+    permitir_cambio_fecha_prestamo: Mapped[bool] = mapped_column(Boolean, default=False)
+    dias_no_laborables: Mapped[str] = mapped_column(Text, default="solo_domingos")
+    periodo_liquidacion: Mapped[str] = mapped_column(Text, default="diario")
+    dias_anticipacion_notificacion: Mapped[int] = mapped_column(Integer, default=0)
+    aviso_dia_cobro: Mapped[bool] = mapped_column(Boolean, default=False)
+    umbral_mora_notificacion: Mapped[int] = mapped_column(Integer, default=0)
+    ruta_habilitada: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class Caja(TenantMixin, Base):
+    """Caja de la cartera (1:1)."""
+
+    __tablename__ = "pack_cobranza_cajas"
+    __table_args__ = (Index("uq_pack_cobranza_caja", "tenant_id", "cartera_id", unique=True),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cartera_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    saldo_inicial: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    saldo_actual: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class CajaAjuste(TenantMixin, Base):
+    __tablename__ = "pack_cobranza_caja_ajustes"
+    __table_args__ = (Index("ix_pack_cobranza_caja_ajustes_tenant_caja", "tenant_id", "caja_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    caja_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    valor_anterior: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    valor_nuevo: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    motivo: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_rol: Mapped[str | None] = mapped_column(Text, default=None)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Inyeccion(TenantMixin, Base):
+    """Aporte de capital a la caja de una cartera."""
+
+    __tablename__ = "pack_cobranza_inyecciones"
+    __table_args__ = (Index("ix_pack_cobranza_inyecciones_tenant_cartera", "tenant_id", "cartera_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cartera_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    valor: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    comentario: Mapped[str | None] = mapped_column(Text, default=None)
+    estado: Mapped[str] = mapped_column(Text, default="activa")  # activa|eliminada
+    fecha_hora: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Gasto(TenantMixin, Base):
+    """Gasto operativo de una cartera, con flujo de aprobación y evidencias."""
+
+    __tablename__ = "pack_cobranza_gastos"
+    __table_args__ = (Index("ix_pack_cobranza_gastos_tenant_cartera", "tenant_id", "cartera_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cartera_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    descripcion: Mapped[str] = mapped_column(Text, nullable=False)
+    valor: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    creado_por: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    aprobado: Mapped[bool] = mapped_column(Boolean, default=False)
+    aprobado_por: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    estado: Mapped[str] = mapped_column(Text, default="activo")  # activo|eliminado
+    fecha_hora: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class GastoEvidencia(TenantMixin, Base):
+    __tablename__ = "pack_cobranza_gasto_evidencias"
+    __table_args__ = (Index("ix_pack_cobranza_gasto_evidencias_tenant_gasto", "tenant_id", "gasto_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    gasto_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    ruta_archivo: Mapped[str] = mapped_column(Text, nullable=False)
+    nombre_original: Mapped[str | None] = mapped_column(Text, default=None)
+    mimetype: Mapped[str | None] = mapped_column(Text, default=None)
+    tamano: Mapped[int | None] = mapped_column(Integer, default=None)
+    creado_por_rol: Mapped[str | None] = mapped_column(Text, default=None)
+    creado_por_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ------------------------------------------------------------------ cartera: clientes
+class Cliente(TenantMixin, Base):
+    """Cliente de cartera. `customer_id` es FK lógica al `Customer` del core."""
+
+    __tablename__ = "pack_cobranza_clientes"
+    __table_args__ = (
+        Index("ix_pack_cobranza_clientes_tenant_cartera", "tenant_id", "cartera_id"),
+        Index("ix_pack_cobranza_clientes_tenant_customer", "tenant_id", "customer_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cartera_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    nombre: Mapped[str] = mapped_column(Text, nullable=False)
+    apellido: Mapped[str | None] = mapped_column(Text, default=None)
+    negocio: Mapped[str | None] = mapped_column(Text, default=None)
+    telefono_whatsapp: Mapped[str | None] = mapped_column(Text, default=None)
+    tipo_documento: Mapped[str | None] = mapped_column(Text, default=None)
+    numero_documento: Mapped[str | None] = mapped_column(Text, default=None)
+    lat: Mapped[float | None] = mapped_column(Float, default=None)
+    lng: Mapped[float | None] = mapped_column(Float, default=None)
+    lat_domicilio: Mapped[float | None] = mapped_column(Float, default=None)
+    lng_domicilio: Mapped[float | None] = mapped_column(Float, default=None)
+    tope_maximo_deuda: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), default=None)
+    color_riesgo: Mapped[str] = mapped_column(Text, default="blanco")  # blanco|azul|rojo
+    estatus: Mapped[str] = mapped_column(Text, default="activo")
+    custom: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Prestamo(TenantMixin, Base):
+    __tablename__ = "pack_cobranza_prestamos"
+    __table_args__ = (Index("ix_pack_cobranza_prestamos_tenant_cliente", "tenant_id", "cliente_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cliente_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    cartera_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    valor: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    saldo: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    num_cuotas: Mapped[int] = mapped_column(Integer, default=1)
+    tipo_interes: Mapped[Decimal] = mapped_column(Numeric(6, 3), default=0)
+    dias_entre_cuotas: Mapped[int] = mapped_column(Integer, default=1)
+    fecha_otorgado: Mapped[date] = mapped_column(Date, nullable=False)
+    fiador_nombre: Mapped[str | None] = mapped_column(Text, default=None)
+    fiador_apellido: Mapped[str | None] = mapped_column(Text, default=None)
+    fiador_documento: Mapped[str | None] = mapped_column(Text, default=None)
+    fiador_telefono: Mapped[str | None] = mapped_column(Text, default=None)
+    estatus: Mapped[str] = mapped_column(Text, default="vigente")  # vigente|liquidado|cancelado
+    custom: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Cuota(TenantMixin, Base):
+    __tablename__ = "pack_cobranza_cuotas"
+    __table_args__ = (Index("ix_pack_cobranza_cuotas_tenant_prestamo", "tenant_id", "prestamo_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    prestamo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    numero_cuota: Mapped[int] = mapped_column(Integer, nullable=False)
+    valor_esperado: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    fecha_vencimiento: Mapped[date] = mapped_column(Date, nullable=False)
+    estatus: Mapped[str] = mapped_column(Text, default="pendiente")  # pendiente|pagada|atrasada
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Pago(TenantMixin, Base):
+    """Pago de una cuota (o pago huérfano, sin cuota)."""
+
+    __tablename__ = "pack_cobranza_pagos"
+    __table_args__ = (
+        Index("ix_pack_cobranza_pagos_tenant_cliente", "tenant_id", "cliente_id"),
+        Index("uq_pack_cobranza_pagos_tenant_idem", "tenant_id", "idempotency_key", unique=True),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cliente_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    prestamo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    cuota_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    valor: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    metodo_pago: Mapped[str] = mapped_column(Text, default="efectivo")
+    registrado_por: Mapped[str | None] = mapped_column(Text, default=None)  # gestor|propietario|agente|ia
+    idempotency_key: Mapped[str | None] = mapped_column(Text, default=None)
+    fecha_hora: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Abono(TenantMixin, Base):
+    """Abono parcial a un préstamo (no cubre una cuota completa)."""
+
+    __tablename__ = "pack_cobranza_abonos"
+    __table_args__ = (
+        Index("ix_pack_cobranza_abonos_tenant_cliente", "tenant_id", "cliente_id"),
+        Index("uq_pack_cobranza_abonos_tenant_idem", "tenant_id", "idempotency_key", unique=True),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    prestamo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    cliente_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    visita_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    valor: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    metodo_pago: Mapped[str] = mapped_column(Text, default="efectivo")
+    registrado_por: Mapped[str | None] = mapped_column(Text, default=None)
+    idempotency_key: Mapped[str | None] = mapped_column(Text, default=None)
+    fecha_hora: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Visita(TenantMixin, Base):
+    __tablename__ = "pack_cobranza_visitas"
+    __table_args__ = (Index("ix_pack_cobranza_visitas_tenant_cartera", "tenant_id", "cartera_id", "fecha"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cartera_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    cliente_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    fecha: Mapped[date] = mapped_column(Date, nullable=False)
+    resultado: Mapped[str] = mapped_column(Text, nullable=False)  # pago|no_pago
+    motivo_no_pago: Mapped[str | None] = mapped_column(Text, default=None)
+    valor_pagado: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), default=None)
+    metodo_pago: Mapped[str | None] = mapped_column(Text, default=None)
+    creado_por: Mapped[str | None] = mapped_column(Text, default=None)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Promesa(TenantMixin, Base):
+    __tablename__ = "pack_cobranza_promesas"
+    __table_args__ = (
+        Index("ix_pack_cobranza_promesas_tenant_prestamo", "tenant_id", "prestamo_id"),
+        Index("uq_pack_cobranza_promesas_tenant_idem", "tenant_id", "idempotency_key", unique=True),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    prestamo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    cliente_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    fecha_prometida: Mapped[date] = mapped_column(Date, nullable=False)
+    valor_prometido: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    estado: Mapped[str] = mapped_column(Text, default="pendiente")  # pendiente|cumplida|incumplida
+    tipo: Mapped[str] = mapped_column(Text, default="promesa")  # promesa|abono_parcial|refinanciacion
+    creado_por: Mapped[str] = mapped_column(Text, default="ia")  # ia|gestor|propietario|agente
+    idempotency_key: Mapped[str | None] = mapped_column(Text, default=None)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ReglaNegociacion(TenantMixin, Base):
+    """Reglas deterministas de negociación del asistente. Una fila por tenant."""
+
+    __tablename__ = "pack_cobranza_reglas_negociacion"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    max_dias_prorroga: Mapped[int] = mapped_column(Integer, default=15)
+    min_abono_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=10)
+    max_reprogramaciones: Mapped[int] = mapped_column(Integer, default=2)
+    umbral_saldo_autonomo: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class Liquidacion(TenantMixin, Base):
+    __tablename__ = "pack_cobranza_liquidaciones"
+    __table_args__ = (Index("ix_pack_cobranza_liquidaciones_tenant_cartera", "tenant_id", "cartera_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cartera_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    fecha: Mapped[date] = mapped_column(Date, nullable=False)
+    periodo: Mapped[str] = mapped_column(Text, default="diario")
+    caja_anterior: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    caja_actual: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    total_cobrado: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    total_prestado: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    total_gastos: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    comision_valor: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    comentario: Mapped[str | None] = mapped_column(Text, default=None)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

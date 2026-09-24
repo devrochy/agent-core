@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Liquidaciones{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Liquidaciones · {{ cartera }}</h1>
+{% include "cobranza/_cartera_nav.html" %}
+
+<form method="post" action="/cobranza/carteras/{{ record_id }}/liquidacion" class="d-flex gap-2 mb-3">
+  <select name="periodo" class="form-select" style="max-width:200px">
+    <option value="diario">diario</option>
+    <option value="semanal">semanal</option>
+    <option value="quincenal">quincenal</option>
+    <option value="mensual">mensual</option>
+  </select>
+  <button class="btn btn-primary">Generar liquidación</button>
+</form>
+
+<table class="table table-hover">
+  <thead><tr><th>Fecha</th><th>Periodo</th><th>Cobrado</th><th>Gastos</th><th>Comisión</th></tr></thead>
+  <tbody>
+    {% for l in liquidaciones %}
+    <tr><td>{{ l.fecha }}</td><td>{{ l.periodo }}</td><td>{{ l.cobrado }}</td><td>{{ l.gastos }}</td><td>{{ l.comision }}</td></tr>
+    {% else %}
+    <tr><td colspan="5" class="text-secondary">Sin liquidaciones</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

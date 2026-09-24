@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% from "_datatable.html" import datatable %}
+{% block title %}Leads{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Leads</h1>
+<p class="text-secondary">
+  Todos los clientes que interactuaron con el asistente (ADR-0022).
+  {% if not has_packs %}Activá un pack para ver sus columnas de dominio.{% endif %}
+</p>
+
+{% call datatable(page_size=25) %}
+  <thead>
+    <tr>
+      {% for col in columns %}
+      <th class="dt-sortable" data-sort-key="{{ col.key }}">{{ col.label }}</th>
+      {% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr data-search="{{ row.search }}"
+        {% for col in columns %}data-sort-{{ col.key }}="{{ row.get(col.key, '') }}" {% endfor %}>
+      {% for col in columns %}
+      <td>{{ row.get(col.key, '—') }}</td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </tbody>
+{% endcall %}
+{% endblock %}

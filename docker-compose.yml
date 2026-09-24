@@ -9,7 +9,10 @@ name: ${COMPOSE_PROJECT_NAME:?falta COMPOSE_PROJECT_NAME en el .env. Añádelo (
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    # pgvector + PostGIS en la misma base (ADR-0058). Ver docker/postgres/Dockerfile.
+    build:
+      context: ./docker/postgres
+    image: agent-core-postgres:pg16-pgvector-postgis
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-agent_core}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent_core}

@@ -14,6 +14,11 @@
     .sidebar .nav-link.active, .sidebar .nav-link:hover { color: #fff; background: rgba(255,255,255,.08); }
     .content { flex: 1; padding: 1.5rem; background: #f6f7f9; }
     .kpi-card .value { font-size: 1.8rem; font-weight: 700; }
+    /* Grupos de packs desplegables (ADR-0047): <details> nativo, sin JS. */
+    .sidebar details.pack-group > summary { cursor: pointer; list-style: none; }
+    .sidebar details.pack-group > summary::-webkit-details-marker { display: none; }
+    .sidebar details.pack-group > summary::after { content: "▸"; float: right; opacity: .7; }
+    .sidebar details.pack-group[open] > summary::after { content: "▾"; }
   </style>
   {% block extra_head %}{% endblock %}
 </head>
@@ -33,6 +38,9 @@
     <ul class="nav nav-pills flex-column gap-1">
       {% if perms and perms.get('dashboard') %}
       <li><a class="nav-link {% if section == 'dashboard' %}active{% endif %}" href="/admin">Dashboard</a></li>
+      {% endif %}
+      {% if perms and perms.get('leads') %}
+      <li><a class="nav-link {% if section == 'leads' %}active{% endif %}" href="/admin/leads">Leads</a></li>
       {% endif %}
       {% if perms and perms.get('conversations') %}
       <li><a class="nav-link {% if section == 'conversations' %}active{% endif %}" href="/admin/conversaciones">Conversaciones</a></li>
@@ -64,17 +72,44 @@
     </ul>
     {% if plugin_menu %}
     <hr class="text-secondary">
+    {% set current = request.url.path %}
+    {% set is_master = admin and admin.role == 'master' %}
     {% for group in plugin_menu %}
     {% if not perms or perms.get(group['id']) %}
-    <div class="text-secondary text-uppercase small px-2 mb-1">{{ group['name'] }}</div>
-    <ul class="nav nav-pills flex-column gap-1 mb-2">
-      {% for item in group['items'] %}
-      {% set current = request.url.path %}
-      {% set item_base = item['path'].rstrip('/') %}
-      {% set is_active = current == item['path'] or current == item_base or (current.startswith(item_base + '/') and item_base.count('/') >= 2) %}
-      <li><a class="nav-link {% if is_active %}active{% endif %}" href="{{ item['path'] }}">{{ item['label'] }}</a></li>
-      {% endfor %}
-    </ul>
+    {# Visibilidad por rol (ADR-0061): `master_only` solo para admin master. #}
+    {% set visible = [] %}
+    {% for item in group['items'] %}
+    {% if is_master or not item.get('master_only') %}
+    {% set _ = visible.append(item) %}
+    {% endif %}
+    {% endfor %}
+    {% if visible %}
+    {# El grupo se muestra desplegable; arranca abierto si contiene la sección activa. #}
+    {% set ns = namespace(active=false) %}
+    {% for item in visible %}
+    {% set item_base = item['path'].rstrip('/') %}
+    {% if current == item['path'] or current == item_base or (current.startswith(item_base + '/') and item_base.count('/') >= 2) %}
+    {% set ns.active = true %}
+    {% endif %}
+    {% endfor %}
+    <details class="pack-group" {% if ns.active %}open{% endif %}>
+      <summary class="text-secondary text-uppercase small px-2 mb-1">{{ group['name'] }}</summary>
+      <ul class="nav nav-pills flex-column gap-1 mb-2">
+        {# Sub-secciones (ADR-0061): etiqueta al cambiar de `section`, preservando el orden. #}
+        {% set sec_ns = namespace(last=None) %}
+        {% for item in visible %}
+        {% set sec = item.get('section') %}
+        {% if sec and sec != sec_ns.last %}
+        <li class="text-secondary text-uppercase px-2 mt-2" style="font-size:.68rem; letter-spacing:.06em;">{{ sec }}</li>
+        {% set sec_ns.last = sec %}
+        {% endif %}
+        {% set item_base = item['path'].rstrip('/') %}
+        {% set is_active = current == item['path'] or current == item_base or (current.startswith(item_base + '/') and item_base.count('/') >= 2) %}
+        <li><a class="nav-link {% if is_active %}active{% endif %}" href="{{ item['path'] }}">{{ item['label'] }}</a></li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
     {% endif %}
     {% endfor %}
     {% endif %}

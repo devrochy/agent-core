@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Cartera · {{ cartera }}{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">{{ cartera }}</h1>
+{% include "cobranza/_cartera_nav.html" %}
+
+<div class="row g-3 mb-3">
+  <div class="col-md-4"><div class="card kpi-card"><div class="card-body">
+    <div class="text-secondary small">Clientes</div><div class="value">{{ clientes_count }}</div>
+  </div></div></div>
+  <div class="col-md-4"><div class="card kpi-card"><div class="card-body">
+    <div class="text-secondary small">Saldo inicial</div><div class="value">{{ saldo_inicial }}</div>
+  </div></div></div>
+  <div class="col-md-4"><div class="card kpi-card"><div class="card-body">
+    <div class="text-secondary small">Saldo actual</div><div class="value">{{ saldo_actual }}</div>
+  </div></div></div>
+</div>
+
+<div class="row">
+  <div class="col-md-6">
+    <h2 class="fs-5">Gastos recientes</h2>
+    <table class="table table-sm">
+      <thead><tr><th>Fecha</th><th>Descripción</th><th>Valor</th></tr></thead>
+      <tbody>
+        {% for g in gastos %}
+        <tr><td>{{ g.fecha }}</td><td>{{ g.descripcion }}</td><td>{{ g.valor }}</td></tr>
+        {% else %}
+        <tr><td colspan="3" class="text-secondary">Sin gastos</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="col-md-6">
+    <h2 class="fs-5">Inyecciones recientes</h2>
+    <table class="table table-sm">
+      <thead><tr><th>Fecha</th><th>Valor</th><th>Comentario</th></tr></thead>
+      <tbody>
+        {% for i in inyecciones %}
+        <tr><td>{{ i.fecha }}</td><td>{{ i.valor }}</td><td>{{ i.comentario }}</td></tr>
+        {% else %}
+        <tr><td colspan="3" class="text-secondary">Sin inyecciones</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<a class="btn btn-outline-secondary" href="/cobranza/carteras">Volver</a>
+{% endblock %}

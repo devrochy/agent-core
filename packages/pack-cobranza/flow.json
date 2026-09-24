@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "sections": [
+    {
+      "id": "saludo",
+      "label": "Saludo y verificación",
+      "purpose": "Recibir al cliente, confirmar su identidad y consultar su saldo real antes de responder cualquier dato de cartera.",
+      "pack": "pack_cobranza",
+      "tools": ["cob_consultar_saldo"]
+    },
+    {
+      "id": "consulta",
+      "label": "Consulta de saldo y estado de cuenta",
+      "purpose": "Responder cuánto debe, cuándo vence la próxima cuota y el detalle de su préstamo, siempre con datos reales.",
+      "pack": "pack_cobranza",
+      "tools": ["cob_consultar_saldo", "cob_estado_cuenta"]
+    },
+    {
+      "id": "negociacion",
+      "label": "Negociación",
+      "purpose": "Evaluar una propuesta del cliente (abono parcial o refinanciación) contra las reglas de la cartera antes de prometer nada.",
+      "pack": "pack_cobranza",
+      "tools": ["cob_evaluar_negociacion"]
+    },
+    {
+      "id": "promesa",
+      "label": "Promesa de pago",
+      "purpose": "Registrar el compromiso del cliente (fecha y valor) cuando lo confirme explícitamente.",
+      "pack": "pack_cobranza",
+      "tools": ["cob_registrar_promesa_pago"]
+    },
+    {
+      "id": "escalamiento",
+      "label": "Escalamiento a un gestor",
+      "purpose": "Pasar la conversación a una persona cuando haya disputa, queja, agresión o una negociación fuera de las reglas.",
+      "pack": "core",
+      "tools": ["escalate_to_human"]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item"><a class="nav-link {% if tab == 'resumen' %}active{% endif %}" href="/cobranza/carteras/{{ record_id }}">Resumen</a></li>
+  <li class="nav-item"><a class="nav-link {% if tab == 'config' %}active{% endif %}" href="/cobranza/carteras/{{ record_id }}/config">Configuración</a></li>
+  <li class="nav-item"><a class="nav-link {% if tab == 'clientes' %}active{% endif %}" href="/cobranza/carteras/{{ record_id }}/clientes">Clientes</a></li>
+  <li class="nav-item"><a class="nav-link {% if tab == 'gastos' %}active{% endif %}" href="/cobranza/carteras/{{ record_id }}/gastos">Gastos</a></li>
+  <li class="nav-item"><a class="nav-link {% if tab == 'inyecciones' %}active{% endif %}" href="/cobranza/carteras/{{ record_id }}/inyecciones">Inyecciones</a></li>
+  <li class="nav-item"><a class="nav-link {% if tab == 'liquidaciones' %}active{% endif %}" href="/cobranza/carteras/{{ record_id }}/liquidaciones">Liquidaciones</a></li>
+</ul>

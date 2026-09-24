@@ -29,6 +29,7 @@ from core.shared.tenant import get_current_tenant_id
 # Secciones del core. Deben coincidir con los `section` de `views.py` y el menú.
 CORE_SECTIONS: dict[str, str] = {
     "dashboard": "Dashboard",
+    "leads": "Leads",
     "conversations": "Conversaciones",
     "escalations": "Escalaciones",
     "connections": "Conexiones",
@@ -195,6 +196,7 @@ _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _SKIP_PREFIXES = ("/admin/login", "/admin/logout", "/admin/switch-tenant")
 
 _CORE_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("/admin/leads", "leads"),
     ("/admin/tenants", "tenants"),
     ("/admin/colaboradores", "collaborators"),
     ("/admin/admins", "collaborators"),

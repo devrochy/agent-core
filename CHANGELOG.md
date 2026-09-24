@@ -1,5 +1,44 @@
 # Changelog
 
+## Sin versión — pack de cobranza (2026-09-24)
+
+Nuevo vertical **`pack-cobranza`**: carteras, préstamos y negociación de cobranza
+por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
+
+> **Alineado a `app-cobranza` develop** (ADR-0060): vocabulario **Propietario →
+> Cartera → Cliente → Préstamo** (no socios/rutas), con mapeo de compatibilidad
+> 1:1 documentado. 20 tablas en v1.
+
+### Pack (`packages/pack-cobranza/`)
+- **20 tablas** `pack_cobranza_*` con `tenant_id` + RLS + FORCE RLS; PostGIS para
+  la geografía de clientes (extensión + `geography(Point,4326)` + trigger + GIST).
+- **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
+  cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
+  Las operaciones de administración (gasto, inyección, visita, liquidación) viven
+  en el panel, no en el asistente del deudor (auditoría M3). Guardrail
+  `cob_promesa_check` y cron `marcar_mora`.
+- **Panel propio (`admin_router`, `/cobranza/…`)**: Resumen con KPIs, CRUD de
+  Gestores/Carteras/Clientes, matriz de **permisos del gestor** (14) y **detalle de
+  cartera con pestañas** (Resumen · Configuración · Clientes · Gastos · Inyecciones ·
+  Liquidaciones). `cartera-config` con los 32 flags.
+- **El propietario ES el tenant** (ADR-0062): sin entidad `propietarios` ni
+  `propietario_id`; su config vive en `CobranzaConfig` y sus permisos en el RBAC
+  del core (owner=write, colaborador=read).
+- `flow.json` con las secciones de atención.
+
+### Core
+- **ADR-0056**: leads globales con `LeadProvider` (`core/admin/lead_registry.py`),
+  sección `leads` y vista `/admin/leads` que combina `Customer` + columnas por pack.
+- **ADR-0058**: imagen de Postgres con **PostGIS + pgvector** (`docker/postgres/Dockerfile`).
+- **ADR-0057/0059**: diseño de rutas públicas de pack e identidad de pack, y
+  aislamiento multi-tenant del pack (1 tenant = 1 propietario).
+- **ADR-0060**: alineación del pack al modelo de dominio de `app-cobranza`
+  develop (mapeo de compatibilidad Propietario/Gestor/Cartera).
+- **ADR-0061**: `admin_menu` de packs por **secciones** (`section`) y visibilidad
+  por rol (`master_only`); el menú del pack replica la IA del panel de referencia.
+- **ADR-0062**: el propietario es el tenant; el pack no duplica identidad.
+- Menú de packs **desplegable** en el panel (`core/admin/templates/base.html`).
+
 ## v0.7.0 — Operación y gobierno del agente (2026-09-23)
 
 Capacidades empresariales de operación sobre lo construido en ADR-0049/0050. Ver ADR-0051.
