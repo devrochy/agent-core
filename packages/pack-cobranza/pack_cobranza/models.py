@@ -449,6 +449,101 @@ class ClienteEvidencia(TenantMixin, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class CarteraNota(TenantMixin, Base):
+    """Nota libre sobre una cartera (observaciones del circuito)."""
+
+    __tablename__ = "pack_cobranza_cartera_notas"
+    __table_args__ = (Index("ix_pack_cobranza_cartera_notas_tenant_cartera", "tenant_id", "cartera_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cartera_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    nota: Mapped[str] = mapped_column(Text, nullable=False)
+    creado_por_rol: Mapped[str | None] = mapped_column(Text, default=None)
+    creado_por_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class CarteraApertura(TenantMixin, Base):
+    """Apertura de la cartera del día (inicio de jornada + ubicación)."""
+
+    __tablename__ = "pack_cobranza_carteras_aperturas"
+    __table_args__ = (Index("ix_pack_cobranza_carteras_aperturas_tenant_cartera", "tenant_id", "cartera_id", "fecha"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cartera_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    fecha: Mapped[date] = mapped_column(Date, nullable=False)
+    hora_inicio: Mapped[str | None] = mapped_column(Text, default=None)
+    lat: Mapped[float | None] = mapped_column(Float, default=None)
+    lng: Mapped[float | None] = mapped_column(Float, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PosicionGestor(TenantMixin, Base):
+    """Posición reportada por el gestor (tracking de campo, v2)."""
+
+    __tablename__ = "pack_cobranza_posicion_gestor"
+    __table_args__ = (Index("ix_pack_cobranza_posicion_gestor_tenant_cartera", "tenant_id", "cartera_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    gestor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    cartera_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    lat: Mapped[float] = mapped_column(Float, nullable=False)
+    lng: Mapped[float] = mapped_column(Float, nullable=False)
+    registrada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ReporteDiario(TenantMixin, Base):
+    """Snapshot del reporte diario de una cartera."""
+
+    __tablename__ = "pack_cobranza_reportes_diarios"
+    __table_args__ = (Index("ix_pack_cobranza_reportes_diarios_tenant_cartera", "tenant_id", "cartera_id", "fecha"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cartera_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    fecha: Mapped[date] = mapped_column(Date, nullable=False)
+    cobrado: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    prestado: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    clientes_visitados: Mapped[list[Any] | None] = mapped_column(JSONB, default=None)
+    clientes_sin_pago: Mapped[list[Any] | None] = mapped_column(JSONB, default=None)
+    trayectorias: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    hora_inicio: Mapped[str | None] = mapped_column(Text, default=None)
+    hora_fin: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CarteraEstadisticasSnapshot(TenantMixin, Base):
+    """KPIs de la cartera congelados a una fecha (para delta vs. ayer)."""
+
+    __tablename__ = "pack_cobranza_cartera_estadisticas"
+    __table_args__ = (Index("ix_pack_cobranza_cartera_estadisticas_tenant_cartera", "tenant_id", "cartera_id", "fecha"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cartera_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    fecha: Mapped[date] = mapped_column(Date, nullable=False)
+    datos: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CarteraOptimizadaLog(TenantMixin, Base):
+    """Log de la optimización del trayecto diario (orden de clientes)."""
+
+    __tablename__ = "pack_cobranza_cartera_optimizada"
+    __table_args__ = (Index("ix_pack_cobranza_cartera_optimizada_tenant_cartera", "tenant_id", "cartera_id", "fecha"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cartera_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    fecha: Mapped[date] = mapped_column(Date, nullable=False)
+    orden_clientes: Mapped[list[Any] | None] = mapped_column(JSONB, default=None)
+    distancia_estimada_km: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), default=None)
+    tiempo_estimado_min: Mapped[int | None] = mapped_column(Integer, default=None)
+    recalculado: Mapped[bool] = mapped_column(Boolean, default=False)
+    motivo_recalculo: Mapped[str | None] = mapped_column(Text, default=None)
+    tipo: Mapped[str] = mapped_column(Text, default="planificada")  # planificada|real
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Liquidacion(TenantMixin, Base):
     __tablename__ = "pack_cobranza_liquidaciones"
     __table_args__ = (Index("ix_pack_cobranza_liquidaciones_tenant_cartera", "tenant_id", "cartera_id"),)

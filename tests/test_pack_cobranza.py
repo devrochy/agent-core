@@ -108,6 +108,16 @@ def test_modelos_alineados_a_develop() -> None:
     assert "pack_cobranza_auditoria" in nombres
     assert "pack_cobranza_cambios_cliente" in nombres
     assert "pack_cobranza_cliente_evidencias" in nombres
+    # Bloque B: operación de cartera.
+    for tabla in (
+        "pack_cobranza_cartera_notas",
+        "pack_cobranza_carteras_aperturas",
+        "pack_cobranza_posicion_gestor",
+        "pack_cobranza_reportes_diarios",
+        "pack_cobranza_cartera_estadisticas",
+        "pack_cobranza_cartera_optimizada",
+    ):
+        assert tabla in nombres
 
 
 def test_lead_provider_registra_columnas() -> None:

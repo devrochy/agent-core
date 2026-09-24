@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Estadísticas de la cartera{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Estadísticas · {{ cartera }}</h1>
+{% include "cobranza/_cartera_nav.html" %}
+<div class="row g-3">
+  {% for k in kpis %}
+  <div class="col-6 col-md-4">
+    <div class="card kpi-card"><div class="card-body">
+      <div class="text-secondary small">{{ k.label }}</div>
+      <div class="value">{{ k.value }}</div>
+    </div></div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

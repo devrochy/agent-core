@@ -16,6 +16,10 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
   (mueven caja y saldo), detalle de cliente con cuotas/abonos, y **auditoría
   imborrable** (`pack_cobranza_auditoria`) de las operaciones. Tablas de cambios de
   cliente y evidencias de cliente.
+- **Bloque B (operación de cartera)**: pestañas **Notas** (CRUD), **Estadísticas**
+  (KPIs por cartera) y **Trayecto diario** con mapa (Leaflet/OSM), apertura del día
+  y registro de posiciones. Tablas `cartera_notas`, `carteras_aperturas`,
+  `posicion_gestor`, `reportes_diarios`, `cartera_estadisticas`, `cartera_optimizada`.
 - **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
   cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
   Las operaciones de administración (gasto, inyección, visita, liquidación) viven

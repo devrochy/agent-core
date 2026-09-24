@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Trayecto diario{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Trayecto diario · {{ cartera }}</h1>
+{% include "cobranza/_cartera_nav.html" %}
+
+<div class="row g-2 mb-3">
+  <div class="col-md-6">
+    <form method="post" action="/cobranza/carteras/{{ record_id }}/apertura" class="d-flex gap-2">
+      <button class="btn btn-outline-primary btn-sm">Registrar apertura de hoy</button>
+      <span class="text-secondary small align-self-center">
+        {% for a in aperturas %}{{ a.fecha }} {{ a.hora }}{% if not loop.last %} · {% endif %}{% endfor %}
+      </span>
+    </form>
+  </div>
+  <div class="col-md-6">
+    <form method="post" action="/cobranza/carteras/{{ record_id }}/posicion" class="d-flex gap-2">
+      <input type="number" step="any" name="lat" class="form-control form-control-sm" placeholder="lat" required>
+      <input type="number" step="any" name="lng" class="form-control form-control-sm" placeholder="lng" required>
+      <button class="btn btn-outline-primary btn-sm">Registrar posición</button>
+    </form>
+  </div>
+</div>
+
+<div id="map" class="mb-3" style="height: 420px; border-radius: .5rem;"></div>
+
+<h2 class="fs-5">Clientes del día ({{ clientes | length }})</h2>
+<table class="table table-sm table-hover">
+  <thead><tr><th>Cliente</th><th>WhatsApp</th><th>Saldo</th><th>Mora (días)</th><th>Riesgo</th></tr></thead>
+  <tbody>
+    {% for c in clientes %}
+    <tr>
+      <td><a href="/cobranza/clientes/{{ c.id }}">{{ c.cliente }}</a></td>
+      <td>{{ c.telefono }}</td><td>{{ c.saldo }}</td><td>{{ c.mora }}</td>
+      <td><span class="badge bg-{{ 'danger' if c.riesgo == 'rojo' else ('primary' if c.riesgo == 'azul' else 'secondary') }}">{{ c.riesgo }}</span></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="text-secondary">Sin clientes con préstamos vigentes</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function () {
+  var puntos = {{ puntos | tojson }};
+  var map = L.map('map');
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; OpenStreetMap'
+  }).addTo(map);
+  var bounds = [];
+  puntos.forEach(function (p) {
+    L.marker([p.lat, p.lng]).addTo(map).bindPopup(p.cliente);
+    bounds.push([p.lat, p.lng]);
+  });
+  if (bounds.length) { map.fitBounds(bounds, { padding: [30, 30] }); }
+  else { map.setView([4.65, -74.05], 11); }
+})();
+</script>
+{% endblock %}

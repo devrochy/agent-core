@@ -35,7 +35,11 @@ from pack_cobranza.models import (
     CajaAjuste,
     CambioCliente,
     Cartera,
+    CarteraApertura,
     CarteraConfig,
+    CarteraEstadisticasSnapshot,
+    CarteraNota,
+    CarteraOptimizadaLog,
     Cliente,
     Cuota,
     Gasto,
@@ -44,8 +48,10 @@ from pack_cobranza.models import (
     Inyeccion,
     Liquidacion,
     Pago,
+    PosicionGestor,
     Prestamo,
     Promesa,
+    ReporteDiario,
 )
 from pack_cobranza.permisos import GESTOR_PERMISOS
 
@@ -931,6 +937,177 @@ async def cambio_decision(request: Request, record_id: str) -> RedirectResponse:
     return RedirectResponse(f"{destino}?flash=Cambio {decision or 'procesado'}&flash_type=success", status_code=303)
 
 
+# --------------------------------------------------------------- cartera: notas / estadísticas / trayecto
+@router.get("/carteras/{record_id}/notas", response_class=HTMLResponse)
+async def cartera_notas(request: Request, record_id: str) -> HTMLResponse:
+    ctx = await base_context(request, SECTION)
+    if ctx is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=False):
+        return RedirectResponse("/admin?flash=sin_pack&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        cartera = await get_owned(session, Cartera, rid) if rid else None
+        if cartera is None:
+            return RedirectResponse("/cobranza/carteras?flash=No encontrada&flash_type=danger", status_code=303)
+        notas = (
+            await session.execute(
+                select(CarteraNota).where(CarteraNota.tenant_id == tid, CarteraNota.cartera_id == cartera.id, CarteraNota.deleted_at.is_(None)).order_by(CarteraNota.created_at.desc())
+            )
+        ).scalars().all()
+        ctx.update(record_id=record_id, tab="notas", cartera=cartera.nombre, notas=[{"id": str(n.id), "nota": n.nota, "fecha": n.created_at.strftime("%Y-%m-%d %H:%M") if n.created_at else ""} for n in notas])
+    return _render("cobranza/cartera_notas.html", ctx)
+
+
+@router.post("/carteras/{record_id}/notas/guardar")
+async def cartera_nota_save(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    form = await request.form()
+    nota = str(form.get("nota") or "").strip()
+    if rid is not None and nota:
+        async with get_session() as session:
+            if await get_owned(session, Cartera, rid) is not None:
+                session.add(CarteraNota(tenant_id=get_current_tenant_id(), cartera_id=rid, nota=nota, creado_por_rol="admin"))
+    return RedirectResponse(f"/cobranza/carteras/{record_id}/notas?flash=Nota guardada&flash_type=success", status_code=303)
+
+
+@router.post("/notas/{record_id}/eliminar")
+async def nota_eliminar(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    destino = "/cobranza/carteras"
+    if rid is not None:
+        async with get_session() as session:
+            nota = await get_owned(session, CarteraNota, rid)
+            if nota is not None:
+                nota.deleted_at = datetime.now(UTC)
+                destino = f"/cobranza/carteras/{nota.cartera_id}/notas"
+    return RedirectResponse(f"{destino}?flash=Nota eliminada&flash_type=success", status_code=303)
+
+
+@router.get("/carteras/{record_id}/estadisticas", response_class=HTMLResponse)
+async def cartera_estadisticas(request: Request, record_id: str) -> HTMLResponse:
+    ctx = await base_context(request, SECTION)
+    if ctx is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=False):
+        return RedirectResponse("/admin?flash=sin_pack&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    tid = get_current_tenant_id()
+    desde_mes = datetime.now(UTC) - timedelta(days=30)
+    async with get_session() as session:
+        cartera = await get_owned(session, Cartera, rid) if rid else None
+        if cartera is None:
+            return RedirectResponse("/cobranza/carteras?flash=No encontrada&flash_type=danger", status_code=303)
+        clientes = (await session.execute(select(func.count()).select_from(Cliente).where(Cliente.tenant_id == tid, Cliente.cartera_id == cartera.id, Cliente.deleted_at.is_(None)))).scalar_one()
+        prestamos = (await session.execute(select(func.count()).select_from(Prestamo).where(Prestamo.tenant_id == tid, Prestamo.cartera_id == cartera.id, Prestamo.estatus == "vigente", Prestamo.deleted_at.is_(None)))).scalar_one()
+        prestamo_ids = select(Prestamo.id).where(Prestamo.tenant_id == tid, Prestamo.cartera_id == cartera.id)
+        saldo = (await session.execute(select(func.coalesce(func.sum(Cuota.valor_esperado), 0)).where(Cuota.tenant_id == tid, Cuota.prestamo_id.in_(prestamo_ids), Cuota.estatus.in_(("pendiente", "atrasada")), Cuota.deleted_at.is_(None)))).scalar_one()
+        mora = (await session.execute(select(func.coalesce(func.sum(Cuota.valor_esperado), 0)).where(Cuota.tenant_id == tid, Cuota.prestamo_id.in_(prestamo_ids), Cuota.estatus == "atrasada", Cuota.deleted_at.is_(None)))).scalar_one()
+        cobrado = (await session.execute(select(func.coalesce(func.sum(Pago.valor), 0)).where(Pago.tenant_id == tid, Pago.prestamo_id.in_(prestamo_ids), Pago.fecha_hora >= desde_mes, Pago.deleted_at.is_(None)))).scalar_one()
+        gastos = (await session.execute(select(func.coalesce(func.sum(Gasto.valor), 0)).where(Gasto.tenant_id == tid, Gasto.cartera_id == cartera.id, Gasto.estado == "activo", Gasto.deleted_at.is_(None)))).scalar_one()
+
+    def _fmt(v: Any) -> str:
+        return f"{Decimal(v):,.0f}".replace(",", ".")
+
+    ctx.update(
+        record_id=record_id, tab="estadisticas", cartera=cartera.nombre,
+        kpis=[
+            {"label": "Clientes", "value": clientes},
+            {"label": "Préstamos vigentes", "value": prestamos},
+            {"label": "Saldo", "value": _fmt(saldo)},
+            {"label": "Mora", "value": _fmt(mora)},
+            {"label": "Cobrado (30 días)", "value": _fmt(cobrado)},
+            {"label": "Gastos", "value": _fmt(gastos)},
+        ],
+    )
+    return _render("cobranza/cartera_estadisticas.html", ctx)
+
+
+async def _clientes_del_dia(session, cartera_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Clientes con préstamo vigente (trayecto: cobro de cuota / cuota en mora)."""
+    tid = get_current_tenant_id()
+    clientes = (await session.execute(select(Cliente).where(Cliente.tenant_id == tid, Cliente.cartera_id == cartera_id, Cliente.deleted_at.is_(None)))).scalars().all()
+    out: list[dict[str, Any]] = []
+    for c in clientes:
+        prestamos = (await session.execute(select(Prestamo.id).where(Prestamo.tenant_id == tid, Prestamo.cliente_id == c.id, Prestamo.estatus == "vigente", Prestamo.deleted_at.is_(None)))).scalars().all()
+        if not prestamos:
+            continue
+        cuotas = (await session.execute(select(Cuota).where(Cuota.tenant_id == tid, Cuota.prestamo_id.in_(prestamos), Cuota.estatus.in_(("pendiente", "atrasada")), Cuota.deleted_at.is_(None)))).scalars().all()
+        saldo = sum((q.valor_esperado for q in cuotas), Decimal(0))
+        mora = max(((date.today() - q.fecha_vencimiento).days for q in cuotas if q.fecha_vencimiento < date.today()), default=0)
+        out.append({"id": str(c.id), "cliente": f"{c.nombre} {c.apellido or ''}".strip(), "telefono": c.telefono_whatsapp or "", "lat": c.lat, "lng": c.lng, "saldo": float(saldo), "mora": mora, "riesgo": c.color_riesgo})
+    out.sort(key=lambda r: r["mora"], reverse=True)
+    return out
+
+
+@router.get("/carteras/{record_id}/trayecto", response_class=HTMLResponse)
+async def cartera_trayecto(request: Request, record_id: str) -> HTMLResponse:
+    ctx = await base_context(request, SECTION)
+    if ctx is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=False):
+        return RedirectResponse("/admin?flash=sin_pack&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        cartera = await get_owned(session, Cartera, rid) if rid else None
+        if cartera is None:
+            return RedirectResponse("/cobranza/carteras?flash=No encontrada&flash_type=danger", status_code=303)
+        clientes = await _clientes_del_dia(session, cartera.id)
+        aperturas = (await session.execute(select(CarteraApertura).where(CarteraApertura.tenant_id == tid, CarteraApertura.cartera_id == cartera.id).order_by(CarteraApertura.fecha.desc()).limit(10))).scalars().all()
+        posiciones = (await session.execute(select(PosicionGestor).where(PosicionGestor.tenant_id == tid, PosicionGestor.cartera_id == cartera.id).order_by(PosicionGestor.registrada_en.desc()).limit(50))).scalars().all()
+        ctx.update(
+            record_id=record_id, tab="trayecto", cartera=cartera.nombre, clientes=clientes,
+            puntos=[{"lat": c["lat"], "lng": c["lng"], "cliente": c["cliente"], "riesgo": c["riesgo"]} for c in clientes if c["lat"] is not None and c["lng"] is not None],
+            aperturas=[{"fecha": a.fecha.isoformat(), "hora": a.hora_inicio or ""} for a in aperturas],
+            posiciones=[{"lat": p.lat, "lng": p.lng, "fecha": p.registrada_en.strftime("%Y-%m-%d %H:%M") if p.registrada_en else ""} for p in posiciones],
+        )
+    return _render("cobranza/cartera_trayecto.html", ctx)
+
+
+@router.post("/carteras/{record_id}/apertura")
+async def cartera_apertura(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    if rid is not None:
+        async with get_session() as session:
+            if await get_owned(session, Cartera, rid) is not None:
+                session.add(CarteraApertura(tenant_id=get_current_tenant_id(), cartera_id=rid, fecha=date.today(), hora_inicio=datetime.now(UTC).strftime("%H:%M")))
+    return RedirectResponse(f"/cobranza/carteras/{record_id}/trayecto?flash=Apertura registrada&flash_type=success", status_code=303)
+
+
+@router.post("/carteras/{record_id}/posicion")
+async def cartera_posicion(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    form = await request.form()
+    try:
+        lat = float(str(form.get("lat") or ""))
+        lng = float(str(form.get("lng") or ""))
+    except ValueError:
+        return RedirectResponse(f"/cobranza/carteras/{record_id}/trayecto?flash=Coordenadas inválidas&flash_type=danger", status_code=303)
+    if rid is not None:
+        async with get_session() as session:
+            if await get_owned(session, Cartera, rid) is not None:
+                session.add(PosicionGestor(tenant_id=get_current_tenant_id(), cartera_id=rid, lat=lat, lng=lng))
+    return RedirectResponse(f"/cobranza/carteras/{record_id}/trayecto?flash=Posición registrada&flash_type=success", status_code=303)
+
+
 # --------------------------------------------------------------- helpers
 async def _caja_de(session, cartera_id: uuid.UUID) -> Caja:
     tid = get_current_tenant_id()
@@ -961,4 +1138,5 @@ async def _generar_liquidacion(cartera_id: uuid.UUID, periodo: str) -> None:
 
 
 # Evita imports sin uso si se recortan handlers.
-_ = (CajaAjuste, Promesa)
+# Modelos declarados (tabla + migración) pero aún sin UI en esta tanda.
+_ = (CajaAjuste, CarteraEstadisticasSnapshot, CarteraOptimizadaLog, Promesa, ReporteDiario)
