@@ -17,13 +17,16 @@
 
 ## Mapa de rutas
 
-### Auth y perfil (F1)
+### Auth y perfil (F1) ✅
 | Endpoint | Respuesta | Fuente en el pack |
 |---|---|---|
-| `POST /auth/gestor/login` `{usuario,password}` | `{accessToken, refreshToken, gestor}` | `gestores.usuario` + `password_hash` |
-| `POST /auth/propietario/login` | `{accessToken, refreshToken, propietario}` | **decisión** (propietario = tenant; ver riesgos) |
-| `POST /auth/refresh` `{refreshToken}` | `{accessToken, refreshToken}` | nuevo |
+| `POST /auth/gestor/login` `{tenant,usuario,password}` | `{accessToken, refreshToken, gestor}` | `gestores.usuario` + `password_hash` |
+| `POST /auth/propietario/login` | **501** (decisión abierta) | propietario = tenant (ADR-0062) |
+| `POST /auth/refresh` `{refreshToken}` | `{accessToken, refreshToken}` | nuevo (JWT `typ=refresh`, 30 d) |
 | `PATCH /perfil` `{nombre,apellido}` | `PerfilPublic` | `gestor` del token |
+
+> `tenant` (slug) es una **adición obligatoria** del contrato: agent-core es multi-tenant y
+> el login de la APK no traía identificador de tenant. La APK lo envía desde `EXPO_PUBLIC_TENANT`.
 
 ### Lecturas (F2)
 | Endpoint | Respuesta | Fuente en el pack |

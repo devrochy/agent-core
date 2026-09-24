@@ -66,6 +66,11 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
   (`conversaciones_propietario` + `mensajes_propietario`) con notificaciones de cobro
   auto-registradas, mensajes manuales saliente/entrante y enlace **wa.me** al
   WhatsApp del propietario (`CobranzaConfig.propietario_whatsapp`).
+- **API de campo del gestor — contrato de la APK** (ADR-0065): router
+  `api_gestor.py` en la API pública, con el contrato exacto de `app-cobranza-apk`
+  (camelCase, IDs string). **F1**: `POST /auth/gestor/login` (`tenant`+`usuario`+
+  `password` → access+refresh), `POST /auth/refresh`, `PATCH /perfil` y
+  `POST /auth/propietario/login` (501; identidad del propietario pendiente).
 - **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
   cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
   Las operaciones de administración (gasto, inyección, visita, liquidación) viven
