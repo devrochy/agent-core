@@ -246,7 +246,12 @@ async def usage_snapshot(
                 "used": used,
                 "limit": limit,
                 "percent": percent,
-                "exceeded": limit is not None and used >= limit,
+                # "excedido" es SUPERAR el límite, no estar justo en él: el plan
+                # permite exactamente `limit` unidades, así que `used == limit`
+                # (1/1, 5/5) NO es excedido. El bloqueo de la SIGUIENTE unidad
+                # sí ocurre al llegar al tope -- eso lo decide
+                # `enforcement.quota_decision` con `used >= limit`, no este flag.
+                "exceeded": limit is not None and used > limit,
             }
         )
     return rows
