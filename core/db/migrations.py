@@ -41,8 +41,11 @@ def sync_database_url() -> str:
 
     Las migraciones corren como el DUEÑO (MIGRATIONS_DATABASE_URL); el runtime
     usa app_runtime y no tiene permiso de DDL. Vacío -> DATABASE_URL.
+
+    Se fija `+psycopg2` explícito: en SQLAlchemy 2.1 el dialecto por defecto de
+    `postgresql://` pasó a psycopg (v3), que no es dependencia del repo.
     """
-    url = (get_settings().migrations_database_url or get_settings().database_url).replace("+asyncpg", "")
+    url = (get_settings().migrations_database_url or get_settings().database_url).replace("+asyncpg", "+psycopg2")
     return url.replace("%", "%%")
 
 
