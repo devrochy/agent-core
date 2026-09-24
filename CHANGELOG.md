@@ -23,6 +23,9 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
 - **Bloque C (monitoreo)**: sección **Monitoreo** con **Reglas de negociación**
   (edita la fila por tenant que usa el motor determinista) y **Monitoreo IA**
   (conversaciones/escalaciones del core + promesas del asistente).
+- **Bloque E (cobros al propietario, Épica 9)**: pantalla **Cobros** (generar el
+  cobro del periodo, registrar pago, crear link de pago). Tablas
+  `cobros_propietario` y `links_pago`.
 - **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
   cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
   Las operaciones de administración (gasto, inyección, visita, liquidación) viven

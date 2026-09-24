@@ -118,6 +118,9 @@ def test_modelos_alineados_a_develop() -> None:
         "pack_cobranza_cartera_optimizada",
     ):
         assert tabla in nombres
+    # Bloque E: cobros al propietario y links de pago.
+    assert "pack_cobranza_cobros_propietario" in nombres
+    assert "pack_cobranza_links_pago" in nombres
 
 
 def test_lead_provider_registra_columnas() -> None:

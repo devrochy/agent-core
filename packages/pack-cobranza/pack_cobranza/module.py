@@ -48,6 +48,7 @@ class CobranzaModule(BaseModule):
         {"label": "Gestores", "path": "/cobranza/gestores", "section": "General"},
         {"label": "Carteras", "path": "/cobranza/carteras", "section": "General"},
         {"label": "Clientes", "path": "/cobranza/clientes", "section": "General"},
+        {"label": "Cobros", "path": "/cobranza/cobros", "section": "General"},
         {"label": "Reglas de negociación", "path": "/cobranza/reglas", "section": "Monitoreo"},
         {"label": "Monitoreo IA", "path": "/cobranza/monitoreo", "section": "Monitoreo"},
     ]

@@ -544,6 +544,46 @@ class CarteraOptimizadaLog(TenantMixin, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class CobroPropietario(TenantMixin, Base):
+    """Cobro periódico al propietario por el servicio (Épica 9).
+
+    Como el propietario ES el tenant (ADR-0062), el cobro es a nivel de tenant.
+    """
+
+    __tablename__ = "pack_cobranza_cobros_propietario"
+    __table_args__ = (Index("uq_pack_cobranza_cobro_periodo", "tenant_id", "periodo", unique=True),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    periodo: Mapped[str] = mapped_column(Text, nullable=False)  # YYYY-MM
+    monto_calculado: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    monto_pagado: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), default=None)
+    fecha_vencimiento: Mapped[date] = mapped_column(Date, nullable=False)
+    fecha_pago: Mapped[date | None] = mapped_column(Date, default=None)
+    estado: Mapped[str] = mapped_column(Text, default="pendiente")  # pendiente|pagado|vencido
+    metodo_pago: Mapped[str | None] = mapped_column(Text, default=None)
+    registrado_por: Mapped[str | None] = mapped_column(Text, default=None)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LinkPago(TenantMixin, Base):
+    """Link de pago asociado a un cobro al propietario (Épica 9)."""
+
+    __tablename__ = "pack_cobranza_links_pago"
+    __table_args__ = (
+        Index("ix_pack_cobranza_links_pago_tenant_cobro", "tenant_id", "cobro_id"),
+        Index("uq_pack_cobranza_links_pago_referencia", "tenant_id", "referencia", unique=True),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cobro_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)  # FK lógica
+    referencia: Mapped[str] = mapped_column(Text, nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    monto: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    estado: Mapped[str] = mapped_column(Text, default="activo")  # activo|usado|expirado
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Liquidacion(TenantMixin, Base):
     __tablename__ = "pack_cobranza_liquidaciones"
     __table_args__ = (Index("ix_pack_cobranza_liquidaciones_tenant_cartera", "tenant_id", "cartera_id"),)
