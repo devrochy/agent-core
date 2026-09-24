@@ -9,9 +9,11 @@
       · Cartera: {{ cartera }} · Riesgo: <span class="badge bg-{{ 'danger' if riesgo == 'rojo' else ('primary' if riesgo == 'azul' else 'secondary') }}">{{ riesgo }}</span>
     </p>
   </div>
-  <a class="btn btn-outline-secondary" href="/cobranza/clientes">Volver</a>
+  <div class="d-flex gap-2">
+    {% if customer_id %}<a class="btn btn-outline-primary" href="{{ '/admin/conversaciones/' + conv_id if conv_id else '/admin/conversaciones' }}"><i class="bi bi-chat-dots"></i> Conversación</a>{% endif %}
+    <a class="btn btn-outline-secondary" href="/cobranza/clientes">Volver</a>
+  </div>
 </div>
-
 {% if cambios %}
 <div class="alert alert-warning">
   <strong>Cambios pendientes de aprobación:</strong>
@@ -74,6 +76,7 @@
               <button class="btn btn-sm btn-outline-success" title="Registrar pago de la cuota">Pagar</button>
             </form>
             {% endif %}
+            <a href="/cobranza/cuotas/{{ c.id }}/editar" class="btn btn-sm btn-outline-secondary" title="Editar cuota"><i class="bi bi-pencil"></i></a>
             <form method="post" action="/cobranza/cuotas/{{ c.id }}/eliminar" class="d-inline" onsubmit="return confirm('¿Eliminar la cuota?');">
               <button class="btn btn-sm btn-outline-danger" title="Eliminar"><i class="bi bi-trash"></i></button>
             </form>

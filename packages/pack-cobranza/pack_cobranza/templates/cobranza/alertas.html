@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Alertas de acceso{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Alertas de acceso</h1>
+<p class="text-secondary">Intentos de acceso de la app de campo. Los denegados se resaltan como alerta de seguridad.</p>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-3"><div class="card"><div class="card-body"><div class="text-secondary small">Intentos</div><div class="fs-4">{{ total }}</div></div></div></div>
+  <div class="col-md-3"><div class="card"><div class="card-body"><div class="text-secondary small">Denegados</div><div class="fs-4 text-danger">{{ denegados }}</div></div></div></div>
+</div>
+
+<div class="card"><div class="card-body p-0">
+<table class="table table-hover mb-0">
+  <thead><tr><th>Fecha</th><th>Resultado</th><th>Gestor</th><th>IMEI</th><th>Motivo</th></tr></thead>
+  <tbody>
+    {% for a in alertas %}
+    <tr class="{{ 'table-danger' if a.critico else '' }}">
+      <td>{{ a.fecha }}</td>
+      <td><span class="badge bg-{{ 'danger' if a.critico else 'success' }}">{{ a.resultado }}</span></td>
+      <td>{{ a.gestor }}</td>
+      <td>{{ a.imei }}</td>
+      <td>{{ a.motivo }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="text-secondary text-center py-3">Sin intentos de acceso</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div></div>
+{% endblock %}

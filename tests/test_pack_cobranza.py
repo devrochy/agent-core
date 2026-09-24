@@ -152,6 +152,9 @@ def test_rbac_subsecciones_por_path() -> None:
         "/cobranza/cobros/generar": "pack_cobranza:cobros",
         "/cobranza/reglas": "pack_cobranza:reglas",
         "/cobranza/monitoreo": "pack_cobranza:monitoreo",
+        "/cobranza/reportes": "pack_cobranza:reportes",
+        "/cobranza/alertas": "pack_cobranza:alertas",
+        "/cobranza/dispositivos": "pack_cobranza:dispositivos",
     }
     for path, esperado in casos.items():
         req = required_section(path, "GET", prefixes)

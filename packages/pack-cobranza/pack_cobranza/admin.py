@@ -587,6 +587,127 @@ async def dispositivo_generar(request: Request) -> HTMLResponse:
     return _render("cobranza/dispositivos.html", ctx)
 
 
+# --------------------------------------------------------------- reportes globales
+@router.get("/reportes", response_class=HTMLResponse)
+async def reportes(request: Request) -> HTMLResponse:
+    ctx = await base_context(request, SECTION)
+    if ctx is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=False):
+        return RedirectResponse("/admin?flash=sin_pack&flash_type=danger", status_code=303)
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        carteras = (await session.execute(select(Cartera).where(Cartera.tenant_id == tid, Cartera.deleted_at.is_(None)).order_by(Cartera.nombre))).scalars().all()
+        filas: list[dict[str, Any]] = []
+        for c in carteras:
+            n_clientes = (await session.execute(select(func.count()).select_from(Cliente).where(Cliente.tenant_id == tid, Cliente.cartera_id == c.id, Cliente.deleted_at.is_(None)))).scalar_one()
+            prestamos = (await session.execute(select(Prestamo).where(Prestamo.tenant_id == tid, Prestamo.cartera_id == c.id, Prestamo.deleted_at.is_(None)))).scalars().all()
+            saldo = sum((p.saldo for p in prestamos), Decimal(0))
+            vencidas = (await session.execute(
+                select(func.count()).select_from(Cuota).join(Prestamo, Cuota.prestamo_id == Prestamo.id).where(
+                    Cuota.tenant_id == tid, Prestamo.cartera_id == c.id, Cuota.estatus != "pagada",
+                    Cuota.fecha_vencimiento < date.today(), Cuota.deleted_at.is_(None),
+                )
+            )).scalar_one()
+            cobrado = (await session.execute(
+                select(func.coalesce(func.sum(Pago.valor), 0)).where(Pago.tenant_id == tid, Pago.cliente_id.in_([p.cliente_id for p in prestamos]) if prestamos else False, Pago.deleted_at.is_(None))
+            )).scalar_one()
+            gastos = (await session.execute(select(func.coalesce(func.sum(Gasto.valor), 0)).where(Gasto.tenant_id == tid, Gasto.cartera_id == c.id, Gasto.deleted_at.is_(None)))).scalar_one()
+            caja = await _caja_de(session, c.id)
+            filas.append({"cartera": c.nombre, "clientes": int(n_clientes), "prestamos": len(prestamos), "saldo": float(saldo), "vencidas": int(vencidas), "cobrado": float(cobrado), "caja": float(caja.saldo_actual), "gastos": float(gastos)})
+        liquidaciones = (await session.execute(select(Liquidacion).where(Liquidacion.tenant_id == tid, Liquidacion.deleted_at.is_(None)).order_by(Liquidacion.fecha.desc()).limit(12))).scalars().all()
+        cartera_nombre = {c.id: c.nombre for c in carteras}
+        ctx.update(
+            filas=filas,
+            liquidaciones=[{"cartera": cartera_nombre.get(liq.cartera_id, "—"), "fecha": liq.fecha.isoformat(), "periodo": liq.periodo, "cobrado": float(liq.total_cobrado), "gastos": float(liq.total_gastos), "comision": float(liq.comision_valor)} for liq in liquidaciones],
+            totales={
+                "clientes": sum(f["clientes"] for f in filas),
+                "saldo": sum(f["saldo"] for f in filas),
+                "vencidas": sum(f["vencidas"] for f in filas),
+                "cobrado": sum(f["cobrado"] for f in filas),
+                "caja": sum(f["caja"] for f in filas),
+                "gastos": sum(f["gastos"] for f in filas),
+            },
+        )
+    return _render("cobranza/reportes.html", ctx)
+
+
+# --------------------------------------------------------------- alertas de acceso
+@router.get("/alertas", response_class=HTMLResponse)
+async def alertas(request: Request) -> HTMLResponse:
+    ctx = await base_context(request, SECTION)
+    if ctx is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=False):
+        return RedirectResponse("/admin?flash=sin_pack&flash_type=danger", status_code=303)
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        intentos = (await session.execute(select(IntentoAcceso).where(IntentoAcceso.tenant_id == tid).order_by(IntentoAcceso.created_at.desc()).limit(100))).scalars().all()
+        gestores = {g.id: f"{g.nombre} {g.apellido or ''}".strip() for g in (await session.execute(select(Gestor).where(Gestor.tenant_id == tid))).scalars().all()}
+        items = [
+            {"resultado": i.resultado, "motivo": i.motivo or "", "imei": i.imei or "", "gestor": gestores.get(i.gestor_id, "—") if i.gestor_id else "—", "fecha": i.created_at.strftime("%Y-%m-%d %H:%M") if i.created_at else "", "critico": i.resultado != "ok"}
+            for i in intentos
+        ]
+    ctx.update(alertas=items, total=len(items), denegados=sum(1 for i in items if i["critico"]))
+    return _render("cobranza/alertas.html", ctx)
+
+
+# --------------------------------------------------------------- editar cuota
+_ESTATUS_CUOTA = ["pendiente", "pagada", "atrasada", "parcial"]
+
+
+@router.get("/cuotas/{record_id}/editar", response_class=HTMLResponse)
+async def cuota_editar(request: Request, record_id: str) -> HTMLResponse:
+    ctx = await base_context(request, SECTION)
+    if ctx is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=False):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    async with get_session() as session:
+        cuota = await get_owned(session, Cuota, rid) if rid else None
+        if cuota is None:
+            return RedirectResponse("/cobranza/clientes?flash=No encontrado&flash_type=danger", status_code=303)
+        prestamo = await get_owned(session, Prestamo, cuota.prestamo_id)
+        cliente_id = str(prestamo.cliente_id) if prestamo else ""
+    ctx.update(cuota={"id": str(cuota.id), "numero": cuota.numero_cuota, "valor": float(cuota.valor_esperado), "vence": cuota.fecha_vencimiento.isoformat(), "estatus": cuota.estatus}, estatus=_ESTATUS_CUOTA, cliente_id=cliente_id)
+    return _render("cobranza/cuota_form.html", ctx)
+
+
+@router.post("/cuotas/{record_id}/editar")
+async def cuota_editar_save(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    form = await request.form()
+    destino = f"/cobranza/cuotas/{record_id}/editar"
+    try:
+        valor = Decimal(str(form.get("valor") or 0))
+        vence = date.fromisoformat(str(form.get("vence") or ""))
+    except Exception:
+        return RedirectResponse(f"{destino}?flash=Datos inválidos&flash_type=danger", status_code=303)
+    estatus = str(form.get("estatus") or "pendiente")
+    if estatus not in _ESTATUS_CUOTA:
+        estatus = "pendiente"
+    if rid is None or valor <= 0:
+        return RedirectResponse(f"{destino}?flash=Datos inválidos&flash_type=danger", status_code=303)
+    async with get_session() as session:
+        cuota = await get_owned(session, Cuota, rid)
+        if cuota is None:
+            return RedirectResponse("/cobranza/clientes?flash=No encontrado&flash_type=danger", status_code=303)
+        antes = {"valor": float(cuota.valor_esperado), "vence": cuota.fecha_vencimiento.isoformat(), "estatus": cuota.estatus}
+        cuota.valor_esperado = valor
+        cuota.fecha_vencimiento = vence
+        cuota.estatus = estatus
+        prestamo = await get_owned(session, Prestamo, cuota.prestamo_id)
+        _auditar(session, "cuota", cuota.id, "editar", antes=antes, despues={"valor": float(valor), "vence": vence.isoformat(), "estatus": estatus})
+        if prestamo is not None:
+            destino = f"/cobranza/clientes/{prestamo.cliente_id}"
+    return RedirectResponse(f"{destino}?flash=Cuota actualizada&flash_type=success", status_code=303)
+
+
 # --------------------------------------------------------------- CRUD genérico
 @router.get("/{entity}", response_class=HTMLResponse)
 async def entity_list(request: Request, entity: str) -> HTMLResponse:
@@ -985,6 +1106,10 @@ async def cliente_detalle(request: Request, record_id: str) -> HTMLResponse:
                 select(CambioCliente).where(CambioCliente.tenant_id == tid, CambioCliente.cliente_id == cliente.id, CambioCliente.estado == "pendiente")
             )
         ).scalars().all()
+        conv_id = None
+        if cliente.customer_id is not None:
+            conv = (await session.execute(select(Conversation).where(Conversation.tenant_id == tid, Conversation.customer_id == cliente.customer_id).order_by(Conversation.started_at.desc()).limit(1))).scalar_one_or_none()
+            conv_id = str(conv.id) if conv else None
         ctx.update(
             record_id=record_id,
             cliente=f"{cliente.nombre} {cliente.apellido or ''}".strip(),
@@ -993,6 +1118,8 @@ async def cliente_detalle(request: Request, record_id: str) -> HTMLResponse:
             negocio=cliente.negocio or "",
             riesgo=cliente.color_riesgo,
             cartera=cartera.nombre if cartera else "—",
+            customer_id=str(cliente.customer_id) if cliente.customer_id else "",
+            conv_id=conv_id,
             prestamos=prestamos_data,
             abonos=[{"id": str(a.id), "valor": float(a.valor), "metodo": a.metodo_pago, "fecha": a.fecha_hora.strftime("%Y-%m-%d") if a.fecha_hora else ""} for a in abonos],
             cambios=[{"id": str(c.id), "campos": c.campos_propuestos, "fecha": c.created_at.strftime("%Y-%m-%d") if c.created_at else ""} for c in cambios],

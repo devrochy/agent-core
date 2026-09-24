@@ -36,6 +36,13 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
   idempotente** (visita/pago/abono). Tablas `devices`, `intentos_acceso`,
   `sync_eventos` + `gestores.password_hash`. Pantalla **Dispositivos** (genera
   código + API key, ver intentos de acceso).
+- **Reportes globales**: consolidado multi-cartera (clientes, préstamos, saldo,
+  cobrado, caja, gastos, cuotas vencidas) + liquidaciones recientes.
+- **Alertas de acceso** (sección Seguridad): intentos de acceso de la app de campo
+  con los denegados resaltados.
+- **Editar cuota**: formulario completo (valor, vencimiento, estatus) con auditoría.
+- **Conversación del cliente**: acceso directo desde el detalle del cliente a la
+  conversación del core (si el cliente está enlazado a un `Customer`).
 - **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
   cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
   Las operaciones de administración (gasto, inyección, visita, liquidación) viven
