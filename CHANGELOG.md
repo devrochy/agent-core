@@ -52,6 +52,16 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
   el libro cuadre.
 - **Eventos de sincronización** de la app de campo en la pantalla **Dispositivos**
   (`SyncEvento`, con los `error` resaltados).
+- **Evidencias de cliente** (Bloque H): endpoint de la API de campo
+  `POST /api/pack/pack_cobranza/clientes/{id}/evidencia` (multipart, foto facial o
+  documento; jpeg/png/webp/pdf, máx. 5 MB) que guarda en
+  `TENANTS_ROOT/<slug>/evidencias/` (fuera de Postgres) + galería en el detalle del
+  cliente con servido tenant-scoped.
+- **Cierre diario** (Bloque H): cron `cierre_diario` que congela `ReporteDiario` y
+  `CarteraEstadisticasSnapshot` por cartera (idempotente por fecha), con botón
+  "Generar cierre del día" e histórico en la pestaña **Estadísticas**.
+- **Optimización de trayecto** (Bloque H): orden por vecino más cercano (haversine)
+  desde la apertura del día → `CarteraOptimizadaLog` + plan y ruta en el mapa.
 - **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
   cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
   Las operaciones de administración (gasto, inyección, visita, liquidación) viven
