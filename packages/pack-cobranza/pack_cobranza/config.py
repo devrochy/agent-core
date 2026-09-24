@@ -8,12 +8,15 @@ oficina, días). Las reglas finas de negociación viven en la tabla
 
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 
 from core.mcp.types import BasePluginConfig
 
 
 class CobranzaConfig(BasePluginConfig):
+    jwt_secret: SecretStr = Field(
+        default=SecretStr(""), description="Secreto para firmar los tokens de la app de campo (gestores)"
+    )
     nombre_oficina: str = Field(
         default="", description="Remitente que verán los clientes en las notificaciones"
     )

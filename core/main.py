@@ -92,6 +92,13 @@ for _module in plugin_manager.list_modules():
             log.warning("extra_admin_router_fuera_de_admin", plugin=_module.id, prefix=_prefix)
             continue
         app.include_router(_extra)
+    # Rutas públicas del pack (ADR-0057): la app de campo se autentica sola.
+    for _public in _module.public_routes():
+        _pprefix = getattr(_public, "prefix", "")
+        if not _pprefix.startswith("/api/pack/"):
+            log.warning("public_router_fuera_de_api_pack", plugin=_module.id, prefix=_pprefix)
+            continue
+        app.include_router(_public)
 
 # Prefijos de UI admin de los packs (ej. /crm → pack_commerce), para el gate por
 # sección del middleware (ADR-0047). Se calcula una vez, tras el scan.
@@ -125,6 +132,7 @@ async def tenant_context_middleware(request: Request, call_next):
         (
             "/webhooks",
             "/healthz",
+            "/api/pack",  # API pública de packs (ADR-0057): se autentica sola
             "/admin/login",
             "/admin/logout",
             "/admin/switch-tenant",

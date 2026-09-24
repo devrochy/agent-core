@@ -9,7 +9,7 @@ Préstamo. Aislamiento multi-tenant (ADR-0059): 1 tenant = 1 propietario.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 # Importar `jobs` a nivel de módulo registra los `@register_cron` en Celery
 # (worker y beat) apenas se escanea el pack -- no dentro de `on_activate()`.
@@ -21,6 +21,7 @@ import pack_cobranza.providers  # noqa: F401
 from core.mcp.types import BaseModule
 from core.shared.logger import get_logger
 from pack_cobranza.admin import router as admin_router
+from pack_cobranza.api import router as public_api_router
 from pack_cobranza.config import CobranzaConfig
 from pack_cobranza.guardrails import promesa_guardrail
 from pack_cobranza.skills import CobranzaSkill
@@ -53,6 +54,7 @@ class CobranzaModule(BaseModule):
         {"label": "Cobros", "path": "/cobranza/cobros", "section": "General", "section_key": "pack_cobranza:cobros"},
         {"label": "Reglas de negociación", "path": "/cobranza/reglas", "section": "Monitoreo", "section_key": "pack_cobranza:reglas"},
         {"label": "Monitoreo IA", "path": "/cobranza/monitoreo", "section": "Monitoreo", "section_key": "pack_cobranza:monitoreo"},
+        {"label": "Dispositivos", "path": "/cobranza/dispositivos", "section": "Seguridad", "section_key": "pack_cobranza:dispositivos"},
     ]
     admin_router = admin_router
     declared_skills: list[type] = [CobranzaSkill]  # noqa: RUF012
@@ -60,3 +62,7 @@ class CobranzaModule(BaseModule):
     def on_activate(self, host: MCPHost) -> None:
         host.register_skill(CobranzaSkill())
         host.register_guardrail("cob_promesa_check", promesa_guardrail, priority=6)
+
+    def public_routes(self) -> list[Any]:
+        """API pública de la app de campo (ADR-0057)."""
+        return [public_api_router]

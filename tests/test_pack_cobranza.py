@@ -121,6 +121,20 @@ def test_modelos_alineados_a_develop() -> None:
     # Bloque E: cobros al propietario y links de pago.
     assert "pack_cobranza_cobros_propietario" in nombres
     assert "pack_cobranza_links_pago" in nombres
+    # Bloque D: dispositivos y offline.
+    for tabla in ("pack_cobranza_devices", "pack_cobranza_intentos_acceso", "pack_cobranza_sync_eventos"):
+        assert tabla in nombres
+    assert "password_hash" in {c.name for c in models.Gestor.__table__.columns}
+
+
+def test_jwt_del_pack() -> None:
+    """ADR-0057: el pack firma/valida su propio token (HS256, sin deps)."""
+    from pack_cobranza.auth import issue_token, verify_token
+
+    token = issue_token({"tenant_id": "t1", "gestor_id": "g1"}, "secreto", ttl_hours=1)
+    assert verify_token(token, "secreto") is not None
+    assert verify_token(token, "otro-secreto") is None
+    assert verify_token("no-es-un-token", "secreto") is None
 
 
 def test_rbac_subsecciones_por_path() -> None:

@@ -73,6 +73,7 @@ class Gestor(TenantMixin, Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     usuario: Mapped[str | None] = mapped_column(Text, default=None)
+    password_hash: Mapped[str | None] = mapped_column(Text, default=None)  # bcrypt; login de campo (v2)
     nombre: Mapped[str] = mapped_column(Text, nullable=False)
     apellido: Mapped[str | None] = mapped_column(Text, default=None)
     correo: Mapped[str | None] = mapped_column(Text, default=None)
@@ -81,6 +82,64 @@ class Gestor(TenantMixin, Base):
     estatus: Mapped[str] = mapped_column(Text, default="activo")
     custom: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Device(TenantMixin, Base):
+    """Dispositivo vinculado a un gestor (ADR-0057): código + API key hasheada."""
+
+    __tablename__ = "pack_cobranza_devices"
+    __table_args__ = (
+        Index("uq_pack_cobranza_device_codigo", "tenant_id", "codigo", unique=True),
+        Index("ix_pack_cobranza_devices_tenant_gestor", "tenant_id", "gestor_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    codigo: Mapped[str] = mapped_column(Text, nullable=False)
+    api_key_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    gestor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)  # FK lógica
+    cartera_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    imei: Mapped[str | None] = mapped_column(Text, default=None)
+    whatsapp_number: Mapped[str | None] = mapped_column(Text, default=None)
+    public_key: Mapped[str | None] = mapped_column(Text, default=None)
+    estado: Mapped[str] = mapped_column(Text, default="activo")  # activo|bloqueado
+    fecha_vinculacion: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class IntentoAcceso(TenantMixin, Base):
+    """Auditoría de intentos de acceso de un dispositivo (IMEI/WhatsApp)."""
+
+    __tablename__ = "pack_cobranza_intentos_acceso"
+    __table_args__ = (Index("ix_pack_cobranza_intentos_acceso_tenant_gestor", "tenant_id", "gestor_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    gestor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    device_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    imei: Mapped[str | None] = mapped_column(Text, default=None)
+    whatsapp_number: Mapped[str | None] = mapped_column(Text, default=None)
+    resultado: Mapped[str] = mapped_column(Text, nullable=False)  # ok|denegado
+    motivo: Mapped[str | None] = mapped_column(Text, default=None)
+    ip: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SyncEvento(TenantMixin, Base):
+    """Evento offline sincronizado por un dispositivo (idempotente por evento de cliente)."""
+
+    __tablename__ = "pack_cobranza_sync_eventos"
+    __table_args__ = (
+        Index("uq_pack_cobranza_sync_evento", "tenant_id", "evento_id_cliente", unique=True),
+        Index("ix_pack_cobranza_sync_eventos_tenant_device", "tenant_id", "device_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    device_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    evento_id_cliente: Mapped[str] = mapped_column(Text, nullable=False)
+    tipo: Mapped[str] = mapped_column(Text, nullable=False)  # visita|pago|abono
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    estado: Mapped[str] = mapped_column(Text, default="aplicado")  # aplicado|error
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

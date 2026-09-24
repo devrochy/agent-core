@@ -30,6 +30,12 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
   `section_key`; el RBAC resuelve por sub-sección (`pack_cobranza:carteras`,
   `:clientes`, `:cobros`, …), así un colaborador puede tener write en unas y read
   en otras vía grants.
+- **Bloque D (API de campo, ADR-0057)**: `public_routes()` en `BaseModule` + API
+  pública `/api/pack/pack_cobranza` con **JWT propio del pack** (HS256, sin deps).
+  Endpoints: login de dispositivo, mis-carteras, clientes-del-día y **sync offline
+  idempotente** (visita/pago/abono). Tablas `devices`, `intentos_acceso`,
+  `sync_eventos` + `gestores.password_hash`. Pantalla **Dispositivos** (genera
+  código + API key, ver intentos de acceso).
 - **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
   cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
   Las operaciones de administración (gasto, inyección, visita, liquidación) viven

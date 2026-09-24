@@ -11,6 +11,7 @@ Reutiliza el generador de formularios del core (`render_json_schema_form` /
 
 from __future__ import annotations
 
+import secrets
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -22,7 +23,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 
-from core.admin.auth import current_admin
+from core.admin.auth import current_admin, hash_password
 from core.admin.context import base_context
 from core.admin.form_generator import parse_json_schema_form, render_json_schema_form
 from core.db.models import Conversation, Escalation
@@ -44,9 +45,11 @@ from pack_cobranza.models import (
     Cliente,
     CobroPropietario,
     Cuota,
+    Device,
     Gasto,
     Gestor,
     GestorPermiso,
+    IntentoAcceso,
     Inyeccion,
     LinkPago,
     Liquidacion,
@@ -534,6 +537,54 @@ async def cobro_link(request: Request, record_id: str) -> RedirectResponse:
             return RedirectResponse("/cobranza/cobros?flash=Cobro no encontrado&flash_type=danger", status_code=303)
         session.add(LinkPago(tenant_id=tid, cobro_id=cobro.id, referencia=referencia, url=url, monto=cobro.monto_calculado))
     return RedirectResponse("/cobranza/cobros?flash=Link de pago creado&flash_type=success", status_code=303)
+
+
+# --------------------------------------------------------------- dispositivos (ADR-0057)
+async def _dispositivos_data(ctx: dict[str, Any]) -> None:
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        devices = (await session.execute(select(Device).where(Device.tenant_id == tid, Device.deleted_at.is_(None)).order_by(Device.created_at.desc()))).scalars().all()
+        gestores = {g.id: f"{g.nombre} {g.apellido or ''}".strip() for g in (await session.execute(select(Gestor).where(Gestor.tenant_id == tid))).scalars().all()}
+        intentos = (await session.execute(select(IntentoAcceso).where(IntentoAcceso.tenant_id == tid).order_by(IntentoAcceso.created_at.desc()).limit(20))).scalars().all()
+        ctx.update(
+            dispositivos=[{"id": str(d.id), "codigo": d.codigo, "gestor": gestores.get(d.gestor_id, "—") if d.gestor_id else "—", "imei": d.imei or "", "estado": d.estado} for d in devices],
+            gestores=[{"id": str(gid), "nombre": nombre} for gid, nombre in gestores.items()],
+            intentos=[{"resultado": i.resultado, "motivo": i.motivo or "", "imei": i.imei or "", "fecha": i.created_at.strftime("%Y-%m-%d %H:%M") if i.created_at else ""} for i in intentos],
+        )
+
+
+@router.get("/dispositivos", response_class=HTMLResponse)
+async def dispositivos(request: Request) -> HTMLResponse:
+    ctx = await base_context(request, SECTION)
+    if ctx is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=False):
+        return RedirectResponse("/admin?flash=sin_pack&flash_type=danger", status_code=303)
+    await _dispositivos_data(ctx)
+    return _render("cobranza/dispositivos.html", ctx)
+
+
+@router.post("/dispositivos/generar", response_class=HTMLResponse)
+async def dispositivo_generar(request: Request) -> HTMLResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    ctx = await base_context(request, SECTION)
+    if ctx is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    form = await request.form()
+    gestor_id = _uuid(str(form.get("gestor_id") or ""))
+    cartera_id = _uuid(str(form.get("cartera_id") or ""))
+    codigo = str(uuid.uuid4())
+    api_key = secrets.token_urlsafe(32)
+    async with get_session() as session:
+        if gestor_id is not None and await get_owned(session, Gestor, gestor_id) is None:
+            gestor_id = None
+        session.add(Device(tenant_id=get_current_tenant_id(), codigo=codigo, api_key_hash=hash_password(api_key), gestor_id=gestor_id, cartera_id=cartera_id, imei=str(form.get("imei") or "").strip() or None, whatsapp_number=str(form.get("whatsapp") or "").strip() or None))
+    await _dispositivos_data(ctx)
+    ctx.update(nuevo_codigo=codigo, nuevo_api_key=api_key)
+    return _render("cobranza/dispositivos.html", ctx)
 
 
 # --------------------------------------------------------------- CRUD genérico

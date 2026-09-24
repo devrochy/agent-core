@@ -208,6 +208,15 @@ class BaseModule(ABC):
     admin_menu: list[dict[str, Any]] = []
     # [{"label": "Leads", "path": "/crm/leads", "section": "General"}]
 
+    def public_routes(self) -> list[Any]:
+        """Routers PÚBLICOS del pack (sin sesión de admin), ej. la app de campo.
+
+        El prefijo DEBE empezar por `/api/pack/` (ADR-0057): el core lo añade a la
+        allowlist del middleware y el pack autentica cada request con su propia
+        identidad. Default: ninguno.
+        """
+        return []
+
     def extra_admin_routers(self) -> list[Any]:
         """Routers admin adicionales del pack (ej. pestañas de Configuración).
 
