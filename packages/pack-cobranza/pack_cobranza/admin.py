@@ -25,6 +25,7 @@ from sqlalchemy import func, select
 from core.admin.auth import current_admin
 from core.admin.context import base_context
 from core.admin.form_generator import parse_json_schema_form, render_json_schema_form
+from core.db.models import Conversation, Escalation
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
@@ -51,6 +52,7 @@ from pack_cobranza.models import (
     PosicionGestor,
     Prestamo,
     Promesa,
+    ReglaNegociacion,
     ReporteDiario,
 )
 from pack_cobranza.permisos import GESTOR_PERMISOS
@@ -357,6 +359,80 @@ async def resumen(request: Request) -> HTMLResponse:
         ]
     )
     return _render("cobranza/resumen.html", ctx)
+
+
+# --------------------------------------------------------------- reglas de negociación + monitoreo
+@router.get("/reglas", response_class=HTMLResponse)
+async def reglas_page(request: Request) -> HTMLResponse:
+    ctx = await base_context(request, SECTION)
+    if ctx is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=False):
+        return RedirectResponse("/admin?flash=sin_pack&flash_type=danger", status_code=303)
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        r = (await session.execute(select(ReglaNegociacion).where(ReglaNegociacion.tenant_id == tid))).scalar_one_or_none()
+        values = {
+            "max_dias_prorroga": r.max_dias_prorroga if r else 15,
+            "min_abono_pct": float(r.min_abono_pct) if r else 10.0,
+            "max_reprogramaciones": r.max_reprogramaciones if r else 2,
+            "umbral_saldo_autonomo": float(r.umbral_saldo_autonomo) if r else 0.0,
+        }
+    ctx.update(values=values)
+    return _render("cobranza/reglas.html", ctx)
+
+
+@router.post("/reglas")
+async def reglas_save(request: Request) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    form = await request.form()
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        r = (await session.execute(select(ReglaNegociacion).where(ReglaNegociacion.tenant_id == tid))).scalar_one_or_none()
+        if r is None:
+            r = ReglaNegociacion(tenant_id=tid)
+            session.add(r)
+        try:
+            r.max_dias_prorroga = int(str(form.get("max_dias_prorroga") or 15))
+            r.min_abono_pct = Decimal(str(form.get("min_abono_pct") or 10))
+            r.max_reprogramaciones = int(str(form.get("max_reprogramaciones") or 2))
+            r.umbral_saldo_autonomo = Decimal(str(form.get("umbral_saldo_autonomo") or 0))
+        except Exception:
+            return RedirectResponse("/cobranza/reglas?flash=Valores inválidos&flash_type=danger", status_code=303)
+    return RedirectResponse("/cobranza/reglas?flash=Reglas guardadas&flash_type=success", status_code=303)
+
+
+@router.get("/monitoreo", response_class=HTMLResponse)
+async def monitoreo(request: Request) -> HTMLResponse:
+    ctx = await base_context(request, SECTION)
+    if ctx is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=False):
+        return RedirectResponse("/admin?flash=sin_pack&flash_type=danger", status_code=303)
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        conversaciones = (await session.execute(select(func.count()).select_from(Conversation).where(Conversation.tenant_id == tid))).scalar_one()
+        escalaciones = (await session.execute(select(func.count()).select_from(Escalation).where(Escalation.tenant_id == tid))).scalar_one()
+        promesas = (await session.execute(select(Promesa).where(Promesa.tenant_id == tid, Promesa.deleted_at.is_(None)).order_by(Promesa.created_at.desc()).limit(20))).scalars().all()
+        clientes = {c.id: f"{c.nombre} {c.apellido or ''}".strip() for c in (await session.execute(select(Cliente).where(Cliente.tenant_id == tid))).scalars().all()}
+        pendientes = sum(1 for p in promesas if p.estado == "pendiente")
+        cumplidas = sum(1 for p in promesas if p.estado == "cumplida")
+        incumplidas = sum(1 for p in promesas if p.estado == "incumplida")
+        ctx.update(
+            conversaciones=conversaciones,
+            escalaciones=escalaciones,
+            promesas_pendientes=pendientes,
+            promesas_cumplidas=cumplidas,
+            promesas_incumplidas=incumplidas,
+            promesas=[
+                {"cliente": clientes.get(p.cliente_id, "—"), "fecha": p.fecha_prometida.isoformat(), "valor": float(p.valor_prometido), "estado": p.estado, "tipo": p.tipo, "origen": p.creado_por}
+                for p in promesas
+            ],
+        )
+    return _render("cobranza/monitoreo.html", ctx)
 
 
 # --------------------------------------------------------------- CRUD genérico

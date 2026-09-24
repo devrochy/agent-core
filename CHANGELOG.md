@@ -20,6 +20,9 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
   (KPIs por cartera) y **Trayecto diario** con mapa (Leaflet/OSM), apertura del día
   y registro de posiciones. Tablas `cartera_notas`, `carteras_aperturas`,
   `posicion_gestor`, `reportes_diarios`, `cartera_estadisticas`, `cartera_optimizada`.
+- **Bloque C (monitoreo)**: sección **Monitoreo** con **Reglas de negociación**
+  (edita la fila por tenant que usa el motor determinista) y **Monitoreo IA**
+  (conversaciones/escalaciones del core + promesas del asistente).
 - **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
   cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
   Las operaciones de administración (gasto, inyección, visita, liquidación) viven
