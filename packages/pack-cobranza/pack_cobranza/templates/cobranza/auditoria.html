@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Auditoría{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Auditoría</h1>
+<p class="text-secondary">Registro imborrable de operaciones sobre cuotas, pagos, abonos, préstamos, promesas, caja y gastos.</p>
+
+<div class="card mb-3"><div class="card-body">
+  <form method="get" action="/cobranza/auditoria" class="row g-2 align-items-end">
+    <div class="col-md-2">
+      <label class="form-label">Entidad</label>
+      <select name="entidad" class="form-select form-select-sm">
+        <option value="">Todas</option>
+        {% for e in entidades %}<option value="{{ e }}" {{ 'selected' if e == f_entidad else '' }}>{{ e }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Operación</label>
+      <select name="operacion" class="form-select form-select-sm">
+        <option value="">Todas</option>
+        {% for o in operaciones %}<option value="{{ o }}" {{ 'selected' if o == f_operacion else '' }}>{{ o }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2"><label class="form-label">Desde</label><input type="date" name="desde" value="{{ f_desde }}" class="form-control form-control-sm"></div>
+    <div class="col-md-2"><label class="form-label">Hasta</label><input type="date" name="hasta" value="{{ f_hasta }}" class="form-control form-control-sm"></div>
+    <div class="col-md-3 d-flex gap-2">
+      <button class="btn btn-primary btn-sm">Filtrar</button>
+      <a class="btn btn-outline-secondary btn-sm" href="/cobranza/auditoria">Limpiar</a>
+    </div>
+  </form>
+</div></div>
+
+<div class="card"><div class="card-body p-0">
+<table class="table table-sm table-hover mb-0">
+  <thead><tr><th>Fecha</th><th>Entidad</th><th>Operación</th><th>Antes</th><th>Después</th><th>Actor</th><th>Motivo</th></tr></thead>
+  <tbody>
+    {% for r in filas %}
+    <tr>
+      <td class="text-nowrap">{{ r.fecha }}</td>
+      <td>{{ r.entidad }} <code class="text-secondary">{{ r.id_corto }}</code></td>
+      <td><span class="badge bg-{{ 'success' if r.operacion == 'crear' else ('danger' if r.operacion == 'eliminar' else 'secondary') }}">{{ r.operacion }}</span></td>
+      <td><small class="text-secondary">{{ r.antes or '—' }}</small></td>
+      <td><small>{{ r.despues or '—' }}</small></td>
+      <td>{{ r.actor }}</td>
+      <td>{{ r.motivo }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="text-secondary text-center py-3">Sin registros de auditoría</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div></div>
+<p class="text-secondary small mt-2">Se muestran los {{ filas|length }} registros más recientes (máx. 200).</p>
+{% endblock %}

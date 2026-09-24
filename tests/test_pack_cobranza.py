@@ -154,6 +154,10 @@ def test_rbac_subsecciones_por_path() -> None:
         "/cobranza/monitoreo": "pack_cobranza:monitoreo",
         "/cobranza/reportes": "pack_cobranza:reportes",
         "/cobranza/alertas": "pack_cobranza:alertas",
+        "/cobranza/promesas": "pack_cobranza:promesas",
+        "/cobranza/promesas/abc/estado": "pack_cobranza:promesas",
+        "/cobranza/auditoria": "pack_cobranza:auditoria",
+        "/cobranza/carteras/abc/caja": "pack_cobranza:carteras",
         "/cobranza/dispositivos": "pack_cobranza:dispositivos",
     }
     for path, esperado in casos.items():
