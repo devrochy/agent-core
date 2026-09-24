@@ -68,9 +68,16 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
   WhatsApp del propietario (`CobranzaConfig.propietario_whatsapp`).
 - **API de campo del gestor — contrato de la APK** (ADR-0065): router
   `api_gestor.py` en la API pública, con el contrato exacto de `app-cobranza-apk`
-  (camelCase, IDs string). **F1**: `POST /auth/gestor/login` (`tenant`+`usuario`+
-  `password` → access+refresh), `POST /auth/refresh`, `PATCH /perfil` y
-  `POST /auth/propietario/login` (501; identidad del propietario pendiente).
+  (camelCase, IDs string). **F1**: `POST /auth/gestor/login` y
+  `/auth/propietario/login` (`tenant`+`usuario`+`password` → access+refresh),
+  `POST /auth/refresh`, `PATCH /perfil`.
+- **Identidad unificada: el gestor es un colaborador del core** (ADR-0066). El
+  propietario es `Admin` + `TenantUser(owner)`; el gestor es `Admin` +
+  `TenantUser(colaborador)` **con perfil `Gestor`** (`admin_id`, sin credenciales
+  propias). El core gana el punto de extensión `BaseModule.collaborator_roles` +
+  `on_collaborator_role` (sin tabla nueva): `/admin/colaboradores` ofrece "Gestor
+  de cobranza" y, al crearlo, el pack crea el perfil; crear un gestor desde
+  Gestores crea la cuenta (aparece en Colaboradores). Migración `0009`.
 - **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
   cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
   Las operaciones de administración (gasto, inyección, visita, liquidación) viven

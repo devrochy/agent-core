@@ -18,12 +18,17 @@
 ## Mapa de rutas
 
 ### Auth y perfil (F1) ✅
-| Endpoint | Respuesta | Fuente en el pack |
+Identidad unificada con el core (ADR-0066): gestor/propietario son colaboradores
+(`admins` + `tenant_user`); el gestor además tiene su perfil `Gestor`.
+
+| Endpoint | Respuesta | Fuente |
 |---|---|---|
-| `POST /auth/gestor/login` `{tenant,usuario,password}` | `{accessToken, refreshToken, gestor}` | `gestores.usuario` + `password_hash` |
-| `POST /auth/propietario/login` | **501** (decisión abierta) | propietario = tenant (ADR-0062) |
-| `POST /auth/refresh` `{refreshToken}` | `{accessToken, refreshToken}` | nuevo (JWT `typ=refresh`, 30 d) |
-| `PATCH /perfil` `{nombre,apellido}` | `PerfilPublic` | `gestor` del token |
+| `POST /auth/gestor/login` `{tenant,usuario,password}` | `{accessToken, refreshToken, gestor}` | `admins` (email o usuario) + `tenant_user` + perfil `Gestor` activo |
+| `POST /auth/propietario/login` `{tenant,usuario,password}` | `{accessToken, refreshToken, propietario}` | `admins` + `tenant_user(owner)` |
+| `POST /auth/refresh` `{refreshToken}` | `{accessToken, refreshToken}` | JWT `typ=refresh` (30 d) |
+| `PATCH /perfil` `{nombre,apellido}` | `PerfilPublic` | perfil `Gestor` (o el admin) |
+
+Token: `{tenant_id, admin_id, gestor_id?, rol}` (`rol` = `gestor`|`propietario`).
 
 > `tenant` (slug) es una **adición obligatoria** del contrato: agent-core es multi-tenant y
 > el login de la APK no traía identificador de tenant. La APK lo envía desde `EXPO_PUBLIC_TENANT`.

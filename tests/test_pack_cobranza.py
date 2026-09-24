@@ -127,7 +127,10 @@ def test_modelos_alineados_a_develop() -> None:
     # Épica 9 (HU-63): conversación con el propietario.
     assert "pack_cobranza_conversaciones_propietario" in nombres
     assert "pack_cobranza_mensajes_propietario" in nombres
-    assert "password_hash" in {c.name for c in models.Gestor.__table__.columns}
+    columns = {c.name for c in models.Gestor.__table__.columns}
+    assert "admin_id" in columns
+    assert "password_hash" not in columns  # identidad unificada (ADR-0066)
+    assert "usuario" not in columns
 
 
 def test_jwt_del_pack() -> None:
@@ -198,15 +201,25 @@ def test_api_gestor_par_de_tokens() -> None:
 
     from pack_cobranza.api_gestor import _par_tokens
     from pack_cobranza.auth import verify_token
-    from pack_cobranza.models import Gestor
 
-    gestor = Gestor(tenant_id=uuid.uuid4(), nombre="Luis", usuario="luis")
-    gestor.id = uuid.uuid4()
-    pair = _par_tokens("secreto", gestor)
+    tenant_id, admin_id, gestor_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    pair = _par_tokens("secreto", tenant_id, admin_id, rol="gestor", gestor_id=gestor_id)
     access = verify_token(pair["accessToken"], "secreto")
     refresh = verify_token(pair["refreshToken"], "secreto")
-    assert access is not None and access["typ"] == "access" and access["gestor_id"] == str(gestor.id)
+    assert access is not None and access["typ"] == "access"
+    assert access["admin_id"] == str(admin_id) and access["gestor_id"] == str(gestor_id) and access["rol"] == "gestor"
     assert refresh is not None and refresh["typ"] == "refresh"
+
+    prop = verify_token(_par_tokens("secreto", tenant_id, admin_id, rol="propietario")["accessToken"], "secreto")
+    assert prop is not None and prop["rol"] == "propietario" and "gestor_id" not in prop
+
+
+def test_modulo_declara_rol_gestor() -> None:
+    """ADR-0066: el pack aporta el rol de colaborador "Gestor de cobranza"."""
+    from pack_cobranza.module import CobranzaModule
+
+    roles = {r["id"]: r["label"] for r in CobranzaModule().collaborator_roles}
+    assert roles.get("gestor") == "Gestor de cobranza"
 
 
 def test_trayecto_vecino_mas_cercano() -> None:

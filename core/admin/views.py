@@ -661,6 +661,42 @@ async def _ensure_tenant_link(admin_id: uuid.UUID, tenant_id: uuid.UUID, role: s
             session.add(TenantUser(tenant_id=tenant_id, admin_id=admin_id, role=role))
 
 
+async def _pack_collaborator_roles() -> list[dict[str, str]]:
+    """Roles de colaborador que aportan los packs ACTIVOS del tenant (ADR-0066)."""
+    from core.agents.spec import enabled_packs, load_active_spec
+
+    enabled = enabled_packs(await load_active_spec())
+    out: list[dict[str, str]] = []
+    for module in plugin_manager.list_modules():
+        if module.id not in enabled or module.id == CORE_PACK_ID:
+            continue
+        for role in getattr(module, "collaborator_roles", []) or []:
+            role_id = str(role.get("id") or "").strip()
+            if role_id:
+                out.append({"value": f"{module.id}:{role_id}", "label": str(role.get("label") or role_id)})
+    return out
+
+
+async def _apply_pack_roles(values: list[str], tenant_id: uuid.UUID | None, admin_id: uuid.UUID | None) -> None:
+    """Avisa a los packs los roles de colaborador otorgados (ADR-0066).
+
+    El pack crea/reconcilia su propio perfil (ej. `Gestor`). Un fallo del pack no
+    debe tumbar el alta de la cuenta: se loguea y se sigue.
+    """
+    if not values or tenant_id is None or admin_id is None:
+        return
+    modules = {m.id: m for m in plugin_manager.list_modules()}
+    for value in values:
+        pack_id, _, role_id = value.partition(":")
+        module = modules.get(pack_id)
+        if module is None or not role_id:
+            continue
+        try:
+            await module.on_collaborator_role(tenant_id, admin_id, role_id)
+        except Exception:  # el pack falla, la cuenta igual queda creada
+            log.warning("on_collaborator_role_failed", pack=pack_id, role=role_id, exc_info=True)
+
+
 async def _collaborators_context(request: Request) -> dict[str, Any] | None:
     ctx = await _base_context(request, "collaborators")
     if ctx is None:
@@ -755,6 +791,7 @@ async def _collaborators_context(request: Request) -> dict[str, Any] | None:
         ctx["sections"] = {k: v for k, v in full.items() if k not in OWNER_GRANTABLE_SECTIONS}
         ctx["tenants_options"] = []
         ctx["active_tenant"] = str(tid) if tid else None
+    ctx["pack_roles"] = await _pack_collaborator_roles()
     return ctx
 
 
@@ -781,6 +818,7 @@ async def collaborators_create(
     role: str = Form(default="colaborador"),
     username: str = Form(default=""),
     tenant: str = Form(default=""),
+    pack_roles: list[str] = Form(default=[]),  # noqa: B008
 ):
     if await current_admin(request) is None:
         return _login_redirect()
@@ -824,8 +862,10 @@ async def collaborators_create(
         )
         session.add(new_admin)
         await session.flush()
+        new_admin_id = new_admin.id
         if tenant_id is not None:
             session.add(TenantUser(tenant_id=tenant_id, admin_id=new_admin.id, role=tenant_role))
+    await _apply_pack_roles(pack_roles, tenant_id, new_admin_id)
     _audit(
         "create_collaborator",
         me.email if me else "?",
