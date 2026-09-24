@@ -19,7 +19,7 @@ if config.config_file_name is not None:
 # que RLS se aplique (ADR-0001). Vacío → usa DATABASE_URL.
 _migrations_url = get_settings().migrations_database_url or get_settings().database_url
 if not config.get_main_option("sqlalchemy.url"):
-    config.set_main_option("sqlalchemy.url", _migrations_url.replace("+asyncpg", ""))
+    config.set_main_option("sqlalchemy.url", _migrations_url.replace("+asyncpg", "+psycopg2"))
 
 target_metadata = Base.metadata
 

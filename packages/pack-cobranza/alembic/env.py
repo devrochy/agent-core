@@ -19,7 +19,7 @@ if not config.get_main_option("sqlalchemy.url"):
     # Las migraciones corren como el DUEÑO (MIGRATIONS_DATABASE_URL); el runtime
     # usa app_runtime y no tiene permiso para DDL. Vacío -> DATABASE_URL.
     _url = get_settings().migrations_database_url or get_settings().database_url
-    config.set_main_option("sqlalchemy.url", _url.replace("+asyncpg", ""))
+    config.set_main_option("sqlalchemy.url", _url.replace("+asyncpg", "+psycopg2"))
 
 target_metadata = Base.metadata
 VERSION_TABLE = config.get_main_option("version_table") or "alembic_version_pack_cobranza"

@@ -30,7 +30,7 @@ def run_import_wizard(plugin_id: str, entity_targets: dict[str, list[str]]) -> P
         return None
 
     try:
-        engine = create_engine(source_url.replace("+asyncpg", ""))
+        engine = create_engine(source_url.replace("+asyncpg", "+psycopg2"))
         inspector = inspect(engine)
         tables = inspector.get_table_names()
     except Exception as exc:
