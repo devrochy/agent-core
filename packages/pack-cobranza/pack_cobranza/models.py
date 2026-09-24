@@ -20,7 +20,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Boolean, Date, DateTime, Float, Index, Integer, Numeric, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, Index, Integer, Numeric, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -66,14 +66,21 @@ class PermisoMixin:
 
 
 class Gestor(TenantMixin, Base):
-    """Gestor de cartera (ex-cobrador): usuario interno del pack, no admin del core."""
+    """Perfil de gestor de cartera (usuario de campo).
+
+    El gestor es un **colaborador del core** (ADR-0066): la identidad y las
+    credenciales viven en `admins`/`tenant_user`; esta fila es el perfil del pack
+    (cartera asignada, permisos de la app de campo, estatus de campo).
+    """
 
     __tablename__ = "pack_cobranza_gestores"
-    __table_args__ = (Index("ix_pack_cobranza_gestores_tenant_estatus", "tenant_id", "estatus"),)
+    __table_args__ = (
+        Index("ix_pack_cobranza_gestores_tenant_estatus", "tenant_id", "estatus"),
+        Index("uq_pack_cobranza_gestor_admin", "tenant_id", "admin_id", unique=True, postgresql_where=text("admin_id is not null")),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    usuario: Mapped[str | None] = mapped_column(Text, default=None)
-    password_hash: Mapped[str | None] = mapped_column(Text, default=None)  # bcrypt; login de campo (v2)
+    admin_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)  # FK lógica a core.admins
     nombre: Mapped[str] = mapped_column(Text, nullable=False)
     apellido: Mapped[str | None] = mapped_column(Text, default=None)
     correo: Mapped[str | None] = mapped_column(Text, default=None)

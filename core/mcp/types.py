@@ -208,6 +208,19 @@ class BaseModule(ABC):
     admin_menu: list[dict[str, Any]] = []
     # [{"label": "Leads", "path": "/crm/leads", "section": "General"}]
 
+    # Roles de colaborador que el pack aporta al alta de cuentas del panel
+    # (ADR-0066). Se ofrecen en `/admin/colaboradores` solo si el pack está
+    # activo. El pack recibe el aviso vía `on_collaborator_role` para crear su
+    # perfil propio. Formato: [{"id": "gestor", "label": "Gestor de cobranza"}].
+    collaborator_roles: list[dict[str, Any]] = []
+
+    async def on_collaborator_role(self, tenant_id: uuid.UUID, admin_id: uuid.UUID, role_id: str) -> None:
+        """Hook opcional (ADR-0066): el admin `admin_id` recibió el rol de pack
+        `role_id` en `tenant_id`. El pack crea/reconcilia el perfil que lo marca
+        como su usuario (ej. perfil `Gestor`). Default: no-op.
+        """
+        return None
+
     def public_routes(self) -> list[Any]:
         """Routers PÚBLICOS del pack (sin sesión de admin), ej. la app de campo.
 
