@@ -73,3 +73,4 @@ Se crean con `/adr`.
 | 0063 | RBAC por sub-sección de pack | aceptado |
 | 0064 | Comunicación con el propietario: bitácora por tenant con enlace wa.me | aceptado |
 | 0065 | API de campo del gestor: el pack implementa el contrato de la APK | aceptado |
+| 0066 | El gestor es un colaborador del core: identidad unificada | aceptado |

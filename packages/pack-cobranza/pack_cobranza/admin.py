@@ -27,7 +27,7 @@ from sqlalchemy import func, select
 from core.admin.auth import current_admin, hash_password
 from core.admin.context import base_context
 from core.admin.form_generator import parse_json_schema_form, render_json_schema_form
-from core.db.models import Conversation, Escalation
+from core.db.models import Admin, Conversation, Escalation, TenantUser
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
@@ -168,11 +168,12 @@ _CONFIG_FIELDS: list[tuple[str, str, str, list[str]]] = [
 _SCHEMAS: dict[str, dict[str, Any]] = {
     "gestores": {
         "type": "object",
-        "required": ["nombre"],
+        "required": ["nombre", "correo"],
         "properties": {
             "nombre": {"type": "string", "title": "Nombre"},
             "apellido": {"type": "string", "title": "Apellido"},
-            "correo": {"type": "string", "title": "Correo"},
+            "correo": {"type": "string", "title": "Email (cuenta del gestor)"},
+            "password": {"type": "string", "title": "Contraseña (obligatoria al crear)"},
             "telefono": {"type": "string", "title": "Teléfono"},
             "codigo": {"type": "string", "title": "Código"},
         },
@@ -226,8 +227,8 @@ async def _rows(entity: str, *, cartera_id: uuid.UUID | None = None) -> tuple[li
     async with get_session() as session:
         if entity == "gestores":
             data = (await session.execute(select(Gestor).where(Gestor.tenant_id == tid, Gestor.deleted_at.is_(None)))).scalars().all()
-            rows = [{"_id": str(g.id), "nombre": f"{g.nombre} {g.apellido or ''}".strip(), "telefono": g.telefono or "", "codigo": g.codigo or "", "estatus": g.estatus} for g in data]
-            cols = [("nombre", "Gestor"), ("telefono", "Teléfono"), ("codigo", "Código"), ("estatus", "Estatus")]
+            rows = [{"_id": str(g.id), "nombre": f"{g.nombre} {g.apellido or ''}".strip(), "correo": g.correo or "", "telefono": g.telefono or "", "estatus": g.estatus} for g in data]
+            cols = [("nombre", "Gestor"), ("correo", "Email"), ("telefono", "Teléfono"), ("estatus", "Estatus")]
         elif entity == "carteras":
             data = (await session.execute(select(Cartera).where(Cartera.tenant_id == tid, Cartera.deleted_at.is_(None)))).scalars().all()
             gestores = {g.id: f"{g.nombre} {g.apellido or ''}".strip() for g in (await session.execute(select(Gestor).where(Gestor.tenant_id == tid))).scalars().all()}
@@ -286,14 +287,34 @@ async def _save(entity: str, record_id: str | None, values: dict[str, Any]) -> N
     tid = get_current_tenant_id()
     async with get_session() as session:
         if entity == "gestores":
-            obj = await get_owned(session, Gestor, rid) if rid else Gestor(tenant_id=tid)
-            if rid and obj is None:
+            if rid is None:
+                # Crear el gestor crea su cuenta del core (Admin + TenantUser) y su
+                # perfil del pack (ADR-0066): aparece en Colaboradores y en Gestores.
+                correo = str(values.get("correo") or "").strip().lower()
+                password = str(values.get("password") or "")
+                if not correo or not password:
+                    return
+                existente = (await session.execute(select(Admin).where(Admin.email == correo))).scalar_one_or_none()
+                if existente is not None:
+                    return
+                admin = Admin(email=correo, password_hash=hash_password(password), role="colaborador")
+                session.add(admin)
+                await session.flush()
+                session.add(TenantUser(tenant_id=tid, admin_id=admin.id, role="colaborador"))
+                obj = Gestor(tenant_id=tid, admin_id=admin.id)
+                for f in ("nombre", "apellido", "correo", "telefono", "codigo"):
+                    if f in values:
+                        setattr(obj, f, values[f])
+                session.add(obj)
+                await session.flush()
+                _auditar(session, "gestor", obj.id, "crear", despues={"correo": correo})
+                return
+            obj = await get_owned(session, Gestor, rid)
+            if obj is None:
                 return
             for f in ("nombre", "apellido", "correo", "telefono", "codigo"):
                 if f in values:
                     setattr(obj, f, values[f])
-            if rid is None:
-                session.add(obj)
         elif entity == "carteras":
             gestor_id: uuid.UUID | None = None
             if values.get("gestor_id"):

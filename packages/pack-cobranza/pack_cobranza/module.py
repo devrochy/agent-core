@@ -62,12 +62,52 @@ class CobranzaModule(BaseModule):
         {"label": "Alertas de acceso", "path": "/cobranza/alertas", "section": "Seguridad", "section_key": "pack_cobranza:alertas"},
         {"label": "Auditoría", "path": "/cobranza/auditoria", "section": "Seguridad", "section_key": "pack_cobranza:auditoria"},
     ]
+    # Roles de colaborador del pack (ADR-0066): un colaborador con rol "gestor"
+    # es un gestor de cobranza (perfil `Gestor` ligado a su `admin_id`).
+    collaborator_roles: list[dict[str, str]] = [  # noqa: RUF012
+        {"id": "gestor", "label": "Gestor de cobranza"},
+    ]
     admin_router = admin_router
     declared_skills: list[type] = [CobranzaSkill]  # noqa: RUF012
 
     def on_activate(self, host: MCPHost) -> None:
         host.register_skill(CobranzaSkill())
         host.register_guardrail("cob_promesa_check", promesa_guardrail, priority=6)
+
+    async def on_collaborator_role(self, tenant_id: Any, admin_id: Any, role_id: str) -> None:
+        """Rol de pack asignado a un colaborador (ADR-0066): crea su perfil `Gestor`.
+
+        Idempotente por `(tenant_id, admin_id)`. El nombre sale del `Admin` (que no
+        tiene nombre propio en el core) — editable luego en la pantalla de Gestores.
+        """
+        if role_id != "gestor":
+            return
+        import uuid as _uuid
+
+        from sqlalchemy import select
+
+        from core.db.models import Admin
+        from core.db.session import get_session
+        from core.shared.tenant import tenant_scope
+        from pack_cobranza.models import Gestor
+
+        tid = _uuid.UUID(str(tenant_id))
+        aid = _uuid.UUID(str(admin_id))
+        async with tenant_scope(tid):
+            async with get_session() as session:
+                existe = (await session.execute(select(Gestor).where(Gestor.tenant_id == tid, Gestor.admin_id == aid))).scalar_one_or_none()
+                if existe is not None:
+                    return
+                admin = (await session.execute(select(Admin).where(Admin.id == aid))).scalar_one_or_none()
+                session.add(
+                    Gestor(
+                        tenant_id=tid,
+                        admin_id=aid,
+                        nombre=(admin.username or admin.email) if admin else "Gestor",
+                        correo=admin.email if admin else None,
+                    )
+                )
+        log.info("cobranza_gestor_creado", tenant_id=str(tid), admin_id=str(aid))
 
     def public_routes(self) -> list[Any]:
         """APIs públicas del pack: campo v1 (ADR-0057) y gestor/APK (ADR-0065)."""
