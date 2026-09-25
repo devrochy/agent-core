@@ -651,7 +651,8 @@ async def _dispositivos_data(ctx: dict[str, Any]) -> None:
         eventos = (await session.execute(select(SyncEvento).where(SyncEvento.tenant_id == tid).order_by(SyncEvento.created_at.desc()).limit(50))).scalars().all()
         device_gestor = {d.id: (gestores.get(d.gestor_id, "—") if d.gestor_id else "—") for d in devices}
         ctx.update(
-            dispositivos=[{"id": str(d.id), "codigo": d.codigo, "gestor": gestores.get(d.gestor_id, "—") if d.gestor_id else "—", "imei": d.imei or "", "estado": d.estado} for d in devices],
+            dispositivos=[{"id": str(d.id), "codigo": d.codigo, "gestor": gestores.get(d.gestor_id, "—") if d.gestor_id else "—", "imei": d.imei or "", "whatsapp": d.whatsapp_number or "", "estado": d.estado} for d in devices],
+            pendientes=sum(1 for d in devices if d.estado == "pendiente"),
             gestores=[{"id": str(gid), "nombre": nombre} for gid, nombre in gestores.items()],
             intentos=[{"resultado": i.resultado, "motivo": i.motivo or "", "imei": i.imei or "", "fecha": i.created_at.strftime("%Y-%m-%d %H:%M") if i.created_at else ""} for i in intentos],
             eventos=[{"fecha": e.created_at.strftime("%Y-%m-%d %H:%M") if e.created_at else "", "tipo": e.tipo, "estado": e.estado, "gestor": device_gestor.get(e.device_id, "—") if e.device_id else "—", "evento": e.evento_id_cliente[:8], "critico": e.estado != "aplicado"} for e in eventos],
@@ -691,6 +692,28 @@ async def dispositivo_generar(request: Request) -> HTMLResponse:
     await _dispositivos_data(ctx)
     ctx.update(nuevo_codigo=codigo, nuevo_api_key=api_key)
     return _render("cobranza/dispositivos.html", ctx)
+
+
+@router.post("/dispositivos/{record_id}/estado")
+async def dispositivo_estado(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    form = await request.form()
+    estado = str(form.get("estado") or "").strip()
+    if estado not in ("activo", "pendiente", "bloqueado"):
+        return RedirectResponse("/cobranza/dispositivos?flash=Estado inválido&flash_type=danger", status_code=303)
+    if rid is not None:
+        async with get_session() as session:
+            device = await get_owned(session, Device, rid)
+            if device is not None:
+                device.estado = estado
+                if estado == "activo" and device.fecha_vinculacion is None:
+                    device.fecha_vinculacion = datetime.now(UTC)
+                _auditar(session, "dispositivo", device.id, "editar", despues={"estado": estado}, motivo="Aprobación de dispositivo")
+    return RedirectResponse("/cobranza/dispositivos?flash=Dispositivo actualizado&flash_type=success", status_code=303)
 
 
 # --------------------------------------------------------------- reportes globales

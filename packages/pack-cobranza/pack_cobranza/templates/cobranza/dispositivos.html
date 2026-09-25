@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Dispositivos{% endblock %}
 {% block content %}
-<h1 class="fs-3 mb-1">Dispositivos</h1>
+<h1 class="fs-3 mb-1">Dispositivos
+  {% if pendientes %}<span class="badge bg-warning text-dark">{{ pendientes }} pendientes</span>{% endif %}
+</h1>
 <p class="text-secondary">Vincula la app de campo (gestores) al tenant (ADR-0057).</p>
 
 {% if nuevo_api_key %}
@@ -28,12 +30,32 @@
 </div></div>
 
 <table class="table table-hover">
-  <thead><tr><th>Código</th><th>Gestor</th><th>IMEI</th><th>Estado</th></tr></thead>
+  <thead><tr><th>Código</th><th>Gestor</th><th>IMEI</th><th>WhatsApp</th><th>Estado</th><th class="text-end">Acciones</th></tr></thead>
   <tbody>
     {% for d in dispositivos %}
-    <tr><td><code>{{ d.codigo }}</code></td><td>{{ d.gestor }}</td><td>{{ d.imei }}</td><td>{{ d.estado }}</td></tr>
+    <tr>
+      <td><code>{{ d.codigo }}</code></td>
+      <td>{{ d.gestor }}</td>
+      <td>{{ d.imei }}</td>
+      <td>{{ d.whatsapp }}</td>
+      <td><span class="badge bg-{{ 'warning text-dark' if d.estado == 'pendiente' else ('success' if d.estado == 'activo' else 'danger') }}">{{ d.estado }}</span></td>
+      <td class="text-end">
+        {% if d.estado != 'activo' %}
+        <form method="post" action="/cobranza/dispositivos/{{ d.id }}/estado" class="d-inline">
+          <input type="hidden" name="estado" value="activo">
+          <button class="btn btn-sm btn-outline-success">Aprobar</button>
+        </form>
+        {% endif %}
+        {% if d.estado != 'bloqueado' %}
+        <form method="post" action="/cobranza/dispositivos/{{ d.id }}/estado" class="d-inline">
+          <input type="hidden" name="estado" value="bloqueado">
+          <button class="btn btn-sm btn-outline-danger">Bloquear</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
     {% else %}
-    <tr><td colspan="4" class="text-secondary">Sin dispositivos</td></tr>
+    <tr><td colspan="6" class="text-secondary text-center py-3">Sin dispositivos</td></tr>
     {% endfor %}
   </tbody>
 </table>

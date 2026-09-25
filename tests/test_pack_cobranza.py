@@ -260,6 +260,29 @@ def test_api_gestor_rutas_f4() -> None:
     assert ("/api/pack/pack_cobranza/sync-offline/trayecto-diario", ("GET",)) in rutas
 
 
+def test_api_gestor_dispositivo_rutas() -> None:
+    """HU-39/43: rutas de autovinculación de dispositivo."""
+    from pack_cobranza import api_gestor
+
+    rutas = {r.path for r in api_gestor.router.routes}
+    assert "/api/pack/pack_cobranza/gestor/dispositivo" in rutas
+
+
+def test_pago_qr_informativo_y_ruta() -> None:
+    """ADR-0067: cobro con QR informativo cuando no hay pasarela."""
+    from pack_cobranza import api_gestor
+    from pack_cobranza.config import CobranzaConfig
+    from pack_cobranza.pagos import datos_informativos
+
+    cfg = CobranzaConfig(pago_titular="T", pago_banco="B", pago_alias="@x")
+    data = datos_informativos(cfg, 1000.0)
+    assert data["modo"] == "informativo" and data["titular"] == "T" and data["alias"] == "@x"
+    assert data["qrPng"] is None or data["qrPng"].startswith("data:image/png;base64,")
+
+    rutas = {r.path for r in api_gestor.router.routes}
+    assert "/api/pack/pack_cobranza/gestor/carteras/{cartera_id}/cuotas/{cuota_id}/link-pago" in rutas
+
+
 def test_api_gestor_par_de_tokens() -> None:
     import uuid
 
