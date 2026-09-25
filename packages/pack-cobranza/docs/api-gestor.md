@@ -81,7 +81,12 @@ exigen contraseña del admin y quedan en la auditoría. El `export-pdf` de v1 es
 | `POST /gestor/carteras/:id/posicion` `{latitud,longitud}` | `{carteraId,latitud,longitud}` | `PosicionGestor` |
 | `POST /gestor/carteras/:id/notas` `{nota}` | `CarteraNotaPublic` | `CarteraNota` |
 
-### Offline (F4)
+### Offline (F4) ✅
+Identidad Bearer (sesión del gestor). Eventos de la cola: `visita` (pago y no-pago),
+`pago`, `abono`, `gasto` (evidencias base64), `trayectoria`, `cambio_cliente`. Ack
+**por evento** (`sincronizado`/`duplicado`/`error`); idempotente por `eventoIdCliente`;
+cada evento en su savepoint (uno inválido no tumba el lote). La cartera se resuelve
+del payload, del cliente, o de la única cartera visible.
 | Endpoint | Contrato |
 |---|---|
 | `POST /sync-offline/eventos` | `{eventos:[{eventoIdCliente,tipoEvento,payload}]}` → `[{eventoIdCliente, estado:"sincronizado"\|"duplicado"\|"error", error?}]`. Tipos: `visita`, `pago`, `abono`, `gasto`, `cambio_cliente`. |
