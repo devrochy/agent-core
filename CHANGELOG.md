@@ -67,7 +67,7 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
   auto-registradas, mensajes manuales saliente/entrante y enlace **wa.me** al
   WhatsApp del propietario (`CobranzaConfig.propietario_whatsapp`).
 - **API de campo del gestor — contrato de la APK** (ADR-0065): router
-  `api_gestor.py` en la API pública, con el contrato exacto de `app-cobranza-apk`
+  `api_gestor.py` en la API pública, con el contrato exacto de `solvershub-apk`
   (camelCase, IDs string). **F1**: `POST /auth/gestor/login` y
   `/auth/propietario/login` (`tenant`+`usuario`+`password` → access+refresh),
   `POST /auth/refresh`, `PATCH /perfil`.

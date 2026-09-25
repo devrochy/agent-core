@@ -1,7 +1,7 @@
 """API de campo del gestor — contrato de la APK (ADR-0065).
 
 Router separado del `api.py` de campo v1 (ADR-0057). Implementa el contrato exacto
-de `app-cobranza-apk`: mismas rutas, **camelCase** idéntico a `types/gestor.ts` y
+de `solvershub-apk`: mismas rutas, **camelCase** idéntico a `types/gestor.ts` y
 **IDs como string** (UUID).
 
 Identidad unificada (ADR-0066): gestores y propietarios son **colaboradores del

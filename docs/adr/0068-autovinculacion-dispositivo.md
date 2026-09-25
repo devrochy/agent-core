@@ -64,5 +64,5 @@ Integrity), o que un gestor necesite operar sin equipo (→ excepción por gesto
 
 - `packages/pack-cobranza/pack_cobranza/api_gestor.py` (`gestor_login` + `/gestor/dispositivo`),
   `admin.py` + `dispositivos.html` (aprobar/bloquear), migración `0012` (IMEI único).
-- `app-cobranza-apk`: `expo-application`, `imei`/`whatsapp` en el login y pantalla de
+- `solvershub-apk`: `expo-application`, `imei`/`whatsapp` en el login y pantalla de
   vinculación.

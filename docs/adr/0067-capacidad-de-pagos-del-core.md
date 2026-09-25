@@ -67,4 +67,4 @@ o que Wompi incorpore métodos que exijan parámetros por método.
 - `packages/pack-payments/pack_payments/payments.py` (nuevo) + `module.py`.
 - `packages/pack-cobranza/pack_cobranza/pagos.py` (nuevo), `config.py`, `models.py`,
   migración `0011`, `api_gestor.py`, `module.py`.
-- `app-cobranza-apk`: tipos, API y acción "Cobro con QR" en el detalle de cuota.
+- `solvershub-apk`: tipos, API y acción "Cobro con QR" en el detalle de cuota.
