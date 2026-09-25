@@ -51,9 +51,24 @@ async def guardar_evidencia(
     mimetype: str | None,
     contenido: bytes,
 ) -> dict[str, object]:
-    """Guarda el archivo y devuelve los metadatos para `ClienteEvidencia`."""
+    """Guarda la evidencia de un cliente y devuelve los metadatos de `ClienteEvidencia`."""
     if tipo not in TIPOS:
         raise EvidenciaError("tipo de evidencia inválido")
+    return await guardar_archivo(tenant_id, str(cliente_id), nombre_original, mimetype, contenido)
+
+
+async def guardar_archivo(
+    tenant_id: uuid.UUID,
+    carpeta: str,
+    nombre_original: str | None,
+    mimetype: str | None,
+    contenido: bytes,
+) -> dict[str, object]:
+    """Guarda un archivo bajo `TENANTS_ROOT/<slug>/evidencias/<carpeta>/`.
+
+    Compartido por evidencias de cliente y de gasto. El nombre físico es un `uuid4`
+    (nunca el nombre que manda el cliente).
+    """
     ext = _MIME_EXT.get((mimetype or "").split(";")[0].strip().lower())
     if ext is None:
         raise EvidenciaError("tipo de archivo no admitido (jpeg, png, webp o pdf)")
@@ -64,12 +79,14 @@ async def guardar_evidencia(
     slug = await tenant_slug(tenant_id)
     if not slug:
         raise EvidenciaError("tenant sin slug")
-    base = _evidencias_root(slug) / str(cliente_id)
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", carpeta or ""):
+        raise EvidenciaError("carpeta inválida")
+    base = _evidencias_root(slug) / carpeta
     base.mkdir(parents=True, exist_ok=True)
     nombre_fisico = f"{uuid.uuid4().hex}{ext}"
     (base / nombre_fisico).write_bytes(contenido)
     return {
-        "ruta_archivo": f"{cliente_id}/{nombre_fisico}",
+        "ruta_archivo": f"{carpeta}/{nombre_fisico}",
         "nombre_original": nombre_original,
         "mimetype": mimetype,
         "tamano": len(contenido),

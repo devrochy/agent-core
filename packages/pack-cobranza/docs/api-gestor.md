@@ -54,7 +54,10 @@ con el snapshot diario (`jobs`, ahora guarda `datos.conteos`).
 | `GET /gestor/carteras/:id/liquidaciones` | `LiquidacionPublic[]` | `Liquidacion` |
 | `GET /sync-offline/trayecto-diario` | `TrayectoDiarioApkPublic` | snapshot cacheado para offline |
 
-### Escrituras (F3)
+### Escrituras (F3) ✅
+Todas tenant-scoped y filtradas por cartera visible; las bajas de cuota/pago/abono
+exigen contraseña del admin y quedan en la auditoría. El `export-pdf` de v1 es un
+**HTML imprimible** (sin dependencia de PDF).
 | Endpoint | Respuesta | Fuente en el pack |
 |---|---|---|
 | `PATCH /gestor/carteras/:id` `{nombre,descripcion}` | `{id,nombre}` | `Cartera` |
