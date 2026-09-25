@@ -251,6 +251,15 @@ def test_api_gestor_rutas_f3() -> None:
     assert not faltan, faltan
 
 
+def test_api_gestor_rutas_f4() -> None:
+    """ADR-0065: el sync offline del gestor (F4) está montado."""
+    from pack_cobranza import api_gestor
+
+    rutas = {(r.path, tuple(sorted(getattr(r, "methods", set())))) for r in api_gestor.router.routes}
+    assert ("/api/pack/pack_cobranza/sync-offline/eventos", ("POST",)) in rutas
+    assert ("/api/pack/pack_cobranza/sync-offline/trayecto-diario", ("GET",)) in rutas
+
+
 def test_api_gestor_par_de_tokens() -> None:
     import uuid
 

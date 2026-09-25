@@ -90,6 +90,10 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
   pago/abono (con contraseña del admin + auditoría), notas, apertura/posición,
   trayectoria real, generar trayecto, editar cartera/configuración, liquidaciones y
   export imprimible (HTML en v1).
+- **API de campo del gestor — F4 (offline)**: `POST /sync-offline/eventos`
+  (idempotente por `eventoIdCliente`, **ack por evento**, savepoint por evento;
+  tipos `visita`/`pago`/`abono`/`gasto` con evidencias base64/`trayectoria`/
+  `cambio_cliente`) y `GET /sync-offline/trayecto-diario`.
 - **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
   cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
   Las operaciones de administración (gasto, inyección, visita, liquidación) viven

@@ -19,6 +19,7 @@ el login no traía identificador de tenant.
 
 from __future__ import annotations
 
+import base64
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -40,6 +41,7 @@ from pack_cobranza.models import (
     Abono,
     AuditoriaCartera,
     Caja,
+    CambioCliente,
     Cartera,
     CarteraApertura,
     CarteraConfig,
@@ -58,6 +60,7 @@ from pack_cobranza.models import (
     PosicionGestor,
     Prestamo,
     Promesa,
+    SyncEvento,
     Visita,
 )
 from pack_cobranza.permisos import GESTOR_PERMISOS
@@ -388,6 +391,31 @@ async def notificaciones(authorization: str | None = Header(default=None)) -> JS
     return JSONResponse(items[:60])
 
 
+async def _trayecto_data(session, tenant_id: uuid.UUID, cid: uuid.UUID) -> dict[str, Any]:
+    """Clientes del día + último trayecto (compartido por el endpoint y el offline)."""
+    hoy = _hoy()
+    clientes = (await session.execute(select(Cliente).where(Cliente.tenant_id == tenant_id, Cliente.cartera_id == cid, Cliente.deleted_at.is_(None)).order_by(Cliente.nombre))).scalars().all()
+    out = []
+    for c in clientes:
+        prestamos = (await session.execute(select(Prestamo).where(Prestamo.tenant_id == tenant_id, Prestamo.cliente_id == c.id, Prestamo.estatus == "vigente", Prestamo.deleted_at.is_(None)))).scalars().all()
+        if not prestamos:
+            continue
+        cuotas = (await session.execute(select(Cuota).where(Cuota.tenant_id == tenant_id, Cuota.prestamo_id.in_([p.id for p in prestamos]), Cuota.estatus.in_(("pendiente", "atrasada")), Cuota.deleted_at.is_(None)))).scalars().all()
+        mora = _dias_mora(cuotas)
+        visita_hoy = (await session.execute(select(Visita).where(Visita.tenant_id == tenant_id, Visita.cliente_id == c.id, Visita.fecha == hoy, Visita.deleted_at.is_(None)).limit(1))).scalar_one_or_none()
+        promesa = (await session.execute(select(Promesa).where(Promesa.tenant_id == tenant_id, Promesa.cliente_id == c.id, Promesa.estado == "pendiente", Promesa.deleted_at.is_(None)).order_by(Promesa.fecha_prometida.desc()).limit(1))).scalar_one_or_none()
+        color = "rojo" if mora > 0 else ("verde" if (visita_hoy and visita_hoy.resultado == "pago") else "blanco")
+        out.append({"clienteId": str(c.id), "nombre": f"{c.nombre} {c.apellido or ''}".strip(), "enTrayecto": True, "color": color, "visitaRegistrada": visita_hoy is not None, "diasMora": mora, "compromisoValor": _f(promesa.valor_prometido) if promesa else None})
+    log = (await session.execute(select(CarteraOptimizadaLog).where(CarteraOptimizadaLog.tenant_id == tenant_id, CarteraOptimizadaLog.cartera_id == cid).order_by(CarteraOptimizadaLog.created_at.desc()).limit(1))).scalar_one_or_none()
+    trayecto = None
+    if log is not None:
+        por_id = {str(c.id): c for c in clientes}
+        ids = [i for i in (log.orden_clientes or []) if isinstance(i, str) and i in por_id]
+        orden = [{"clienteId": i, "latitud": por_id[i].lat, "longitud": por_id[i].lng} for i in ids]
+        trayecto = {"id": str(log.id), "carteraId": str(cid), "fecha": _d(log.fecha), "ordenClientes": orden, "waypoints": [{"latitud": p["latitud"], "longitud": p["longitud"]} for p in orden if p["latitud"] is not None and p["longitud"] is not None], "distanciaEstimadaKm": _f(log.distancia_estimada_km), "tiempoEstimadoMin": int(log.tiempo_estimado_min or 0), "tipo": log.tipo}
+    return {"clientes": out, "trayectos": trayecto}
+
+
 @router.get("/gestor/carteras/{cartera_id}/trayecto-diario")
 async def trayecto_diario(cartera_id: str, authorization: str | None = Header(default=None)) -> JSONResponse:
     auth = await _auth(authorization)
@@ -398,30 +426,12 @@ async def trayecto_diario(cartera_id: str, authorization: str | None = Header(de
         cid = uuid.UUID(cartera_id)
     except ValueError:
         return JSONResponse({"error": "cartera inválida"}, status_code=400)
-    hoy = _hoy()
     async with tenant_scope(tenant_id):
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
-            clientes = (await session.execute(select(Cliente).where(Cliente.tenant_id == tenant_id, Cliente.cartera_id == cid, Cliente.deleted_at.is_(None)).order_by(Cliente.nombre))).scalars().all()
-            out = []
-            for c in clientes:
-                prestamos = (await session.execute(select(Prestamo).where(Prestamo.tenant_id == tenant_id, Prestamo.cliente_id == c.id, Prestamo.estatus == "vigente", Prestamo.deleted_at.is_(None)))).scalars().all()
-                if not prestamos:
-                    continue
-                cuotas = (await session.execute(select(Cuota).where(Cuota.tenant_id == tenant_id, Cuota.prestamo_id.in_([p.id for p in prestamos]), Cuota.estatus.in_(("pendiente", "atrasada")), Cuota.deleted_at.is_(None)))).scalars().all()
-                mora = _dias_mora(cuotas)
-                visita_hoy = (await session.execute(select(Visita).where(Visita.tenant_id == tenant_id, Visita.cliente_id == c.id, Visita.fecha == hoy, Visita.deleted_at.is_(None)).limit(1))).scalar_one_or_none()
-                promesa = (await session.execute(select(Promesa).where(Promesa.tenant_id == tenant_id, Promesa.cliente_id == c.id, Promesa.estado == "pendiente", Promesa.deleted_at.is_(None)).order_by(Promesa.fecha_prometida.desc()).limit(1))).scalar_one_or_none()
-                color = "rojo" if mora > 0 else ("verde" if (visita_hoy and visita_hoy.resultado == "pago") else "blanco")
-                out.append({"clienteId": str(c.id), "nombre": f"{c.nombre} {c.apellido or ''}".strip(), "enTrayecto": True, "color": color, "visitaRegistrada": visita_hoy is not None, "diasMora": mora, "compromisoValor": _f(promesa.valor_prometido) if promesa else None})
-            log = (await session.execute(select(CarteraOptimizadaLog).where(CarteraOptimizadaLog.tenant_id == tenant_id, CarteraOptimizadaLog.cartera_id == cid).order_by(CarteraOptimizadaLog.created_at.desc()).limit(1))).scalar_one_or_none()
-            trayecto = None
-            if log is not None:
-                por_id = {str(c.id): c for c in clientes}
-                orden = [{"clienteId": cid_, "latitud": por_id[cid_].lat, "longitud": por_id[cid_].lng} for cid_ in (log.orden_clientes or []) if cid_ in por_id]
-                trayecto = {"id": str(log.id), "carteraId": str(cid), "fecha": _d(log.fecha), "ordenClientes": orden, "waypoints": [{"latitud": p["latitud"], "longitud": p["longitud"]} for p in orden if p["latitud"] is not None and p["longitud"] is not None], "distanciaEstimadaKm": _f(log.distancia_estimada_km), "tiempoEstimadoMin": int(log.tiempo_estimado_min or 0), "tipo": log.tipo}
-    return JSONResponse({"clientes": out, "trayectos": trayecto})
+            data = await _trayecto_data(session, tenant_id, cid)
+    return JSONResponse(data)
 
 
 @router.get("/gestor/carteras/{cartera_id}/estadisticas")
@@ -1018,6 +1028,44 @@ async def agregar_evidencias(cartera_id: str, cliente_id: str, request: Request,
     return JSONResponse({"clienteId": str(clid)}, status_code=201)
 
 
+async def _aplicar_visita(session, tenant_id: uuid.UUID, cid: uuid.UUID, data: dict[str, Any]) -> Visita:
+    """Aplica una visita (pago o no-pago). Usado por el endpoint y el sync offline."""
+    pid = uuid.UUID(str(data.get("prestamoId")))
+    clid = uuid.UUID(str(data.get("clienteId")))
+    if str(data.get("resultado") or "no_pago") == "pago":
+        valor = Decimal(str(data.get("valor") or 0))
+        if valor <= 0:
+            raise ValueError("valor inválido")
+        metodo = str(data.get("metodoPago") or "efectivo")
+        tipo_pago = str(data.get("tipoPago") or "cuota")
+        cuota_id = uuid.UUID(str(data["cuotaId"])) if data.get("cuotaId") else None
+        visita = Visita(tenant_id=tenant_id, cartera_id=cid, cliente_id=clid, fecha=date.today(), resultado="pago", valor_pagado=valor, metodo_pago=metodo, creado_por="gestor")
+        session.add(visita)
+        if tipo_pago == "abono":
+            session.add(Abono(tenant_id=tenant_id, prestamo_id=pid, cliente_id=clid, valor=valor, metodo_pago=metodo, registrado_por="gestor"))
+        else:
+            session.add(Pago(tenant_id=tenant_id, cliente_id=clid, prestamo_id=pid, cuota_id=cuota_id, valor=valor, metodo_pago=metodo, registrado_por="gestor"))
+            if cuota_id:
+                cuota = await get_owned(session, Cuota, cuota_id)
+                if cuota is not None and cuota.prestamo_id == pid:
+                    cuota.estatus = "pagada"
+        p = await get_owned(session, Prestamo, pid)
+        if p is not None:
+            p.saldo = p.saldo - valor
+            caja = await _caja(session, tenant_id, p.cartera_id)
+            caja.saldo_actual = caja.saldo_actual + valor
+        await session.flush()
+        _auditar(session, tenant_id, "visita", visita.id, "crear", despues={"resultado": "pago", "valor": float(valor), "tipo": tipo_pago})
+        return visita
+    visita = Visita(tenant_id=tenant_id, cartera_id=cid, cliente_id=clid, fecha=date.today(), resultado="no_pago", motivo_no_pago=data.get("motivoNoPago"), creado_por="gestor")
+    session.add(visita)
+    if data.get("fechaPrometida") and data.get("valorPrometido"):
+        session.add(Promesa(tenant_id=tenant_id, prestamo_id=pid, cliente_id=clid, fecha_prometida=date.fromisoformat(str(data["fechaPrometida"])), valor_prometido=Decimal(str(data["valorPrometido"])), creado_por="gestor"))
+    await session.flush()
+    _auditar(session, tenant_id, "visita", visita.id, "crear", despues={"resultado": "no_pago"})
+    return visita
+
+
 @router.post("/gestor/carteras/{cartera_id}/visitas/pago")
 async def visita_pago(cartera_id: str, request: Request, authorization: str | None = Header(default=None)) -> JSONResponse:
     auth = await _auth(authorization)
@@ -1034,12 +1082,6 @@ async def visita_pago(cartera_id: str, request: Request, authorization: str | No
         clid = uuid.UUID(str(body.get("clienteId")))
     except (TypeError, ValueError):
         return JSONResponse({"error": "datos inválidos"}, status_code=400)
-    valor = Decimal(str(body.get("valor") or 0))
-    if valor <= 0:
-        return JSONResponse({"error": "valor inválido"}, status_code=400)
-    metodo = str(body.get("metodoPago") or "efectivo")
-    tipo_pago = str(body.get("tipoPago") or "cuota")
-    cuota_id = uuid.UUID(str(body["cuotaId"])) if body.get("cuotaId") else None
     async with tenant_scope(tenant_id):
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
@@ -1047,21 +1089,10 @@ async def visita_pago(cartera_id: str, request: Request, authorization: str | No
             p = await get_owned(session, Prestamo, pid)
             if p is None or p.cartera_id != cid or p.cliente_id != clid:
                 return JSONResponse({"error": "préstamo no encontrado"}, status_code=404)
-            visita = Visita(tenant_id=tenant_id, cartera_id=cid, cliente_id=clid, fecha=date.today(), resultado="pago", valor_pagado=valor, metodo_pago=metodo, creado_por="gestor")
-            session.add(visita)
-            if tipo_pago == "abono":
-                session.add(Abono(tenant_id=tenant_id, prestamo_id=pid, cliente_id=clid, valor=valor, metodo_pago=metodo, registrado_por="gestor"))
-            else:
-                session.add(Pago(tenant_id=tenant_id, cliente_id=clid, prestamo_id=pid, cuota_id=cuota_id, valor=valor, metodo_pago=metodo, registrado_por="gestor"))
-                if cuota_id:
-                    cuota = await get_owned(session, Cuota, cuota_id)
-                    if cuota is not None and cuota.prestamo_id == pid:
-                        cuota.estatus = "pagada"
-            p.saldo = p.saldo - valor
-            caja = await _caja(session, tenant_id, cid)
-            caja.saldo_actual = caja.saldo_actual + valor
-            await session.flush()
-            _auditar(session, tenant_id, "visita", visita.id, "crear", despues={"resultado": "pago", "valor": float(valor), "tipo": tipo_pago})
+            try:
+                visita = await _aplicar_visita(session, tenant_id, cid, body)
+            except ValueError:
+                return JSONResponse({"error": "datos inválidos"}, status_code=400)
             out = _visita_public(visita, pid)
     return JSONResponse(out, status_code=201)
 
@@ -1079,19 +1110,13 @@ async def visita_no_pago(cartera_id: str, request: Request, authorization: str |
     body = await request.json()
     try:
         pid = uuid.UUID(str(body.get("prestamoId")))
-        clid = uuid.UUID(str(body.get("clienteId")))
     except (TypeError, ValueError):
         return JSONResponse({"error": "datos inválidos"}, status_code=400)
     async with tenant_scope(tenant_id):
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
-            visita = Visita(tenant_id=tenant_id, cartera_id=cid, cliente_id=clid, fecha=date.today(), resultado="no_pago", motivo_no_pago=body.get("motivoNoPago"), creado_por="gestor")
-            session.add(visita)
-            if body.get("fechaPrometida") and body.get("valorPrometido"):
-                session.add(Promesa(tenant_id=tenant_id, prestamo_id=pid, cliente_id=clid, fecha_prometida=date.fromisoformat(str(body["fechaPrometida"])), valor_prometido=Decimal(str(body["valorPrometido"])), creado_por="gestor"))
-            await session.flush()
-            _auditar(session, tenant_id, "visita", visita.id, "crear", despues={"resultado": "no_pago"})
+            visita = await _aplicar_visita(session, tenant_id, cid, {**body, "resultado": "no_pago"})
             out = _visita_public(visita, pid)
     return JSONResponse(out, status_code=201)
 
@@ -1332,3 +1357,130 @@ async def exportar_liquidacion(cartera_id: str, liquidacion_id: str, authorizati
                 "</body></html>"
             )
     return Response(content=html.encode("utf-8"), media_type="text/html")
+
+
+# --------------------------------------------------------------- offline (F4)
+def _ack(evento_id: str, estado: str, error: str | None = None) -> dict[str, Any]:
+    out: dict[str, Any] = {"eventoIdCliente": evento_id, "estado": estado}
+    if error:
+        out["error"] = error
+    return out
+
+
+async def _cartera_de_evento(session, tenant_id: uuid.UUID, payload: dict[str, Any], data: dict[str, Any]) -> uuid.UUID | None:
+    """Resuelve la cartera del evento: payload → cliente → única cartera visible."""
+    if data.get("carteraId"):
+        try:
+            return uuid.UUID(str(data["carteraId"]))
+        except ValueError:
+            return None
+    if data.get("clienteId"):
+        try:
+            cli = await get_owned(session, Cliente, uuid.UUID(str(data["clienteId"])))
+        except ValueError:
+            cli = None
+        if cli is not None:
+            return cli.cartera_id
+    carteras = await _carteras_visibles(session, tenant_id, payload)
+    return carteras[0].id if len(carteras) == 1 else None
+
+
+async def _aplicar_evento_offline(session, tenant_id: uuid.UUID, payload: dict[str, Any], tipo: str, data: dict[str, Any]) -> None:
+    if tipo in ("visita", "pago", "abono"):
+        cid = await _cartera_de_evento(session, tenant_id, payload, data)
+        if cid is None:
+            raise ValueError("no se pudo resolver la cartera del evento")
+        d = dict(data)
+        if tipo == "pago":
+            d["resultado"], d["tipoPago"] = "pago", "cuota"
+        elif tipo == "abono":
+            d["resultado"], d["tipoPago"] = "pago", "abono"
+        await _aplicar_visita(session, tenant_id, cid, d)
+    elif tipo == "gasto":
+        cid = await _cartera_de_evento(session, tenant_id, payload, data)
+        if cid is None:
+            raise ValueError("no se pudo resolver la cartera del gasto")
+        g = Gasto(tenant_id=tenant_id, cartera_id=cid, descripcion=str(data.get("descripcion") or "Gasto"), valor=Decimal(str(data.get("valor") or 0)), creado_por=uuid.UUID(str(payload["admin_id"])) if payload.get("admin_id") else None)
+        session.add(g)
+        await session.flush()
+        for ev in data.get("evidencias") or []:
+            b64 = ev.get("base64")
+            if not b64:
+                continue
+            try:
+                contenido = base64.b64decode(b64)
+                meta = await guardar_archivo(tenant_id, str(g.id), ev.get("nombre"), ev.get("mimetype"), contenido)
+            except (EvidenciaError, ValueError):
+                continue
+            session.add(GastoEvidencia(tenant_id=tenant_id, gasto_id=g.id, ruta_archivo=str(meta["ruta_archivo"]), nombre_original=meta["nombre_original"], mimetype=meta["mimetype"], tamano=meta["tamano"], creado_por_rol="gestor"))  # type: ignore[arg-type]
+    elif tipo == "trayectoria":
+        cid = await _cartera_de_evento(session, tenant_id, payload, data)
+        if cid is None:
+            raise ValueError("no se pudo resolver la cartera de la trayectoria")
+        session.add(CarteraOptimizadaLog(tenant_id=tenant_id, cartera_id=cid, fecha=date.today(), orden_clientes=data.get("puntos") or [], tipo="real"))
+    elif tipo == "cambio_cliente":
+        clid = uuid.UUID(str(data.get("clienteId")))
+        campos = data.get("input") or data.get("campos") or {}
+        session.add(CambioCliente(tenant_id=tenant_id, cliente_id=clid, campos_propuestos=campos, estado="pendiente", solicitado_por_rol="gestor"))
+    else:
+        raise ValueError(f"tipo de evento no soportado: {tipo}")
+
+
+@router.post("/sync-offline/eventos")
+async def sync_offline(request: Request, authorization: str | None = Header(default=None)) -> JSONResponse:
+    """Sincroniza la cola offline del gestor; respuesta con ack por evento."""
+    auth = await _auth(authorization)
+    if auth is None:
+        return JSONResponse({"error": "no autorizado"}, status_code=401)
+    tenant_id, payload = auth
+    body = await request.json()
+    eventos = body.get("eventos") or []
+    acks: list[dict[str, Any]] = []
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            for ev in eventos:
+                eid = str(ev.get("eventoIdCliente") or "").strip()
+                tipo = str(ev.get("tipoEvento") or "").strip()
+                data = ev.get("payload") or {}
+                if not eid or not tipo:
+                    acks.append(_ack(eid, "error", "evento inválido"))
+                    continue
+                existe = (await session.execute(select(SyncEvento.id).where(SyncEvento.tenant_id == tenant_id, SyncEvento.evento_id_cliente == eid))).scalar_one_or_none()
+                if existe is not None:
+                    acks.append(_ack(eid, "duplicado"))
+                    continue
+                try:
+                    async with session.begin_nested():
+                        await _aplicar_evento_offline(session, tenant_id, payload, tipo, data)
+                    session.add(SyncEvento(tenant_id=tenant_id, evento_id_cliente=eid, tipo=tipo, payload=data))
+                    acks.append(_ack(eid, "sincronizado"))
+                except Exception as exc:  # evento inválido: no tumba el lote
+                    session.add(SyncEvento(tenant_id=tenant_id, evento_id_cliente=eid, tipo=tipo, payload=data, estado="error"))
+                    log.warning("sync_offline_error", tipo=tipo, error=type(exc).__name__)
+                    acks.append(_ack(eid, "error", str(exc)))
+    return JSONResponse(acks)
+
+
+@router.get("/sync-offline/trayecto-diario")
+async def sync_trayecto(carteraId: str | None = None, authorization: str | None = Header(default=None)) -> JSONResponse:
+    """Snapshot del trayecto del día para trabajar sin conexión."""
+    auth = await _auth(authorization)
+    if auth is None:
+        return JSONResponse({"error": "no autorizado"}, status_code=401)
+    tenant_id, payload = auth
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            if carteraId:
+                try:
+                    cid = uuid.UUID(carteraId)
+                except ValueError:
+                    return JSONResponse({"error": "cartera inválida"}, status_code=400)
+                if await _cartera_visible(session, tenant_id, payload, cid) is None:
+                    return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            else:
+                carteras = await _carteras_visibles(session, tenant_id, payload)
+                if not carteras:
+                    return JSONResponse({"clientes": [], "trayectos": None})
+                cid = carteras[0].id
+            data = await _trayecto_data(session, tenant_id, cid)
+    return JSONResponse(data)
