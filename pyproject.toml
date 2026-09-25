@@ -45,6 +45,8 @@ dependencies = [
     "rich>=13.0",
     "questionary>=2.0",
     "sentry-sdk>=2.69.2",
+    # Utilidades (QR de pago, ADR-0067)
+    "qrcode[png]>=7.4",
 ]
 
 [project.optional-dependencies]

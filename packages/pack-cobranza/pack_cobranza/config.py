@@ -43,3 +43,18 @@ class CobranzaConfig(BasePluginConfig):
     escalar_siempre_a_humano: bool = Field(
         default=False, description="Desviar toda conversación a un gestor humano"
     )
+    # Cobro digital (ADR-0067). Con `pack_payments` activo se generan links/QR en
+    # línea; sin él, la app muestra la cuenta informativa de abajo.
+    pago_qr_activo: bool = Field(
+        default=False, description="Habilitar el cobro con link/QR en la app de campo"
+    )
+    pago_titular: str = Field(default="", description="Titular de la cuenta (cobro informativo)")
+    pago_banco: str = Field(default="", description="Banco para transferencia (cobro informativo)")
+    pago_tipo_cuenta: str = Field(default="", description="Tipo de cuenta (ahorros/corriente)")
+    pago_numero_cuenta: str = Field(default="", description="Número de cuenta (cobro informativo)")
+    pago_alias: str = Field(
+        default="", description="Alias/llave de billetera (Nequi, Daviplata) o llave de transferencia"
+    )
+    pago_qr_imagen_url: str = Field(
+        default="", description="URL de una imagen QR del comercio (opcional, cobro informativo)"
+    )

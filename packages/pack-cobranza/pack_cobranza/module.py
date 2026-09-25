@@ -73,6 +73,9 @@ class CobranzaModule(BaseModule):
     def on_activate(self, host: MCPHost) -> None:
         host.register_skill(CobranzaSkill())
         host.register_guardrail("cob_promesa_check", promesa_guardrail, priority=6)
+        import pack_cobranza.pagos
+
+        pack_cobranza.pagos.suscribir()
 
     async def on_collaborator_role(self, tenant_id: Any, admin_id: Any, role_id: str) -> None:
         """Rol de pack asignado a un colaborador (ADR-0066): crea su perfil `Gestor`.

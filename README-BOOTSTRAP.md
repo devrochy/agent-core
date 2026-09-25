@@ -21,7 +21,7 @@ git add -A && git commit -m "chore: bootstrap del devkit de agent-core"
 | `docs/adr/` | Decisiones de arquitectura. Las 3 primeras ya escritas. |
 | `docs/ROADMAP.md` | Sprints con criterio de salida. Es tu tablero. |
 | `docs/inventory.md` | Plantilla del inventario del Paso 1. |
-| `docs/security.md` | Esqueleto del one-pager de seguridad para ventas. |
+| `../solvershub/security.md` | Documento de seguridad para ventas (vive en el centro de lanzamiento). |
 | `packages/contracts/src/index.ts` | Los 5 contratos del framework. |
 | `prompts/` | Los prompts exactos para pegar en modo plan. |
 

@@ -312,6 +312,7 @@ def _config_public(cartera_id: uuid.UUID, cfg: CarteraConfig | None) -> dict[str
         "diasAnticipacionNotificacion": int(g("dias_anticipacion_notificacion", 0)),
         "avisoDiaCobro": bool(g("aviso_dia_cobro", False)),
         "umbralMoraNotificacion": int(g("umbral_mora_notificacion", 0)),
+        "pagoQrActivo": bool(g("pago_qr_activo", False)),
     }
 
 
@@ -639,6 +640,37 @@ async def detalle_cuota(cartera_id: str, prestamo_id: str, cuota_id: str, author
         "abonos": [{"id": str(a.id), "valor": _f(a.valor), "fechaHora": _d(a.fecha_hora), "liquidado": False} for a in abonos],
         "ultimaVisita": {"resultado": ultima.resultado, "motivoNoPago": ultima.motivo_no_pago, "fecha": _d(ultima.fecha)} if ultima else None,
     })
+
+
+@router.post("/gestor/carteras/{cartera_id}/cuotas/{cuota_id}/link-pago")
+async def crear_link_pago_cuota(cartera_id: str, cuota_id: str, authorization: str | None = Header(default=None)) -> JSONResponse:
+    """Crea (o reutiliza) el link/QR de cobro de una cuota (REQ-APK-007, ADR-0067)."""
+    auth = await _auth(authorization)
+    if auth is None:
+        return JSONResponse({"error": "no autorizado"}, status_code=401)
+    tenant_id, payload = auth
+    try:
+        cid, quid = uuid.UUID(cartera_id), uuid.UUID(cuota_id)
+    except ValueError:
+        return JSONResponse({"error": "id inválido"}, status_code=400)
+    from pack_cobranza.pagos import PaymentCapabilityError, config_del_tenant, crear_link_para_cuota
+
+    async with tenant_scope(tenant_id):
+        cfg = await config_del_tenant()
+        if cfg is None or not cfg.pago_qr_activo:
+            return JSONResponse({"error": "El cobro con QR no está habilitado."}, status_code=403)
+        async with get_session() as session:
+            if await _cartera_visible(session, tenant_id, payload, cid) is None:
+                return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            cuota = await get_owned(session, Cuota, quid)
+            prestamo = await get_owned(session, Prestamo, cuota.prestamo_id) if cuota else None
+            if cuota is None or prestamo is None or prestamo.cartera_id != cid:
+                return JSONResponse({"error": "cuota no encontrada"}, status_code=404)
+        try:
+            data = await crear_link_para_cuota(cuota, cfg)
+        except PaymentCapabilityError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse(data, status_code=201)
 
 
 @router.get("/gestor/carteras/{cartera_id}/notas")
