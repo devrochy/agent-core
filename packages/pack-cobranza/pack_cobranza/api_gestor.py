@@ -412,7 +412,8 @@ async def _trayecto_data(session, tenant_id: uuid.UUID, cid: uuid.UUID) -> dict[
         por_id = {str(c.id): c for c in clientes}
         ids = [i for i in (log.orden_clientes or []) if isinstance(i, str) and i in por_id]
         orden = [{"clienteId": i, "latitud": por_id[i].lat, "longitud": por_id[i].lng} for i in ids]
-        trayecto = {"id": str(log.id), "carteraId": str(cid), "fecha": _d(log.fecha), "ordenClientes": orden, "waypoints": [{"latitud": p["latitud"], "longitud": p["longitud"]} for p in orden if p["latitud"] is not None and p["longitud"] is not None], "distanciaEstimadaKm": _f(log.distancia_estimada_km), "tiempoEstimadoMin": int(log.tiempo_estimado_min or 0), "tipo": log.tipo}
+        # La APK tipa `ordenClientes` como lista de trayectos (ParadaGeo[][]).
+        trayecto = {"id": str(log.id), "carteraId": str(cid), "fecha": _d(log.fecha), "ordenClientes": [orden] if orden else [], "waypoints": [{"latitud": p["latitud"], "longitud": p["longitud"]} for p in orden if p["latitud"] is not None and p["longitud"] is not None], "distanciaEstimadaKm": _f(log.distancia_estimada_km), "tiempoEstimadoMin": int(log.tiempo_estimado_min or 0), "tipo": log.tipo}
     return {"clientes": out, "trayectos": trayecto}
 
 
@@ -921,7 +922,7 @@ async def generar_trayecto(cartera_id: str, authorization: str | None = Header(d
             await session.flush()
             por_id = {str(c.id): c for c in clientes}
             orden_pub = [{"clienteId": i, "latitud": por_id[i].lat, "longitud": por_id[i].lng} for i in orden]
-            out = {"id": str(log.id), "carteraId": str(cid), "fecha": _d(log.fecha), "ordenClientes": orden_pub, "waypoints": [{"latitud": o["latitud"], "longitud": o["longitud"]} for o in orden_pub], "distanciaEstimadaKm": float(round(km, 2)), "tiempoEstimadoMin": tiempo, "tipo": "planificada"}
+            out = {"id": str(log.id), "carteraId": str(cid), "fecha": _d(log.fecha), "ordenClientes": [orden_pub], "waypoints": [{"latitud": o["latitud"], "longitud": o["longitud"]} for o in orden_pub], "distanciaEstimadaKm": float(round(km, 2)), "tiempoEstimadoMin": tiempo, "tipo": "planificada"}
     return JSONResponse(out, status_code=201)
 
 
