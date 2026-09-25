@@ -276,7 +276,7 @@ async def _permisos_de(session, tenant_id: uuid.UUID, payload: dict[str, Any]) -
 
 def _config_public(cartera_id: uuid.UUID, cfg: CarteraConfig | None) -> dict[str, Any]:
     def g(attr: str, default: Any) -> Any:
-        return getattr(cfg, attr) if cfg is not None else default
+        return getattr(cfg, attr, default) if cfg is not None else default
 
     return {
         "carteraId": str(cartera_id),
@@ -312,7 +312,6 @@ def _config_public(cartera_id: uuid.UUID, cfg: CarteraConfig | None) -> dict[str
         "diasAnticipacionNotificacion": int(g("dias_anticipacion_notificacion", 0)),
         "avisoDiaCobro": bool(g("aviso_dia_cobro", False)),
         "umbralMoraNotificacion": int(g("umbral_mora_notificacion", 0)),
-        "pagoQrActivo": bool(g("pago_qr_activo", False)),
     }
 
 
@@ -342,13 +341,17 @@ async def mis_carteras(authorization: str | None = Header(default=None)) -> JSON
     if auth is None:
         return JSONResponse({"error": "no autorizado"}, status_code=401)
     tenant_id, payload = auth
+    from pack_cobranza.pagos import config_del_tenant
+
     async with tenant_scope(tenant_id):
+        cfg_pack = await config_del_tenant()
+        qr_activo = bool(cfg_pack.pago_qr_activo) if cfg_pack is not None else False
         async with get_session() as session:
             permisos = await _permisos_de(session, tenant_id, payload)
             out = []
             for c in await _carteras_visibles(session, tenant_id, payload):
                 cfg = (await session.execute(select(CarteraConfig).where(CarteraConfig.tenant_id == tenant_id, CarteraConfig.cartera_id == c.id))).scalar_one_or_none()
-                out.append({"id": str(c.id), "nombre": c.nombre, "estatus": c.estatus, "tipoInteres": _f(c.tipo_interes), "numCuotas": c.num_cuotas, "config": _config_public(c.id, cfg), "permisos": permisos})
+                out.append({"id": str(c.id), "nombre": c.nombre, "estatus": c.estatus, "tipoInteres": _f(c.tipo_interes), "numCuotas": c.num_cuotas, "pagoQrActivo": qr_activo, "config": _config_public(c.id, cfg), "permisos": permisos})
     return JSONResponse(out)
 
 

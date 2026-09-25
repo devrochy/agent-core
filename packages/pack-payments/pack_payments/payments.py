@@ -35,7 +35,10 @@ class WompiPaymentCapability:
     async def create_link(
         self, *, reference: str, amount: float, description: str = "", method: str | None = None
     ) -> PaymentLink:
-        config = await tenant_config()
+        try:
+            config = await tenant_config()
+        except Exception as exc:  # config ausente/inválida del tenant
+            raise PaymentCapabilityError("La pasarela de pagos no está configurada.") from exc
         provider = build_provider(config)
         try:
             link = await provider.create_payment_link(
