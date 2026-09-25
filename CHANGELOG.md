@@ -78,6 +78,12 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
   `on_collaborator_role` (sin tabla nueva): `/admin/colaboradores` ofrece "Gestor
   de cobranza" y, al crearlo, el pack crea el perfil; crear un gestor desde
   Gestores crea la cuenta (aparece en Colaboradores). Migración `0009`.
+- **API de campo del gestor — F2 (lecturas)**: mis-carteras (con `config` y
+  `permisos`), notificaciones, trayecto-diario, estadísticas (con snapshot para
+  `anterior`/`deltas`), clientes, tarjeta, préstamos, estado-cuenta, detalle de
+  cuota, notas, liquidaciones y servido de evidencias por Bearer. Todo
+  tenant-scoped y filtrado por cartera visible (gestor → las suyas; propietario →
+  todas); `pack_cobranza/estadisticas.py` comparte los conteos con el cron diario.
 - **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
   cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
   Las operaciones de administración (gasto, inyección, visita, liquidación) viven

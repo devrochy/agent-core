@@ -196,6 +196,29 @@ def test_api_gestor_rutas_f1() -> None:
     assert ("/api/pack/pack_cobranza/perfil", ("PATCH",)) in rutas
 
 
+def test_api_gestor_rutas_f2() -> None:
+    """ADR-0065: las lecturas del gestor (F2) están montadas."""
+    from pack_cobranza import api_gestor
+
+    rutas = {r.path for r in api_gestor.router.routes}
+    esperadas = [
+        "/api/pack/pack_cobranza/gestor/mis-carteras",
+        "/api/pack/pack_cobranza/gestor/notificaciones",
+        "/api/pack/pack_cobranza/gestor/carteras/{cartera_id}/trayecto-diario",
+        "/api/pack/pack_cobranza/gestor/carteras/{cartera_id}/estadisticas",
+        "/api/pack/pack_cobranza/gestor/carteras/{cartera_id}/clientes",
+        "/api/pack/pack_cobranza/gestor/carteras/{cartera_id}/clientes/{cliente_id}/tarjeta",
+        "/api/pack/pack_cobranza/gestor/carteras/{cartera_id}/clientes/{cliente_id}/prestamos",
+        "/api/pack/pack_cobranza/gestor/carteras/{cartera_id}/prestamos/{prestamo_id}/estado-cuenta",
+        "/api/pack/pack_cobranza/gestor/carteras/{cartera_id}/prestamos/{prestamo_id}/cuotas/{cuota_id}/detalle",
+        "/api/pack/pack_cobranza/gestor/carteras/{cartera_id}/notas",
+        "/api/pack/pack_cobranza/gestor/carteras/{cartera_id}/liquidaciones",
+        "/api/pack/pack_cobranza/clientes/{cliente_id}/evidencia/{ev_id}",
+    ]
+    faltan = [p for p in esperadas if p not in rutas]
+    assert not faltan, faltan
+
+
 def test_api_gestor_par_de_tokens() -> None:
     import uuid
 

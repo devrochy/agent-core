@@ -33,7 +33,12 @@ Token: `{tenant_id, admin_id, gestor_id?, rol}` (`rol` = `gestor`|`propietario`)
 > `tenant` (slug) es una **adición obligatoria** del contrato: agent-core es multi-tenant y
 > el login de la APK no traía identificador de tenant. La APK lo envía desde `EXPO_PUBLIC_TENANT`.
 
-### Lecturas (F2)
+### Lecturas (F2) ✅
+Todas tenant-scoped y filtradas por cartera visible (el gestor solo ve las suyas;
+el propietario, todas). La evidencia se sirve por Bearer en
+`GET /clientes/{id}/evidencia/{ev}`; `estadisticas` contrasta los conteos de hoy
+con el snapshot diario (`jobs`, ahora guarda `datos.conteos`).
+
 | Endpoint | Respuesta | Fuente en el pack |
 |---|---|---|
 | `GET /gestor/mis-carteras` | `CarteraApkPublic[]` (con `config` + `permisos`) | `Cartera` + `CarteraConfig` + `GestorPermiso` |

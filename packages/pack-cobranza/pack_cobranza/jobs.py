@@ -154,10 +154,13 @@ async def snapshot_cartera(session, tenant_id: uuid.UUID, cartera: Cartera, hoy:
     saldo = await _suma(session, select(func.coalesce(func.sum(Cuota.valor_esperado), 0)).where(Cuota.tenant_id == tid, Cuota.prestamo_id.in_(prestamo_ids), Cuota.estatus.in_(("pendiente", "atrasada")), Cuota.deleted_at.is_(None)))
     mora = await _suma(session, select(func.coalesce(func.sum(Cuota.valor_esperado), 0)).where(Cuota.tenant_id == tid, Cuota.prestamo_id.in_(prestamo_ids), Cuota.estatus == "atrasada", Cuota.deleted_at.is_(None)))
     gastos = await _suma(session, select(func.coalesce(func.sum(Gasto.valor), 0)).where(Gasto.tenant_id == tid, Gasto.cartera_id == cartera.id, Gasto.deleted_at.is_(None)))
+    from pack_cobranza.estadisticas import conteos_cartera
+
+    conteos = await conteos_cartera(session, tid, cartera.id)
     session.add(
         CarteraEstadisticasSnapshot(
             tenant_id=tid, cartera_id=cartera.id, fecha=d,
-            datos={"clientes": int(clientes or 0), "prestamos_vigentes": int(vigentes or 0), "saldo": float(saldo), "mora": float(mora), "gastos": float(gastos), "cobrado_dia": float(cobrado)},
+            datos={"clientes": int(clientes or 0), "prestamos_vigentes": int(vigentes or 0), "saldo": float(saldo), "mora": float(mora), "gastos": float(gastos), "cobrado_dia": float(cobrado), "conteos": conteos},
         )
     )
 
