@@ -697,6 +697,12 @@ class Liquidacion(TenantMixin, Base):
     total_prestado: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     total_gastos: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     comision_valor: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    # KPIs del día (REQ-APK-003): calculados al generar la liquidación.
+    estimado_acobrar: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    total_inyeccion: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    suma_cartera: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    comision_porcentaje: Mapped[Decimal] = mapped_column(Numeric(6, 3), default=0)
+    detalle: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
     comentario: Mapped[str | None] = mapped_column(Text, default=None)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

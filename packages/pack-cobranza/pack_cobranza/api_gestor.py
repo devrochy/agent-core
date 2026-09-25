@@ -405,7 +405,7 @@ async def _trayecto_data(session, tenant_id: uuid.UUID, cid: uuid.UUID) -> dict[
         visita_hoy = (await session.execute(select(Visita).where(Visita.tenant_id == tenant_id, Visita.cliente_id == c.id, Visita.fecha == hoy, Visita.deleted_at.is_(None)).limit(1))).scalar_one_or_none()
         promesa = (await session.execute(select(Promesa).where(Promesa.tenant_id == tenant_id, Promesa.cliente_id == c.id, Promesa.estado == "pendiente", Promesa.deleted_at.is_(None)).order_by(Promesa.fecha_prometida.desc()).limit(1))).scalar_one_or_none()
         color = "rojo" if mora > 0 else ("verde" if (visita_hoy and visita_hoy.resultado == "pago") else "blanco")
-        out.append({"clienteId": str(c.id), "nombre": f"{c.nombre} {c.apellido or ''}".strip(), "enTrayecto": True, "color": color, "visitaRegistrada": visita_hoy is not None, "diasMora": mora, "compromisoValor": _f(promesa.valor_prometido) if promesa else None})
+        out.append({"clienteId": str(c.id), "nombre": f"{c.nombre} {c.apellido or ''}".strip(), "latitud": c.lat, "longitud": c.lng, "enTrayecto": True, "color": color, "visitaRegistrada": visita_hoy is not None, "diasMora": mora, "compromisoValor": _f(promesa.valor_prometido) if promesa else None})
     log = (await session.execute(select(CarteraOptimizadaLog).where(CarteraOptimizadaLog.tenant_id == tenant_id, CarteraOptimizadaLog.cartera_id == cid).order_by(CarteraOptimizadaLog.created_at.desc()).limit(1))).scalar_one_or_none()
     trayecto = None
     if log is not None:
@@ -674,15 +674,7 @@ async def liquidaciones(cartera_id: str, authorization: str | None = Header(defa
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
             rows = (await session.execute(select(Liquidacion).where(Liquidacion.tenant_id == tenant_id, Liquidacion.cartera_id == cid, Liquidacion.deleted_at.is_(None)).order_by(Liquidacion.fecha.desc()))).scalars().all()
-    return JSONResponse([
-        {"id": str(liq.id), "carteraId": str(liq.cartera_id), "fecha": _d(liq.fecha), "periodo": liq.periodo,
-         "cajaAnterior": _f(liq.caja_anterior), "cajaActual": _f(liq.caja_actual), "estimadoACobrar": 0.0,
-         "totalInyeccion": 0.0, "totalCobradoPeriodo": _f(liq.total_cobrado), "totalCobradoDia": _f(liq.total_cobrado),
-         "totalPrestado": _f(liq.total_prestado), "totalGastos": _f(liq.total_gastos), "sumaCartera": 0.0,
-         "comisionPorcentaje": 0.0, "comisionValor": _f(liq.comision_valor), "comentario": liq.comentario,
-         "createdAt": _d(liq.created_at), "pagos": [], "abonos": []}
-        for liq in rows
-    ])
+    return JSONResponse([_liquidacion_public(liq) for liq in rows])
 
 
 @router.get("/clientes/{cliente_id}/evidencia/{ev_id}")
@@ -1295,7 +1287,20 @@ async def eliminar_pago(cartera_id: str, record_id: str, request: Request, autho
 
 
 def _liquidacion_public(liq: Liquidacion) -> dict[str, Any]:
-    return {"id": str(liq.id), "carteraId": str(liq.cartera_id), "fecha": _d(liq.fecha), "periodo": liq.periodo, "cajaAnterior": _f(liq.caja_anterior), "cajaActual": _f(liq.caja_actual), "estimadoACobrar": 0.0, "totalInyeccion": 0.0, "totalCobradoPeriodo": _f(liq.total_cobrado), "totalCobradoDia": _f(liq.total_cobrado), "totalPrestado": _f(liq.total_prestado), "totalGastos": _f(liq.total_gastos), "sumaCartera": 0.0, "comisionPorcentaje": 0.0, "comisionValor": _f(liq.comision_valor), "comentario": liq.comentario, "createdAt": _d(liq.created_at), "pagos": [], "abonos": []}
+    det = liq.detalle or {}
+    return {
+        "id": str(liq.id), "carteraId": str(liq.cartera_id), "fecha": _d(liq.fecha), "periodo": liq.periodo,
+        "cajaAnterior": _f(liq.caja_anterior), "cajaActual": _f(liq.caja_actual),
+        "estimadoACobrar": _f(liq.estimado_acobrar), "totalInyeccion": _f(liq.total_inyeccion),
+        "totalCobradoPeriodo": _f(liq.total_cobrado), "totalCobradoDia": _f(liq.total_cobrado),
+        "totalPrestado": _f(liq.total_prestado), "totalGastos": _f(liq.total_gastos),
+        "sumaCartera": _f(liq.suma_cartera), "comisionPorcentaje": _f(liq.comision_porcentaje),
+        "comisionValor": _f(liq.comision_valor), "comentario": liq.comentario,
+        "createdAt": _d(liq.created_at), "pagos": [], "abonos": [],
+        "pagaron": int(det.get("pagaron", 0)), "faltan": int(det.get("faltan", 0)),
+        "totalDia": int(det.get("totalDia", 0)), "sinCuentas": int(det.get("sinCuentas", 0)),
+        "horaPrimera": det.get("horaPrimera"), "horaUltima": det.get("horaUltima"),
+    }
 
 
 @router.post("/gestor/carteras/{cartera_id}/liquidaciones")

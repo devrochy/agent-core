@@ -43,7 +43,7 @@ con el snapshot diario (`jobs`, ahora guarda `datos.conteos`).
 |---|---|---|
 | `GET /gestor/mis-carteras` | `CarteraApkPublic[]` (con `config` + `permisos`) | `Cartera` + `CarteraConfig` + `GestorPermiso` |
 | `GET /gestor/notificaciones` | `NotificacionPublic[]` | `Pago`/`Gasto`/`Visita`/`CobroPropietario` recientes |
-| `GET /gestor/carteras/:id/trayecto-diario` | `TrayectoDiarioApkPublic` | `_clientes_del_dia` + `CarteraOptimizadaLog` |
+| `GET /gestor/carteras/:id/trayecto-diario` | `TrayectoDiarioApkPublic` (con `latitud`/`longitud` por cliente) | `_clientes_del_dia` + `CarteraOptimizadaLog` |
 | `GET /gestor/carteras/:id/estadisticas` | `EstadisticasCarteraPublic` | `CarteraEstadisticasSnapshot` (actual/anterior/deltas) |
 | `GET /gestor/carteras/:id/clientes` | `ClienteGestorPublic[]` | `Cliente` + `Prestamo` + `Cuota` |
 | `GET /gestor/carteras/:id/clientes/:cid/tarjeta` | `ClienteTarjetaPublic` | `Cliente` + saldo/mora + `ClienteEvidencia` |
@@ -51,7 +51,7 @@ con el snapshot diario (`jobs`, ahora guarda `datos.conteos`).
 | `GET /gestor/carteras/:id/prestamos/:pid/estado-cuenta` | `EstadoCuentaPrestamoPublic` | `Prestamo` + `Cuota` + `Abono` |
 | `GET /gestor/carteras/:id/prestamos/:pid/cuotas/:cid/detalle` | `DetalleCuotaPublic` | `Cuota` + `Pago` + `Abono` + `Visita` |
 | `GET /gestor/carteras/:id/notas` | `CarteraNotaPublic[]` | `CarteraNota` |
-| `GET /gestor/carteras/:id/liquidaciones` | `LiquidacionPublic[]` | `Liquidacion` |
+| `GET /gestor/carteras/:id/liquidaciones` | `LiquidacionPublic[]` (KPIs del día) | `Liquidacion` |
 | `GET /sync-offline/trayecto-diario` | `TrayectoDiarioApkPublic` | snapshot cacheado para offline |
 
 ### Escrituras (F3) ✅
@@ -75,7 +75,7 @@ exigen contraseña del admin y quedan en la auditoría. El `export-pdf` de v1 es
 | `DELETE /gestor/carteras/:id/cuotas/:cid` `{password,motivo}` | `{id}` | soft-delete + auditoría |
 | `DELETE /gestor/carteras/:id/abonos/:id` `{password,motivo}` | `{id}` | soft-delete + auditoría |
 | `DELETE /gestor/carteras/:id/pagos/:id` `{password,motivo}` | `{id}` | soft-delete + auditoría |
-| `POST /gestor/carteras/:id/liquidaciones` `{comentario}` | `LiquidacionPublic` | `Liquidacion` |
+| `POST /gestor/carteras/:id/liquidaciones` `{comentario}` | `LiquidacionPublic` (con `estimadoACobrar`, `totalInyeccion`, `sumaCartera`, `comisionPorcentaje` + conteos `pagaron`/`faltan`/`totalDia`/`sinCuentas`/`horaPrimera`/`horaUltima`) | `Liquidacion` |
 | `GET /gestor/carteras/:id/liquidaciones/:id/export-pdf` | bytes | generador PDF (nuevo) |
 | `POST /gestor/carteras/:id/apertura` `{latitud,longitud}` | `{id,carteraId}` | `CarteraApertura` |
 | `POST /gestor/carteras/:id/posicion` `{latitud,longitud}` | `{carteraId,latitud,longitud}` | `PosicionGestor` |
