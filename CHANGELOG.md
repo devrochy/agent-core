@@ -84,6 +84,12 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
   cuota, notas, liquidaciones y servido de evidencias por Bearer. Todo
   tenant-scoped y filtrado por cartera visible (gestor → las suyas; propietario →
   todas); `pack_cobranza/estadisticas.py` comparte los conteos con el cron diario.
+- **API de campo del gestor — F3 (escrituras)**: visitas (pago/no-pago con pago o
+  abono y promesa), gastos (multipart con evidencias), alta/edición de cliente
+  (multipart con evidencias), préstamos, edición/eliminación de cuotas y bajas de
+  pago/abono (con contraseña del admin + auditoría), notas, apertura/posición,
+  trayectoria real, generar trayecto, editar cartera/configuración, liquidaciones y
+  export imprimible (HTML en v1).
 - **5 tools del asistente** (orientadas al cliente): consultar saldo, estado de
   cuenta, **evaluación determinista de negociación**, registrar promesa y abono.
   Las operaciones de administración (gasto, inyección, visita, liquidación) viven

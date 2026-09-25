@@ -219,6 +219,38 @@ def test_api_gestor_rutas_f2() -> None:
     assert not faltan, faltan
 
 
+def test_api_gestor_rutas_f3() -> None:
+    """ADR-0065: las escrituras del gestor (F3) están montadas."""
+    from pack_cobranza import api_gestor
+
+    rutas = {(r.path, tuple(sorted(getattr(r, "methods", set())))) for r in api_gestor.router.routes}
+    base = "/api/pack/pack_cobranza/gestor/carteras/{cartera_id}"
+    esperadas = [
+        (base, ("PATCH",)),
+        (base + "/configuracion", ("PATCH",)),
+        (base + "/notas", ("POST",)),
+        (base + "/apertura", ("POST",)),
+        (base + "/posicion", ("POST",)),
+        (base + "/trayectoria-real", ("POST",)),
+        (base + "/trayecto", ("POST",)),
+        (base + "/clientes", ("POST",)),
+        (base + "/clientes/{cliente_id}", ("PATCH",)),
+        (base + "/clientes/{cliente_id}/evidencias", ("POST",)),
+        (base + "/visitas/pago", ("POST",)),
+        (base + "/visitas/no-pago", ("POST",)),
+        (base + "/gastos", ("POST",)),
+        (base + "/prestamos", ("POST",)),
+        (base + "/cuotas/{cuota_id}", ("PATCH",)),
+        (base + "/cuotas/{cuota_id}", ("DELETE",)),
+        (base + "/abonos/{record_id}", ("DELETE",)),
+        (base + "/pagos/{record_id}", ("DELETE",)),
+        (base + "/liquidaciones", ("POST",)),
+        (base + "/liquidaciones/{liquidacion_id}/export-pdf", ("GET",)),
+    ]
+    faltan = [p for p in esperadas if p not in rutas]
+    assert not faltan, faltan
+
+
 def test_api_gestor_par_de_tokens() -> None:
     import uuid
 
