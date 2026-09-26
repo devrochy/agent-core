@@ -15,6 +15,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from core.mcp.types import BaseModule
+from core.shared.logger import get_logger
 from pack_calendar.admin import router as calendar_admin_router
 from pack_calendar.config import CalendarConfig
 from pack_calendar.skills import CalendarSkill
@@ -23,6 +24,8 @@ if TYPE_CHECKING:
     from core.mcp.host import MCPHost
 
 PLUGIN_ID = "pack_calendar"
+
+log = get_logger(__name__)
 
 # OAuth: conserva la URL vieja (ver docstring).
 oauth_router = APIRouter(prefix=f"/admin/plugins/{PLUGIN_ID}", tags=[PLUGIN_ID])
@@ -85,14 +88,23 @@ async def oauth_callback(request: Request, code: str = ""):  # type: ignore[no-u
             "/calendar/?flash=El pack no está configurado&flash_type=danger", status_code=303
         )
 
+    from core.shared.exceptions import PluginError
     from pack_calendar.oauth import exchange_code, save_tokens
 
-    tokens = await exchange_code(
-        config.client_id,  # type: ignore[attr-defined]
-        config.client_secret.get_secret_value(),  # type: ignore[attr-defined]
-        code,
-    )
-    await save_tokens(tokens)
+    try:
+        tokens = await exchange_code(
+            config.client_id,  # type: ignore[attr-defined]
+            config.client_secret.get_secret_value(),  # type: ignore[attr-defined]
+            code,
+        )
+        await save_tokens(tokens)
+    except PluginError as exc:
+        from urllib.parse import quote
+
+        log.warning("calendar_oauth_callback_failed", error=str(exc)[:200])
+        return RedirectResponse(
+            f"/calendar/?flash={quote(str(exc)[:140])}&flash_type=danger", status_code=303
+        )
     return RedirectResponse("/calendar/?flash=Google Calendar conectado ✓", status_code=303)
 
 
