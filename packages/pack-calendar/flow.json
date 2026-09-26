@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "sections": [
+    {
+      "id": "agendamiento",
+      "label": "Agendamiento de citas",
+      "purpose": "Consultar la disponibilidad real del calendario y crear la cita cuando el cliente confirme fecha y hora. Si el cliente dio su email, enviarle la confirmación.",
+      "pack": "pack_calendar",
+      "tools": ["check_availability", "create_calendar_event", "send_email"]
+    }
+  ]
+}
