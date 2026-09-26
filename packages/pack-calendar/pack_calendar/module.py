@@ -43,10 +43,15 @@ async def start_oauth(request: Request):  # type: ignore[no-untyped-def]
             "/admin/conexiones?flash=Sin permiso para conectar cuentas&flash_type=danger",
             status_code=303,
         )
-    config = await plugin_manager.load_config(PLUGIN_ID)
+    from core.shared.exceptions import PluginConfigError
+
+    try:
+        config = await plugin_manager.load_config(PLUGIN_ID)
+    except PluginConfigError:
+        config = None
     if config is None:
         return RedirectResponse(
-            f"/admin/plugins/{PLUGIN_ID}/configurar?flash=Configura primero client_id y secret",
+            "/calendar/configuracion?flash=Configurá primero client_id y secret&flash_type=danger",
             status_code=303,
         )
     from pack_calendar.oauth import build_authorization_url
@@ -69,9 +74,16 @@ async def oauth_callback(request: Request, code: str = ""):  # type: ignore[no-u
     if not code:
         return HTMLResponse("<h3>Autorización cancelada.</h3>", status_code=400)
 
-    config = await plugin_manager.load_config(PLUGIN_ID)
+    from core.shared.exceptions import PluginConfigError
+
+    try:
+        config = await plugin_manager.load_config(PLUGIN_ID)
+    except PluginConfigError:
+        config = None
     if config is None:
-        return RedirectResponse("/admin/plugins", status_code=303)
+        return RedirectResponse(
+            "/calendar/?flash=El pack no está configurado&flash_type=danger", status_code=303
+        )
 
     from pack_calendar.oauth import exchange_code, save_tokens
 

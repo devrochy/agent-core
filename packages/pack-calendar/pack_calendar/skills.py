@@ -73,6 +73,7 @@ class CalendarSkill(BaseSkill):
                     "required": ["title", "start_datetime"],
                 },
                 handler=self.create_event,
+                requires_connection_types=["google_calendar"],
             ),
             MCPTool(
                 name="check_availability",
@@ -88,6 +89,7 @@ class CalendarSkill(BaseSkill):
                     "required": ["date"],
                 },
                 handler=self.check_availability,
+                requires_connection_types=["google_calendar"],
             ),
         ]
 

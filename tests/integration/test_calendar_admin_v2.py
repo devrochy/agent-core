@@ -122,3 +122,37 @@ async def test_calendar_config_business_hours_invalido_rechaza(app_client):
     )
     assert r.status_code == 303
     assert "JSON" in unquote(r.headers["location"])
+
+
+async def _enable_pack_calendar(tenant_id: uuid.UUID) -> None:
+    from core.admin.views import _save_spec_version
+    from core.agents.spec import load_active_spec
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        spec = await load_active_spec()
+        new_spec = spec.model_copy(update={"packs": sorted({*spec.packs, "pack_calendar"})})
+        await _save_spec_version(new_spec)
+
+
+async def test_oauth_sin_config_no_da_500_y_guia_a_configurar(app_client):
+    """Regresión del 500: `load_config` lanza si el pack no está configurado."""
+    from core.onboarding import onboard_tenant
+
+    slug = _uniq("calendar-nocfg")
+    tid, _ = await onboard_tenant(
+        name=f"Tenant {slug}", slug=slug, business_description="x",
+        persona={"tone": "cercano"}, admin_email="admin@local",
+    )
+    cookie = await _switch_tenant(app_client, await _login(app_client), tid)
+
+    # Sin configurar: /admin/plugins/pack_calendar/oauth redirige al configurador (no 500).
+    r = await app_client.get("/admin/plugins/pack_calendar/oauth", headers={"Cookie": cookie})
+    assert r.status_code == 303
+    assert "/calendar/configuracion" in unquote(r.headers["location"])
+
+    # Habilitado pero sin configurar: la página de conexión invita a configurar primero.
+    await _enable_pack_calendar(tid)
+    r = await app_client.get("/calendar/", headers={"Cookie": cookie})
+    assert r.status_code == 200
+    assert "Configurar Google Calendar" in r.text
