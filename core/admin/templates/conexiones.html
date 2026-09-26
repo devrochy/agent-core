@@ -156,45 +156,31 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <div class="row row-cols-2 row-cols-md-3 g-3">
-          <div class="col">
-            <a href="/admin/conexiones/wizard/whatsapp/elegir-entorno" class="card text-decoration-none text-body h-100 text-center py-3">
-              <i class="bi bi-whatsapp fs-1 mb-2 text-success"></i>
-              <div class="fw-semibold">WhatsApp</div>
-              <div class="small text-secondary">Meta Cloud API</div>
-            </a>
-          </div>
-          <div class="col">
-            <div class="card h-100 text-center py-3 opacity-50" aria-disabled="true">
-              <i class="bi bi-instagram fs-1 mb-2"></i>
-              <div class="fw-semibold">Instagram</div>
-              <span class="badge text-bg-secondary mx-auto mt-1">Próximamente</span>
+        {% for group in catalog %}
+        <div class="mb-3">
+          <div class="text-secondary text-uppercase fw-semibold mb-2" style="font-size:.72rem; letter-spacing:.06em;">{{ group.label }}</div>
+          <div class="row row-cols-2 row-cols-md-3 g-3">
+            {% for item in group['items'] %}
+            <div class="col">
+              {% if item.available %}
+              <a href="{{ item.url }}" class="card text-decoration-none text-body h-100 text-center py-3">
+                <i class="bi {{ item.icon }} fs-1 mb-2"></i>
+                <div class="fw-semibold">{{ item.label }}</div>
+                {% if item.description %}<div class="small text-secondary">{{ item.description }}</div>{% endif %}
+              </a>
+              {% else %}
+              <div class="card h-100 text-center py-3 opacity-50" aria-disabled="true">
+                <i class="bi {{ item.icon }} fs-1 mb-2"></i>
+                <div class="fw-semibold">{{ item.label }}</div>
+                {% if item.description %}<div class="small text-secondary">{{ item.description }}</div>{% endif %}
+                <span class="badge text-bg-secondary mx-auto mt-1">Próximamente</span>
+              </div>
+              {% endif %}
             </div>
-          </div>
-          <div class="col">
-            <div class="card h-100 text-center py-3 opacity-50" aria-disabled="true">
-              <i class="bi bi-messenger fs-1 mb-2"></i>
-              <div class="fw-semibold">Messenger</div>
-              <span class="badge text-bg-secondary mx-auto mt-1">Próximamente</span>
-            </div>
-          </div>
-          <div class="col">
-            <div class="card h-100 text-center py-3 opacity-50" aria-disabled="true">
-              <i class="bi bi-whatsapp fs-1 mb-2"></i>
-              <div class="fw-semibold">WhatsApp</div>
-              <div class="small text-secondary">vía Twilio</div>
-              <span class="badge text-bg-secondary mx-auto mt-1">Próximamente</span>
-            </div>
-          </div>
-          <div class="col">
-            <div class="card h-100 text-center py-3 opacity-50" aria-disabled="true">
-              <i class="bi bi-whatsapp fs-1 mb-2"></i>
-              <div class="fw-semibold">WhatsApp</div>
-              <div class="small text-secondary">vía Plivo</div>
-              <span class="badge text-bg-secondary mx-auto mt-1">Próximamente</span>
-            </div>
+            {% endfor %}
           </div>
         </div>
+        {% endfor %}
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
