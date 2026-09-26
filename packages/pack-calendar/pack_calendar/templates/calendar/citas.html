@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Calendar · Citas{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4">Calendar · Citas</h1>
+<div class="card">
+  <div class="card-body">
+    {% if appointments %}
+    <table class="table align-middle">
+      <thead>
+        <tr><th>Cuándo</th><th>Título</th><th>Cliente</th><th>Estado</th><th class="text-end">Acciones</th></tr>
+      </thead>
+      <tbody>
+        {% for a in appointments %}
+        <tr>
+          <td class="small">{{ a.start_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td><strong>{{ a.title }}</strong></td>
+          <td class="small text-secondary">{{ a.attendee_email or '' }}</td>
+          <td>
+            {% if a.status == 'scheduled' %}
+            <span class="badge text-bg-success">agendada</span>
+            {% else %}
+            <span class="badge text-bg-secondary">cancelada</span>
+            {% endif %}
+          </td>
+          <td class="text-end">
+            {% if a.status == 'scheduled' %}
+            <form method="post" action="/calendar/citas/{{ a.id }}/cancelar" class="d-inline"
+                  onsubmit="return confirm('¿Cancelar esta cita? Se borra también en Google Calendar.');">
+              <button class="btn btn-outline-danger btn-sm"><i class="bi bi-x-circle"></i> Cancelar</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-secondary mb-0">Todavía no hay citas agendadas por el asistente.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

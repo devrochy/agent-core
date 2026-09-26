@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Calendar · Tipos de cita{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4">Calendar · Tipos de cita</h1>
+<div class="row g-3">
+  <div class="col-md-5">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title fs-6">Nuevo tipo</h5>
+        <form method="post" action="/calendar/tipos/guardar" class="row g-3">
+          <div class="col-12">
+            <label class="form-label">Nombre</label>
+            <input type="text" name="name" class="form-control" required>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Duración (min)</label>
+            <input type="number" name="duration_minutes" class="form-control" value="60" min="5">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Descripción</label>
+            <input type="text" name="description" class="form-control">
+          </div>
+          <div class="col-12">
+            <button class="btn btn-primary">Agregar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-7">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title fs-6">Tipos activos</h5>
+        {% if types %}
+        <table class="table align-middle">
+          <thead><tr><th>Nombre</th><th>Duración</th><th class="text-end">Acciones</th></tr></thead>
+          <tbody>
+            {% for t in types %}
+            <tr>
+              <td><strong>{{ t.name }}</strong>{% if t.description %}<br><span class="text-secondary small">{{ t.description }}</span>{% endif %}</td>
+              <td>{{ t.duration_minutes }} min</td>
+              <td class="text-end">
+                <form method="post" action="/calendar/tipos/{{ t.id }}/eliminar" class="d-inline"
+                      onsubmit="return confirm('¿Eliminar este tipo de cita?');">
+                  <button class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="text-secondary mb-0">Todavía no hay tipos de cita.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

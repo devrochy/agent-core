@@ -1,18 +1,38 @@
-"""CalendarSkill: agendamiento de citas contra Google Calendar API."""
+"""CalendarSkill: agendamiento de citas contra Google Calendar API.
+
+La cita se espeja en `pack_calendar_appointments` (para el panel) con su
+`google_event_id`. `check_availability` considera el horario de atención
+configurado (`CalendarConfig.business_hours`) además de los eventos ocupados.
+"""
 
 from __future__ import annotations
 
+import json
+import uuid
+from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.shared.exceptions import PluginError
+from core.shared.tenant import get_current_tenant_id
 from pack_calendar.config import CalendarConfig
 from pack_calendar.oauth import get_access_token
 
 CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 PLUGIN_ID = "pack_calendar"
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _as_uuid(value: Any) -> uuid.UUID | None:
+    if value is None:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
 
 
 class CalendarSkill(BaseSkill):
@@ -57,8 +77,8 @@ class CalendarSkill(BaseSkill):
             MCPTool(
                 name="check_availability",
                 description=(
-                    "Consulta los eventos ya agendados en una fecha para proponer horarios libres. "
-                    "Úsala ANTES de crear una cita."
+                    "Consulta los eventos ya agendados y el horario de atención de una fecha "
+                    "para proponer horarios libres. Úsala ANTES de crear una cita."
                 ),
                 parameters={
                     "type": "object",
@@ -73,13 +93,14 @@ class CalendarSkill(BaseSkill):
 
     # ------------------------------------------------------------ handlers
     async def create_event(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        from datetime import datetime, timedelta
-
         config = await self._tenant_config()
         token = await get_access_token(
             config.client_id, config.client_secret.get_secret_value()
         )
+        tz = ZoneInfo(config.timezone)
         start = datetime.fromisoformat(str(arguments["start_datetime"]))
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=tz)
         end = start + timedelta(minutes=config.event_duration_minutes)
 
         body: dict[str, Any] = {
@@ -99,8 +120,11 @@ class CalendarSkill(BaseSkill):
                 headers={"Authorization": f"Bearer {token}"},
             )
         if response.status_code >= 400:
-            raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}: {response.text[:200]}")
+            raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}")
         event = response.json()
+
+        await self._mirror_appointment(event, arguments, context, start, end)
+
         return {
             "event_id": event.get("id"),
             "status": "created",
@@ -109,6 +133,48 @@ class CalendarSkill(BaseSkill):
             # SafeRenderer: el link exacto lo adjunta el core, el LLM no lo copia a mano
             "_safe_append": f"📅 Tu cita quedó agendada: {event.get('htmlLink', '')}",
         }
+
+    async def _mirror_appointment(
+        self,
+        event: dict[str, Any],
+        arguments: dict[str, Any],
+        context: ToolContext,
+        start: datetime,
+        end: datetime,
+    ) -> None:
+        """Espeja la cita en la tabla del pack (para el panel). Best-effort."""
+        tenant_id = get_current_tenant_id()
+        if tenant_id is None:
+            from core.shared.logger import get_logger
+
+            get_logger(__name__).warning("calendar_mirror_sin_tenant")
+            return
+        try:
+            from core.db.session import get_session
+            from pack_calendar.models import Appointment
+
+            async with get_session() as session:
+                session.add(
+                    Appointment(
+                        tenant_id=tenant_id,
+                        conversation_id=_as_uuid(context.conversation_id),
+                        customer_id=_as_uuid(context.customer_id),
+                        google_event_id=event.get("id"),
+                        title=str(arguments.get("title", "Cita")),
+                        attendee_email=(
+                            str(arguments["attendee_email"])
+                            if arguments.get("attendee_email")
+                            else None
+                        ),
+                        start_at=start,
+                        end_at=end,
+                        status="scheduled",
+                    )
+                )
+        except Exception:  # nunca tumbar el agendamiento real por el espejo
+            from core.shared.logger import get_logger
+
+            get_logger(__name__).warning("calendar_mirror_failed", exc_info=True)
 
     async def check_availability(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         config = await self._tenant_config()
@@ -138,4 +204,21 @@ class CalendarSkill(BaseSkill):
             }
             for e in events
         ]
-        return {"date": date, "busy_slots": busy, "total_events": len(busy)}
+        return {
+            "date": date,
+            "business_hours": _open_window(config, date),
+            "slot_minutes": config.slot_minutes,
+            "buffer_minutes": config.buffer_minutes,
+            "busy_slots": busy,
+            "total_events": len(busy),
+        }
+
+
+def _open_window(config: CalendarConfig, date: str) -> str:
+    """Ventana de atención ("HH:MM-HH:MM") del día, o "" si está cerrado."""
+    try:
+        parsed = json.loads(config.business_hours or "{}")
+        weekday = datetime.fromisoformat(date).weekday()
+        return str(parsed.get(WEEKDAYS[weekday], "") or "")
+    except (ValueError, json.JSONDecodeError):
+        return ""
