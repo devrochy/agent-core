@@ -4,7 +4,7 @@ Este fichero es el tablero. Se actualiza al cerrar cada sprint. Claude lo lee pa
 en qué estamos.
 
 **Sprint activo:** Sprint 4
-**Última actualización:** 2026-09-22
+**Última actualización:** 2026-09-26
 
 ---
 
@@ -105,6 +105,10 @@ configuración. **Cronometrarlo.** Ese número es la métrica de negocio princip
 - [ ] Guardrails de runtime: pre-tool, post-generación, presupuesto, rate limit
 - [ ] Reporte mensual automático por cliente
 - [x] `security.md` completo (movido a `solvershub/security.md`)
+- [x] **Conexiones clasificadas + pack-calendar v2** (2026-09-26, ADR-0069/0070/0072):
+      catálogo de tipos de conexión, conexión de correo (registro), tokens de Google
+      al vault de la conexión, submenú del pack (Conexión/Horarios/Tipos de cita/Citas)
+      y gating por conexión activa. Épica #97, PRs #104–#108.
 
 **Salida:** conectar el calendario o el ERP de un cliente sin escribir código nuevo.
 
