@@ -140,3 +140,81 @@ async def test_formulario_invalido_redirige(app_client):
     from urllib.parse import unquote
 
     assert "Tipo de conexión inválido" in unquote(r.headers["location"])
+
+
+async def _cleanup_all(tenant_id: uuid.UUID) -> None:
+    from sqlalchemy import delete
+
+    from core.db.models import ChannelConnection
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            await session.execute(
+                delete(ChannelConnection).where(ChannelConnection.tenant_id == tenant_id)
+            )
+
+
+async def test_editar_conexion_manual_conserva_secretos(app_client):
+    from core.gateway.connections import resolve_connection_credentials
+    from core.shared.tenant import tenant_scope
+
+    tid = await _new_tenant()
+    session_cookie = await _login(app_client)
+    cookie = await _switch_tenant(app_client, session_cookie, tid)
+    original = f"{_uniq('edit')}@ejemplo.com"
+    nuevo = f"{_uniq('edit2')}@ejemplo.com"
+
+    await app_client.post(
+        "/admin/conexiones/nuevo",
+        headers={"Cookie": cookie},
+        data={
+            "type_id": "email_smtp", "label": "Correo", "host": "smtp.viejo.com",
+            "port": "587", "username": "u", "password": "secreto1",
+            "from_address": original, "use_tls": "on",
+        },
+    )
+    async with tenant_scope(tid):
+        creds = await resolve_connection_credentials("email_smtp", tid)
+    assert creds is not None and creds["host"] == "smtp.viejo.com"
+    connection_id = (await _get_email_connection_id(tid))
+
+    # GET de edición: prellena el remitente.
+    r = await app_client.get(
+        f"/admin/conexiones/nuevo?type=email_smtp&connection_id={connection_id}",
+        headers={"Cookie": cookie},
+    )
+    assert r.status_code == 200
+    assert original in r.text
+
+    # POST de edición: cambia host/remitente y deja el secreto en blanco.
+    r = await app_client.post(
+        "/admin/conexiones/nuevo",
+        headers={"Cookie": cookie},
+        data={
+            "type_id": "email_smtp", "connection_id": str(connection_id),
+            "label": "Correo editado", "host": "smtp.nuevo.com", "port": "587",
+            "username": "u", "password": "", "from_address": nuevo, "use_tls": "on",
+        },
+    )
+    assert r.status_code == 303
+
+    async with tenant_scope(tid):
+        creds = await resolve_connection_credentials("email_smtp", tid)
+    assert creds is not None
+    assert creds["host"] == "smtp.nuevo.com"
+    assert creds["from_address"] == nuevo
+    assert creds["password"] == "secreto1", "el secreto en blanco se conserva"
+
+    await _cleanup_all(tid)
+
+
+async def _get_email_connection_id(tenant_id: uuid.UUID) -> uuid.UUID:
+    from core.gateway.connections import get_active_connection
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        conn = await get_active_connection("email_smtp", tenant_id)
+    assert conn is not None
+    return conn.id

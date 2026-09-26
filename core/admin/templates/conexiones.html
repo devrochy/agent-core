@@ -117,6 +117,9 @@
         </div>
         {% else %}
         <div class="dt-actions-row">
+          {% if c.edit_url %}
+          <a href="{{ c.edit_url }}" class="btn btn-outline-secondary" title="Editar conexión"><i class="bi bi-pencil"></i></a>
+          {% endif %}
           {% if c.active and not c.is_primary %}
           <form method="post" action="/admin/conexiones/{{ c.id }}/primaria" class="d-inline">
             <button class="btn btn-outline-primary" title="Marcar principal"><i class="bi bi-star"></i></button>
