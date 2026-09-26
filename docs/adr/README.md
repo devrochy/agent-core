@@ -80,3 +80,4 @@ Se crean con `/adr`.
 | 0070 | Vault unificado: los tokens OAuth de Google pasan a la conexión del tenant | aceptado |
 | 0071 | Canal de correo saliente (sin inbound) | aceptado |
 | 0072 | Gating declarativo de tools por prerequisitos de conexión | aceptado |
+| 0073 | Panel y URLs de la app bajo un prefijo de ruta del proxy | aceptado |

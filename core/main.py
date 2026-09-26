@@ -177,3 +177,14 @@ async def tenant_context_middleware(request: Request, call_next):
 @app.get("/")
 async def root() -> RedirectResponse:
     return RedirectResponse("/admin")
+
+
+# Soporte de despliegue bajo prefijo de ruta (ADR-0073). Se agrega AL FINAL para
+# quedar como middleware más externo: reescribe las URLs salientes (Location/HTML)
+# de TODAS las respuestas, incluidas las de otros middlewares. Sin ROOT_PATH es
+# no-op (la app se sirve en la raíz).
+if get_settings().root_path:
+    from core.admin.path_prefix import PathPrefixMiddleware
+
+    app.add_middleware(PathPrefixMiddleware, prefix=get_settings().root_path)
+
