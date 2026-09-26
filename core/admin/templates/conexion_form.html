@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Conectar {{ ctype_label }}{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4 d-flex justify-content-between align-items-center">
+  Conectar {{ ctype_label }}
+  <a href="/admin/conexiones" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left"></i> Volver
+  </a>
+</h1>
+{% if ctype_description %}<p class="text-secondary">{{ ctype_description }}</p>{% endif %}
+<div class="card">
+  <div class="card-body">
+    <form method="post" action="/admin/conexiones/nuevo" class="row g-3">
+      <input type="hidden" name="type_id" value="{{ ctype_id }}">
+      <div class="col-12">
+        <label class="form-label" for="label">Nombre de la conexión</label>
+        <input type="text" id="label" name="label" class="form-control" placeholder="{{ ctype_label }}">
+      </div>
+      <div class="col-12">{{ form_fields|safe }}</div>
+      <div class="col-12">
+        <button class="btn btn-primary">Guardar conexión</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

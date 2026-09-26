@@ -188,6 +188,11 @@ class ChannelConnection(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     channel: Mapped[str] = mapped_column(Text)     # "whatsapp"
     provider: Mapped[str] = mapped_column(Text)    # "meta"
+    # Catálogo de tipos (ADR-0069): `type_id` referencia `connection_types.id`
+    # (FK lógica, validada en código); `category` es desnormalizada para el
+    # índice y para acotar la primacía. Nulas = filas legacy (se backfillean).
+    type_id: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(Text)
     label: Mapped[str] = mapped_column(Text, default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -534,6 +539,36 @@ class Plan(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_public: Mapped[bool] = mapped_column(Boolean, default=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class ConnectionTypeRecord(Base):
+    """Catálogo de tipos de conexión. Tabla de SISTEMA (sin RLS, sin `tenant_id`).
+
+    Excepción deliberada a la invariante #1 (ADR-0069), mismo criterio que
+    `plans` (ADR-0045): el catálogo es global y compartido. La fuente de verdad es
+    `core/gateway/connection_types.py`; esta tabla la espeja para el panel y los
+    FKs, y `sync_connection_types()` la mantiene al día.
+    """
+
+    __tablename__ = "connection_types"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    category: Mapped[str] = mapped_column(Text)       # comunicacion | correo | calendario
+    channel: Mapped[str] = mapped_column(Text, default="")
+    label: Mapped[str] = mapped_column(Text)
+    provider: Mapped[str] = mapped_column(Text, default="")
+    icon: Mapped[str] = mapped_column(Text, default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    credentials_schema: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    external_id_key: Mapped[str] = mapped_column(Text, default="")
+    produces_conversations: Mapped[bool] = mapped_column(Boolean, default=False)
+    available: Mapped[bool] = mapped_column(Boolean, default=True)
+    setup_kind: Mapped[str] = mapped_column(Text, default="manual")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow

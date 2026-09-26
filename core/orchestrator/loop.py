@@ -242,6 +242,14 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
 
     candidate_tools = [*candidate_tools, *tools_for_spec(spec)]
 
+    # Prerequisito operativo (ADR-0072): una tool que necesita una conexión activa
+    # (p. ej. google_calendar) no se ofrece si el tenant no la tiene conectada. Se
+    # aplica ACÁ y en `_tool_denial` (revocación a mitad de turno).
+    from core.gateway.connections import active_connection_type_ids
+
+    connected_types = await active_connection_type_ids(get_current_tenant_id())
+    candidate_tools = [t for t in candidate_tools if _connections_ok(t, connected_types)]
+
     flow = await resolve_flow(
         spec, available={t.name for t in candidate_tools}
     )
@@ -254,6 +262,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         active_tools = mcp_host.get_skill_tools(selected_names)
         active_tools = [*active_tools, *tools_for_spec(spec)]
         flow_summary = ""
+
+    active_tools = [t for t in active_tools if _connections_ok(t, connected_types)]
 
     prompt_ctx = PromptContext(
         assistant_name=app_settings.assistant_name if app_settings else settings.app_name,
@@ -680,6 +690,12 @@ async def _execute_tool_safely(
     return result
 
 
+def _connections_ok(tool, connected_types: set[str]) -> bool:  # type: ignore[no-untyped-def]
+    """True si el tenant tiene conectados los tipos que la tool requiere (ADR-0072)."""
+    required = getattr(tool, "requires_connection_types", None) or []
+    return all(t in connected_types for t in required)
+
+
 async def _tool_denial(
     spec, tool_name: str, conversation_id: uuid.UUID | None = None
 ) -> str | None:
@@ -712,6 +728,18 @@ async def _tool_denial(
         tenant_id = get_current_tenant_id()
         if tenant_id is not None and await plugin_manager.is_disabled_for_tenant(tenant_id, tool.plugin_id):
             return f"La herramienta '{tool_name}' no está disponible en este momento."
+        if tool.requires_connection_types:
+            # Revocación a mitad de turno (ADR-0072): el pre-prompt ya la filtró,
+            # pero un tool_call que llegó con la conexión ya caída se deniega acá.
+            from core.gateway.connections import active_connection_type_ids
+
+            connected = await active_connection_type_ids(tenant_id)
+            missing = [rt for rt in tool.requires_connection_types if rt not in connected]
+            if missing:
+                return (
+                    f"La herramienta '{tool_name}' no está disponible: falta conectar "
+                    f"{', '.join(missing)}."
+                )
     for binding in spec.tools:
         if binding.tool != tool_name:
             continue
