@@ -104,7 +104,7 @@ configuración. **Cronometrarlo.** Ese número es la métrica de negocio princip
 - [ ] Registro de servidores MCP por tenant con allowlist y circuit breaker
 - [ ] Guardrails de runtime: pre-tool, post-generación, presupuesto, rate limit
 - [ ] Reporte mensual automático por cliente
-- [ ] `docs/security.md` completo
+- [x] `security.md` completo (movido a `solvershub/security.md`)
 
 **Salida:** conectar el calendario o el ERP de un cliente sin escribir código nuevo.
 

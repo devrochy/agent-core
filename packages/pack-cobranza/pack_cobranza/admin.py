@@ -65,6 +65,7 @@ from pack_cobranza.models import (
     ReglaNegociacion,
     ReporteDiario,
     SyncEvento,
+    Visita,
 )
 from pack_cobranza.permisos import GESTOR_PERMISOS
 
@@ -650,7 +651,8 @@ async def _dispositivos_data(ctx: dict[str, Any]) -> None:
         eventos = (await session.execute(select(SyncEvento).where(SyncEvento.tenant_id == tid).order_by(SyncEvento.created_at.desc()).limit(50))).scalars().all()
         device_gestor = {d.id: (gestores.get(d.gestor_id, "—") if d.gestor_id else "—") for d in devices}
         ctx.update(
-            dispositivos=[{"id": str(d.id), "codigo": d.codigo, "gestor": gestores.get(d.gestor_id, "—") if d.gestor_id else "—", "imei": d.imei or "", "estado": d.estado} for d in devices],
+            dispositivos=[{"id": str(d.id), "codigo": d.codigo, "gestor": gestores.get(d.gestor_id, "—") if d.gestor_id else "—", "imei": d.imei or "", "whatsapp": d.whatsapp_number or "", "estado": d.estado} for d in devices],
+            pendientes=sum(1 for d in devices if d.estado == "pendiente"),
             gestores=[{"id": str(gid), "nombre": nombre} for gid, nombre in gestores.items()],
             intentos=[{"resultado": i.resultado, "motivo": i.motivo or "", "imei": i.imei or "", "fecha": i.created_at.strftime("%Y-%m-%d %H:%M") if i.created_at else ""} for i in intentos],
             eventos=[{"fecha": e.created_at.strftime("%Y-%m-%d %H:%M") if e.created_at else "", "tipo": e.tipo, "estado": e.estado, "gestor": device_gestor.get(e.device_id, "—") if e.device_id else "—", "evento": e.evento_id_cliente[:8], "critico": e.estado != "aplicado"} for e in eventos],
@@ -690,6 +692,28 @@ async def dispositivo_generar(request: Request) -> HTMLResponse:
     await _dispositivos_data(ctx)
     ctx.update(nuevo_codigo=codigo, nuevo_api_key=api_key)
     return _render("cobranza/dispositivos.html", ctx)
+
+
+@router.post("/dispositivos/{record_id}/estado")
+async def dispositivo_estado(request: Request, record_id: str) -> RedirectResponse:
+    if await current_admin(request) is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not await _authorized(request, write=True):
+        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
+    rid = _uuid(record_id)
+    form = await request.form()
+    estado = str(form.get("estado") or "").strip()
+    if estado not in ("activo", "pendiente", "bloqueado"):
+        return RedirectResponse("/cobranza/dispositivos?flash=Estado inválido&flash_type=danger", status_code=303)
+    if rid is not None:
+        async with get_session() as session:
+            device = await get_owned(session, Device, rid)
+            if device is not None:
+                device.estado = estado
+                if estado == "activo" and device.fecha_vinculacion is None:
+                    device.fecha_vinculacion = datetime.now(UTC)
+                _auditar(session, "dispositivo", device.id, "editar", despues={"estado": estado}, motivo="Aprobación de dispositivo")
+    return RedirectResponse("/cobranza/dispositivos?flash=Dispositivo actualizado&flash_type=success", status_code=303)
 
 
 # --------------------------------------------------------------- reportes globales
@@ -1854,18 +1878,52 @@ async def _caja_de(session, cartera_id: uuid.UUID) -> Caja:
 
 
 async def _generar_liquidacion(cartera_id: uuid.UUID, periodo: str) -> None:
+    hoy = date.today()
     desde = {
-        "diario": date.today(),
-        "semanal": date.today() - timedelta(days=7),
-        "quincenal": date.today() - timedelta(days=15),
-        "mensual": date.today() - timedelta(days=30),
-    }.get(periodo, date.today())
+        "diario": hoy,
+        "semanal": hoy - timedelta(days=7),
+        "quincenal": hoy - timedelta(days=15),
+        "mensual": hoy - timedelta(days=30),
+    }.get(periodo, hoy)
     tid = get_current_tenant_id()
+    desde_dt = datetime.combine(desde, datetime.min.time(), tzinfo=UTC)
+    hoy_dt = datetime.combine(hoy, datetime.min.time(), tzinfo=UTC)
     async with get_session() as session:
         cartera = await get_owned(session, Cartera, cartera_id)
         if cartera is None:
             return
         prestamo_ids = select(Prestamo.id).where(Prestamo.tenant_id == tid, Prestamo.cartera_id == cartera.id)
-        cobrado = (await session.execute(select(func.coalesce(func.sum(Pago.valor), 0)).where(Pago.tenant_id == tid, Pago.prestamo_id.in_(prestamo_ids), Pago.fecha_hora >= datetime.combine(desde, datetime.min.time()), Pago.deleted_at.is_(None)))).scalar_one()
-        gastos = (await session.execute(select(func.coalesce(func.sum(Gasto.valor), 0)).where(Gasto.tenant_id == tid, Gasto.cartera_id == cartera.id, Gasto.estado == "activo", Gasto.deleted_at.is_(None)))).scalar_one()
-        session.add(Liquidacion(tenant_id=tid, cartera_id=cartera.id, fecha=date.today(), periodo=periodo, total_cobrado=cobrado, total_gastos=gastos))
+        cobrado = Decimal((await session.execute(select(func.coalesce(func.sum(Pago.valor), 0)).where(Pago.tenant_id == tid, Pago.prestamo_id.in_(prestamo_ids), Pago.fecha_hora >= desde_dt, Pago.deleted_at.is_(None)))).scalar_one() or 0)
+        prestado = Decimal((await session.execute(select(func.coalesce(func.sum(Prestamo.valor), 0)).where(Prestamo.tenant_id == tid, Prestamo.cartera_id == cartera.id, Prestamo.fecha_otorgado >= desde, Prestamo.deleted_at.is_(None)))).scalar_one() or 0)
+        gastos = Decimal((await session.execute(select(func.coalesce(func.sum(Gasto.valor), 0)).where(Gasto.tenant_id == tid, Gasto.cartera_id == cartera.id, Gasto.estado == "activo", Gasto.deleted_at.is_(None)))).scalar_one() or 0)
+        inyeccion = Decimal((await session.execute(select(func.coalesce(func.sum(Inyeccion.valor), 0)).where(Inyeccion.tenant_id == tid, Inyeccion.cartera_id == cartera.id, Inyeccion.deleted_at.is_(None)))).scalar_one() or 0)
+        suma_cartera = Decimal((await session.execute(select(func.coalesce(func.sum(Prestamo.saldo), 0)).where(Prestamo.tenant_id == tid, Prestamo.cartera_id == cartera.id, Prestamo.estatus == "vigente", Prestamo.deleted_at.is_(None)))).scalar_one() or 0)
+        estimado = Decimal((await session.execute(select(func.coalesce(func.sum(Cuota.valor_esperado), 0)).where(Cuota.tenant_id == tid, Cuota.prestamo_id.in_(prestamo_ids), Cuota.estatus.in_(("pendiente", "atrasada")), Cuota.fecha_vencimiento <= hoy, Cuota.deleted_at.is_(None)))).scalar_one() or 0)
+        cfg = (await session.execute(select(CarteraConfig).where(CarteraConfig.tenant_id == tid, CarteraConfig.cartera_id == cartera.id))).scalar_one_or_none()
+        comision_pct = cfg.comision_porcentaje if cfg is not None else Decimal(0)
+        comision = (cobrado * comision_pct / Decimal(100)).quantize(Decimal("1"))
+        caja = await _caja_de(session, cartera.id)
+        # Conteos del día (REQ-APK-003).
+        clientes = (await session.execute(select(Cliente).where(Cliente.tenant_id == tid, Cliente.cartera_id == cartera.id, Cliente.deleted_at.is_(None)))).scalars().all()
+        vigentes = (await session.execute(select(Prestamo.cliente_id).where(Prestamo.tenant_id == tid, Prestamo.cartera_id == cartera.id, Prestamo.estatus == "vigente", Prestamo.deleted_at.is_(None)))).scalars().all()
+        con_prestamo = set(vigentes)
+        visitas = (await session.execute(select(Visita.cliente_id, Visita.resultado).where(Visita.tenant_id == tid, Visita.cartera_id == cartera.id, Visita.fecha == hoy, Visita.deleted_at.is_(None)))).all()
+        pagaron = {v.cliente_id for v in visitas if v.resultado == "pago"}
+        pagos_hoy = (await session.execute(select(Pago.fecha_hora).where(Pago.tenant_id == tid, Pago.prestamo_id.in_(prestamo_ids), Pago.fecha_hora >= hoy_dt, Pago.deleted_at.is_(None)).order_by(Pago.fecha_hora))).scalars().all()
+        horas = [pg.strftime("%H:%M") for pg in pagos_hoy if pg is not None]
+        detalle = {
+            "pagaron": len(pagaron),
+            "faltan": max(len(con_prestamo - pagaron), 0),
+            "totalDia": len(con_prestamo),
+            "sinCuentas": max(len(clientes) - len(con_prestamo), 0),
+            "horaPrimera": horas[0] if horas else None,
+            "horaUltima": horas[-1] if horas else None,
+        }
+        session.add(Liquidacion(
+            tenant_id=tid, cartera_id=cartera.id, fecha=hoy, periodo=periodo,
+            caja_anterior=caja.saldo_inicial, caja_actual=caja.saldo_actual,
+            total_cobrado=cobrado, total_prestado=prestado, total_gastos=gastos,
+            comision_porcentaje=comision_pct, comision_valor=comision,
+            estimado_acobrar=estimado, total_inyeccion=inyeccion, suma_cartera=suma_cartera,
+            detalle=detalle,
+        ))

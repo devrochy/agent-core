@@ -32,6 +32,10 @@ ON_ESCALATION_TRIGGERED = "escalation.triggered"  # payload: conversation_id, re
 ON_PLUGIN_ACTIVATED = "plugin.activated"          # payload: plugin_id
 ON_PLUGIN_DISABLED = "plugin.disabled"            # payload: plugin_id, reason
 ON_TOOL_EXECUTED = "tool.executed"                # payload: tool_name, plugin_id, conversation_id
+# Pagos (ADR-0067): el pack de pagos los emite; otros packs (p. ej. cobranza) se
+# suscriben para registrar el cobro. Contrato compartido del core.
+ON_PAYMENT_CONFIRMED = "payment.confirmed"        # payload: reference, provider, provider_reference, amount
+ON_PAYMENT_REJECTED = "payment.rejected"          # payload: reference, provider, provider_reference, amount
 
 
 class EventBus:

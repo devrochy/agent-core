@@ -67,10 +67,14 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
   auto-registradas, mensajes manuales saliente/entrante y enlace **wa.me** al
   WhatsApp del propietario (`CobranzaConfig.propietario_whatsapp`).
 - **API de campo del gestor — contrato de la APK** (ADR-0065): router
-  `api_gestor.py` en la API pública, con el contrato exacto de `app-cobranza-apk`
+  `api_gestor.py` en la API pública, con el contrato exacto de `solvershub-apk`
   (camelCase, IDs string). **F1**: `POST /auth/gestor/login` y
   `/auth/propietario/login` (`tenant`+`usuario`+`password` → access+refresh),
   `POST /auth/refresh`, `PATCH /perfil`.
+- **Autovinculación de dispositivo (HU-39/43, ADR-0068)**: `POST/GET /gestor/dispositivo`
+  (IMEI + WhatsApp, estado `pendiente`); el login exige coincidir con un device
+  `activo` con IMEI (403 + `IntentoAcceso` si no) y no bloquea el primer vínculo;
+  el panel **Dispositivos** aprueba/bloquea. Migración `0012` (IMEI único). X25519/HU-40 diferido.
 - **Identidad unificada: el gestor es un colaborador del core** (ADR-0066). El
   propietario es `Admin` + `TenantUser(owner)`; el gestor es `Admin` +
   `TenantUser(colaborador)` **con perfil `Gestor`** (`admin_id`, sin credenciales
@@ -90,6 +94,17 @@ por WhatsApp. Ver ADR-0056/0057/0058/0059/0060.
   pago/abono (con contraseña del admin + auditoría), notas, apertura/posición,
   trayectoria real, generar trayecto, editar cartera/configuración, liquidaciones y
   export imprimible (HTML en v1).
+- **Gestor B (REQ-APK-002/003)**: `trayecto-diario` incluye `latitud`/`longitud` por
+  cliente (cliente cercano en la app); la liquidación calcula KPIs reales
+  (`estimado_acobrar`, `total_inyeccion`, `suma_cartera`, `comision_porcentaje`)
+  y los conteos del día (`pagaron`/`faltan`/`totalDia`/`sinCuentas`/horas) —
+  migración `0010`.
+- **Capacidad de pagos del core + cobro digital (ADR-0067)**: registry
+  `core/payments/` (molde `LeadRegistry`), topics `ON_PAYMENT_*` movidos al core y
+  `qr_png_data_uri`. `pack_payments` registra su capacidad (Wompi) y `pack_cobranza`
+  crea el link/QR de una cuota (`POST …/cuotas/{id}/link-pago`), registra el `Pago`
+  al confirmarse por EventBus (idempotente), o devuelve la **cuenta informativa**
+  de `CobranzaConfig` si no hay pasarela. Migración `0011` (LinkPago→cuota).
 - **API de campo del gestor — F4 (offline)**: `POST /sync-offline/eventos`
   (idempotente por `eventoIdCliente`, **ack por evento**, savepoint por evento;
   tipos `visita`/`pago`/`abono`/`gasto` con evidencias base64/`trayectoria`/
