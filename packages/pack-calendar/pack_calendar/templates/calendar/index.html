@@ -13,6 +13,14 @@
     <a href="/admin/plugins/pack_calendar/oauth" class="btn btn-outline-secondary btn-sm">
       <i class="bi bi-arrow-repeat"></i> Reconectar cuenta
     </a>
+    {% elif not configured %}
+    <p class="text-secondary">
+      Todavía no configuraste las credenciales de Google (client_id y client_secret).
+      Cargalas antes de conectar la cuenta.
+    </p>
+    <a href="/calendar/configuracion" class="btn btn-primary">
+      <i class="bi bi-sliders"></i> Configurar Google Calendar
+    </a>
     {% else %}
     <p class="text-secondary">
       Todavía no hay una cuenta de Google conectada. <strong>Sin conexión, el asistente no agenda citas.</strong>
