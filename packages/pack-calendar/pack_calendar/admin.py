@@ -81,13 +81,20 @@ async def calendar_home(request: Request):
     if not await _authorized(request, write=False):
         return RedirectResponse("/admin", status_code=303)
     from core.gateway.connections import get_active_connection
+    from core.plugin_manager import plugin_manager
+    from core.shared.exceptions import PluginConfigError
 
     ctx = await base_context(request, SECTION)
     if ctx is None:
         return RedirectResponse("/admin/login", status_code=303)
 
+    try:
+        config = await plugin_manager.load_config(PLUGIN_ID)
+    except PluginConfigError:
+        config = None
     connection = await get_active_connection("google_calendar")
     ctx.update(
+        configured=config is not None,
         connected=connection is not None,
         account_email=(connection.external_id if connection else ""),
         connection_label=(connection.label if connection else ""),
