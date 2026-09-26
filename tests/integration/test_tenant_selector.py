@@ -25,6 +25,33 @@ async def _login(app_client) -> str:
     return cookie
 
 
+async def test_master_ve_todos_los_tenants() -> None:
+    """ADR-0047: un `master` ve todos los tenants activos, no solo los de
+    `tenant_user` (migración 0037). El admin de tests es `master` y solo está
+    vinculado a algunos tenants, pero `admin_tenants()` debe devolver igual todos
+    los activos."""
+    from sqlalchemy import select
+
+    from core.db.models import Admin, Tenant
+    from core.db.session import get_session
+    from core.shared.tenant import admin_tenants
+
+    async with get_session() as session:
+        admin = (
+            await session.execute(select(Admin).where(Admin.email == "admin@local"))
+        ).scalar_one()
+        assert admin.role == "master"
+        active_ids = set(
+            (await session.execute(select(Tenant.id).where(Tenant.status == "active")))
+            .scalars()
+            .all()
+        )
+
+    visible_ids = {tid for (tid, _name, _role) in await admin_tenants(admin.id)}
+    assert active_ids, "debe haber al menos un tenant activo"
+    assert visible_ids == active_ids, "un master debe ver todos los tenants activos"
+
+
 async def test_switch_tenant_valida_acceso(app_client, moto_setup) -> None:
     _t1, t2 = moto_setup
     cookie = await _login(app_client)

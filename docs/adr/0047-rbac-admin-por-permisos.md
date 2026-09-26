@@ -38,8 +38,10 @@ sistema `admin_permissions`:
    reemplaza, y no requiere backfill.
 4. **Alcance de tenants**: `admin_tenants()` se reescribe para que un admin con algún
    permiso global (`tenant_id is null`) vea todos los tenants activos, además de los
-   que tenga por `tenant_user`. Así el admin de marketing entra al panel, el
-   middleware le fija un tenant (ADR-0012) y solo puede leer.
+   que tenga por `tenant_user`. Un **`master`** ve también todos los tenants activos
+   (migración `0037`): era la única pieza que faltaba para que su bypass de acceso —ya
+   total en las secciones— se reflejara en el selector. Así el admin de marketing entra
+   al panel, el middleware le fija un tenant (ADR-0012) y solo puede leer.
 5. **Default-deny central**: el middleware de FastAPI (`tenant_context_middleware`)
    mapea ruta → sección (`required_section`, con `read` para GET y `write` para el
    resto) y deniega con 403 si no hay permiso. Cubre el panel, los routers de packs
