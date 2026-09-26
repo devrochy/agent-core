@@ -20,6 +20,7 @@ EXPECTED_TOOLS = {
     "load_playbook",
     "get_conversation_usage",
     "set_conversation_note",
+    "send_email",
 }
 
 

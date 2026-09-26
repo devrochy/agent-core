@@ -28,6 +28,12 @@ y **pack-calendar v2**, con gating por conexión. Ver ADR-0069/0070/0072. Épica
   horario de atención configurado.
 - Sin cuenta conectada, el asistente **no** ofrece agendar (gating).
 
+### Correo saliente (ADR-0071)
+- Adaptador de canal `smtp` (built-in, `smtplib`) reutilizando la cola de salida
+  (`outbound_send`): un envío es un `Message` del canal `email`.
+- Tool **`send_email`** (gated por conexión `email_smtp`): crea el `Customer` +
+  `Conversation` del destinatario y encola el correo. Sin inbound.
+
 ### Migraciones
 - Core `0038` (catálogo de conexiones). Pack-calendar `0001` (tipos de cita y citas).
 
