@@ -50,6 +50,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from core.billing.plans import sync_plans
 
     await sync_plans()
+    # 1c. Espejar el catálogo de tipos de conexión a `connection_types` (ADR-0069)
+    from core.gateway.connection_types import sync_connection_types
+
+    await sync_connection_types()
     # 2. Activar los que estaban configurados/activos
     await plugin_manager.activate_all_configured()
     # 3. Crash recovery del debounce

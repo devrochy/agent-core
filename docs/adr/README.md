@@ -76,3 +76,4 @@ Se crean con `/adr`.
 | 0066 | El gestor es un colaborador del core: identidad unificada | aceptado |
 | 0067 | Capacidad de pagos del core y cobro digital en cobranza | aceptado |
 | 0068 | Autovinculación de dispositivo del gestor (HU-39/43) | aceptado |
+| 0069 | Catálogo de tipos de conexión y generalización de `channel_connections` | aceptado |

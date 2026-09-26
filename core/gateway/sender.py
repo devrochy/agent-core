@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from core.config import get_settings
 from core.db.models import (
@@ -32,6 +32,7 @@ from core.db.models import (
     utcnow,
 )
 from core.db.session import get_session
+from core.gateway.connection_types import CATEGORY_COMMUNICATION
 from core.gateway.message_splitter import split_for_bubbles
 from core.shared.crypto import get_secret_box
 from core.shared.events import ON_MESSAGE_SENT, event_bus
@@ -144,20 +145,25 @@ async def resolve_credentials(
         if creds:
             return "meta", creds
 
-    # Fallback: conexión primaria en BD -- `tenant_id` explícito además de
-    # RLS (defensa en profundidad, mismo criterio que el resto del código
-    # de esta serie): sin este filtro, dos tenants con conexión primaria
-    # activa hacen que `scalar_one_or_none` reviente con
-    # `MultipleResultsFound` en vez de devolver la propia.
+    # Fallback: conexión primaria de MENSAJERÍA en BD -- `tenant_id` explícito
+    # además de RLS (defensa en profundidad): sin este filtro, dos tenants con
+    # conexión primaria activa revientan con `MultipleResultsFound`. La categoría
+    # se acota (ADR-0069) para no tomar una conexión de correo/calendario como
+    # fallback del sender de mensajería; las filas legacy sin `category` cuentan
+    # como mensajería.
     async with get_session() as session:
         result = await session.execute(
             select(ChannelConnection).where(
                 ChannelConnection.active.is_(True),
                 ChannelConnection.is_primary.is_(True),
                 ChannelConnection.tenant_id == get_current_tenant_id(),
-            )
+                or_(
+                    ChannelConnection.category == CATEGORY_COMMUNICATION,
+                    ChannelConnection.category.is_(None),
+                ),
+            ).limit(1)
         )
-        primary = result.scalar_one_or_none()
+        primary = result.scalars().first()
     if primary and primary.credentials_encrypted:
         creds = get_secret_box().decrypt_json(primary.credentials_encrypted)
         return primary.provider, {str(k): str(v) for k, v in creds.items()}

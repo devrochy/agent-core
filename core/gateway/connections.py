@@ -10,16 +10,20 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, or_, select
 
 from core.config import get_settings
 from core.db.models import ChannelConnection, utcnow
 from core.db.session import get_session
+from core.gateway.connection_types import (
+    CATEGORY_COMMUNICATION,
+    WHATSAPP_META,
+    external_id_for,
+    get_connection_type,
+    normalize_credentials,
+)
 from core.shared.crypto import get_secret_box
 from core.shared.tenant import get_current_tenant_id
-
-# Claves que se guardan cifradas en credentials_encrypted (lista blanca)
-CREDENTIAL_KEYS = ("phone_number_id", "app_secret", "access_token", "verify_token")
 
 
 async def list_connections() -> list[ChannelConnection]:
@@ -55,6 +59,12 @@ async def find_by_external_id(external_id: str) -> ChannelConnection | None:
 
 
 async def primary_connection(tenant_id: uuid.UUID | None = None) -> ChannelConnection | None:
+    """Conexión primaria activa de la categoría de mensajería, o None.
+
+    La primacía solo aplica a `comunicacion` (ADR-0069): una conexión de correo o
+    calendario nunca es el fallback de credenciales del sender de mensajería. Las
+    filas legacy sin `category` (insertadas por tests) se tratan como mensajería.
+    """
     tid = tenant_id if tenant_id is not None else get_current_tenant_id()
     async with get_session() as session:
         result = await session.execute(
@@ -66,6 +76,10 @@ async def primary_connection(tenant_id: uuid.UUID | None = None) -> ChannelConne
                 # profundidad, invariante nº1): `tid is None` no matchea nada
                 # (fail-closed), nunca "sin filtrar".
                 ChannelConnection.tenant_id == tid,
+                or_(
+                    ChannelConnection.category == CATEGORY_COMMUNICATION,
+                    ChannelConnection.category.is_(None),
+                ),
             )
             .limit(1)
         )
@@ -77,6 +91,47 @@ def decrypt_credentials(connection: ChannelConnection) -> dict[str, str]:
         return {}
     raw = get_secret_box().decrypt_json(connection.credentials_encrypted)
     return {str(k): str(v) for k, v in raw.items() if v}
+
+
+def _decrypt_raw(connection: ChannelConnection) -> dict[str, Any]:
+    """Descifra credenciales conservando los tipos (int/bool) del schema."""
+    if not connection.credentials_encrypted:
+        return {}
+    return get_secret_box().decrypt_json(connection.credentials_encrypted)
+
+
+async def get_active_connection(
+    type_id: str, tenant_id: uuid.UUID | None = None
+) -> ChannelConnection | None:
+    """Conexión activa del tipo pedido para el tenant (la primaria primero)."""
+    tid = tenant_id if tenant_id is not None else get_current_tenant_id()
+    async with get_session() as session:
+        result = await session.execute(
+            select(ChannelConnection)
+            .where(
+                ChannelConnection.type_id == type_id,
+                ChannelConnection.tenant_id == tid,
+                ChannelConnection.active.is_(True),
+                ChannelConnection.deleted_at.is_(None),
+            )
+            .order_by(ChannelConnection.is_primary.desc(), ChannelConnection.created_at)
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+
+async def resolve_connection_credentials(
+    type_id: str, tenant_id: uuid.UUID | None = None
+) -> dict[str, Any] | None:
+    """Credenciales (sin coercionar a str) de la conexión activa del tipo.
+
+    Helper único de resolución por `(type_id, tenant)` (ADR-0069): lo usa un pack
+    para leer su propia conexión (p. ej. los tokens de Google Calendar).
+    """
+    connection = await get_active_connection(type_id, tenant_id)
+    if connection is None:
+        return None
+    return _decrypt_raw(connection)
 
 
 async def resolve_credentials_for_external(external_id: str) -> dict[str, str] | None:
@@ -163,63 +218,108 @@ async def resolve_effective_app_secret(tenant_id: uuid.UUID) -> str:
 
 async def save_connection(
     label: str,
-    credentials: dict[str, str],
+    credentials: dict[str, Any],
     connection_id: uuid.UUID | None = None,
+    type_id: str = WHATSAPP_META,
 ) -> tuple[ChannelConnection, bool]:
-    """Crea o actualiza una conexión Meta/WhatsApp. Devuelve (conn, created).
+    """Crea o actualiza una conexión de un tipo del catálogo. Devuelve (conn, created).
 
-    La primera conexión creada queda como primaria automáticamente.
+    Las credenciales se validan/normalizan contra el `credentials_schema` del tipo
+    (ADR-0069): se descartan claves no declaradas y se coercionan los tipos. La
+    primera conexión de mensajería activa queda como primaria.
     """
+    ctype = get_connection_type(type_id)
+    if ctype is None:
+        raise ValueError(f"Tipo de conexión desconocido: {type_id}")
+
     box = get_secret_box()
-    phone_number_id = credentials.get("phone_number_id", "")
-    encrypted = box.encrypt_json({k: credentials.get(k, "") for k in CREDENTIAL_KEYS})
+    tid = get_current_tenant_id()
 
     async with get_session() as session:
+        previous: dict[str, Any] = {}
+        connection: ChannelConnection | None = None
         if connection_id is not None:
             connection = await session.get(ChannelConnection, connection_id)
             if connection is None:
                 raise ValueError("La conexión no existe")
+            if connection.tenant_id != tid:
+                raise ValueError("La conexión no pertenece a este tenant")
+            previous = _decrypt_raw(connection)
+
+        clean = normalize_credentials(ctype, credentials, previous)
+        external_id = external_id_for(ctype, clean)
+        encrypted = box.encrypt_json(clean)
+
+        if connection is not None:
             connection.label = label
-            connection.external_id = phone_number_id or connection.external_id
+            connection.type_id = type_id
+            connection.category = ctype.category
+            connection.channel = ctype.channel
+            connection.provider = ctype.provider
+            connection.external_id = external_id or connection.external_id
             connection.credentials_encrypted = encrypted
             connection.active = True
             created = False
         else:
+            # Lookup alineado al índice único `(tenant_id, provider, external_id)`
+            # (defensa en profundidad + evita IntegrityError). Se prefiere la fila
+            # activa sobre una soft-deleted para no chocar con el índice parcial.
             existing = (
                 await session.execute(
-                    select(ChannelConnection).where(
-                        ChannelConnection.external_id == phone_number_id
+                    select(ChannelConnection)
+                    .where(
+                        ChannelConnection.tenant_id == tid,
+                        ChannelConnection.provider == ctype.provider,
+                        ChannelConnection.external_id == external_id,
                     )
+                    .order_by(
+                        case((ChannelConnection.deleted_at.is_(None), 0), else_=1),
+                        ChannelConnection.created_at.desc(),
+                    )
+                    .limit(1)
                 )
-            ).scalar_one_or_none()
+            ).scalars().first()
             if existing is not None:
                 existing.label = label
+                existing.type_id = type_id
+                existing.category = ctype.category
+                existing.channel = ctype.channel
                 existing.credentials_encrypted = encrypted
                 existing.active = True
                 existing.deleted_at = None  # re-agregar des-elimina (invariante #8)
                 return existing, False
             connection = ChannelConnection(
-                tenant_id=get_current_tenant_id(),
-                channel="whatsapp",
-                provider="meta",
+                tenant_id=tid,
+                channel=ctype.channel,
+                provider=ctype.provider,
+                type_id=type_id,
+                category=ctype.category,
                 label=label,
                 active=True,
                 is_primary=False,
-                external_id=phone_number_id,
+                external_id=external_id,
                 credentials_encrypted=encrypted,
             )
             session.add(connection)
             await session.flush()
             created = True
 
-        # La primera conexión activa queda como primaria
-        count_active = (
-            await session.execute(
-                select(func.count(ChannelConnection.id)).where(ChannelConnection.active.is_(True))
-            )
-        ).scalar() or 0
-        if created and count_active <= 1:
-            connection.is_primary = True
+        # La primera conexión de MENSAJERÍA activa queda como primaria (ADR-0069)
+        if created and ctype.category == CATEGORY_COMMUNICATION:
+            count_active = (
+                await session.execute(
+                    select(func.count(ChannelConnection.id)).where(
+                        ChannelConnection.active.is_(True),
+                        ChannelConnection.tenant_id == tid,
+                        or_(
+                            ChannelConnection.category == CATEGORY_COMMUNICATION,
+                            ChannelConnection.category.is_(None),
+                        ),
+                    )
+                )
+            ).scalar() or 0
+            if count_active <= 1:
+                connection.is_primary = True
         return connection, created
 
 
@@ -235,11 +335,25 @@ async def set_active(connection_id: uuid.UUID, active: bool) -> None:
 
 async def set_primary(connection_id: uuid.UUID) -> None:
     async with get_session() as session:
-        rows = (await session.execute(select(ChannelConnection))).scalars().all()
+        target = await session.get(ChannelConnection, connection_id)
+        if target is None:
+            return
+        # Solo se reasigna la primacía dentro de la misma categoría (ADR-0069) y
+        # del mismo tenant; las filas legacy sin `category` cuentan como mensajería.
+        rows = (
+            await session.execute(
+                select(ChannelConnection).where(
+                    ChannelConnection.tenant_id == target.tenant_id,
+                    or_(
+                        ChannelConnection.category == target.category,
+                        ChannelConnection.category.is_(None),
+                    ),
+                )
+            )
+        ).scalars().all()
         for row in rows:
             row.is_primary = row.id == connection_id
-            if row.id == connection_id:
-                row.active = True
+        target.active = True
 
 
 async def delete_connection(connection_id: uuid.UUID) -> None:
