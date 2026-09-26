@@ -256,3 +256,39 @@ async def test_tool_binding_scopes_maxcalls_requires_confirmation(monkeypatch) -
     monkeypatch.setattr(loop_mod, "_tool_calls_in_conversation", _fake_count)
     denial = await _tool_denial(spec, "safe_tool", conv_id)
     assert denial is not None and "máximo" in denial
+
+
+@pytest.mark.asyncio
+async def test_tool_denial_requiere_conexion(monkeypatch) -> None:
+    """ADR-0072: una tool que requiere una conexión activa se deniega sin ella."""
+    from core.mcp.types import MCPTool
+    from core.orchestrator.loop import _tool_denial
+
+    spec = make_spec([])
+    spec.packs = ["core"]
+    tool = MCPTool(
+        name="agendar",
+        description="t",
+        parameters={},
+        handler=lambda *a, **k: {"ok": True},
+        plugin_id="core",
+        requires_connection_types=["google_calendar"],
+    )
+    import core.orchestrator.loop as loop_mod
+
+    monkeypatch.setattr(
+        loop_mod.mcp_host, "get_tool", lambda name: tool if name == tool.name else None
+    )
+
+    async def _sin_conexion(_tid):
+        return set()
+
+    monkeypatch.setattr("core.gateway.connections.active_connection_type_ids", _sin_conexion)
+    denial = await _tool_denial(spec, "agendar")
+    assert denial is not None and "google_calendar" in denial
+
+    async def _con_conexion(_tid):
+        return {"google_calendar"}
+
+    monkeypatch.setattr("core.gateway.connections.active_connection_type_ids", _con_conexion)
+    assert await _tool_denial(spec, "agendar") is None
