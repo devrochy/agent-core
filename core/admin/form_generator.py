@@ -98,16 +98,18 @@ def _render_prop(name: str, prop: dict[str, Any], current: Any, required: bool) 
         step = "1" if ptype == "integer" else "any"
         min_attr = f' min="{prop["minimum"]}"' if "minimum" in prop else ""
         max_attr = f' max="{prop["maximum"]}"' if "maximum" in prop else ""
+        num_value = "" if default is None else html.escape(str(default))
         return f"""
 <div class="mb-3">
   <label class="form-label" for="{name}">{label}</label>
   <input type="number" step="{step}" class="form-control" id="{name}" name="{name}"
-         value="{html.escape(str(default))}" {required_attr}{min_attr}{max_attr}>
+         value="{num_value}" {required_attr}{min_attr}{max_attr}>
   {help_html}
 </div>"""
 
-    # string (default)
-    value = "" if isinstance(default, dict) else html.escape(str(default))
+    # string (default). `None` (campo sin valor ni default) NO debe renderizarse
+    # como el texto "None".
+    value = "" if default is None or isinstance(default, dict) else html.escape(str(default))
     return f"""
 <div class="mb-3">
   <label class="form-label" for="{name}">{label}</label>

@@ -1842,7 +1842,18 @@ async def connections_page(request: Request):
 
     # Selector "Agregar conexión" generado desde el catálogo (ADR-0069): agrupado
     # por categoría, con los no disponibles como "Próximamente".
-    from core.gateway.connection_types import setup_url, types_by_category
+    from core.gateway.connection_types import (
+        SETUP_MANUAL,
+        get_connection_type,
+        setup_url,
+        types_by_category,
+    )
+
+    def _edit_url(connection: Any) -> str | None:
+        ctype = get_connection_type(connection.type_id or "")
+        if ctype is None or ctype.setup_kind != SETUP_MANUAL:
+            return None
+        return f"/admin/conexiones/nuevo?type={ctype.id}&connection_id={connection.id}"
 
     catalog = [
         {
@@ -1886,6 +1897,7 @@ async def connections_page(request: Request):
             "is_primary": c.is_primary,
             "created_at": c.created_at,
             "detail_url": None,
+            "edit_url": _edit_url(c),
         }
         for c in connections
     ]
@@ -1941,13 +1953,42 @@ async def connections_page(request: Request):
 
 @router.get("/conexiones/nuevo", response_class=HTMLResponse)
 async def connection_new(request: Request):
-    """Formulario genérico de credenciales para tipos `manual` del catálogo."""
+    """Formulario genérico de credenciales para tipos `manual` (alta o edición)."""
     if await current_admin(request) is None:
         return _login_redirect()
     from core.admin.form_generator import render_json_schema_form
     from core.gateway.connection_types import SETUP_MANUAL, get_connection_type
 
     type_id = request.query_params.get("type", "")
+    connection_id = request.query_params.get("connection_id", "")
+    current_values: dict[str, Any] = {}
+    label_value = ""
+    connection_uuid: uuid.UUID | None = None
+    if connection_id:
+        try:
+            connection_uuid = uuid.UUID(connection_id)
+        except (ValueError, TypeError):
+            connection_uuid = None
+        if connection_uuid is None:
+            return RedirectResponse(
+                "/admin/conexiones?flash=Conexión inválida&flash_type=danger", status_code=303
+            )
+        from core.db.models import ChannelConnection
+        from core.db.session import get_owned, get_session
+        from core.gateway.connections import credentials_of
+
+        async with get_session() as session:
+            connection = await get_owned(
+                session, ChannelConnection, connection_uuid, get_current_tenant_id()
+            )
+        if connection is None:
+            return RedirectResponse(
+                "/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303
+            )
+        current_values = credentials_of(connection)
+        label_value = connection.label or ""
+        type_id = connection.type_id or type_id
+
     ctype = get_connection_type(type_id)
     if ctype is None or not ctype.available or ctype.setup_kind != SETUP_MANUAL:
         return RedirectResponse(
@@ -1962,14 +2003,16 @@ async def connection_new(request: Request):
         ctype_id=ctype.id,
         ctype_label=ctype.label,
         ctype_description=ctype.description,
-        form_fields=render_json_schema_form(ctype.credentials_schema, {}),
+        form_fields=render_json_schema_form(ctype.credentials_schema, current_values),
+        connection_id=str(connection_uuid) if connection_uuid else "",
+        label_value=label_value,
     )
     return _render("conexion_form.html", ctx)
 
 
 @router.post("/conexiones/nuevo")
 async def connection_new_save(request: Request):
-    """Guarda una conexión de un tipo `manual` desde el formulario genérico."""
+    """Guarda (alta o edición) una conexión de un tipo `manual`."""
     if await current_admin(request) is None:
         return _login_redirect()
     from core.admin.form_generator import parse_json_schema_form
@@ -1978,6 +2021,7 @@ async def connection_new_save(request: Request):
     form = await request.form()
     type_id = str(form.get("type_id", ""))
     label = str(form.get("label", "") or "")
+    connection_id = str(form.get("connection_id", "") or "")
     ctype = get_connection_type(type_id)
     if ctype is None or not ctype.available or ctype.setup_kind != SETUP_MANUAL:
         return RedirectResponse(
@@ -1985,12 +2029,39 @@ async def connection_new_save(request: Request):
             status_code=303,
         )
 
+    # Edición: cargar credenciales previas para conservar los secretos en blanco.
+    connection_uuid: uuid.UUID | None = None
+    previous: dict[str, Any] = {}
+    if connection_id:
+        try:
+            connection_uuid = uuid.UUID(connection_id)
+        except (ValueError, TypeError):
+            connection_uuid = None
+        if connection_uuid is None:
+            return RedirectResponse(
+                "/admin/conexiones?flash=Conexión inválida&flash_type=danger", status_code=303
+            )
+        from core.db.models import ChannelConnection
+        from core.db.session import get_owned, get_session
+        from core.gateway.connections import credentials_of
+
+        async with get_session() as session:
+            existing = await get_owned(
+                session, ChannelConnection, connection_uuid, get_current_tenant_id()
+            )
+        if existing is None:
+            return RedirectResponse(
+                "/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303
+            )
+        previous = credentials_of(existing)
+
     form_data = {str(k): str(v) for k, v in form.items()}
-    credentials = parse_json_schema_form(ctype.credentials_schema, form_data, {})
+    credentials = parse_json_schema_form(ctype.credentials_schema, form_data, previous)
     missing = [k for k in ctype.credentials_schema.get("required", []) if not credentials.get(k)]
     if missing:
+        suffix = f"&connection_id={connection_id}" if connection_id else ""
         return RedirectResponse(
-            f"/admin/conexiones/nuevo?type={ctype.id}"
+            f"/admin/conexiones/nuevo?type={ctype.id}{suffix}"
             f"&flash=Faltan campos: {', '.join(missing)}&flash_type=danger",
             status_code=303,
         )
@@ -1999,7 +2070,7 @@ async def connection_new_save(request: Request):
         from core.gateway.connections import save_connection
 
         _connection, created = await save_connection(
-            label or ctype.label, credentials, type_id=ctype.id
+            label or ctype.label, credentials, connection_uuid, type_id=ctype.id
         )
         log.info(
             "connection_type_saved",
@@ -2012,8 +2083,9 @@ async def connection_new_save(request: Request):
         return RedirectResponse(f"/admin/conexiones?flash=Conexión {ctype.label} {action} ✓", status_code=303)
     except Exception as exc:
         log.exception("connection_type_save_failed")
+        suffix = f"&connection_id={connection_id}" if connection_id else ""
         return RedirectResponse(
-            f"/admin/conexiones/nuevo?type={ctype.id}&flash=Error al guardar: {str(exc)[:120]}&flash_type=danger",
+            f"/admin/conexiones/nuevo?type={ctype.id}{suffix}&flash=Error al guardar: {str(exc)[:120]}&flash_type=danger",
             status_code=303,
         )
 

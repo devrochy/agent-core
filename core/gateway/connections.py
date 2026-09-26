@@ -100,6 +100,11 @@ def _decrypt_raw(connection: ChannelConnection) -> dict[str, Any]:
     return get_secret_box().decrypt_json(connection.credentials_encrypted)
 
 
+def credentials_of(connection: ChannelConnection) -> dict[str, Any]:
+    """Credenciales descifradas de una conexión (para prellenar el form de edición)."""
+    return _decrypt_raw(connection)
+
+
 async def active_connection_type_ids(tenant_id: uuid.UUID | None = None) -> set[str]:
     """`type_id` de las conexiones activas del tenant (gating ADR-0072)."""
     tid = tenant_id if tenant_id is not None else get_current_tenant_id()

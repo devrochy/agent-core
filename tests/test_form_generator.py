@@ -77,6 +77,24 @@ def test_parse_textarea_devuelve_el_string_crudo() -> None:
     assert values == {"notas": "a: b => c\nd: e => f"}
 
 
+def test_campo_sin_default_no_se_prellena_con_none() -> None:
+    """Un campo sin valor ni default no debe renderizarse como el texto 'None'."""
+    from core.admin.form_generator import render_json_schema_form
+
+    html = render_json_schema_form(
+        {
+            "type": "object",
+            "properties": {
+                "from_address": {"type": "string"},
+                "port": {"type": "integer"},
+            },
+        },
+        {},
+    )
+    assert 'value="None"' not in html
+    assert html.count('value=""') == 2
+
+
 def test_delegacion_pydantic_usa_el_mismo_motor() -> None:
     from pack_calendar.config import CalendarConfig
 
