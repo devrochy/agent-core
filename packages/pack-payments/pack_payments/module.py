@@ -1,9 +1,11 @@
 """PaymentsModule: BaseModule con webhook público propio (confirmación de Wompi).
 
-Emite eventos de dominio (`ON_PAYMENT_CONFIRMED`/`ON_PAYMENT_REJECTED`,
-ADR-0023) para que otros packs (ej. pack-commerce) reaccionen sin que este
-pack los importe -- invariante nº5 de CLAUDE.md. Cualquier pack que quiera
-escuchar usa el mismo string literal (no una constante importada de acá).
+Emite eventos de dominio (`ON_PAYMENT_CONFIRMED`/`ON_PAYMENT_REJECTED`) para que
+otros packs (p. ej. cobranza) reaccionen sin que este pack los importe --
+invariante nº5. Los topics viven ahora en el **core** (ADR-0067).
+
+Registra su `PaymentCapability` (ADR-0067) para que otros packs creen links de
+pago sin importarlo.
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ from sqlalchemy import select
 
 from core.db.session import get_session
 from core.mcp.types import BaseModule
+from core.payments import payment_registry
+from core.shared.events import ON_PAYMENT_CONFIRMED, ON_PAYMENT_REJECTED
 from core.shared.exceptions import PluginError
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, tenant_scope
@@ -30,12 +34,6 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 PLUGIN_ID = "pack_payments"
-
-# Eventos de dominio que este pack emite (ADR-0023). El nombre del string es
-# el contrato real -- lo consume quien se suscriba con host.subscribe(...)
-# usando el mismo literal, sin importar nada de este módulo.
-ON_PAYMENT_CONFIRMED = "payment.confirmed"
-ON_PAYMENT_REJECTED = "payment.rejected"
 
 admin_router = APIRouter(prefix="/webhooks/payments/wompi", tags=[PLUGIN_ID])
 
@@ -131,6 +129,9 @@ class PaymentsModule(BaseModule):
 
             raise PluginConfigError(PLUGIN_ID, "Config inválida o ausente")
         host.register_skill(PaymentSkill())
+        from pack_payments.payments import WompiPaymentCapability
+
+        payment_registry.register(PLUGIN_ID, WompiPaymentCapability())
 
     def extra_admin_routers(self) -> list[APIRouter]:
         """Router de la pestaña "Pagos" de Configuración (ADR-0049)."""

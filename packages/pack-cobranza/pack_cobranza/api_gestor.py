@@ -1,7 +1,7 @@
 """API de campo del gestor — contrato de la APK (ADR-0065).
 
 Router separado del `api.py` de campo v1 (ADR-0057). Implementa el contrato exacto
-de `app-cobranza-apk`: mismas rutas, **camelCase** idéntico a `types/gestor.ts` y
+de `solvershub-apk`: mismas rutas, **camelCase** idéntico a `types/gestor.ts` y
 **IDs como string** (UUID).
 
 Identidad unificada (ADR-0066): gestores y propietarios son **colaboradores del
@@ -20,6 +20,7 @@ el login no traía identificador de tenant.
 from __future__ import annotations
 
 import base64
+import secrets
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -29,7 +30,7 @@ from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
-from core.admin.auth import verify_password
+from core.admin.auth import hash_password, verify_password
 from core.db.models import Admin, TenantUser
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
@@ -51,10 +52,12 @@ from pack_cobranza.models import (
     Cliente,
     ClienteEvidencia,
     Cuota,
+    Device,
     Gasto,
     GastoEvidencia,
     Gestor,
     GestorPermiso,
+    IntentoAcceso,
     Liquidacion,
     Pago,
     PosicionGestor,
@@ -111,6 +114,8 @@ async def gestor_login(request: Request) -> JSONResponse:
     slug = str(body.get("tenant") or "").strip()
     usuario = str(body.get("usuario") or "").strip()
     password = str(body.get("password") or "")
+    imei = str(body.get("imei") or "").strip()
+    whatsapp = str(body.get("whatsapp") or "").strip()
     if not (slug and usuario and password):
         return JSONResponse({"error": "faltan datos"}, status_code=400)
 
@@ -135,9 +140,28 @@ async def gestor_login(request: Request) -> JSONResponse:
             ).scalar_one_or_none()
             if gestor is None or gestor.estatus != "activo":
                 return JSONResponse({"error": "no es gestor de esta cartera"}, status_code=403)
+            # Autovinculación (HU-39/43): si el gestor ya tiene un equipo activo con
+            # IMEI, se exige coincidir; si es el primer vínculo, no bloquea.
+            dispositivos = (
+                await session.execute(select(Device).where(Device.tenant_id == tenant_id, Device.gestor_id == gestor.id, Device.deleted_at.is_(None)))
+            ).scalars().all()
+            activos_imei = [d for d in dispositivos if d.estado == "activo" and d.imei]
+            legacy_activo = any(d.estado == "activo" and not d.imei for d in dispositivos)
+            vinculado, estado_dispositivo = False, "none"
+            if activos_imei:
+                if imei and any(d.imei == imei for d in activos_imei):
+                    vinculado, estado_dispositivo = True, "activo"
+                else:
+                    session.add(IntentoAcceso(tenant_id=tenant_id, gestor_id=gestor.id, imei=imei or None, whatsapp_number=whatsapp or None, resultado="denegado", motivo="dispositivo no autorizado", ip=request.client.host if request.client else None))
+                    return JSONResponse({"error": "dispositivo no autorizado"}, status_code=403)
+            elif legacy_activo:
+                vinculado, estado_dispositivo = True, "activo"
+            elif any(d.estado == "pendiente" for d in dispositivos):
+                estado_dispositivo = "pendiente"
             tokens = _par_tokens(secret, tenant_id, admin.id, rol="gestor", gestor_id=gestor.id)
             perfil = {"id": str(gestor.id), "usuario": _usuario_de(admin), "nombre": gestor.nombre, "apellido": gestor.apellido or ""}
-    return JSONResponse({**tokens, "gestor": perfil})
+            telefono = gestor.telefono or ""
+    return JSONResponse({**tokens, "gestor": perfil, "telefono": telefono, "dispositivoVinculado": vinculado, "estadoDispositivo": estado_dispositivo, "requiereVinculacion": not vinculado})
 
 
 @router.post("/auth/propietario/login")
@@ -235,6 +259,59 @@ async def actualizar_perfil(request: Request, authorization: str | None = Header
     return JSONResponse(perfil)
 
 
+# --------------------------------------------------------------- dispositivo (HU-39/43)
+@router.post("/gestor/dispositivo")
+async def vincular_dispositivo(request: Request, authorization: str | None = Header(default=None)) -> JSONResponse:
+    """Vincula este equipo al gestor del token; queda **pendiente** de aprobación."""
+    auth = await _auth(authorization)
+    if auth is None:
+        return JSONResponse({"error": "no autorizado"}, status_code=401)
+    tenant_id, payload = auth
+    gestor_id = payload.get("gestor_id")
+    if not gestor_id:
+        return JSONResponse({"error": "token sin gestor"}, status_code=403)
+    body = await request.json()
+    imei = str(body.get("imei") or "").strip()
+    whatsapp = str(body.get("whatsapp") or "").strip()
+    public_key = str(body.get("publicKey") or "").strip() or None
+    if not imei or not whatsapp:
+        return JSONResponse({"error": "imei y whatsapp son obligatorios"}, status_code=400)
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            gestor = await get_owned(session, Gestor, uuid.UUID(str(gestor_id)))
+            if gestor is None:
+                return JSONResponse({"error": "gestor no encontrado"}, status_code=404)
+            existente = (await session.execute(select(Device).where(Device.tenant_id == tenant_id, Device.gestor_id == gestor.id, Device.imei == imei, Device.deleted_at.is_(None)))).scalar_one_or_none()
+            if existente is not None:
+                if public_key and not existente.public_key:
+                    existente.public_key = public_key
+                return JSONResponse({"estado": existente.estado, "imei": existente.imei, "whatsapp": existente.whatsapp_number})
+            device = Device(tenant_id=tenant_id, codigo=str(uuid.uuid4()), api_key_hash=hash_password(secrets.token_urlsafe(24)), gestor_id=gestor.id, imei=imei, whatsapp_number=whatsapp, public_key=public_key, estado="pendiente")
+            session.add(device)
+            await session.flush()
+            session.add(IntentoAcceso(tenant_id=tenant_id, gestor_id=gestor.id, device_id=device.id, imei=imei, whatsapp_number=whatsapp, resultado="ok", motivo="solicitud de vinculación", ip=request.client.host if request.client else None))
+    return JSONResponse({"estado": "pendiente", "imei": imei, "whatsapp": whatsapp}, status_code=201)
+
+
+@router.get("/gestor/dispositivo")
+async def estado_dispositivo(authorization: str | None = Header(default=None)) -> JSONResponse:
+    """Estado de vinculación del equipo del gestor (la app espera la aprobación)."""
+    auth = await _auth(authorization)
+    if auth is None:
+        return JSONResponse({"error": "no autorizado"}, status_code=401)
+    tenant_id, payload = auth
+    gestor_id = payload.get("gestor_id")
+    if not gestor_id:
+        return JSONResponse({"error": "token sin gestor"}, status_code=403)
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            devices = (await session.execute(select(Device).where(Device.tenant_id == tenant_id, Device.gestor_id == uuid.UUID(str(gestor_id)), Device.deleted_at.is_(None)).order_by(Device.created_at.desc()))).scalars().all()
+    activo = next((d for d in devices if d.estado == "activo"), None)
+    pendiente = next((d for d in devices if d.estado == "pendiente"), None)
+    dev = activo or pendiente
+    return JSONResponse({"vinculado": activo is not None, "estado": dev.estado if dev else "none", "imei": dev.imei if dev else None, "whatsapp": dev.whatsapp_number if dev else None})
+
+
 # --------------------------------------------------------------- lecturas (F2)
 def _f(v: Any) -> float:
     return float(v) if v is not None else 0.0
@@ -276,7 +353,7 @@ async def _permisos_de(session, tenant_id: uuid.UUID, payload: dict[str, Any]) -
 
 def _config_public(cartera_id: uuid.UUID, cfg: CarteraConfig | None) -> dict[str, Any]:
     def g(attr: str, default: Any) -> Any:
-        return getattr(cfg, attr) if cfg is not None else default
+        return getattr(cfg, attr, default) if cfg is not None else default
 
     return {
         "carteraId": str(cartera_id),
@@ -341,13 +418,17 @@ async def mis_carteras(authorization: str | None = Header(default=None)) -> JSON
     if auth is None:
         return JSONResponse({"error": "no autorizado"}, status_code=401)
     tenant_id, payload = auth
+    from pack_cobranza.pagos import config_del_tenant
+
     async with tenant_scope(tenant_id):
+        cfg_pack = await config_del_tenant()
+        qr_activo = bool(cfg_pack.pago_qr_activo) if cfg_pack is not None else False
         async with get_session() as session:
             permisos = await _permisos_de(session, tenant_id, payload)
             out = []
             for c in await _carteras_visibles(session, tenant_id, payload):
                 cfg = (await session.execute(select(CarteraConfig).where(CarteraConfig.tenant_id == tenant_id, CarteraConfig.cartera_id == c.id))).scalar_one_or_none()
-                out.append({"id": str(c.id), "nombre": c.nombre, "estatus": c.estatus, "tipoInteres": _f(c.tipo_interes), "numCuotas": c.num_cuotas, "config": _config_public(c.id, cfg), "permisos": permisos})
+                out.append({"id": str(c.id), "nombre": c.nombre, "estatus": c.estatus, "tipoInteres": _f(c.tipo_interes), "numCuotas": c.num_cuotas, "pagoQrActivo": qr_activo, "config": _config_public(c.id, cfg), "permisos": permisos})
     return JSONResponse(out)
 
 
@@ -639,6 +720,37 @@ async def detalle_cuota(cartera_id: str, prestamo_id: str, cuota_id: str, author
         "abonos": [{"id": str(a.id), "valor": _f(a.valor), "fechaHora": _d(a.fecha_hora), "liquidado": False} for a in abonos],
         "ultimaVisita": {"resultado": ultima.resultado, "motivoNoPago": ultima.motivo_no_pago, "fecha": _d(ultima.fecha)} if ultima else None,
     })
+
+
+@router.post("/gestor/carteras/{cartera_id}/cuotas/{cuota_id}/link-pago")
+async def crear_link_pago_cuota(cartera_id: str, cuota_id: str, authorization: str | None = Header(default=None)) -> JSONResponse:
+    """Crea (o reutiliza) el link/QR de cobro de una cuota (REQ-APK-007, ADR-0067)."""
+    auth = await _auth(authorization)
+    if auth is None:
+        return JSONResponse({"error": "no autorizado"}, status_code=401)
+    tenant_id, payload = auth
+    try:
+        cid, quid = uuid.UUID(cartera_id), uuid.UUID(cuota_id)
+    except ValueError:
+        return JSONResponse({"error": "id inválido"}, status_code=400)
+    from pack_cobranza.pagos import PaymentCapabilityError, config_del_tenant, crear_link_para_cuota
+
+    async with tenant_scope(tenant_id):
+        cfg = await config_del_tenant()
+        if cfg is None or not cfg.pago_qr_activo:
+            return JSONResponse({"error": "El cobro con QR no está habilitado."}, status_code=403)
+        async with get_session() as session:
+            if await _cartera_visible(session, tenant_id, payload, cid) is None:
+                return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            cuota = await get_owned(session, Cuota, quid)
+            prestamo = await get_owned(session, Prestamo, cuota.prestamo_id) if cuota else None
+            if cuota is None or prestamo is None or prestamo.cartera_id != cid:
+                return JSONResponse({"error": "cuota no encontrada"}, status_code=404)
+        try:
+            data = await crear_link_para_cuota(cuota, cfg)
+        except PaymentCapabilityError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse(data, status_code=201)
 
 
 @router.get("/gestor/carteras/{cartera_id}/notas")

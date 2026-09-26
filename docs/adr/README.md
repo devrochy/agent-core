@@ -74,3 +74,5 @@ Se crean con `/adr`.
 | 0064 | Comunicación con el propietario: bitácora por tenant con enlace wa.me | aceptado |
 | 0065 | API de campo del gestor: el pack implementa el contrato de la APK | aceptado |
 | 0066 | El gestor es un colaborador del core: identidad unificada | aceptado |
+| 0067 | Capacidad de pagos del core y cobro digital en cobranza | aceptado |
+| 0068 | Autovinculación de dispositivo del gestor (HU-39/43) | aceptado |
