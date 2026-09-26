@@ -29,12 +29,12 @@ sudo tailscale funnel --set-path=/agent-core --bg --https=443 127.0.0.1:3003
 tailscale funnel status          # verificar: / y /agent-core en el 443
 ```
 
-**Limitación conocida:** el **panel admin no funciona bajo el prefijo**. Las
-plantillas usan rutas absolutas (`/admin/...`, `/static/...`) que el navegador
-resuelve contra la raíz del dominio (agent-sale). El webhook, `/healthz` y la
-API funcionan perfecto; para operar se usa el CLI dentro del contenedor o se
-verifica por BD/logs. Cuando agent-core tenga su propio hostname de 443 (VPS en
-el tailnet, ADR-0010, o DNS de Cloudflare), el panel vuelve a la raíz.
+**Panel bajo el prefijo (ADR-0073):** con `ROOT_PATH=/agent-core` la app prefija
+las URLs que genera (redirects, links, estáticos) con un middleware, así que el
+panel admin **sí funciona** en `https://devrochy.tail2ad60a.ts.net/agent-core/admin`
+(y el OAuth de Calendar completa). Sin `ROOT_PATH` (vacío) la app se sirve en la
+raíz. El proxy sigue quitando el prefijo al reenviar; el middleware solo reescribe
+la salida.
 
 > **Riesgo / pendiente de dominio estable (2026-09-22):** el **DNS público de la
 > Funnel de Tailscale se cayó** (`NXDOMAIN` en resolvers públicos) hasta reiniciar
@@ -52,6 +52,7 @@ el tailnet, ADR-0010, o DNS de Cloudflare), el panel vuelve a la raíz.
 | --- | --- |
 | `APP_ENV` | `production` (**no disponible en build**) |
 | `PUBLIC_BASE_URL` | `https://devrochy.tail2ad60a.ts.net/agent-core` |
+| `ROOT_PATH` | `/agent-core` (prefijo del proxy; ADR-0073) |
 | `DATABASE_URL` | `postgresql+asyncpg://app_runtime:app_runtime@huvhzaxim2notqkcxqa5930a:5432/agent_core` |
 | `MIGRATIONS_DATABASE_URL` | `postgresql+asyncpg://agent_core_migrations:<pw>@huvhzaxim2notqkcxqa5930a:5432/agent_core` |
 | `REDIS_URL` | `redis://default:<pw>@gk9bagcojtdrtofcx8tdxkiq:6379/0` |

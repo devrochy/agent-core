@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DebounceMode = Literal["inmediato", "rapido", "natural", "pausado"]
@@ -32,6 +32,18 @@ class Settings(BaseSettings):
     app_env: Literal["development", "production"] = Field(default="development", alias="APP_ENV")
     app_secret_key: str = Field(default="change-me", alias="APP_SECRET_KEY")
     public_base_url: str = Field(default="http://localhost:8000", alias="PUBLIC_BASE_URL")
+    # Prefijo de ruta bajo el que se sirve la app detrás de un proxy inverso
+    # (p. ej. "/agent-core" en Coolify/Tailscale). Vacío = servida en la raíz.
+    # El proxy QUITA el prefijo al reenviar; para las URLs que genera la app
+    # (redirects, links, estáticos) lo vuelve a agregar `PathPrefixMiddleware`
+    # (ADR-0073).
+    root_path: str = Field(default="", alias="ROOT_PATH")
+
+    @field_validator("root_path", mode="after")
+    @classmethod
+    def _normalize_root_path(cls, value: str) -> str:
+        stripped = (value or "").strip().strip("/")
+        return f"/{stripped}" if stripped else ""
 
     # --- Tenants (datos por cliente, fuera del código del framework) ---
     # Carpeta con los artefactos de cada tenant: catalog.json, docs/, evals/.
