@@ -33,7 +33,12 @@ log = get_logger(__name__)
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
-SCOPES = "https://www.googleapis.com/auth/calendar.events"
+# calendar.events: agendar. userinfo.email: leer el email de la cuenta
+# (external_id de la conexión; el exchange del `code` no lo devuelve).
+SCOPES = (
+    "https://www.googleapis.com/auth/calendar.events "
+    "https://www.googleapis.com/auth/userinfo.email"
+)
 PLUGIN_ID = "pack_calendar"
 CONNECTION_TYPE = "google_calendar"
 
