@@ -99,6 +99,7 @@ class Device(TenantMixin, Base):
     __table_args__ = (
         Index("uq_pack_cobranza_device_codigo", "tenant_id", "codigo", unique=True),
         Index("ix_pack_cobranza_devices_tenant_gestor", "tenant_id", "gestor_id"),
+        Index("uq_pack_cobranza_device_imei", "tenant_id", "imei", unique=True, postgresql_where=text("imei is not null and deleted_at is null")),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

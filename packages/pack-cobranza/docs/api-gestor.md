@@ -1,7 +1,7 @@
 # API de campo del gestor — contrato de la APK (plan)
 
 - **ADR:** `docs/adr/0065-api-de-campo-del-gestor.md`
-- **Consumidor:** `app-cobranza-apk` (Expo/React Native)
+- **Consumidor:** `solvershub-apk` (Expo/React Native)
 - **Router:** `pack_cobranza/api_gestor.py` (nuevo), montado en `module.py::public_routes()`
 - **Estado:** plan aprobado (2026-09-24). Sin código hasta ejecutar por fases.
 

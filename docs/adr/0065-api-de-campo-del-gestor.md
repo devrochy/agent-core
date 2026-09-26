@@ -5,7 +5,7 @@
 
 ## Contexto
 
-La APK del gestor (`app-cobranza-apk`, Expo/React Native) ya existe y está madura,
+La APK del gestor (`solvershub-apk`, Expo/React Native) ya existe y está madura,
 pero hoy consume el backend NestJS `devrochy/app-cobranza` con un contrato propio:
 `POST /auth/gestor/login`, `POST /auth/refresh`, `GET /perfil`, rutas `/gestor/…`
 en **camelCase** y **IDs numéricos**, y `POST /sync-offline/eventos` autenticado con
@@ -67,5 +67,5 @@ aparezca un segundo consumidor que prefiera el estilo nativo del pack.
 - `packages/pack-cobranza/pack_cobranza/api_gestor.py` (nuevo) y su montaje en
   `module.py::public_routes`.
 - `packages/pack-cobranza/docs/api-gestor.md` (plan y descomposición).
-- `app-cobranza-apk/src/{config.ts, api/*, types/*, session/*}` y
+- `solvershub-apk/src/{config.ts, api/*, types/*, session/*}` y
   `docs/ai/tasks/migracion-api-agent-core.md`.
