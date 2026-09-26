@@ -77,3 +77,4 @@ Se crean con `/adr`.
 | 0067 | Capacidad de pagos del core y cobro digital en cobranza | aceptado |
 | 0068 | Autovinculación de dispositivo del gestor (HU-39/43) | aceptado |
 | 0069 | Catálogo de tipos de conexión y generalización de `channel_connections` | aceptado |
+| 0070 | Vault unificado: los tokens OAuth de Google pasan a la conexión del tenant | aceptado |

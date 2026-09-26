@@ -114,7 +114,7 @@ async def get_active_connection(
                 ChannelConnection.active.is_(True),
                 ChannelConnection.deleted_at.is_(None),
             )
-            .order_by(ChannelConnection.is_primary.desc(), ChannelConnection.created_at)
+            .order_by(ChannelConnection.is_primary.desc(), ChannelConnection.created_at.desc())
             .limit(1)
         )
         return result.scalar_one_or_none()
