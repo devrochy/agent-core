@@ -13,6 +13,7 @@ from typing import Any
 
 from core.config import get_settings
 from core.gateway.channels.base import InboundAdapter, OutboundAdapter
+from core.gateway.channels.email import EmailSmtpOutbound
 from core.gateway.channels.whatsapp.inbound import WhatsAppMetaInbound
 from core.gateway.channels.whatsapp.outbound import WhatsAppMetaOutbound
 from core.shared.logger import get_logger
@@ -26,6 +27,7 @@ _INBOUND: dict[str, InboundAdapter] = {
 }
 _OUTBOUND: dict[str, OutboundAdapter] = {
     "meta": WhatsAppMetaOutbound(),
+    "smtp": EmailSmtpOutbound(),  # correo saliente (ADR-0071)
 }
 
 _scanned = False

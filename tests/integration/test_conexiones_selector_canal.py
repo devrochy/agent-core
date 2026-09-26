@@ -1,7 +1,7 @@
-"""Criterio de aceptación: el modal "Agregar conexión" de /admin/conexiones
-muestra un grid con las 5 opciones de canal (WhatsApp, Instagram, Messenger,
-WhatsApp vía Twilio, WhatsApp vía Plivo); solo WhatsApp (Meta) es clickeable
-y lleva al wizard real, el resto queda deshabilitado ("Próximamente")."""
+"""Criterio de aceptación de /admin/conexiones: el modal "Agregar conexión" se
+genera desde el catálogo (ADR-0069) agrupado por categoría; los tipos `manual`
+(como correo) abren un formulario genérico que guarda credenciales cifradas y la
+conexión aparece listada; los no disponibles quedan como "Próximamente"."""
 
 from __future__ import annotations
 
@@ -48,7 +48,25 @@ async def _new_tenant():
     return tid
 
 
-async def test_modal_muestra_las_cinco_opciones_de_canal(app_client):
+async def _cleanup_email(tenant_id: uuid.UUID, from_address: str) -> None:
+    from sqlalchemy import select
+
+    from core.db.models import ChannelConnection
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(ChannelConnection).where(ChannelConnection.external_id == from_address)
+                )
+            ).scalars().first()
+            if row is not None:
+                await session.delete(row)
+
+
+async def test_modal_agrupado_por_categoria_con_disponibles_y_proximamente(app_client):
     tid = await _new_tenant()
     session_cookie = await _login(app_client)
     cookie = await _switch_tenant(app_client, session_cookie, tid)
@@ -56,20 +74,69 @@ async def test_modal_muestra_las_cinco_opciones_de_canal(app_client):
     r = await app_client.get("/admin/conexiones", headers={"Cookie": cookie})
     assert r.status_code == 200
     assert "Elegí el canal a conectar" in r.text
-    assert "WhatsApp" in r.text
-    assert "Instagram" in r.text
-    assert "Messenger" in r.text
-    assert "vía Twilio" in r.text
-    assert "vía Plivo" in r.text
+    # Categorías del catálogo.
+    assert "Comunicación" in r.text
+    assert "Correo" in r.text
+    assert "Calendario" in r.text
+    # Disponibles con su link de alta.
+    assert 'href="/admin/conexiones/wizard/whatsapp/elegir-entorno"' in r.text
+    assert 'href="/admin/conexiones/nuevo?type=email_smtp"' in r.text
+    assert 'href="/admin/plugins/pack_calendar/oauth"' in r.text
+    # No disponibles (Instagram, Messenger, Twilio, Plivo).
     assert r.text.count("Próximamente") == 4
+    assert r.text.count('aria-disabled="true"') == 4
 
 
-async def test_solo_whatsapp_meta_es_clickeable_hacia_el_wizard(app_client):
+async def test_formulario_generico_guarda_conexion_de_correo(app_client):
+    tid = await _new_tenant()
+    session_cookie = await _login(app_client)
+    cookie = await _switch_tenant(app_client, session_cookie, tid)
+    from_address = f"{_uniq('smtp')}@ejemplo.com"
+    try:
+        # GET del formulario generado desde el credentials_schema del tipo.
+        r = await app_client.get(
+            "/admin/conexiones/nuevo?type=email_smtp", headers={"Cookie": cookie}
+        )
+        assert r.status_code == 200
+        assert 'name="host"' in r.text
+        assert 'name="from_address"' in r.text
+        assert 'name="password"' in r.text  # secreto renderizado como password
+
+        # POST: guarda cifrado y redirige al listado.
+        r = await app_client.post(
+            "/admin/conexiones/nuevo",
+            headers={"Cookie": cookie},
+            data={
+                "type_id": "email_smtp",
+                "label": "Correo de prueba",
+                "host": "smtp.ejemplo.com",
+                "port": "587",
+                "username": "usuario",
+                "password": "secreto",
+                "from_address": from_address,
+                "use_tls": "on",
+            },
+        )
+        assert r.status_code == 303
+        assert "/admin/conexiones?" in r.headers["location"]
+
+        r = await app_client.get("/admin/conexiones", headers={"Cookie": cookie})
+        assert from_address in r.text
+        assert "Correo (SMTP)" in r.text or "Correo" in r.text
+    finally:
+        await _cleanup_email(tid, from_address)
+
+
+async def test_formulario_invalido_redirige(app_client):
     tid = await _new_tenant()
     session_cookie = await _login(app_client)
     cookie = await _switch_tenant(app_client, session_cookie, tid)
 
-    r = await app_client.get("/admin/conexiones", headers={"Cookie": cookie})
-    assert r.status_code == 200
-    assert 'href="/admin/conexiones/wizard/whatsapp/elegir-entorno"' in r.text
-    assert r.text.count('aria-disabled="true"') == 4
+    # Un tipo wizard no se sirve por el formulario genérico.
+    r = await app_client.get(
+        "/admin/conexiones/nuevo?type=whatsapp_meta", headers={"Cookie": cookie}
+    )
+    assert r.status_code == 303
+    from urllib.parse import unquote
+
+    assert "Tipo de conexión inválido" in unquote(r.headers["location"])

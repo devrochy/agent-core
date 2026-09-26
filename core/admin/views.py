@@ -1840,6 +1840,29 @@ async def connections_page(request: Request):
         return _login_redirect()
     connections = await list_connections()
 
+    # Selector "Agregar conexión" generado desde el catálogo (ADR-0069): agrupado
+    # por categoría, con los no disponibles como "Próximamente".
+    from core.gateway.connection_types import setup_url, types_by_category
+
+    catalog = [
+        {
+            "category": group["category"],
+            "label": group["label"],
+            "items": [
+                {
+                    "id": t.id,
+                    "label": t.label,
+                    "description": t.description,
+                    "icon": t.icon,
+                    "available": t.available,
+                    "url": setup_url(t),
+                }
+                for t in group["items"]
+            ],
+        }
+        for group in types_by_category()
+    ]
+
     # URL del webhook por tenant (cada app tiene el suyo: /webhooks/whatsapp/<slug>).
     from core.db.models import PhoneNumber, Tenant
     from core.tenants import tenant_webhook_url
@@ -1911,8 +1934,88 @@ async def connections_page(request: Request):
         connections=rows,
         has_connection=bool(rows),
         webhook_url=tenant_webhook_url(tenant_slug) if tenant_slug else "",
+        catalog=catalog,
     )
     return _render("conexiones.html", ctx)
+
+
+@router.get("/conexiones/nuevo", response_class=HTMLResponse)
+async def connection_new(request: Request):
+    """Formulario genérico de credenciales para tipos `manual` del catálogo."""
+    if await current_admin(request) is None:
+        return _login_redirect()
+    from core.admin.form_generator import render_json_schema_form
+    from core.gateway.connection_types import SETUP_MANUAL, get_connection_type
+
+    type_id = request.query_params.get("type", "")
+    ctype = get_connection_type(type_id)
+    if ctype is None or not ctype.available or ctype.setup_kind != SETUP_MANUAL:
+        return RedirectResponse(
+            "/admin/conexiones?flash=Tipo de conexión inválido&flash_type=danger",
+            status_code=303,
+        )
+
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+    ctx.update(
+        ctype_id=ctype.id,
+        ctype_label=ctype.label,
+        ctype_description=ctype.description,
+        form_fields=render_json_schema_form(ctype.credentials_schema, {}),
+    )
+    return _render("conexion_form.html", ctx)
+
+
+@router.post("/conexiones/nuevo")
+async def connection_new_save(request: Request):
+    """Guarda una conexión de un tipo `manual` desde el formulario genérico."""
+    if await current_admin(request) is None:
+        return _login_redirect()
+    from core.admin.form_generator import parse_json_schema_form
+    from core.gateway.connection_types import SETUP_MANUAL, get_connection_type
+
+    form = await request.form()
+    type_id = str(form.get("type_id", ""))
+    label = str(form.get("label", "") or "")
+    ctype = get_connection_type(type_id)
+    if ctype is None or not ctype.available or ctype.setup_kind != SETUP_MANUAL:
+        return RedirectResponse(
+            "/admin/conexiones?flash=Tipo de conexión inválido&flash_type=danger",
+            status_code=303,
+        )
+
+    form_data = {str(k): str(v) for k, v in form.items()}
+    credentials = parse_json_schema_form(ctype.credentials_schema, form_data, {})
+    missing = [k for k in ctype.credentials_schema.get("required", []) if not credentials.get(k)]
+    if missing:
+        return RedirectResponse(
+            f"/admin/conexiones/nuevo?type={ctype.id}"
+            f"&flash=Faltan campos: {', '.join(missing)}&flash_type=danger",
+            status_code=303,
+        )
+
+    try:
+        from core.gateway.connections import save_connection
+
+        _connection, created = await save_connection(
+            label or ctype.label, credentials, type_id=ctype.id
+        )
+        log.info(
+            "connection_type_saved",
+            tenant_id=str(get_current_tenant_id() or ""),
+            type_id=ctype.id,
+            created=created,
+            connection_id=str(_connection.id),
+        )
+        action = "creada" if created else "actualizada"
+        return RedirectResponse(f"/admin/conexiones?flash=Conexión {ctype.label} {action} ✓", status_code=303)
+    except Exception as exc:
+        log.exception("connection_type_save_failed")
+        return RedirectResponse(
+            f"/admin/conexiones/nuevo?type={ctype.id}&flash=Error al guardar: {str(exc)[:120]}&flash_type=danger",
+            status_code=303,
+        )
 
 
 @router.post("/conexiones/guardar")

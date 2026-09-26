@@ -141,6 +141,9 @@ class MCPTool:
     handler: ToolHandler
     plugin_id: str = ""  # lo completa el MCPHost al registrar
     scopes: list[str] = field(default_factory=list)  # scopes que requiere (ADR-0019)
+    # Tipos de conexión activos que la tool necesita para ofrecerse/ejecutarse
+    # (ADR-0072; ej. ["google_calendar"]). Ortogonal a packs/salud/scopes.
+    requires_connection_types: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -100,6 +100,21 @@ def _decrypt_raw(connection: ChannelConnection) -> dict[str, Any]:
     return get_secret_box().decrypt_json(connection.credentials_encrypted)
 
 
+async def active_connection_type_ids(tenant_id: uuid.UUID | None = None) -> set[str]:
+    """`type_id` de las conexiones activas del tenant (gating ADR-0072)."""
+    tid = tenant_id if tenant_id is not None else get_current_tenant_id()
+    async with get_session() as session:
+        rows = await session.execute(
+            select(ChannelConnection.type_id).where(
+                ChannelConnection.tenant_id == tid,
+                ChannelConnection.active.is_(True),
+                ChannelConnection.deleted_at.is_(None),
+                ChannelConnection.type_id.is_not(None),
+            )
+        )
+    return {str(t) for t in rows.scalars().all() if t}
+
+
 async def get_active_connection(
     type_id: str, tenant_id: uuid.UUID | None = None
 ) -> ChannelConnection | None:
@@ -114,7 +129,7 @@ async def get_active_connection(
                 ChannelConnection.active.is_(True),
                 ChannelConnection.deleted_at.is_(None),
             )
-            .order_by(ChannelConnection.is_primary.desc(), ChannelConnection.created_at)
+            .order_by(ChannelConnection.is_primary.desc(), ChannelConnection.created_at.desc())
             .limit(1)
         )
         return result.scalar_one_or_none()

@@ -1,5 +1,42 @@
 # Changelog
 
+## Sin versión — conexiones clasificadas + pack-calendar v2 (2026-09-26)
+
+Conexiones del panel clasificadas por categoría (comunicación, correo, calendario)
+y **pack-calendar v2**, con gating por conexión. Ver ADR-0069/0070/0072. Épica #97.
+
+### Core
+- **Catálogo de tipos de conexión** `connection_types` (tabla de sistema, patrón
+  `plans`) + `sync_connection_types()` en el arranque (ADR-0069).
+- `channel_connections` gana `type_id`/`category`; `save_connection` se generaliza
+  (valida credenciales contra el `credentials_schema` del tipo), corrige el filtro
+  de tenant del lookup y acota la primacía a la categoría de mensajería.
+- `/admin/conexiones`: el modal "Agregar conexión" se genera desde el catálogo,
+  agrupado por categoría; los tipos `manual` (correo SMTP) abren un formulario
+  genérico de credenciales (FormEngine + SecretBox).
+- **Gating de tools por conexión activa** (`MCPTool.requires_connection_types`,
+  ADR-0072): en pre-prompt y en `_tool_denial`.
+
+### pack-calendar v2
+- Los tokens OAuth de Google pasan a la **conexión del tenant** (vault), con
+  dual-read transitorio de `plugin_configs` (ADR-0070).
+- **Submenú** `/calendar/*` (ADR-0061/0063): Conexión · Horarios y calendario ·
+  Tipos de cita · Citas.
+- Tablas `pack_calendar_appointment_types` y `pack_calendar_appointments`
+  (`tenant_id` + RLS + FORCE RLS).
+- `create_calendar_event` espeja la cita en la tabla; `check_availability` usa el
+  horario de atención configurado.
+- Sin cuenta conectada, el asistente **no** ofrece agendar (gating).
+
+### Correo saliente (ADR-0071)
+- Adaptador de canal `smtp` (built-in, `smtplib`) reutilizando la cola de salida
+  (`outbound_send`): un envío es un `Message` del canal `email`.
+- Tool **`send_email`** (gated por conexión `email_smtp`): crea el `Customer` +
+  `Conversation` del destinatario y encola el correo. Sin inbound.
+
+### Migraciones
+- Core `0038` (catálogo de conexiones). Pack-calendar `0001` (tipos de cita y citas).
+
 ## Sin versión — pack de cobranza (2026-09-24)
 
 Nuevo vertical **`pack-cobranza`**: carteras, préstamos y negociación de cobranza

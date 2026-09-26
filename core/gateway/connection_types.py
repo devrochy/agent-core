@@ -52,6 +52,8 @@ class ConnectionType:
     credentials_schema: dict[str, Any] = field(default_factory=dict)
     # Clave de credencial que se usa como `external_id` de la conexión.
     external_id_key: str = ""
+    # URL del flujo de alta para `setup_kind=wizard` (los `manual` van al form).
+    setup_path: str = ""
     produces_conversations: bool = False
     available: bool = True
     setup_kind: str = SETUP_MANUAL
@@ -98,6 +100,7 @@ _EMAIL_SCHEMA: dict[str, Any] = {
         "from_address": {"type": "string", "title": "Remitente (email)"},
         "use_tls": {"type": "boolean", "title": "Usar TLS", "default": True},
     },
+    "required": ["host", "port", "username", "password", "from_address"],
 }
 
 _CALENDAR_SCHEMA: dict[str, Any] = {
@@ -122,6 +125,7 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
         description="Meta Cloud API",
         credentials_schema=_META_SCHEMA,
         external_id_key="phone_number_id",
+        setup_path="/admin/conexiones/wizard/whatsapp/elegir-entorno",
         produces_conversations=True,
         available=True,
         setup_kind=SETUP_WIZARD,
@@ -156,6 +160,32 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
         sort_order=30,
     ),
     ConnectionType(
+        id="whatsapp_twilio",
+        category=CATEGORY_COMMUNICATION,
+        channel="whatsapp",
+        label="WhatsApp",
+        provider="twilio",
+        icon="bi-whatsapp",
+        description="vía Twilio",
+        produces_conversations=True,
+        available=False,
+        setup_kind=SETUP_MANUAL,
+        sort_order=31,
+    ),
+    ConnectionType(
+        id="whatsapp_plivo",
+        category=CATEGORY_COMMUNICATION,
+        channel="whatsapp",
+        label="WhatsApp",
+        provider="plivo",
+        icon="bi-whatsapp",
+        description="vía Plivo",
+        produces_conversations=True,
+        available=False,
+        setup_kind=SETUP_MANUAL,
+        sort_order=32,
+    ),
+    ConnectionType(
         id="email_smtp",
         category=CATEGORY_EMAIL,
         channel="email",
@@ -180,6 +210,7 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
         description="Agendamiento de citas con OAuth2 de Google",
         credentials_schema=_CALENDAR_SCHEMA,
         external_id_key="account_email",
+        setup_path="/admin/plugins/pack_calendar/oauth",
         produces_conversations=False,
         available=True,
         setup_kind=SETUP_WIZARD,
@@ -211,6 +242,33 @@ def available_types_by_category() -> dict[str, list[ConnectionType]]:
     for t in available_types():
         grouped.setdefault(t.category, []).append(t)
     return grouped
+
+
+def types_by_category(include_unavailable: bool = True) -> list[dict[str, Any]]:
+    """Tipos agrupados por categoría para el selector del panel.
+
+    Devuelve `[{category, label, items: [ConnectionType, ...]}]`, omitiendo
+    categorías vacías y preservando el orden declarado.
+    """
+    groups: list[dict[str, Any]] = []
+    for cat in CATEGORY_ORDER:
+        items = [
+            t
+            for t in connection_types()
+            if t.category == cat and (include_unavailable or t.available)
+        ]
+        if items:
+            groups.append({"category": cat, "label": CATEGORY_LABELS[cat], "items": items})
+    return groups
+
+
+def setup_url(ctype: ConnectionType) -> str:
+    """URL del flujo de alta del tipo (vacío si el tipo no está disponible)."""
+    if not ctype.available:
+        return ""
+    if ctype.setup_kind == SETUP_WIZARD:
+        return ctype.setup_path
+    return f"/admin/conexiones/nuevo?type={ctype.id}"
 
 
 def messaging_type_ids() -> set[str]:
@@ -329,5 +387,7 @@ __all__ = [
     "get_connection_type",
     "messaging_type_ids",
     "normalize_credentials",
+    "setup_url",
     "sync_connection_types",
+    "types_by_category",
 ]
