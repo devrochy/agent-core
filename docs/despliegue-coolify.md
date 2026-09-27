@@ -12,47 +12,34 @@ igual que agent-sale). Un solo entorno por ahora, siguiendo la rama `develop`.
 
 ## Dominio público
 
-agent-core se sirve bajo un **prefijo de ruta en el Funnel 443** de Tailscale,
-porque Meta exige HTTPS/443 para el webhook y el 443 ya estaba ocupado por el
-test de agent-sale:
+agent-core (test) se sirve en **`https://app.solvershub.site`** vía **Cloudflare
+Tunnel** (outbound: no se abren puertos ni se gestiona TLS). `solvershub.site`
+está en Cloudflare; el tunnel publica:
 
 ```
-https://devrochy.tail2ad60a.ts.net/          → 127.0.0.1:3000  (agent-sale test, intacto)
-https://devrochy.tail2ad60a.ts.net/agent-core → 127.0.0.1:3003  (agent-core)
+https://app.solvershub.site → http://localhost:3003  (agent-core test)
 ```
 
-Tailscale quita el prefijo `/agent-core` al reenviar, así que agent-core recibe
-rutas limpias (`/healthz`, `/webhooks/...`). Se montó con:
+- El conector **`cloudflared`** corre como **recurso Docker en Coolify** con el
+  `TUNNEL_TOKEN` del tunnel y `--network host` para alcanzar `http://localhost:3003`.
+- El **Public Hostname** del tunnel (`app.solvershub.site` → `http://localhost:3003`)
+  se configura en Zero Trust → Networks → Tunnels; eso crea el DNS (CNAME).
+- **Cloudflare Access**: aplicación para `app.solvershub.site` con policy *Allow*;
+  **Bypass** para `/webhooks/*` y `/healthz` (Meta y el health check no autentican).
+- El host dedicado sirve la app en la **raíz**: `ROOT_PATH` queda **vacío** y el
+  panel funciona en `https://app.solvershub.site/admin`.
 
-```bash
-sudo tailscale funnel --set-path=/agent-core --bg --https=443 127.0.0.1:3003
-tailscale funnel status          # verificar: / y /agent-core en el 443
-```
-
-**Panel bajo el prefijo (ADR-0073):** con `ROOT_PATH=/agent-core` la app prefija
-las URLs que genera (redirects, links, estáticos) con un middleware, así que el
-panel admin **sí funciona** en `https://devrochy.tail2ad60a.ts.net/agent-core/admin`
-(y el OAuth de Calendar completa). Sin `ROOT_PATH` (vacío) la app se sirve en la
-raíz. El proxy sigue quitando el prefijo al reenviar; el middleware solo reescribe
-la salida.
-
-> **Riesgo / pendiente de dominio estable (2026-09-22):** el **DNS público de la
-> Funnel de Tailscale se cayó** (`NXDOMAIN` en resolvers públicos) hasta reiniciar
-> `tailscaled` → Meta no puede verificar ni entregar mientras tanto. Además, el
-> dominio *default* de Coolify para la app es `http://<app>.186.82.102.11.sslip.io`
-> (**HTTP, sin TLS**) y los **puertos 80/443 del host están cerrados** desde internet,
-> así que Coolify/Traefik no puede servir HTTPS ni validar Let's Encrypt. **Decisión
-> pendiente** (ver `docs/BACKLOG.md`): Cloudflare Tunnel (`agentcore.formotos.com`,
-> outbound, requiere `cloudflared tunnel login` en la cuenta dueña de `formotos.com`)
-> vs abrir 80/443 y usar el dominio de Coolify.
+> Reemplaza a la Funnel de Tailscale (`https://devrochy.tail2ad60a.ts.net/agent-core`),
+> que se degradaba de forma intermitente (el TLS público se cortaba y Meta dejaba
+> de entregar webhooks) y requería `sudo systemctl restart tailscaled`.
 
 ## Variables de entorno (App, por API/UI de Coolify)
 
 | Variable | Valor |
 | --- | --- |
 | `APP_ENV` | `production` (**no disponible en build**) |
-| `PUBLIC_BASE_URL` | `https://devrochy.tail2ad60a.ts.net/agent-core` |
-| `ROOT_PATH` | `/agent-core` (prefijo del proxy; ADR-0073) |
+| `PUBLIC_BASE_URL` | `https://app.solvershub.site` |
+| `ROOT_PATH` | *(vacío)* — host dedicado, la app se sirve en la raíz |
 | `DATABASE_URL` | `postgresql+asyncpg://app_runtime:app_runtime@huvhzaxim2notqkcxqa5930a:5432/agent_core` |
 | `MIGRATIONS_DATABASE_URL` | `postgresql+asyncpg://agent_core_migrations:<pw>@huvhzaxim2notqkcxqa5930a:5432/agent_core` |
 | `REDIS_URL` | `redis://default:<pw>@gk9bagcojtdrtofcx8tdxkiq:6379/0` |
@@ -73,8 +60,8 @@ Notas:
   verdad y la password maestra de Coolify no entra en el entorno de la app.
 - **`APP_ENV` va "Not available during build"** (mismo gotcha que agent-sale):
   las variables de la app se inyectan también en el build.
-- **`PUBLIC_BASE_URL` incluye el prefijo** `/agent-core`: de ahí sale el webhook
-  del tenant y los OAuth de packs.
+- **`PUBLIC_BASE_URL` es la URL pública del host**: de ahí salen el webhook del
+  tenant y los OAuth de packs.
 
 ## Despliegue
 
@@ -103,8 +90,8 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 
 ## Onboarding de un tenant (E2E)
 
-El panel no sirve bajo el prefijo, así que el alta se hace con el CLI dentro del
-contenedor (usa la BD desplegada y valida las credenciales contra la Graph API):
+El alta puede hacerse desde el panel (`https://app.solvershub.site/admin/tenants`),
+o con el CLI dentro del contenedor (usa la BD desplegada y valida contra la Graph API):
 
 ```bash
 APP=$(docker ps --format '{{.Names}}' | grep ggzjdyc | head -1)
@@ -119,7 +106,7 @@ docker exec "$APP" agent-core tenant create --non-interactive \
 
 Luego en Meta (App → WhatsApp → Configuration):
 
-- Callback URL: `https://devrochy.tail2ad60a.ts.net/agent-core/webhooks/whatsapp/<slug>`
+- Callback URL: `https://app.solvershub.site/webhooks/whatsapp/<slug>`
 - Verify token: el de la conexión del tenant
 - Campo `messages`
 
@@ -131,27 +118,26 @@ Luego en Meta (App → WhatsApp → Configuration):
 ```bash
 docker ps --format '{{.Names}}\t{{.Status}}' | grep ggzjdyc        # Up (healthy)
 curl -s http://127.0.0.1:3003/healthz                              # {"status":"ok"}
-curl -s https://devrochy.tail2ad60a.ts.net/agent-core/healthz      # desde FUERA del tailnet
-curl -s "https://devrochy.tail2ad60a.ts.net/agent-core/webhooks/whatsapp/<slug>?hub.mode=subscribe&hub.verify_token=<vt>&hub.challenge=x"  # → x
+curl -s https://app.solvershub.site/healthz                        # desde internet (Cloudflare)
+curl -s "https://app.solvershub.site/webhooks/whatsapp/<slug>?hub.mode=subscribe&hub.verify_token=<vt>&hub.challenge=x"  # → x
 # migraciones al head:
-docker exec huvhzaxim2notqkcxqa5930a psql -U postgres -d agent_core -tAc "SELECT version_num FROM alembic_version;"   # 0011
+docker exec huvhzaxim2notqkcxqa5930a psql -U postgres -d agent_core -tAc "SELECT version_num FROM alembic_version;"   # 0038
 # el rol de runtime existe:
 docker exec huvhzaxim2notqkcxqa5930a psql -U postgres -d agent_core -tAc "SELECT rolname FROM pg_roles WHERE rolname='app_runtime';"
 ```
 
 ## Gotchas conocidos
 
-- **El panel no carga bajo `/agent-core`** (rutas absolutas en las plantillas).
-  El webhook y la API no se ven afectados.
+- **El panel requiere un host en la raíz.** Con host dedicado (`app.solvershub.site`)
+  funciona directo; si se sirve bajo un prefijo de ruta, usar `ROOT_PATH` (ADR-0073).
 - **Puertos por defecto de Coolify chocan con agent-sale:** las apps/databases
   nuevas traen `3000:xxxx` de port mapping; cambiarlo a loopback con puerto
   libre (`127.0.0.1:5439`, `127.0.0.1:6381`, `127.0.0.1:3003`) antes del primer
   start.
 - **Un contenedor atascado en crash-loop bloquea el siguiente deploy**
   (`No such container` al limpiar). `docker rm -f <container>` y redesplegar.
-- **El webhook de Meta exige 443** y el Funnel tiene un solo hostname: un solo
-  prefijo de app a la vez puede tener E2E real (agent-sale en `/`, agent-core
-  en `/agent-core`).
+- **El webhook de Meta exige 443**: lo sirve Cloudflare (TLS en el edge) y el
+  tunnel reenvía a `http://localhost:3003`. No hace falta abrir puertos en el host.
 - **Los valores de env de Coolify van cifrados** en su BD (Laravel): no
   insertarlos por SQL, usar la UI o la API.
 
