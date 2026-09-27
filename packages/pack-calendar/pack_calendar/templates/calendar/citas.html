@@ -1,8 +1,5 @@
 {% extends "base.html" %}
 {% block title %}Calendar · Citas{% endblock %}
-{% block extra_head %}
-<link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.css" rel="stylesheet">
-{% endblock %}
 {% block content %}
 <h1 class="fs-3 mb-4">Calendar · Citas</h1>
 <div class="alert alert-warning d-none" id="google-error-alert">
@@ -12,6 +9,36 @@
 <div class="card">
   <div class="card-body">
     <div id="calendar"></div>
+  </div>
+</div>
+
+<div class="card mt-4">
+  <div class="card-header">Citas agendadas</div>
+  <div class="card-body">
+    {% if scheduled_citas %}
+    <table class="table align-middle">
+      <thead>
+        <tr><th>Cuándo</th><th>Título</th><th>Cliente</th><th class="text-end">Acciones</th></tr>
+      </thead>
+      <tbody>
+        {% for cita in scheduled_citas %}
+        <tr>
+          <td class="small">{{ cita.cuando }}</td>
+          <td><strong>{{ cita.title }}</strong></td>
+          <td class="small text-secondary">{{ cita.attendee_email }}</td>
+          <td class="text-end">
+            <form method="post" action="/calendar/citas/{{ cita.id }}/cancelar" class="d-inline"
+                  onsubmit="return confirm('¿Cancelar esta cita? Se borra también en Google Calendar.');">
+              <button class="btn btn-outline-danger btn-sm"><i class="bi bi-x-circle"></i> Cancelar</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-secondary mb-0">Todavía no hay citas agendadas por el asistente.</p>
+    {% endif %}
   </div>
 </div>
 
@@ -30,7 +57,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/locales-all.global.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@fullcalendar/core@6.1.15/locales/es.global.min.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
   const timezone = {{ calendar_timezone | tojson }};
@@ -105,7 +132,27 @@ document.addEventListener('DOMContentLoaded', function () {
       right: 'dayGridMonth,timeGridWeek,timeGridDay'
     },
     buttonText: { month: 'Mes', week: 'Semana', day: 'Día', today: 'Hoy' },
-    events: { url: '/calendar/citas/calendario.json' },
+    events: function (info, success, failure) {
+      // Fetch controlado por nosotros: envía la sesión (same-origin) y, si el
+      // endpoint responde algo no iterable (401/redirect), llamamos failure()
+      // en vez de dejar que FullCalendar rompa su ciclo (TypeError e is not iterable).
+      const params = '?start=' + encodeURIComponent(info.start.toISOString()) +
+                     '&end=' + encodeURIComponent(info.end.toISOString());
+      fetch('/calendar/citas/calendario.json' + params, { credentials: 'same-origin' })
+        .then(function (r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.json(); })
+        .then(function (data) {
+          if (data.google_error) {
+            document.getElementById('google-error-alert').classList.remove('d-none');
+          } else {
+            document.getElementById('google-error-alert').classList.add('d-none');
+          }
+          success(data.events || []);
+        })
+        .catch(failure);
+    },
+    eventSourceFailure: function () {
+      document.getElementById('google-error-alert').classList.remove('d-none');
+    },
     eventClick: abrirDetalle,
     eventDidMount: function (info) {
       if ((info.event.extendedProps.status || '') === 'cancelled') {
@@ -115,16 +162,6 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   });
   calendar.render();
-
-  // Si el backend reportó que Google falló, avisar (sin romper el calendario).
-  fetch('/calendar/citas/calendario.json?start=' + encodeURIComponent(new Date(Date.now() - 86400000).toISOString()) + '&end=' + encodeURIComponent(new Date(Date.now() + 86400000).toISOString()))
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      if (data.google_error) {
-        document.getElementById('google-error-alert').classList.remove('d-none');
-      }
-    })
-    .catch(function () {});
 });
 </script>
 {% endblock %}

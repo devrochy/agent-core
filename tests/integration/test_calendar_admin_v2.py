@@ -295,3 +295,20 @@ async def test_calendario_json_fusiona_eventos_de_google(app_client, monkeypatch
         assert externo["color"] == "#0d6efd"
     finally:
         await _delete_appointment(tid, appt_id)
+
+
+async def test_citas_pagina_lista_citas_agendadas(app_client):
+    from datetime import datetime
+
+    cookie, tid = await _calendar_tenant_tid(app_client)
+    start = datetime(2026, 10, 20, 10, 0, tzinfo=UTC)
+    appt_id = await _make_appointment(
+        tid, title="Cita de la lista", start_utc=start, attendee_email="x@y.com"
+    )
+    try:
+        r = await app_client.get("/calendar/citas", headers={"Cookie": cookie})
+        assert r.status_code == 200
+        assert "Cita de la lista" in r.text
+        assert f"/calendar/citas/{appt_id}/cancelar" in r.text
+    finally:
+        await _delete_appointment(tid, appt_id)
