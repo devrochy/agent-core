@@ -69,12 +69,39 @@
             <label class="form-label" for="f-notes">Notas</label>
             <textarea class="form-control" id="f-notes" rows="2"></textarea>
           </div>
+          <div class="form-check" id="f-notify-wrap">
+            <input class="form-check-input" type="checkbox" id="f-notify" checked>
+            <label class="form-check-label" for="f-notify">Avisar al cliente por WhatsApp si cambia el horario</label>
+          </div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
           <button type="submit" class="btn btn-primary" id="f-submit">Guardar</button>
         </div>
       </form>
+    </div>
+  </div>
+</div>
+
+{# Modal de confirmación al mover/redimensionar una cita #}
+<div class="modal fade" id="modal-confirmar" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Confirmar movimiento</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p id="confirmar-texto" class="mb-3"></p>
+        <div class="form-check" id="confirmar-notify-wrap">
+          <input class="form-check-input" type="checkbox" id="confirmar-notify" checked>
+          <label class="form-check-label" for="confirmar-notify">Avisar al cliente por WhatsApp</label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" id="confirmar-cancelar">Cancelar</button>
+        <button type="button" class="btn btn-primary" id="confirmar-aceptar">Confirmar</button>
+      </div>
     </div>
   </div>
 </div>
@@ -86,6 +113,7 @@ document.addEventListener('DOMContentLoaded', function () {
   const defaultDurationMin = {{ calendar_default_duration | tojson }};
   const calendarEl = document.getElementById('calendar');
   let tipos = [];
+  let pendingInfo = null; // info del eventDrop/eventResize a la espera de confirmación
 
   function toast(msg, ok) {
     const el = document.getElementById(ok ? 'toast-ok' : 'toast-error');
@@ -158,11 +186,14 @@ document.addEventListener('DOMContentLoaded', function () {
     document.getElementById('modal-form-titulo').textContent = mode === 'edit' ? 'Editar cita' : 'Nueva cita';
     document.getElementById('f-submit').textContent = mode === 'edit' ? 'Guardar cambios' : 'Crear cita';
     document.getElementById('form-cita').dataset.mode = mode;
+    // El aviso por WhatsApp aplica al editar (cambio de horario), no al crear.
+    document.getElementById('f-notify-wrap').classList.toggle('d-none', mode !== 'edit');
     if (mode === 'create') {
       document.getElementById('f-id').value = '';
       document.getElementById('f-title').value = '';
       document.getElementById('f-email').value = '';
       document.getElementById('f-notes').value = '';
+      document.getElementById('f-notify').checked = true;
       cargarTiposCita('');
     } else {
       const p = prefill.extendedProps || {};
@@ -170,6 +201,7 @@ document.addEventListener('DOMContentLoaded', function () {
       document.getElementById('f-title').value = prefill.title || '';
       document.getElementById('f-email').value = p.attendee_email || '';
       document.getElementById('f-notes').value = p.description || '';
+      document.getElementById('f-notify').checked = true;
       cargarTiposCita(p.appointment_type_id || '');
     }
     document.getElementById('f-start').value = prefill.start ? toLocalValue(prefill.start) : '';
@@ -257,7 +289,8 @@ document.addEventListener('DOMContentLoaded', function () {
       notes: document.getElementById('f-notes').value.trim(),
       appointment_type_id: document.getElementById('f-type').value || null,
       start: startRaw.toISOString(),
-      end: endRaw.toISOString()
+      end: endRaw.toISOString(),
+      notify: document.getElementById('f-notify').checked
     };
     if (!body.title) { toast('El título es obligatorio', false); return; }
     const id = document.getElementById('f-id').value;
@@ -274,7 +307,8 @@ document.addEventListener('DOMContentLoaded', function () {
         toast(data.detail || 'Error al guardar la cita', false);
         return;
       }
-      toast(mode === 'edit' ? 'Cita actualizada ✓' : 'Cita creada ✓', true);
+      const base = mode === 'edit' ? 'Cita actualizada' : 'Cita creada';
+      toast(base + (data.notified ? ' y se avisó al cliente por WhatsApp ✓' : ' ✓'), true);
       bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-form')).hide();
       calendar.refetchEvents();
     } catch (e) {
@@ -282,11 +316,12 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   }
 
-  async function moverEvento(info) {
+  async function aplicarMovimiento(info, notify) {
     const p = info.event.extendedProps || {};
     const body = {
       start: info.event.start ? info.event.start.toISOString() : null,
-      end: info.event.end ? info.event.end.toISOString() : null
+      end: info.event.end ? info.event.end.toISOString() : null,
+      notify: notify
     };
     let url;
     if (p.appointment_id) {
@@ -309,11 +344,37 @@ document.addEventListener('DOMContentLoaded', function () {
         calendar.refetchEvents();
         return;
       }
-      toast('Cita movida ✓', true);
+      toast(data.notified ? 'Cita movida y se avisó al cliente por WhatsApp ✓' : 'Cita movida ✓', true);
+      calendar.refetchEvents();
     } catch (e) {
       toast('No se pudo mover la cita', false);
       calendar.refetchEvents();
     }
+  }
+
+  function pedirConfirmacion(info) {
+    const p = info.event.extendedProps || {};
+    const ev = info.event;
+    const oldEv = info.oldEvent;
+    const de = oldEv && oldEv.start
+      ? fmt(oldEv.start) + (oldEv.end && oldEv.end.getTime() !== oldEv.start.getTime() ? ' → ' + fmt(oldEv.end) : '')
+      : '—';
+    const a = ev.start
+      ? fmt(ev.start) + (ev.end && ev.end.getTime() !== ev.start.getTime() ? ' → ' + fmt(ev.end) : '')
+      : '—';
+    document.getElementById('confirmar-texto').textContent =
+      'Mover "' + (ev.title || 'Cita') + '" de ' + de + ' a ' + a + '.';
+    const wrap = document.getElementById('confirmar-notify-wrap');
+    const box = document.getElementById('confirmar-notify');
+    if (p.appointment_id) {
+      wrap.classList.remove('d-none');
+      box.checked = true;
+    } else {
+      wrap.classList.add('d-none');
+      box.checked = false;
+    }
+    pendingInfo = info;
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-confirmar')).show();
   }
 
   const calendar = new FullCalendar.Calendar(calendarEl, {
@@ -364,8 +425,8 @@ document.addEventListener('DOMContentLoaded', function () {
       document.getElementById('google-error-alert').classList.remove('d-none');
     },
     eventClick: abrirDetalle,
-    eventDrop: moverEvento,
-    eventResize: moverEvento,
+    eventDrop: pedirConfirmacion,
+    eventResize: pedirConfirmacion,
     eventDidMount: function (info) {
       if ((info.event.extendedProps.status || '') === 'cancelled') {
         info.el.style.opacity = 0.45;
@@ -374,6 +435,25 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   });
   document.getElementById('form-cita').addEventListener('submit', guardarForm);
+
+  // Confirmación de mover/redimensionar: confirmar -> PATCH (con notify);
+  // cancelar o cerrar -> revert() (la cita vuelve a su lugar).
+  document.getElementById('confirmar-aceptar').addEventListener('click', async function () {
+    const info = pendingInfo;
+    const notify = document.getElementById('confirmar-notify').checked;
+    pendingInfo = null;
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-confirmar')).hide();
+    if (info) await aplicarMovimiento(info, notify);
+  });
+  function cancelarMovimiento() {
+    if (pendingInfo) { pendingInfo.revert(); pendingInfo = null; }
+  }
+  document.getElementById('confirmar-cancelar').addEventListener('click', function () {
+    cancelarMovimiento();
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-confirmar')).hide();
+  });
+  document.getElementById('modal-confirmar').addEventListener('hidden.bs.modal', cancelarMovimiento);
+
   cargarTipos();
   calendar.render();
 });

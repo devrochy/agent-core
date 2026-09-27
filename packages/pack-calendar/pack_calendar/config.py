@@ -17,6 +17,11 @@ DEFAULT_BUSINESS_HOURS = (
     '"thu": "09:00-19:00", "fri": "09:00-19:00", "sat": "09:00-13:00", "sun": ""}'
 )
 
+# Mensaje por defecto al cliente cuando se mueve su cita (WhatsApp).
+DEFAULT_MOVED_MESSAGE = (
+    "Tu cita fue reprogramada para el {fecha} a las {hora}. Te esperamos. 💬"
+)
+
 
 class CalendarConfig(BasePluginConfig):
     client_id: str = Field(..., description="Client ID de OAuth2 (Google Cloud Console)")
@@ -33,6 +38,14 @@ class CalendarConfig(BasePluginConfig):
         description=(
             "Horario de atención por día (JSON: día -> 'HH:MM-HH:MM'; \"\" = cerrado). "
             "Días: mon, tue, wed, thu, fri, sat, sun"
+        ),
+        json_schema_extra={"format": "textarea"},
+    )
+    appointment_moved_message: str = Field(
+        default=DEFAULT_MOVED_MESSAGE,
+        description=(
+            "Mensaje que recibe el cliente por WhatsApp cuando se mueve su cita. "
+            "Placeholders: {fecha}, {hora}, {titulo}"
         ),
         json_schema_extra={"format": "textarea"},
     )
