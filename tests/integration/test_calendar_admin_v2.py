@@ -223,7 +223,7 @@ async def test_citas_pagina_carga_fullcalendar(app_client):
     assert "fullcalendar" in r.text.lower()
     assert "initialDate" in r.text
     assert "Citas agendadas" not in r.text
-    assert "fakeToReal" in r.text
+    assert "realDate" in r.text
     assert "parseWallClockInTz" in r.text
 
 
