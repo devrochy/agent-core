@@ -33,6 +33,7 @@ from core.mcp.types import BaseModule, GuardrailResult
 from core.shared.events import ON_CONVERSATION_STARTED
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from pack_commerce.api import router as leads_router
 from pack_commerce.config import CRMConfig
 from pack_commerce.models import (
     Category,
@@ -1004,6 +1005,10 @@ class CRMModule(BaseModule):
         CatalogSkill,
         OrderSkill,
     ]
+
+    def public_routes(self) -> list[Any]:
+        """API pública del pack (ADR-0057): intake de leads desde landings."""
+        return [leads_router]
 
     def on_activate(self, host: MCPHost) -> None:
         host.register_skill(LeadSkill())
