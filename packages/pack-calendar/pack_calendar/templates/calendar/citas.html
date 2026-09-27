@@ -96,9 +96,17 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // --- timezone del tenant -------------------------------------------------
-  // Con `timeZone` nombrado, FullCalendar devuelve en `select` un "fake" Date:
-  // su valor UTC es el reloj de pared en la tz del calendario, NO el instante
-  // real. Estas helpers convierten entre reloj de pared (tenant) e instante.
+  // Con `timeZone` nombrado, FullCalendar expone Dates "fake" (event.start,
+  // select.start): su valor UTC es el reloj de pared del calendario, no el
+  // instante real. La fuente confiable es `startStr`/`endStr`, que incluyen el
+  // offset real (ej. "2026-09-22T09:00:00-05:00") y se convierten con `new
+  // Date()`. El form trabaja con el reloj de pared del tenant.
+  function realDate(str) {
+    if (!str) return null;
+    const d = new Date(str);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
   function tzOffsetMin(instant, tz) {
     const dtf = new Intl.DateTimeFormat('en-US', {
       timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
@@ -108,11 +116,6 @@ document.addEventListener('DOMContentLoaded', function () {
     const g = function (t) { const x = p.find(function (o) { return o.type === t; }); return x ? x.value : ''; };
     const wallAsUtc = Date.UTC(+g('year'), +g('month') - 1, +g('day'), +g('hour'), +g('minute'), +g('second'));
     return (wallAsUtc - instant) / 60000;
-  }
-
-  function fakeToReal(fake, tz) {
-    const t = fake.getTime();
-    return new Date(t - tzOffsetMin(t, tz) * 60000);
   }
 
   function wallClockInTz(instant, tz) {
@@ -136,10 +139,28 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   const fmtDtf = new Intl.DateTimeFormat('es-CO', { timeZone: timezone, dateStyle: 'full', timeStyle: 'short' });
+  const fmtDateDtf = new Intl.DateTimeFormat('es-CO', { timeZone: timezone, dateStyle: 'full' });
   function fmt(fecha) {
     if (!fecha) return '—';
     try { return fmtDtf.format(new Date(fecha)); }
     catch (e) { return new Date(fecha).toLocaleString(); }
+  }
+
+  function fmtEvent(ev) {
+    const start = realDate(ev.startStr) || ev.start;
+    const end = realDate(ev.endStr) || ev.end;
+    if (!start) return '—';
+    if (ev.allDay || (ev.startStr && ev.startStr.indexOf('T') === -1)) {
+      // evento de día completo: solo fecha(s)
+      if (end) {
+        const endDate = new Date(end);
+        if (endDate.getTime() - start.getTime() > 0) {
+          return fmtDateDtf.format(start) + ' → ' + fmtDateDtf.format(end);
+        }
+      }
+      return fmtDateDtf.format(start);
+    }
+    return fmt(start) + (end && end.getTime() !== start.getTime() ? ' → ' + fmt(end) : '');
   }
 
   function badge(estado) {
@@ -177,14 +198,20 @@ document.addEventListener('DOMContentLoaded', function () {
     document.getElementById('modal-form-titulo').textContent = mode === 'edit' ? 'Editar cita' : 'Nueva cita';
     document.getElementById('f-submit').textContent = mode === 'edit' ? 'Guardar cambios' : 'Crear cita';
     document.getElementById('form-cita').dataset.mode = mode;
+    // En create, prefill ya viene con instantes reales (de startStr/endStr);
+    // en edit, prefill es el Event (usar startStr/endStr, que llevan offset real).
+    const startReal = mode === 'create'
+      ? prefill.start
+      : (realDate(prefill.startStr) || prefill.start);
+    const endReal = mode === 'create'
+      ? prefill.end
+      : (realDate(prefill.endStr) || prefill.end);
     if (mode === 'create') {
       document.getElementById('f-id').value = '';
       document.getElementById('f-title').value = '';
       document.getElementById('f-email').value = '';
       document.getElementById('f-notes').value = '';
       cargarTiposCita('');
-      document.getElementById('f-start').value = wallClockInTz(prefill.start, timezone);
-      document.getElementById('f-end').value = wallClockInTz(prefill.end, timezone);
     } else {
       const p = prefill.extendedProps || {};
       document.getElementById('f-id').value = p.appointment_id || '';
@@ -192,9 +219,9 @@ document.addEventListener('DOMContentLoaded', function () {
       document.getElementById('f-email').value = p.attendee_email || '';
       document.getElementById('f-notes').value = p.description || '';
       cargarTiposCita(p.appointment_type_id || '');
-      document.getElementById('f-start').value = wallClockInTz(prefill.start, timezone);
-      document.getElementById('f-end').value = wallClockInTz(prefill.end, timezone);
     }
+    document.getElementById('f-start').value = startReal ? wallClockInTz(startReal, timezone) : '';
+    document.getElementById('f-end').value = endReal ? wallClockInTz(endReal, timezone) : '';
     bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-form')).show();
   }
 
@@ -204,7 +231,7 @@ document.addEventListener('DOMContentLoaded', function () {
     document.getElementById('modal-cita-titulo').textContent = info.event.title;
     document.getElementById('modal-cita-cuerpo').innerHTML =
       '<dl class="row mb-0">' +
-        '<dt class="col-sm-4">Cuándo</dt><dd class="col-sm-8">' + fmt(info.event.start) + '</dd>' +
+        '<dt class="col-sm-4">Cuándo</dt><dd class="col-sm-8">' + fmtEvent(info.event) + '</dd>' +
         '<dt class="col-sm-4">Estado</dt><dd class="col-sm-8">' + badge(estado) + '</dd>' +
         '<dt class="col-sm-4">Origen</dt><dd class="col-sm-8">' +
           (p.source === 'asistente' ? 'Asistente' : 'Google (externo)') + '</dd>' +
@@ -306,8 +333,8 @@ document.addEventListener('DOMContentLoaded', function () {
   async function moverEvento(info) {
     const p = info.event.extendedProps || {};
     const body = {
-      start: info.event.start ? info.event.start.toISOString() : null,
-      end: info.event.end ? info.event.end.toISOString() : null
+      start: realDate(info.event.startStr) ? realDate(info.event.startStr).toISOString() : (info.event.start ? info.event.start.toISOString() : null),
+      end: realDate(info.event.endStr) ? realDate(info.event.endStr).toISOString() : (info.event.end ? info.event.end.toISOString() : null)
     };
     let url;
     if (p.appointment_id) {
@@ -356,13 +383,27 @@ document.addEventListener('DOMContentLoaded', function () {
     },
     buttonText: { month: 'Mes', week: 'Semana', day: 'Día', today: 'Hoy' },
     select: function (info) {
-      const start = fakeToReal(info.start, timezone);
-      const end = fakeToReal(info.end || new Date(info.start.getTime() + defaultDurationMin * 60000), timezone);
+      // startStr/endStr llevan el offset real de la tz del calendario.
+      let start = realDate(info.startStr);
+      let end = realDate(info.endStr);
+      if (!start) {
+        start = info.start ? new Date(info.start.toISOString()) : null;
+      }
+      if (!end) {
+        end = info.end ? new Date(info.end.toISOString()) : new Date(start.getTime() + defaultDurationMin * 60000);
+      }
+      // Selección de día completo (vista mes): arrancar a las 09:00 del tenant.
+      if (info.allDay && info.startStr && info.startStr.indexOf('T') === -1) {
+        start = parseWallClockInTz(info.startStr + 'T09:00', timezone);
+        end = new Date(start.getTime() + defaultDurationMin * 60000);
+      }
       abrirForm('create', { start: start, end: end });
     },
     events: function (info, success, failure) {
-      const params = '?start=' + encodeURIComponent(info.start.toISOString()) +
-                     '&end=' + encodeURIComponent(info.end.toISOString());
+      const rangeStart = realDate(info.startStr) || info.start;
+      const rangeEnd = realDate(info.endStr) || info.end;
+      const params = '?start=' + encodeURIComponent(rangeStart.toISOString()) +
+                     '&end=' + encodeURIComponent(rangeEnd.toISOString());
       fetch('/calendar/citas/calendario.json' + params, { credentials: 'same-origin' })
         .then(function (r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.json(); })
         .then(function (data) {
