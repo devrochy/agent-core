@@ -15,7 +15,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 
 from core.db.session import get_owned, get_session
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
@@ -45,6 +45,15 @@ DELIVERY_METHODS = ("domicilio", "recoger_en_tienda")
 
 
 # ------------------------------------------------------------------ helpers
+# Palabras que no aportan a la búsqueda por tokens (evitan falsos positivos).
+_SEARCH_STOPWORDS = frozenset(
+    {
+        "de", "la", "el", "los", "las", "un", "una", "unos", "unas", "y", "o", "u",
+        "para", "por", "con", "del", "al", "que", "mi", "me", "the", "and", "for",
+    }
+)
+
+
 def _float(value: Any) -> float:
     return float(value or 0)
 
@@ -387,8 +396,10 @@ class CatalogSkill(BaseSkill):
                 name="consultar_inventario",
                 description=(
                     "Consulta precios y disponibilidad reales de los productos del menú. "
+                    "Acepta búsqueda libre: pasá solo la palabra clave (ej: 'basic', no 'plan basic'). "
                     "Úsala SIEMPRE antes de afirmar cualquier precio, stock o disponibilidad. "
-                    "Nunca inventes precios: si el cliente pregunta por algo, consulta aquí primero."
+                    "Si devuelve `recommendations` en vez de `matches`, es que no encontró el "
+                    "producto: decíselo al cliente y ofrecele esas opciones. Nunca inventes precios."
                 ),
                 parameters={
                     "type": "object",
@@ -422,6 +433,29 @@ class CatalogSkill(BaseSkill):
         query = str(arguments.get("query", "")).strip()
         sku = str(arguments.get("sku", "")).strip()
 
+        # Búsqueda por lenguaje natural: se tokeniza la frase y se matchea CUALQUIER
+        # token contra nombre, descripción o SKU. Así "plan basic" encuentra el
+        # producto "Basic" (antes `%plan basic%` no matcheaba nada).
+        tokens = [
+            token
+            for token in re.split(r"[\s,]+", query.lower())
+            if len(token) >= 3 and token not in _SEARCH_STOPWORDS
+        ]
+
+        def _match(variant: ProductVariant, product: Product, inventory: Inventory | None) -> dict[str, Any]:
+            return {
+                "product_id": str(product.id),
+                "variant_id": str(variant.id),
+                "sku": variant.sku,
+                "name": product.name,
+                "attributes": variant.attributes or {},
+                "price": _float(variant.price),
+                "price_label": _money(variant.price),
+                "disponible": bool(inventory and inventory.stock_quantity > 0),
+                "stock": inventory.stock_quantity if inventory else 0,
+                "description": product.description or "",
+            }
+
         async with get_session() as session:
             stmt = (
                 select(ProductVariant, Product, Inventory)
@@ -434,36 +468,57 @@ class CatalogSkill(BaseSkill):
             )
             if sku:
                 stmt = stmt.where(ProductVariant.sku == sku)
-            elif query:
-                like = f"%{query}%"
-                stmt = stmt.where(
-                    Product.name.ilike(like) | ProductVariant.sku.ilike(like)
-                )
+            elif tokens:
+                conditions = []
+                for token in tokens:
+                    like = f"%{token}%"
+                    conditions.extend(
+                        (
+                            Product.name.ilike(like),
+                            Product.description.ilike(like),
+                            ProductVariant.sku.ilike(like),
+                        )
+                    )
+                stmt = stmt.where(or_(*conditions))
             stmt = stmt.order_by(Product.name).limit(15)
             rows = (await session.execute(stmt)).all()
+            matches = [_match(variant, product, inventory) for variant, product, inventory in rows]
 
-        matches = []
-        for variant, product, inventory in rows:
-            matches.append(
-                {
-                    "product_id": str(product.id),
-                    "variant_id": str(variant.id),
-                    "sku": variant.sku,
-                    "name": product.name,
-                    "attributes": variant.attributes or {},
-                    "price": _float(variant.price),
-                    "price_label": _money(variant.price),
-                    "disponible": bool(inventory and inventory.stock_quantity > 0),
-                    "stock": inventory.stock_quantity if inventory else 0,
-                    "description": product.description or "",
+            if matches:
+                return {"matches": matches}
+
+            if not query and not sku:
+                return {
+                    "matches": [],
+                    "message": "No hay productos cargados en el catálogo.",
                 }
+
+            # Fallback: no se encontró el pedido, pero se ofrecen los top disponibles
+            # para no dejar la conversación en "no existe".
+            fallback_stmt = (
+                select(ProductVariant, Product, Inventory)
+                .join(Product, Product.id == ProductVariant.product_id)
+                .join(Inventory, Inventory.variant_id == ProductVariant.id)
+                .where(
+                    ProductVariant.active.is_(True),
+                    ProductVariant.tenant_id == get_current_tenant_id(),
+                    Inventory.stock_quantity > 0,
+                )
+                .order_by(Product.name)
+                .limit(5)
             )
-        if not matches:
+            fallback_rows = (await session.execute(fallback_stmt)).all()
             return {
                 "matches": [],
-                "message": "No encontré productos para esa búsqueda. Pide más detalles o sugiere ver el menú completo.",
+                "message": (
+                    "No encontré un producto para esa búsqueda. Decíselo al cliente y "
+                    "ofrecele estas opciones disponibles, preguntando cuál le interesa."
+                ),
+                "recommendations": [
+                    _match(variant, product, inventory)
+                    for variant, product, inventory in fallback_rows
+                ],
             }
-        return {"matches": matches}
 
     async def recomendar_producto(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         product_id = str(arguments.get("product_id", "")).strip()

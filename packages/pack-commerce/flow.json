@@ -4,7 +4,7 @@
     {
       "id": "saludo",
       "label": "Saludo y descubrimiento",
-      "purpose": "Recibir al cliente, entender qué busca y registrar sus datos de interés.",
+      "purpose": "Recibir al cliente y detectar su intención: si quiere información o comprar (venta) o agendar una demo/reunión (agendamiento). Registrar sus datos de interés.",
       "pack": "pack_commerce",
       "tools": [
         "crear_lead",
