@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import UTC
 from urllib.parse import unquote
 
 import pytest
@@ -156,3 +157,141 @@ async def test_oauth_sin_config_no_da_500_y_guia_a_configurar(app_client):
     r = await app_client.get("/calendar/", headers={"Cookie": cookie})
     assert r.status_code == 200
     assert "Configurar Google Calendar" in r.text
+
+async def _calendar_tenant_tid(app_client):
+    """Tenant con pack_calendar configurado+habilitado. Devuelve (cookie, tid)."""
+    from core.onboarding import onboard_tenant
+
+    slug = _uniq("calendar-json")
+    tid, _ = await onboard_tenant(
+        name=f"Tenant {slug}", slug=slug, business_description="x",
+        persona={"tone": "cercano"}, admin_email="admin@local",
+    )
+    cookie = await _switch_tenant(app_client, await _login(app_client), tid)
+    r = await app_client.post(
+        "/admin/plugins/pack_calendar/configurar",
+        headers={"Cookie": cookie},
+        data={
+            "client_id": "cid-test", "client_secret": "secret-test",
+            "calendar_id": "primary", "timezone": "America/Bogota",
+            "event_duration_minutes": "45", "slot_minutes": "30",
+            "buffer_minutes": "10", "business_hours": '{"mon": "09:00-18:00"}',
+        },
+    )
+    assert r.status_code == 303
+    return cookie, tid
+
+
+async def _make_appointment(tenant_id, *, title, start_utc, status="scheduled", google_event_id=None, attendee_email=None):
+    from datetime import timedelta
+
+    from pack_calendar.models import Appointment
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            row = Appointment(
+                tenant_id=tenant_id, title=title, start_at=start_utc,
+                end_at=start_utc + timedelta(minutes=60), status=status,
+                google_event_id=google_event_id, attendee_email=attendee_email,
+            )
+            session.add(row)
+            await session.flush()
+            return row.id
+
+
+async def _delete_appointment(tenant_id, appointment_id):
+    from pack_calendar.models import Appointment
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            row = await session.get(Appointment, appointment_id)
+            if row is not None:
+                await session.delete(row)
+
+
+async def test_citas_pagina_carga_fullcalendar(app_client):
+    cookie, _ = await _calendar_tenant_tid(app_client)
+    r = await app_client.get("/calendar/citas", headers={"Cookie": cookie})
+    assert r.status_code == 200
+    assert 'id="calendar"' in r.text
+    assert "fullcalendar" in r.text.lower()
+
+
+async def test_calendario_json_cita_del_asistente(app_client, monkeypatch):
+    from datetime import datetime
+
+    cookie, tid = await _calendar_tenant_tid(app_client)
+    start = datetime(2026, 10, 5, 15, 0, tzinfo=UTC)
+    appt_id = await _make_appointment(tid, title="Demo Plan Basic", start_utc=start, google_event_id="ev-1", attendee_email="a@b.com")
+    cancelled_id = await _make_appointment(
+        tid, title="Cancelada", start_utc=datetime(2026, 10, 6, 15, 0, tzinfo=UTC),
+        status="cancelled", google_event_id="ev-2",
+    )
+    monkeypatch.setattr("pack_calendar.admin._fetch_google_events", lambda config, start, end: [])
+    try:
+        r = await app_client.get(
+            "/calendar/citas/calendario.json?start=2026-10-01T00:00:00Z&end=2026-10-31T00:00:00Z",
+            headers={"Cookie": cookie},
+        )
+        assert r.status_code == 200
+        by_title = {e["title"]: e for e in r.json()["events"]}
+        demo = by_title["Demo Plan Basic"]
+        assert demo["extendedProps"]["source"] == "asistente"
+        assert demo["extendedProps"]["status"] == "scheduled"
+        assert demo["extendedProps"]["can_cancel"] is True
+        assert demo["extendedProps"]["attendee_email"] == "a@b.com"
+        assert demo["color"] == "#198754"
+        canc = by_title["Cancelada"]
+        assert canc["extendedProps"]["status"] == "cancelled"
+        assert canc["extendedProps"]["can_cancel"] is False
+        assert canc["color"] == "#6c757d"
+    finally:
+        await _delete_appointment(tid, appt_id)
+        await _delete_appointment(tid, cancelled_id)
+
+
+async def test_calendario_json_fusiona_eventos_de_google(app_client, monkeypatch):
+    from datetime import datetime
+
+    cookie, tid = await _calendar_tenant_tid(app_client)
+    start = datetime(2026, 10, 6, 10, 0, tzinfo=UTC)
+    appt_id = await _make_appointment(tid, title="Asistente con link", start_utc=start, google_event_id="ev-1")
+
+    async def _fake(config, start, end):
+        return [
+            {
+                "id": "ev-1", "status": "confirmed", "summary": "Asistente con link",
+                "start": {"dateTime": "2026-10-06T10:00:00-05:00"},
+                "end": {"dateTime": "2026-10-06T10:30:00-05:00"},
+                "htmlLink": "https://calendar.google.com/calendar/r/ev-1",
+            },
+            {
+                "id": "ev-99", "status": "confirmed", "summary": "Evento externo",
+                "start": {"dateTime": "2026-10-07T11:00:00-05:00"},
+                "end": {"dateTime": "2026-10-07T11:30:00-05:00"},
+                "htmlLink": "https://calendar.google.com/calendar/r/ev-99",
+            },
+        ]
+
+    monkeypatch.setattr("pack_calendar.admin._fetch_google_events", _fake)
+    try:
+        r = await app_client.get(
+            "/calendar/citas/calendario.json?start=2026-10-01T00:00:00Z&end=2026-10-31T00:00:00Z",
+            headers={"Cookie": cookie},
+        )
+        assert r.status_code == 200
+        by_title = {e["title"]: e for e in r.json()["events"]}
+        asist = by_title["Asistente con link"]
+        assert asist["extendedProps"]["source"] == "asistente"
+        assert asist["extendedProps"]["html_link"] == "https://calendar.google.com/calendar/r/ev-1"
+        externo = by_title["Evento externo"]
+        assert externo["extendedProps"]["source"] == "google"
+        assert externo["color"] == "#0d6efd"
+    finally:
+        await _delete_appointment(tid, appt_id)

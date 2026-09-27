@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 
@@ -72,6 +73,82 @@ async def _pack_enabled() -> bool:
 
 async def _authorized(request: Request, *, write: bool) -> bool:
     return await _guard(request, _request_section(request), write=write) and await _pack_enabled()
+
+
+# ------------------------------------------------------------ calendario (citas)
+CALENDAR_API = "https://www.googleapis.com/calendar/v3"
+MAX_RANGE_DAYS = 93  # el calendario no pide más de 3 meses por request
+
+
+def _utc_iso(value: datetime) -> str:
+    """ISO en UTC con sufijo Z (lo que FullCalendar espera)."""
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+    return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+async def _fetch_google_events(config: Any, start: datetime, end: datetime) -> list[dict[str, Any]]:
+    """Lista eventos reales de Google en [start, end). Lanza si falla la API."""
+    import httpx
+
+    from pack_calendar.oauth import get_access_token
+
+    token = await get_access_token(
+        config.client_id, config.client_secret.get_secret_value()  # type: ignore[attr-defined]
+    )
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(
+            f"{CALENDAR_API}/calendars/{config.calendar_id}/events",  # type: ignore[attr-defined]
+            params={
+                "timeMin": _utc_iso(start),
+                "timeMax": _utc_iso(end),
+                "singleEvents": "true",
+                "orderBy": "startTime",
+                "maxResults": 1000,
+                "fields": "items(id,status,summary,start,end,attendees,htmlLink)",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    if response.status_code >= 400:
+        from core.shared.exceptions import PluginError
+
+        raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}")
+    return list(response.json().get("items") or [])
+
+
+def _google_event_to_fc(event: dict[str, Any]) -> dict[str, Any]:
+    """Convierte un evento de Google al shape de FullCalendar (fuente externa)."""
+    start_raw = (event.get("start") or {}).get("dateTime") or (event.get("start") or {}).get("date")
+    end_raw = (event.get("end") or {}).get("dateTime") or (event.get("end") or {}).get("date")
+    all_day = not (event.get("start") or {}).get("dateTime")
+    cancelled = event.get("status") == "cancelled"
+    attendees = event.get("attendees") or []
+    email = next((a.get("email") for a in attendees), None)
+    return {
+        "id": f"g-{event.get('id')}",
+        "title": event.get("summary") or "(sin título)",
+        "start": _utc_iso(_parse_dt(start_raw)) if start_raw else None,
+        "end": _utc_iso(_parse_dt(end_raw)) if end_raw else None,
+        "allDay": all_day,
+        "color": "#6c757d" if cancelled else "#0d6efd",
+        "extendedProps": {
+            "source": "google",
+            "status": "cancelled" if cancelled else "confirmed",
+            "attendee_email": email or "",
+            "description": "",
+            "google_event_id": event.get("id"),
+            "html_link": event.get("htmlLink"),
+            "can_cancel": False,
+        },
+    }
 
 
 # ------------------------------------------------------------------ conexión
@@ -246,26 +323,112 @@ async def calendar_types_delete(request: Request, type_id: uuid.UUID):
 async def calendar_appointments(request: Request):
     if not await _authorized(request, write=False):
         return RedirectResponse("/admin", status_code=303)
-    from pack_calendar.models import Appointment
-
     ctx = await base_context(request, SECTION)
     if ctx is None:
         return RedirectResponse("/admin/login", status_code=303)
 
+    from core.plugin_manager import plugin_manager
+    from core.shared.exceptions import PluginConfigError
+
+    try:
+        config = await plugin_manager.load_config(PLUGIN_ID)
+        timezone_name = getattr(config, "timezone", "America/Bogota") or "America/Bogota"
+    except PluginConfigError:
+        timezone_name = "America/Bogota"
+    ctx.update(calendar_timezone=timezone_name)
+    return _render("calendar/citas.html", ctx)
+
+
+@router.get("/citas/calendario.json")
+async def calendar_appointments_json(request: Request):
+    """Eventos para FullCalendar en [start, end): citas del asistente (BD) +
+    eventos reales de Google, fusionados por google_event_id."""
+    if not await _authorized(request, write=False):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
+
+    from core.plugin_manager import plugin_manager
+    from pack_calendar.models import Appointment
+
+    def _parse(value: str, default: datetime) -> datetime:
+        try:
+            return datetime.fromisoformat(value).astimezone(UTC)
+        except (ValueError, TypeError):
+            return default
+
+    now = datetime.now(UTC)
+    month_start = now.replace(day=1)
+    start = _parse(request.query_params.get("start", ""), month_start)
+    end = _parse(request.query_params.get("end", ""), start + timedelta(days=31))
+    if end < start:
+        end = start + timedelta(days=31)
+    if end - start > timedelta(days=MAX_RANGE_DAYS):
+        end = start + timedelta(days=MAX_RANGE_DAYS)
+
+    tenant_id = get_current_tenant_id()
+
+    # Citas del asistente (espejo local).
     async with get_session() as session:
         rows = (
             await session.execute(
-                select(Appointment)
-                .where(
-                    Appointment.tenant_id == get_current_tenant_id(),
+                select(Appointment).where(
+                    Appointment.tenant_id == tenant_id,
                     Appointment.deleted_at.is_(None),
+                    Appointment.start_at >= start,
+                    Appointment.start_at < end,
                 )
-                .order_by(Appointment.start_at.desc())
-                .limit(200)
             )
         ).scalars().all()
-    ctx.update(appointments=rows)
-    return _render("calendar/citas.html", ctx)
+
+    # Eventos reales de Google (best-effort: si falla, seguimos con la BD).
+    google_events: list[dict[str, Any]] = []
+    google_error = False
+    try:
+        config = await plugin_manager.load_config(PLUGIN_ID)
+        if config is not None:
+            google_events = await _fetch_google_events(config, start, end)
+    except Exception:
+        google_error = True
+
+    google_by_id = {e.get("id"): e for e in google_events if e.get("id")}
+    events: list[dict[str, Any]] = []
+    for appointment in rows:
+        google = google_by_id.get(appointment.google_event_id) if appointment.google_event_id else None
+        events.append(
+            {
+                "id": f"appt-{appointment.id}",
+                "title": appointment.title,
+                "start": _utc_iso(appointment.start_at),
+                "end": _utc_iso(appointment.end_at),
+                "color": "#198754" if appointment.status == "scheduled" else "#6c757d",
+                "extendedProps": {
+                    "appointment_id": str(appointment.id),
+                    "source": "asistente",
+                    "status": appointment.status,
+                    "attendee_email": appointment.attendee_email or "",
+                    "description": appointment.notes or "",
+                    "google_event_id": appointment.google_event_id,
+                    "html_link": (google or {}).get("htmlLink"),
+                    "can_cancel": appointment.status == "scheduled",
+                },
+            }
+        )
+
+    local_google_ids = {a.google_event_id for a in rows if a.google_event_id}
+    for event in google_events:
+        if event.get("id") in local_google_ids:
+            continue
+        events.append(_google_event_to_fc(event))
+
+    timezone_name = "America/Bogota"
+    try:
+        config = await plugin_manager.load_config(PLUGIN_ID)
+        timezone_name = getattr(config, "timezone", "America/Bogota") or "America/Bogota"
+    except Exception:
+        pass
+
+    return JSONResponse(
+        {"events": events, "google_error": google_error, "timezone": timezone_name}
+    )
 
 
 @router.post("/citas/{appointment_id}/cancelar")
