@@ -32,10 +32,9 @@
 <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/locales-all.global.min.js"></script>
 <script>
-(function () {
+document.addEventListener('DOMContentLoaded', function () {
   const timezone = {{ calendar_timezone | tojson }};
   const calendarEl = document.getElementById('calendar');
-  const modal = new bootstrap.Modal(document.getElementById('modal-cita'));
   const GOOGLE_LINK = 'https://www.google.com/calendar/r/eventedit/';
 
   function fmt(fecha) {
@@ -91,7 +90,7 @@
       cerrar.textContent = 'Cerrar';
       acciones.appendChild(cerrar);
     }
-    modal.show();
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-cita')).show();
   }
 
   const calendar = new FullCalendar.Calendar(calendarEl, {
@@ -126,6 +125,6 @@
       }
     })
     .catch(function () {});
-})();
+});
 </script>
 {% endblock %}
