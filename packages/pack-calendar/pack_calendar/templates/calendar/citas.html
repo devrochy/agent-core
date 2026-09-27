@@ -1,42 +1,131 @@
 {% extends "base.html" %}
 {% block title %}Calendar · Citas{% endblock %}
+{% block extra_head %}
+<link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.css" rel="stylesheet">
+{% endblock %}
 {% block content %}
 <h1 class="fs-3 mb-4">Calendar · Citas</h1>
+<div class="alert alert-warning d-none" id="google-error-alert">
+  No se pudieron cargar los eventos de Google (revisá la conexión en Calendar · Conexión).
+  Mostrando las citas del asistente.
+</div>
 <div class="card">
   <div class="card-body">
-    {% if appointments %}
-    <table class="table align-middle">
-      <thead>
-        <tr><th>Cuándo</th><th>Título</th><th>Cliente</th><th>Estado</th><th class="text-end">Acciones</th></tr>
-      </thead>
-      <tbody>
-        {% for a in appointments %}
-        <tr>
-          <td class="small">{{ a.start_at.strftime('%Y-%m-%d %H:%M') }}</td>
-          <td><strong>{{ a.title }}</strong></td>
-          <td class="small text-secondary">{{ a.attendee_email or '' }}</td>
-          <td>
-            {% if a.status == 'scheduled' %}
-            <span class="badge text-bg-success">agendada</span>
-            {% else %}
-            <span class="badge text-bg-secondary">cancelada</span>
-            {% endif %}
-          </td>
-          <td class="text-end">
-            {% if a.status == 'scheduled' %}
-            <form method="post" action="/calendar/citas/{{ a.id }}/cancelar" class="d-inline"
-                  onsubmit="return confirm('¿Cancelar esta cita? Se borra también en Google Calendar.');">
-              <button class="btn btn-outline-danger btn-sm"><i class="bi bi-x-circle"></i> Cancelar</button>
-            </form>
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="text-secondary mb-0">Todavía no hay citas agendadas por el asistente.</p>
-    {% endif %}
+    <div id="calendar"></div>
   </div>
 </div>
+
+{# Modal de detalle de la cita/evento #}
+<div class="modal fade" id="modal-cita" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="modal-cita-titulo">Cita</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="modal-cita-cuerpo"></div>
+      <div class="modal-footer" id="modal-cita-acciones"></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/locales-all.global.min.js"></script>
+<script>
+(function () {
+  const timezone = {{ calendar_timezone | tojson }};
+  const calendarEl = document.getElementById('calendar');
+  const modal = new bootstrap.Modal(document.getElementById('modal-cita'));
+  const GOOGLE_LINK = 'https://www.google.com/calendar/r/eventedit/';
+
+  function fmt(fecha) {
+    if (!fecha) return '—';
+    try { return fecha.toLocaleString('es-CO', { dateStyle: 'full', timeStyle: 'short' }); }
+    catch (e) { return fecha.toLocaleString(); }
+  }
+
+  function badge(estado) {
+    const map = { scheduled: ['agendada', 'success'], cancelled: ['cancelada', 'secondary'], confirmed: ['confirmado', 'info'] };
+    const [label, tipo] = map[estado] || [estado, 'secondary'];
+    return '<span class="badge text-bg-' + tipo + '">' + label + '</span>';
+  }
+
+  function abrirDetalle(info) {
+    const p = info.event.extendedProps || {};
+    const estado = p.status || 'confirmed';
+    document.getElementById('modal-cita-titulo').textContent = info.event.title;
+    document.getElementById('modal-cita-cuerpo').innerHTML =
+      '<dl class="row mb-0">' +
+        '<dt class="col-sm-4">Cuándo</dt><dd class="col-sm-8">' + fmt(info.event.start) + '</dd>' +
+        '<dt class="col-sm-4">Estado</dt><dd class="col-sm-8">' + badge(estado) + '</dd>' +
+        '<dt class="col-sm-4">Origen</dt><dd class="col-sm-8">' +
+          (p.source === 'asistente' ? 'Asistente' : 'Google (externo)') + '</dd>' +
+        (p.attendee_email ? '<dt class="col-sm-4">Cliente</dt><dd class="col-sm-8">' + p.attendee_email + '</dd>' : '') +
+        (p.description ? '<dt class="col-sm-4">Detalle</dt><dd class="col-sm-8">' + p.description + '</dd>' : '') +
+      '</dl>';
+    const acciones = document.getElementById('modal-cita-acciones');
+    acciones.innerHTML = '';
+    if (p.html_link) {
+      const a = document.createElement('a');
+      a.className = 'btn btn-outline-secondary';
+      a.href = p.html_link; a.target = '_blank'; a.rel = 'noopener';
+      a.textContent = 'Abrir en Google';
+      acciones.appendChild(a);
+    }
+    if (p.can_cancel) {
+      const f = document.createElement('form');
+      f.method = 'post';
+      f.action = '/calendar/citas/' + p.appointment_id + '/cancelar';
+      f.onsubmit = function () { return confirm('¿Cancelar esta cita? Se borra también en Google Calendar.'); };
+      const b = document.createElement('button');
+      b.className = 'btn btn-outline-danger';
+      b.type = 'submit';
+      b.textContent = 'Cancelar cita';
+      f.appendChild(b);
+      acciones.appendChild(f);
+    }
+    if (!acciones.children.length) {
+      const cerrar = document.createElement('button');
+      cerrar.className = 'btn btn-secondary';
+      cerrar.setAttribute('data-bs-dismiss', 'modal');
+      cerrar.textContent = 'Cerrar';
+      acciones.appendChild(cerrar);
+    }
+    modal.show();
+  }
+
+  const calendar = new FullCalendar.Calendar(calendarEl, {
+    initialView: 'timeGridWeek',
+    locale: 'es',
+    timeZone: timezone,
+    height: 'auto',
+    nowIndicator: true,
+    headerToolbar: {
+      left: 'prev,next today',
+      center: 'title',
+      right: 'dayGridMonth,timeGridWeek,timeGridDay'
+    },
+    buttonText: { month: 'Mes', week: 'Semana', day: 'Día', today: 'Hoy' },
+    events: { url: '/calendar/citas/calendario.json' },
+    eventClick: abrirDetalle,
+    eventDidMount: function (info) {
+      if ((info.event.extendedProps.status || '') === 'cancelled') {
+        info.el.style.opacity = 0.45;
+        info.el.style.textDecoration = 'line-through';
+      }
+    }
+  });
+  calendar.render();
+
+  // Si el backend reportó que Google falló, avisar (sin romper el calendario).
+  fetch('/calendar/citas/calendario.json?start=' + encodeURIComponent(new Date(Date.now() - 86400000).toISOString()) + '&end=' + encodeURIComponent(new Date(Date.now() + 86400000).toISOString()))
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (data.google_error) {
+        document.getElementById('google-error-alert').classList.remove('d-none');
+      }
+    })
+    .catch(function () {});
+})();
+</script>
 {% endblock %}
