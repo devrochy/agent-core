@@ -12,6 +12,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -93,6 +94,15 @@ def _parse_dt(value: str | None) -> datetime | None:
     except (ValueError, TypeError):
         return None
     return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _as_uuid(value: Any) -> uuid.UUID | None:
+    if value is None:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
 
 
 async def _fetch_google_events(config: Any, start: datetime, end: datetime) -> list[dict[str, Any]]:
@@ -333,8 +343,10 @@ async def calendar_appointments(request: Request):
     try:
         config = await plugin_manager.load_config(PLUGIN_ID)
         timezone_name = getattr(config, "timezone", "America/Bogota") or "America/Bogota"
+        default_duration = getattr(config, "event_duration_minutes", 60) or 60
     except PluginConfigError:
         timezone_name = "America/Bogota"
+        default_duration = 60
 
     # El calendario arranca en la próxima cita agendada (o hoy), para que las
     # citas sean visibles sin tener que navegar a la fecha.
@@ -363,6 +375,7 @@ async def calendar_appointments(request: Request):
     ctx.update(
         calendar_timezone=timezone_name,
         calendar_initial_date=initial.strftime("%Y-%m-%d"),
+        calendar_default_duration=default_duration,
     )
     return _render("calendar/citas.html", ctx)
 
@@ -430,6 +443,9 @@ async def calendar_appointments_json(request: Request):
                 "color": "#198754" if appointment.status == "scheduled" else "#6c757d",
                 "extendedProps": {
                     "appointment_id": str(appointment.id),
+                    "appointment_type_id": (
+                        str(appointment.appointment_type_id) if appointment.appointment_type_id else ""
+                    ),
                     "source": "asistente",
                     "status": appointment.status,
                     "attendee_email": appointment.attendee_email or "",
@@ -499,3 +515,295 @@ async def calendar_appointment_cancel(request: Request, appointment_id: uuid.UUI
             row_db.status = "cancelled"
             row_db.updated_at = utcnow()
     return RedirectResponse("/calendar/citas?flash=Cita cancelada ✓", status_code=303)
+
+
+# ------------------------------------------------------- calendario editable
+async def _google_token(config: Any) -> str:
+    """Token OAuth de Google para el tenant actual (config ya cargada per-tenant)."""
+    from pack_calendar.oauth import get_access_token
+
+    return await get_access_token(
+        config.client_id, config.client_secret.get_secret_value()  # type: ignore[attr-defined]
+    )
+
+
+def _google_body_dt(value: datetime, timezone: str) -> dict[str, str]:
+    return {"dateTime": value.astimezone(ZoneInfo(timezone)).isoformat(), "timeZone": timezone}
+
+
+async def _google_create_event(
+    config: Any,
+    token: str,
+    *,
+    title: str,
+    start: datetime,
+    end: datetime,
+    attendee_email: str | None,
+    notes: str,
+) -> dict[str, Any]:
+    import httpx
+
+    body: dict[str, Any] = {
+        "summary": title,
+        "description": notes,
+        "start": _google_body_dt(start, config.timezone),  # type: ignore[attr-defined]
+        "end": _google_body_dt(end, config.timezone),  # type: ignore[attr-defined]
+    }
+    if attendee_email:
+        body["attendees"] = [{"email": attendee_email}]
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            f"{CALENDAR_API}/calendars/{config.calendar_id}/events",  # type: ignore[attr-defined]
+            json=body,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    if response.status_code >= 400:
+        from core.shared.exceptions import PluginError
+
+        raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}")
+    return response.json()
+
+
+async def _google_patch_event(config: Any, token: str, google_event_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    import httpx
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.patch(
+            f"{CALENDAR_API}/calendars/{config.calendar_id}/events/{google_event_id}",  # type: ignore[attr-defined]
+            json=body,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    if response.status_code >= 400:
+        from core.shared.exceptions import PluginError
+
+        raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}")
+    return response.json()
+
+
+@router.get("/tipos.json")
+async def calendar_types_json(request: Request):
+    """Tipos de cita activos, para el select del modal crear/editar."""
+    if not await _authorized(request, write=False):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
+
+    from pack_calendar.models import AppointmentType
+
+    tenant_id = get_current_tenant_id()
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                select(AppointmentType)
+                .where(
+                    AppointmentType.tenant_id == tenant_id,
+                    AppointmentType.deleted_at.is_(None),
+                    AppointmentType.active.is_(True),
+                )
+                .order_by(AppointmentType.name)
+            )
+        ).scalars().all()
+    return JSONResponse(
+        {
+            "tipos": [
+                {"id": str(t.id), "name": t.name, "duration_minutes": t.duration_minutes}
+                for t in rows
+            ]
+        }
+    )
+
+
+@router.post("/citas/crear")
+async def calendar_appointment_create(request: Request):
+    """Crea una cita desde el panel. Si el tenant tiene Google conectado, crea el
+    evento real y espeja la fila con su google_event_id; si no, cita local (BD)."""
+    if not await _authorized(request, write=True):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
+
+    from core.plugin_manager import plugin_manager
+    from pack_calendar.models import Appointment
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "json inválido"}, status_code=400)
+
+    title = str(body.get("title", "")).strip()
+    if not title:
+        return JSONResponse({"detail": "El título es obligatorio"}, status_code=422)
+    start = _parse_dt(body.get("start"))
+    end = _parse_dt(body.get("end"))
+    if not start or not end or end <= start:
+        return JSONResponse({"detail": "start/end inválidos"}, status_code=422)
+
+    attendee_email = str(body.get("attendee_email", "")).strip() or None
+    notes = str(body.get("notes", "")).strip() or ""
+    type_id = _as_uuid(body.get("appointment_type_id"))
+    tenant_id = get_current_tenant_id()
+
+    config = await plugin_manager.load_config(PLUGIN_ID)
+    google_event_id: str | None = None
+    link = ""
+    if config is not None:
+        try:
+            token = await _google_token(config)
+            event = await _google_create_event(
+                config,
+                token,
+                title=title,
+                start=start,
+                end=end,
+                attendee_email=attendee_email,
+                notes=notes,
+            )
+        except Exception:
+            return JSONResponse(
+                {"detail": "Google Calendar rechazó la creación (revisá la conexión)"},
+                status_code=502,
+            )
+        google_event_id = event.get("id")
+        link = event.get("htmlLink", "")
+
+    async with get_session() as session:
+        row = Appointment(
+            tenant_id=tenant_id,
+            appointment_type_id=type_id,
+            google_event_id=google_event_id,
+            title=title,
+            attendee_email=attendee_email,
+            start_at=start,
+            end_at=end,
+            status="scheduled",
+            notes=notes,
+        )
+        session.add(row)
+        await session.commit()
+        appt_id = row.id
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "id": str(appt_id),
+            "google_event_id": google_event_id,
+            "link": link,
+        }
+    )
+
+
+@router.patch("/citas/{appointment_id}")
+async def calendar_appointment_patch(request: Request, appointment_id: uuid.UUID):
+    """Edita campos y/o horario de una cita del asistente. Si espeja en Google,
+    primero PATCH a Google y solo si acepta actualiza la BD (rollback lógico)."""
+    if not await _authorized(request, write=True):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
+
+    from core.db.models import utcnow
+    from core.db.session import get_owned
+    from core.plugin_manager import plugin_manager
+    from pack_calendar.models import Appointment
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "json inválido"}, status_code=400)
+
+    tenant_id = get_current_tenant_id()
+    async with get_session() as session:
+        row = await get_owned(session, Appointment, appointment_id, tenant_id)
+    if row is None:
+        return JSONResponse({"detail": "Cita no encontrada"}, status_code=404)
+
+    new_start = _parse_dt(body.get("start")) if body.get("start") else None
+    new_end = _parse_dt(body.get("end")) if body.get("end") else None
+    if new_start and new_end and new_end <= new_start:
+        return JSONResponse({"detail": "El fin debe ser posterior al inicio"}, status_code=422)
+
+    title = body.get("title")
+    attendee = body.get("attendee_email")
+    notes = body.get("notes")
+    type_id = _as_uuid(body.get("appointment_type_id"))
+
+    if row.google_event_id:
+        config = await plugin_manager.load_config(PLUGIN_ID)
+        if config is None:
+            return JSONResponse({"detail": "Sin conexión de Google"}, status_code=409)
+        try:
+            token = await _google_token(config)
+        except Exception:
+            return JSONResponse({"detail": "Token de Google inválido"}, status_code=502)
+
+        gbody: dict[str, Any] = {}
+        if title is not None:
+            gbody["summary"] = str(title)
+        if attendee is not None:
+            emails = [e.strip() for e in str(attendee).split(",") if e.strip()]
+            gbody["attendees"] = [{"email": e} for e in emails]
+        if notes is not None:
+            gbody["description"] = str(notes)
+        if new_start:
+            gbody["start"] = _google_body_dt(new_start, config.timezone)  # type: ignore[attr-defined]
+        if new_end:
+            gbody["end"] = _google_body_dt(new_end, config.timezone)  # type: ignore[attr-defined]
+        if gbody:
+            try:
+                await _google_patch_event(config, token, row.google_event_id, gbody)
+            except Exception:
+                return JSONResponse(
+                    {"detail": "Google Calendar rechazó el cambio"}, status_code=409
+                )
+
+    async with get_session() as session:
+        db_row = await get_owned(session, Appointment, appointment_id, tenant_id)
+        if db_row is not None:
+            if title is not None:
+                db_row.title = str(title)
+            if attendee is not None:
+                db_row.attendee_email = str(attendee).strip() or None
+            if notes is not None:
+                db_row.notes = str(notes)
+            if type_id is not None:
+                db_row.appointment_type_id = type_id
+            if new_start:
+                db_row.start_at = new_start
+            if new_end:
+                db_row.end_at = new_end
+            db_row.updated_at = utcnow()
+
+    return JSONResponse({"ok": True})
+
+
+@router.patch("/citas/google/{google_event_id}")
+async def calendar_google_event_patch(request: Request, google_event_id: str):
+    """Mueve/redimensiona un evento solo-Google (sin fila local): PATCH directo."""
+    if not await _authorized(request, write=True):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
+
+    from core.plugin_manager import plugin_manager
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "json inválido"}, status_code=400)
+
+    config = await plugin_manager.load_config(PLUGIN_ID)
+    if config is None:
+        return JSONResponse({"detail": "Sin conexión de Google"}, status_code=409)
+
+    new_start = _parse_dt(body.get("start"))
+    new_end = _parse_dt(body.get("end"))
+    if new_start and new_end and new_end <= new_start:
+        return JSONResponse({"detail": "El fin debe ser posterior al inicio"}, status_code=422)
+
+    gbody: dict[str, Any] = {}
+    if new_start:
+        gbody["start"] = _google_body_dt(new_start, config.timezone)  # type: ignore[attr-defined]
+    if new_end:
+        gbody["end"] = _google_body_dt(new_end, config.timezone)  # type: ignore[attr-defined]
+    if not gbody:
+        return JSONResponse({"detail": "Sin cambios"}, status_code=422)
+
+    try:
+        token = await _google_token(config)
+        await _google_patch_event(config, token, google_event_id, gbody)
+    except Exception:
+        return JSONResponse({"detail": "Google Calendar rechazó el cambio"}, status_code=409)
+
+    return JSONResponse({"ok": True})
