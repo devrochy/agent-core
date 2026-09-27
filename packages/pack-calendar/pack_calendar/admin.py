@@ -234,6 +234,7 @@ async def calendar_config_save(request: Request):
         "slot_minutes": int(form.get("slot_minutes", 60) or 60),
         "buffer_minutes": int(form.get("buffer_minutes", 0) or 0),
         "business_hours": str(form.get("business_hours", "") or ""),
+        "appointment_moved_message": str(form.get("appointment_moved_message", "") or ""),
     }
     # Horario: JSON válido o rechazo (evita guardar basura que rompería la disponibilidad).
     try:
@@ -580,6 +581,41 @@ async def _google_patch_event(config: Any, token: str, google_event_id: str, bod
     return response.json()
 
 
+async def _notify_cita_movida(conversation_id: uuid.UUID, title: str, new_start: datetime) -> bool:
+    """Avisa por WhatsApp al cliente que su cita cambió de horario (best-effort).
+
+    El texto es configurable (`appointment_moved_message`) con placeholders
+    {fecha}, {hora}, {titulo}. Nunca tumba el flujo si el envío falla.
+    """
+    from core.db.models import Conversation
+    from core.db.session import get_owned
+    from core.gateway.sender import send_to_conversation
+    from core.plugin_manager import plugin_manager
+    from pack_calendar.config import DEFAULT_MOVED_MESSAGE
+
+    tenant_id = get_current_tenant_id()
+    async with get_session() as session:
+        conversation = await get_owned(session, Conversation, conversation_id, tenant_id)
+    if conversation is None or conversation.bot_paused or conversation.status == "closed":
+        return False
+
+    config = await plugin_manager.load_config(PLUGIN_ID)
+    if config is None:
+        return False
+    tz = ZoneInfo(getattr(config, "timezone", "America/Bogota") or "America/Bogota")
+    local = new_start.astimezone(tz)
+    fecha = local.strftime("%d/%m/%Y")
+    hora = local.strftime("%H:%M")
+    template = getattr(config, "appointment_moved_message", "") or DEFAULT_MOVED_MESSAGE
+    message = template.format(fecha=fecha, hora=hora, titulo=title or "tu cita")
+    try:
+        await send_to_conversation(conversation_id, message, sender_type="agent")
+        return True
+    except Exception:
+        log.warning("calendar_notify_moved_failed", conversation_id=str(conversation_id), exc_info=True)
+        return False
+
+
 @router.get("/tipos.json")
 async def calendar_types_json(request: Request):
     """Tipos de cita activos, para el select del modal crear/editar."""
@@ -708,8 +744,12 @@ async def calendar_appointment_patch(request: Request, appointment_id: uuid.UUID
     tenant_id = get_current_tenant_id()
     async with get_session() as session:
         row = await get_owned(session, Appointment, appointment_id, tenant_id)
-    if row is None:
-        return JSONResponse({"detail": "Cita no encontrada"}, status_code=404)
+        if row is None:
+            return JSONResponse({"detail": "Cita no encontrada"}, status_code=404)
+        old_start = row.start_at
+        old_end = row.end_at
+        conv_id = row.conversation_id
+        appt_title = row.title
 
     new_start = _parse_dt(body.get("start")) if body.get("start") else None
     new_end = _parse_dt(body.get("end")) if body.get("end") else None
@@ -767,7 +807,14 @@ async def calendar_appointment_patch(request: Request, appointment_id: uuid.UUID
                 db_row.end_at = new_end
             db_row.updated_at = utcnow()
 
-    return JSONResponse({"ok": True})
+    moved = (new_start is not None and new_start != old_start) or (
+        new_end is not None and new_end != old_end
+    )
+    notified = False
+    if moved and conv_id is not None and bool(body.get("notify", True)):
+        notified = await _notify_cita_movida(conv_id, appt_title, new_start or old_start)
+
+    return JSONResponse({"ok": True, "notified": notified})
 
 
 @router.patch("/citas/google/{google_event_id}")

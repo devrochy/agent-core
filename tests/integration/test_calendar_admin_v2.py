@@ -182,7 +182,9 @@ async def _calendar_tenant_tid(app_client):
     return cookie, tid
 
 
-async def _make_appointment(tenant_id, *, title, start_utc, status="scheduled", google_event_id=None, attendee_email=None):
+async def _make_appointment(
+    tenant_id, *, title, start_utc, status="scheduled", google_event_id=None, attendee_email=None, conversation_id=None
+):
     from datetime import timedelta
 
     from pack_calendar.models import Appointment
@@ -196,6 +198,7 @@ async def _make_appointment(tenant_id, *, title, start_utc, status="scheduled", 
                 tenant_id=tenant_id, title=title, start_at=start_utc,
                 end_at=start_utc + timedelta(minutes=60), status=status,
                 google_event_id=google_event_id, attendee_email=attendee_email,
+                conversation_id=conversation_id,
             )
             session.add(row)
             await session.flush()
@@ -465,3 +468,141 @@ async def test_citas_endpoints_requieren_sesion(app_client, monkeypatch):
     assert r.status_code == 401
     r = await app_client.get("/calendar/tipos.json", headers=bad)
     assert r.status_code == 401
+
+
+async def _make_conversation(tenant_id, external_id="whatsapp:+573001234567"):
+    from core.db.models import Conversation, Customer
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            customer = Customer(
+                tenant_id=tenant_id,
+                channel="whatsapp",
+                external_id=external_id,
+                contact_phone="+573001234567",
+                name="Cliente Test",
+            )
+            session.add(customer)
+            await session.flush()
+            conv = Conversation(
+                tenant_id=tenant_id, customer_id=customer.id, channel="whatsapp", status="open"
+            )
+            session.add(conv)
+            await session.flush()
+            return customer.id, conv.id
+
+
+async def _mover_cita_notify(app_client, cookie, appt_id, conv_id, *, notify=True, fields=None):
+    """PATCH de mover con google mockeado + send_to_conversation espía."""
+    from datetime import datetime, timedelta
+
+    calls: list[tuple] = []
+
+    async def fake_send(conversation_id, text, image_url=None, sender_type="agent", *, is_template=False):
+        calls.append((str(conversation_id), text, sender_type))
+        return True
+
+    async def fake_token(config):
+        return "tok"
+
+    async def fake_patch(config, token, gid, body):
+        return {"id": gid}
+
+    import pytest
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr("core.gateway.sender.send_to_conversation", fake_send)
+    monkeypatch.setattr("pack_calendar.admin._google_token", fake_token)
+    monkeypatch.setattr("pack_calendar.admin._google_patch_event", fake_patch)
+
+    new_start = datetime(2026, 10, 6, 10, 0, tzinfo=UTC)
+    body = fields if fields is not None else {
+        "start": new_start.isoformat(),
+        "end": (new_start + timedelta(minutes=60)).isoformat(),
+        "notify": notify,
+    }
+    r = await app_client.patch(
+        f"/calendar/citas/{appt_id}", headers={"Cookie": cookie}, json=body
+    )
+    monkeypatch.undo()
+    return r, calls
+
+
+async def test_citas_mover_notifica_cliente_por_whatsapp(app_client):
+    from datetime import datetime
+
+    cookie, tid = await _calendar_tenant_tid(app_client)
+    _, conv_id = await _make_conversation(tid)
+    start = datetime(2026, 10, 5, 15, 0, tzinfo=UTC)
+    appt_id = await _make_appointment(
+        tid, title="Cita notificada", start_utc=start, google_event_id="g-abc", conversation_id=conv_id
+    )
+    try:
+        r, calls = await _mover_cita_notify(app_client, cookie, appt_id, conv_id, notify=True)
+        assert r.status_code == 200, r.text
+        assert r.json()["notified"] is True
+        assert len(calls) == 1
+        conv_str, text, sender = calls[0]
+        assert conv_str == str(conv_id)
+        assert sender == "agent"
+        # Fecha nueva formateada en la tz del tenant (America/Bogota = UTC-5).
+        assert "06/10/2026" in text
+        assert "05:00" in text
+    finally:
+        await _delete_appointment(tid, appt_id)
+
+
+async def test_citas_mover_sin_conversacion_no_notifica(app_client):
+    from datetime import datetime
+
+    cookie, tid = await _calendar_tenant_tid(app_client)
+    start = datetime(2026, 10, 5, 15, 0, tzinfo=UTC)
+    appt_id = await _make_appointment(tid, title="Sin conversación", start_utc=start, google_event_id="g-xyz")
+    try:
+        r, calls = await _mover_cita_notify(app_client, cookie, appt_id, None, notify=True)
+        assert r.status_code == 200, r.text
+        assert r.json()["notified"] is False
+        assert calls == []
+    finally:
+        await _delete_appointment(tid, appt_id)
+
+
+async def test_citas_mover_notify_false_no_notifica(app_client):
+    from datetime import datetime
+
+    cookie, tid = await _calendar_tenant_tid(app_client)
+    _, conv_id = await _make_conversation(tid)
+    start = datetime(2026, 10, 5, 15, 0, tzinfo=UTC)
+    appt_id = await _make_appointment(
+        tid, title="Sin aviso", start_utc=start, google_event_id="g-abc", conversation_id=conv_id
+    )
+    try:
+        r, calls = await _mover_cita_notify(app_client, cookie, appt_id, conv_id, notify=False)
+        assert r.status_code == 200, r.text
+        assert r.json()["notified"] is False
+        assert calls == []
+    finally:
+        await _delete_appointment(tid, appt_id)
+
+
+async def test_citas_editar_solo_titulo_no_notifica(app_client):
+    from datetime import datetime
+
+    cookie, tid = await _calendar_tenant_tid(app_client)
+    _, conv_id = await _make_conversation(tid)
+    start = datetime(2026, 10, 5, 15, 0, tzinfo=UTC)
+    appt_id = await _make_appointment(
+        tid, title="Original", start_utc=start, google_event_id="g-abc", conversation_id=conv_id
+    )
+    try:
+        # Cambia solo el título (sin start/end): no se avisa.
+        r, calls = await _mover_cita_notify(
+            app_client, cookie, appt_id, conv_id, notify=True, fields={"title": "Titulo nuevo"}
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["notified"] is False
+        assert calls == []
+    finally:
+        await _delete_appointment(tid, appt_id)
