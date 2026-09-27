@@ -29,6 +29,28 @@ from core.shared.tenant import tenant_scope
 log = get_logger(__name__)
 
 
+def _normalize_fields(raw: object) -> list[str]:
+    """Normaliza los `fields` que devuelve Meta a `list[str]`.
+
+    La Graph API respondía `["messages", ...]`; desde v26 devuelve objetos
+    `[{"name": "messages", "version": "v26.0"}, ...]`. Al insertarlos en una
+    columna `text[]` eso reventaba con `DataError: invalid input for query
+    argument` y el cron de salud no podía persistir el estado.
+    """
+    if not isinstance(raw, list):
+        return []
+    result: list[str] = []
+    for item in raw:
+        if isinstance(item, dict):
+            name = item.get("name")
+            if name:
+                result.append(str(name))
+        elif item:
+            result.append(str(item))
+    return result
+
+
+
 @dataclass
 class _AppGroup:
     meta_app_id: str
@@ -165,7 +187,7 @@ async def _check_group(group: _AppGroup) -> None:
     for item in items:
         object_ = item.get("object", "")
         active = item.get("active", False)
-        fields = item.get("fields", [])
+        fields = _normalize_fields(item.get("fields", []))
         callback_url = item.get("callback_url")
         await persist_subscription_state(
             group.meta_app_id, object_, callback_url=callback_url, active=active, fields=fields, last_error=None
