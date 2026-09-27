@@ -335,7 +335,39 @@ async def calendar_appointments(request: Request):
         timezone_name = getattr(config, "timezone", "America/Bogota") or "America/Bogota"
     except PluginConfigError:
         timezone_name = "America/Bogota"
-    ctx.update(calendar_timezone=timezone_name)
+
+    # Lista de citas agendadas (server-rendered): siempre visible, aunque el
+    # calendario JS falle. Horas en la tz del tenant.
+    from zoneinfo import ZoneInfo
+
+    from pack_calendar.models import Appointment
+
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                select(Appointment)
+                .where(
+                    Appointment.tenant_id == get_current_tenant_id(),
+                    Appointment.deleted_at.is_(None),
+                    Appointment.status == "scheduled",
+                )
+                .order_by(Appointment.start_at)
+                .limit(200)
+            )
+        ).scalars().all()
+
+    tz = ZoneInfo(timezone_name)
+    scheduled_citas = [
+        {
+            "id": cita.id,
+            "title": cita.title,
+            "attendee_email": cita.attendee_email or "",
+            "cuando": cita.start_at.astimezone(tz).strftime("%Y-%m-%d %H:%M"),
+        }
+        for cita in rows
+    ]
+
+    ctx.update(calendar_timezone=timezone_name, scheduled_citas=scheduled_citas)
     return _render("calendar/citas.html", ctx)
 
 
