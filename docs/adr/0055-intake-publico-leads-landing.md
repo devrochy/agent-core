@@ -1,7 +1,14 @@
 # ADR-0055 — Intake público de leads desde la landing
 
-- **Estado:** propuesto
+- **Estado:** reemplazado por [ADR-0057](0057-rutas-publicas-e-identidad-de-pack.md)
 - **Fecha:** 2026-09-23
+
+> **Reemplazada.** La superficie `/webhooks/leads/{slug}` aquí propuesta fue descartada
+> por ADR-0057 (las rutas públicas de pack viven bajo `/api/pack/<plugin_id>/…`, no
+> reutilizan `/webhooks/*`). La implementación vigente es
+> `POST /api/pack/pack_commerce/leads/{slug}` en `pack_commerce`, con **secreto por
+> tenant** (`CRMConfig.lead_intake_secret`) y configuración por tenant. Este documento
+> se conserva como registro histórico del problema original.
 
 ## Contexto
 

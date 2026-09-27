@@ -62,7 +62,7 @@ Se crean con `/adr`.
 | 0052 | Extensibilidad de capacidades: tools declarativas y canales por entry_points | aceptado |
 | 0053 | Memoria: retención, purga por cliente y redacción de PII | aceptado |
 | 0054 | Flujo de atención declarativo por pack, personalizable por tenant | aceptado |
-| 0055 | Intake público de leads desde la landing | propuesto |
+| 0055 | Intake público de leads desde la landing | reemplazado por 0057 |
 | 0056 | Leads globales con contribuciones por pack (`LeadProvider`) | aceptado |
 | 0057 | Rutas públicas de pack e identidad de pack (auth de usuarios finales) | aceptado |
 | 0058 | PostGIS en el despliegue del core | aceptado |
