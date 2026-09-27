@@ -140,3 +140,42 @@ async def test_tool_rota_solo_afecta_al_tenant_que_fallo(_registered_failing_too
     # Limpieza para no dejar T1 marcado entre corridas de la suite.
     async with tenant_scope(T1):
         await plugin_manager.reactivate_for_tenant(T1, "pack_commerce")
+
+
+async def test_plugins_page_no_muestra_error_reactivado(app_client):
+    """Regresión UI (ADR-0024): una fila de salud con `deleted_at` (reactivada)
+    NO debe seguir mostrándose como error en /admin/plugins."""
+    from core.onboarding import onboard_tenant
+    from core.plugin_manager import plugin_manager
+    from core.shared.tenant import tenant_scope
+
+    slug = f"plughealth-{uuid.uuid4().hex[:6]}"
+    tid, _ = await onboard_tenant(
+        name=f"Tenant {slug}", slug=slug, business_description="x",
+        persona={"tone": "cercano"}, admin_email="admin@local",
+    )
+
+    r = await app_client.post("/admin/login", data={"email": "admin@local", "password": "admin123"})
+    assert r.status_code == 303
+    cookie = r.headers["set-cookie"].split(";")[0]
+    r = await app_client.post(
+        "/admin/switch-tenant", headers={"Cookie": cookie}, data={"tenant_id": str(tid)}
+    )
+    ac = next(c.split(";")[0] for c in r.headers.get_list("set-cookie") if "ac_tenant" in c)
+    full_cookie = f"{cookie}; {ac}"
+
+    # Error ACTIVO (deleted_at NULL) -> se muestra en el panel.
+    async with tenant_scope(tid):
+        await plugin_manager.auto_disable_for_tenant(
+            tid, "pack_calendar", "[pack_calendar] Calendar API 404 de prueba"
+        )
+    r = await app_client.get("/admin/plugins", headers={"Cookie": full_cookie})
+    assert r.status_code == 200
+    assert "Calendar API 404 de prueba" in r.text
+
+    # Reactivado (deleted_at seteado, fila "sana") -> NO debe mostrarse.
+    async with tenant_scope(tid):
+        await plugin_manager.reactivate_for_tenant(tid, "pack_calendar")
+    r = await app_client.get("/admin/plugins", headers={"Cookie": full_cookie})
+    assert r.status_code == 200
+    assert "Calendar API 404 de prueba" not in r.text

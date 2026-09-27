@@ -1631,7 +1631,14 @@ async def plugins_list(request: Request):
             r.plugin_id: r
             for r in (
                 await session.execute(
-                    select(PluginTenantState).where(PluginTenantState.tenant_id == tenant_id)
+                    select(PluginTenantState).where(
+                        # Salud por tenant (ADR-0024): solo se muestra como error si
+                        # la fila está ACTIVA (deleted_at IS NULL). Una fila con
+                        # deleted_at = reactivada/recuperada conserva el error viejo
+                        # y NO debe pintarse como falla en el panel.
+                        PluginTenantState.tenant_id == tenant_id,
+                        PluginTenantState.deleted_at.is_(None),
+                    )
                 )
             )
             .scalars()
