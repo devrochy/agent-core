@@ -95,17 +95,51 @@ document.addEventListener('DOMContentLoaded', function () {
     setTimeout(function () { el.classList.add('d-none'); }, 4000);
   }
 
-  function fmt(fecha) {
-    if (!fecha) return '—';
-    try { return fecha.toLocaleString('es-CO', { dateStyle: 'full', timeStyle: 'short' }); }
-    catch (e) { return fecha.toLocaleString(); }
+  // --- timezone del tenant -------------------------------------------------
+  // Con `timeZone` nombrado, FullCalendar devuelve en `select` un "fake" Date:
+  // su valor UTC es el reloj de pared en la tz del calendario, NO el instante
+  // real. Estas helpers convierten entre reloj de pared (tenant) e instante.
+  function tzOffsetMin(instant, tz) {
+    const dtf = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+    });
+    const p = dtf.formatToParts(new Date(instant));
+    const g = function (t) { const x = p.find(function (o) { return o.type === t; }); return x ? x.value : ''; };
+    const wallAsUtc = Date.UTC(+g('year'), +g('month') - 1, +g('day'), +g('hour'), +g('minute'), +g('second'));
+    return (wallAsUtc - instant) / 60000;
   }
 
-  function toLocalValue(d) {
-    // valor para <input type="datetime-local"> (sin tz; se interpreta en la tz del navegador)
-    const pad = function (n) { return String(n).padStart(2, '0'); };
-    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
-           'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  function fakeToReal(fake, tz) {
+    const t = fake.getTime();
+    return new Date(t - tzOffsetMin(t, tz) * 60000);
+  }
+
+  function wallClockInTz(instant, tz) {
+    const dtf = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+    });
+    const p = dtf.formatToParts(new Date(instant));
+    const g = function (t) { const x = p.find(function (o) { return o.type === t; }); return x ? x.value : ''; };
+    return g('year') + '-' + g('month') + '-' + g('day') + 'T' + g('hour') + ':' + g('minute');
+  }
+
+  function parseWallClockInTz(value, tz) {
+    if (!value) return null;
+    const parts = value.split('T');
+    const date = (parts[0] || '').split('-');
+    const time = (parts[1] || '00:00').split(':');
+    const asFake = Date.UTC(+date[0], +date[1] - 1, +date[2], +time[0], +time[1]);
+    if (isNaN(asFake)) return null;
+    return new Date(asFake - tzOffsetMin(asFake, tz) * 60000);
+  }
+
+  const fmtDtf = new Intl.DateTimeFormat('es-CO', { timeZone: timezone, dateStyle: 'full', timeStyle: 'short' });
+  function fmt(fecha) {
+    if (!fecha) return '—';
+    try { return fmtDtf.format(new Date(fecha)); }
+    catch (e) { return new Date(fecha).toLocaleString(); }
   }
 
   function badge(estado) {
@@ -149,8 +183,8 @@ document.addEventListener('DOMContentLoaded', function () {
       document.getElementById('f-email').value = '';
       document.getElementById('f-notes').value = '';
       cargarTiposCita('');
-      document.getElementById('f-start').value = toLocalValue(prefill.start);
-      document.getElementById('f-end').value = toLocalValue(prefill.end);
+      document.getElementById('f-start').value = wallClockInTz(prefill.start, timezone);
+      document.getElementById('f-end').value = wallClockInTz(prefill.end, timezone);
     } else {
       const p = prefill.extendedProps || {};
       document.getElementById('f-id').value = p.appointment_id || '';
@@ -158,8 +192,8 @@ document.addEventListener('DOMContentLoaded', function () {
       document.getElementById('f-email').value = p.attendee_email || '';
       document.getElementById('f-notes').value = p.description || '';
       cargarTiposCita(p.appointment_type_id || '');
-      document.getElementById('f-start').value = toLocalValue(prefill.start);
-      document.getElementById('f-end').value = toLocalValue(prefill.end);
+      document.getElementById('f-start').value = wallClockInTz(prefill.start, timezone);
+      document.getElementById('f-end').value = wallClockInTz(prefill.end, timezone);
     }
     bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-form')).show();
   }
@@ -232,8 +266,8 @@ document.addEventListener('DOMContentLoaded', function () {
   async function guardarForm(ev) {
     ev.preventDefault();
     const mode = document.getElementById('form-cita').dataset.mode;
-    const startRaw = new Date(document.getElementById('f-start').value);
-    const endRaw = new Date(document.getElementById('f-end').value);
+    const startRaw = parseWallClockInTz(document.getElementById('f-start').value, timezone);
+    const endRaw = parseWallClockInTz(document.getElementById('f-end').value, timezone);
     if (isNaN(startRaw) || isNaN(endRaw) || endRaw <= startRaw) {
       toast('El fin debe ser posterior al inicio', false);
       return;
@@ -322,8 +356,8 @@ document.addEventListener('DOMContentLoaded', function () {
     },
     buttonText: { month: 'Mes', week: 'Semana', day: 'Día', today: 'Hoy' },
     select: function (info) {
-      const start = info.start;
-      const end = info.end || new Date(start.getTime() + defaultDurationMin * 60000);
+      const start = fakeToReal(info.start, timezone);
+      const end = fakeToReal(info.end || new Date(info.start.getTime() + defaultDurationMin * 60000), timezone);
       abrirForm('create', { start: start, end: end });
     },
     events: function (info, success, failure) {
