@@ -297,3 +297,169 @@ async def test_calendario_json_fusiona_eventos_de_google(app_client, monkeypatch
         assert externo["color"] == "#0d6efd"
     finally:
         await _delete_appointment(tid, appt_id)
+
+
+async def test_citas_crear_mover_editar_con_google(app_client, monkeypatch):
+    from datetime import datetime, timedelta
+
+    from pack_calendar.models import Appointment
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    cookie, tid = await _calendar_tenant_tid(app_client)
+
+    # Tipos de cita para el select del modal.
+    r = await app_client.post(
+        "/calendar/tipos/guardar", headers={"Cookie": cookie},
+        data={"name": "Consulta", "duration_minutes": "30", "description": "x"},
+    )
+    assert r.status_code == 303
+    r = await app_client.get("/calendar/tipos.json", headers={"Cookie": cookie})
+    assert r.status_code == 200
+    tipos = r.json()["tipos"]
+    assert any(t["name"] == "Consulta" for t in tipos)
+    tipo_id = next(t["id"] for t in tipos if t["name"] == "Consulta")
+
+    google_patch_calls: list[dict] = []
+    async def fake_token(config):
+        return "tok-test"
+    async def fake_create(config, token, **kw):
+        return {"id": "g-abc", "htmlLink": "https://g/abc"}
+    async def fake_patch(config, token, google_event_id, body):
+        google_patch_calls.append({"gid": google_event_id, "body": body})
+        return {"id": google_event_id}
+    monkeypatch.setattr("pack_calendar.admin._google_token", fake_token)
+    monkeypatch.setattr("pack_calendar.admin._google_create_event", fake_create)
+    monkeypatch.setattr("pack_calendar.admin._google_patch_event", fake_patch)
+    monkeypatch.setattr("pack_calendar.admin._fetch_google_events", lambda config, s, e: [])
+
+    start = datetime(2026, 11, 3, 15, 0, tzinfo=UTC)
+    end = start + timedelta(minutes=30)
+
+    # Crear.
+    r = await app_client.post(
+        "/calendar/citas/crear", headers={"Cookie": cookie},
+        json={
+            "title": "Nueva desde panel", "start": start.isoformat(), "end": end.isoformat(),
+            "attendee_email": "cliente@x.com", "notes": "nota", "appointment_type_id": tipo_id,
+        },
+    )
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["ok"] is True and payload["google_event_id"] == "g-abc"
+    appt_id = payload["id"]
+
+    try:
+        # Aparece en el calendario con el tipo.
+        r = await app_client.get(
+            "/calendar/citas/calendario.json?start=2026-11-01T00:00:00Z&end=2026-12-01T00:00:00Z",
+            headers={"Cookie": cookie},
+        )
+        assert r.status_code == 200
+        evs = r.json()["events"]
+        mine = [e for e in evs if e.get("id") == f"appt-{appt_id}"]
+        assert mine and mine[0]["title"] == "Nueva desde panel"
+        assert mine[0]["extendedProps"]["appointment_type_id"] == tipo_id
+
+        # Mover (PATCH con start/end nuevos).
+        new_start = datetime(2026, 11, 4, 10, 0, tzinfo=UTC)
+        new_end = new_start + timedelta(minutes=45)
+        r = await app_client.patch(
+            f"/calendar/citas/{appt_id}", headers={"Cookie": cookie},
+            json={"start": new_start.isoformat(), "end": new_end.isoformat()},
+        )
+        assert r.status_code == 200, r.text
+        assert google_patch_calls and google_patch_calls[-1]["gid"] == "g-abc"
+        sent_start = google_patch_calls[-1]["body"]["start"]
+        assert sent_start["timeZone"] == "America/Bogota"
+        assert datetime.fromisoformat(sent_start["dateTime"]).astimezone(UTC) == new_start
+
+        # Editar título/notas.
+        r = await app_client.patch(
+            f"/calendar/citas/{appt_id}", headers={"Cookie": cookie},
+            json={"title": "Titulo editado", "notes": "nota2"},
+        )
+        assert r.status_code == 200, r.text
+
+        async with tenant_scope(tid):
+            async with get_session() as session:
+                row = await session.get(Appointment, uuid.UUID(appt_id))
+                assert row.title == "Titulo editado"
+                assert row.notes == "nota2"
+                assert row.start_at == new_start
+                assert row.end_at == new_end
+    finally:
+        await _delete_appointment(tid, uuid.UUID(appt_id))
+
+
+async def test_citas_crear_sin_conexion_google_crea_local(app_client, monkeypatch):
+
+    from datetime import datetime, timedelta
+
+    cookie, tid = await _calendar_tenant_tid(app_client)
+
+    async def fake_load_config(plugin_id):
+        return None
+    monkeypatch.setattr("core.plugin_manager.plugin_manager.load_config", fake_load_config)
+    monkeypatch.setattr("pack_calendar.admin._fetch_google_events", lambda config, s, e: [])
+
+    start = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+    r = await app_client.post(
+        "/calendar/citas/crear", headers={"Cookie": cookie},
+        json={"title": "Local sin google", "start": start.isoformat(), "end": (start + timedelta(minutes=30)).isoformat()},
+    )
+    assert r.status_code == 200, r.text
+    appt_id = r.json()["id"]
+    try:
+        r = await app_client.get(
+            "/calendar/citas/calendario.json?start=2026-11-01T00:00:00Z&end=2026-12-01T00:00:00Z",
+            headers={"Cookie": cookie},
+        )
+        mine = [e for e in r.json()["events"] if e.get("id") == f"appt-{appt_id}"]
+        assert mine and mine[0]["extendedProps"]["google_event_id"] is None
+        assert mine[0]["color"] == "#198754"
+    finally:
+        await _delete_appointment(tid, uuid.UUID(appt_id))
+
+
+async def test_citas_mover_evento_google_only(app_client, monkeypatch):
+    from datetime import datetime, timedelta
+
+    cookie, _ = await _calendar_tenant_tid(app_client)
+    calls: list[dict] = []
+    async def fake_token(config):
+        return "tok"
+    async def fake_patch(config, token, google_event_id, body):
+        calls.append({"gid": google_event_id, "body": body})
+        return {"id": google_event_id}
+    monkeypatch.setattr("pack_calendar.admin._google_token", fake_token)
+    monkeypatch.setattr("pack_calendar.admin._google_patch_event", fake_patch)
+
+    start = datetime(2026, 11, 12, 9, 0, tzinfo=UTC)
+    r = await app_client.patch(
+        "/calendar/citas/google/g-xyz", headers={"Cookie": cookie},
+        json={"start": start.isoformat(), "end": (start + timedelta(hours=1)).isoformat()},
+    )
+    assert r.status_code == 200, r.text
+    assert calls and calls[-1]["gid"] == "g-xyz"
+    assert calls[-1]["body"]["start"]["timeZone"] == "America/Bogota"
+
+
+async def test_citas_endpoints_requieren_sesion(app_client, monkeypatch):
+    from datetime import datetime
+
+    # Cookie inválida explícita (el cliente httpx puede conservar cookies de tests previos).
+    bad = {"Cookie": "session=nope; ac_tenant=nope"}
+    r = await app_client.post(
+        "/calendar/citas/crear",
+        headers=bad,
+        json={"title": "x", "start": datetime(2026, 11, 1, 10, 0, tzinfo=UTC).isoformat(), "end": datetime(2026, 11, 1, 11, 0, tzinfo=UTC).isoformat()},
+    )
+    assert r.status_code == 401
+    r = await app_client.patch("/calendar/citas/00000000-0000-0000-0000-000000000001", headers=bad, json={"title": "x"})
+    assert r.status_code == 401
+    r = await app_client.patch("/calendar/citas/google/g-1", headers=bad, json={"start": datetime(2026, 11, 1, 10, 0, tzinfo=UTC).isoformat()})
+    assert r.status_code == 401
+    r = await app_client.get("/calendar/tipos.json", headers=bad)
+    assert r.status_code == 401
