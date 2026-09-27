@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 
 from core.mcp.types import BasePluginConfig
 
@@ -133,4 +133,36 @@ class CRMConfig(BasePluginConfig):
             "Las frases NUNCA se interpretan como regex (se escapan). Si el "
             "nombre coincide con un claim incorporado, lo reemplaza."
         ),
+    )
+
+    # ---------------------------------------------------------------- intake de leads (ADR-0055 superseded)
+    lead_intake_enabled: bool = Field(
+        default=False,
+        description=(
+            "Aceptar leads desde landings externas por la API pública del pack "
+            "(/api/pack/pack_commerce/leads/<slug>). Desactivado por defecto."
+        ),
+    )
+    lead_intake_secret: SecretStr = Field(
+        default=SecretStr(""),
+        description=(
+            "Secreto compartido del intake. La landing lo envía en el header "
+            "X-Intake-Secret. Vacío = intake sin configurar (503)."
+        ),
+    )
+    lead_intake_allowed_origins: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Orígenes permitidos para el formulario alojado (iframe). Vacío = sin "
+            "restricción de origen."
+        ),
+    )
+    lead_intake_default_status: str = Field(
+        default="nuevo", description="Estado inicial del lead capturado por intake"
+    )
+    lead_intake_default_interest: str = Field(
+        default="", description="Interés por defecto si el formulario no lo envía"
+    )
+    lead_intake_source: str = Field(
+        default="landing", description="Origen (source) guardado en el lead del intake"
     )
