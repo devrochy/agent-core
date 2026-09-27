@@ -336,38 +336,34 @@ async def calendar_appointments(request: Request):
     except PluginConfigError:
         timezone_name = "America/Bogota"
 
-    # Lista de citas agendadas (server-rendered): siempre visible, aunque el
-    # calendario JS falle. Horas en la tz del tenant.
+    # El calendario arranca en la próxima cita agendada (o hoy), para que las
+    # citas sean visibles sin tener que navegar a la fecha.
     from zoneinfo import ZoneInfo
 
     from pack_calendar.models import Appointment
 
+    now = datetime.now(UTC)
     async with get_session() as session:
-        rows = (
+        next_cita = (
             await session.execute(
                 select(Appointment)
                 .where(
                     Appointment.tenant_id == get_current_tenant_id(),
                     Appointment.deleted_at.is_(None),
                     Appointment.status == "scheduled",
+                    Appointment.start_at >= now,
                 )
                 .order_by(Appointment.start_at)
-                .limit(200)
+                .limit(1)
             )
-        ).scalars().all()
+        ).scalar_one_or_none()
 
     tz = ZoneInfo(timezone_name)
-    scheduled_citas = [
-        {
-            "id": cita.id,
-            "title": cita.title,
-            "attendee_email": cita.attendee_email or "",
-            "cuando": cita.start_at.astimezone(tz).strftime("%Y-%m-%d %H:%M"),
-        }
-        for cita in rows
-    ]
-
-    ctx.update(calendar_timezone=timezone_name, scheduled_citas=scheduled_citas)
+    initial = (next_cita.start_at if next_cita else now).astimezone(tz)
+    ctx.update(
+        calendar_timezone=timezone_name,
+        calendar_initial_date=initial.strftime("%Y-%m-%d"),
+    )
     return _render("calendar/citas.html", ctx)
 
 

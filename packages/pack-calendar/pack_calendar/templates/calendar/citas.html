@@ -12,36 +12,6 @@
   </div>
 </div>
 
-<div class="card mt-4">
-  <div class="card-header">Citas agendadas</div>
-  <div class="card-body">
-    {% if scheduled_citas %}
-    <table class="table align-middle">
-      <thead>
-        <tr><th>Cuándo</th><th>Título</th><th>Cliente</th><th class="text-end">Acciones</th></tr>
-      </thead>
-      <tbody>
-        {% for cita in scheduled_citas %}
-        <tr>
-          <td class="small">{{ cita.cuando }}</td>
-          <td><strong>{{ cita.title }}</strong></td>
-          <td class="small text-secondary">{{ cita.attendee_email }}</td>
-          <td class="text-end">
-            <form method="post" action="/calendar/citas/{{ cita.id }}/cancelar" class="d-inline"
-                  onsubmit="return confirm('¿Cancelar esta cita? Se borra también en Google Calendar.');">
-              <button class="btn btn-outline-danger btn-sm"><i class="bi bi-x-circle"></i> Cancelar</button>
-            </form>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="text-secondary mb-0">Todavía no hay citas agendadas por el asistente.</p>
-    {% endif %}
-  </div>
-</div>
-
 {# Modal de detalle de la cita/evento #}
 <div class="modal fade" id="modal-cita" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog">
@@ -122,6 +92,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   const calendar = new FullCalendar.Calendar(calendarEl, {
     initialView: 'timeGridWeek',
+    initialDate: {{ calendar_initial_date | tojson }},
     locale: 'es',
     timeZone: timezone,
     height: 'auto',
