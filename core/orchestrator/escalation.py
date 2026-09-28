@@ -21,6 +21,7 @@ from core.shared.audit import record_audit
 from core.shared.events import ON_ESCALATION_TRIGGERED, event_bus
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from core.shared.test_mode import is_test_channel
 
 log = get_logger(__name__)
 
@@ -36,6 +37,12 @@ async def escalate(conversation_id: uuid.UUID, reason: str, summary: str = "") -
     async with get_session() as session:
         conversation = await session.get(Conversation, conversation_id)
         if conversation is None:
+            return
+        # Conversación del playground (channel "test"): no es atención real. No
+        # se crea `Escalation`, no se pausa el bot y no se emite alerta -- sería
+        # contaminar la cola del cliente con una prueba del panel.
+        if is_test_channel(conversation.channel):
+            log.info("escalation_skipped_test", conversation_id=str(conversation_id), reason=reason)
             return
         conversation.status = "escalated"
         conversation.bot_paused = True  # CRÍTICO: el bot deja de responder ya

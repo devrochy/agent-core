@@ -1,5 +1,81 @@
 # Changelog
 
+## Sin versión — Playground "Probar asistente" + F0 del canal waweb (2026-09-27)
+
+### Playground (ADR-0075)
+- Nueva vista `/admin/asistente/probar`: conversa con el asistente del tenant
+  **sin pasar por ningún canal** (mismo loop del runtime, `process_conversation`).
+- Botón destacado **"Probar asistente"** (acento indigo propio) en `/admin/conexiones`
+  y en el menú lateral; vista tipo celular con aviso de modo prueba.
+- Conversación de prueba `channel == "test"`: **no** persiste filas en `messages`,
+  queda excluida de las métricas de billing (`clientes`/`conversaciones`/
+  `costo_llm_usd`) y de `escalate()` (no crea `Escalation`, no pausa, no alerta).
+- Archivos: `core/admin/playground.py`, `core/shared/test_mode.py`,
+  `core/admin/templates/asistente_probar.html`, rutas en `core/admin/views.py`,
+  filtros en `core/billing/metrics.py` y `core/orchestrator/escalation.py`.
+
+### F0 del canal WhatsApp Web no oficial (ADR-0074, propuesto)
+- Spike `scripts/spike_neonize.py` + verificación de instalación.
+- **Validado:** `neonize 0.5.2` instala e importa (con `_ctypes` disponible) y
+  `NewAClient` instancia. **Hallazgo:** el Python fuente del venv
+  (`/usr/local/Python-3.12.0`) se compiló **sin libffi** → `No module named
+  '_ctypes'`; el connector necesita un Python con libffi (el del Docker sí lo tiene).
+- **Pendiente manual** (requiere número de repuesto): QR, persistencia tras
+  reinicio, supervivencia a recrear contenedor, media y reconexión tras caída de red.
+
+### F1 (inicio) — sesión persistente del canal `waweb`
+- Migración core **`0039_waweb_sessions`**: tabla `waweb_sessions` (`tenant_id` +
+  RLS + FORCE + índice compuesto + único parcial por conexión + `deleted_at`) y
+  modelo `WaWebSession` en `core/db/models.py`. Aplicar/revertir validado contra
+  el stack local.
+- **Tipo de conexión `whatsapp_waweb`** en el catálogo (`connection_types.py`,
+  wizard `/admin/conexiones/waweb`): aparece en "Agregar conexión" con su aviso.
+- **Política anti-baneo por tenant** (`core/waweb/policy.py`): modo solo-respuesta
+  (default), delays y tope diario configurables en `behavior_config`, con clamps.
+- **Paquete `packages/channel-waweb`** (entry_point `agent_core.channels` →
+  provider `waweb`) con `WaWebInbound`/`WaWebOutbound`; el envío cruza por Redis
+  request/reply (`core/waweb/handoff.py`) hacia el futuro proceso `connector`.
+- **Vista `/admin/conexiones/waweb`**: aviso de riesgo con aceptación registrada
+  (`risk_ack_at/by/version`) y QR por polling (`/qr.json`), a la espera del
+  connector.
+- **Runtime del connector (handlers reusables)**: `core/waweb/inbound.py`
+  (publica el entrante al stream `agent_core:inbound` con dedupe por wamid) y
+  `core/waweb/outbound.py` (drena `waweb:outbox` con delay anti-baneo y responde
+  el wamid/error). Backend abstracto: el socket Neonize se enchufa después del
+  spike.
+- **Connector completo (endurecido)**: `store.py` (sesión efímera ↔ blob cifrado
+  en `waweb_sessions.creds_encrypted`), `backend.py` + `backend_neonize.py`,
+  `manager.py` (FSM, reconexión con backoff + *attempt guard*, persistencia,
+  alertas), `registry.py`, `limits.py` (tope diario real + kill-switch) y
+  `connector.py` (entrypoint). Rol `connector`: `scripts/entrypoint-connector.sh`
+  + servicio `waweb-connector` (perfil `waweb`, tmpfs, **apagado por defecto**).
+- **Config**: `WAWEB_ENABLED` (default **false**), `WAWEB_SESSION_DIR`,
+  `WAWEB_SWEEP_INTERVAL_S`, `WAWEB_RECONNECT_MAX_S`; extra `waweb` (neonize) en
+  `pyproject`. Imagen con `libmagic1`/`ffmpeg` (Neonize).
+- **Coexistence (Stream B)**: badge "coexistencia" en `/admin/conexiones` y
+  lectura de `is_on_biz_app` en el wizard (sin migración).
+- Tests: `tests/test_waweb_{policy,handoff,connector,store,limits,manager}.py`.
+- **Verificado en vivo (sin SIM):** el connector arranca, el barrido encuentra la
+  sesión con riesgo aceptado, Neonize conecta y **genera un QR real** que se
+  publica a Redis y el panel lo muestra (`/admin/conexiones/waweb`). Mapeo de
+  eventos de Neonize confirmado en código (`event.qr`, `ConnectedEv`,
+  `DisconnectedEv`, `LoggedOutEv`, `TemporaryBanEv`, `ConnectFailureEv`,
+  `MessageEv`).
+- **Fix de aislamiento (importante):** el connector corre como `app_runtime`
+  (RLS); `active_sessions`/`set_status` y el store de sesión ahora iteran
+  `tenants` y abren `tenant_scope` por tenant (antes RLS los dejaba en cero).
+- **Arreglos tras la primera prueba en vivo:**
+  - Remitente: `MessageSource.Sender` es un **proto JID** (no texto); se resuelve
+    con `.User` y fallback LID→`SenderAlt`. Antes producía `whatsapp:+User` y las
+    respuestas eran inentregables.
+  - UI: se elimina el **reload en loop** al conectar; el polling se detiene y se
+    muestra "Número vinculado" en el lugar. `logged_out` muestra un aviso claro.
+  - Al `logged_out` se **vacía el outbox** del tenant (no más envíos fantasma).
+  - `request_send` **falla rápido** si la sesión no está conectada (marca
+    `waweb:ready:<tenant>` la fija el connector al conectar).
+  - Detección de **número duplicado** entre tenants (alerta + se detiene el de
+    mayor id).
+
 ## Sin versión — conexiones clasificadas + pack-calendar v2 (2026-09-26)
 
 Conexiones del panel clasificadas por categoría (comunicación, correo, calendario)

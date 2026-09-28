@@ -2,6 +2,17 @@
 {% from "_datatable.html" import datatable %}
 {% block title %}Conexiones{% endblock %}
 {% block content %}
+<div class="card mb-4" style="border-left: 5px solid #4f46e5;">
+  <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-3">
+    <div>
+      <div class="fs-5 fw-bold"><i class="bi bi-robot text-accent"></i> Probar asistente</div>
+      <div class="text-secondary">Conversá con el asistente ahora, sin conectar WhatsApp.</div>
+    </div>
+    <a href="/admin/asistente/probar" class="btn btn-accent btn-lg fw-semibold" aria-label="Abrir prueba del asistente">
+      <i class="bi bi-play-fill"></i> Probar asistente
+    </a>
+  </div>
+</div>
 <h1 class="fs-3 mb-4 d-flex justify-content-between align-items-center">
   Conexiones
   <span>
@@ -91,6 +102,7 @@
       <td>
         {% if c.active %}<span class="badge text-bg-success">activa</span>{% else %}<span class="badge text-bg-secondary">inactiva</span>{% endif %}
         {% if c.is_primary %}<span class="badge text-bg-primary">principal</span>{% endif %}
+        {% if c.coexistencia %}<span class="badge text-bg-info" title="El número sigue en la app de WhatsApp Business (Cloud API en paralelo)">coexistencia</span>{% endif %}
       </td>
       <td class="text-end">
         {% if c.tipo == "meta_connection" %}

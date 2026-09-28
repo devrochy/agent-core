@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from core.db.models import Conversation, Customer, Message
 from core.db.session import get_session
 from core.shared.tenant import tenant_scope
+from core.shared.test_mode import TEST_CHANNEL
 
 MetricScope = Literal["period", "lifetime"]
 
@@ -146,6 +147,9 @@ async def _count_metric_in_session(session, tenant_id: uuid.UUID, key: str, peri
                     select(func.count(Customer.id)).where(
                         Customer.tenant_id == tenant_id,
                         Customer.deleted_at.is_(None),
+                        # El cliente sintético del playground (channel "test") no
+                        # es un cliente del negocio: no consume la métrica.
+                        Customer.channel != TEST_CHANNEL,
                     )
                 )
             ).scalar()
@@ -155,6 +159,8 @@ async def _count_metric_in_session(session, tenant_id: uuid.UUID, key: str, peri
         query = select(func.count(Conversation.id)).where(
             Conversation.tenant_id == tenant_id,
             Conversation.deleted_at.is_(None),
+            # La conversación de prueba del panel no cuenta para la cuota (ADR-0045).
+            Conversation.channel != TEST_CHANNEL,
         )
         if period_start is not None:
             query = query.where(Conversation.started_at >= period_start)
@@ -180,10 +186,23 @@ async def _count_metric_in_session(session, tenant_id: uuid.UUID, key: str, peri
 async def _count_cost(session, tenant_id: uuid.UUID, period_start) -> float:
     from decimal import Decimal
 
+    from sqlalchemy import or_
+
     from core.db.models import UsageLedger
 
     query = select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
         UsageLedger.tenant_id == tenant_id
+    )
+    # El playground gasta tokens reales, pero es una prueba del panel: no debe
+    # consumir la cuota de costo del cliente. Se excluyen las filas atadas a una
+    # conversación de prueba; las filas sin `conversation_id` se conservan
+    # (`NOT IN` con NULL descartaría filas legítimas).
+    test_conversations = select(Conversation.id).where(Conversation.channel == TEST_CHANNEL)
+    query = query.where(
+        or_(
+            UsageLedger.conversation_id.is_(None),
+            ~UsageLedger.conversation_id.in_(test_conversations),
+        )
     )
     if period_start is not None:
         query = query.where(UsageLedger.created_at >= period_start)

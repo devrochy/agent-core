@@ -85,6 +85,7 @@ from core.shared.crypto import get_secret_box
 from core.shared.exceptions import PluginConfigError, PluginError
 from core.shared.logger import get_logger
 from core.shared.tenant import admin_tenants, get_current_tenant_id, tenant_scope
+from core.shared.test_mode import TEST_CHANNEL
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -1387,6 +1388,7 @@ async def dashboard(request: Request):
                 select(func.count(Conversation.id)).where(
                     Conversation.tenant_id == my_tenant,
                     Conversation.started_at >= week_ago,
+                    Conversation.channel != TEST_CHANNEL,
                 )
             )
         ).scalar() or 0
@@ -1426,7 +1428,10 @@ async def dashboard(request: Request):
             await session.execute(
                 select(Conversation, Customer)
                 .join(Customer, Customer.id == Conversation.customer_id)
-                .where(Conversation.tenant_id == my_tenant)
+                .where(
+                    Conversation.tenant_id == my_tenant,
+                    Conversation.channel != TEST_CHANNEL,
+                )
                 .order_by(Conversation.started_at.desc())
                 .limit(8)
             )
@@ -1476,6 +1481,7 @@ async def conversations_list(request: Request):
             await session.execute(
                 select(Conversation, Customer)
                 .join(Customer, Customer.id == Conversation.customer_id)
+                .where(Conversation.channel != TEST_CHANNEL)
                 .order_by(Conversation.started_at.desc())
                 .limit(100)
             )
@@ -1945,6 +1951,10 @@ async def connections_page(request: Request):
                 "is_primary": False,
                 "created_at": mc.created_at,
                 "detail_url": "/admin/conexiones/salud",
+                # Coexistencia (ADR-0030): el número sigue en la app de WhatsApp
+                # Business y en Cloud API a la vez. No requiere migración: se lee
+                # de `health` (lo setea `meta_onboarding.persist_finish_payload`).
+                "coexistencia": bool((mc.health or {}).get("coexistence")),
             })
 
     rows.sort(key=lambda r: r["created_at"] or utcnow(), reverse=True)
@@ -1956,6 +1966,170 @@ async def connections_page(request: Request):
         catalog=catalog,
     )
     return _render("conexiones.html", ctx)
+
+
+# ------------------------------------------------------------------ canal waweb (ADR-0074)
+def _qr_data_uri(data: str) -> str:
+    import base64
+    import io
+
+    import qrcode
+
+    image = qrcode.make(data)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
+
+
+@router.get("/conexiones/waweb", response_class=HTMLResponse)
+async def conexiones_waweb(request: Request):
+    """Vínculo por QR de un número propio — canal NO oficial (ADR-0074)."""
+    ctx = await _base_context(request, "connections")
+    if ctx is None:
+        return _login_redirect()
+    from core.waweb import connections as waweb
+
+    tid = get_current_tenant_id()
+    state = await waweb.session_view(tid) if tid is not None else {}
+    if state.get("qr"):
+        state["qr_uri"] = _qr_data_uri(state["qr"])
+    ctx.update(waweb=state)
+    return _render("conexiones_waweb.html", ctx)
+
+
+@router.post("/conexiones/waweb/aceptar-riesgo")
+async def conexiones_waweb_aceptar_riesgo(request: Request):
+    admin = await current_admin(request)
+    if admin is None:
+        return _login_redirect()
+    from core.waweb import connections as waweb
+
+    tid = get_current_tenant_id()
+    if tid is not None:
+        try:
+            await waweb.accept_risk(tid, admin.id)
+        except Exception:
+            log.exception("waweb_accept_risk_failed")
+            return RedirectResponse(
+                "/admin/conexiones/waweb?flash=No se pudo registrar la aceptación&flash_type=danger",
+                status_code=303,
+            )
+    return RedirectResponse(
+        "/admin/conexiones/waweb?flash=Aviso aceptado — esperando el QR&flash_type=success",
+        status_code=303,
+    )
+
+
+@router.post("/conexiones/waweb/reiniciar")
+async def conexiones_waweb_reiniciar(request: Request):
+    if await current_admin(request) is None:
+        return _login_redirect()
+    from core.waweb import connections as waweb
+
+    tid = get_current_tenant_id()
+    if tid is not None:
+        try:
+            await waweb.reset_session(tid)
+        except Exception:
+            log.exception("waweb_reset_failed")
+    return RedirectResponse(
+        "/admin/conexiones/waweb?flash=Vínculo reiniciado&flash_type=success", status_code=303
+    )
+
+
+@router.get("/conexiones/waweb/qr.json")
+async def conexiones_waweb_qr(request: Request):
+    """Estado + QR vigente (data URI). Lo consulta la vista por polling."""
+    if await current_admin(request) is None:
+        return _login_redirect()
+    from core.waweb import connections as waweb
+
+    tid = get_current_tenant_id()
+    if tid is None:
+        return {"status": "", "qr_image": None, "risk_ok": False, "jid": None}
+    state = await waweb.session_view(tid)
+    return {
+        "status": state.get("status", ""),
+        "risk_ok": state.get("risk_ok", False),
+        "jid": state.get("jid"),
+        "qr_image": _qr_data_uri(state["qr"]) if state.get("qr") else None,
+    }
+
+
+# ------------------------------------------------------------------ probar asistente (playground)
+@router.get("/asistente/probar", response_class=HTMLResponse)
+async def asistente_probar(request: Request):
+    """Vista tipo celular para conversar con el asistente SIN ningún canal.
+
+    Llama al loop real (`process_conversation`) sobre una conversación de prueba
+    (`channel == "test"`); la respuesta se muestra en pantalla, nunca se envía
+    por Meta ni waweb. Ver `core/admin/playground.py`.
+    """
+    ctx = await _base_context(request, "asistente")
+    if ctx is None:
+        return _login_redirect()
+
+    from core.admin import playground
+
+    turns: list[dict] = []
+    test_error: str | None = None
+    tid = get_current_tenant_id()
+    if tid is not None:
+        try:
+            conversation = await playground.get_or_create_test_conversation(tid)
+            turns = await playground.list_test_turns(conversation.id)
+        except Exception:
+            log.exception("playground_init_failed")
+            test_error = "No se pudo iniciar la prueba. Revisá los logs del panel."
+    ctx.update(turns=turns, test_error=test_error)
+    return _render("asistente_probar.html", ctx)
+
+
+@router.post("/asistente/probar/mensaje")
+async def asistente_probar_mensaje(request: Request):
+    """Un turno del playground. Devuelve la respuesta del asistente (JSON)."""
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    from core.admin import playground
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    text = str((body or {}).get("text", "")).strip()
+    if not text:
+        return JSONResponse({"error": "Escribí un mensaje."}, status_code=400)
+
+    tid = get_current_tenant_id()
+    if tid is None:
+        return JSONResponse({"error": "No hay un negocio activo seleccionado."}, status_code=400)
+
+    try:
+        turn = await playground.run_test_turn(tid, text)
+    except playground.PlaygroundError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    except Exception:
+        log.exception("playground_turn_failed")
+        return JSONResponse({"error": "Error inesperado probando el asistente."}, status_code=500)
+    return {"reply": turn.text, "image_url": turn.image_url, "escalated": turn.escalated}
+
+
+@router.post("/asistente/probar/reiniciar")
+async def asistente_probar_reiniciar(request: Request):
+    """Arranca la prueba de cero (cierra la conversación y limpia la memoria)."""
+    if await current_admin(request) is None:
+        return _login_redirect()
+
+    from core.admin import playground
+
+    tid = get_current_tenant_id()
+    if tid is not None:
+        try:
+            await playground.reset_test_conversation(tid)
+        except Exception:
+            log.exception("playground_reset_failed")
+    return RedirectResponse("/admin/asistente/probar", status_code=303)
 
 
 @router.get("/conexiones/nuevo", response_class=HTMLResponse)

@@ -202,6 +202,46 @@ class ChannelConnection(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class WaWebSession(Base):
+    """Sesión multi-device del canal WhatsApp Web no oficial (ADR-0074).
+
+    Una sesión viva por conexión `waweb` (índice único parcial por `deleted_at`).
+    Las credenciales de sesión (auth state de Neonize) van CIFRADAS con
+    `SecretBox` -- nunca en el sistema de archivos suelto -- para sobrevivir
+    reinicios de contenedor sin volver a pedir QR.
+    """
+
+    __tablename__ = "waweb_sessions"
+    __table_args__ = (
+        Index(
+            "uq_waweb_sessions_connection",
+            "tenant_id",
+            "connection_id",
+            unique=True,
+            postgresql_where=text("deleted_at is null"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("channel_connections.id", ondelete="CASCADE")
+    )
+    jid: Mapped[str | None] = mapped_column(Text)  # identidad del dispositivo vinculado
+    creds_encrypted: Mapped[str | None] = mapped_column(Text)
+    # pending_qr | connecting | connected | disconnected | logged_out | error
+    status: Mapped[str] = mapped_column(Text, default="pending_qr")
+    last_qr_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    risk_ack_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    risk_ack_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    risk_ack_version: Mapped[str | None] = mapped_column(Text)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 

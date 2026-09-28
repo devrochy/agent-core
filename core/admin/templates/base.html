@@ -19,6 +19,21 @@
     .sidebar details.pack-group > summary::-webkit-details-marker { display: none; }
     .sidebar details.pack-group > summary::after { content: "▸"; float: right; opacity: .7; }
     .sidebar details.pack-group[open] > summary::after { content: "▾"; }
+    /* Acento propio del panel: "Probar asistente" (Fase CT). Distinto del azul
+       de Embedded Signup, del verde de "activa" y del cian de info. */
+    .btn-accent {
+      --bs-btn-color: #fff;
+      --bs-btn-bg: #4f46e5;
+      --bs-btn-border-color: #4f46e5;
+      --bs-btn-hover-color: #fff;
+      --bs-btn-hover-bg: #4338ca;
+      --bs-btn-hover-border-color: #4338ca;
+      --bs-btn-focus-shadow-rgb: 79, 70, 229;
+      --bs-btn-active-color: #fff;
+      --bs-btn-active-bg: #4338ca;
+      --bs-btn-active-border-color: #4338ca;
+    }
+    .text-accent { color: #4f46e5 !important; }
   </style>
   {% block extra_head %}{% endblock %}
 </head>
@@ -50,6 +65,7 @@
       {% endif %}
       {% if perms and perms.get('connections') %}
       <li><a class="nav-link {% if section == 'connections' %}active{% endif %}" href="/admin/conexiones">Conexiones</a></li>
+      <li><a class="nav-link {% if section == 'asistente' %}active{% endif %}" href="/admin/asistente/probar">Probar asistente</a></li>
       {% endif %}
       {% if perms and perms.get('plugins') %}
       <li><a class="nav-link {% if section == 'plugins' %}active{% endif %}" href="/admin/plugins">Plugins</a></li>
