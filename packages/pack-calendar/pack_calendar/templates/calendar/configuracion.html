@@ -57,6 +57,13 @@
         </div>
       </div>
       <div class="col-12">
+        <label class="form-label">Mensaje resumen al cancelar varias citas (WhatsApp)</label>
+        <textarea name="appointments_cancelled_summary" class="form-control" rows="2">{{ config.appointments_cancelled_summary }}</textarea>
+        <div class="form-text">
+          Placeholder: <code>{cantidad}</code>. Si queda vacío se usa el mensaje por defecto.
+        </div>
+      </div>
+      <div class="col-12">
         <button class="btn btn-primary">Guardar configuración</button>
       </div>
     </form>

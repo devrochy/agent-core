@@ -212,6 +212,7 @@ def test_calendar_skill_sin_estado_por_tenant() -> None:
         "check_availability",
         "update_calendar_event",
         "cancel_calendar_event",
+        "list_client_appointments",
     }
 
 @pytest.mark.asyncio
