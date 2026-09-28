@@ -157,6 +157,14 @@ class CRMConfig(BasePluginConfig):
             "restricción de origen."
         ),
     )
+    lead_intake_turnstile: SecretStr = Field(
+        default=SecretStr(""),
+        description=(
+            "Secret key del widget Cloudflare Turnstile de ESTE negocio. Si está "
+            "definido, el intake exige y valida el token (siteverify). Vacío = sin "
+            "Turnstile."
+        ),
+    )
     lead_intake_default_status: str = Field(
         default="nuevo", description="Estado inicial del lead capturado por intake"
     )

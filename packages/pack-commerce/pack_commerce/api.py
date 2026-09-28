@@ -11,7 +11,9 @@ sesión de admin). Reemplaza el intake propuesto en ADR-0055 (que usaba
    (`CRMConfig.lead_intake_enabled`).
 3. Valida el header `X-Intake-Secret` contra `CRMConfig.lead_intake_secret`
    (comparación en tiempo constante).
-4. Crea/actualiza el lead de forma **idempotente**: `Customer` del core (identidad,
+4. Si el tenant configuró `CRMConfig.lead_intake_turnstile`, exige y valida el
+   token de Cloudflare Turnstile (`siteverify`).
+5. Crea/actualiza el lead de forma **idempotente**: `Customer` del core (identidad,
    ADR-0022) + `Lead` del pack (dominio comercial), con clave
    `intake:<email|phone>`.
 """
@@ -21,6 +23,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
@@ -41,6 +44,8 @@ log = get_logger(__name__)
 PLUGIN_ID = "pack_commerce"
 router = APIRouter(prefix="/api/pack/pack_commerce", tags=[PLUGIN_ID])
 
+TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+
 # Rate limit en proceso (por instancia). El intake es server→server; suficiente
 # como primera barrera. Un abuso sostenido se corta en el WAF/proxy externo.
 _RATE_LIMIT = 30
@@ -58,6 +63,23 @@ def _rate_limited(ip: str) -> bool:
 
 def _norm(value: Any) -> str:
     return str(value).strip() if value is not None else ""
+
+
+async def _verify_turnstile(token: str, secret: str, ip: str | None) -> bool:
+    """Valida un token de Cloudflare Turnstile (`siteverify`). Fail-closed."""
+    if not token:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            res = await client.post(
+                TURNSTILE_VERIFY_URL,
+                data={"secret": secret, "response": token, "remoteip": ip or ""},
+            )
+            data = res.json()
+    except Exception:
+        log.warning("turnstile_verify_error", exc_info=True)
+        return False
+    return bool(data.get("success"))
 
 
 @router.post("/leads/{slug}")
@@ -81,6 +103,7 @@ async def intake_lead(
     negocio = _norm(body.get("negocio"))
     origen = _norm(body.get("origen"))
     optin = bool(body.get("optin"))
+    turnstile_token = _norm(body.get("turnstile_token") or body.get("cf_turnstile_response"))
 
     if not nombre or not (email or phone):
         return JSONResponse({"error": "validation"}, status_code=422)
@@ -103,6 +126,10 @@ async def intake_lead(
             return JSONResponse({"error": "intake_not_configured"}, status_code=503)
         if not x_intake_secret or not constant_time_equal(x_intake_secret, secret):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+        turnstile_secret = config.lead_intake_turnstile.get_secret_value()
+        if turnstile_secret and not await _verify_turnstile(turnstile_token, turnstile_secret, ip):
+            return JSONResponse({"error": "turnstile_failed"}, status_code=403)
 
         external_id = email or phone      # identidad del Customer (canal web)
         idem = f"intake:{external_id}"    # idempotencia del Lead (pack)
