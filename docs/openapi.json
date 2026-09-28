@@ -5051,6 +5051,64 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Create Collector",
+        "description": "Alta del gestor: crea su cuenta del core (Admin + TenantUser) y su perfil (ADR-0066).",
+        "operationId": "create_collector_api_v1_pack_cobranza_collectors_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectorIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collector"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/pack/cobranza/monitoring": {
@@ -5809,6 +5867,125 @@
               "type": "string",
               "format": "uuid",
               "title": "Cartera Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/collectors/{collector_id}": {
+      "put": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Update Collector",
+        "operationId": "update_collector_api_v1_pack_cobranza_collectors__collector_id__put",
+        "parameters": [
+          {
+            "name": "collector_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Collector Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectorIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collector"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Delete Collector",
+        "operationId": "delete_collector_api_v1_pack_cobranza_collectors__collector_id__delete",
+        "parameters": [
+          {
+            "name": "collector_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Collector Id"
             }
           },
           {
@@ -6948,6 +7125,44 @@
           "estatus"
         ],
         "title": "Collector"
+      },
+      "CollectorIn": {
+        "properties": {
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "apellido": {
+            "type": "string",
+            "title": "Apellido",
+            "default": ""
+          },
+          "correo": {
+            "type": "string",
+            "title": "Correo",
+            "default": ""
+          },
+          "telefono": {
+            "type": "string",
+            "title": "Telefono",
+            "default": ""
+          },
+          "codigo": {
+            "type": "string",
+            "title": "Codigo",
+            "default": ""
+          },
+          "password": {
+            "type": "string",
+            "title": "Password",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "nombre"
+        ],
+        "title": "CollectorIn"
       },
       "CommerceDashboard": {
         "properties": {

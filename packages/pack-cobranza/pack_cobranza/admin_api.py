@@ -18,9 +18,10 @@ from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
+from core.admin.auth import hash_password
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
-from core.db.models import Conversation, Escalation
+from core.db.models import Admin, Conversation, Escalation, TenantUser
 from core.db.session import get_owned, get_session
 
 from .models import (
@@ -1543,4 +1544,101 @@ async def delete_portfolio(
             raise ApiError.not_found("Cartera no encontrada.")
         cartera.deleted_at = datetime.now(UTC)
         _audit(session, tid, "cartera", cartera.id, "eliminar", despues={"nombre": cartera.nombre})
+    return Response(status_code=204)
+
+
+# ------------------------------------------------------- CRUD de gestores
+class CollectorIn(BaseModel):
+    nombre: str
+    apellido: str = ""
+    correo: str = ""
+    telefono: str = ""
+    codigo: str = ""
+    password: str = ""
+
+
+def _as_collector(row: Gestor) -> Collector:
+    return Collector(
+        id=row.id,
+        nombre=f"{row.nombre} {row.apellido or ''}".strip(),
+        correo=row.correo,
+        telefono=row.telefono,
+        codigo=row.codigo,
+        estatus=row.estatus,
+    )
+
+
+def _collector_values(payload: CollectorIn) -> dict[str, str]:
+    nombre = payload.nombre.strip()
+    if not nombre:
+        raise ApiError.bad_request("El nombre es obligatorio.", "missing_name")
+    return {
+        "nombre": nombre,
+        "apellido": payload.apellido.strip(),
+        "correo": (payload.correo or "").strip().lower(),
+        "telefono": (payload.telefono or "").strip(),
+        "codigo": (payload.codigo or "").strip(),
+    }
+
+
+@router.post("/collectors", response_model=Collector, status_code=201)
+async def create_collector(
+    payload: CollectorIn,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:gestores", write=True))],
+) -> Collector:
+    """Alta del gestor: crea su cuenta del core (Admin + TenantUser) y su perfil (ADR-0066)."""
+    tid = principal.tenant_id
+    correo = (payload.correo or "").strip().lower()
+    password = payload.password or ""
+    if not correo or not password:
+        raise ApiError.bad_request("Correo y contraseña son obligatorios.", "missing_credentials")
+    if len(password) < 8:
+        raise ApiError.bad_request("La contraseña debe tener al menos 8 caracteres.", "weak_password")
+    async with get_session() as session:
+        existente = (
+            await session.execute(select(Admin).where(Admin.email == correo))
+        ).scalar_one_or_none()
+        if existente is not None:
+            raise ApiError.bad_request("Ya existe una cuenta con ese correo.", "email_taken")
+        values = _collector_values(payload)
+        admin = Admin(email=correo, password_hash=hash_password(password), role="colaborador")
+        session.add(admin)
+        await session.flush()
+        session.add(TenantUser(tenant_id=tid, admin_id=admin.id, role="colaborador"))
+        gestor = Gestor(tenant_id=tid, admin_id=admin.id, **values)
+        session.add(gestor)
+        await session.flush()
+        _audit(session, tid, "gestor", gestor.id, "crear", despues={"correo": correo})
+        return _as_collector(gestor)
+
+
+@router.put("/collectors/{collector_id}", response_model=Collector)
+async def update_collector(
+    collector_id: uuid.UUID,
+    payload: CollectorIn,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:gestores", write=True))],
+) -> Collector:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        gestor = await _get_active(session, Gestor, collector_id, tid)
+        if gestor is None:
+            raise ApiError.not_found("Gestor no encontrado.")
+        for campo, valor in _collector_values(payload).items():
+            setattr(gestor, campo, valor)
+        _audit(session, tid, "gestor", gestor.id, "editar", despues={"correo": gestor.correo})
+        return _as_collector(gestor)
+
+
+@router.delete("/collectors/{collector_id}", status_code=204)
+async def delete_collector(
+    collector_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:gestores", write=True))],
+) -> Response:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        gestor = await _get_active(session, Gestor, collector_id, tid)
+        if gestor is None:
+            raise ApiError.not_found("Gestor no encontrado.")
+        gestor.deleted_at = datetime.now(UTC)
+        _audit(session, tid, "gestor", gestor.id, "eliminar", despues={"correo": gestor.correo})
     return Response(status_code=204)
