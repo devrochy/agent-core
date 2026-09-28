@@ -22,6 +22,11 @@ DEFAULT_MOVED_MESSAGE = (
     "Tu cita fue reprogramada para el {fecha} a las {hora}. Te esperamos. 💬"
 )
 
+# Mensaje por defecto al cliente cuando se cancela su cita (WhatsApp).
+DEFAULT_CANCELLED_MESSAGE = (
+    "Tu cita quedó cancelada. Si querés reagendarla, avisanos y lo ajustamos. 💬"
+)
+
 
 class CalendarConfig(BasePluginConfig):
     client_id: str = Field(..., description="Client ID de OAuth2 (Google Cloud Console)")
@@ -45,6 +50,14 @@ class CalendarConfig(BasePluginConfig):
         default=DEFAULT_MOVED_MESSAGE,
         description=(
             "Mensaje que recibe el cliente por WhatsApp cuando se mueve su cita. "
+            "Placeholders: {fecha}, {hora}, {titulo}"
+        ),
+        json_schema_extra={"format": "textarea"},
+    )
+    appointment_cancelled_message: str = Field(
+        default=DEFAULT_CANCELLED_MESSAGE,
+        description=(
+            "Mensaje que recibe el cliente por WhatsApp cuando se cancela su cita. "
             "Placeholders: {fecha}, {hora}, {titulo}"
         ),
         json_schema_extra={"format": "textarea"},

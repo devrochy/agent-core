@@ -235,6 +235,7 @@ async def calendar_config_save(request: Request):
         "buffer_minutes": int(form.get("buffer_minutes", 0) or 0),
         "business_hours": str(form.get("business_hours", "") or ""),
         "appointment_moved_message": str(form.get("appointment_moved_message", "") or ""),
+        "appointment_cancelled_message": str(form.get("appointment_cancelled_message", "") or ""),
     }
     # Horario: JSON válido o rechazo (evita guardar basura que rompería la disponibilidad).
     try:

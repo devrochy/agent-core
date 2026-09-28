@@ -207,7 +207,12 @@ def test_calendar_skill_sin_estado_por_tenant() -> None:
     assert not hasattr(skill, "_config"), "config debe resolverse por invocación"
     assert hasattr(skill, "_tenant_config")
     tools = skill.get_tools()
-    assert {t.name for t in tools} == {"create_calendar_event", "check_availability"}
+    assert {t.name for t in tools} == {
+        "create_calendar_event",
+        "check_availability",
+        "update_calendar_event",
+        "cancel_calendar_event",
+    }
 
 @pytest.mark.asyncio
 async def test_tool_binding_scopes_maxcalls_requires_confirmation(monkeypatch) -> None:
