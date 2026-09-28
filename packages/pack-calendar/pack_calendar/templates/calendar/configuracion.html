@@ -50,6 +50,13 @@
         </div>
       </div>
       <div class="col-12">
+        <label class="form-label">Mensaje al cliente cuando se cancela su cita (WhatsApp)</label>
+        <textarea name="appointment_cancelled_message" class="form-control" rows="3">{{ config.appointment_cancelled_message }}</textarea>
+        <div class="form-text">
+          Placeholders: <code>{fecha}</code>, <code>{hora}</code>, <code>{titulo}</code>. Si queda vacío se usa el mensaje por defecto.
+        </div>
+      </div>
+      <div class="col-12">
         <button class="btn btn-primary">Guardar configuración</button>
       </div>
     </form>

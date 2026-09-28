@@ -606,3 +606,187 @@ async def test_citas_editar_solo_titulo_no_notifica(app_client):
         assert calls == []
     finally:
         await _delete_appointment(tid, appt_id)
+
+
+async def test_skill_update_event_reagenda_por_event_id(app_client, monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from pack_calendar.models import Appointment
+    from pack_calendar.skills import CalendarSkill
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    _, tid = await _calendar_tenant_tid(app_client)
+    _, conv_id = await _make_conversation(tid)
+    start = datetime(2026, 10, 5, 15, 0, tzinfo=UTC)
+    appt_id = await _make_appointment(
+        tid, title="Demo a mover", start_utc=start, google_event_id="g-abc", conversation_id=conv_id
+    )
+
+    calls: list[tuple] = []
+    notified: list[str] = []
+
+    async def fake_patch(config, token, gid, body):
+        calls.append((gid, body))
+        return {"id": gid, "htmlLink": "https://g/abc"}
+
+    async def fake_send(conversation_id, text, image_url=None, sender_type="agent", *, is_template=False):
+        notified.append(str(conversation_id))
+        return True
+
+    async def _tok(*a, **k):
+        return "tok"
+    monkeypatch.setattr("pack_calendar.skills.get_access_token", _tok)
+    monkeypatch.setattr("pack_calendar.skills._google_patch_event", fake_patch)
+    monkeypatch.setattr("core.gateway.sender.send_to_conversation", fake_send)
+
+    try:
+        ctx = SimpleNamespace(conversation_id=str(conv_id), customer_id=None)
+        async with tenant_scope(tid):
+            result = await CalendarSkill().update_event(
+                {"start_datetime": "2026-10-06T10:00:00", "event_id": "g-abc"}, ctx
+            )
+        assert result["status"] == "updated", result
+        assert result["event_id"] == "g-abc"
+        assert result["notified"] is True
+        assert calls and calls[0][0] == "g-abc"
+        assert calls[0][1]["start"]["timeZone"] == "America/Bogota"
+        assert notified == [str(conv_id)]
+
+        async with tenant_scope(tid):
+            async with get_session() as session:
+                row = await session.get(Appointment, appt_id)
+                # 2026-10-06T10:00 Bogotá (UTC-5) = 15:00Z
+                assert row.start_at == datetime(2026, 10, 6, 15, 0, tzinfo=UTC)
+    finally:
+        await _delete_appointment(tid, appt_id)
+
+
+async def test_skill_update_event_por_coincidencia(app_client, monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from pack_calendar.models import Appointment
+    from pack_calendar.skills import CalendarSkill
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    _, tid = await _calendar_tenant_tid(app_client)
+    _, conv_id = await _make_conversation(tid)
+    start = datetime(2026, 10, 5, 15, 0, tzinfo=UTC)
+    appt_id = await _make_appointment(
+        tid, title="Demo Juanita", start_utc=start, google_event_id="g-j", attendee_email="j@x.com",
+        conversation_id=conv_id,
+    )
+
+    calls: list[str] = []
+
+    async def fake_patch(config, token, gid, body):
+        calls.append(gid)
+        return {"id": gid, "htmlLink": "https://g/j"}
+
+    async def fake_send(*a, **k):
+        return True
+
+    async def _tok(*a, **k):
+        return "tok"
+    monkeypatch.setattr("pack_calendar.skills.get_access_token", _tok)
+    monkeypatch.setattr("pack_calendar.skills._google_patch_event", fake_patch)
+    monkeypatch.setattr("core.gateway.sender.send_to_conversation", fake_send)
+
+    try:
+        ctx = SimpleNamespace(conversation_id=str(conv_id), customer_id=None)
+        async with tenant_scope(tid):
+            result = await CalendarSkill().update_event(
+                {"start_datetime": "2026-10-07T09:00:00", "attendee_email": "j@x.com"}, ctx
+            )
+        assert result["status"] == "updated", result
+        assert result["event_id"] == "g-j"
+        assert calls == ["g-j"]
+        async with tenant_scope(tid):
+            async with get_session() as session:
+                row = await session.get(Appointment, appt_id)
+                assert row.start_at == datetime(2026, 10, 7, 14, 0, tzinfo=UTC)  # 09:00 Bogotá
+    finally:
+        await _delete_appointment(tid, appt_id)
+
+
+async def test_skill_cancel_event_cancela_y_notifica(app_client, monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from pack_calendar.models import Appointment
+    from pack_calendar.skills import CalendarSkill
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    _, tid = await _calendar_tenant_tid(app_client)
+    _, conv_id = await _make_conversation(tid)
+    start = datetime(2026, 10, 8, 15, 0, tzinfo=UTC)
+    appt_id = await _make_appointment(
+        tid, title="Demo a cancelar", start_utc=start, google_event_id="g-c", conversation_id=conv_id
+    )
+
+    deleted: list[str] = []
+    notified: list[str] = []
+
+    async def fake_delete(config, token, gid):
+        deleted.append(gid)
+
+    async def fake_send(conversation_id, text, image_url=None, sender_type="agent", *, is_template=False):
+        notified.append(str(conversation_id))
+        return True
+
+    async def _tok(*a, **k):
+        return "tok"
+    monkeypatch.setattr("pack_calendar.skills.get_access_token", _tok)
+    monkeypatch.setattr("pack_calendar.skills._google_delete_event", fake_delete)
+    monkeypatch.setattr("core.gateway.sender.send_to_conversation", fake_send)
+
+    try:
+        ctx = SimpleNamespace(conversation_id=str(conv_id), customer_id=None)
+        async with tenant_scope(tid):
+            result = await CalendarSkill().cancel_event({"event_id": "g-c"}, ctx)
+        assert result["status"] == "cancelled", result
+        assert deleted == ["g-c"]
+        assert notified == [str(conv_id)]
+
+        async with tenant_scope(tid):
+            async with get_session() as session:
+                row = await session.get(Appointment, appt_id)
+                assert row.status == "cancelled"
+    finally:
+        await _delete_appointment(tid, appt_id)
+
+
+async def test_skill_update_event_sin_cita_no_notifica(app_client, monkeypatch):
+    from types import SimpleNamespace
+
+    from pack_calendar.skills import CalendarSkill
+
+    from core.shared.tenant import tenant_scope
+
+    _, tid = await _calendar_tenant_tid(app_client)
+
+    async def fake_send(*a, **k):
+        raise AssertionError("no debe enviar")
+
+    async def fake_patch(*a, **k):
+        raise AssertionError("no debe patchear google")
+
+    async def _tok(*a, **k):
+        return "tok"
+    monkeypatch.setattr("pack_calendar.skills.get_access_token", _tok)
+    monkeypatch.setattr("pack_calendar.skills._google_patch_event", fake_patch)
+    monkeypatch.setattr("core.gateway.sender.send_to_conversation", fake_send)
+
+    ctx = SimpleNamespace(conversation_id="00000000-0000-0000-0000-000000000001", customer_id=None)
+    async with tenant_scope(tid):
+        result = await CalendarSkill().update_event(
+            {"start_datetime": "2026-10-09T10:00:00", "event_id": "g-no-existe"}, ctx
+        )
+    assert result["status"] == "not_found"
