@@ -35,6 +35,7 @@ from .models import (
     Gasto,
     Gestor,
     IntentoAcceso,
+    Inyeccion,
     LinkPago,
     Liquidacion,
     MensajePropietario,
@@ -1250,3 +1251,183 @@ async def create_owner_message(
             despues={"direccion": direccion},
         )
     return Response(status_code=204)
+
+
+# ------------------------------------------------------- detalle de cartera
+class PortfolioCaja(BaseModel):
+    saldo_inicial: float
+    saldo_actual: float
+    actualizado: str
+
+
+class Injection(BaseModel):
+    fecha: str
+    valor: float
+    comentario: str
+    estado: str
+
+
+class Expense(BaseModel):
+    fecha: str
+    descripcion: str
+    valor: float
+    aprobado: bool
+
+
+class PortfolioDetail(BaseModel):
+    id: uuid.UUID
+    nombre: str
+    descripcion: str | None
+    gestor: str | None
+    tipo_interes: float
+    num_cuotas: int
+    moneda: str
+    estatus: str
+    clientes: int
+    prestamos: int
+    saldo: float
+    caja: PortfolioCaja
+    liquidaciones: list[Liquidation]
+    inyecciones: list[Injection]
+    gastos: list[Expense]
+
+
+@router.get("/portfolios/{cartera_id}", response_model=PortfolioDetail)
+async def portfolio_detail(
+    cartera_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras"))],
+) -> PortfolioDetail:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await get_owned(session, Cartera, cartera_id, tid)
+        if cartera is None:
+            raise ApiError.not_found("Cartera no encontrada.")
+        gestor = (
+            await session.execute(
+                select(Gestor).where(Gestor.tenant_id == tid, Gestor.id == cartera.gestor_id)
+            )
+        ).scalar_one_or_none() if cartera.gestor_id else None
+        clientes = (
+            await session.execute(
+                select(func.count())
+                .select_from(Cliente)
+                .where(
+                    Cliente.tenant_id == tid,
+                    Cliente.cartera_id == cartera.id,
+                    Cliente.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one()
+        prestamos = (
+            (
+                await session.execute(
+                    select(Prestamo).where(
+                        Prestamo.tenant_id == tid,
+                        Prestamo.cartera_id == cartera.id,
+                        Prestamo.deleted_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        caja = (
+            await session.execute(
+                select(Caja).where(Caja.tenant_id == tid, Caja.cartera_id == cartera.id)
+            )
+        ).scalar_one_or_none()
+        liquidaciones = (
+            (
+                await session.execute(
+                    select(Liquidacion)
+                    .where(
+                        Liquidacion.tenant_id == tid,
+                        Liquidacion.cartera_id == cartera.id,
+                        Liquidacion.deleted_at.is_(None),
+                    )
+                    .order_by(Liquidacion.fecha.desc())
+                    .limit(12)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        inyecciones = (
+            (
+                await session.execute(
+                    select(Inyeccion)
+                    .where(
+                        Inyeccion.tenant_id == tid,
+                        Inyeccion.cartera_id == cartera.id,
+                        Inyeccion.deleted_at.is_(None),
+                    )
+                    .order_by(Inyeccion.fecha_hora.desc())
+                    .limit(10)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        gastos = (
+            (
+                await session.execute(
+                    select(Gasto)
+                    .where(
+                        Gasto.tenant_id == tid,
+                        Gasto.cartera_id == cartera.id,
+                        Gasto.deleted_at.is_(None),
+                    )
+                    .order_by(Gasto.fecha_hora.desc())
+                    .limit(10)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return PortfolioDetail(
+        id=cartera.id,
+        nombre=cartera.nombre,
+        descripcion=cartera.descripcion,
+        gestor=f"{gestor.nombre} {gestor.apellido or ''}".strip() if gestor else None,
+        tipo_interes=float(cartera.tipo_interes or 0),
+        num_cuotas=int(cartera.num_cuotas or 1),
+        moneda=cartera.moneda or "COP",
+        estatus=cartera.estatus,
+        clientes=int(clientes),
+        prestamos=len(prestamos),
+        saldo=float(sum((p.saldo for p in prestamos), Decimal(0))),
+        caja=PortfolioCaja(
+            saldo_inicial=float(caja.saldo_inicial) if caja else 0.0,
+            saldo_actual=float(caja.saldo_actual) if caja else 0.0,
+            actualizado=caja.updated_at.strftime("%Y-%m-%d %H:%M") if caja and caja.updated_at else "",
+        ),
+        liquidaciones=[
+            Liquidation(
+                cartera=cartera.nombre,
+                fecha=liq.fecha,
+                periodo=liq.periodo,
+                cobrado=float(liq.total_cobrado or 0),
+                gastos=float(liq.total_gastos or 0),
+                comision=float(liq.comision_valor or 0),
+            )
+            for liq in liquidaciones
+        ],
+        inyecciones=[
+            Injection(
+                fecha=i.fecha_hora.strftime("%Y-%m-%d") if i.fecha_hora else "",
+                valor=float(i.valor or 0),
+                comentario=i.comentario or "",
+                estado=i.estado,
+            )
+            for i in inyecciones
+        ],
+        gastos=[
+            Expense(
+                fecha=g.fecha_hora.strftime("%Y-%m-%d") if g.fecha_hora else "",
+                descripcion=g.descripcion,
+                valor=float(g.valor or 0),
+                aprobado=bool(g.aprobado),
+            )
+            for g in gastos
+        ],
+    )

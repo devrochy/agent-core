@@ -5612,6 +5612,65 @@
         }
       }
     },
+    "/api/v1/pack/cobranza/portfolios/{cartera_id}": {
+      "get": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Portfolio Detail",
+        "operationId": "portfolio_detail_api_v1_pack_cobranza_portfolios__cartera_id__get",
+        "parameters": [
+          {
+            "name": "cartera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cartera Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortfolioDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/calendar/status": {
       "get": {
         "tags": [
@@ -7441,6 +7500,34 @@
         ],
         "title": "EvalRunItem"
       },
+      "Expense": {
+        "properties": {
+          "fecha": {
+            "type": "string",
+            "title": "Fecha"
+          },
+          "descripcion": {
+            "type": "string",
+            "title": "Descripcion"
+          },
+          "valor": {
+            "type": "number",
+            "title": "Valor"
+          },
+          "aprobado": {
+            "type": "boolean",
+            "title": "Aprobado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fecha",
+          "descripcion",
+          "valor",
+          "aprobado"
+        ],
+        "title": "Expense"
+      },
       "FlowResponse": {
         "properties": {
           "source": {
@@ -7928,6 +8015,34 @@
           "assistant_name"
         ],
         "title": "IdentityUpdate"
+      },
+      "Injection": {
+        "properties": {
+          "fecha": {
+            "type": "string",
+            "title": "Fecha"
+          },
+          "valor": {
+            "type": "number",
+            "title": "Valor"
+          },
+          "comentario": {
+            "type": "string",
+            "title": "Comentario"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fecha",
+          "valor",
+          "comentario",
+          "estado"
+        ],
+        "title": "Injection"
       },
       "LeadColumn": {
         "properties": {
@@ -9751,6 +9866,135 @@
           "estatus"
         ],
         "title": "Portfolio"
+      },
+      "PortfolioCaja": {
+        "properties": {
+          "saldo_inicial": {
+            "type": "number",
+            "title": "Saldo Inicial"
+          },
+          "saldo_actual": {
+            "type": "number",
+            "title": "Saldo Actual"
+          },
+          "actualizado": {
+            "type": "string",
+            "title": "Actualizado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "saldo_inicial",
+          "saldo_actual",
+          "actualizado"
+        ],
+        "title": "PortfolioCaja"
+      },
+      "PortfolioDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "descripcion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Descripcion"
+          },
+          "gestor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gestor"
+          },
+          "tipo_interes": {
+            "type": "number",
+            "title": "Tipo Interes"
+          },
+          "num_cuotas": {
+            "type": "integer",
+            "title": "Num Cuotas"
+          },
+          "moneda": {
+            "type": "string",
+            "title": "Moneda"
+          },
+          "estatus": {
+            "type": "string",
+            "title": "Estatus"
+          },
+          "clientes": {
+            "type": "integer",
+            "title": "Clientes"
+          },
+          "prestamos": {
+            "type": "integer",
+            "title": "Prestamos"
+          },
+          "saldo": {
+            "type": "number",
+            "title": "Saldo"
+          },
+          "caja": {
+            "$ref": "#/components/schemas/PortfolioCaja"
+          },
+          "liquidaciones": {
+            "items": {
+              "$ref": "#/components/schemas/Liquidation"
+            },
+            "type": "array",
+            "title": "Liquidaciones"
+          },
+          "inyecciones": {
+            "items": {
+              "$ref": "#/components/schemas/Injection"
+            },
+            "type": "array",
+            "title": "Inyecciones"
+          },
+          "gastos": {
+            "items": {
+              "$ref": "#/components/schemas/Expense"
+            },
+            "type": "array",
+            "title": "Gastos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "nombre",
+          "descripcion",
+          "gestor",
+          "tipo_interes",
+          "num_cuotas",
+          "moneda",
+          "estatus",
+          "clientes",
+          "prestamos",
+          "saldo",
+          "caja",
+          "liquidaciones",
+          "inyecciones",
+          "gastos"
+        ],
+        "title": "PortfolioDetail"
       },
       "ProductOut": {
         "properties": {
