@@ -24,15 +24,17 @@ EMAIL = "lead-intake@test.local"
 IDEM = f"intake:{EMAIL}"
 
 
-async def _configure_intake(tenant_id, enabled: bool) -> None:
+async def _configure_intake(
+    tenant_id, enabled: bool, turnstile_secret: str | None = None
+) -> None:
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
 
+    values: dict = {"lead_intake_enabled": enabled, "lead_intake_secret": SECRET}
+    if turnstile_secret is not None:
+        values["lead_intake_turnstile"] = turnstile_secret
     async with tenant_scope(tenant_id):
-        await plugin_manager.save_config(
-            "pack_commerce",
-            {"lead_intake_enabled": enabled, "lead_intake_secret": SECRET},
-        )
+        await plugin_manager.save_config("pack_commerce", values)
 
 
 async def _cleanup(tenant_id) -> None:
@@ -146,3 +148,55 @@ async def test_intake_deshabilitado_y_validacion(app_client, moto_setup) -> None
         json=_payload(),
     )
     assert r.status_code == 403
+
+
+async def test_intake_turnstile(app_client, moto_setup, monkeypatch) -> None:
+    """Turnstile: se exige y valida solo si el tenant tiene secret configurado."""
+    from pack_commerce import api as intake_api
+
+    _t1, moto = moto_setup
+    await _cleanup(moto)
+
+    # 1) Tenant CON turnstile: token ausente → 403 (no llama a Cloudflare).
+    await _configure_intake(moto, enabled=True, turnstile_secret="tt-secret")
+    r = await app_client.post(
+        f"/api/pack/pack_commerce/leads/{SLUG}",
+        headers={"X-Intake-Secret": SECRET},
+        json=_payload(),
+    )
+    assert r.status_code == 403
+    assert r.json()["error"] == "turnstile_failed"
+
+    # 2) Token inválido (siteverify dice success=false) → 403.
+    async def _fail(token: str, secret: str, ip):
+        return False
+
+    monkeypatch.setattr(intake_api, "_verify_turnstile", _fail)
+    r = await app_client.post(
+        f"/api/pack/pack_commerce/leads/{SLUG}",
+        headers={"X-Intake-Secret": SECRET},
+        json={**_payload(), "turnstile_token": "bad"},
+    )
+    assert r.status_code == 403
+
+    # 3) Token válido (stub) → 200 y crea el lead.
+    async def _ok(token: str, secret: str, ip):
+        return bool(token)
+
+    monkeypatch.setattr(intake_api, "_verify_turnstile", _ok)
+    r = await app_client.post(
+        f"/api/pack/pack_commerce/leads/{SLUG}",
+        headers={"X-Intake-Secret": SECRET},
+        json={**_payload(), "turnstile_token": "good"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+
+    # 4) Sin turnstile configurado → no se exige token (200).
+    await _configure_intake(moto, enabled=True, turnstile_secret="")
+    r = await app_client.post(
+        f"/api/pack/pack_commerce/leads/{SLUG}",
+        headers={"X-Intake-Secret": SECRET},
+        json=_payload(),
+    )
+    assert r.status_code == 200
