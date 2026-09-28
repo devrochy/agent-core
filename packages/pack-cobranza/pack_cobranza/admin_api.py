@@ -27,6 +27,7 @@ from .models import (
     AuditoriaCartera,
     Caja,
     Cartera,
+    CarteraConfig,
     Cliente,
     CobroPropietario,
     ConversacionPropietario,
@@ -50,6 +51,16 @@ PLUGIN_ID = "pack_cobranza"
 router = APIRouter(prefix="/api/v1/pack/cobranza", tags=["pack · cobranza"])
 
 PROMISE_STATUSES = ("pendiente", "cumplida", "incumplida")
+
+
+async def _get_active(
+    session: Any, model: type[Any], id_: uuid.UUID, tid: uuid.UUID
+) -> Any | None:
+    """Como `get_owned` pero excluye filas con soft delete (ADR-0001)."""
+    obj = await get_owned(session, model, id_, tid)
+    if obj is not None and getattr(obj, "deleted_at", None) is not None:
+        return None
+    return obj
 
 
 # ------------------------------------------------------------------ resumen
@@ -378,7 +389,7 @@ async def update_promise_status(
             "invalid_status",
         )
     async with get_session() as session:
-        row = await get_owned(session, Promesa, promise_id, principal.tenant_id)
+        row = await _get_active(session, Promesa, promise_id, principal.tenant_id)
         if row is None:
             raise ApiError.not_found("Promesa no encontrada.")
         row.estado = payload.estado
@@ -820,7 +831,7 @@ async def set_device_status(
             "invalid_status",
         )
     async with get_session() as session:
-        device = await get_owned(session, Device, device_id, principal.tenant_id)
+        device = await _get_active(session, Device, device_id, principal.tenant_id)
         if device is None:
             raise ApiError.not_found("Dispositivo no encontrado.")
         device.estado = payload.estado
@@ -984,7 +995,7 @@ async def register_owner_payment(
     if payload.monto_pagado <= 0:
         raise ApiError.bad_request("El monto debe ser mayor a cero.", "invalid_amount")
     async with get_session() as session:
-        cobro = await get_owned(session, CobroPropietario, charge_id, principal.tenant_id)
+        cobro = await _get_active(session, CobroPropietario, charge_id, principal.tenant_id)
         if cobro is None:
             raise ApiError.not_found("Cobro no encontrado.")
         cobro.monto_pagado = Decimal(str(payload.monto_pagado))
@@ -1299,7 +1310,7 @@ async def portfolio_detail(
 ) -> PortfolioDetail:
     tid = principal.tenant_id
     async with get_session() as session:
-        cartera = await get_owned(session, Cartera, cartera_id, tid)
+        cartera = await _get_active(session, Cartera, cartera_id, tid)
         if cartera is None:
             raise ApiError.not_found("Cartera no encontrada.")
         gestor = (
@@ -1431,3 +1442,111 @@ async def portfolio_detail(
             for g in gastos
         ],
     )
+
+
+# ------------------------------------------------------- CRUD de carteras
+class PortfolioIn(BaseModel):
+    nombre: str
+    descripcion: str = ""
+    gestor_id: uuid.UUID | None = None
+    tipo_interes: float = 0.0
+    num_cuotas: int = 1
+    moneda: str = "COP"
+    costo_cobro: float = 0.0
+
+
+def _as_portfolio(row: Cartera, gestor: str | None) -> Portfolio:
+    return Portfolio(
+        id=row.id,
+        nombre=row.nombre,
+        descripcion=row.descripcion,
+        gestor=gestor,
+        tipo_interes=float(row.tipo_interes or 0),
+        num_cuotas=int(row.num_cuotas or 1),
+        moneda=row.moneda or "COP",
+        estatus=row.estatus,
+    )
+
+
+async def _portfolio_values(
+    session: Any, payload: PortfolioIn, *, tid: uuid.UUID
+) -> dict[str, Any]:
+    """Valida y normaliza el alta/edición de cartera (mismos campos que el clásico)."""
+    nombre = payload.nombre.strip()
+    if not nombre:
+        raise ApiError.bad_request("El nombre es obligatorio.", "missing_name")
+    if payload.gestor_id is not None and await _get_active(
+        session, Gestor, payload.gestor_id, tid
+    ) is None:
+        raise ApiError.bad_request("El gestor indicado no existe.", "invalid_gestor")
+    if payload.num_cuotas < 1:
+        raise ApiError.bad_request("El número de cuotas debe ser al menos 1.", "invalid_installments")
+    if payload.tipo_interes < 0 or payload.costo_cobro < 0:
+        raise ApiError.bad_request("Interés y costo de cobro no pueden ser negativos.", "invalid_amount")
+    return {
+        "nombre": nombre,
+        "descripcion": payload.descripcion.strip(),
+        "gestor_id": payload.gestor_id,
+        "tipo_interes": Decimal(str(payload.tipo_interes)),
+        "num_cuotas": payload.num_cuotas,
+        "moneda": payload.moneda.strip() or "COP",
+        "costo_cobro": Decimal(str(payload.costo_cobro)),
+    }
+
+
+async def _gestor_nombre(session: Any, gestor_id: uuid.UUID | None) -> str | None:
+    if gestor_id is None:
+        return None
+    gestor = (await session.execute(select(Gestor).where(Gestor.id == gestor_id))).scalar_one_or_none()
+    return f"{gestor.nombre} {gestor.apellido or ''}".strip() if gestor else None
+
+
+@router.post("/portfolios", response_model=Portfolio, status_code=201)
+async def create_portfolio(
+    payload: PortfolioIn,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras", write=True))],
+) -> Portfolio:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        values = await _portfolio_values(session, payload, tid=tid)
+        cartera = Cartera(tenant_id=tid, **values)
+        session.add(cartera)
+        await session.flush()
+        # Paridad con el clásico: cada cartera nace con su fila de configuración.
+        session.add(CarteraConfig(tenant_id=tid, cartera_id=cartera.id))
+        _audit(session, tid, "cartera", cartera.id, "crear", despues={"nombre": values["nombre"]})
+        gestor = await _gestor_nombre(session, cartera.gestor_id)
+        return _as_portfolio(cartera, gestor)
+
+
+@router.put("/portfolios/{cartera_id}", response_model=Portfolio)
+async def update_portfolio(
+    cartera_id: uuid.UUID,
+    payload: PortfolioIn,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras", write=True))],
+) -> Portfolio:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await _get_active(session, Cartera, cartera_id, tid)
+        if cartera is None:
+            raise ApiError.not_found("Cartera no encontrada.")
+        values = await _portfolio_values(session, payload, tid=tid)
+        for campo, valor in values.items():
+            setattr(cartera, campo, valor)
+        _audit(session, tid, "cartera", cartera.id, "editar", despues={"nombre": values["nombre"]})
+        return _as_portfolio(cartera, await _gestor_nombre(session, cartera.gestor_id))
+
+
+@router.delete("/portfolios/{cartera_id}", status_code=204)
+async def delete_portfolio(
+    cartera_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras", write=True))],
+) -> Response:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await _get_active(session, Cartera, cartera_id, tid)
+        if cartera is None:
+            raise ApiError.not_found("Cartera no encontrada.")
+        cartera.deleted_at = datetime.now(UTC)
+        _audit(session, tid, "cartera", cartera.id, "eliminar", despues={"nombre": cartera.nombre})
+    return Response(status_code=204)
