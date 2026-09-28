@@ -27,6 +27,11 @@ DEFAULT_CANCELLED_MESSAGE = (
     "Tu cita quedó cancelada. Si querés reagendarla, avisanos y lo ajustamos. 💬"
 )
 
+# Mensaje resumen por defecto al cancelar varias citas (WhatsApp).
+DEFAULT_CANCELLED_SUMMARY = (
+    "Se cancelaron {cantidad} citas. Si querés reagendarlas, avisanos. 💬"
+)
+
 
 class CalendarConfig(BasePluginConfig):
     client_id: str = Field(..., description="Client ID de OAuth2 (Google Cloud Console)")
@@ -59,6 +64,14 @@ class CalendarConfig(BasePluginConfig):
         description=(
             "Mensaje que recibe el cliente por WhatsApp cuando se cancela su cita. "
             "Placeholders: {fecha}, {hora}, {titulo}"
+        ),
+        json_schema_extra={"format": "textarea"},
+    )
+    appointments_cancelled_summary: str = Field(
+        default=DEFAULT_CANCELLED_SUMMARY,
+        description=(
+            "Mensaje resumen que recibe el cliente por WhatsApp cuando se cancelan "
+            "VARIAS citas a la vez. Placeholder: {cantidad}"
         ),
         json_schema_extra={"format": "textarea"},
     )

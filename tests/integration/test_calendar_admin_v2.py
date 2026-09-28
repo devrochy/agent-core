@@ -895,3 +895,146 @@ async def test_panel_crear_registra_programada_y_actividades_json(app_client, mo
         assert any(a["appointment_id"] == appt_id and a["action"] == "programada" for a in feed)
     finally:
         await _delete_appointment(tid, uuid.UUID(appt_id))
+
+
+async def test_skill_list_client_appointments(app_client):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from pack_calendar.skills import CalendarSkill
+
+    _, tid = await _calendar_tenant_tid(app_client)
+    _, conv_id = await _make_conversation(tid)
+    a1 = await _make_appointment(
+        tid, title="Demo A", start_utc=datetime(2026, 11, 2, 15, 0, tzinfo=UTC),
+        google_event_id="g-1", attendee_email="j@x.com", conversation_id=conv_id,
+    )
+    a2 = await _make_appointment(
+        tid, title="Demo B", start_utc=datetime(2026, 11, 5, 15, 0, tzinfo=UTC),
+        google_event_id="g-2", attendee_email="j@x.com", conversation_id=conv_id,
+    )
+    try:
+        ctx = SimpleNamespace(conversation_id=str(conv_id), customer_id=None)
+        from core.shared.tenant import tenant_scope
+
+        async with tenant_scope(tid):
+            result = await CalendarSkill().list_appointments({"attendee_email": "j@x.com"}, ctx)
+        assert result["total"] == 2
+        assert [a["event_id"] for a in result["appointments"]] == ["g-1", "g-2"]
+        assert result["appointments"][0]["index"] == 1
+        assert result["appointments"][1]["index"] == 2
+    finally:
+        await _delete_appointment(tid, a1)
+        await _delete_appointment(tid, a2)
+
+
+async def test_skill_cancel_event_ids_cancela_varias_y_resumen(app_client, monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from pack_calendar.models import Appointment
+    from pack_calendar.skills import CalendarSkill
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    _, tid = await _calendar_tenant_tid(app_client)
+    _, conv_id = await _make_conversation(tid)
+    a1 = await _make_appointment(
+        tid, title="Demo 1", start_utc=datetime(2026, 11, 10, 15, 0, tzinfo=UTC),
+        google_event_id="g-1", attendee_email="j@x.com", conversation_id=conv_id,
+    )
+    a2 = await _make_appointment(
+        tid, title="Demo 2", start_utc=datetime(2026, 11, 11, 15, 0, tzinfo=UTC),
+        google_event_id="g-2", attendee_email="j@x.com", conversation_id=conv_id,
+    )
+
+    deleted: list[str] = []
+    sent: list[str] = []
+
+    async def fake_delete(config, token, gid):
+        deleted.append(gid)
+
+    async def fake_send(conversation_id, text, image_url=None, sender_type="agent", *, is_template=False):
+        sent.append(text)
+        return True
+
+    async def _tok(*a, **k):
+        return "tok"
+
+    monkeypatch.setattr("pack_calendar.skills.get_access_token", _tok)
+    monkeypatch.setattr("pack_calendar.skills._google_delete_event", fake_delete)
+    monkeypatch.setattr("core.gateway.sender.send_to_conversation", fake_send)
+
+    try:
+        ctx = SimpleNamespace(conversation_id=str(conv_id), customer_id=None)
+        async with tenant_scope(tid):
+            result = await CalendarSkill().cancel_event({"event_ids": ["g-1", "g-2"]}, ctx)
+        assert result["status"] == "cancelled"
+        assert sorted(result["cancelled"]) == ["g-1", "g-2"]
+        assert sorted(deleted) == ["g-1", "g-2"]
+        # Mensaje resumen (una sola notificación con {cantidad}).
+        assert len(sent) == 1
+        assert "2" in sent[0]
+
+        async with tenant_scope(tid):
+            async with get_session() as session:
+                assert (await session.get(Appointment, a1)).status == "cancelled"
+                assert (await session.get(Appointment, a2)).status == "cancelled"
+    finally:
+        await _delete_appointment(tid, a1)
+        await _delete_appointment(tid, a2)
+
+
+async def test_skill_cancel_all_cancela_todas_por_email(app_client, monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from pack_calendar.models import Appointment
+    from pack_calendar.skills import CalendarSkill
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    _, tid = await _calendar_tenant_tid(app_client)
+    _, conv_id = await _make_conversation(tid)
+    # Una cita en la conversación y otra SIN conversación, ambas con el email:
+    # cancel_all debe encontrarlas por email.
+    a1 = await _make_appointment(
+        tid, title="Con conv", start_utc=datetime(2026, 11, 20, 15, 0, tzinfo=UTC),
+        google_event_id="g-1", attendee_email="j@x.com", conversation_id=conv_id,
+    )
+    a2 = await _make_appointment(
+        tid, title="Sin conv", start_utc=datetime(2026, 11, 21, 15, 0, tzinfo=UTC),
+        google_event_id="g-2", attendee_email="j@x.com",
+    )
+
+    deleted: list[str] = []
+    async def fake_delete(config, token, gid):
+        deleted.append(gid)
+    async def fake_send(*a, **k):
+        return True
+    async def _tok(*a, **k):
+        return "tok"
+
+    monkeypatch.setattr("pack_calendar.skills.get_access_token", _tok)
+    monkeypatch.setattr("pack_calendar.skills._google_delete_event", fake_delete)
+    monkeypatch.setattr("core.gateway.sender.send_to_conversation", fake_send)
+
+    try:
+        ctx = SimpleNamespace(conversation_id=str(conv_id), customer_id=None)
+        async with tenant_scope(tid):
+            result = await CalendarSkill().cancel_event(
+                {"cancel_all": True, "attendee_email": "j@x.com"}, ctx
+            )
+        assert result["status"] == "cancelled"
+        assert sorted(result["cancelled"]) == ["g-1", "g-2"]
+        assert sorted(deleted) == ["g-1", "g-2"]
+
+        async with tenant_scope(tid):
+            async with get_session() as session:
+                assert (await session.get(Appointment, a1)).status == "cancelled"
+                assert (await session.get(Appointment, a2)).status == "cancelled"
+    finally:
+        await _delete_appointment(tid, a1)
+        await _delete_appointment(tid, a2)

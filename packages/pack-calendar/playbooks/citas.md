@@ -17,6 +17,20 @@ description: Reglas de reagendado y cancelación de citas
   solicitud al equipo": cancelá de una y confirmale al cliente.
 - Confirmá que el cliente pidió cancelar explícitamente antes de llamar la tool.
 
+## Cancelar VARIAS o TODAS las citas
+- Si el cliente pide cancelar **varias** o **todas** sus citas (o pregunta
+  "¿qué citas tengo?"), usá SIEMPRE `list_client_appointments` para enumerarlas.
+- Mostrale al cliente la lista **numerada** (fecha/hora de cada cita) y preguntale
+  **cuáles quiere cancelar (por número) o si quiere cancelar todas**.
+- Antes de ejecutar, **pedí confirmación explícita** del cliente.
+- Luego llamá `cancel_calendar_event` con:
+  - `cancel_all: true` si quiere cancelar todas, o
+  - `event_ids: [...]` con los `event_id` de la lista para las que eligió.
+- Después de llamar la tool, comunicá al cliente **exactamente lo que devolvió**
+  (`status: "cancelled"` con los ids cancelados, o `status: "not_found"`).
+  **NUNCA afirmes que una cita se canceló si la tool no la devolvió como
+  cancelada** — si alguna no se encontró, decilo claramente.
+
 ## General
 - Una cita solo se puede mover/cancelar si ya está agendada; si el cliente pide
   agendar una cita ADICIONAL (nueva), ahí sí usá `create_calendar_event`.
