@@ -17,16 +17,32 @@ from agentcore_contracts import AgentSpec
 from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
+from core.admin.advanced_service import (
+    list_spec_versions,
+    save_llm,
+)
 from core.admin.auth import (
     SESSION_COOKIE,
     TENANT_COOKIE,
     current_admin,
-    hash_password,
     login,
     logout,
+)
+from core.admin.collaborators_service import (
+    apply_pack_roles,
+    create_collaborator,
+    ensure_tenant_link,
+    grant_permission,
+    link_tenant,
+    pack_collaborator_roles,
+    reset_password,
+    resolve_tenant_id,
+    revoke_permission,
+    target_allowed_for_owner,
+    toggle_active,
 )
 from core.admin.context import base_context as _base_context
 from core.admin.context import config_tabs
@@ -36,30 +52,76 @@ from core.admin.form_generator import (
     render_form_fields,
     render_json_schema_form,
 )
+from core.admin.meta_costs_service import (
+    list_credit_connections,
+    meta_costs_context,
+    sync_meta_pricing,
+    verify_credits,
+)
+from core.admin.meta_health_service import (
+    diagnose_connection,
+    register_channel_subscription,
+    resubscribe_waba,
+    set_billing_status,
+    set_connection_status,
+    soft_delete_connection,
+    webhook_subscriptions_status,
+)
+from core.admin.meta_numbers_service import (
+    add_number,
+    list_numbers,
+    request_code,
+    resolve_waba_and_token,
+    verify_number,
+)
+from core.admin.meta_templates_service import (
+    delete_template,
+    list_templates,
+    sync_templates_now,
+)
 from core.admin.permissions import OWNER_GRANTABLE_SECTIONS
 from core.admin.permissions import catalog as sections_catalog
+from core.admin.settings_service import (
+    format_business_ranges,
+    parse_business_ranges,
+    save_memory,
+)
 from core.admin.view_registry import view_registry
-from core.agents.spec import CORE_PACK_ID, activate_spec_version, enabled_packs, load_active_spec
+from core.admin.waweb_service import (
+    accept_risk as waweb_accept_risk,
+)
+from core.admin.waweb_service import (
+    reset_session as waweb_reset_session,
+)
+from core.admin.waweb_service import (
+    session_state as waweb_session_state,
+)
+from core.agents.spec import (
+    CORE_PACK_ID,
+    activate_spec_version,
+    enabled_packs,
+    load_active_spec,
+    next_spec_version,
+    save_spec_if_changed,
+    save_spec_version,
+)
 from core.billing.enforcement import QuotaExceeded
 from core.config import get_settings
 from core.db.models import (
     WIZARD_STEPS,
     Admin,
     AdminPermission,
-    AgentSpecRecord,
     AppSettings,
     Conversation,
     Customer,
     Escalation,
     Message,
-    MessageCost,
     MessageTemplate,
     MetaConnection,
     PhoneNumber,
     PluginConfig,
     PluginRecord,
     PluginTenantState,
-    PricingDaily,
     Tenant,
     TenantUser,
     UsageLedger,
@@ -647,60 +709,23 @@ def _audit(action: str, actor: str, target: str, **detail: Any) -> None:
 
 
 async def _resolve_tenant_id(slug: str) -> uuid.UUID | None:
-    async with get_session() as session:
-        return (
-            await session.execute(select(Tenant.id).where(Tenant.slug == slug))
-        ).scalar_one_or_none()
+    """Delegación a `collaborators_service.resolve_tenant_id` (fuente única)."""
+    return await resolve_tenant_id(slug)
 
 
 async def _ensure_tenant_link(admin_id: uuid.UUID, tenant_id: uuid.UUID, role: str) -> None:
-    """Vincula un admin a un tenant si no lo estaba (idempotente)."""
-    async with get_session() as session:
-        existing = (
-            await session.execute(
-                select(TenantUser).where(
-                    TenantUser.admin_id == admin_id, TenantUser.tenant_id == tenant_id
-                )
-            )
-        ).scalar_one_or_none()
-        if existing is None:
-            session.add(TenantUser(tenant_id=tenant_id, admin_id=admin_id, role=role))
+    """Delegación a `collaborators_service.ensure_tenant_link` (fuente única)."""
+    await ensure_tenant_link(admin_id, tenant_id, role)
 
 
 async def _pack_collaborator_roles() -> list[dict[str, str]]:
-    """Roles de colaborador que aportan los packs ACTIVOS del tenant (ADR-0066)."""
-    from core.agents.spec import enabled_packs, load_active_spec
-
-    enabled = enabled_packs(await load_active_spec())
-    out: list[dict[str, str]] = []
-    for module in plugin_manager.list_modules():
-        if module.id not in enabled or module.id == CORE_PACK_ID:
-            continue
-        for role in getattr(module, "collaborator_roles", []) or []:
-            role_id = str(role.get("id") or "").strip()
-            if role_id:
-                out.append({"value": f"{module.id}:{role_id}", "label": str(role.get("label") or role_id)})
-    return out
+    """Delegación a `collaborators_service.pack_collaborator_roles` (fuente única)."""
+    return await pack_collaborator_roles()
 
 
 async def _apply_pack_roles(values: list[str], tenant_id: uuid.UUID | None, admin_id: uuid.UUID | None) -> None:
-    """Avisa a los packs los roles de colaborador otorgados (ADR-0066).
-
-    El pack crea/reconcilia su propio perfil (ej. `Gestor`). Un fallo del pack no
-    debe tumbar el alta de la cuenta: se loguea y se sigue.
-    """
-    if not values or tenant_id is None or admin_id is None:
-        return
-    modules = {m.id: m for m in plugin_manager.list_modules()}
-    for value in values:
-        pack_id, _, role_id = value.partition(":")
-        module = modules.get(pack_id)
-        if module is None or not role_id:
-            continue
-        try:
-            await module.on_collaborator_role(tenant_id, admin_id, role_id)
-        except Exception:  # el pack falla, la cuenta igual queda creada
-            log.warning("on_collaborator_role_failed", pack=pack_id, role=role_id, exc_info=True)
+    """Delegación a `collaborators_service.apply_pack_roles` (fuente única)."""
+    await apply_pack_roles(values, tenant_id, admin_id)
 
 
 async def _collaborators_context(request: Request) -> dict[str, Any] | None:
@@ -831,97 +856,24 @@ async def collaborators_create(
     me = await current_admin(request)
     if not await _require_collaborators(request, write=True):
         return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
-    is_master = me is not None and me.role == "master"
-
-    email = email.strip().lower()
-    if not email or not password:
-        return _collab_redirect("email y contraseña son obligatorios", "danger")
-    if role not in ("master", "owner", "colaborador"):
-        return _collab_redirect("rol inválido", "danger")
-    if role == "master" and not is_master:
-        return _collab_redirect("no podés crear un master de plataforma", "danger")
-
-    if is_master:
-        admin_role = "master" if role == "master" else "colaborador"
-        tenant_id = await _resolve_tenant_id(tenant) if tenant else None
-        if tenant and tenant_id is None:
-            return _collab_redirect("tenant no encontrado", "danger")
-        tenant_role = "colaborador" if role == "colaborador" else "owner"
-    else:
-        admin_role = "colaborador"
-        tenant_id = get_current_tenant_id()
-        if tenant_id is None:
-            return _collab_redirect("no hay tenant activo", "danger")
-        tenant_role = "owner" if role == "owner" else "colaborador"
-
-    async with get_session() as session:
-        existing = (
-            await session.execute(select(Admin).where(Admin.email == email))
-        ).scalar_one_or_none()
-        if existing is not None:
-            return _collab_redirect(f"el admin {email} ya existe", "danger")
-        new_admin = Admin(
-            email=email,
-            username=username.strip() or None,
-            password_hash=hash_password(password),
-            role=admin_role,
-        )
-        session.add(new_admin)
-        await session.flush()
-        new_admin_id = new_admin.id
-        if tenant_id is not None:
-            session.add(TenantUser(tenant_id=tenant_id, admin_id=new_admin.id, role=tenant_role))
-    await _apply_pack_roles(pack_roles, tenant_id, new_admin_id)
-    _audit(
-        "create_collaborator",
-        me.email if me else "?",
-        email,
-        role=admin_role,
-        tenant=tenant or "*",
+    error = await create_collaborator(
+        actor=me,
+        email=email,
+        password=password,
+        role=role,
+        username=username,
+        tenant_slug=tenant,
+        pack_roles=pack_roles,
     )
+    if error is not None:
+        return _collab_redirect(error, "danger")
+    _audit("create_collaborator", me.email if me else "?", email, role=role, tenant=tenant or "*")
     return _collab_redirect(f"colaborador {email} creado")
 
 
 async def _target_allowed_for_owner(admin_id: uuid.UUID, tid: uuid.UUID | None) -> bool:
-    """Un owner solo gestiona cuentas EXCLUSIVAS de su tenant.
-
-    No puede tocar a un master de plataforma, ni a una cuenta con permisos
-    globales o vinculada a otro tenant (compartida): esas las administra el
-    master. Si no, podría resetear su contraseña y secuestrar la cuenta.
-    """
-    if tid is None:
-        return False
-    async with get_session() as session:
-        target = await session.get(Admin, admin_id)
-        if target is None or target.role == "master":
-            return False
-        link = (
-            await session.execute(
-                select(TenantUser.role).where(
-                    TenantUser.admin_id == admin_id, TenantUser.tenant_id == tid
-                )
-            )
-        ).scalar_one_or_none()
-        if link is None:
-            return False
-        global_perms = (
-            await session.execute(
-                select(func.count())
-                .select_from(AdminPermission)
-                .where(
-                    AdminPermission.admin_id == admin_id,
-                    AdminPermission.tenant_id.is_(None),
-                )
-            )
-        ).scalar_one()
-        other_links = (
-            await session.execute(
-                select(func.count())
-                .select_from(TenantUser)
-                .where(TenantUser.admin_id == admin_id, TenantUser.tenant_id != tid)
-            )
-        ).scalar_one()
-    return global_perms == 0 and other_links == 0
+    """Delegación a `collaborators_service.target_allowed_for_owner` (fuente única)."""
+    return await target_allowed_for_owner(admin_id, tid)
 
 
 @router.post("/colaboradores/{admin_id}/password")
@@ -933,16 +885,9 @@ async def collaborators_password(
     me = await current_admin(request)
     if not await _require_collaborators(request, write=True):
         return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
-    is_master = me is not None and me.role == "master"
-    if not password:
-        return _collab_redirect("la contraseña no puede estar vacía", "danger")
-    if not is_master and not await _target_allowed_for_owner(admin_id, get_current_tenant_id()):
-        return _collab_redirect("no podés cambiar esa contraseña", "danger")
-    async with get_session() as session:
-        admin = await session.get(Admin, admin_id)
-        if admin is None:
-            return _collab_redirect("admin no encontrado", "danger")
-        admin.password_hash = hash_password(password)
+    error = await reset_password(actor=me, admin_id=admin_id, password=password)
+    if error is not None:
+        return _collab_redirect(error, "danger")
     _audit("reset_password", me.email if me else "?", str(admin_id))
     return _collab_redirect("contraseña actualizada")
 
@@ -960,43 +905,11 @@ async def collaborators_grant(
     me = await current_admin(request)
     if not await _require_collaborators(request, write=True):
         return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
-    is_master = me is not None and me.role == "master"
-    if section not in sections_catalog(plugin_manager.active_ids()):
-        return _collab_redirect("sección inválida", "danger")
-    if access not in ("read", "write"):
-        return _collab_redirect("acceso inválido", "danger")
-
-    if is_master:
-        tenant_id = await _resolve_tenant_id(tenant) if tenant else None
-        if tenant and tenant_id is None:
-            return _collab_redirect("tenant no encontrado", "danger")
-    else:
-        if section in OWNER_GRANTABLE_SECTIONS:
-            return _collab_redirect("no podés otorgar esa sección", "danger")
-        if not await _target_allowed_for_owner(admin_id, get_current_tenant_id()):
-            return _collab_redirect("no podés otorgar permisos a esa cuenta", "danger")
-        tenant_id = get_current_tenant_id()
-
-    async with get_session() as session:
-        row = (
-            await session.execute(
-                select(AdminPermission).where(
-                    AdminPermission.admin_id == admin_id,
-                    AdminPermission.section == section,
-                    AdminPermission.tenant_id.is_(None)
-                    if tenant_id is None
-                    else AdminPermission.tenant_id == tenant_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if row is None:
-            session.add(
-                AdminPermission(
-                    admin_id=admin_id, section=section, access=access, tenant_id=tenant_id
-                )
-            )
-        else:
-            row.access = access
+    error = await grant_permission(
+        actor=me, admin_id=admin_id, section=section, access=access, tenant_slug=tenant
+    )
+    if error is not None:
+        return _collab_redirect(error, "danger")
     _audit(
         "grant", me.email if me else "?", str(admin_id),
         section=section, access=access, scope=tenant or "*",
@@ -1016,25 +929,11 @@ async def collaborators_revoke(
     me = await current_admin(request)
     if not await _require_collaborators(request, write=True):
         return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
-    is_master = me is not None and me.role == "master"
-    if section not in sections_catalog(plugin_manager.active_ids()):
-        return _collab_redirect("sección inválida", "danger")
-    if is_master:
-        tenant_id = await _resolve_tenant_id(tenant) if tenant else None
-    else:
-        if not await _target_allowed_for_owner(admin_id, get_current_tenant_id()):
-            return _collab_redirect("no podés revocar permisos de esa cuenta", "danger")
-        tenant_id = get_current_tenant_id()
-    async with get_session() as session:
-        await session.execute(
-            delete(AdminPermission).where(
-                AdminPermission.admin_id == admin_id,
-                AdminPermission.section == section,
-                AdminPermission.tenant_id.is_(None)
-                if tenant_id is None
-                else AdminPermission.tenant_id == tenant_id,
-            )
-        )
+    error = await revoke_permission(
+        actor=me, admin_id=admin_id, section=section, tenant_slug=tenant
+    )
+    if error is not None:
+        return _collab_redirect(error, "danger")
     _audit("revoke", me.email if me else "?", str(admin_id), section=section, scope=tenant or "*")
     return _collab_redirect(f"permiso {section} revocado")
 
@@ -1050,25 +949,11 @@ async def collaborators_link(
     me = await current_admin(request)
     if me is None:
         return _login_redirect()
-    if me.role != "master":
-        return _collab_redirect("solo un master puede vincular admins", "danger")
-    if role not in ("owner", "colaborador"):
-        return _collab_redirect("rol inválido", "danger")
-    tenant_id = await _resolve_tenant_id(tenant)
-    if tenant_id is None:
-        return _collab_redirect("tenant no encontrado", "danger")
-    async with get_session() as session:
-        row = (
-            await session.execute(
-                select(TenantUser).where(
-                    TenantUser.admin_id == admin_id, TenantUser.tenant_id == tenant_id
-                )
-            )
-        ).scalar_one_or_none()
-        if row is None:
-            session.add(TenantUser(tenant_id=tenant_id, admin_id=admin_id, role=role))
-        else:
-            row.role = role
+    error = await link_tenant(
+        actor=me, admin_id=admin_id, tenant_slug=tenant, role=role
+    )
+    if error is not None:
+        return _collab_redirect(error, "danger")
     _audit("link", me.email, str(admin_id), tenant=tenant, role=role)
     return _collab_redirect(f"vinculado a {tenant} ({role})")
 
@@ -1080,69 +965,31 @@ async def collaborators_toggle(request: Request, admin_id: uuid.UUID):
     me = await current_admin(request)
     if not await _require_collaborators(request, write=True):
         return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
-    is_master = me is not None and me.role == "master"
-    if me is not None and me.id == admin_id:
-        return _collab_redirect("no podés desactivar tu propio usuario", "danger")
-    if not is_master and not await _target_allowed_for_owner(admin_id, get_current_tenant_id()):
-        return _collab_redirect("no podés modificar esa cuenta", "danger")
+    error = await toggle_active(
+        actor=me, admin_id=admin_id, current_tenant_id=get_current_tenant_id()
+    )
+    if error is not None:
+        return _collab_redirect(error, "danger")
     async with get_session() as session:
-        admin = await session.get(Admin, admin_id)
-        if admin is None:
-            return _collab_redirect("admin no encontrado", "danger")
-        admin.active = not admin.active
-        active = admin.active
-        state = "activado" if admin.active else "desactivado"
-    _audit("toggle", me.email if me else "?", str(admin_id), active=active)
-    return _collab_redirect(f"admin {state}")
+        state = "activado" if (await session.get(Admin, admin_id)).active else "desactivado"
+    _audit("toggle", me.email if me else "?", str(admin_id))
+    return _collab_redirect(f"usuario {state}")
 
 
 # ------------------------------------------------------------------ AgentSpec
 async def _spec_versions() -> list[dict[str, Any]]:
-    async with get_session() as session:
-        rows = (
-            await session.execute(
-                select(AgentSpecRecord)
-                .where(
-                    AgentSpecRecord.tenant_id == get_current_tenant_id(),
-                    AgentSpecRecord.deleted_at.is_(None),
-                )
-                .order_by(AgentSpecRecord.created_at.desc())
-            )
-        ).scalars().all()
-    return [
-        {
-            "id": str(r.id),
-            "version": r.version,
-            "is_active": r.is_active,
-            "created_at": r.created_at,
-        }
-        for r in rows
-    ]
+    """Delegación a `advanced_service.list_spec_versions` (fuente única)."""
+    return await list_spec_versions(get_current_tenant_id())
 
 
 def _format_business_ranges(escalation_config: dict) -> str:
-    """Franjas de horario a texto editable ("día HH:MM-HH:MM" por línea)."""
-    ranges = ((escalation_config or {}).get("business_hours") or {}).get("ranges") or []
-    lines = []
-    for r in ranges:
-        day = r.get("day")
-        start = r.get("from")
-        end = r.get("to")
-        if day is not None and start and end:
-            lines.append(f"{day} {start}-{end}")
-    return "\n".join(lines)
+    """Delegación a `settings_service.format_business_ranges` (fuente única)."""
+    return format_business_ranges(escalation_config)
 
 
 def _parse_business_ranges(text: str) -> list[dict[str, Any]]:
-    """Parsea "día HH:MM-HH:MM" por línea a la forma del contrato. Ignora basura."""
-    import re as _re
-
-    ranges: list[dict[str, Any]] = []
-    for line in (text or "").splitlines():
-        m = _re.fullmatch(r"([0-6])\s+(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})", line.strip())
-        if m:
-            ranges.append({"day": int(m.group(1)), "from": m.group(2), "to": m.group(3)})
-    return ranges
+    """Delegación a `settings_service.parse_business_ranges` (fuente única)."""
+    return parse_business_ranges(text)
 
 
 def _declarative_tools_json(spec) -> str:  # type: ignore[no-untyped-def]
@@ -1182,19 +1029,11 @@ async def _recent_eval_runs(limit: int = 10) -> list[dict[str, Any]]:
 
 
 async def _next_spec_version() -> str:
-    """Versión nueva: sube la patch de la versión más alta existente (1.0.0 → 1.0.1)."""
-    versions = await _spec_versions()
-    nums: list[list[int]] = []
-    for v in versions:
-        parts = [int(x) for x in str(v["version"]).split(".") if x.isdigit()]
-        if parts:
-            nums.append(parts)
-    if not nums:
+    """Delegación a `core.agents.spec.next_spec_version` (fuente única)."""
+    tid = get_current_tenant_id()
+    if tid is None:
         return "1.0.0"
-    base = max(nums, key=lambda p: tuple(([*p, 0, 0])[:3]))
-    base = ([*base, 0, 0])[:3]
-    base[2] += 1
-    return ".".join(str(x) for x in base)
+    return await next_spec_version(tid)
 
 
 @router.get("/spec")
@@ -1246,38 +1085,9 @@ async def _ensure_pack_activated(pack: str) -> str | None:
         return f"{pack}: {exc}"
 
 
-async def _save_spec_version(new_spec: AgentSpec) -> int | None:
-    """Persiste `new_spec` como nueva versión activa del tenant actual.
-
-    Desactiva la versión previa e inserta la nueva en la misma transacción.
-    Devuelve la versión nueva, o None si hubo una edición concurrente (los
-    índices parciales protegen la integridad; el llamador decide cómo avisar).
-    """
-    version = await _next_spec_version()
-    try:
-        async with get_session() as session:
-            current_row = (
-                await session.execute(
-                    select(AgentSpecRecord).where(
-                        AgentSpecRecord.tenant_id == get_current_tenant_id(),
-                        AgentSpecRecord.is_active.is_(True),
-                        AgentSpecRecord.deleted_at.is_(None),
-                    )
-                )
-            ).scalar_one_or_none()
-            if current_row is not None:
-                current_row.is_active = False
-            session.add(
-                AgentSpecRecord(
-                    tenant_id=get_current_tenant_id(),
-                    version=version,
-                    is_active=True,
-                    spec=new_spec.model_dump(mode="json"),
-                )
-            )
-    except IntegrityError:
-        return None
-    return version
+async def _save_spec_version(new_spec: AgentSpec) -> str | None:
+    """Delegación a `core.agents.spec.save_spec_version` (fuente única)."""
+    return await save_spec_version(new_spec)
 
 
 @router.post("/spec")
@@ -1734,20 +1544,17 @@ async def plugin_config_save(request: Request, plugin_id: str):
     except Exception:
         pass
 
+    # Configurarlo implica que este tenant lo quiere usar.
     try:
         values = parse_form_values(module.config_schema, form_data, previous)
-        await plugin_manager.save_config(plugin_id, values)
-        await plugin_manager.activate(plugin_id)
+        await configure_plugin_for_tenant(plugin_id, values)
+    except QuotaExceeded as exc:
+        return _quota_redirect(exc)
     except Exception as exc:
         log.exception("plugin_config_save_failed", plugin=plugin_id)
         return RedirectResponse(
             f"/admin/plugins?flash=Error: {str(exc)[:120]}&flash_type=danger", status_code=303
         )
-    # Configurarlo implica que este tenant lo quiere usar.
-    try:
-        await _enable_pack_for_tenant(plugin_id)
-    except QuotaExceeded as exc:
-        return _quota_redirect(exc)
     return RedirectResponse("/admin/plugins?flash=Plugin configurado y activado", status_code=303)
 
 
@@ -1757,6 +1564,18 @@ def _quota_redirect(exc: QuotaExceeded) -> RedirectResponse:
         f"({exc.used}/{exc.limit}). Mejorá tu plan en /admin/plan.&flash_type=danger",
         status_code=303,
     )
+
+
+async def configure_plugin_for_tenant(plugin_id: str, values: dict[str, Any]) -> None:
+    """Guarda la config del plugin, lo activa y lo habilita para el tenant actual.
+
+    Punto ÚNICO compartido por el panel SSR y la API `/api/v1` (ADR-0076/0077): la
+    lógica de cifrado, activación y cuota del pack no se duplica. Levanta
+    `QuotaExceeded` si el plan no permite habilitar otro pack.
+    """
+    await plugin_manager.save_config(plugin_id, values)
+    await plugin_manager.activate(plugin_id)
+    await _enable_pack_for_tenant(plugin_id)
 
 
 async def _enable_pack_for_tenant(pack: str) -> int | None:
@@ -1817,18 +1636,33 @@ async def _disable_pack_for_tenant(pack: str) -> int | None:
     return await _save_spec_version(new_spec)
 
 
+async def set_pack_for_tenant(pack: str, enabled: bool) -> str | None:
+    """Habilita/deshabilita un pack para el tenant actual (fuente única SSR + API).
+
+    Devuelve un mensaje de error, o `None` si quedó aplicado. Levanta
+    `QuotaExceeded` si el plan no permite habilitar otro pack.
+    """
+    if enabled:
+        error = await _ensure_pack_activated(pack)
+        if error is not None:
+            return error
+        await _enable_pack_for_tenant(pack)
+        return None
+    await _disable_pack_for_tenant(pack)
+    return None
+
+
 @router.post("/plugins/{plugin_id}/activar")
 async def plugin_activate(request: Request, plugin_id: str):
     """Habilita `plugin_id` para el TENANT ACTUAL únicamente (AgentSpec.packs)."""
     if await current_admin(request) is None:
         return _login_redirect()
-    error = await _ensure_pack_activated(plugin_id)
-    if error is not None:
-        return RedirectResponse(f"/admin/plugins?flash=Error: {error}&flash_type=danger", status_code=303)
     try:
-        await _enable_pack_for_tenant(plugin_id)
+        error = await set_pack_for_tenant(plugin_id, True)
     except QuotaExceeded as exc:
         return _quota_redirect(exc)
+    if error is not None:
+        return RedirectResponse(f"/admin/plugins?flash=Error: {error}&flash_type=danger", status_code=303)
     return RedirectResponse("/admin/plugins?flash=Plugin activado para este tenant", status_code=303)
 
 
@@ -1838,7 +1672,7 @@ async def plugin_deactivate(request: Request, plugin_id: str):
     cargado en el servidor por si otro tenant lo usa."""
     if await current_admin(request) is None:
         return _login_redirect()
-    await _disable_pack_for_tenant(plugin_id)
+    await set_pack_for_tenant(plugin_id, False)
     return RedirectResponse("/admin/plugins?flash=Plugin desactivado para este tenant", status_code=303)
 
 
@@ -1976,32 +1810,15 @@ async def connections_page(request: Request):
     return _render("conexiones.html", ctx)
 
 
-# ------------------------------------------------------------------ canal waweb (ADR-0074)
-def _qr_data_uri(data: str) -> str:
-    import base64
-    import io
-
-    import qrcode
-
-    image = qrcode.make(data)
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
-
-
 @router.get("/conexiones/waweb", response_class=HTMLResponse)
 async def conexiones_waweb(request: Request):
     """Vínculo por QR de un número propio — canal NO oficial (ADR-0074)."""
     ctx = await _base_context(request, "connections")
     if ctx is None:
         return _login_redirect()
-    from core.waweb import connections as waweb
-
     tid = get_current_tenant_id()
-    state = await waweb.session_view(tid) if tid is not None else {}
-    if state.get("qr"):
-        state["qr_uri"] = _qr_data_uri(state["qr"])
-    ctx.update(waweb=state)
+    state = await waweb_session_state(tid)
+    ctx.update(waweb={**state, "qr_uri": state.get("qr_image")})
     return _render("conexiones_waweb.html", ctx)
 
 
@@ -2010,18 +1827,13 @@ async def conexiones_waweb_aceptar_riesgo(request: Request):
     admin = await current_admin(request)
     if admin is None:
         return _login_redirect()
-    from core.waweb import connections as waweb
-
-    tid = get_current_tenant_id()
-    if tid is not None:
-        try:
-            await waweb.accept_risk(tid, admin.id)
-        except Exception:
-            log.exception("waweb_accept_risk_failed")
-            return RedirectResponse(
-                "/admin/conexiones/waweb?flash=No se pudo registrar la aceptación&flash_type=danger",
-                status_code=303,
-            )
+    error = await waweb_accept_risk(get_current_tenant_id(), admin.id)
+    if error is not None:
+        log.warning("waweb_accept_risk_failed", error=error)
+        return RedirectResponse(
+            "/admin/conexiones/waweb?flash=No se pudo registrar la aceptación&flash_type=danger",
+            status_code=303,
+        )
     return RedirectResponse(
         "/admin/conexiones/waweb?flash=Aviso aceptado — esperando el QR&flash_type=success",
         status_code=303,
@@ -2032,14 +1844,9 @@ async def conexiones_waweb_aceptar_riesgo(request: Request):
 async def conexiones_waweb_reiniciar(request: Request):
     if await current_admin(request) is None:
         return _login_redirect()
-    from core.waweb import connections as waweb
-
-    tid = get_current_tenant_id()
-    if tid is not None:
-        try:
-            await waweb.reset_session(tid)
-        except Exception:
-            log.exception("waweb_reset_failed")
+    error = await waweb_reset_session(get_current_tenant_id())
+    if error is not None:
+        log.warning("waweb_reset_failed", error=error)
     return RedirectResponse(
         "/admin/conexiones/waweb?flash=Vínculo reiniciado&flash_type=success", status_code=303
     )
@@ -2050,18 +1857,7 @@ async def conexiones_waweb_qr(request: Request):
     """Estado + QR vigente (data URI). Lo consulta la vista por polling."""
     if await current_admin(request) is None:
         return _login_redirect()
-    from core.waweb import connections as waweb
-
-    tid = get_current_tenant_id()
-    if tid is None:
-        return {"status": "", "qr_image": None, "risk_ok": False, "jid": None}
-    state = await waweb.session_view(tid)
-    return {
-        "status": state.get("status", ""),
-        "risk_ok": state.get("risk_ok", False),
-        "jid": state.get("jid"),
-        "qr_image": _qr_data_uri(state["qr"]) if state.get("qr") else None,
-    }
+    return await waweb_session_state(get_current_tenant_id())
 
 
 # ------------------------------------------------------------------ probar asistente (playground)
@@ -2495,42 +2291,8 @@ async def _require_owner_or_master(request: Request, tenant_id: uuid.UUID | None
 
 
 async def _webhook_subscriptions_status(tid: uuid.UUID | None) -> list[dict[str, Any]]:
-    """Una fila por canal conectado del tenant activo, con el estado de la
-    suscripción de APP de la que depende ese canal (no de su suscripción de
-    objeto individual, que es otra cosa)."""
-    from core.db.models import MetaConnection
-    from core.gateway.meta_subscriptions import OBJECT_TO_CHANNEL, list_app_subscriptions
-
-    channel_to_object = {v: k for k, v in OBJECT_TO_CHANNEL.items()}
-
-    if tid is None:
-        return []
-    async with get_session() as session:
-        connections = (
-            await session.execute(
-                select(MetaConnection).where(MetaConnection.tenant_id == tid, MetaConnection.status == "connected")
-            )
-        ).scalars().all()
-
-    rows: list[dict[str, Any]] = []
-    for connection in connections:
-        object_ = channel_to_object.get(connection.channel)
-        if object_ is None:
-            continue
-        subs = await list_app_subscriptions(connection.meta_app_id)
-        sub = next((s for s in subs if s.object == object_), None)
-        rows.append(
-            {
-                "channel": connection.channel,
-                "object": object_,
-                "meta_app_id": connection.meta_app_id,
-                "callback_url": sub.callback_url if sub else None,
-                "active": sub.active if sub else None,
-                "fields": sub.fields if sub else [],
-                "last_error": sub.last_error if sub else None,
-            }
-        )
-    return rows
+    """Delegación a `meta_health_service.webhook_subscriptions_status` (fuente única)."""
+    return await webhook_subscriptions_status(tid)
 
 
 @router.get("/conexiones/webhooks", response_class=HTMLResponse)
@@ -2558,54 +2320,15 @@ async def meta_webhooks_json(request: Request):
 
 @router.post("/conexiones/webhooks/registrar")
 async def meta_webhooks_register(request: Request, channel: str = Form(...)):
-    from core.gateway.meta_preflight import resolve_app_credentials
-    from core.gateway.meta_subscriptions import (
-        OBJECT_TO_CHANNEL,
-        SubscriptionError,
-        upsert_app_subscription,
-    )
-    from core.shared.exceptions import AgentCoreError
-
     tid = get_current_tenant_id()
     if not await _require_owner_or_master(request, tid):
         return HTMLResponse("No tenés permiso para re-registrar suscripciones (se requiere owner o master).", status_code=403)
 
-    channel_to_object = {v: k for k, v in OBJECT_TO_CHANNEL.items()}
-    object_ = channel_to_object.get(channel)
-    if object_ is None:
+    error = await register_channel_subscription(tid, channel)
+    if error is not None:
         return RedirectResponse(
-            f"/admin/conexiones/webhooks?flash=Canal desconocido: {channel}&flash_type=danger", status_code=303
+            f"/admin/conexiones/webhooks?flash={error}&flash_type=danger", status_code=303
         )
-
-    config = await resolve_app_credentials(tid, channel)
-    if config is None:
-        return RedirectResponse(
-            "/admin/conexiones/webhooks?flash=No hay app de Meta configurada para este canal&flash_type=danger",
-            status_code=303,
-        )
-
-    settings = get_settings()
-    callback_url = f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"
-    # Esta ruta registra sobre el webhook GENÉRICO (sin slug). Ese handler
-    # (`webhooks.py::verify_webhook`) corre sin scope de tenant (ruta pública)
-    # y resuelve solo `settings.whatsapp_verify_token` -- el token por tenant
-    # vive en la URL por slug y lo maneja el wizard BYOK. Registrar acá el
-    # token de la conexión del tenant produce un 403 en el self-check (el
-    # handler genérico no lo conoce).
-    verify_token = settings.whatsapp_verify_token
-
-    try:
-        async with tenant_scope(tid):
-            await upsert_app_subscription(config, object_, callback_url=callback_url, verify_token=verify_token)
-    except SubscriptionError as exc:
-        return RedirectResponse(f"/admin/conexiones/webhooks?flash={str(exc)[:140]}&flash_type=danger", status_code=303)
-    except AgentCoreError as exc:  # GraphError
-        from core.gateway.meta_subscriptions import humanize_subscription_error
-
-        return RedirectResponse(
-            f"/admin/conexiones/webhooks?flash={humanize_subscription_error(exc)[:140]}&flash_type=danger", status_code=303
-        )
-
     return RedirectResponse("/admin/conexiones/webhooks?flash=Suscripción registrada", status_code=303)
 
 
@@ -2982,31 +2705,14 @@ async def meta_connection_numeros_page(request: Request, connection_id: str):
     if ctx is None:
         return _login_redirect()
 
-    from core.db.models import PhoneNumber
-    from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_phone_numbers import sync_phone_numbers
-
     tid = get_current_tenant_id()
-    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    connection, waba, _token = await resolve_waba_and_token(uuid.UUID(connection_id), tid)
     if connection is None:
-        return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+        return RedirectResponse(
+            "/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303
+        )
 
-    sync_error = None
-    if waba is not None and token:
-        try:
-            await sync_phone_numbers(
-                waba.waba_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid
-            )
-        except GraphError as exc:
-            sync_error = exc.message
-
-    async with get_session() as session:
-        numbers = (
-            await session.execute(
-                select(PhoneNumber).where(PhoneNumber.connection_id == connection.id, PhoneNumber.tenant_id == tid)
-            )
-        ).scalars().all()
-
+    numbers, sync_error = await list_numbers(tid, connection_id)
     ctx.update(connection=connection, waba=waba, numbers=numbers, sync_error=sync_error)
     return _render("meta_numeros.html", ctx)
 
@@ -3015,26 +2721,15 @@ async def meta_connection_numeros_page(request: Request, connection_id: str):
 async def meta_connection_numeros_agregar(
     request: Request, connection_id: str, cc: str = Form(...), phone_number: str = Form(...), verified_name: str = Form(...)
 ):
-    from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_phone_numbers import add_phone_number
-
     if await current_admin(request) is None:
         return _login_redirect()
 
-    tid = get_current_tenant_id()
-    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
     url = f"/admin/conexiones/meta/{connection_id}/numeros"
-    if connection is None or waba is None or not token:
-        return RedirectResponse(f"{url}?flash=No hay conexión/WABA lista todavía&flash_type=danger", status_code=303)
-
-    try:
-        await add_phone_number(
-            waba.waba_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid,
-            cc=cc, phone_number=phone_number, verified_name=verified_name,
-        )
-    except GraphError as exc:
-        return RedirectResponse(f"{url}?flash={exc.message[:140]}&flash_type=danger", status_code=303)
-
+    error = await add_number(
+        get_current_tenant_id(), connection_id, cc=cc, phone_number=phone_number, verified_name=verified_name
+    )
+    if error is not None:
+        return RedirectResponse(f"{url}?flash={error}&flash_type=danger", status_code=303)
     return RedirectResponse(f"{url}?flash=Número agregado", status_code=303)
 
 
@@ -3042,60 +2737,29 @@ async def meta_connection_numeros_agregar(
 async def meta_connection_numeros_solicitar_codigo(
     request: Request, connection_id: str, phone_number_id: str, code_method: str = Form(...), language: str = Form(default="es")
 ):
-    from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_phone_numbers import request_verification_code
-    from core.memory.working import get_redis
-
     if await current_admin(request) is None:
         return _login_redirect()
 
-    tid = get_current_tenant_id()
-    connection, _waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
     url = f"/admin/conexiones/meta/{connection_id}/numeros"
-    if connection is None or not token:
-        return RedirectResponse(f"{url}?flash=No hay conexión lista todavía&flash_type=danger", status_code=303)
-
-    redis = get_redis()
-    # Namespaced por tenant -- phone_number_id es único global en Meta pero
-    # no queremos que un tenant pueda interferir el rate limit de otro
-    # (hallazgo auditor-multitenant, 2026-09-22, severidad media).
-    rate_limit_key = f"verify_code_resend:{tid}:{phone_number_id}"
-    if await redis.get(rate_limit_key):
-        return RedirectResponse(f"{url}?flash=Esperá un momento antes de reenviar el código&flash_type=danger", status_code=303)
-
-    try:
-        await request_verification_code(
-            phone_number_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id,
-            code_method=code_method, language=language,
-        )
-    except GraphError as exc:
-        return RedirectResponse(f"{url}?flash={exc.message[:140]}&flash_type=danger", status_code=303)
-
-    await redis.set(rate_limit_key, "1", ex=60)
+    error = await request_code(
+        get_current_tenant_id(), connection_id, phone_number_id, code_method=code_method, language=language
+    )
+    if error is not None:
+        return RedirectResponse(f"{url}?flash={error}&flash_type=danger", status_code=303)
     return RedirectResponse(f"{url}?flash=Código enviado", status_code=303)
 
 
 @router.post("/conexiones/meta/{connection_id}/numeros/{phone_number_id}/verificar")
 async def meta_connection_numeros_verificar(request: Request, connection_id: str, phone_number_id: str, code: str = Form(...)):
-    from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_phone_numbers import verify_code
-
     if await current_admin(request) is None:
         return _login_redirect()
 
-    tid = get_current_tenant_id()
-    connection, _waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
     url = f"/admin/conexiones/meta/{connection_id}/numeros"
-    if connection is None or not token:
-        return RedirectResponse(f"{url}?flash=No hay conexión lista todavía&flash_type=danger", status_code=303)
-
-    try:
-        ok = await verify_code(
-            phone_number_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid, code=code
-        )
-    except GraphError as exc:
-        return RedirectResponse(f"{url}?flash={exc.message[:140]}&flash_type=danger", status_code=303)
-
+    ok, error = await verify_number(
+        get_current_tenant_id(), connection_id, phone_number_id, code=code
+    )
+    if error is not None:
+        return RedirectResponse(f"{url}?flash={error}&flash_type=danger", status_code=303)
     if not ok:
         return RedirectResponse(f"{url}?flash=Código incorrecto&flash_type=danger", status_code=303)
     return RedirectResponse(f"{url}?flash=Número verificado", status_code=303)
@@ -3172,40 +2836,14 @@ async def meta_connection_plantillas_page(request: Request, connection_id: str):
     if ctx is None:
         return _login_redirect()
 
-    from core.db.models import MessageTemplate
-    from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_template_sync import acquire_sync_lock, sync_templates
-
     tid = get_current_tenant_id()
-    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    connection, waba, _token = await resolve_waba_and_token(uuid.UUID(connection_id), tid)
     if connection is None:
-        return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
+        return RedirectResponse(
+            "/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303
+        )
 
-    sync_error = None
-    if waba is not None and token and await acquire_sync_lock(waba.waba_id):
-        try:
-            await sync_templates(
-                waba.waba_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid
-            )
-        except GraphError as exc:
-            sync_error = exc.message
-
-    templates: list[MessageTemplate] = []
-    if waba is not None:
-        async with get_session() as session:
-            templates = (
-                await session.execute(
-                    select(MessageTemplate)
-                    .where(MessageTemplate.waba_account_id == waba.id, MessageTemplate.tenant_id == tid)
-                    .order_by(MessageTemplate.name, MessageTemplate.language)
-                )
-            ).scalars().all()
-
-    at_limit = bool(
-        waba is not None and waba.message_template_limit is not None
-        and (waba.message_template_count or 0) >= waba.message_template_limit
-    )
-
+    templates, sync_error, at_limit = await list_templates(tid, connection_id)
     ctx.update(connection=connection, waba=waba, templates=templates, sync_error=sync_error, at_limit=at_limit)
     return _render("meta_plantillas.html", ctx)
 
@@ -3379,31 +3017,13 @@ async def meta_connection_plantilla_editar(request: Request, connection_id: str,
 @router.post("/conexiones/meta/{connection_id}/plantillas/{template_id}/eliminar")
 async def meta_connection_plantilla_eliminar(request: Request, connection_id: str, template_id: str):
     """Borra TODAS las versiones de idioma de la plantilla."""
-    from core.db.models import MessageTemplate
-    from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_templates import delete_template_all_languages
-
     if await current_admin(request) is None:
         return _login_redirect()
 
-    tid = get_current_tenant_id()
-    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
     url = f"/admin/conexiones/meta/{connection_id}/plantillas"
-    if connection is None or waba is None or not token:
-        return RedirectResponse(f"{url}?flash=No hay conexión/WABA lista todavía&flash_type=danger", status_code=303)
-
-    async with get_session() as session:
-        row = await get_owned(session, MessageTemplate, uuid.UUID(template_id), tid)
-    if row is None:
-        return RedirectResponse(f"{url}?flash=Plantilla no encontrada&flash_type=danger", status_code=303)
-
-    try:
-        await delete_template_all_languages(
-            waba.waba_id, row.name, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid
-        )
-    except GraphError as exc:
-        return RedirectResponse(f"{url}?flash={exc.message[:200]}&flash_type=danger", status_code=303)
-
+    error = await delete_template(get_current_tenant_id(), connection_id, template_id)
+    if error is not None:
+        return RedirectResponse(f"{url}?flash={error}&flash_type=danger", status_code=303)
     return RedirectResponse(f"{url}?flash=Plantilla eliminada (todos los idiomas)", status_code=303)
 
 
@@ -3441,28 +3061,13 @@ async def meta_connection_plantilla_eliminar_traduccion(request: Request, connec
 
 @router.post("/conexiones/meta/{connection_id}/plantillas/sync")
 async def meta_connection_plantillas_sync(request: Request, connection_id: str):
-    from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_template_sync import acquire_sync_lock, sync_templates
-
     if await current_admin(request) is None:
         return _login_redirect()
 
-    tid = get_current_tenant_id()
-    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
     url = f"/admin/conexiones/meta/{connection_id}/plantillas"
-    if connection is None or waba is None or not token:
-        return RedirectResponse(f"{url}?flash=No hay conexión/WABA lista todavía&flash_type=danger", status_code=303)
-
-    if not await acquire_sync_lock(waba.waba_id):
-        return RedirectResponse(f"{url}?flash=Ya se sincronizó en la última hora&flash_type=danger", status_code=303)
-
-    try:
-        await sync_templates(
-            waba.waba_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid
-        )
-    except GraphError as exc:
-        return RedirectResponse(f"{url}?flash={exc.message[:200]}&flash_type=danger", status_code=303)
-
+    error = await sync_templates_now(get_current_tenant_id(), connection_id)
+    if error is not None:
+        return RedirectResponse(f"{url}?flash={error}&flash_type=danger", status_code=303)
     return RedirectResponse(f"{url}?flash=Sincronizado", status_code=303)
 
 
@@ -3505,130 +3110,72 @@ async def meta_health_page(request: Request):
 
 @router.post("/conexiones/meta/{connection_id}/activar")
 async def meta_connection_activar(request: Request, connection_id: str):
+    """Delegación a `meta_health_service` (fuente única)."""
     if await current_admin(request) is None:
         return _login_redirect()
-
-    tid = get_current_tenant_id()
-    async with get_session() as session:
-        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
-        if connection is None:
-            return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
-        connection.status = "connected"
-        connection.status_reason = None
-
+    error = await set_connection_status(
+        get_current_tenant_id(), connection_id, active=True
+    )
+    if error is not None:
+        return RedirectResponse(f"/admin/conexiones?flash={error}&flash_type=danger", status_code=303)
     return RedirectResponse("/admin/conexiones?flash=Conexión activada", status_code=303)
+
 
 
 @router.post("/conexiones/meta/{connection_id}/desactivar")
 async def meta_connection_desactivar(request: Request, connection_id: str):
+    """Delegación a `meta_health_service` (fuente única)."""
     if await current_admin(request) is None:
         return _login_redirect()
-
-    tid = get_current_tenant_id()
-    async with get_session() as session:
-        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
-        if connection is None:
-            return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
-        connection.status = "revoked"
-        connection.status_reason = "Desactivada a mano desde el panel"
-
+    error = await set_connection_status(
+        get_current_tenant_id(), connection_id, active=False
+    )
+    if error is not None:
+        return RedirectResponse(f"/admin/conexiones?flash={error}&flash_type=danger", status_code=303)
     return RedirectResponse("/admin/conexiones?flash=Conexión desactivada", status_code=303)
+
 
 
 @router.post("/conexiones/meta/{connection_id}/eliminar")
 async def meta_connection_eliminar(request: Request, connection_id: str):
-    """Soft-delete (invariante nº8 de CLAUDE.md) -- nunca borra la fila,
-    solo la saca de la lista y libera el `meta_app_id` para poder
-    reconectar la misma app después (índice único parcial, migración
-    0032)."""
+    """Delegación a `meta_health_service` (fuente única)."""
     if await current_admin(request) is None:
         return _login_redirect()
-
-    tid = get_current_tenant_id()
-    async with get_session() as session:
-        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
-        if connection is None:
-            return RedirectResponse("/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303)
-        connection.deleted_at = utcnow()
-        connection.status = "revoked"
-        # Liberar los assets de Meta de esta conexión para que el número/WABA se
-        # puedan reclamar de nuevo (por este tenant al reconectar, o por otro):
-        # `phone_number_id` es único GLOBAL y `resolve_tenant_for_waba` no filtra
-        # por estado, así que una fila colgada de una conexión revocada bloquea o
-        # rutea mal. No tienen hijos que las referencien (solo FK hacia afuera);
-        # la conexión en sí queda soft-deleted (invariante #8).
-        await session.execute(
-            PhoneNumber.__table__.delete().where(
-                PhoneNumber.connection_id == connection.id,
-                PhoneNumber.tenant_id == tid,
-            )
-        )
-        await session.execute(
-            WabaAccount.__table__.delete().where(
-                WabaAccount.connection_id == connection.id,
-                WabaAccount.tenant_id == tid,
-            )
-        )
-
+    error = await soft_delete_connection(get_current_tenant_id(), connection_id)
+    if error is not None:
+        return RedirectResponse(f"/admin/conexiones?flash={error}&flash_type=danger", status_code=303)
     return RedirectResponse("/admin/conexiones?flash=Conexión eliminada", status_code=303)
+
 
 
 @router.post("/conexiones/salud/{connection_id}/diagnosticar")
 async def meta_health_diagnosticar(request: Request, connection_id: str):
     """Diagnóstico on-demand -- corre los 7 checks síncrono (debe responder
     en <10s para 1 WABA + 2 números, criterio de aceptación del ticket)."""
-    from core.gateway.meta_health import decide_status, run_health_checks
-
     if await current_admin(request) is None:
         return _login_redirect()
 
-    tid = get_current_tenant_id()
-    url = "/admin/conexiones/salud"
-    async with get_session() as session:
-        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
-    if connection is None:
-        return RedirectResponse(f"{url}?flash=Conexión no encontrada&flash_type=danger", status_code=303)
-
-    checks = await run_health_checks(connection, tid)
-    new_status, reason = decide_status(checks)
-
-    async with get_session() as session:
-        db_connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
-        if db_connection is not None:
-            db_connection.health = checks
-            db_connection.status = new_status
-            db_connection.status_reason = reason
-            db_connection.last_health_check_at = utcnow()
-
-    return RedirectResponse(f"{url}?flash=Diagnóstico completo", status_code=303)
+    error = await diagnose_connection(get_current_tenant_id(), connection_id)
+    if error is not None:
+        return RedirectResponse(
+            f"/admin/conexiones/salud?flash={error}&flash_type=danger", status_code=303
+        )
+    return RedirectResponse("/admin/conexiones/salud?flash=Diagnóstico completo", status_code=303)
 
 
 @router.post("/conexiones/salud/{connection_id}/resubscribe-waba")
 async def meta_health_resubscribe_waba(request: Request, connection_id: str):
     """Reparación INLINE del check `webhook_subscribed` -- reencola SOLO
     la suscripción de la WABA, nunca el wizard de OAuth completo."""
-    from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_onboarding import _subscribe_waba_to_app
-
     if await current_admin(request) is None:
         return _login_redirect()
 
-    tid = get_current_tenant_id()
-    url = "/admin/conexiones/salud"
-    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
-    if connection is None or waba is None or not token:
-        return RedirectResponse(f"{url}?flash=No hay conexión/WABA lista todavía&flash_type=danger", status_code=303)
-
-    try:
-        await _subscribe_waba_to_app(
-            token, waba.waba_id, connection.graph_api_version, connection.id, get_settings().meta_app_secret, tid
+    error = await resubscribe_waba(get_current_tenant_id(), connection_id)
+    if error is not None:
+        return RedirectResponse(
+            f"/admin/conexiones/salud?flash={error}&flash_type=danger", status_code=303
         )
-    except GraphError as exc:
-        return RedirectResponse(f"{url}?flash={exc.message[:200]}&flash_type=danger", status_code=303)
-    except Exception as exc:
-        return RedirectResponse(f"{url}?flash={str(exc)[:200]}&flash_type=danger", status_code=303)
-
-    return RedirectResponse(f"{url}?flash=WABA re-suscripta", status_code=303)
+    return RedirectResponse("/admin/conexiones/salud?flash=WABA re-suscripta", status_code=303)
 
 
 @router.post("/conexiones/salud/{connection_id}/billing")
@@ -3639,17 +3186,14 @@ async def meta_health_set_billing_status(request: Request, connection_id: str, m
     if await current_admin(request) is None:
         return _login_redirect()
 
-    tid = get_current_tenant_id()
-    url = "/admin/conexiones/salud"
-    async with get_session() as session:
-        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
-        if connection is None:
-            return RedirectResponse(f"{url}?flash=Conexión no encontrada&flash_type=danger", status_code=303)
-        health = dict(connection.health or {})
-        health["billing"] = {"manual_status": manual_status}
-        connection.health = health
-
-    return RedirectResponse(f"{url}?flash=Estado de facturación actualizado", status_code=303)
+    error = await set_billing_status(get_current_tenant_id(), connection_id, manual_status)
+    if error is not None:
+        return RedirectResponse(
+            f"/admin/conexiones/salud?flash={error}&flash_type=danger", status_code=303
+        )
+    return RedirectResponse(
+        "/admin/conexiones/salud?flash=Estado de facturación actualizado", status_code=303
+    )
 
 
 @router.get("/conexiones/manual", response_class=HTMLResponse)
@@ -3883,147 +3427,22 @@ async def costs_page(request: Request):
 
 
 async def _meta_costs_context(tenant_id: uuid.UUID, since: datetime) -> dict[str, Any]:
-    """Costos de WhatsApp (Meta) -- `cost` viene SIEMPRE de `pricing_daily`
-    (autoritativo, sincronizado desde `pricing_analytics`); nunca se
-    calcula localmente con una tabla de tarifas propia."""
-    async with get_session() as session:
-        wabas = (
-            await session.execute(select(WabaAccount).where(WabaAccount.tenant_id == tenant_id))
-        ).scalars().all()
-        waba_ids = [w.id for w in wabas]
-
-        by_category_country_rows = []
-        by_phone_rows = []
-        webhook_volume_rows = []
-        pricing_volume_rows = []
-        if waba_ids:
-            by_category_country_rows = (
-                await session.execute(
-                    select(
-                        PricingDaily.pricing_category, PricingDaily.country,
-                        func.sum(PricingDaily.volume), func.sum(PricingDaily.cost),
-                    )
-                    .where(
-                        PricingDaily.waba_account_id.in_(waba_ids), PricingDaily.tenant_id == tenant_id,
-                        PricingDaily.date >= since.date(),
-                    )
-                    .group_by(PricingDaily.pricing_category, PricingDaily.country)
-                    .order_by(func.sum(PricingDaily.cost).desc())
-                )
-            ).all()
-            by_phone_rows = (
-                await session.execute(
-                    select(PricingDaily.phone_number, func.sum(PricingDaily.volume), func.sum(PricingDaily.cost))
-                    .where(
-                        PricingDaily.waba_account_id.in_(waba_ids), PricingDaily.tenant_id == tenant_id,
-                        PricingDaily.date >= since.date(),
-                    )
-                    .group_by(PricingDaily.phone_number)
-                    .order_by(func.sum(PricingDaily.cost).desc())
-                )
-            ).all()
-            # Diferencia de VOLUMEN (nunca de dólares -- el webhook no trae
-            # dólares): cuántos eventos facturables vio el webhook por
-            # categoría vs. el `volume` que reportó pricing_analytics para
-            # esa misma categoría/rango. Sirve para detectar desajustes
-            # pronto, no para reemplazar el costo real.
-            webhook_volume_rows = (
-                await session.execute(
-                    select(MessageCost.pricing_category, func.count(MessageCost.id))
-                    .where(
-                        MessageCost.tenant_id == tenant_id, MessageCost.billable.is_(True),
-                        MessageCost.event_ts >= since,
-                    )
-                    .group_by(MessageCost.pricing_category)
-                )
-            ).all()
-            pricing_volume_rows = (
-                await session.execute(
-                    select(PricingDaily.pricing_category, func.sum(PricingDaily.volume))
-                    .where(
-                        PricingDaily.waba_account_id.in_(waba_ids), PricingDaily.tenant_id == tenant_id,
-                        PricingDaily.date >= since.date(),
-                    )
-                    .group_by(PricingDaily.pricing_category)
-                )
-            ).all()
-
-    webhook_by_cat = {cat: count for cat, count in webhook_volume_rows}
-    pricing_by_cat = {cat: int(vol or 0) for cat, vol in pricing_volume_rows}
-    all_cats = set(webhook_by_cat) | set(pricing_by_cat)
-    discrepancy = [
-        {
-            "category": cat or "(sin categoría)",
-            "webhook_count": webhook_by_cat.get(cat, 0),
-            "pricing_volume": pricing_by_cat.get(cat, 0),
-            "diff": webhook_by_cat.get(cat, 0) - pricing_by_cat.get(cat, 0),
-        }
-        for cat in sorted(all_cats, key=lambda c: c or "")
-    ]
-
-    return {
-        "meta_wabas": wabas,
-        "meta_by_category_country": [
-            {"category": cat or "(sin categoría)", "country": country or "(sin país)", "volume": int(vol or 0), "cost": float(cost or 0)}
-            for cat, country, vol, cost in by_category_country_rows
-        ],
-        "meta_by_phone": [
-            {"phone_number": phone or "(sin número)", "volume": int(vol or 0), "cost": float(cost or 0)}
-            for phone, vol, cost in by_phone_rows
-        ],
-        "meta_discrepancy": discrepancy,
-        "meta_service_allowance_hypothesis_enabled": get_settings().meta_service_message_allowance_hypothesis_enabled,
-    }
+    """Delegación a `meta_costs_service.meta_costs_context` (fuente única)."""
+    return await meta_costs_context(tenant_id, since)
 
 
 @router.post("/costos/meta/sync")
 async def costs_meta_sync(request: Request):
-    """Sync manual de `pricing_analytics` para las WABAs de este tenant --
-    el mismo trabajo que hace el cron diario (`core.meta_pricing_sync`),
-    disparado a demanda."""
-    from core.gateway import meta_token_store
-    from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_onboarding import TOKEN_KIND
-    from core.gateway.meta_pricing_analytics import sync_pricing_daily
-    from core.tasks.meta_pricing_sync import _SYNC_WINDOW_DAYS
-
+    """Sync manual de `pricing_analytics` (delegado al servicio compartido)."""
     if await current_admin(request) is None:
         return _login_redirect()
 
-    tid = get_current_tenant_id()
-    url = "/admin/costos"
-    now = datetime.now(UTC)
-    start_unix = int((now - timedelta(days=_SYNC_WINDOW_DAYS)).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-    end_unix = int(now.timestamp())
-
-    async with get_session() as session:
-        rows = (
-            await session.execute(
-                select(WabaAccount, MetaConnection)
-                .join(MetaConnection, MetaConnection.id == WabaAccount.connection_id)
-                .where(WabaAccount.tenant_id == tid, MetaConnection.status == "connected")
-            )
-        ).all()
-
-    errors = []
-    for waba, connection in rows:
-        token = await meta_token_store.get_token(
-            connection.id, TOKEN_KIND, connection.business_id or str(connection.id), tenant_id=tid
-        )
-        app_secret = await meta_token_store.get_token(connection.id, "app_access", connection.meta_app_id, tenant_id=tid)
-        if not token or not app_secret:
-            continue
-        try:
-            await sync_pricing_daily(
-                waba.waba_id, waba.id, tid, start_unix, end_unix, token, app_secret,
-                connection.graph_api_version, connection.id,
-            )
-        except GraphError as exc:
-            errors.append(exc.message[:100])
-
+    errors = await sync_meta_pricing(get_current_tenant_id())
     if errors:
-        return RedirectResponse(f"{url}?flash={'; '.join(errors)[:200]}&flash_type=danger", status_code=303)
-    return RedirectResponse(f"{url}?flash=Costos de Meta sincronizados", status_code=303)
+        return RedirectResponse(
+            f"/admin/costos?flash={'; '.join(errors)[:200]}&flash_type=danger", status_code=303
+        )
+    return RedirectResponse("/admin/costos?flash=Costos de Meta sincronizados", status_code=303)
 
 
 @router.get("/costos/meta/creditos", response_class=HTMLResponse)
@@ -4033,12 +3452,7 @@ async def costs_meta_creditos_page(request: Request):
         return _login_redirect()
 
     tid = get_current_tenant_id()
-    async with get_session() as session:
-        connections = (
-            await session.execute(
-                select(MetaConnection).where(MetaConnection.tenant_id == tid, MetaConnection.business_id.is_not(None))
-            )
-        ).scalars().all()
+    connections = await list_credit_connections(tid)
 
     ctx.update(connections=connections)
     return _render("costs_meta_creditos.html", ctx)
@@ -4049,42 +3463,13 @@ async def costs_meta_creditos_verificar(request: Request, connection_id: str):
     """Solo lectura (`GET /{business_id}/extendedcredits`) -- Meta no
     soporta crear/actualizar/borrar líneas de crédito. No se le atribuye
     a esto ningún significado de "método de pago configurado: sí/no"."""
-    from core.gateway import meta_token_store
-    from core.gateway.meta_business_credits import get_extended_credits
-    from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_onboarding import TOKEN_KIND
-
     ctx = await _base_context(request, "costs")
     if ctx is None:
         return _login_redirect()
 
     tid = get_current_tenant_id()
-    async with get_session() as session:
-        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
-        connections = (
-            await session.execute(
-                select(MetaConnection).where(MetaConnection.tenant_id == tid, MetaConnection.business_id.is_not(None))
-            )
-        ).scalars().all()
-
-    credits_error = None
-    credits = []
-    if connection is None or not connection.business_id:
-        credits_error = "Esta conexión no tiene business_id configurado"
-    else:
-        token = await meta_token_store.get_token(
-            connection.id, TOKEN_KIND, connection.business_id, tenant_id=tid
-        )
-        app_secret = await meta_token_store.get_token(connection.id, "app_access", connection.meta_app_id, tenant_id=tid)
-        if not token or not app_secret:
-            credits_error = "No hay token disponible para esta conexión"
-        else:
-            try:
-                credits = await get_extended_credits(
-                    connection.business_id, token, app_secret, connection.graph_api_version, connection.id
-                )
-            except GraphError as exc:
-                credits_error = exc.message
+    connections = await list_credit_connections(tid)
+    credits, credits_error = await verify_credits(tid, connection_id)
 
     ctx.update(connections=connections, credits=credits, credits_error=credits_error, checked_connection_id=connection_id)
     return _render("costs_meta_creditos.html", ctx)
@@ -4269,14 +3654,13 @@ async def settings_memory_save(
     """Memoria del agente (ADR-0050): turnos de contexto y recall RAG."""
     if await current_admin(request) is None:
         return _login_redirect()
-    current = await load_active_spec()
-    data = current.model_dump(mode="json")
-    data["memory"]["shortTermTurns"] = max(1, min(200, memory_short_term_turns))
-    if rag_top_k and rag_top_k > 0:
-        data["memory"]["rag"] = {"topK": max(1, min(20, rag_top_k)), "minScore": max(0.0, min(1.0, rag_min_score))}
-    else:
-        data["memory"]["rag"] = None
-    return await _save_spec_from_form(request, data, "memoria")
+    await save_memory(
+        get_current_tenant_id(),
+        short_term_turns=memory_short_term_turns,
+        rag_top_k=rag_top_k,
+        rag_min_score=rag_min_score,
+    )
+    return RedirectResponse("/admin/configuracion?tab=memoria&flash=memoria guardada", status_code=303)
 
 
 @router.post("/configuracion/habilidades")
@@ -4407,19 +3791,9 @@ async def _save_spec_from_form(request: Request, data: dict, tab: str) -> Redire
     )
 
 
-async def _save_spec_if_changed(current: AgentSpec, data: dict) -> int | None:
-    """Guarda una versión nueva del spec SOLO si `data` difiere de `current`.
-
-    Evita crear una versión en cada guardado de la tab Identidad cuando lo único
-    que cambió fue AppSettings (nombre, tono, debounce, etc.).
-    """
-    try:
-        new_spec = AgentSpec.model_validate(data)
-    except Exception:
-        return None
-    if new_spec.model_dump(mode="json") == current.model_dump(mode="json"):
-        return None
-    return await _save_spec_version(new_spec)
+async def _save_spec_if_changed(current: AgentSpec, data: dict) -> str | None:
+    """Delegación a `core.agents.spec.save_spec_if_changed` (fuente única)."""
+    return await save_spec_if_changed(current, data)
 
 
 @router.post("/configuracion/asistente")
@@ -4564,22 +3938,12 @@ async def settings_llm_save(
 ):
     if await current_admin(request) is None:
         return _login_redirect()
-    async with get_session() as session:
-        app_settings = (
-            await session.execute(
-                select(AppSettings).where(
-                    AppSettings.tenant_id == get_current_tenant_id(),
-                    AppSettings.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-        if app_settings is None:
-            app_settings = AppSettings(tenant_id=get_current_tenant_id())
-            session.add(app_settings)
-        app_settings.llm_provider = llm_provider or None
-        app_settings.llm_model = llm_model or None
-        if llm_api_key:
-            app_settings.llm_api_key_encrypted = get_secret_box().encrypt(llm_api_key)
+    await save_llm(
+        get_current_tenant_id(),
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+        llm_api_key=llm_api_key,
+    )
     return RedirectResponse("/admin/configuracion?flash=LLM actualizado", status_code=303)
 
 

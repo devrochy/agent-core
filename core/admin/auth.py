@@ -3,6 +3,8 @@
 Decisiones (ADR-025 de agent-sale):
 - Sesión en BD (no JWT): revocación inmediata — cada request valida admins.active.
 - Cookie httponly + samesite=lax. En producción agregar secure=True (HTTPS).
+- La misma sesión sirve por `Authorization: Bearer` para clientes no-navegador
+  (API `/api/v1`, apps): ADR-0077. Sigue siendo revocable al desactivar el admin.
 """
 
 from __future__ import annotations
@@ -64,11 +66,23 @@ async def logout(token: str) -> None:
             await session.delete(stored)
 
 
-async def current_admin(request: Request) -> Admin | None:
-    """Resuelve el admin de la cookie. Valida expiración Y admins.active (revocación inmediata)."""
-    token = request.cookies.get(SESSION_COOKIE)
-    if not token:
+def bearer_token(request: Request) -> str | None:
+    """Token de `Authorization: Bearer <token>`, o None. No valida la sesión."""
+    header = request.headers.get("authorization")
+    if not header:
         return None
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return token.strip()
+
+
+async def admin_from_token(token: str) -> Admin | None:
+    """Resuelve el admin dueño de una sesión. Valida expiración Y admins.active.
+
+    Misma lógica que la cookie: la revocación es inmediata (borrar/desactivar la
+    sesión o el admin invalida el token en el siguiente request).
+    """
     async with get_session() as session:
         stored = await session.get(AdminSession, token)
         if stored is None or stored.expires_at < datetime.now(UTC):
@@ -77,3 +91,11 @@ async def current_admin(request: Request) -> Admin | None:
         if admin is None or not admin.active:
             return None
         return admin
+
+
+async def current_admin(request: Request) -> Admin | None:
+    """Resuelve el admin desde la cookie de sesión o, si falta, un Bearer."""
+    token = request.cookies.get(SESSION_COOKIE) or bearer_token(request)
+    if not token:
+        return None
+    return await admin_from_token(token)

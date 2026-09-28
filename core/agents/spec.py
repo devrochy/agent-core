@@ -12,6 +12,7 @@ from typing import Any
 
 from agentcore_contracts import AgentSpec
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from core.db.models import AgentSpecRecord
 from core.db.session import get_session
@@ -288,3 +289,85 @@ async def activate_spec_version(
         await session.flush()
         target.is_active = True
     return target.version
+
+async def next_spec_version(tenant_id: uuid.UUID) -> str:
+    """Versión nueva: sube la patch de la más alta existente (1.0.0 → 1.0.1)."""
+    async with get_session() as session:
+        versions = (
+            await session.execute(
+                select(AgentSpecRecord.version).where(
+                    AgentSpecRecord.tenant_id == tenant_id,
+                    AgentSpecRecord.deleted_at.is_(None),
+                )
+            )
+        ).scalars().all()
+
+    nums: list[list[int]] = []
+    for v in versions:
+        parts = [int(x) for x in str(v).split(".") if x.isdigit()]
+        if parts:
+            nums.append(parts)
+    if not nums:
+        return "1.0.0"
+    base = max(nums, key=lambda p: tuple(([*p, 0, 0])[:3]))
+    base = ([*base, 0, 0])[:3]
+    base[2] += 1
+    return ".".join(str(x) for x in base)
+
+
+async def save_spec_version(
+    new_spec: AgentSpec, tenant_id: uuid.UUID | None = None
+) -> str | None:
+    """Persiste `new_spec` como nueva versión ACTIVA del tenant.
+
+    Desactiva la versión previa e inserta la nueva en la misma transacción.
+    Fuente única para el panel SSR (`_save_spec_version`) y la API `/api/v1`
+    (ADR-0076/0077). Devuelve la versión nueva, o `None` si hubo una edición
+    concurrente (los índices parciales protegen la integridad).
+    """
+    tid = tenant_id or get_current_tenant_id()
+    if tid is None:
+        return None
+    version = await next_spec_version(tid)
+    try:
+        async with get_session() as session:
+            current_row = (
+                await session.execute(
+                    select(AgentSpecRecord).where(
+                        AgentSpecRecord.tenant_id == tid,
+                        AgentSpecRecord.is_active.is_(True),
+                        AgentSpecRecord.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if current_row is not None:
+                current_row.is_active = False
+            session.add(
+                AgentSpecRecord(
+                    tenant_id=tid,
+                    version=version,
+                    is_active=True,
+                    spec=new_spec.model_dump(mode="json"),
+                )
+            )
+    except IntegrityError:
+        return None
+    return version
+
+
+async def save_spec_if_changed(
+    current: AgentSpec, data: dict[str, Any], tenant_id: uuid.UUID | None = None
+) -> str | None:
+    """Guarda una versión nueva SOLO si `data` difiere de `current`.
+
+    Evita crear una versión en cada guardado cuando lo único que cambió fue
+    `AppSettings` (nombre, tono, debounce, etc.). Fuente única para el panel SSR
+    y la API.
+    """
+    try:
+        new_spec = AgentSpec.model_validate(data)
+    except Exception:
+        return None
+    if new_spec.model_dump(mode="json") == current.model_dump(mode="json"):
+        return None
+    return await save_spec_version(new_spec, tenant_id)
