@@ -5462,6 +5462,156 @@
         }
       }
     },
+    "/api/v1/pack/cobranza/reports": {
+      "get": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Reports",
+        "operationId": "reports_api_v1_pack_cobranza_reports_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Reports"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/owner-thread": {
+      "get": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Owner Thread",
+        "operationId": "owner_thread_api_v1_pack_cobranza_owner_thread_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnerThread"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/owner-thread/messages": {
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Create Owner Message",
+        "operationId": "create_owner_message_api_v1_pack_cobranza_owner_thread_messages_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnerMessageCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/calendar/status": {
       "get": {
         "tags": [
@@ -7894,6 +8044,45 @@
         ],
         "title": "LinkRequest"
       },
+      "Liquidation": {
+        "properties": {
+          "cartera": {
+            "type": "string",
+            "title": "Cartera"
+          },
+          "fecha": {
+            "type": "string",
+            "format": "date",
+            "title": "Fecha"
+          },
+          "periodo": {
+            "type": "string",
+            "title": "Periodo"
+          },
+          "cobrado": {
+            "type": "number",
+            "title": "Cobrado"
+          },
+          "gastos": {
+            "type": "number",
+            "title": "Gastos"
+          },
+          "comision": {
+            "type": "number",
+            "title": "Comision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cartera",
+          "fecha",
+          "periodo",
+          "cobrado",
+          "gastos",
+          "comision"
+        ],
+        "title": "Liquidation"
+      },
       "LlmSettings": {
         "properties": {
           "llm_provider": {
@@ -8766,6 +8955,63 @@
         ],
         "title": "OwnerCharges"
       },
+      "OwnerMessage": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "direccion": {
+            "type": "string",
+            "title": "Direccion"
+          },
+          "tipo": {
+            "type": "string",
+            "title": "Tipo"
+          },
+          "autor": {
+            "type": "string",
+            "title": "Autor"
+          },
+          "contenido": {
+            "type": "string",
+            "title": "Contenido"
+          },
+          "fecha": {
+            "type": "string",
+            "title": "Fecha"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "direccion",
+          "tipo",
+          "autor",
+          "contenido",
+          "fecha"
+        ],
+        "title": "OwnerMessage"
+      },
+      "OwnerMessageCreate": {
+        "properties": {
+          "contenido": {
+            "type": "string",
+            "title": "Contenido"
+          },
+          "direccion": {
+            "type": "string",
+            "title": "Direccion",
+            "default": "saliente"
+          }
+        },
+        "type": "object",
+        "required": [
+          "contenido"
+        ],
+        "title": "OwnerMessageCreate"
+      },
       "OwnerPayment": {
         "properties": {
           "monto_pagado": {
@@ -8789,6 +9035,42 @@
           "monto_pagado"
         ],
         "title": "OwnerPayment"
+      },
+      "OwnerThread": {
+        "properties": {
+          "whatsapp": {
+            "type": "string",
+            "title": "Whatsapp"
+          },
+          "asunto": {
+            "type": "string",
+            "title": "Asunto"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "abierto": {
+            "type": "boolean",
+            "title": "Abierto"
+          },
+          "mensajes": {
+            "items": {
+              "$ref": "#/components/schemas/OwnerMessage"
+            },
+            "type": "array",
+            "title": "Mensajes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "whatsapp",
+          "asunto",
+          "estado",
+          "abierto",
+          "mensajes"
+        ],
+        "title": "OwnerThread"
       },
       "PackRole": {
         "properties": {
@@ -9925,6 +10207,78 @@
           "channel"
         ],
         "title": "RegisterRequest"
+      },
+      "ReportRow": {
+        "properties": {
+          "cartera": {
+            "type": "string",
+            "title": "Cartera"
+          },
+          "clientes": {
+            "type": "integer",
+            "title": "Clientes"
+          },
+          "prestamos": {
+            "type": "integer",
+            "title": "Prestamos"
+          },
+          "saldo": {
+            "type": "number",
+            "title": "Saldo"
+          },
+          "vencidas": {
+            "type": "integer",
+            "title": "Vencidas"
+          },
+          "cobrado": {
+            "type": "number",
+            "title": "Cobrado"
+          },
+          "caja": {
+            "type": "number",
+            "title": "Caja"
+          },
+          "gastos": {
+            "type": "number",
+            "title": "Gastos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cartera",
+          "clientes",
+          "prestamos",
+          "saldo",
+          "vencidas",
+          "cobrado",
+          "caja",
+          "gastos"
+        ],
+        "title": "ReportRow"
+      },
+      "Reports": {
+        "properties": {
+          "filas": {
+            "items": {
+              "$ref": "#/components/schemas/ReportRow"
+            },
+            "type": "array",
+            "title": "Filas"
+          },
+          "liquidaciones": {
+            "items": {
+              "$ref": "#/components/schemas/Liquidation"
+            },
+            "type": "array",
+            "title": "Liquidaciones"
+          }
+        },
+        "type": "object",
+        "required": [
+          "filas",
+          "liquidaciones"
+        ],
+        "title": "Reports"
       },
       "RequestCodeRequest": {
         "properties": {

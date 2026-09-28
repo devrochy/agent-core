@@ -25,15 +25,19 @@ from core.db.session import get_owned, get_session
 
 from .models import (
     AuditoriaCartera,
+    Caja,
     Cartera,
     Cliente,
     CobroPropietario,
+    ConversacionPropietario,
     Cuota,
     Device,
     Gasto,
     Gestor,
     IntentoAcceso,
     LinkPago,
+    Liquidacion,
+    MensajePropietario,
     Pago,
     Prestamo,
     Promesa,
@@ -988,4 +992,261 @@ async def register_owner_payment(
         if payload.metodo_pago:
             cobro.metodo_pago = payload.metodo_pago
         cobro.registrado_por = principal.admin.email
+    return Response(status_code=204)
+
+
+# ------------------------------------------------------------------ reportes
+class ReportRow(BaseModel):
+    cartera: str
+    clientes: int
+    prestamos: int
+    saldo: float
+    vencidas: int
+    cobrado: float
+    caja: float
+    gastos: float
+
+
+class Liquidation(BaseModel):
+    cartera: str
+    fecha: date
+    periodo: str
+    cobrado: float
+    gastos: float
+    comision: float
+
+
+class Reports(BaseModel):
+    filas: list[ReportRow]
+    liquidaciones: list[Liquidation]
+
+
+@router.get("/reports", response_model=Reports)
+async def reports(
+    principal: Annotated[Principal, Depends(require("pack_cobranza:reportes"))],
+) -> Reports:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        carteras = (
+            (
+                await session.execute(
+                    select(Cartera)
+                    .where(Cartera.tenant_id == tid, Cartera.deleted_at.is_(None))
+                    .order_by(Cartera.nombre)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        filas: list[ReportRow] = []
+        for c in carteras:
+            n_clientes = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(Cliente)
+                    .where(
+                        Cliente.tenant_id == tid,
+                        Cliente.cartera_id == c.id,
+                        Cliente.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one()
+            prestamos = (
+                (
+                    await session.execute(
+                        select(Prestamo).where(
+                            Prestamo.tenant_id == tid,
+                            Prestamo.cartera_id == c.id,
+                            Prestamo.deleted_at.is_(None),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            saldo = sum((p.saldo for p in prestamos), Decimal(0))
+            vencidas = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(Cuota)
+                    .join(Prestamo, Cuota.prestamo_id == Prestamo.id)
+                    .where(
+                        Cuota.tenant_id == tid,
+                        Prestamo.cartera_id == c.id,
+                        Cuota.estatus != "pagada",
+                        Cuota.fecha_vencimiento < date.today(),
+                        Cuota.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one()
+            cobrado = (
+                await session.execute(
+                    select(func.coalesce(func.sum(Pago.valor), 0)).where(
+                        Pago.tenant_id == tid,
+                        Pago.cliente_id.in_([p.cliente_id for p in prestamos])
+                        if prestamos
+                        else False,
+                        Pago.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one()
+            gastos = (
+                await session.execute(
+                    select(func.coalesce(func.sum(Gasto.valor), 0)).where(
+                        Gasto.tenant_id == tid,
+                        Gasto.cartera_id == c.id,
+                        Gasto.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one()
+            caja = (
+                await session.execute(
+                    select(Caja).where(Caja.tenant_id == tid, Caja.cartera_id == c.id)
+                )
+            ).scalar_one_or_none()
+            filas.append(
+                ReportRow(
+                    cartera=c.nombre,
+                    clientes=int(n_clientes),
+                    prestamos=len(prestamos),
+                    saldo=float(saldo),
+                    vencidas=int(vencidas),
+                    cobrado=float(cobrado),
+                    caja=float(caja.saldo_actual) if caja is not None else 0.0,
+                    gastos=float(gastos),
+                )
+            )
+        liquidaciones = (
+            (
+                await session.execute(
+                    select(Liquidacion)
+                    .where(Liquidacion.tenant_id == tid, Liquidacion.deleted_at.is_(None))
+                    .order_by(Liquidacion.fecha.desc())
+                    .limit(12)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    nombres = {c.id: c.nombre for c in carteras}
+    return Reports(
+        filas=filas,
+        liquidaciones=[
+            Liquidation(
+                cartera=nombres.get(liq.cartera_id, "—"),
+                fecha=liq.fecha,
+                periodo=liq.periodo,
+                cobrado=float(liq.total_cobrado or 0),
+                gastos=float(liq.total_gastos or 0),
+                comision=float(liq.comision_valor or 0),
+            )
+            for liq in liquidaciones
+        ],
+    )
+
+
+# ------------------------------------------------- hilo con el propietario
+class OwnerMessage(BaseModel):
+    id: uuid.UUID
+    direccion: str
+    tipo: str
+    autor: str
+    contenido: str
+    fecha: str
+
+
+class OwnerThread(BaseModel):
+    whatsapp: str
+    asunto: str
+    estado: str
+    abierto: bool
+    mensajes: list[OwnerMessage]
+
+
+@router.get("/owner-thread", response_model=OwnerThread)
+async def owner_thread(
+    principal: Annotated[Principal, Depends(require("pack_cobranza:propietario"))],
+) -> OwnerThread:
+    from .admin import _propietario_whatsapp
+
+    tid = principal.tenant_id
+    async with get_session() as session:
+        conv = (
+            await session.execute(
+                select(ConversacionPropietario).where(
+                    ConversacionPropietario.tenant_id == tid,
+                    ConversacionPropietario.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        mensajes = (
+            []
+            if conv is None
+            else (
+                (
+                    await session.execute(
+                        select(MensajePropietario)
+                        .where(
+                            MensajePropietario.tenant_id == tid,
+                            MensajePropietario.conversacion_id == conv.id,
+                            MensajePropietario.deleted_at.is_(None),
+                        )
+                        .order_by(MensajePropietario.created_at)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        )
+    return OwnerThread(
+        whatsapp=await _propietario_whatsapp(),
+        asunto=conv.asunto if conv else "Comunicación con el propietario",
+        estado=conv.estado if conv else "abierta",
+        abierto=conv is not None,
+        mensajes=[
+            OwnerMessage(
+                id=m.id,
+                direccion=m.direccion,
+                tipo=m.tipo,
+                autor=m.autor_rol or "",
+                contenido=m.contenido,
+                fecha=m.created_at.strftime("%Y-%m-%d %H:%M") if m.created_at else "",
+            )
+            for m in mensajes
+        ],
+    )
+
+
+class OwnerMessageCreate(BaseModel):
+    contenido: str
+    direccion: str = "saliente"
+
+
+@router.post("/owner-thread/messages", status_code=204)
+async def create_owner_message(
+    payload: OwnerMessageCreate,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:propietario", write=True))],
+) -> Response:
+    from .admin import registrar_mensaje_propietario
+
+    contenido = payload.contenido.strip()
+    if not contenido:
+        raise ApiError.bad_request("Escribe un mensaje.", "missing_content")
+    direccion = payload.direccion if payload.direccion in ("saliente", "entrante") else "saliente"
+    async with get_session() as session:
+        mensaje = await registrar_mensaje_propietario(
+            session,
+            principal.tenant_id,
+            contenido,
+            direccion=direccion,
+            autor_rol="admin" if direccion == "saliente" else "propietario",
+        )
+        _audit(
+            session,
+            principal.tenant_id,
+            "mensaje_propietario",
+            mensaje.id,
+            "crear",
+            despues={"direccion": direccion},
+        )
     return Response(status_code=204)
