@@ -83,3 +83,7 @@ Se crean con `/adr`.
 | 0073 | Panel y URLs de la app bajo un prefijo de ruta del proxy | aceptado |
 | 0074 | Canal WhatsApp Web no oficial (`waweb`) vía Neonize, coexistente con Meta | propuesto |
 | 0075 | Playground "Probar asistente": conversación de prueba sin canal | aceptado |
+| 0076 | Panel API-first y frontend separado (reemplaza la decisión operativa de `docs/ADR/ADR-007`) | aceptado |
+| 0077 | API unificada `/api/v1` y realms de autenticación (modifica 0057 y 0065) | aceptado |
+| 0078 | El wizard de WhatsApp (Embedded Signup/BYOK) permanece en el panel clásico | aceptado |
+| 0079 | API admin de packs bajo `/api/v1/pack/<id>` (punto de extensión) | aceptado |

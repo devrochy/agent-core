@@ -100,6 +100,9 @@ ignore = [
 "core/mcp/types.py" = ["RUF012"]
 "packages/pack-calendar/pack_calendar/module.py" = ["RUF012"]
 "packages/pack-calendar/pack_calendar/skills.py" = ["RUF012"]
+# Paginación genérica: usa `Generic[T]` (no PEP 695) porque mypy 1.11 todavía no
+# soporta la sintaxis nueva; ruff la exigiría (UP046/UP047).
+"core/api/pagination.py" = ["UP046", "UP047"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -1,0 +1,306 @@
+"""Colaboradores (lectura): `GET /api/v1/admin/collaborators`.
+
+Cuentas admin con sus permisos por sección y sus vínculos a tenants. Un `master`
+ve todas las cuentas; un `owner` solo las exclusivas de su tenant (mismos datos
+que la vista SSR `/admin/colaboradores`). Requiere la sección `collaborators`.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Response
+from pydantic import BaseModel
+from sqlalchemy import select
+
+from core.admin.collaborators_service import (
+    audit,
+    create_collaborator,
+    grant_permission,
+    link_tenant,
+    pack_collaborator_roles,
+    reset_password,
+    revoke_permission,
+    toggle_active,
+)
+from core.api.deps import Principal, require
+from core.api.errors import ApiError
+from core.db.models import Admin, AdminPermission, Tenant, TenantUser
+from core.db.session import get_session
+
+router = APIRouter(prefix="/admin/collaborators", tags=["admin · colaboradores"])
+
+
+class PermissionItem(BaseModel):
+    section: str
+    access: str
+    scope: str
+
+
+class TenantLink(BaseModel):
+    role: str
+    slug: str
+    name: str
+
+
+class CollaboratorItem(BaseModel):
+    id: uuid.UUID
+    email: str
+    username: str | None
+    role: str
+    active: bool
+    is_self: bool
+    is_platform_master: bool
+    permissions: list[PermissionItem]
+    links: list[TenantLink]
+
+
+class PackRole(BaseModel):
+    value: str
+    label: str
+
+
+@router.get("/pack-roles", response_model=list[PackRole])
+async def list_pack_roles(
+    principal: Annotated[Principal, Depends(require("collaborators"))],
+) -> list[PackRole]:
+    """Roles de colaborador que aportan los packs habilitados (ADR-0066)."""
+    return [PackRole(**r) for r in await pack_collaborator_roles()]
+
+
+@router.get("", response_model=list[CollaboratorItem])
+async def list_collaborators(
+    principal: Annotated[Principal, Depends(require("collaborators"))],
+) -> list[CollaboratorItem]:
+    me = principal.admin
+    is_master = me.role == "master"
+    tid = principal.tenant_id
+
+    async with get_session() as session:
+        if is_master:
+            admins = (await session.execute(select(Admin).order_by(Admin.email))).scalars().all()
+        else:
+            admins = list(
+                (
+                    await session.execute(
+                        select(Admin)
+                        .join(TenantUser, TenantUser.admin_id == Admin.id)
+                        .where(TenantUser.tenant_id == tid)
+                        .order_by(Admin.email)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+        admin_ids = [a.id for a in admins]
+        perms = []
+        links = []
+        if admin_ids:
+            perm_where = [AdminPermission.admin_id.in_(admin_ids)]
+            link_where = [TenantUser.admin_id.in_(admin_ids)]
+            if not is_master:
+                # Un owner solo ve el scope de SU tenant.
+                perm_where.append(AdminPermission.tenant_id == tid)
+                link_where.append(TenantUser.tenant_id == tid)
+            perms = (
+                await session.execute(
+                    select(
+                        AdminPermission.admin_id,
+                        AdminPermission.section,
+                        AdminPermission.access,
+                        Tenant.slug,
+                    )
+                    .join(Tenant, Tenant.id == AdminPermission.tenant_id, isouter=True)
+                    .where(*perm_where)
+                )
+            ).all()
+            links = (
+                await session.execute(
+                    select(TenantUser.admin_id, TenantUser.role, Tenant.slug, Tenant.name)
+                    .join(Tenant, Tenant.id == TenantUser.tenant_id)
+                    .where(*link_where)
+                    .order_by(Tenant.name)
+                )
+            ).all()
+
+    perms_by: dict[uuid.UUID, list[PermissionItem]] = {}
+    for admin_id, section, access, slug in perms:
+        perms_by.setdefault(admin_id, []).append(
+            PermissionItem(section=section, access=access, scope=slug or "*")
+        )
+    links_by: dict[uuid.UUID, list[TenantLink]] = {}
+    for admin_id, role, slug, name in links:
+        links_by.setdefault(admin_id, []).append(TenantLink(role=role, slug=slug, name=name))
+
+    return [
+        CollaboratorItem(
+            id=a.id,
+            email=a.email,
+            username=a.username,
+            role=a.role,
+            active=a.active,
+            is_self=a.id == me.id,
+            is_platform_master=a.role == "master",
+            permissions=sorted(
+                perms_by.get(a.id, []), key=lambda p: (p.section, p.scope)
+            ),
+            links=links_by.get(a.id, []),
+        )
+        for a in admins
+    ]
+
+
+# ------------------------------------------------------------------ acciones
+class CollaboratorCreate(BaseModel):
+    email: str
+    password: str
+    role: str = "colaborador"
+    username: str = ""
+    tenant: str = ""
+    pack_roles: list[str] = []
+
+
+class PasswordReset(BaseModel):
+    password: str
+
+
+class GrantRequest(BaseModel):
+    section: str
+    access: str = "read"
+    tenant: str = ""
+
+
+class RevokeRequest(BaseModel):
+    section: str
+    tenant: str = ""
+
+
+class LinkRequest(BaseModel):
+    tenant: str
+    role: str = "colaborador"
+
+
+def _fail(error: str | None) -> None:
+    if error is not None:
+        raise ApiError.bad_request(error, "collaborator_error")
+
+
+@router.post("", status_code=204)
+async def create_collaborator_endpoint(
+    payload: CollaboratorCreate,
+    principal: Annotated[Principal, Depends(require("collaborators", write=True))],
+) -> Response:
+    error = await create_collaborator(
+        actor=principal.admin,
+        email=payload.email,
+        password=payload.password,
+        role=payload.role,
+        username=payload.username,
+        tenant_slug=payload.tenant,
+        pack_roles=payload.pack_roles,
+    )
+    _fail(error)
+    audit(
+        "create_collaborator",
+        principal.admin.email,
+        payload.email,
+        role=payload.role,
+        tenant=payload.tenant or "*",
+    )
+    return Response(status_code=204)
+
+
+@router.post("/{admin_id}/password", status_code=204)
+async def reset_collaborator_password(
+    admin_id: uuid.UUID,
+    payload: PasswordReset,
+    principal: Annotated[Principal, Depends(require("collaborators", write=True))],
+) -> Response:
+    error = await reset_password(
+        actor=principal.admin, admin_id=admin_id, password=payload.password
+    )
+    _fail(error)
+    audit("reset_password", principal.admin.email, str(admin_id))
+    return Response(status_code=204)
+
+
+@router.post("/{admin_id}/grant", status_code=204)
+async def grant_collaborator_permission(
+    admin_id: uuid.UUID,
+    payload: GrantRequest,
+    principal: Annotated[Principal, Depends(require("collaborators", write=True))],
+) -> Response:
+    error = await grant_permission(
+        actor=principal.admin,
+        admin_id=admin_id,
+        section=payload.section,
+        access=payload.access,
+        tenant_slug=payload.tenant,
+    )
+    _fail(error)
+    audit(
+        "grant",
+        principal.admin.email,
+        str(admin_id),
+        section=payload.section,
+        access=payload.access,
+        scope=payload.tenant or "*",
+    )
+    return Response(status_code=204)
+
+
+@router.post("/{admin_id}/revoke", status_code=204)
+async def revoke_collaborator_permission(
+    admin_id: uuid.UUID,
+    payload: RevokeRequest,
+    principal: Annotated[Principal, Depends(require("collaborators", write=True))],
+) -> Response:
+    error = await revoke_permission(
+        actor=principal.admin,
+        admin_id=admin_id,
+        section=payload.section,
+        tenant_slug=payload.tenant,
+    )
+    _fail(error)
+    audit(
+        "revoke",
+        principal.admin.email,
+        str(admin_id),
+        section=payload.section,
+        scope=payload.tenant or "*",
+    )
+    return Response(status_code=204)
+
+
+@router.post("/{admin_id}/link", status_code=204)
+async def link_collaborator_tenant(
+    admin_id: uuid.UUID,
+    payload: LinkRequest,
+    principal: Annotated[Principal, Depends(require("collaborators", write=True))],
+) -> Response:
+    error = await link_tenant(
+        actor=principal.admin,
+        admin_id=admin_id,
+        tenant_slug=payload.tenant,
+        role=payload.role,
+    )
+    _fail(error)
+    audit(
+        "link", principal.admin.email, str(admin_id), tenant=payload.tenant, role=payload.role
+    )
+    return Response(status_code=204)
+
+
+@router.post("/{admin_id}/toggle", status_code=204)
+async def toggle_collaborator_active(
+    admin_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("collaborators", write=True))],
+) -> Response:
+    error = await toggle_active(
+        actor=principal.admin, admin_id=admin_id, current_tenant_id=principal.tenant_id
+    )
+    _fail(error)
+    audit("toggle", principal.admin.email, str(admin_id))
+    return Response(status_code=204)

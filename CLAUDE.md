@@ -40,9 +40,10 @@ core/                  monolito modular (todo el runtime en un proceso)
   onboarding.py        alta de tenants (usado por CLI `tenant create` y el panel)
   memory/              working (Redis) + recall (pgvector)
   billing/             planes, cuotas, enforcement, cobro Wompi (ADR-0045/0046)
-  admin/               panel SSR + auth propia + data-table + editor spec + wizard tenants
-                       + RBAC por permisos de sección y Colaboradores por tenant (ADR-0047/0048)
-                       + Configuración por pestañas (ADR-0049)
+  admin/               panel SSR (en retiro progresivo, ADR-0076) + auth propia + data-table
+                       + editor spec + wizard tenants + RBAC por permisos de sección y
+                       Colaboradores por tenant (ADR-0047/0048) + Configuración por pestañas (ADR-0049)
+  api/                 API JSON /api/v1 (ADR-0076/0077): realms admin+gestor, OpenAPI → tipos TS
   db/                  tenant_scope→set_config, RLS, migraciones
   tasks/               celery (crons), colas
 packages/contracts     tipos compartidos (pydantic), congelados, sin dependencias
@@ -56,6 +57,10 @@ Los stubs de `apps/*` y de los packages `core-crm`, `core-runtime`, `channel-wha
 son residuos del plan; no hay que escribir código nuevo ahí: el código nuevo vive en
 `core/` (runtime) o en `packages/pack-*` (verticales).
 
+El panel deja de ser SSR (ADR-0076): la UI vive en `panel-web/` (Next.js + shadcn/ui)
+y consume `/api/v1` (ADR-0077) con tipos TS generados del OpenAPI. Las plantillas de
+`core/admin/templates/` se retiran por secciones, no de golpe.
+
 Regla de separación: el repo del framework NO contiene datos ni documentación de
 clientes. Todo lo específico de un tenant vive en `tenants/<slug>/` (gitignored,
 `TENANTS_ROOT`). La alta de un cliente es configuración (`agent-core tenant create`
@@ -66,6 +71,9 @@ o `/admin/tenants/nuevo`), nunca código por cliente.
 - Toda decisión de arquitectura se registra en `docs/adr/` con `/adr`.
 - Todo cambio de esquema pasa por `/db-migration`.
 - Toda tool nueva se crea con `/new-tool`.
+- Toda ruta de la API `/api/v1` se refleja en `docs/openapi.json` con
+  `python scripts/export_openapi.py` (commiteado: el panel y la app generan tipos TS
+  desde ahí, ADR-0077).
 - Antes de cerrar cualquier tanda de cambios: correr el subagente `auditor-multitenant`.
 - Un cambio no está completo si `ruff check` && `pytest` no pasan.
 
