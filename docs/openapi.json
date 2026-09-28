@@ -6022,6 +6022,262 @@
         }
       }
     },
+    "/api/v1/pack/cobranza/clients": {
+      "get": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "List Clients",
+        "operationId": "list_clients_api_v1_pack_cobranza_clients_get",
+        "parameters": [
+          {
+            "name": "cartera_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cartera Id"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClientRow"
+                  },
+                  "title": "Response List Clients Api V1 Pack Cobranza Clients Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Create Client",
+        "operationId": "create_client_api_v1_pack_cobranza_clients_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientRow"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/clients/{client_id}": {
+      "put": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Update Client",
+        "operationId": "update_client_api_v1_pack_cobranza_clients__client_id__put",
+        "parameters": [
+          {
+            "name": "client_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Client Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientRow"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Delete Client",
+        "operationId": "delete_client_api_v1_pack_cobranza_clients__client_id__delete",
+        "parameters": [
+          {
+            "name": "client_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Client Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/calendar/status": {
       "get": {
         "tags": [
@@ -6957,6 +7213,125 @@
           "name"
         ],
         "title": "CategorySave"
+      },
+      "ClientIn": {
+        "properties": {
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "apellido": {
+            "type": "string",
+            "title": "Apellido",
+            "default": ""
+          },
+          "telefono": {
+            "type": "string",
+            "title": "Telefono",
+            "default": ""
+          },
+          "tipo_documento": {
+            "type": "string",
+            "title": "Tipo Documento",
+            "default": ""
+          },
+          "numero_documento": {
+            "type": "string",
+            "title": "Numero Documento",
+            "default": ""
+          },
+          "negocio": {
+            "type": "string",
+            "title": "Negocio",
+            "default": ""
+          },
+          "cartera_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cartera Id"
+          },
+          "tope_maximo_deuda": {
+            "type": "number",
+            "title": "Tope Maximo Deuda",
+            "default": 0.0
+          },
+          "color_riesgo": {
+            "type": "string",
+            "title": "Color Riesgo",
+            "default": "blanco"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nombre",
+          "cartera_id"
+        ],
+        "title": "ClientIn"
+      },
+      "ClientRow": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "apellido": {
+            "type": "string",
+            "title": "Apellido"
+          },
+          "telefono": {
+            "type": "string",
+            "title": "Telefono"
+          },
+          "tipo_documento": {
+            "type": "string",
+            "title": "Tipo Documento"
+          },
+          "numero_documento": {
+            "type": "string",
+            "title": "Numero Documento"
+          },
+          "negocio": {
+            "type": "string",
+            "title": "Negocio"
+          },
+          "cartera": {
+            "type": "string",
+            "title": "Cartera"
+          },
+          "cartera_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cartera Id"
+          },
+          "tope_maximo_deuda": {
+            "type": "number",
+            "title": "Tope Maximo Deuda"
+          },
+          "color_riesgo": {
+            "type": "string",
+            "title": "Color Riesgo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "nombre",
+          "apellido",
+          "telefono",
+          "tipo_documento",
+          "numero_documento",
+          "negocio",
+          "cartera",
+          "cartera_id",
+          "tope_maximo_deuda",
+          "color_riesgo"
+        ],
+        "title": "ClientRow"
       },
       "CollaboratorCreate": {
         "properties": {

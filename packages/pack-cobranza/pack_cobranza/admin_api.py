@@ -16,7 +16,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from core.admin.auth import hash_password
 from core.api.deps import Principal, require
@@ -1641,4 +1641,168 @@ async def delete_collector(
             raise ApiError.not_found("Gestor no encontrado.")
         gestor.deleted_at = datetime.now(UTC)
         _audit(session, tid, "gestor", gestor.id, "eliminar", despues={"correo": gestor.correo})
+    return Response(status_code=204)
+
+
+# ------------------------------------------------------- CRUD de clientes
+RISK_COLORS = ("blanco", "azul", "rojo")
+
+
+class ClientIn(BaseModel):
+    nombre: str
+    apellido: str = ""
+    telefono: str = ""
+    tipo_documento: str = ""
+    numero_documento: str = ""
+    negocio: str = ""
+    cartera_id: uuid.UUID
+    tope_maximo_deuda: float = 0.0
+    color_riesgo: str = "blanco"
+
+
+class ClientRow(BaseModel):
+    id: uuid.UUID
+    nombre: str
+    apellido: str
+    telefono: str
+    tipo_documento: str
+    numero_documento: str
+    negocio: str
+    cartera: str
+    cartera_id: uuid.UUID
+    tope_maximo_deuda: float
+    color_riesgo: str
+
+
+def _as_client(row: Cliente, cartera: str) -> ClientRow:
+    return ClientRow(
+        id=row.id,
+        nombre=row.nombre,
+        apellido=row.apellido or "",
+        telefono=row.telefono_whatsapp or "",
+        tipo_documento=row.tipo_documento or "",
+        numero_documento=row.numero_documento or "",
+        negocio=row.negocio or "",
+        cartera=cartera,
+        cartera_id=row.cartera_id,
+        tope_maximo_deuda=float(row.tope_maximo_deuda or 0),
+        color_riesgo=row.color_riesgo or "blanco",
+    )
+
+
+async def _client_values(session: Any, payload: ClientIn, *, tid: uuid.UUID) -> dict[str, Any]:
+    nombre = payload.nombre.strip()
+    if not nombre:
+        raise ApiError.bad_request("El nombre es obligatorio.", "missing_name")
+    if await _get_active(session, Cartera, payload.cartera_id, tid) is None:
+        raise ApiError.bad_request("La cartera indicada no existe.", "invalid_portfolio")
+    if payload.color_riesgo not in RISK_COLORS:
+        raise ApiError.bad_request(
+            f"Color inválido: {payload.color_riesgo}. Válidos: {', '.join(RISK_COLORS)}",
+            "invalid_risk_color",
+        )
+    if payload.tope_maximo_deuda < 0:
+        raise ApiError.bad_request("El tope de deuda no puede ser negativo.", "invalid_amount")
+    return {
+        "nombre": nombre,
+        "apellido": payload.apellido.strip(),
+        "telefono_whatsapp": payload.telefono.strip(),
+        "tipo_documento": payload.tipo_documento.strip(),
+        "numero_documento": payload.numero_documento.strip(),
+        "negocio": payload.negocio.strip(),
+        "cartera_id": payload.cartera_id,
+        "tope_maximo_deuda": Decimal(str(payload.tope_maximo_deuda)),
+        "color_riesgo": payload.color_riesgo,
+    }
+
+
+async def _cartera_nombre(session: Any, cartera_id: uuid.UUID) -> str:
+    cartera = (
+        await session.execute(select(Cartera).where(Cartera.id == cartera_id))
+    ).scalar_one_or_none()
+    return cartera.nombre if cartera else "—"
+
+
+@router.get("/clients", response_model=list[ClientRow])
+async def list_clients(
+    principal: Annotated[Principal, Depends(require("pack_cobranza:clientes"))],
+    cartera_id: uuid.UUID | None = None,
+    q: str = "",
+) -> list[ClientRow]:
+    tid = principal.tenant_id
+    query = select(Cliente).where(Cliente.tenant_id == tid, Cliente.deleted_at.is_(None))
+    if cartera_id is not None:
+        query = query.where(Cliente.cartera_id == cartera_id)
+    texto = q.strip()
+    if texto:
+        like = f"%{texto}%"
+        query = query.where(
+            or_(
+                Cliente.nombre.ilike(like),
+                Cliente.apellido.ilike(like),
+                Cliente.numero_documento.ilike(like),
+            )
+        )
+    async with get_session() as session:
+        rows = (
+            (await session.execute(query.order_by(Cliente.nombre).limit(300))).scalars().all()
+        )
+        carteras = (
+            (
+                await session.execute(
+                    select(Cartera).where(Cartera.tenant_id == tid)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    nombres = {c.id: c.nombre for c in carteras}
+    return [_as_client(c, nombres.get(c.cartera_id, "—")) for c in rows]
+
+
+@router.post("/clients", response_model=ClientRow, status_code=201)
+async def create_client(
+    payload: ClientIn,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:clientes", write=True))],
+) -> ClientRow:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        values = await _client_values(session, payload, tid=tid)
+        cliente = Cliente(tenant_id=tid, **values)
+        session.add(cliente)
+        await session.flush()
+        _audit(session, tid, "cliente", cliente.id, "crear", despues={"nombre": values["nombre"]})
+        return _as_client(cliente, await _cartera_nombre(session, cliente.cartera_id))
+
+
+@router.put("/clients/{client_id}", response_model=ClientRow)
+async def update_client(
+    client_id: uuid.UUID,
+    payload: ClientIn,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:clientes", write=True))],
+) -> ClientRow:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cliente = await _get_active(session, Cliente, client_id, tid)
+        if cliente is None:
+            raise ApiError.not_found("Cliente no encontrado.")
+        values = await _client_values(session, payload, tid=tid)
+        for campo, valor in values.items():
+            setattr(cliente, campo, valor)
+        _audit(session, tid, "cliente", cliente.id, "editar", despues={"nombre": values["nombre"]})
+        return _as_client(cliente, await _cartera_nombre(session, cliente.cartera_id))
+
+
+@router.delete("/clients/{client_id}", status_code=204)
+async def delete_client(
+    client_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:clientes", write=True))],
+) -> Response:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cliente = await _get_active(session, Cliente, client_id, tid)
+        if cliente is None:
+            raise ApiError.not_found("Cliente no encontrado.")
+        cliente.deleted_at = datetime.now(UTC)
+        _audit(session, tid, "cliente", cliente.id, "eliminar", despues={"nombre": cliente.nombre})
     return Response(status_code=204)
