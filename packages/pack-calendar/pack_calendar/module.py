@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from core.mcp.types import BaseModule, GuardrailResult
 from core.shared.logger import get_logger
 from pack_calendar.admin import router as calendar_admin_router
+from pack_calendar.admin_api import router as calendar_admin_api_router
 from pack_calendar.config import CalendarConfig
 from pack_calendar.skills import CalendarSkill
 
@@ -165,6 +166,10 @@ class GoogleCalendarModule(BaseModule):
         {"label": "Citas", "path": "/calendar/citas", "section": "Operación", "section_key": "pack_calendar:citas"},
     ]
     admin_router = calendar_admin_router
+
+    def admin_api_routes(self) -> list[object]:
+        """API admin consumida por el panel nuevo (ADR-0079)."""
+        return [calendar_admin_api_router]
     declared_skills: list[type] = [CalendarSkill]
 
     def on_activate(self, host: MCPHost) -> None:

@@ -20,6 +20,8 @@ from fastapi.staticfiles import StaticFiles
 from core.admin.auth import SESSION_COOKIE, TENANT_COOKIE, current_admin
 from core.admin.permissions import effective_access, pack_prefixes, required_section
 from core.admin.views import router as admin_router
+from core.api import api_router
+from core.api.errors import ApiError, api_error_handler
 from core.config import get_settings
 from core.gateway.webhooks import router as webhooks_router
 from core.mcp.host import mcp_host
@@ -69,10 +71,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("shutdown")
 
 
-app = FastAPI(title="agent-core", lifespan=lifespan, docs_url=None, redoc_url=None)
+app = FastAPI(
+    title="agent-core",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    # Sin esquema en vivo: el contrato se exporta offline (scripts/export_openapi.py)
+    # y de ahí se generan los tipos TS del panel/app (ADR-0077).
+    openapi_url=None,
+)
+app.add_exception_handler(ApiError, api_error_handler)
 
 app.include_router(webhooks_router)
 app.include_router(admin_router)
+# API JSON unificada (ADR-0076/0077): se autentica sola por realms.
+app.include_router(api_router)
 
 # Estáticos del panel (table.css/table.js del motor data-table)
 _admin_static = Path(__file__).resolve().parent / "admin" / "static"
@@ -96,6 +109,14 @@ for _module in plugin_manager.list_modules():
             log.warning("extra_admin_router_fuera_de_admin", plugin=_module.id, prefix=_prefix)
             continue
         app.include_router(_extra)
+    # API admin del pack (ADR-0079): el core solo monta; el pack hereda la
+    # identidad de admin vía `core.api.deps`.
+    for _api in _module.admin_api_routes():
+        _aprefix = getattr(_api, "prefix", "")
+        if not _aprefix.startswith("/api/v1/pack/"):
+            log.warning("admin_api_router_fuera_de_api_v1_pack", plugin=_module.id, prefix=_aprefix)
+            continue
+        app.include_router(_api)
     # Rutas públicas del pack (ADR-0057): la app de campo se autentica sola.
     for _public in _module.public_routes():
         _pprefix = getattr(_public, "prefix", "")
@@ -137,6 +158,7 @@ async def tenant_context_middleware(request: Request, call_next):
             "/webhooks",
             "/healthz",
             "/api/pack",  # API pública de packs (ADR-0057): se autentica sola
+            "/api/v1",  # API unificada (ADR-0077): resuelve identidad y tenant en `deps`
             "/admin/login",
             "/admin/logout",
             "/admin/switch-tenant",

@@ -1,0 +1,597 @@
+"""API admin del pack de Comercio (ADR-0079).
+
+Montada por el core en `/api/v1/pack/commerce`. Usa las dependencias del core
+(`core.api.deps`) para heredar la identidad de admin, el `X-Tenant-Id` validado y
+el RBAC de la sección `pack_commerce`; el core no conoce el dominio.
+
+Cubre el catálogo (productos con su variante e inventario), categorías,
+promociones y pedidos, con la misma semántica que el panel SSR del pack.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Depends, Response
+from pydantic import BaseModel
+from sqlalchemy import select
+
+from core.api.deps import Principal, require
+from core.api.errors import ApiError
+from core.db.session import get_owned, get_session
+
+from .models import Category, Inventory, Order, OrderItem, Product, ProductVariant, Promotion
+
+router = APIRouter(prefix="/api/v1/pack/commerce", tags=["pack · comercio"])
+
+ORDER_STATUSES = ("abierto", "despachado", "entregado", "cancelado", "expirado")
+
+
+# ------------------------------------------------------------------ dashboard
+class CommerceKpi(BaseModel):
+    leads: int
+    products: int
+    promotions: int
+    orders: int
+
+
+class RecentOrder(BaseModel):
+    id: uuid.UUID
+    public_order_number: str
+    total: float
+    status: str
+    created_at: datetime | None = None
+
+
+class CommerceDashboard(BaseModel):
+    kpi: CommerceKpi
+    recent_orders: list[RecentOrder]
+
+
+@router.get("/dashboard", response_model=CommerceDashboard)
+async def commerce_dashboard(
+    principal: Annotated[Principal, Depends(require("pack_commerce"))],
+) -> CommerceDashboard:
+    from core.db.models import Customer
+
+    tenant_id = principal.tenant_id
+    async with get_session() as session:
+        leads = (
+            await session.execute(
+                select(Customer).where(
+                    Customer.tenant_id == tenant_id, Customer.deleted_at.is_(None)
+                )
+            )
+        ).scalars().all()
+        products = (
+            await session.execute(select(Product).where(Product.tenant_id == tenant_id))
+        ).scalars().all()
+        promotions = (
+            await session.execute(select(Promotion).where(Promotion.tenant_id == tenant_id))
+        ).scalars().all()
+        orders = (
+            await session.execute(
+                select(Order)
+                .where(Order.tenant_id == tenant_id)
+                .order_by(Order.created_at.desc())
+                .limit(5)
+            )
+        ).scalars().all()
+
+    return CommerceDashboard(
+        kpi=CommerceKpi(
+            leads=len(leads),
+            products=len(products),
+            promotions=len(promotions),
+            orders=len(orders),
+        ),
+        recent_orders=[
+            RecentOrder(
+                id=o.id,
+                public_order_number=o.public_order_number,
+                total=float(o.total or 0),
+                status=o.status,
+                created_at=o.created_at,
+            )
+            for o in orders
+        ],
+    )
+
+
+# ------------------------------------------------------------------ productos
+class VariantOut(BaseModel):
+    id: uuid.UUID
+    sku: str
+    attributes: dict[str, Any]
+    price: float
+    stock: int
+    active: bool
+
+
+class ProductOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str
+    category_id: uuid.UUID | None
+    category: str
+    price: float
+    variants: list[VariantOut]
+
+
+class ProductSave(BaseModel):
+    product_id: uuid.UUID | None = None
+    name: str
+    description: str = ""
+    category_id: uuid.UUID | None = None
+    sku: str = ""
+    price: float = 0
+    stock: int = 0
+
+
+@router.get("/products", response_model=list[ProductOut])
+async def list_products(
+    principal: Annotated[Principal, Depends(require("pack_commerce"))],
+) -> list[ProductOut]:
+    tenant_id = principal.tenant_id
+    async with get_session() as session:
+        products = (
+            (
+                await session.execute(
+                    select(Product).where(Product.tenant_id == tenant_id).order_by(Product.name)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        variants = (
+            (
+                await session.execute(
+                    select(ProductVariant).where(ProductVariant.tenant_id == tenant_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        inventory = (
+            (
+                await session.execute(
+                    select(Inventory).where(Inventory.tenant_id == tenant_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        categories = (
+            (
+                await session.execute(
+                    select(Category).where(
+                        Category.deleted_at.is_(None), Category.tenant_id == tenant_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    cat_by_id = {c.id: c.name for c in categories}
+    inv_by_variant = {i.variant_id: i.stock_quantity for i in inventory}
+    variants_by_product: dict[str, list[ProductVariant]] = {}
+    for v in variants:
+        variants_by_product.setdefault(str(v.product_id), []).append(v)
+
+    out: list[ProductOut] = []
+    for p in products:
+        product_variants = variants_by_product.get(str(p.id), [])
+        out.append(
+            ProductOut(
+                id=p.id,
+                name=p.name,
+                description=p.description or "",
+                category_id=p.category_id,
+                category=cat_by_id.get(p.category_id, "Sin categoría"),
+                price=float(product_variants[0].price or 0) if product_variants else 0.0,
+                variants=[
+                    VariantOut(
+                        id=v.id,
+                        sku=v.sku,
+                        attributes=v.attributes or {},
+                        price=float(v.price or 0),
+                        stock=inv_by_variant.get(v.id, 0),
+                        active=v.active,
+                    )
+                    for v in product_variants
+                ],
+            )
+        )
+    return out
+
+
+@router.post("/products", status_code=204)
+async def save_product(
+    payload: ProductSave,
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> Response:
+    """Alta/edición del producto con su variante por defecto e inventario."""
+    tenant_id = principal.tenant_id
+    async with get_session() as session:
+        # Defensa en profundidad: no dejar la categoría colgando a otro tenant.
+        resolved_category_id: uuid.UUID | None = None
+        if payload.category_id is not None:
+            category = await get_owned(session, Category, payload.category_id, tenant_id)
+            if category is not None:
+                resolved_category_id = category.id
+
+        if payload.product_id is not None:
+            product = await get_owned(session, Product, payload.product_id, tenant_id)
+            if product is None:
+                raise ApiError.not_found("Producto no encontrado.")
+            product.name = payload.name
+            product.description = payload.description
+            product.category_id = resolved_category_id
+            variant = (
+                (
+                    await session.execute(
+                        select(ProductVariant).where(
+                            ProductVariant.product_id == product.id,
+                            ProductVariant.tenant_id == tenant_id,
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if variant is not None:
+                if payload.sku:
+                    variant.sku = payload.sku
+                if payload.price:
+                    variant.price = payload.price
+                inventory = (
+                    await session.execute(
+                        select(Inventory).where(
+                            Inventory.variant_id == variant.id,
+                            Inventory.tenant_id == tenant_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if inventory is None:
+                    session.add(Inventory(variant_id=variant.id, stock_quantity=payload.stock))
+                else:
+                    inventory.stock_quantity = payload.stock
+        else:
+            product = Product(
+                name=payload.name,
+                description=payload.description or "",
+                category_id=resolved_category_id,
+            )
+            session.add(product)
+            await session.flush()
+            variant = ProductVariant(
+                product_id=product.id,
+                sku=payload.sku or f"SKU-{product.id.hex[:8]}",
+                price=payload.price,
+            )
+            session.add(variant)
+            await session.flush()
+            session.add(Inventory(variant_id=variant.id, stock_quantity=payload.stock))
+            product.has_variants = False
+    return Response(status_code=204)
+
+
+# ------------------------------------------------------------------ categorías
+class CategoryOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    parent_id: uuid.UUID | None
+    sort_order: int
+    active: bool
+
+
+class CategorySave(BaseModel):
+    category_id: uuid.UUID | None = None
+    name: str
+    parent_id: uuid.UUID | None = None
+    sort_order: int = 0
+
+
+@router.get("/categories", response_model=list[CategoryOut])
+async def list_categories(
+    principal: Annotated[Principal, Depends(require("pack_commerce"))],
+) -> list[CategoryOut]:
+    async with get_session() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(Category)
+                    .where(
+                        Category.tenant_id == principal.tenant_id,
+                        Category.deleted_at.is_(None),
+                    )
+                    .order_by(Category.sort_order, Category.name)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return [
+        CategoryOut(
+            id=c.id,
+            name=c.name,
+            parent_id=c.parent_id,
+            sort_order=c.sort_order or 0,
+            active=bool(c.active),
+        )
+        for c in rows
+    ]
+
+
+@router.post("/categories", status_code=204)
+async def save_category(
+    payload: CategorySave,
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> Response:
+    tenant_id = principal.tenant_id
+    async with get_session() as session:
+        resolved_parent: uuid.UUID | None = None
+        if payload.parent_id is not None:
+            parent = await get_owned(session, Category, payload.parent_id, tenant_id)
+            if parent is not None:
+                resolved_parent = parent.id
+
+        if payload.category_id is not None:
+            category = await get_owned(session, Category, payload.category_id, tenant_id)
+            if category is None:
+                raise ApiError.not_found("Categoría no encontrada.")
+            category.name = payload.name
+            category.parent_id = resolved_parent
+            category.sort_order = payload.sort_order
+        else:
+            session.add(
+                Category(
+                    name=payload.name,
+                    parent_id=resolved_parent,
+                    sort_order=payload.sort_order,
+                )
+            )
+    return Response(status_code=204)
+
+
+@router.post("/categories/{category_id}/delete", status_code=204)
+async def delete_category(
+    category_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> Response:
+    """Soft-delete (invariante 8): marca `deleted_at`."""
+    from core.db.models import utcnow
+
+    async with get_session() as session:
+        category = await get_owned(session, Category, category_id, principal.tenant_id)
+        if category is None:
+            raise ApiError.not_found("Categoría no encontrada.")
+        category.deleted_at = utcnow()
+    return Response(status_code=204)
+
+
+# ------------------------------------------------------------------ promociones
+class PromotionOut(BaseModel):
+    id: uuid.UUID
+    type: str
+    rules: dict[str, Any]
+    active: bool
+    valid_from: datetime | None
+    valid_to: datetime | None
+    category_id: uuid.UUID | None
+    product_id: uuid.UUID | None
+    eligible_segments: list[str] | None
+
+
+class PromotionSave(BaseModel):
+    promotion_id: uuid.UUID | None = None
+    type: str
+    rules: dict[str, Any] = {}
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    category_id: uuid.UUID | None = None
+    product_id: uuid.UUID | None = None
+
+
+def _promotion_out(p: Promotion) -> PromotionOut:
+    return PromotionOut(
+        id=p.id,
+        type=p.type,
+        rules=p.rules or {},
+        active=bool(p.active),
+        valid_from=p.valid_from,
+        valid_to=p.valid_to,
+        category_id=p.category_id,
+        product_id=p.product_id,
+        eligible_segments=list(p.eligible_segments) if p.eligible_segments else None,
+    )
+
+
+@router.get("/promotions", response_model=list[PromotionOut])
+async def list_promotions(
+    principal: Annotated[Principal, Depends(require("pack_commerce"))],
+) -> list[PromotionOut]:
+    async with get_session() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(Promotion)
+                    .where(Promotion.tenant_id == principal.tenant_id)
+                    .order_by(Promotion.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return [_promotion_out(p) for p in rows]
+
+
+@router.post("/promotions", status_code=204)
+async def save_promotion(
+    payload: PromotionSave,
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> Response:
+    tenant_id = principal.tenant_id
+    async with get_session() as session:
+        resolved_category: uuid.UUID | None = None
+        if payload.category_id is not None:
+            category = await get_owned(session, Category, payload.category_id, tenant_id)
+            if category is not None:
+                resolved_category = category.id
+        resolved_product: uuid.UUID | None = None
+        if payload.product_id is not None:
+            product = await get_owned(session, Product, payload.product_id, tenant_id)
+            if product is not None:
+                resolved_product = product.id
+
+        if payload.promotion_id is not None:
+            promotion = await get_owned(session, Promotion, payload.promotion_id, tenant_id)
+            if promotion is None:
+                raise ApiError.not_found("Promoción no encontrada.")
+            promotion.type = payload.type
+            promotion.rules = payload.rules
+            promotion.valid_from = payload.valid_from
+            promotion.valid_to = payload.valid_to
+            promotion.category_id = resolved_category
+            promotion.product_id = resolved_product
+        else:
+            session.add(
+                Promotion(
+                    type=payload.type,
+                    rules=payload.rules,
+                    valid_from=payload.valid_from,
+                    valid_to=payload.valid_to,
+                    category_id=resolved_category,
+                    product_id=resolved_product,
+                )
+            )
+    return Response(status_code=204)
+
+
+@router.post("/promotions/{promotion_id}/toggle", status_code=204)
+async def toggle_promotion(
+    promotion_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> Response:
+    async with get_session() as session:
+        promotion = await get_owned(session, Promotion, promotion_id, principal.tenant_id)
+        if promotion is None:
+            raise ApiError.not_found("Promoción no encontrada.")
+        promotion.active = not promotion.active
+    return Response(status_code=204)
+
+
+# ------------------------------------------------------------------ pedidos
+class OrderLine(BaseModel):
+    name: str
+    quantity: int
+    unit_price: float
+
+
+class OrderOut(BaseModel):
+    id: uuid.UUID
+    public_order_number: str
+    total: float
+    status: str
+    payment_status: str
+    payment_method: str
+    delivery_method: str
+    delivery_full_name: str | None
+    delivery_address: str | None
+    created_at: datetime | None
+    line_items: list[OrderLine]
+
+
+class OrderStatusUpdate(BaseModel):
+    status: str
+
+
+@router.get("/orders", response_model=list[OrderOut])
+async def list_orders(
+    principal: Annotated[Principal, Depends(require("pack_commerce"))],
+) -> list[OrderOut]:
+    tenant_id = principal.tenant_id
+    async with get_session() as session:
+        orders = (
+            (
+                await session.execute(
+                    select(Order)
+                    .where(Order.tenant_id == tenant_id)
+                    .order_by(Order.created_at.desc())
+                    .limit(200)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        items = (
+            (
+                await session.execute(
+                    select(OrderItem).where(OrderItem.tenant_id == tenant_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        variants = (
+            await session.execute(
+                select(ProductVariant, Product)
+                .join(Product, Product.id == ProductVariant.product_id)
+                .where(
+                    ProductVariant.tenant_id == tenant_id, Product.tenant_id == tenant_id
+                )
+            )
+        ).all()
+
+    name_by_variant = {v.id: p.name for v, p in variants}
+    items_by_order: dict[str, list[OrderLine]] = {}
+    for i in items:
+        items_by_order.setdefault(str(i.order_id), []).append(
+            OrderLine(
+                name=name_by_variant.get(i.variant_id, "Producto"),
+                quantity=i.quantity,
+                unit_price=float(i.unit_price or 0),
+            )
+        )
+
+    return [
+        OrderOut(
+            id=o.id,
+            public_order_number=o.public_order_number,
+            total=float(o.total or 0),
+            status=o.status,
+            payment_status=o.payment_status,
+            payment_method=o.payment_method,
+            delivery_method=o.delivery_method,
+            delivery_full_name=o.delivery_full_name,
+            delivery_address=o.delivery_address,
+            created_at=o.created_at,
+            line_items=items_by_order.get(str(o.id), []),
+        )
+        for o in orders
+    ]
+
+
+@router.post("/orders/{order_id}/status", status_code=204)
+async def update_order_status(
+    order_id: uuid.UUID,
+    payload: OrderStatusUpdate,
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> Response:
+    if payload.status not in ORDER_STATUSES:
+        raise ApiError.bad_request(
+            f"Estado inválido: {payload.status}. Válidos: {', '.join(ORDER_STATUSES)}",
+            "invalid_status",
+        )
+    from datetime import UTC
+
+    async with get_session() as session:
+        order = await get_owned(session, Order, order_id, principal.tenant_id)
+        if order is None:
+            raise ApiError.not_found("Pedido no encontrado.")
+        order.status = payload.status
+        order.status_changed_at = datetime.now(UTC)
+    return Response(status_code=204)

@@ -33,6 +33,7 @@ from core.mcp.types import BaseModule, GuardrailResult
 from core.shared.events import ON_CONVERSATION_STARTED
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from pack_commerce.admin_api import router as admin_api_router
 from pack_commerce.api import router as leads_router
 from pack_commerce.config import CRMConfig
 from pack_commerce.models import (
@@ -1000,6 +1001,10 @@ class CRMModule(BaseModule):
         {"label": "Pedidos", "path": "/crm/pedidos"},
     ]
     admin_router = admin_router
+
+    def admin_api_routes(self) -> list[Any]:
+        """API admin consumida por el panel nuevo (ADR-0079)."""
+        return [admin_api_router]
     declared_skills: list[type] = [  # noqa: RUF012
         LeadSkill,
         CatalogSkill,

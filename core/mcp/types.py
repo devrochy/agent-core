@@ -233,6 +233,16 @@ class BaseModule(ABC):
         """
         return []
 
+    def admin_api_routes(self) -> list[Any]:
+        """Routers de API ADMIN del pack (ADR-0079), montados en `/api/v1`.
+
+        El prefijo DEBE empezar por `/api/v1/pack/<plugin_id>`. El pack usa las
+        dependencias del core (`core.api.deps.require`) para heredar la identidad
+        de admin, el `X-Tenant-Id` validado y el RBAC por sección; el core solo
+        monta. Default: ninguno.
+        """
+        return []
+
     def extra_admin_routers(self) -> list[Any]:
         """Routers admin adicionales del pack (ej. pestañas de Configuración).
 

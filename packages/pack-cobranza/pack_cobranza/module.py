@@ -21,6 +21,7 @@ import pack_cobranza.providers  # noqa: F401
 from core.mcp.types import BaseModule
 from core.shared.logger import get_logger
 from pack_cobranza.admin import router as admin_router
+from pack_cobranza.admin_api import router as admin_api_router
 from pack_cobranza.api import router as public_api_router
 from pack_cobranza.api_gestor import router as gestor_api_router
 from pack_cobranza.config import CobranzaConfig
@@ -68,6 +69,10 @@ class CobranzaModule(BaseModule):
         {"id": "gestor", "label": "Gestor de cobranza"},
     ]
     admin_router = admin_router
+
+    def admin_api_routes(self) -> list[Any]:
+        """API admin consumida por el panel nuevo (ADR-0079)."""
+        return [admin_api_router]
     declared_skills: list[type] = [CobranzaSkill]  # noqa: RUF012
 
     def on_activate(self, host: MCPHost) -> None:
