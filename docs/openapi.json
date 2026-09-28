@@ -4996,6 +4996,193 @@
         }
       }
     },
+    "/api/v1/pack/cobranza/monitoring": {
+      "get": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Monitoring",
+        "operationId": "monitoring_api_v1_pack_cobranza_monitoring_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Monitoring"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/alerts": {
+      "get": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "List Alerts",
+        "operationId": "list_alerts_api_v1_pack_cobranza_alerts_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Alerts"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/audit": {
+      "get": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Audit Log",
+        "operationId": "audit_log_api_v1_pack_cobranza_audit_get",
+        "parameters": [
+          {
+            "name": "entidad",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Entidad"
+            }
+          },
+          {
+            "name": "operacion",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Operacion"
+            }
+          },
+          {
+            "name": "desde",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Desde"
+            }
+          },
+          {
+            "name": "hasta",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Hasta"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditLog"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/calendar/status": {
       "get": {
         "tags": [
@@ -5332,6 +5519,44 @@
   },
   "components": {
     "schemas": {
+      "AccessAttempt": {
+        "properties": {
+          "fecha": {
+            "type": "string",
+            "title": "Fecha"
+          },
+          "gestor": {
+            "type": "string",
+            "title": "Gestor"
+          },
+          "resultado": {
+            "type": "string",
+            "title": "Resultado"
+          },
+          "motivo": {
+            "type": "string",
+            "title": "Motivo"
+          },
+          "imei": {
+            "type": "string",
+            "title": "Imei"
+          },
+          "critico": {
+            "type": "boolean",
+            "title": "Critico"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fecha",
+          "gestor",
+          "resultado",
+          "motivo",
+          "imei",
+          "critico"
+        ],
+        "title": "AccessAttempt"
+      },
       "AddNumberRequest": {
         "properties": {
           "cc": {
@@ -5391,6 +5616,32 @@
           "eval_runs"
         ],
         "title": "AdvancedResponse"
+      },
+      "Alerts": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "denegados": {
+            "type": "integer",
+            "title": "Denegados"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AccessAttempt"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "denegados",
+          "items"
+        ],
+        "title": "Alerts"
       },
       "AppointmentOut": {
         "properties": {
@@ -5469,6 +5720,102 @@
           "appointment_type_id"
         ],
         "title": "AppointmentOut"
+      },
+      "AuditLog": {
+        "properties": {
+          "entidades": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Entidades"
+          },
+          "operaciones": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Operaciones"
+          },
+          "filas": {
+            "items": {
+              "$ref": "#/components/schemas/AuditRow"
+            },
+            "type": "array",
+            "title": "Filas"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entidades",
+          "operaciones",
+          "filas"
+        ],
+        "title": "AuditLog"
+      },
+      "AuditRow": {
+        "properties": {
+          "fecha": {
+            "type": "string",
+            "title": "Fecha"
+          },
+          "entidad": {
+            "type": "string",
+            "title": "Entidad"
+          },
+          "entidad_id": {
+            "type": "string",
+            "title": "Entidad Id"
+          },
+          "operacion": {
+            "type": "string",
+            "title": "Operacion"
+          },
+          "antes": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Antes"
+          },
+          "despues": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Despues"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "motivo": {
+            "type": "string",
+            "title": "Motivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fecha",
+          "entidad",
+          "entidad_id",
+          "operacion",
+          "antes",
+          "despues",
+          "actor",
+          "motivo"
+        ],
+        "title": "AuditRow"
       },
       "BillingRequest": {
         "properties": {
@@ -7724,6 +8071,47 @@
           "cost"
         ],
         "title": "ModelCost"
+      },
+      "Monitoring": {
+        "properties": {
+          "conversaciones": {
+            "type": "integer",
+            "title": "Conversaciones"
+          },
+          "escalaciones": {
+            "type": "integer",
+            "title": "Escalaciones"
+          },
+          "promesas_pendientes": {
+            "type": "integer",
+            "title": "Promesas Pendientes"
+          },
+          "promesas_cumplidas": {
+            "type": "integer",
+            "title": "Promesas Cumplidas"
+          },
+          "promesas_incumplidas": {
+            "type": "integer",
+            "title": "Promesas Incumplidas"
+          },
+          "ultimas_promesas": {
+            "items": {
+              "$ref": "#/components/schemas/Promise"
+            },
+            "type": "array",
+            "title": "Ultimas Promesas"
+          }
+        },
+        "type": "object",
+        "required": [
+          "conversaciones",
+          "escalaciones",
+          "promesas_pendientes",
+          "promesas_cumplidas",
+          "promesas_incumplidas",
+          "ultimas_promesas"
+        ],
+        "title": "Monitoring"
       },
       "NumbersResponse": {
         "properties": {

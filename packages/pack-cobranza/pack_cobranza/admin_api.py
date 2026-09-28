@@ -1,9 +1,10 @@
-"""API admin del pack de Cobranza (ADR-0079) — núcleo.
+"""API admin del pack de Cobranza (ADR-0079).
 
 Montada en `/api/v1/pack/cobranza`. Cubre lo más usado del panel: resumen,
-reglas de negociación, carteras, cobros (pagos), promesas y gestores. El resto
-(carteras a fondo, monitoreo, dispositivos, alertas, auditoría, reportes,
-propietario) sigue en el panel clásico enlazado.
+reglas de negociación, carteras, cobros (pagos), promesas, gestores y las
+secciones operativas (monitoreo, alertas de acceso y auditoría). El resto
+(carteras a fondo, dispositivos, reportes, propietario, caja/liquidaciones)
+sigue en el panel clásico enlazado.
 """
 
 from __future__ import annotations
@@ -19,14 +20,17 @@ from sqlalchemy import func, select
 
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
+from core.db.models import Conversation, Escalation
 from core.db.session import get_owned, get_session
 
 from .models import (
+    AuditoriaCartera,
     Cartera,
     Cliente,
     Cuota,
     Gasto,
     Gestor,
+    IntentoAcceso,
     Pago,
     Prestamo,
     Promesa,
@@ -412,3 +416,235 @@ async def list_collectors(
         )
         for g in rows
     ]
+
+
+# ------------------------------------------------------------------ monitoreo
+class Monitoring(BaseModel):
+    conversaciones: int
+    escalaciones: int
+    promesas_pendientes: int
+    promesas_cumplidas: int
+    promesas_incumplidas: int
+    ultimas_promesas: list[Promise]
+
+
+def _name_by_id(rows: list[Cliente]) -> dict[uuid.UUID, str]:
+    return {c.id: f"{c.nombres} {c.apellidos or ''}".strip() for c in rows}
+
+
+def _as_promise(row: Promesa, cliente: str) -> Promise:
+    return Promise(
+        id=row.id,
+        cliente=cliente,
+        fecha_prometida=row.fecha_prometida,
+        valor_prometido=float(row.valor_prometido or 0),
+        estado=row.estado,
+        tipo=row.tipo,
+        creado_por=row.creado_por,
+    )
+
+
+@router.get("/monitoring", response_model=Monitoring)
+async def monitoring(
+    principal: Annotated[Principal, Depends(require("pack_cobranza:monitoreo"))],
+) -> Monitoring:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        conversaciones = (
+            await session.execute(
+                select(func.count())
+                .select_from(Conversation)
+                .where(Conversation.tenant_id == tid)
+            )
+        ).scalar_one()
+        escalaciones = (
+            await session.execute(
+                select(func.count()).select_from(Escalation).where(Escalation.tenant_id == tid)
+            )
+        ).scalar_one()
+        rows = (
+            (
+                await session.execute(
+                    select(Promesa)
+                    .where(Promesa.tenant_id == tid, Promesa.deleted_at.is_(None))
+                    .order_by(Promesa.created_at.desc())
+                    .limit(20)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        clientes = (
+            (
+                await session.execute(
+                    select(Cliente).where(Cliente.tenant_id == tid, Cliente.deleted_at.is_(None))
+                )
+            )
+            .scalars()
+            .all()
+        )
+    nombres = _name_by_id(clientes)
+    return Monitoring(
+        conversaciones=conversaciones,
+        escalaciones=escalaciones,
+        promesas_pendientes=sum(1 for p in rows if p.estado == "pendiente"),
+        promesas_cumplidas=sum(1 for p in rows if p.estado == "cumplida"),
+        promesas_incumplidas=sum(1 for p in rows if p.estado == "incumplida"),
+        ultimas_promesas=[_as_promise(p, nombres.get(p.cliente_id, "—")) for p in rows],
+    )
+
+
+# ------------------------------------------------------------------ alertas
+class AccessAttempt(BaseModel):
+    fecha: str
+    gestor: str
+    resultado: str
+    motivo: str
+    imei: str
+    critico: bool
+
+
+class Alerts(BaseModel):
+    total: int
+    denegados: int
+    items: list[AccessAttempt]
+
+
+@router.get("/alerts", response_model=Alerts)
+async def list_alerts(
+    principal: Annotated[Principal, Depends(require("pack_cobranza:alertas"))],
+) -> Alerts:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(IntentoAcceso)
+                    .where(IntentoAcceso.tenant_id == tid)
+                    .order_by(IntentoAcceso.created_at.desc())
+                    .limit(100)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        gestores = (
+            (
+                await session.execute(
+                    select(Gestor).where(Gestor.tenant_id == tid)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    nombres = {g.id: f"{g.nombre} {g.apellido or ''}".strip() for g in gestores}
+    items = [
+        AccessAttempt(
+            fecha=r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "",
+            gestor=nombres.get(r.gestor_id, "—") if r.gestor_id else "—",
+            resultado=r.resultado,
+            motivo=r.motivo or "",
+            imei=r.imei or "",
+            critico=r.resultado != "ok",
+        )
+        for r in rows
+    ]
+    return Alerts(
+        total=len(items),
+        denegados=sum(1 for i in items if i.critico),
+        items=items,
+    )
+
+
+# ------------------------------------------------------------------ auditoría
+class AuditRow(BaseModel):
+    fecha: str
+    entidad: str
+    entidad_id: str
+    operacion: str
+    antes: dict[str, Any] | None
+    despues: dict[str, Any] | None
+    actor: str
+    motivo: str
+
+
+class AuditLog(BaseModel):
+    entidades: list[str]
+    operaciones: list[str]
+    filas: list[AuditRow]
+
+
+@router.get("/audit", response_model=AuditLog)
+async def audit_log(
+    principal: Annotated[Principal, Depends(require("pack_cobranza:auditoria"))],
+    entidad: str = "",
+    operacion: str = "",
+    desde: str = "",
+    hasta: str = "",
+) -> AuditLog:
+    tid = principal.tenant_id
+    query = select(AuditoriaCartera).where(AuditoriaCartera.tenant_id == tid)
+    if entidad:
+        query = query.where(AuditoriaCartera.entidad == entidad)
+    if operacion:
+        query = query.where(AuditoriaCartera.operacion == operacion)
+    for valor, es_desde in ((desde, True), (hasta, False)):
+        if not valor:
+            continue
+        try:
+            dia = date.fromisoformat(valor)
+        except ValueError:
+            continue
+        limite = datetime.combine(
+            dia if es_desde else dia + timedelta(days=1), datetime.min.time(), tzinfo=UTC
+        )
+        query = (
+            query.where(AuditoriaCartera.created_at >= limite)
+            if es_desde
+            else query.where(AuditoriaCartera.created_at < limite)
+        )
+    async with get_session() as session:
+        filas = (
+            (await session.execute(query.order_by(AuditoriaCartera.created_at.desc()).limit(200)))
+            .scalars()
+            .all()
+        )
+        entidades = sorted(
+            e
+            for (e,) in (
+                await session.execute(
+                    select(AuditoriaCartera.entidad)
+                    .where(AuditoriaCartera.tenant_id == tid)
+                    .distinct()
+                )
+            ).all()
+            if e
+        )
+        operaciones = sorted(
+            o
+            for (o,) in (
+                await session.execute(
+                    select(AuditoriaCartera.operacion)
+                    .where(AuditoriaCartera.tenant_id == tid)
+                    .distinct()
+                )
+            ).all()
+            if o
+        )
+    return AuditLog(
+        entidades=entidades,
+        operaciones=operaciones,
+        filas=[
+            AuditRow(
+                fecha=r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "",
+                entidad=r.entidad,
+                entidad_id=str(r.entidad_id)[:8],
+                operacion=r.operacion,
+                antes=r.valores_antes,
+                despues=r.valores_despues,
+                actor=r.actor_rol or "—",
+                motivo=r.motivo or "",
+            )
+            for r in filas
+        ],
+    )
