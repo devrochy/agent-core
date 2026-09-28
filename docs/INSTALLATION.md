@@ -192,6 +192,14 @@ encuentra algo, así que sirve en scripts.
 
 ### Los fallos que más cuestan
 
+**0. `#131030 Recipient phone number not in allowed list` al enviar**
+
+El número de WhatsApp es de **prueba** (test number): Meta solo permite enviar a
+los destinatarios agregados en el portal del desarrollador. Ve a la app de Meta →
+**WhatsApp → API Setup → "To" (destinatarios) → Agregar destinatario** y agrega el
+número completo del cliente (ej. `+573128404683`). Con un número de producción no
+aplica esta restricción.
+
 **1. `port is already allocated` al levantar**
 
 Otro servicio ocupó el puerto entre el `init` y el `docker compose up`. Cambia
