@@ -66,10 +66,13 @@ class DbSessionRegistry:
                             select(WaWebSession, ChannelConnection)
                             .join(ChannelConnection, ChannelConnection.id == WaWebSession.connection_id)
                             .where(
+                                WaWebSession.tenant_id == tenant_id,
                                 WaWebSession.deleted_at.is_(None),
                                 WaWebSession.risk_ack_at.is_not(None),
                                 WaWebSession.status != status.LOGGED_OUT,
+                                ChannelConnection.tenant_id == tenant_id,
                                 ChannelConnection.active.is_(True),
+                                ChannelConnection.deleted_at.is_(None),
                             )
                         )
                     ).all()

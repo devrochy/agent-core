@@ -50,6 +50,15 @@ async def get_or_create_connection(tenant_id: uuid.UUID) -> ChannelConnection:
     """
     existing = await get_active_connection(tenant_id)
     if existing is not None:
+        if not existing.active:
+            # Reactivar en vez de crear otra (evita choque con el índice único
+            # (tenant_id, provider, external_id)).
+            async with get_session() as session:
+                row = await session.get(ChannelConnection, existing.id)
+                if row is not None:
+                    row.active = True
+                    await session.flush()
+                    return row
         return existing
     async with get_session() as session:
         connection = ChannelConnection(

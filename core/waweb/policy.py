@@ -95,18 +95,22 @@ async def load_policy(tenant_id: uuid.UUID | None = None) -> WaWebPolicy:
 
     from core.db.models import AppSettings
     from core.db.session import get_session
-    from core.shared.tenant import get_current_tenant_id
+    from core.shared.tenant import get_current_tenant_id, tenant_scope
 
     tid = tenant_id if tenant_id is not None else get_current_tenant_id()
     if tid is None:
         return WaWebPolicy()
-    async with get_session() as session:
-        app_settings = (
-            await session.execute(
-                select(AppSettings).where(
-                    AppSettings.tenant_id == tid,
-                    AppSettings.deleted_at.is_(None),
+    # El connector corre sin scope ambiente (rol app_runtime, RLS): hay que
+    # abrir `tenant_scope`, o `app_settings` devuelve 0 filas y se usaría la
+    # política por defecto en vez de la configurada por el tenant.
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            app_settings = (
+                await session.execute(
+                    select(AppSettings).where(
+                        AppSettings.tenant_id == tid,
+                        AppSettings.deleted_at.is_(None),
+                    )
                 )
-            )
-        ).scalar_one_or_none()
+            ).scalar_one_or_none()
     return policy_from_behavior(dict(app_settings.behavior_config) if app_settings else {})

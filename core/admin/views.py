@@ -138,7 +138,12 @@ async def leads_global(request: Request) -> HTMLResponse:
         customers = (
             await session.execute(
                 _select(Customer)
-                .where(Customer.tenant_id == tid, Customer.deleted_at.is_(None))
+                .where(
+                    Customer.tenant_id == tid,
+                    Customer.deleted_at.is_(None),
+                    # El cliente sintético del playground no es un lead del negocio.
+                    Customer.channel != TEST_CHANNEL,
+                )
                 .order_by(Customer.created_at.desc())
                 .limit(500)
             )
@@ -1509,6 +1514,9 @@ async def conversation_detail(request: Request, conversation_id: uuid.UUID):
     async with get_session() as session:
         conversation = await session.get(Conversation, conversation_id)
         if conversation is None:
+            return RedirectResponse("/admin/conversaciones", status_code=303)
+        if conversation.channel == TEST_CHANNEL:
+            # Las pruebas del playground no son conversaciones del negocio.
             return RedirectResponse("/admin/conversaciones", status_code=303)
         customer = await session.get(Customer, conversation.customer_id)
         messages = (

@@ -5,7 +5,7 @@ conexión, persistida CIFRADA para sobrevivir reinicios de contenedor. Una sola
 sesión viva por conexión (índice único parcial por `deleted_at`). RLS con el
 patrón `nullif` + FORCE de 0003/0034.
 
-Revision ID: 0039
+Revision ID: 0041
 Revises: 0040
 Create Date: 2026-09-27
 """
@@ -16,7 +16,7 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from alembic import op
 
-revision = "0039"
+revision = "0041"
 down_revision = "0040"
 branch_labels = None
 depends_on = None
