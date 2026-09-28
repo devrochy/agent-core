@@ -150,6 +150,23 @@ async def test_intake_deshabilitado_y_validacion(app_client, moto_setup) -> None
     assert r.status_code == 403
 
 
+async def test_intake_config(app_client, moto_setup) -> None:
+    """Config no sensible para el formulario alojado (frame-ancestors)."""
+    _t1, moto = moto_setup
+    await _configure_intake(moto, enabled=True)
+
+    r = await app_client.get(f"/api/pack/pack_commerce/intake-config/{SLUG}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["enabled"] is True
+    assert body["allowed_origins"] == []
+    assert body["turnstile"] is False
+
+    # slug desconocido → 404
+    r = await app_client.get("/api/pack/pack_commerce/intake-config/no-existe")
+    assert r.status_code == 404
+
+
 async def test_intake_turnstile(app_client, moto_setup, monkeypatch) -> None:
     """Turnstile: se exige y valida solo si el tenant tiene secret configurado."""
     from pack_commerce import api as intake_api

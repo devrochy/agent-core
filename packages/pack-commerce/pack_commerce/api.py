@@ -82,6 +82,36 @@ async def _verify_turnstile(token: str, secret: str, ip: str | None) -> bool:
     return bool(data.get("success"))
 
 
+@router.get("/intake-config/{slug}")
+async def intake_config(slug: str) -> JSONResponse:
+    """Config **no sensible** del intake para el formulario alojado.
+
+    La página embebible (`/f/<slug>`) la usa para aplicar el CSP `frame-ancestors`
+    con los orígenes permitidos del tenant. No expone secretos; solo si el intake
+    está activo, qué orígenes pueden incrustarlo y si exige Turnstile.
+    """
+    tenant_id = await resolve_tenant_by_slug(slug)
+    if tenant_id is None:
+        return JSONResponse({"error": "tenant_unknown"}, status_code=404)
+
+    async with tenant_scope(tenant_id):
+        spec = await load_active_spec(tenant_id)
+        if PLUGIN_ID not in enabled_packs(spec):
+            return JSONResponse({"error": "pack_disabled"}, status_code=403)
+
+        config = await plugin_manager.load_config(PLUGIN_ID)
+        if not isinstance(config, CRMConfig):
+            return JSONResponse({"enabled": False, "allowed_origins": [], "turnstile": False})
+
+        return JSONResponse(
+            {
+                "enabled": bool(config.lead_intake_enabled),
+                "allowed_origins": list(config.lead_intake_allowed_origins),
+                "turnstile": bool(config.lead_intake_turnstile.get_secret_value()),
+            }
+        )
+
+
 @router.post("/leads/{slug}")
 async def intake_lead(
     slug: str,
