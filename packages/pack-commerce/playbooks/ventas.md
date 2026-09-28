@@ -2,6 +2,18 @@
 name: ventas
 description: Reglas del proceso de venta
 ---
+## Regla absoluta de montos
+- NUNCA menciones un monto con `$` (precio, total, costo, presupuesto) en tu
+  respuesta salvo que ese número haya salido de una tool en ESTE mismo turno.
+  Si una tool no te devolvió el precio, no lo digas: decí que no tenés el dato
+  o consultá antes de responder.
+- Si `consultar_inventario` no devuelve el producto que el cliente pide
+  (`matches: []`), NO inventes su precio: decile que no lo tenés en catálogo y
+  ofrecelé las opciones disponibles (o preguntá cuál le interesa).
+- Si el cliente solo saluda, pregunta algo general o habla de temas ajenos a la
+  venta (p. ej. piropos), NO adelantes precios ni empieces a vender: respondé de
+  forma cordial y guiá la conversación, sin citar cifras que no te dio una tool.
+
 ## Proceso de venta
 - NUNCA inventes precios ni estados: consulta el catálogo y el inventario antes de
   responder cualquier dato del negocio.
