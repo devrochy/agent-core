@@ -21,6 +21,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Literal
 
+from sqlalchemy import and_, or_, select
+
 from core.db.models import Conversation, Customer, Message, utcnow
 from core.db.session import get_session
 from core.gateway.channels.registry import outbound_adapter_for
@@ -64,6 +66,105 @@ def decide_retry(exc: GraphError, attempts_made: int, max_attempts: int = MAX_AT
     return RetryDecision("retry", countdown_s)
 
 
+async def _is_earliest_queued(
+    conversation_id: uuid.UUID, tenant_id: uuid.UUID, created_at, msg_id: uuid.UUID
+) -> bool:
+    """¿Es este mensaje el outbound 'queued' más antiguo de la conversación?
+
+    El envío es estrictamente secuencial por conversación: un mensaje solo se
+    envía cuando no hay otro outbound pendiente con (created_at, id) anterior.
+    Si no es el más antiguo, la tarea sale como no-op y el predecesor lo
+    encadena al terminar (orden garantizado dentro del turno y entre turnos:
+    burbujas, avisos de calendario y respuestas humanas).
+    """
+    async with get_session() as session:
+        earlier = await session.execute(
+            select(Message.id)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.tenant_id == tenant_id,
+                Message.direction == "outbound",
+                Message.status == "queued",
+                or_(
+                    Message.created_at < created_at,
+                    and_(Message.created_at == created_at, Message.id < msg_id),
+                ),
+            )
+            .limit(1)
+        )
+        return earlier.scalar_one_or_none() is None
+
+
+async def _enqueue_next(
+    conversation_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    after_created_at,
+    after_id: uuid.UUID,
+) -> None:
+    """Encadena el siguiente outbound 'queued' de la conversación (por orden).
+
+    Solo hay una tarea viva por conversación en vuelo: al terminar un mensaje
+    se encola el siguiente más antiguo, así la cadena avanza en orden y nunca
+    se corta (aunque una burbuja falle de forma permanente, la siguiente sale).
+    """
+    async with get_session() as session:
+        nxt = await session.execute(
+            select(Message.id)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.tenant_id == tenant_id,
+                Message.direction == "outbound",
+                Message.status == "queued",
+                or_(
+                    Message.created_at > after_created_at,
+                    and_(Message.created_at == after_created_at, Message.id > after_id),
+                ),
+            )
+            .order_by(Message.created_at, Message.id)
+            .limit(1)
+        )
+        next_id = nxt.scalar_one_or_none()
+    if next_id is not None:
+        outbound_send_task.delay(str(next_id), str(tenant_id))
+
+
+_CLAIM_TTL_S = 300
+
+
+async def _claim_outbound(
+    message_id: uuid.UUID, conversation_id: uuid.UUID, tenant_id: uuid.UUID
+) -> bool:
+    """Claim atómico (Redis SETNX) para que UNA sola tarea envíe el mensaje.
+
+    Un mensaje puede encolarse dos veces (batch + cadena) o ser redeliverado
+    por Celery tras un crash; el claim evita el doble envío. Si Redis falla,
+    se envía igual (garantía at-least-once, no peor que hoy).
+    """
+    from core.memory.working import get_redis
+
+    try:
+        claimed = await get_redis().set(
+            f"outbound:claim:{tenant_id}:{conversation_id}:{message_id}",
+            "1",
+            nx=True,
+            ex=_CLAIM_TTL_S,
+        )
+        return bool(claimed)
+    except Exception:
+        return True
+
+
+async def _release_claim(
+    message_id: uuid.UUID, conversation_id: uuid.UUID, tenant_id: uuid.UUID
+) -> None:
+    from core.memory.working import get_redis
+
+    try:
+        await get_redis().delete(f"outbound:claim:{tenant_id}:{conversation_id}:{message_id}")
+    except Exception:
+        pass
+
+
 async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError | None:
     """Devuelve el `GraphError` si falló (para que el caller decida retry/DLQ),
     `None` si se envió bien o si no había nada que hacer (idempotencia)."""
@@ -91,6 +192,19 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
         if conversation is None or customer is None:
             return None
 
+        # ORDEN: solo se envía si es el outbound 'queued' más antiguo de la
+        # conversación. Si no, esta tarea es un no-op y el predecesor encadena
+        # este mensaje cuando termine (envío secuencial por conversación).
+        if not await _is_earliest_queued(
+            message.conversation_id, tenant_id, message.created_at, message.id
+        ):
+            return None
+
+        # CLAIM (Redis): evita doble envío si el mismo mensaje se encoló dos
+        # veces (batch + cadena) o Celery lo redeliveró tras un crash.
+        if not await _claim_outbound(message.id, message.conversation_id, tenant_id):
+            return None
+
         provider, credentials = await resolve_credentials(
             conversation.connection_id, conversation.meta_connection_id, expected_tenant_id=tenant_id
         )
@@ -102,8 +216,10 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
             else:
                 wamid = await adapter.send_text(credentials, customer.external_id, message.content)
         except GraphError as exc:
+            await _release_claim(message.id, message.conversation_id, tenant_id)
             return exc
         except Exception as exc:  # transporte no clasificado (ej. httpx.ConnectError sin envolver)
+            await _release_claim(message.id, message.conversation_id, tenant_id)
             return GraphError(f"Error de red enviando mensaje: {exc}", category="TRANSIENT", is_transient=True)
 
         async with get_session() as session:
@@ -112,22 +228,29 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
                 db_message.status = "sent"
                 db_message.external_message_id = wamid or None
                 db_message.status_updated_at = utcnow()
+
+        await _release_claim(message.id, message.conversation_id, tenant_id)
+        # Encadena el siguiente pendiente de la conversación (la cola avanza
+        # en orden incluso si este mensaje fue un "batch" inicial).
+        await _enqueue_next(message.conversation_id, tenant_id, message.created_at, message.id)
         return None
 
 
-async def _mark_failed(message_id: uuid.UUID, tenant_id: uuid.UUID, exc: GraphError, *, dlq: bool) -> None:
+async def _mark_failed(
+    message_id: uuid.UUID, tenant_id: uuid.UUID, exc: GraphError, *, dlq: bool
+) -> tuple[uuid.UUID, object, uuid.UUID] | None:
     async with tenant_scope(tenant_id):
         async with get_session() as session:
             db_message = await session.get(Message, message_id)
             if db_message is None:
-                return
+                return None
             if db_message.tenant_id != tenant_id:
                 log.error(
                     "outbound_mark_failed_tenant_mismatch",
                     message_id=str(message_id), task_tenant_id=str(tenant_id),
                     message_tenant_id=str(db_message.tenant_id),
                 )
-                return
+                return None
             db_message.status = "failed"
             db_message.error_code = exc.code
             db_message.error_subcode = exc.error_subcode
@@ -135,6 +258,8 @@ async def _mark_failed(message_id: uuid.UUID, tenant_id: uuid.UUID, exc: GraphEr
             db_message.error_reason = exc.message
             db_message.status_updated_at = utcnow()
             conversation_id = db_message.conversation_id
+            created_at = db_message.created_at
+            failed_id = db_message.id
 
         if dlq:
             log.error(
@@ -145,6 +270,8 @@ async def _mark_failed(message_id: uuid.UUID, tenant_id: uuid.UUID, exc: GraphEr
         from core.orchestrator.escalation import escalate
 
         await escalate(conversation_id, reason="send_failed", summary=exc.message[:500])
+
+    return conversation_id, created_at, failed_id
 
 
 @celery.task(bind=True, max_retries=MAX_ATTEMPTS, name="core.outbound_send")
@@ -158,4 +285,9 @@ def outbound_send_task(self, message_id: str, tenant_id: str) -> None:
         raise self.retry(exc=error, countdown=decision.countdown_s)
 
     dlq = self.request.retries >= MAX_ATTEMPTS and error.category not in ("PERMANENT", "AUTH")
-    run_async(_mark_failed(uuid.UUID(message_id), uuid.UUID(tenant_id), error, dlq=dlq))
+    info = run_async(_mark_failed(uuid.UUID(message_id), uuid.UUID(tenant_id), error, dlq=dlq))
+    # La cadena no se corta: aunque esta burbuja falló para siempre, el
+    # siguiente mensaje pendiente de la conversación sigue en orden.
+    if info is not None:
+        conversation_id, created_at, failed_id = info
+        run_async(_enqueue_next(conversation_id, uuid.UUID(tenant_id), created_at, failed_id))
