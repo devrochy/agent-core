@@ -15,7 +15,9 @@ from sqlalchemy import select
 from core.agents.spec import activate_spec_version, load_active_spec, save_spec_if_changed
 from core.db.models import AgentSpecRecord, AppSettings
 from core.db.session import get_session
+from core.shared.logger import get_logger
 
+log = get_logger(__name__)
 
 # ------------------------------------------------------------------ versiones
 async def list_spec_versions(tenant_id: uuid.UUID | None) -> list[dict[str, Any]]:
@@ -118,23 +120,34 @@ async def save_llm(
 
 
 # ------------------------------------------------------------------ guardrails propios
-def parse_custom_guardrails(text: str) -> list[dict[str, Any]]:
-    """Parsea guardrails propios, una regla por línea (DSL seguro)."""
+def parse_custom_guardrails_report(text: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """Parsea guardrails propios y REPORTA las líneas ignoradas (DEF-01).
+
+    El DSL es una regla por línea; antes las líneas mal formadas se descartaban en
+    silencio y el usuario creía haberlas guardado. Ahora se devuelven aparte para
+    que quien guarda pueda avisar (la regla sigue sin aplicarse: misma semántica).
+    """
     rules: list[dict[str, Any]] = []
-    for line in (text or "").splitlines():
+    ignoradas: list[str] = []
+    for numero, line in enumerate((text or "").splitlines(), start=1):
+        if not line.strip():
+            continue
         parts = [p.strip() for p in line.split("|")]
         if len(parts) < 2:
+            ignoradas.append(f"línea {numero}: falta el separador «|»")
             continue
         kind = parts[0]
         if kind == "max_length":
             try:
                 value = int(parts[1])
             except ValueError:
+                ignoradas.append(f"línea {numero}: «max_length» espera un número")
                 continue
             action = parts[2] if len(parts) > 2 else "retry"
             rules.append({"kind": kind, "value": value, "action": action})
         elif kind == "required_tool":
             if len(parts) < 3:
+                ignoradas.append(f"línea {numero}: «required_tool» pide frases y tool")
                 continue
             phrases = [p.strip() for p in parts[1].split(",") if p.strip()]
             tool = parts[2]
@@ -146,7 +159,14 @@ def parse_custom_guardrails(text: str) -> list[dict[str, Any]]:
             phrases = [p.strip() for p in parts[1].split(",") if p.strip()]
             action = parts[2] if len(parts) > 2 else "retry"
             rules.append({"kind": kind, "phrases": phrases, "action": action})
-    return rules
+        else:
+            ignoradas.append(f"línea {numero}: tipo desconocido «{kind}»")
+    return rules, ignoradas
+
+
+def parse_custom_guardrails(text: str) -> list[dict[str, Any]]:
+    """Parsea guardrails propios, una regla por línea (DSL seguro)."""
+    return parse_custom_guardrails_report(text)[0]
 
 
 def format_custom_guardrails(rules: list[dict[str, Any]]) -> str:
@@ -170,21 +190,32 @@ def read_custom_guardrails(spec) -> str:  # type: ignore[no-untyped-def]
     return format_custom_guardrails((spec.extensions or {}).get("guardrails") or [])
 
 
-async def save_custom_guardrails(
+async def save_custom_guardrails_report(
     tenant_id: uuid.UUID | None, text: str
-) -> str | None:
+) -> tuple[str | None, list[str]]:
+    """Guarda los guardrails y devuelve (error, líneas ignoradas) — ver DEF-01."""
     from core.orchestrator.guardrails import validate_custom_rules
 
     spec = await load_active_spec()
     data = spec.model_dump(mode="json")
     extensions = dict(data.get("extensions") or {})
+    rules, ignoradas = parse_custom_guardrails_report(text)
+    if ignoradas:
+        log.warning("guardrails_lineas_ignoradas", lineas=ignoradas)
     try:
-        extensions["guardrails"] = validate_custom_rules(parse_custom_guardrails(text))
+        extensions["guardrails"] = validate_custom_rules(rules)
     except Exception as exc:
-        return str(exc)[:160]
+        return str(exc)[:160], ignoradas
     data["extensions"] = extensions
     await save_spec_if_changed(spec, data, tenant_id)
-    return None
+    return None, ignoradas
+
+
+async def save_custom_guardrails(
+    tenant_id: uuid.UUID | None, text: str
+) -> str | None:
+    error, _ = await save_custom_guardrails_report(tenant_id, text)
+    return error
 
 
 # ------------------------------------------------------------------ flow y evals (lectura)

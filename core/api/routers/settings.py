@@ -357,6 +357,9 @@ class LlmUpdate(BaseModel):
 
 class GuardrailsSettings(BaseModel):
     guardrails_text: str
+    # Líneas del DSL que no se pudieron aplicar (DEF-01): se guardan las válidas
+    # pero el panel debe avisar de estas.
+    ignored: list[str] = []
 
 
 class GuardrailsUpdate(BaseModel):
@@ -455,10 +458,17 @@ async def save_guardrails_settings(
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> GuardrailsSettings:
     """Guardrails personalizados del tenant (DSL seguro, una regla por línea)."""
-    from core.admin.advanced_service import read_custom_guardrails, save_custom_guardrails
+    from core.admin.advanced_service import (
+        read_custom_guardrails,
+        save_custom_guardrails_report,
+    )
 
-    error = await save_custom_guardrails(principal.tenant_id, payload.guardrails_text)
+    error, ignoradas = await save_custom_guardrails_report(
+        principal.tenant_id, payload.guardrails_text
+    )
     if error is not None:
         raise ApiError.bad_request(error, "invalid_guardrails")
     spec = await load_active_spec()
-    return GuardrailsSettings(guardrails_text=read_custom_guardrails(spec))
+    return GuardrailsSettings(
+        guardrails_text=read_custom_guardrails(spec), ignored=ignoradas
+    )

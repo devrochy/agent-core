@@ -7617,6 +7617,14 @@
           "guardrails_text": {
             "type": "string",
             "title": "Guardrails Text"
+          },
+          "ignored": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ignored",
+            "default": []
           }
         },
         "type": "object",
