@@ -446,7 +446,7 @@ async def _discover_assets_step(wizard_id: uuid.UUID, tenant_id: uuid.UUID | Non
     if token and phone is not None and not phone.raw:
         data = await graph_fetch(
             f"/{phone.phone_number_id}", token=token, app_secret=settings.meta_app_secret,
-            query={"fields": "display_phone_number,verified_name,quality_rating,messaging_limit_tier,name_status,code_verification_status,platform_type"},
+            query={"fields": "display_phone_number,verified_name,quality_rating,messaging_limit_tier,name_status,code_verification_status,platform_type,is_on_biz_app"},
             version=version, connection_id=wizard.connection_id,
         )
         async with get_session() as session:

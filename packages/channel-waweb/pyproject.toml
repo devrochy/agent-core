@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentcore-channel-waweb"
+version = "0.1.0"
+description = "Canal WhatsApp Web no oficial (Neonize) para agent-core"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.entry-points."agent_core.channels"]
+waweb = "agentcore_channel_waweb"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agentcore_channel_waweb*"]

@@ -105,6 +105,16 @@ class Settings(BaseSettings):
     whatsapp_access_token: str = Field(default="", alias="WHATSAPP_ACCESS_TOKEN")
     whatsapp_phone_number_id: str = Field(default="", alias="WHATSAPP_PHONE_NUMBER_ID")
 
+    # --- Canal WhatsApp Web no oficial (waweb, ADR-0074) ---
+    # Canal NO oficial con riesgo de suspensión. El connector está apagado por
+    # defecto: en producción NO debe correr salvo habilitación explícita.
+    waweb_enabled: bool = Field(default=False, alias="WAWEB_ENABLED")
+    # Directorio de sesiones efímeras (idealmente un volumen tmpfs). La copia
+    # durable y cifrada vive en `waweb_sessions.creds_encrypted`.
+    waweb_session_dir: str = Field(default="/tmp/waweb-sessions", alias="WAWEB_SESSION_DIR")
+    waweb_sweep_interval_s: int = Field(default=15, alias="WAWEB_SWEEP_INTERVAL_S")
+    waweb_reconnect_max_s: int = Field(default=60, alias="WAWEB_RECONNECT_MAX_S")
+
     # --- Meta App (preflight, ADR pendiente) ---
     # BYOK por tenant (AppSettings.meta_app_config_encrypted); estos 3 son SOLO
     # el fallback opcional de dev/single-tenant, igual criterio que whatsapp_*

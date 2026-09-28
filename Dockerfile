@@ -3,7 +3,9 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # curl para el healthcheck que genera Coolify (docker healthcheck).
-RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev curl && rm -rf /var/lib/apt/lists/*
+# libmagic1 y ffmpeg: requeridos por Neonize (canal waweb, ADR-0074) para
+# detectar tipos de archivo y procesar media.
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev curl libmagic1 ffmpeg && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./
 COPY packages ./packages
@@ -16,8 +18,8 @@ COPY sdd/templates ./sdd/templates
 # Packs (packages/pack-*) y plugins (plugins/) horneados en la imagen:
 # en el despliegue (Coolify) no hay volúmenes de bind-mount como en compose.
 RUN pip install --no-cache-dir -e packages/contracts \
-    && pip install --no-cache-dir -e . \
-    && for d in packages/pack-*/ plugins/*/; do \
+    && pip install --no-cache-dir -e ".[waweb]" \
+    && for d in packages/pack-*/ packages/channel-*/ plugins/*/; do \
          if [ -f "${d}pyproject.toml" ]; then \
            pip install --no-cache-dir -e "${d}" || exit 1; \
          fi; \

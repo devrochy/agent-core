@@ -4,7 +4,26 @@ Este fichero es el tablero. Se actualiza al cerrar cada sprint. Claude lo lee pa
 en qué estamos.
 
 **Sprint activo:** Sprint 4
-**Última actualización:** 2026-09-26
+**Última actualización:** 2026-09-27
+
+---
+
+## En curso — canal WhatsApp Web + playground (2026-09-27)
+
+- [x] **Playground "Probar asistente"** (ADR-0075): probar el asistente de un tenant
+      sin ningún canal, desde el panel (`/admin/asistente/probar`). Excluido de cuotas
+      y escalamiento.
+- [~] **Canal `waweb` no oficial** (ADR-0074, propuesto): F0 (spike Neonize) iniciado.
+      Instalación/import validados; quedan los criterios manuales (QR, persistencia,
+      media, reconexión) con número de repuesto. **Bloqueante de entorno:** el Python
+      fuente del venv no trae `_ctypes`; el connector requiere Python con libffi
+      (venv de spike dedicado en `.spike/venv`).
+- [~] **F1 iniciado:** migración `0039` (`waweb_sessions`) + modelo `WaWebSession`
+      (RLS, única parcial por conexión), tipo de conexión `whatsapp_waweb`, política
+      anti-baneo por tenant, paquete `packages/channel-waweb` (entry point + adaptadores
+      + handoff Redis), vista `/admin/conexiones/waweb` (riesgo + QR) y handlers del
+      connector (inbound→stream, outbound con delay). Falta el backend Neonize y el
+      proceso `connector` (depende del spike con SIM).
 
 ---
 

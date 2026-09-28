@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Probar asistente{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-3"><i class="bi bi-robot text-accent"></i> Probar asistente</h1>
+<p class="text-secondary">
+  Conversá con el asistente de este negocio. Esta prueba <strong>no pasa por ningún canal</strong>:
+  no se envía ni se recibe nada por WhatsApp. El historial de la prueba no aparece en las
+  conversaciones del negocio ni consume la cuota del plan.
+</p>
+
+{% if test_error %}
+<div class="alert alert-warning">{{ test_error }}</div>
+{% endif %}
+
+<div class="d-flex justify-content-center">
+  <div class="card shadow-sm" style="max-width: 420px; width: 100%;">
+    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+      <span><i class="bi bi-phone"></i> Vista de prueba</span>
+      <form method="post" action="/admin/asistente/probar/reiniciar" class="m-0">
+        <button class="btn btn-sm btn-outline-light" type="submit">
+          <i class="bi bi-arrow-counterclockwise"></i> Reiniciar
+        </button>
+      </form>
+    </div>
+    <div class="card-body bg-body-tertiary">
+      <div class="d-flex justify-content-center mb-2">
+        <span class="badge text-bg-warning">Modo prueba — no pasa por ningún canal</span>
+      </div>
+      <div id="chat" aria-live="polite" aria-label="Conversación de prueba"
+           style="height: 460px; overflow-y: auto; padding: .25rem;">
+        {% for t in turns %}
+          {% if t.role == 'user' %}
+          <div class="d-flex justify-content-end mb-2">
+            <div class="p-2 px-3 rounded-3 text-white" style="background:#4f46e5; max-width: 80%; white-space: pre-wrap;">{{ t.content }}</div>
+          </div>
+          {% elif t.role == 'assistant' %}
+          <div class="d-flex justify-content-start mb-2">
+            <div class="p-2 px-3 rounded-3 bg-white border" style="max-width: 80%; white-space: pre-wrap;">{{ t.content }}</div>
+          </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+    <div class="card-footer">
+      <form id="form" class="d-flex gap-2" autocomplete="off">
+        <label class="visually-hidden" for="input">Mensaje</label>
+        <input id="input" name="text" class="form-control" placeholder="Escribí un mensaje…" required>
+        <button id="send" class="btn btn-accent" type="submit" aria-label="Enviar mensaje">
+          <i class="bi bi-send-fill"></i>
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const chat = document.getElementById('chat');
+  const form = document.getElementById('form');
+  const input = document.getElementById('input');
+  const send = document.getElementById('send');
+
+  function scrollDown() { chat.scrollTop = chat.scrollHeight; }
+  scrollDown();
+
+  function bubble(role, text) {
+    const row = document.createElement('div');
+    row.className = 'd-flex mb-2 ' + (role === 'user' ? 'justify-content-end' : 'justify-content-start');
+    const box = document.createElement('div');
+    box.className = role === 'user' ? 'p-2 px-3 rounded-3 text-white' : 'p-2 px-3 rounded-3 bg-white border';
+    if (role === 'user') box.style.background = '#4f46e5';
+    box.style.maxWidth = '80%';
+    box.style.whiteSpace = 'pre-wrap';
+    box.textContent = text;
+    row.appendChild(box);
+    chat.appendChild(row);
+    scrollDown();
+    return box;
+  }
+
+  function image(url) {
+    const row = document.createElement('div');
+    row.className = 'd-flex justify-content-start mb-2';
+    const img = document.createElement('img');
+    img.src = url;
+    img.className = 'rounded-3 border';
+    img.style.maxWidth = '80%';
+    img.alt = 'Imagen de la respuesta';
+    row.appendChild(img);
+    chat.appendChild(row);
+    scrollDown();
+  }
+
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    bubble('user', text);
+    input.value = '';
+    input.disabled = true;
+    send.disabled = true;
+    const typing = bubble('assistant', '…');
+    typing.classList.add('text-secondary');
+    try {
+      const res = await fetch('/admin/asistente/probar/mensaje', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const data = await res.json();
+      typing.remove();
+      if (!res.ok) {
+        bubble('assistant', data.error || 'No se pudo obtener respuesta.');
+      } else {
+        bubble('assistant', data.reply || '(sin respuesta)');
+        if (data.image_url) image(data.image_url);
+        if (data.escalated) {
+          const note = bubble('assistant', '⚠ El asistente escaló a un humano (la prueba no genera escalaciones reales).');
+          note.classList.add('text-warning');
+        }
+      }
+    } catch (e) {
+      typing.remove();
+      bubble('assistant', 'Error de red probando el asistente.');
+    } finally {
+      input.disabled = false;
+      send.disabled = false;
+      input.focus();
+    }
+  });
+</script>
+{% endblock %}

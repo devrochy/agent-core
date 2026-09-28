@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Conectar WhatsApp por QR{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-2"><i class="bi bi-phone"></i> Conectar WhatsApp por QR</h1>
+<p class="text-secondary mb-4">
+  Vinculá un número propio escaneando un código, sin la API oficial de Meta.
+  <a href="/admin/conexiones">Volver a Conexiones</a>
+</p>
+
+<div class="alert alert-danger" role="alert">
+  <strong><i class="bi bi-exclamation-triangle-fill"></i> Canal no oficial — riesgo de suspensión.</strong>
+  <div class="small mt-1">
+    Esta vía usa el protocolo de WhatsApp Web, que <strong>no está autorizado por WhatsApp</strong>.
+    La cuenta vinculada <strong>puede ser suspendida</strong>, a veces de forma permanente.
+    No la uses con el número principal de nadie. Enviar mensajes a quien no te escribió primero
+    o a desconocidos aumenta mucho el riesgo. Vinculá <strong>un solo número a un solo negocio</strong>.
+  </div>
+</div>
+
+{% if not waweb.risk_ok %}
+<div class="card">
+  <div class="card-body">
+    <h2 class="fs-5">Antes de continuar</h2>
+    <p class="text-secondary">
+      Confirmá que entendés y aceptás el riesgo. Queda registrado con tu usuario y la fecha.
+    </p>
+    <form method="post" action="/admin/conexiones/waweb/aceptar-riesgo">
+      <div class="form-check mb-3">
+        <input class="form-check-input" type="checkbox" id="ack" required>
+        <label class="form-check-label" for="ack">
+          Entiendo que este canal es no oficial y que el número puede ser suspendido por WhatsApp.
+          No uso un número personal que me importe.
+        </label>
+      </div>
+      <button type="submit" class="btn btn-accent btn-lg fw-semibold">
+        <i class="bi bi-check2-circle"></i> Acepto el riesgo y continuar
+      </button>
+    </form>
+  </div>
+</div>
+{% else %}
+
+<div class="d-flex justify-content-center">
+  <div class="card shadow-sm" style="max-width: 460px; width: 100%;">
+    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+      <span>Vínculo del número</span>
+      <span id="status-badge" class="badge text-bg-secondary">{{ waweb.status }}</span>
+    </div>
+    <div class="card-body text-center">
+      <div id="linked" class="{% if waweb.status != 'connected' %}d-none{% endif %}">
+        <p class="mb-1"><i class="bi bi-check-circle-fill text-success"></i> <strong>Número vinculado</strong></p>
+        <p class="text-secondary small mb-0">{{ waweb.jid or "" }}</p>
+        <p class="text-secondary small">Ya podés recibir y responder mensajes.</p>
+      </div>
+
+      <div id="qr-wrap" class="{% if waweb.status == 'connected' %}d-none{% endif %}">
+        <p class="text-secondary small">Escaneá este código desde WhatsApp → Dispositivos vinculados → Vincular un dispositivo.</p>
+        <img id="qr-img" alt="Código QR de vínculo de WhatsApp"
+             src="{{ waweb.qr_uri if waweb.qr_uri else '' }}"
+             class="img-fluid {% if not waweb.qr %}d-none{% endif %}"
+             style="max-width: 280px;">
+        <p id="qr-wait" class="text-secondary small {% if waweb.qr %}d-none{% endif %}">
+          <span class="spinner-border spinner-border-sm"></span>
+          Esperando el QR del conector…
+        </p>
+      </div>
+
+      <div id="closed" class="alert alert-warning small mt-3 d-none" role="alert"></div>
+      {% if waweb.last_error %}
+      <div class="alert alert-warning small mt-3 mb-0">{{ waweb.last_error }}</div>
+      {% endif %}
+    </div>
+    <div class="card-footer d-flex justify-content-between align-items-center">
+      <span class="text-secondary small">
+        Política: {{ 'solo respuesta' if not waweb.policy.allows_outbound else 'salida habilitada' }},
+        {{ waweb.policy.send_min_delay_ms }}–{{ waweb.policy.send_max_delay_ms }} ms,
+        tope {{ waweb.policy.daily_outbound_cap }}/día
+      </span>
+      <form method="post" action="/admin/conexiones/waweb/reiniciar" class="m-0">
+        <button class="btn btn-sm btn-outline-secondary" type="submit">
+          <i class="bi bi-arrow-counterclockwise"></i> Reiniciar vínculo
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if waweb.risk_ok %}
+<script>
+  const badge = document.getElementById('status-badge');
+  const img = document.getElementById('qr-img');
+  const wait = document.getElementById('qr-wait');
+  const qrWrap = document.getElementById('qr-wrap');
+  const linked = document.getElementById('linked');
+  const closed = document.getElementById('closed');
+  let timer = null;
+  let stopped = false;
+
+  function stop() { if (timer) { clearInterval(timer); timer = null; } }
+
+  function showConnected() {
+    if (stopped) return;
+    stopped = true;
+    stop();
+    if (badge) { badge.textContent = 'connected'; badge.className = 'badge text-bg-success'; }
+    if (qrWrap) qrWrap.classList.add('d-none');
+    if (linked) linked.classList.remove('d-none');
+  }
+
+  function showClosed(msg) {
+    if (stopped) return;
+    stopped = true;
+    stop();
+    if (badge) { badge.textContent = 'sesión cerrada'; badge.className = 'badge text-bg-danger'; }
+    if (qrWrap) qrWrap.classList.add('d-none');
+    if (closed) { closed.textContent = msg; closed.classList.remove('d-none'); }
+  }
+
+  async function refresh() {
+    if (stopped) return;
+    try {
+      const res = await fetch('/admin/conexiones/waweb/qr.json');
+      const d = await res.json();
+      if (badge) badge.textContent = d.status || '—';
+      if (d.status === 'connected') { showConnected(); return; }
+      if (d.status === 'logged_out') {
+        showClosed('La sesión se cerró (el dispositivo fue desvinculado). Volvé a vincular con “Reiniciar vínculo”.');
+        return;
+      }
+      if (d.qr_image && img) {
+        img.src = d.qr_image;
+        img.classList.remove('d-none');
+        if (wait) wait.classList.add('d-none');
+      }
+    } catch (e) { /* reintenta en el próximo tick */ }
+  }
+
+  refresh();
+  timer = setInterval(refresh, 3000);
+</script>
+{% endif %}
+{% endblock %}

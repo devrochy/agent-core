@@ -52,6 +52,9 @@ dependencies = [
 [project.optional-dependencies]
 # Embeddings locales (memoria vectorial sin API externa)
 embeddings-local = ["sentence-transformers>=3.0"]
+# Canal WhatsApp Web no oficial (rol `connector`, ADR-0074). Canal con riesgo de
+# suspensión: apagado por defecto (`WAWEB_ENABLED=false`).
+waweb = ["neonize>=0.5"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
