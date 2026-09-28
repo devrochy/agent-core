@@ -11,6 +11,7 @@ factoría de socket, drainer, sleep, alert) — se puede correr entero con fakes
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -47,9 +48,16 @@ class WaWebConnector:
     alert: Callable[..., Awaitable[None]] = send_alert
     sweep_interval_s: int = 15
     reconnect_max_s: int = 60
+    # Watchdog de vinculación: si un socket no está conectado y no publica QR en
+    # este tiempo, se recicla (Neonize puede dejar de emitir QR tras un timeout
+    # de login SIN marcar el socket como cerrado → quedaba en "esperando QR").
+    pairing_timeout_s: float = 45.0
+    now: Callable[[], float] = time.monotonic
     _tasks: dict[uuid.UUID, asyncio.Task] = field(default_factory=dict, init=False)
     _stop: set[uuid.UUID] = field(default_factory=set, init=False)
     _sockets: dict[uuid.UUID, WaWebSocket] = field(default_factory=dict, init=False)
+    _qr_at: dict[uuid.UUID, float] = field(default_factory=dict, init=False)
+    _connected: set[uuid.UUID] = field(default_factory=set, init=False)
 
     async def run(self) -> None:
         """Bucle principal: barre sesiones y arranca/detiene sockets."""
@@ -119,6 +127,7 @@ class WaWebConnector:
             return
         policy = await self.policy_loader(ctx.tenant_id)
         idle = 0
+        inicio = self.now()
         while not sock.closed.is_set() and ctx.tenant_id not in self._stop:
             processed = await self.drainer(
                 ctx.tenant_id,
@@ -140,9 +149,16 @@ class WaWebConnector:
                         await handoff.set_ready(str(ctx.tenant_id))
                     except Exception:
                         log.exception("waweb_session_persist_failed")
+                if ctx.tenant_id not in self._connected:
+                    ultimo = max(self._qr_at.get(ctx.tenant_id, 0.0), inicio)
+                    if self.now() - ultimo > self.pairing_timeout_s:
+                        log.warning("waweb_pairing_watchdog", tenant_id=str(ctx.tenant_id))
+                        sock.closed.set()
+                        break
                 await self.sleep(0.05)
 
     async def _on_qr(self, ctx: SessionContext, qr: str) -> None:
+        self._qr_at[ctx.tenant_id] = self.now()
         await handoff.publish_qr(str(ctx.tenant_id), qr)
         # `detail=""` limpia un `last_error` previo (p. ej. de un intento fallido).
         await self.registry.set_status(ctx.tenant_id, status.PENDING_QR, detail="")
@@ -151,6 +167,10 @@ class WaWebConnector:
         self, ctx: SessionContext, backend_status: str, detail: str | None = None, jid: str | None = None
     ) -> None:
         mapped = _STATUS_MAP.get(backend_status, status.ERROR)
+        if mapped == status.CONNECTED:
+            self._connected.add(ctx.tenant_id)
+        else:
+            self._connected.discard(ctx.tenant_id)
         await self.registry.set_status(ctx.tenant_id, mapped, detail=detail, jid=jid)
         if mapped != status.CONNECTED:
             await handoff.clear_ready(str(ctx.tenant_id))

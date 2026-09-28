@@ -202,3 +202,58 @@ async def test_run_session_conecta_y_persiste(tmp_path: Path, monkeypatch: pytes
     assert sock.connected is True
     assert registry.statuses[ctx.tenant_id] == status.CONNECTED
     assert set(connector.store.persisted) == {ctx.tenant_id}
+
+
+async def test_watchdog_vinculacion_recicla_socket_sin_qr(tmp_path: Path) -> None:
+    """Un socket que queda colgado sin QR (timeout de login de Neonize) se recicla.
+
+    Antes el drain seguía en bucle para siempre y el panel quedaba en
+    "esperando el QR" sin forma de recuperarse salvo reiniciar el conector.
+    """
+    ctx = _ctx()
+    registry = FakeRegistry([ctx])
+    reloj = {"t": 0.0}
+    sockets: list[Any] = []
+
+    class SocketMudo(FakeSocket):
+        async def connect(self, *, session_dir, on_qr, on_status, on_message):
+            # Ni "connected" ni QR: el login quedó colgado (timeout).
+            self.connected = True
+            self.session_dir = session_dir
+            self.callbacks = {"qr": on_qr, "status": on_status, "message": on_message}
+
+    def factory() -> Any:
+        sock = SocketMudo()
+        sockets.append(sock)
+        if len(sockets) >= 2:
+            connector._stop.add(ctx.tenant_id)
+        return sock
+
+    async def _noop_drain(*a: Any, **k: Any) -> bool:
+        return False
+
+    async def _sleep(segundos: float) -> None:
+        reloj["t"] += max(segundos, 0.05)
+
+    async def _alert(*a: Any, **k: Any) -> None:
+        return None
+
+    async def _policy(_tenant_id: uuid.UUID) -> WaWebPolicy:
+        return WaWebPolicy()
+
+    connector = WaWebConnector(
+        registry=registry,
+        store=FakeStore(tmp_path),
+        socket_factory=factory,
+        policy_loader=_policy,
+        drainer=_noop_drain,
+        sleep=_sleep,
+        alert=_alert,
+        now=lambda: reloj["t"],
+        pairing_timeout_s=0.2,
+    )
+
+    await asyncio.wait_for(connector.run_session(ctx), timeout=2)
+
+    assert len(sockets) == 2
+    assert sockets[0].closed.is_set()
