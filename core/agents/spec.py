@@ -158,6 +158,18 @@ async def _ensure_default_playbooks(tenant_id: uuid.UUID, spec: AgentSpec) -> Ag
     """
     existing = {p.name for p in spec.playbooks}
     missing = [ref for ref in DEFAULT_PLAYBOOK_REFS if ref["name"] not in existing]
+    # Playbooks de packs habilitados del tenant (ADR-0019): un playbook nuevo en
+    # un pack (p. ej. `citas` de pack-calendar) entra al allowlist sin tocar el
+    # spec de cada tenant -- data migration perezosa, idempotente. Import local
+    # para no crear un ciclo (onboarding importa spec a nivel de módulo).
+    try:
+        from core.onboarding import _pack_playbook_refs
+
+        for ref in _pack_playbook_refs(list(spec.packs)):
+            if ref["name"] not in existing and ref["name"] not in {m["name"] for m in missing}:
+                missing.append(ref)
+    except Exception:
+        pass
     if not missing:
         return spec
     merged = spec.model_copy(update={"playbooks": [*spec.playbooks, *missing]})

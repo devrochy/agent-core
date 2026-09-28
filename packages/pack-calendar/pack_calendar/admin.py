@@ -516,6 +516,14 @@ async def calendar_appointment_cancel(request: Request, appointment_id: uuid.UUI
         if row_db is not None:
             row_db.status = "cancelled"
             row_db.updated_at = utcnow()
+
+    await _record_event(
+        action="cancelada",
+        title=row.title,
+        appointment_id=appointment_id,
+        conversation_id=row.conversation_id,
+        old_start=row.start_at,
+    )
     return RedirectResponse("/calendar/citas?flash=Cita cancelada ✓", status_code=303)
 
 
@@ -617,6 +625,81 @@ async def _notify_cita_movida(conversation_id: uuid.UUID, title: str, new_start:
         return False
 
 
+async def _record_event(
+    *,
+    action: str,
+    title: str = "",
+    appointment_id: uuid.UUID | None = None,
+    conversation_id: uuid.UUID | None = None,
+    old_start: datetime | None = None,
+    new_start: datetime | None = None,
+    actor: str = "panel",
+) -> None:
+    """Registra una acción del historial de la cita (best-effort)."""
+    from pack_calendar.models import AppointmentEvent
+
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return
+    try:
+        async with get_session() as session:
+            session.add(
+                AppointmentEvent(
+                    tenant_id=tenant_id,
+                    appointment_id=appointment_id,
+                    action=action,
+                    title=title,
+                    old_start_at=old_start,
+                    new_start_at=new_start,
+                    actor=actor,
+                    conversation_id=conversation_id,
+                )
+            )
+    except Exception:
+        log.warning("calendar_event_record_failed", exc_info=True)
+
+
+@router.get("/actividades.json")
+async def calendar_activities_json(request: Request):
+    """Historial de acciones sobre las citas (programada/reprogramada/cancelada),
+    para el botón "Actividades" de la vista de Citas."""
+    if not await _authorized(request, write=False):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
+
+    from pack_calendar.models import AppointmentEvent
+
+    tenant_id = get_current_tenant_id()
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                select(AppointmentEvent)
+                .where(
+                    AppointmentEvent.tenant_id == tenant_id,
+                    AppointmentEvent.deleted_at.is_(None),
+                )
+                .order_by(AppointmentEvent.created_at.desc())
+                .limit(200)
+            )
+        ).scalars().all()
+    return JSONResponse(
+        {
+            "actividades": [
+                {
+                    "id": str(ev.id),
+                    "action": ev.action,
+                    "title": ev.title,
+                    "old_start": _utc_iso(ev.old_start_at) if ev.old_start_at else None,
+                    "new_start": _utc_iso(ev.new_start_at) if ev.new_start_at else None,
+                    "actor": ev.actor,
+                    "appointment_id": str(ev.appointment_id) if ev.appointment_id else None,
+                    "created_at": _utc_iso(ev.created_at),
+                }
+                for ev in rows
+            ]
+        }
+    )
+
+
 @router.get("/tipos.json")
 async def calendar_types_json(request: Request):
     """Tipos de cita activos, para el select del modal crear/editar."""
@@ -715,6 +798,14 @@ async def calendar_appointment_create(request: Request):
         await session.commit()
         appt_id = row.id
 
+    await _record_event(
+        action="programada",
+        title=title,
+        appointment_id=appt_id,
+        new_start=start,
+        actor="panel",
+    )
+
     return JSONResponse(
         {
             "ok": True,
@@ -811,6 +902,16 @@ async def calendar_appointment_patch(request: Request, appointment_id: uuid.UUID
     moved = (new_start is not None and new_start != old_start) or (
         new_end is not None and new_end != old_end
     )
+    if moved:
+        await _record_event(
+            action="reprogramada",
+            title=appt_title,
+            appointment_id=appointment_id,
+            conversation_id=conv_id,
+            old_start=old_start,
+            new_start=new_start or old_start,
+            actor="panel",
+        )
     notified = False
     if moved and conv_id is not None and bool(body.get("notify", True)):
         notified = await _notify_cita_movida(conv_id, appt_title, new_start or old_start)

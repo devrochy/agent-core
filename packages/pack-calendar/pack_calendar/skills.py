@@ -118,11 +118,14 @@ class CalendarSkill(BaseSkill):
             MCPTool(
                 name="update_calendar_event",
                 description=(
-                    "Reagenda/reprograma una cita YA EXISTENTE a una nueva fecha/hora (la mueve, "
-                    "no crea otra). Úsala SOLO cuando el cliente haya confirmado la nueva fecha y "
-                    "hora exactas. Si conocés el event_id que devolvió create_calendar_event, "
-                    "pasalo; si no, el sistema busca la próxima cita agendada del cliente por "
-                    "título o email. Fechas ISO 8601 en hora local del negocio."
+                    "Reagenda/reprograma una cita YA EXISTENTE a una nueva fecha/hora (la MUEVE, "
+                    "no crea otra). REGLA OBLIGATORIA: cuando el cliente pide reagendar/mover una "
+                    "cita ya agendada, NUNCA uses create_calendar_event (eso crea una cita NUEVA y "
+                    "duplica): usá SIEMPRE esta tool. Úsala SOLO cuando el cliente haya confirmado "
+                    "la nueva fecha y hora exactas. Si conocés el event_id que devolvió "
+                    "create_calendar_event, pasalo; si no, el sistema busca la próxima cita "
+                    "agendada del cliente por título o email. Fechas ISO 8601 en hora local del "
+                    "negocio."
                 ),
                 parameters={
                     "type": "object",
@@ -157,9 +160,11 @@ class CalendarSkill(BaseSkill):
                 name="cancel_calendar_event",
                 description=(
                     "Cancela una cita YA EXISTENTE (borra el evento de Google y la marca cancelada). "
-                    "Úsala SOLO cuando el cliente pidió cancelar explícitamente su cita/demo. Si "
-                    "conocés el event_id, pasalo; si no, el sistema busca la próxima cita agendada "
-                    "del cliente por título o email."
+                    "REGLA OBLIGATORIA: cuando el cliente pide cancelar su cita/demo, NUNCA escales "
+                    "a un humano ni digas 'paso tu solicitud': usá SIEMPRE esta tool para cancelar "
+                    "automáticamente y confirmarle al cliente. Úsala SOLO cuando el cliente pidió "
+                    "cancelar explícitamente. Si conocés el event_id, pasalo; si no, el sistema "
+                    "busca la próxima cita agendada del cliente por título o email."
                 ),
                 parameters={
                     "type": "object",
@@ -207,14 +212,22 @@ class CalendarSkill(BaseSkill):
             raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}")
         event = response.json()
 
-        await self._mirror_appointment(event, arguments, context, start, end)
+        appt_id = await self._mirror_appointment(event, arguments, context, start, end)
+        await self._record_event(
+            action="programada",
+            title=str(arguments.get("title", "Cita")),
+            appointment_id=appt_id,
+            conversation_id=context.conversation_id,
+            new_start=start,
+        )
 
         return {
             "event_id": event.get("id"),
             "status": "created",
             "start": start.isoformat(),
-            "link": event.get("htmlLink", ""),
-            # SafeRenderer: el link exacto lo adjunta el core, el LLM no lo copia a mano
+            # SafeRenderer: el link exacto lo adjunta el core, el LLM no lo copia a mano.
+            # No se expone `link` como clave: si el modelo lo copiara al texto, el
+            # safe_append lo duplicaría.
             "_safe_append": f"📅 Tu cita quedó agendada: {event.get('htmlLink', '')}",
         }
 
@@ -225,40 +238,84 @@ class CalendarSkill(BaseSkill):
         context: ToolContext,
         start: datetime,
         end: datetime,
-    ) -> None:
-        """Espeja la cita en la tabla del pack (para el panel). Best-effort."""
+    ) -> uuid.UUID | None:
+        """Espeja la cita en la tabla del pack (para el panel). Best-effort.
+
+        Devuelve el `id` de la fila espejo (para el historial de actividades) o
+        `None` si no se pudo persistir.
+        """
         tenant_id = get_current_tenant_id()
         if tenant_id is None:
             from core.shared.logger import get_logger
 
             get_logger(__name__).warning("calendar_mirror_sin_tenant")
-            return
+            return None
         try:
             from core.db.session import get_session
             from pack_calendar.models import Appointment
 
             async with get_session() as session:
-                session.add(
-                    Appointment(
-                        tenant_id=tenant_id,
-                        conversation_id=_as_uuid(context.conversation_id),
-                        customer_id=_as_uuid(context.customer_id),
-                        google_event_id=event.get("id"),
-                        title=str(arguments.get("title", "Cita")),
-                        attendee_email=(
-                            str(arguments["attendee_email"])
-                            if arguments.get("attendee_email")
-                            else None
-                        ),
-                        start_at=start,
-                        end_at=end,
-                        status="scheduled",
-                    )
+                row = Appointment(
+                    tenant_id=tenant_id,
+                    conversation_id=_as_uuid(context.conversation_id),
+                    customer_id=_as_uuid(context.customer_id),
+                    google_event_id=event.get("id"),
+                    title=str(arguments.get("title", "Cita")),
+                    attendee_email=(
+                        str(arguments["attendee_email"])
+                        if arguments.get("attendee_email")
+                        else None
+                    ),
+                    start_at=start,
+                    end_at=end,
+                    status="scheduled",
                 )
+                session.add(row)
+                await session.flush()
+                return row.id
         except Exception:  # nunca tumbar el agendamiento real por el espejo
             from core.shared.logger import get_logger
 
             get_logger(__name__).warning("calendar_mirror_failed", exc_info=True)
+            return None
+
+    async def _record_event(
+        self,
+        *,
+        action: str,
+        title: str = "",
+        appointment_id: uuid.UUID | None = None,
+        conversation_id: Any = None,
+        old_start: datetime | None = None,
+        new_start: datetime | None = None,
+        actor: str = "asistente",
+    ) -> None:
+        """Registra una acción del historial de la cita (best-effort)."""
+        from pack_calendar.models import AppointmentEvent
+
+        tenant_id = get_current_tenant_id()
+        if tenant_id is None:
+            return
+        try:
+            from core.db.session import get_session
+
+            async with get_session() as session:
+                session.add(
+                    AppointmentEvent(
+                        tenant_id=tenant_id,
+                        appointment_id=appointment_id,
+                        action=action,
+                        title=title,
+                        old_start_at=old_start,
+                        new_start_at=new_start,
+                        actor=actor,
+                        conversation_id=_as_uuid(conversation_id),
+                    )
+                )
+        except Exception:
+            from core.shared.logger import get_logger
+
+            get_logger(__name__).warning("calendar_event_record_failed", exc_info=True)
 
     async def _find_appointment(self, arguments: dict[str, Any], context: ToolContext) -> Any | None:
         """Localiza la cita a reagendar/cancelar.
@@ -365,12 +422,22 @@ class CalendarSkill(BaseSkill):
         from core.db.session import get_owned, get_session
         from pack_calendar.models import Appointment
 
+        old_start = appt.start_at
         async with get_session() as session:
             row = await get_owned(session, Appointment, appt.id, get_current_tenant_id())
             if row is not None:
                 row.start_at = start
                 row.end_at = end
                 row.updated_at = utcnow()
+
+        await self._record_event(
+            action="reprogramada",
+            title=appt.title or "",
+            appointment_id=appt.id,
+            conversation_id=appt.conversation_id,
+            old_start=old_start,
+            new_start=start,
+        )
 
         fecha = start.astimezone(tz).strftime("%d/%m/%Y")
         hora = start.astimezone(tz).strftime("%H:%M")
@@ -386,7 +453,6 @@ class CalendarSkill(BaseSkill):
             "event_id": appt.google_event_id,
             "start": start.isoformat(),
             "notified": notified,
-            "link": event.get("htmlLink", ""),
             "_safe_append": f"📅 Tu cita quedó reagendada para el {fecha} a las {hora}: {event.get('htmlLink', '')}",
         }
 
@@ -417,6 +483,14 @@ class CalendarSkill(BaseSkill):
             if row is not None:
                 row.status = "cancelled"
                 row.updated_at = utcnow()
+
+        await self._record_event(
+            action="cancelada",
+            title=appt.title or "",
+            appointment_id=appt.id,
+            conversation_id=appt.conversation_id,
+            old_start=appt.start_at,
+        )
 
         tz = ZoneInfo(config.timezone)
         fecha = appt.start_at.astimezone(tz).strftime("%d/%m/%Y") if appt.start_at else ""

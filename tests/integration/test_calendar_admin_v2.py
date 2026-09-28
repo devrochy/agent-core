@@ -790,3 +790,108 @@ async def test_skill_update_event_sin_cita_no_notifica(app_client, monkeypatch):
             {"start_datetime": "2026-10-09T10:00:00", "event_id": "g-no-existe"}, ctx
         )
     assert result["status"] == "not_found"
+
+
+async def _eventos_de(tenant_id, appointment_id=None):
+    from pack_calendar.models import AppointmentEvent
+    from sqlalchemy import select
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            q = select(AppointmentEvent).where(AppointmentEvent.tenant_id == tenant_id)
+            if appointment_id is not None:
+                q = q.where(AppointmentEvent.appointment_id == appointment_id)
+            rows = (await session.execute(q.order_by(AppointmentEvent.created_at.asc()))).scalars().all()
+            return [(e.action, e.actor, e.title) for e in rows]
+
+
+async def test_skill_registra_historial_programada_reprogramada_cancelada(app_client, monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from pack_calendar.skills import CalendarSkill
+
+    _, tid = await _calendar_tenant_tid(app_client)
+    _, conv_id = await _make_conversation(tid)
+    start = datetime(2026, 10, 12, 15, 0, tzinfo=UTC)
+    appt_id = await _make_appointment(
+        tid, title="Demo historial", start_utc=start, google_event_id="g-h", conversation_id=conv_id
+    )
+
+    async def _tok(*a, **k):
+        return "tok"
+
+    async def fake_patch(config, token, gid, body):
+        return {"id": gid, "htmlLink": "https://g/h"}
+
+    async def fake_delete(config, token, gid):
+        return None
+
+    async def fake_send(*a, **k):
+        return True
+
+    monkeypatch.setattr("pack_calendar.skills.get_access_token", _tok)
+    monkeypatch.setattr("pack_calendar.skills._google_patch_event", fake_patch)
+    monkeypatch.setattr("pack_calendar.skills._google_delete_event", fake_delete)
+    monkeypatch.setattr("core.gateway.sender.send_to_conversation", fake_send)
+
+    ctx = SimpleNamespace(conversation_id=str(conv_id), customer_id=None)
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tid):
+            await CalendarSkill().update_event(
+                {"start_datetime": "2026-10-13T10:00:00", "event_id": "g-h"}, ctx
+            )
+        async with tenant_scope(tid):
+            await CalendarSkill().cancel_event({"event_id": "g-h"}, ctx)
+
+        eventos = await _eventos_de(tid, appointment_id=appt_id)
+        acciones = [e[0] for e in eventos]
+        assert "reprogramada" in acciones
+        assert "cancelada" in acciones
+    finally:
+        await _delete_appointment(tid, appt_id)
+
+
+async def test_panel_crear_registra_programada_y_actividades_json(app_client, monkeypatch):
+    from datetime import datetime, timedelta
+
+    cookie, tid = await _calendar_tenant_tid(app_client)
+
+    async def _tok(config):
+        return "tok"
+
+    async def fake_create(config, token, **kw):
+        return {"id": "g-panel", "htmlLink": "https://g/p"}
+
+    async def fake_send(*a, **k):
+        return True
+
+    monkeypatch.setattr("pack_calendar.admin._google_token", _tok)
+    monkeypatch.setattr("pack_calendar.admin._google_create_event", fake_create)
+    monkeypatch.setattr("pack_calendar.admin._fetch_google_events", lambda config, s, e: [])
+    monkeypatch.setattr("core.gateway.sender.send_to_conversation", fake_send)
+
+    start = datetime(2026, 10, 15, 15, 0, tzinfo=UTC)
+    r = await app_client.post(
+        "/calendar/citas/crear", headers={"Cookie": cookie},
+        json={"title": "Cita panel historial", "start": start.isoformat(), "end": (start + timedelta(minutes=60)).isoformat()},
+    )
+    assert r.status_code == 200, r.text
+    appt_id = r.json()["id"]
+
+    try:
+        eventos = await _eventos_de(tid, appointment_id=uuid.UUID(appt_id))
+        assert ("programada", "panel", "Cita panel historial") in eventos
+
+        # El feed devuelve la actividad con appointment_id.
+        r = await app_client.get("/calendar/actividades.json", headers={"Cookie": cookie})
+        assert r.status_code == 200
+        feed = r.json()["actividades"]
+        assert any(a["appointment_id"] == appt_id and a["action"] == "programada" for a in feed)
+    finally:
+        await _delete_appointment(tid, uuid.UUID(appt_id))
