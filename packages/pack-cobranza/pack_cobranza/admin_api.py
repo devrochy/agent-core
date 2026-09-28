@@ -221,10 +221,12 @@ class Portfolio(BaseModel):
     nombre: str
     descripcion: str | None
     gestor: str | None
+    gestor_id: uuid.UUID | None = None
     tipo_interes: float
     num_cuotas: int
     moneda: str
     estatus: str
+    costo_cobro: float = 0.0
 
 
 @router.get("/portfolios", response_model=list[Portfolio])
@@ -255,17 +257,7 @@ async def list_portfolios(
         )
     name_by_id = {g.id: f"{g.nombre} {g.apellido or ''}".strip() for g in gestores}
     return [
-        Portfolio(
-            id=c.id,
-            nombre=c.nombre,
-            descripcion=c.descripcion,
-            gestor=name_by_id.get(c.gestor_id) if c.gestor_id else None,
-            tipo_interes=float(c.tipo_interes or 0),
-            num_cuotas=int(c.num_cuotas or 1),
-            moneda=c.moneda or "COP",
-            estatus=c.estatus,
-        )
-        for c in rows
+        _as_portfolio(c, name_by_id.get(c.gestor_id) if c.gestor_id else None) for c in rows
     ]
 
 
@@ -1461,10 +1453,12 @@ def _as_portfolio(row: Cartera, gestor: str | None) -> Portfolio:
         nombre=row.nombre,
         descripcion=row.descripcion,
         gestor=gestor,
+        gestor_id=row.gestor_id,
         tipo_interes=float(row.tipo_interes or 0),
         num_cuotas=int(row.num_cuotas or 1),
         moneda=row.moneda or "COP",
         estatus=row.estatus,
+        costo_cobro=float(row.costo_cobro or 0),
     )
 
 

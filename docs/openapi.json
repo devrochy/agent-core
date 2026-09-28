@@ -10019,6 +10019,18 @@
             ],
             "title": "Gestor"
           },
+          "gestor_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gestor Id"
+          },
           "tipo_interes": {
             "type": "number",
             "title": "Tipo Interes"
@@ -10034,6 +10046,11 @@
           "estatus": {
             "type": "string",
             "title": "Estatus"
+          },
+          "costo_cobro": {
+            "type": "number",
+            "title": "Costo Cobro",
+            "default": 0.0
           }
         },
         "type": "object",
