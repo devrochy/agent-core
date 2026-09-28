@@ -48,7 +48,19 @@ def extract_safe_extras(tool_results: list[dict[str, Any]]) -> SafeExtras:
 def apply_safe_extras(response_text: str, extras: SafeExtras) -> str:
     if not extras.safe_appends:
         return response_text
-    return response_text.rstrip() + "\n\n" + "\n\n".join(extras.safe_appends)
+    # Dedup: no repetir un append que el modelo ya escribió en su respuesta
+    # (p. ej. copió el link del resultado de la tool) ni repetir appends
+    # idénticos de varias tools en el mismo turno.
+    seen: set[str] = set()
+    pending: list[str] = []
+    for append in extras.safe_appends:
+        if append in seen or append in response_text:
+            continue
+        seen.add(append)
+        pending.append(append)
+    if not pending:
+        return response_text
+    return response_text.rstrip() + "\n\n" + "\n\n".join(pending)
 
 
 def strip_reserved_keys(result: dict[str, Any]) -> dict[str, Any]:
