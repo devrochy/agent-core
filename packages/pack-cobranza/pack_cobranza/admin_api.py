@@ -27,14 +27,18 @@ from .models import (
     AuditoriaCartera,
     Cartera,
     Cliente,
+    CobroPropietario,
     Cuota,
+    Device,
     Gasto,
     Gestor,
     IntentoAcceso,
+    LinkPago,
     Pago,
     Prestamo,
     Promesa,
     ReglaNegociacion,
+    SyncEvento,
 )
 
 PLUGIN_ID = "pack_cobranza"
@@ -648,3 +652,340 @@ async def audit_log(
             for r in filas
         ],
     )
+
+
+# ---------------------------------------------------------------- dispositivos
+class DeviceRow(BaseModel):
+    id: uuid.UUID
+    codigo: str
+    gestor: str
+    imei: str
+    whatsapp: str
+    estado: str
+    vinculado: str
+
+
+class AttemptRow(BaseModel):
+    resultado: str
+    motivo: str
+    imei: str
+    fecha: str
+
+
+class SyncRow(BaseModel):
+    fecha: str
+    tipo: str
+    estado: str
+    gestor: str
+    evento: str
+    critico: bool
+
+
+class Devices(BaseModel):
+    pendientes: int
+    eventos_error: int
+    dispositivos: list[DeviceRow]
+    intentos: list[AttemptRow]
+    eventos: list[SyncRow]
+
+
+def _audit(
+    session: Any,
+    tid: uuid.UUID,
+    entidad: str,
+    entidad_id: uuid.UUID,
+    operacion: str,
+    *,
+    despues: dict[str, Any] | None = None,
+    motivo: str | None = None,
+) -> None:
+    session.add(
+        AuditoriaCartera(
+            tenant_id=tid,
+            entidad=entidad,
+            entidad_id=entidad_id,
+            operacion=operacion,
+            valores_despues=despues,
+            motivo=motivo,
+            actor_rol="admin",
+        )
+    )
+
+
+@router.get("/devices", response_model=Devices)
+async def list_devices(
+    principal: Annotated[Principal, Depends(require("pack_cobranza:dispositivos"))],
+) -> Devices:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        devices = (
+            (
+                await session.execute(
+                    select(Device)
+                    .where(Device.tenant_id == tid, Device.deleted_at.is_(None))
+                    .order_by(Device.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        gestores = (
+            (await session.execute(select(Gestor).where(Gestor.tenant_id == tid))).scalars().all()
+        )
+        intentos = (
+            (
+                await session.execute(
+                    select(IntentoAcceso)
+                    .where(IntentoAcceso.tenant_id == tid)
+                    .order_by(IntentoAcceso.created_at.desc())
+                    .limit(20)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        eventos = (
+            (
+                await session.execute(
+                    select(SyncEvento)
+                    .where(SyncEvento.tenant_id == tid)
+                    .order_by(SyncEvento.created_at.desc())
+                    .limit(50)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    nombres = {g.id: f"{g.nombre} {g.apellido or ''}".strip() for g in gestores}
+    por_device = {d.id: nombres.get(d.gestor_id, "—") if d.gestor_id else "—" for d in devices}
+    return Devices(
+        pendientes=sum(1 for d in devices if d.estado == "pendiente"),
+        eventos_error=sum(1 for e in eventos if e.estado != "aplicado"),
+        dispositivos=[
+            DeviceRow(
+                id=d.id,
+                codigo=d.codigo,
+                gestor=nombres.get(d.gestor_id, "—") if d.gestor_id else "—",
+                imei=d.imei or "",
+                whatsapp=d.whatsapp_number or "",
+                estado=d.estado,
+                vinculado=d.fecha_vinculacion.strftime("%Y-%m-%d %H:%M") if d.fecha_vinculacion else "",
+            )
+            for d in devices
+        ],
+        intentos=[
+            AttemptRow(
+                resultado=i.resultado,
+                motivo=i.motivo or "",
+                imei=i.imei or "",
+                fecha=i.created_at.strftime("%Y-%m-%d %H:%M") if i.created_at else "",
+            )
+            for i in intentos
+        ],
+        eventos=[
+            SyncRow(
+                fecha=e.created_at.strftime("%Y-%m-%d %H:%M") if e.created_at else "",
+                tipo=e.tipo,
+                estado=e.estado,
+                gestor=por_device.get(e.device_id, "—") if e.device_id else "—",
+                evento=(e.evento_id_cliente or "")[:8],
+                critico=e.estado != "aplicado",
+            )
+            for e in eventos
+        ],
+    )
+
+
+class DeviceStatusUpdate(BaseModel):
+    estado: str
+
+
+DEVICE_STATUSES = ("activo", "pendiente", "bloqueado")
+
+
+@router.post("/devices/{device_id}/status", status_code=204)
+async def set_device_status(
+    device_id: uuid.UUID,
+    payload: DeviceStatusUpdate,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:dispositivos", write=True))],
+) -> Response:
+    if payload.estado not in DEVICE_STATUSES:
+        raise ApiError.bad_request(
+            f"Estado inválido: {payload.estado}. Válidos: {', '.join(DEVICE_STATUSES)}",
+            "invalid_status",
+        )
+    async with get_session() as session:
+        device = await get_owned(session, Device, device_id, principal.tenant_id)
+        if device is None:
+            raise ApiError.not_found("Dispositivo no encontrado.")
+        device.estado = payload.estado
+        if payload.estado == "activo" and device.fecha_vinculacion is None:
+            device.fecha_vinculacion = datetime.now(UTC)
+        _audit(
+            session,
+            principal.tenant_id,
+            "dispositivo",
+            device.id,
+            "editar",
+            despues={"estado": payload.estado},
+            motivo="Aprobación de dispositivo",
+        )
+    return Response(status_code=204)
+
+
+# --------------------------------------------------------- cobros al propietario
+class OwnerCharge(BaseModel):
+    id: uuid.UUID
+    periodo: str
+    monto: float
+    pagado: float | None
+    vence: date
+    estado: str
+
+
+class PaymentLink(BaseModel):
+    referencia: str
+    url: str
+    monto: float
+    estado: str
+
+
+class OwnerCharges(BaseModel):
+    cobros: list[OwnerCharge]
+    links: list[PaymentLink]
+
+
+def _as_charge(row: CobroPropietario) -> OwnerCharge:
+    return OwnerCharge(
+        id=row.id,
+        periodo=row.periodo,
+        monto=float(row.monto_calculado or 0),
+        pagado=float(row.monto_pagado) if row.monto_pagado is not None else None,
+        vence=row.fecha_vencimiento,
+        estado=row.estado,
+    )
+
+
+@router.get("/owner-charges", response_model=OwnerCharges)
+async def list_owner_charges(
+    principal: Annotated[Principal, Depends(require("pack_cobranza:cobros"))],
+) -> OwnerCharges:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cobros = (
+            (
+                await session.execute(
+                    select(CobroPropietario)
+                    .where(
+                        CobroPropietario.tenant_id == tid,
+                        CobroPropietario.deleted_at.is_(None),
+                    )
+                    .order_by(CobroPropietario.periodo.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        links = (
+            (
+                await session.execute(
+                    select(LinkPago)
+                    .where(LinkPago.tenant_id == tid)
+                    .order_by(LinkPago.created_at.desc())
+                    .limit(20)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return OwnerCharges(
+        cobros=[_as_charge(c) for c in cobros],
+        links=[
+            PaymentLink(
+                referencia=lk.referencia,
+                url=lk.url,
+                monto=float(lk.monto or 0),
+                estado=lk.estado,
+            )
+            for lk in links
+        ],
+    )
+
+
+class OwnerChargeCreate(BaseModel):
+    periodo: str
+    monto: float
+    fecha_vencimiento: date
+
+
+@router.post("/owner-charges", response_model=OwnerCharge, status_code=201)
+async def create_owner_charge(
+    payload: OwnerChargeCreate,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:cobros", write=True))],
+) -> OwnerCharge:
+    from .admin import registrar_mensaje_propietario
+
+    periodo = payload.periodo.strip()
+    if not periodo:
+        raise ApiError.bad_request("Falta el periodo.", "missing_period")
+    if payload.monto <= 0:
+        raise ApiError.bad_request("El monto debe ser mayor a cero.", "invalid_amount")
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cobro = (
+            await session.execute(
+                select(CobroPropietario).where(
+                    CobroPropietario.tenant_id == tid,
+                    CobroPropietario.periodo == periodo,
+                )
+            )
+        ).scalar_one_or_none()
+        if cobro is None:
+            cobro = CobroPropietario(
+                tenant_id=tid,
+                periodo=periodo,
+                monto_calculado=Decimal(str(payload.monto)),
+                fecha_vencimiento=payload.fecha_vencimiento,
+            )
+            session.add(cobro)
+            await session.flush()
+        else:
+            cobro.monto_calculado = Decimal(str(payload.monto))
+            cobro.fecha_vencimiento = payload.fecha_vencimiento
+        await registrar_mensaje_propietario(
+            session,
+            tid,
+            f"Notificación de cobro · periodo {periodo}: {payload.monto:,.0f} · "
+            f"vence {payload.fecha_vencimiento.isoformat()}",
+            tipo="notificacion",
+            autor_rol="sistema",
+            cobro_id=cobro.id,
+        )
+        await session.refresh(cobro)
+        return _as_charge(cobro)
+
+
+class OwnerPayment(BaseModel):
+    monto_pagado: float
+    metodo_pago: str | None = None
+
+
+@router.post("/owner-charges/{charge_id}/payment", status_code=204)
+async def register_owner_payment(
+    charge_id: uuid.UUID,
+    payload: OwnerPayment,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:cobros", write=True))],
+) -> Response:
+    if payload.monto_pagado <= 0:
+        raise ApiError.bad_request("El monto debe ser mayor a cero.", "invalid_amount")
+    async with get_session() as session:
+        cobro = await get_owned(session, CobroPropietario, charge_id, principal.tenant_id)
+        if cobro is None:
+            raise ApiError.not_found("Cobro no encontrado.")
+        cobro.monto_pagado = Decimal(str(payload.monto_pagado))
+        cobro.fecha_pago = date.today()
+        cobro.estado = "pagado"
+        if payload.metodo_pago:
+            cobro.metodo_pago = payload.metodo_pago
+        cobro.registrado_por = principal.admin.email
+    return Response(status_code=204)

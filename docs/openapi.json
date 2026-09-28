@@ -5183,6 +5183,285 @@
         }
       }
     },
+    "/api/v1/pack/cobranza/devices": {
+      "get": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "List Devices",
+        "operationId": "list_devices_api_v1_pack_cobranza_devices_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Devices"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/devices/{device_id}/status": {
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Set Device Status",
+        "operationId": "set_device_status_api_v1_pack_cobranza_devices__device_id__status_post",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceStatusUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/owner-charges": {
+      "get": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "List Owner Charges",
+        "operationId": "list_owner_charges_api_v1_pack_cobranza_owner_charges_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnerCharges"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Create Owner Charge",
+        "operationId": "create_owner_charge_api_v1_pack_cobranza_owner_charges_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnerChargeCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnerCharge"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/owner-charges/{charge_id}/payment": {
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Register Owner Payment",
+        "operationId": "register_owner_payment_api_v1_pack_cobranza_owner_charges__charge_id__payment_post",
+        "parameters": [
+          {
+            "name": "charge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Charge Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnerPayment"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/calendar/status": {
       "get": {
         "tags": [
@@ -5720,6 +5999,34 @@
           "appointment_type_id"
         ],
         "title": "AppointmentOut"
+      },
+      "AttemptRow": {
+        "properties": {
+          "resultado": {
+            "type": "string",
+            "title": "Resultado"
+          },
+          "motivo": {
+            "type": "string",
+            "title": "Motivo"
+          },
+          "imei": {
+            "type": "string",
+            "title": "Imei"
+          },
+          "fecha": {
+            "type": "string",
+            "title": "Fecha"
+          }
+        },
+        "type": "object",
+        "required": [
+          "resultado",
+          "motivo",
+          "imei",
+          "fecha"
+        ],
+        "title": "AttemptRow"
       },
       "AuditLog": {
         "properties": {
@@ -6784,6 +7091,105 @@
           "billing"
         ],
         "title": "DashboardResponse"
+      },
+      "DeviceRow": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "codigo": {
+            "type": "string",
+            "title": "Codigo"
+          },
+          "gestor": {
+            "type": "string",
+            "title": "Gestor"
+          },
+          "imei": {
+            "type": "string",
+            "title": "Imei"
+          },
+          "whatsapp": {
+            "type": "string",
+            "title": "Whatsapp"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "vinculado": {
+            "type": "string",
+            "title": "Vinculado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "codigo",
+          "gestor",
+          "imei",
+          "whatsapp",
+          "estado",
+          "vinculado"
+        ],
+        "title": "DeviceRow"
+      },
+      "DeviceStatusUpdate": {
+        "properties": {
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "estado"
+        ],
+        "title": "DeviceStatusUpdate"
+      },
+      "Devices": {
+        "properties": {
+          "pendientes": {
+            "type": "integer",
+            "title": "Pendientes"
+          },
+          "eventos_error": {
+            "type": "integer",
+            "title": "Eventos Error"
+          },
+          "dispositivos": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceRow"
+            },
+            "type": "array",
+            "title": "Dispositivos"
+          },
+          "intentos": {
+            "items": {
+              "$ref": "#/components/schemas/AttemptRow"
+            },
+            "type": "array",
+            "title": "Intentos"
+          },
+          "eventos": {
+            "items": {
+              "$ref": "#/components/schemas/SyncRow"
+            },
+            "type": "array",
+            "title": "Eventos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pendientes",
+          "eventos_error",
+          "dispositivos",
+          "intentos",
+          "eventos"
+        ],
+        "title": "Devices"
       },
       "EscalationItem": {
         "properties": {
@@ -8265,6 +8671,125 @@
         ],
         "title": "OrderStatusUpdate"
       },
+      "OwnerCharge": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "periodo": {
+            "type": "string",
+            "title": "Periodo"
+          },
+          "monto": {
+            "type": "number",
+            "title": "Monto"
+          },
+          "pagado": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pagado"
+          },
+          "vence": {
+            "type": "string",
+            "format": "date",
+            "title": "Vence"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "periodo",
+          "monto",
+          "pagado",
+          "vence",
+          "estado"
+        ],
+        "title": "OwnerCharge"
+      },
+      "OwnerChargeCreate": {
+        "properties": {
+          "periodo": {
+            "type": "string",
+            "title": "Periodo"
+          },
+          "monto": {
+            "type": "number",
+            "title": "Monto"
+          },
+          "fecha_vencimiento": {
+            "type": "string",
+            "format": "date",
+            "title": "Fecha Vencimiento"
+          }
+        },
+        "type": "object",
+        "required": [
+          "periodo",
+          "monto",
+          "fecha_vencimiento"
+        ],
+        "title": "OwnerChargeCreate"
+      },
+      "OwnerCharges": {
+        "properties": {
+          "cobros": {
+            "items": {
+              "$ref": "#/components/schemas/OwnerCharge"
+            },
+            "type": "array",
+            "title": "Cobros"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/PaymentLink"
+            },
+            "type": "array",
+            "title": "Links"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cobros",
+          "links"
+        ],
+        "title": "OwnerCharges"
+      },
+      "OwnerPayment": {
+        "properties": {
+          "monto_pagado": {
+            "type": "number",
+            "title": "Monto Pagado"
+          },
+          "metodo_pago": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metodo Pago"
+          }
+        },
+        "type": "object",
+        "required": [
+          "monto_pagado"
+        ],
+        "title": "OwnerPayment"
+      },
       "PackRole": {
         "properties": {
           "value": {
@@ -8439,6 +8964,34 @@
           "password"
         ],
         "title": "PasswordReset"
+      },
+      "PaymentLink": {
+        "properties": {
+          "referencia": {
+            "type": "string",
+            "title": "Referencia"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "monto": {
+            "type": "number",
+            "title": "Monto"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "referencia",
+          "url",
+          "monto",
+          "estado"
+        ],
+        "title": "PaymentLink"
       },
       "PermissionItem": {
         "properties": {
@@ -9700,6 +10253,44 @@
           "kpis"
         ],
         "title": "Summary"
+      },
+      "SyncRow": {
+        "properties": {
+          "fecha": {
+            "type": "string",
+            "title": "Fecha"
+          },
+          "tipo": {
+            "type": "string",
+            "title": "Tipo"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "gestor": {
+            "type": "string",
+            "title": "Gestor"
+          },
+          "evento": {
+            "type": "string",
+            "title": "Evento"
+          },
+          "critico": {
+            "type": "boolean",
+            "title": "Critico"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fecha",
+          "tipo",
+          "estado",
+          "gestor",
+          "evento",
+          "critico"
+        ],
+        "title": "SyncRow"
       },
       "TemplateItem": {
         "properties": {
