@@ -96,7 +96,7 @@ async def _tenant_y_secretos(payload: dict[str, Any]) -> tuple[uuid.UUID | None,
     framework (`.env`). Dos bugs reales corregidos acá (2026-09-29):
     - la ruta genérica validaba solo con el secret del framework: con BYOK toda
       entrega terminaba en 401;
-    - el token BYOK vive bajo RLS de tenant (`meta_private.meta_tokens`): hay
+    - el token BYOK vive bajo RLS de tenant (custodia `meta_token_store`): hay
       que resolverlo dentro de `tenant_scope` o la lectura cae al `.env`.
     """
     from core.gateway.connections import resolve_effective_app_secret
