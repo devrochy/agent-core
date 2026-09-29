@@ -88,3 +88,4 @@ Se crean con `/adr`.
 | 0078 | El wizard de WhatsApp (Embedded Signup/BYOK) permanece en el panel clásico | aceptado |
 | 0079 | API admin de packs bajo `/api/v1/pack/<id>` (punto de extensión) | aceptado |
 | [0080](0080-wizard-whatsapp-en-panel-nuevo.md) | El wizard de WhatsApp se reconstruye en el panel nuevo (supera el 0078) |
+| [0081](0081-login-unificado-e-invitaciones.md) | Identidad unificada: login sin slug, selección de negocio y membresía por invitación | aceptado |
