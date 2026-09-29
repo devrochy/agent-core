@@ -412,7 +412,7 @@ async def create_connection_template(
 
     if payload.header_format in ("IMAGE", "VIDEO", "DOCUMENT"):
         raise ApiError.bad_request(
-            "Los encabezados con multimedia aún se crean desde el panel clásico.",
+            "Los encabezados con multimedia aún no están soportados (pendiente: subida de archivo).",
             "media_header_not_supported",
         )
     if not payload.name.strip() or not payload.body_text.strip():
