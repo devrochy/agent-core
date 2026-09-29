@@ -2231,6 +2231,72 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Create Connection Template",
+        "description": "Crea una plantilla en la WABA de la conexión (pendiente de revisión de Meta).",
+        "operationId": "create_connection_template_api_v1_admin_meta_connections__connection_id__templates_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/admin/meta/connections/{connection_id}/templates/sync": {
@@ -14673,6 +14739,80 @@
           "critico"
         ],
         "title": "SyncRow"
+      },
+      "TemplateCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": "es"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "default": "UTILITY"
+          },
+          "header_format": {
+            "type": "string",
+            "title": "Header Format",
+            "default": "NONE"
+          },
+          "header_text": {
+            "type": "string",
+            "title": "Header Text",
+            "default": ""
+          },
+          "header_param_name": {
+            "type": "string",
+            "title": "Header Param Name",
+            "default": ""
+          },
+          "header_param_example": {
+            "type": "string",
+            "title": "Header Param Example",
+            "default": ""
+          },
+          "body_text": {
+            "type": "string",
+            "title": "Body Text"
+          },
+          "body_param_names": {
+            "type": "string",
+            "title": "Body Param Names",
+            "default": ""
+          },
+          "body_param_examples": {
+            "type": "string",
+            "title": "Body Param Examples",
+            "default": ""
+          },
+          "footer_text": {
+            "type": "string",
+            "title": "Footer Text",
+            "default": ""
+          },
+          "buttons_json": {
+            "type": "string",
+            "title": "Buttons Json",
+            "default": ""
+          },
+          "parameter_format": {
+            "type": "string",
+            "title": "Parameter Format",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "body_text"
+        ],
+        "title": "TemplateCreate",
+        "description": "Alta de plantilla (texto; los encabezados con multimedia se suben aparte)."
       },
       "TemplateItem": {
         "properties": {

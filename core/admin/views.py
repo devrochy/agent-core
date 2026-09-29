@@ -2688,70 +2688,6 @@ async def meta_connection_numeros_verificar(request: Request, connection_id: str
 
 
 # ---------------------------------------------------------- plantillas de WhatsApp
-@router.get("/plantillas", response_class=HTMLResponse)
-async def plantillas_page(request: Request):
-    """Entrada de menú a las plantillas de WhatsApp.
-
-    Las plantillas son por conexión (WABA): esta ruta resuelve las conexiones del
-    tenant actual (RLS) y redirige a la más reciente. Con más de una, muestra un
-    selector para elegir cuál; sin ninguna, invita a conectar WhatsApp.
-    """
-    ctx = await _base_context(request, "plantillas")
-    if ctx is None:
-        return _login_redirect()
-
-    tid = get_current_tenant_id()
-    from core.db.models import MetaConnection
-
-    async with get_session() as session:
-        meta_connections = (
-            await session.execute(
-                select(MetaConnection)
-                .where(MetaConnection.tenant_id == tid, MetaConnection.deleted_at.is_(None))
-                .order_by(MetaConnection.created_at.desc())
-            )
-        ).scalars().all()
-        phones_by_connection: dict[uuid.UUID, str] = {}
-        if meta_connections:
-            phone_rows = (
-                await session.execute(
-                    select(PhoneNumber).where(
-                        PhoneNumber.tenant_id == tid,
-                        PhoneNumber.connection_id.in_([mc.id for mc in meta_connections]),
-                    )
-                )
-            ).scalars().all()
-            for p in phone_rows:
-                phones_by_connection.setdefault(
-                    p.connection_id, p.display_phone_number or p.phone_number_id
-                )
-
-    if not meta_connections:
-        return RedirectResponse(
-            "/admin/conexiones?flash=Primero conectá WhatsApp para gestionar plantillas&flash_type=warning",
-            status_code=303,
-        )
-    if len(meta_connections) == 1:
-        return RedirectResponse(
-            f"/admin/conexiones/meta/{meta_connections[0].id}/plantillas", status_code=303
-        )
-
-    ctx.update(
-        connections=[
-            {
-                "id": mc.id,
-                "channel": mc.channel,
-                "environment": mc.environment,
-                "status": mc.status,
-                "number": phones_by_connection.get(mc.id, mc.meta_app_id),
-                "created_at": mc.created_at,
-            }
-            for mc in meta_connections
-        ]
-    )
-    return _render("plantillas_conexiones.html", ctx)
-
-
 @router.get("/conexiones/meta/{connection_id}/plantillas", response_class=HTMLResponse)
 async def meta_connection_plantillas_page(request: Request, connection_id: str):
     ctx = await _base_context(request, "connections")
@@ -2768,24 +2704,6 @@ async def meta_connection_plantillas_page(request: Request, connection_id: str):
     templates, sync_error, at_limit = await list_templates(tid, connection_id)
     ctx.update(connection=connection, waba=waba, templates=templates, sync_error=sync_error, at_limit=at_limit)
     return _render("meta_plantillas.html", ctx)
-
-
-@router.get("/conexiones/meta/{connection_id}/plantillas/nueva", response_class=HTMLResponse)
-async def meta_connection_plantilla_nueva_page(request: Request, connection_id: str):
-    ctx = await _base_context(request, "connections")
-    if ctx is None:
-        return _login_redirect()
-
-    tid = get_current_tenant_id()
-    connection, waba, _token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
-    if connection is None or waba is None:
-        return RedirectResponse(
-            f"/admin/conexiones/meta/{connection_id}/plantillas?flash=No hay WABA lista todavía&flash_type=danger",
-            status_code=303,
-        )
-
-    ctx.update(connection=connection, waba=waba)
-    return _render("meta_plantilla_nueva.html", ctx)
 
 
 def _build_template_components(form: dict[str, str]) -> list[dict[str, Any]]:
@@ -2839,68 +2757,6 @@ def _build_template_components(form: dict[str, str]) -> list[dict[str, Any]]:
             components.append({"type": "BUTTONS", "buttons": buttons})
 
     return components
-
-
-@router.post("/conexiones/meta/{connection_id}/plantillas/nueva")
-async def meta_connection_plantilla_crear(request: Request, connection_id: str):
-    from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_preflight import resolve_app_credentials
-    from core.gateway.meta_subscriptions import fetch_app_access_token
-    from core.gateway.meta_template_upload import (
-        TemplateUploadError,
-        start_upload_session,
-        upload_file_chunk,
-    )
-    from core.gateway.meta_templates import (
-        TemplateRateLimitError,
-        TemplateValidationError,
-        create_template,
-    )
-
-    if await current_admin(request) is None:
-        return _login_redirect()
-
-    tid = get_current_tenant_id()
-    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
-    url = f"/admin/conexiones/meta/{connection_id}/plantillas"
-    if connection is None or waba is None or not token:
-        return RedirectResponse(f"{url}?flash=No hay conexión/WABA lista todavía&flash_type=danger", status_code=303)
-
-    form = dict(await request.form())
-    header_format = form.get("header_format", "NONE")
-
-    try:
-        if header_format in ("IMAGE", "VIDEO", "DOCUMENT"):
-            upload = form.get("header_file")
-            if upload is None or not hasattr(upload, "read"):
-                raise TemplateValidationError("HEADER: falta el archivo de cabecera")
-            file_bytes = await upload.read()
-            app_creds = await resolve_app_credentials(tid, channel="whatsapp")
-            if app_creds is None:
-                raise TemplateValidationError("no hay credenciales de app configuradas para subir la cabecera")
-            app_access_token = await fetch_app_access_token(
-                app_creds.app_id, app_creds.app_secret, app_creds.graph_api_version
-            )
-            upload_id = await start_upload_session(
-                app_creds.app_id, app_access_token, app_creds.app_secret, app_creds.graph_api_version, connection.id,
-                file_name=upload.filename or "cabecera", file_length=len(file_bytes),
-                file_type=upload.content_type or "application/octet-stream",
-            )
-            handle = await upload_file_chunk(upload_id, app_access_token, file_bytes)
-            form["header_handle"] = handle
-
-        components = _build_template_components(form)
-        await create_template(
-            waba.waba_id, token, get_settings().meta_app_secret, connection.graph_api_version, connection.id, tid,
-            waba.id, name=form["name"], language=form["language"], category=form["category"],
-            components=components, parameter_format=form.get("parameter_format") or None,
-        )
-    except (TemplateValidationError, TemplateRateLimitError, TemplateUploadError) as exc:
-        return RedirectResponse(f"{url}?flash={str(exc)[:200]}&flash_type=danger", status_code=303)
-    except GraphError as exc:
-        return RedirectResponse(f"{url}?flash={exc.message[:200]}&flash_type=danger", status_code=303)
-
-    return RedirectResponse(f"{url}?flash=Plantilla creada, pendiente de revisión de Meta", status_code=303)
 
 
 @router.post("/conexiones/meta/{connection_id}/plantillas/{template_id}/editar")

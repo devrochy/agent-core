@@ -48,6 +48,7 @@ from core.admin.waweb_service import (
 )
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
+from core.config import get_settings
 
 router = APIRouter(prefix="/admin/meta", tags=["admin · meta"])
 
@@ -372,3 +373,98 @@ async def meta_connection_action(
     if error is not None:
         raise ApiError.bad_request(error, "meta_connection_failed")
     return Response(status_code=204)
+
+class TemplateCreate(BaseModel):
+    """Alta de plantilla (texto; los encabezados con multimedia se suben aparte)."""
+
+    name: str
+    language: str = "es"
+    category: str = "UTILITY"
+    header_format: str = "NONE"
+    header_text: str = ""
+    header_param_name: str = ""
+    header_param_example: str = ""
+    body_text: str
+    body_param_names: str = ""
+    body_param_examples: str = ""
+    footer_text: str = ""
+    buttons_json: str = ""
+    parameter_format: str = ""
+
+
+@router.post("/connections/{connection_id}/templates", status_code=201)
+async def create_connection_template(
+    connection_id: str,
+    payload: TemplateCreate,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> Response:
+    """Crea una plantilla en la WABA de la conexión (pendiente de revisión de Meta)."""
+    import uuid as uuid_mod
+
+    from core.admin.views import _build_template_components, _resolve_waba_and_token
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_template_upload import TemplateUploadError
+    from core.gateway.meta_templates import (
+        TemplateRateLimitError,
+        TemplateValidationError,
+        create_template,
+    )
+
+    if payload.header_format in ("IMAGE", "VIDEO", "DOCUMENT"):
+        raise ApiError.bad_request(
+            "Los encabezados con multimedia aún se crean desde el panel clásico.",
+            "media_header_not_supported",
+        )
+    if not payload.name.strip() or not payload.body_text.strip():
+        raise ApiError.bad_request("Nombre y cuerpo son obligatorios.", "missing_fields")
+    try:
+        connection, waba, token = await _resolve_waba_and_token(
+            uuid_mod.UUID(connection_id), principal.tenant_id
+        )
+    except ValueError as exc:
+        raise ApiError.bad_request("Conexión inválida.", "invalid_connection") from exc
+    except Exception as exc:  # conexión inexistente / sin WABA / sin token
+        raise ApiError.bad_request(
+            f"No hay conexión/WABA lista todavía: {str(exc)[:120]}", "connection_not_ready"
+        ) from exc
+    if connection is None or waba is None or not token:
+        raise ApiError.bad_request(
+            "No hay conexión/WABA lista todavía.", "connection_not_ready"
+        )
+
+    form = {
+        "name": payload.name.strip(),
+        "language": payload.language.strip() or "es",
+        "category": payload.category.strip() or "UTILITY",
+        "header_format": payload.header_format,
+        "header_text": payload.header_text,
+        "header_param_name": payload.header_param_name,
+        "header_param_example": payload.header_param_example,
+        "body_text": payload.body_text,
+        "body_param_names": payload.body_param_names,
+        "body_param_examples": payload.body_param_examples,
+        "footer_text": payload.footer_text,
+        "buttons_json": payload.buttons_json,
+        "parameter_format": payload.parameter_format,
+    }
+    components = _build_template_components(form)
+    try:
+        await create_template(
+            waba.waba_id,
+            token,
+            get_settings().meta_app_secret,
+            connection.graph_api_version,
+            connection.id,
+            principal.tenant_id,
+            waba.id,
+            name=form["name"],
+            language=form["language"],
+            category=form["category"],
+            components=components,
+            parameter_format=form.get("parameter_format") or None,
+        )
+    except (TemplateValidationError, TemplateRateLimitError, TemplateUploadError) as exc:
+        raise ApiError.bad_request(str(exc)[:200], "template_rejected") from exc
+    except GraphError as exc:
+        raise ApiError.bad_request(str(getattr(exc, "message", exc))[:200], "graph_error") from exc
+    return Response(status_code=201)
