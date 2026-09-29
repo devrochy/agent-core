@@ -471,6 +471,156 @@ async def create_connection_template(
         raise ApiError.bad_request(str(getattr(exc, "message", exc))[:200], "graph_error") from exc
     return Response(status_code=201)
 
+# ------------------------------------------------- token BYOK (extender/inspeccionar)
+class TokenConnectionRequest(BaseModel):
+    connection_id: str
+
+
+class TokenInspect(BaseModel):
+    is_valid: bool
+    type: str | None = None
+    app_id: str | None = None
+    # `expires_at` en unixtime (0 = no expira) según Meta; `token_expires_at`
+    # es lo que ya teníamos guardado en el token store.
+    expires_at: int | None = None
+    never_expires: bool = False
+    token_expires_at: datetime | None = None
+    scopes: list[str] = []
+    has_whatsapp_scopes: bool = False
+
+
+class TokenExtend(BaseModel):
+    token_expires_at: datetime | None = None
+    expires_in: int | None = None
+
+
+async def _resolve_connection_token_secret(
+    principal: Principal, connection_id: str
+) -> tuple[Any, str, str]:
+    """(conexión, app_secret, access_token) guardados del negocio, o error claro.
+
+    El token y el secret viven bajo RLS de tenant (custodia del token store):
+    todo se resuelve dentro de `tenant_scope` (mismo bug real que el webhook).
+    """
+    from core.db.models import MetaConnection
+    from core.gateway import meta_token_store
+    from core.gateway.connections import resolve_effective_app_secret
+    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
+    from core.shared.tenant import tenant_scope
+
+    try:
+        conn_uuid = uuid.UUID(connection_id)
+    except ValueError as exc:
+        raise ApiError.not_found("La conexión no existe.") from exc
+
+    async with tenant_scope(principal.tenant_id):
+        async with get_session() as session:
+            connection = await session.get(MetaConnection, conn_uuid)
+            if (
+                connection is None
+                or connection.tenant_id != principal.tenant_id
+                or connection.deleted_at is not None
+            ):
+                raise ApiError.not_found("La conexión no existe.")
+            secret = await resolve_effective_app_secret(principal.tenant_id)
+            token = await meta_token_store.get_token(
+                connection.id,
+                CLOUD_API_ACCESS_TOKEN_KIND,
+                connection.meta_app_id,
+                tenant_id=principal.tenant_id,
+            )
+    if not secret or not token:
+        raise ApiError.bad_request(
+            "La conexión no tiene app secret o access token guardados.",
+            "missing_credentials",
+        )
+    return connection, secret, token
+
+
+@router.post("/byok/token/inspect", response_model=TokenInspect)
+async def inspect_byok_token(
+    payload: TokenConnectionRequest,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> TokenInspect:
+    """Debug del token guardado: validez, tipo, vencimiento real y scopes."""
+    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_token_store import get_token_expires_at
+    from core.gateway.meta_token_tools import inspect_token
+
+    connection, secret, token = await _resolve_connection_token_secret(
+        principal, payload.connection_id
+    )
+    try:
+        info = await inspect_token(
+            connection.meta_app_id, secret, token, version=connection.graph_api_version
+        )
+    except GraphError as exc:
+        raise ApiError.bad_request(str(getattr(exc, "message", exc))[:200], "graph_error") from exc
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(principal.tenant_id):
+        guardado = await get_token_expires_at(
+            connection.id, CLOUD_API_ACCESS_TOKEN_KIND, connection.meta_app_id,
+            tenant_id=principal.tenant_id,
+        )
+    return TokenInspect(
+        is_valid=info["is_valid"],
+        type=info.get("type"),
+        app_id=info.get("app_id"),
+        expires_at=info.get("expires_at"),
+        never_expires=bool(info.get("never_expires")),
+        token_expires_at=guardado,
+        scopes=list(info.get("scopes") or []),
+        has_whatsapp_scopes=bool(info.get("has_whatsapp_scopes")),
+    )
+
+
+@router.post("/byok/token/extend", response_model=TokenExtend)
+async def extend_byok_token(
+    payload: TokenConnectionRequest,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> TokenExtend:
+    """Canjea el token guardado por uno long-lived (~60 días) y lo persiste.
+
+    Nunca devuelve el token: el panel solo muestra la nueva caducidad.
+    """
+    _require_owner_or_master(principal)
+
+    from datetime import UTC, timedelta
+
+    from core.gateway import meta_token_store
+    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_token_tools import extend_token
+    from core.shared.tenant import tenant_scope
+
+    connection, secret, token = await _resolve_connection_token_secret(
+        principal, payload.connection_id
+    )
+    try:
+        info = await extend_token(
+            connection.meta_app_id, secret, token, version=connection.graph_api_version
+        )
+    except GraphError as exc:
+        raise ApiError.bad_request(str(getattr(exc, "message", exc))[:200], "graph_error") from exc
+
+    expires_in = info.get("expires_in")
+    expires_at = (
+        datetime.now(UTC) + timedelta(seconds=int(expires_in)) if expires_in else None
+    )
+    async with tenant_scope(principal.tenant_id):
+        await meta_token_store.put_token(
+            connection.id,
+            CLOUD_API_ACCESS_TOKEN_KIND,
+            connection.meta_app_id,
+            info["access_token"],
+            tenant_id=principal.tenant_id,
+            expires_at=expires_at,
+        )
+    return TokenExtend(token_expires_at=expires_at, expires_in=expires_in)
+
+
 # ------------------------------------------------- checklist de puesta en marcha
 class ChecklistStep(BaseModel):
     key: str
