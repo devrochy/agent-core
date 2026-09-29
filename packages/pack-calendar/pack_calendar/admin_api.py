@@ -242,3 +242,82 @@ async def cancel_appointment(
             row_db.status = "cancelled"
             row_db.updated_at = utcnow()
     return Response(status_code=204)
+
+
+class AppointmentIn(BaseModel):
+    title: str
+    start_at: datetime
+    end_at: datetime
+    attendee_email: str = ""
+    notes: str = ""
+    appointment_type_id: uuid.UUID | None = None
+
+
+@router.post("/appointments", response_model=AppointmentOut, status_code=201)
+async def create_appointment(
+    payload: AppointmentIn,
+    principal: Annotated[Principal, Depends(require("pack_calendar:citas", write=True))],
+) -> AppointmentOut:
+    """Crea una cita: local y, si el negocio tiene Google conectado, también el evento real."""
+    from core.plugin_manager import plugin_manager
+    from pack_calendar.admin import PLUGIN_ID, _google_create_event, _google_token
+    from pack_calendar.models import Appointment
+
+    titulo = payload.title.strip()
+    if not titulo:
+        raise ApiError.bad_request("El título es obligatorio.", "missing_title")
+    if payload.end_at <= payload.start_at:
+        raise ApiError.bad_request("La hora de fin debe ser posterior al inicio.", "invalid_range")
+
+    attendee = payload.attendee_email.strip() or None
+    notas = payload.notes.strip()
+    google_event_id: str | None = None
+    try:
+        config = await plugin_manager.load_config(PLUGIN_ID)
+    except Exception:
+        # Sin configuración del pack (p. ej. admin master en un negocio que no lo
+        # tiene habilitado) la cita es local: no hay Google al que empujarla.
+        config = None
+    if config is not None:
+        try:
+            token = await _google_token(config)
+            evento = await _google_create_event(
+                config,
+                token,
+                title=titulo,
+                start=payload.start_at,
+                end=payload.end_at,
+                attendee_email=attendee,
+                notes=notas,
+            )
+            google_event_id = evento.get("id")
+        except Exception as exc:
+            raise ApiError.bad_request(
+                "Google Calendar rechazó la creación (revisá la conexión).", "google_rejected"
+            ) from exc
+
+    async with get_session() as session:
+        cita = Appointment(
+            tenant_id=principal.tenant_id,
+            appointment_type_id=payload.appointment_type_id,
+            title=titulo,
+            attendee_email=attendee,
+            start_at=payload.start_at,
+            end_at=payload.end_at,
+            status="scheduled",
+            notes=notas,
+            google_event_id=google_event_id,
+        )
+        session.add(cita)
+        await session.flush()
+        return AppointmentOut(
+            id=cita.id,
+            title=cita.title,
+            attendee_email=cita.attendee_email,
+            start_at=cita.start_at,
+            end_at=cita.end_at,
+            status=cita.status,
+            notes=cita.notes,
+            google_event_id=cita.google_event_id,
+            appointment_type_id=cita.appointment_type_id,
+        )
