@@ -281,6 +281,110 @@
         }
       }
     },
+    "/api/v1/admin/dlq": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · dlq"
+        ],
+        "summary": "List Dlq",
+        "description": "Últimos 200 eventos fallidos, solo del tenant activo.",
+        "operationId": "list_dlq_api_v1_admin_dlq_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DlqPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/dlq/{entry_id}/retry": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · dlq"
+        ],
+        "summary": "Retry Dlq",
+        "description": "Re-encola un evento: revoca el claim de idempotencia y lo devuelve al stream.",
+        "operationId": "retry_dlq_api_v1_admin_dlq__entry_id__retry_post",
+        "parameters": [
+          {
+            "name": "entry_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Entry Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/conversations": {
       "get": {
         "tags": [
@@ -10470,6 +10574,50 @@
           "eventos"
         ],
         "title": "Devices"
+      },
+      "DlqEntry": {
+        "properties": {
+          "entry_id": {
+            "type": "string",
+            "title": "Entry Id"
+          },
+          "external_message_id": {
+            "type": "string",
+            "title": "External Message Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entry_id",
+          "external_message_id",
+          "tenant_id",
+          "content"
+        ],
+        "title": "DlqEntry"
+      },
+      "DlqPage": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/DlqEntry"
+            },
+            "type": "array",
+            "title": "Entries"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "title": "DlqPage"
       },
       "EscalationItem": {
         "properties": {

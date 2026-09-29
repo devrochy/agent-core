@@ -156,8 +156,6 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 # wizard): nunca cachear en navegador/proxies.
 _NO_STORE = {"Cache-Control": "no-store"}
 
-INBOUND_STREAM = "agent_core:inbound"
-DLQ_STREAM = "agent_core:inbound:dlq"
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -3872,63 +3870,3 @@ async def settings_llm_save(
 
 
 # ------------------------------------------------------------------ DLQ (reintento manual)
-@router.get("/dlq", response_class=HTMLResponse)
-async def dlq_page(request: Request):
-    """Lista la dead-letter del stream de entrada (mensajes que fallaron N veces)."""
-    ctx = await _base_context(request, "dlq")
-    if ctx is None:
-        return _login_redirect()
-    from core.memory.working import get_redis
-
-    r = get_redis()
-    my_tenant = str(get_current_tenant_id())
-    entries = await r.xrange(DLQ_STREAM, count=200)
-    ctx["dlq_entries"] = [
-        {
-            "entry_id": eid,
-            "fields": dict(fields),
-            "content": dict(fields).get("content", "")[:120],
-        }
-        for eid, fields in entries
-        if dict(fields).get("tenant_id") == my_tenant
-    ]
-    return _render("dlq.html", ctx)
-
-
-@router.post("/dlq/{entry_id}/retry")
-async def dlq_retry(request: Request, entry_id: str):
-    """Re-encola un evento de la DLQ: revoca el claim de idempotencia (soft-delete)
-    y lo devuelve al stream de entrada (ADR-0013). Solo el tenant dueño puede reintentarlo."""
-    if await current_admin(request) is None:
-        return _login_redirect()
-    from sqlalchemy import update
-
-    from core.db.models import ProcessedEvent
-    from core.memory.working import get_redis
-
-    r = get_redis()
-    rows = await r.xrange(DLQ_STREAM, min=entry_id, max=entry_id)
-    if not rows:
-        return RedirectResponse("/admin/dlq?flash=El evento ya no está en la DLQ&flash_type=danger", status_code=303)
-    _eid, fields = rows[0]
-    fields = dict(fields)
-    tenant_id = fields.get("tenant_id")
-
-    if tenant_id != str(get_current_tenant_id()):
-        return RedirectResponse("/admin/dlq?flash=No puedes reintentar eventos de otro tenant&flash_type=danger", status_code=303)
-
-    async with tenant_scope(tenant_id):
-        async with get_session() as session:
-            await session.execute(
-                update(ProcessedEvent)
-                .where(
-                    ProcessedEvent.tenant_id == get_current_tenant_id(),
-                    ProcessedEvent.external_message_id == fields.get("external_message_id", ""),
-                    ProcessedEvent.deleted_at.is_(None),
-                )
-                .values(deleted_at=utcnow())
-            )
-
-    await r.xadd(INBOUND_STREAM, fields)
-    await r.xdel(DLQ_STREAM, entry_id)
-    return RedirectResponse("/admin/dlq?flash=Evento reintentado", status_code=303)

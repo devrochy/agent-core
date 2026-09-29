@@ -228,7 +228,6 @@ _CORE_PREFIXES: tuple[tuple[str, str], ...] = (
     ("/admin/costos", "costs"),
     ("/admin/plan", "plan"),
     ("/admin/configuracion", "settings"),
-    ("/admin/dlq", "settings"),
 )
 
 
