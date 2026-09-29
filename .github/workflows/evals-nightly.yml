@@ -39,9 +39,15 @@ jobs:
       APP_ENV: development
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Entorno Python (self-hosted)
+        # Mismo motivo que el gate: el runner es Linux Mint y setup-python no
+        # tiene builds para esa distro → venv con el Python del runner.
+        run: |
+          python3 --version
+          python3 -c "import sys; assert sys.version_info >= (3, 12), 'Se requiere Python 3.12+'"
+          python3 -m venv .venv-ci
+          echo "$PWD/.venv-ci/bin" >> "$GITHUB_PATH"
+          .venv-ci/bin/python -m pip install --upgrade pip
       - name: Instalar
         run: |
           pip install -e packages/contracts
