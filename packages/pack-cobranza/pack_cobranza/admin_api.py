@@ -25,6 +25,7 @@ from core.db.models import Admin, Conversation, Escalation, TenantUser
 from core.db.session import get_owned, get_session
 
 from .models import (
+    Abono,
     AuditoriaCartera,
     Caja,
     Cartera,
@@ -1805,4 +1806,370 @@ async def delete_client(
             raise ApiError.not_found("Cliente no encontrado.")
         cliente.deleted_at = datetime.now(UTC)
         _audit(session, tid, "cliente", cliente.id, "eliminar", despues={"nombre": cliente.nombre})
+    return Response(status_code=204)
+
+
+# ------------------------------------------------- ficha del cliente (3.2)
+class Installment(BaseModel):
+    id: uuid.UUID
+    numero: int
+    valor: float
+    vence: date
+    estatus: str
+
+
+class Loan(BaseModel):
+    id: uuid.UUID
+    valor: float
+    saldo: float
+    num_cuotas: int
+    tipo_interes: float
+    fecha_otorgado: date
+    estatus: str
+    cuotas: list[Installment]
+
+
+class ClientMovement(BaseModel):
+    id: uuid.UUID
+    tipo: str
+    fecha: str
+    valor: float
+    metodo: str
+
+
+class ClientDetail(BaseModel):
+    cliente: ClientRow
+    prestamos: list[Loan]
+    movimientos: list[ClientMovement]
+
+
+async def _caja_de(session: Any, tid: uuid.UUID, cartera_id: uuid.UUID) -> Caja:
+    """Caja de la cartera, creándola si no existe (paridad con el clásico)."""
+    caja = (
+        await session.execute(
+            select(Caja).where(Caja.tenant_id == tid, Caja.cartera_id == cartera_id)
+        )
+    ).scalar_one_or_none()
+    if caja is None:
+        caja = Caja(
+            tenant_id=tid, cartera_id=cartera_id, saldo_inicial=Decimal(0), saldo_actual=Decimal(0)
+        )
+        session.add(caja)
+        await session.flush()
+    return caja
+
+
+@router.get("/clients/{client_id}", response_model=ClientDetail)
+async def client_detail(
+    client_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:clientes"))],
+) -> ClientDetail:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cliente = await _get_active(session, Cliente, client_id, tid)
+        if cliente is None:
+            raise ApiError.not_found("Cliente no encontrado.")
+        prestamos = (
+            (
+                await session.execute(
+                    select(Prestamo)
+                    .where(
+                        Prestamo.tenant_id == tid,
+                        Prestamo.cliente_id == cliente.id,
+                        Prestamo.deleted_at.is_(None),
+                    )
+                    .order_by(Prestamo.fecha_otorgado.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        cuotas = (
+            (
+                await session.execute(
+                    select(Cuota)
+                    .where(
+                        Cuota.tenant_id == tid,
+                        Cuota.prestamo_id.in_([p.id for p in prestamos]) if prestamos else False,
+                        Cuota.deleted_at.is_(None),
+                    )
+                    .order_by(Cuota.numero_cuota)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        pagos = (
+            (
+                await session.execute(
+                    select(Pago)
+                    .where(
+                        Pago.tenant_id == tid,
+                        Pago.cliente_id == cliente.id,
+                        Pago.deleted_at.is_(None),
+                    )
+                    .order_by(Pago.fecha_hora.desc())
+                    .limit(20)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        abonos = (
+            (
+                await session.execute(
+                    select(Abono)
+                    .where(
+                        Abono.tenant_id == tid,
+                        Abono.cliente_id == cliente.id,
+                        Abono.deleted_at.is_(None),
+                    )
+                    .order_by(Abono.fecha_hora.desc())
+                    .limit(20)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        cartera = await _cartera_nombre(session, cliente.cartera_id)
+    por_prestamo: dict[uuid.UUID, list[Installment]] = {}
+    for c in cuotas:
+        por_prestamo.setdefault(c.prestamo_id, []).append(
+            Installment(
+                id=c.id,
+                numero=c.numero_cuota,
+                valor=float(c.valor_esperado or 0),
+                vence=c.fecha_vencimiento,
+                estatus=c.estatus,
+            )
+        )
+    movimientos = [
+        ClientMovement(
+            id=p.id,
+            tipo="pago",
+            fecha=p.fecha_hora.strftime("%Y-%m-%d %H:%M") if p.fecha_hora else "",
+            valor=float(p.valor or 0),
+            metodo=p.metodo_pago or "",
+        )
+        for p in pagos
+    ] + [
+        ClientMovement(
+            id=a.id,
+            tipo="abono",
+            fecha=a.fecha_hora.strftime("%Y-%m-%d %H:%M") if a.fecha_hora else "",
+            valor=float(a.valor or 0),
+            metodo=a.metodo_pago or "",
+        )
+        for a in abonos
+    ]
+    movimientos.sort(key=lambda m: m.fecha, reverse=True)
+    return ClientDetail(
+        cliente=_as_client(cliente, cartera),
+        prestamos=[
+            Loan(
+                id=p.id,
+                valor=float(p.valor or 0),
+                saldo=float(p.saldo or 0),
+                num_cuotas=int(p.num_cuotas or 0),
+                tipo_interes=float(p.tipo_interes or 0),
+                fecha_otorgado=p.fecha_otorgado,
+                estatus=p.estatus,
+                cuotas=por_prestamo.get(p.id, []),
+            )
+            for p in prestamos
+        ],
+        movimientos=movimientos[:20],
+    )
+
+
+class LoanIn(BaseModel):
+    valor: float
+    num_cuotas: int = 1
+    tipo_interes: float = 0.0
+    dias_entre_cuotas: int = 1
+    fecha_otorgado: date | None = None
+
+
+@router.post("/clients/{client_id}/loans", response_model=Loan, status_code=201)
+async def create_loan(
+    client_id: uuid.UUID,
+    payload: LoanIn,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:clientes", write=True))],
+) -> Loan:
+    """Crea el préstamo, su plan de cuotas y descuenta el desembolso de la caja."""
+    tid = principal.tenant_id
+    if payload.valor <= 0:
+        raise ApiError.bad_request("El valor del préstamo debe ser mayor a cero.", "invalid_amount")
+    if payload.num_cuotas < 1:
+        raise ApiError.bad_request("El número de cuotas debe ser al menos 1.", "invalid_installments")
+    if payload.tipo_interes < 0:
+        raise ApiError.bad_request("El interés no puede ser negativo.", "invalid_rate")
+    if payload.dias_entre_cuotas < 1:
+        raise ApiError.bad_request("Los días entre cuotas deben ser al menos 1.", "invalid_days")
+    fecha = payload.fecha_otorgado or date.today()
+    async with get_session() as session:
+        cliente = await _get_active(session, Cliente, client_id, tid)
+        if cliente is None:
+            raise ApiError.not_found("Cliente no encontrado.")
+        valor = Decimal(str(payload.valor))
+        interes = Decimal(str(payload.tipo_interes))
+        total = (valor * (Decimal(1) + interes / Decimal(100))).quantize(Decimal("1"))
+        cuota_valor = (total / payload.num_cuotas).quantize(Decimal("1"))
+        prestamo = Prestamo(
+            tenant_id=tid,
+            cliente_id=cliente.id,
+            cartera_id=cliente.cartera_id,
+            valor=valor,
+            saldo=total,
+            num_cuotas=payload.num_cuotas,
+            tipo_interes=interes,
+            dias_entre_cuotas=payload.dias_entre_cuotas,
+            fecha_otorgado=fecha,
+        )
+        session.add(prestamo)
+        await session.flush()
+        cuotas = [
+            Cuota(
+                tenant_id=tid,
+                prestamo_id=prestamo.id,
+                numero_cuota=i,
+                valor_esperado=cuota_valor,
+                fecha_vencimiento=fecha + timedelta(days=i * payload.dias_entre_cuotas),
+            )
+            for i in range(1, payload.num_cuotas + 1)
+        ]
+        session.add_all(cuotas)
+        caja = await _caja_de(session, tid, cliente.cartera_id)
+        caja.saldo_actual = (caja.saldo_actual or Decimal(0)) - valor
+        _audit(
+            session,
+            tid,
+            "prestamo",
+            prestamo.id,
+            "crear",
+            despues={
+                "valor": float(valor),
+                "num_cuotas": payload.num_cuotas,
+                "cliente_id": str(cliente.id),
+            },
+        )
+        return Loan(
+            id=prestamo.id,
+            valor=float(prestamo.valor or 0),
+            saldo=float(prestamo.saldo or 0),
+            num_cuotas=prestamo.num_cuotas,
+            tipo_interes=float(prestamo.tipo_interes or 0),
+            fecha_otorgado=prestamo.fecha_otorgado,
+            estatus=prestamo.estatus,
+            cuotas=[
+                Installment(
+                    id=c.id,
+                    numero=c.numero_cuota,
+                    valor=float(c.valor_esperado or 0),
+                    vence=c.fecha_vencimiento,
+                    estatus=c.estatus,
+                )
+                for c in cuotas
+            ],
+        )
+
+
+class PaymentIn(BaseModel):
+    valor: float
+    metodo_pago: str = "efectivo"
+    cuota_id: uuid.UUID | None = None
+
+
+@router.post("/loans/{loan_id}/payments", status_code=204)
+async def register_loan_payment(
+    loan_id: uuid.UUID,
+    payload: PaymentIn,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:clientes", write=True))],
+) -> Response:
+    """Registra el pago: marca la cuota, baja el saldo y suma a la caja."""
+    if payload.valor <= 0:
+        raise ApiError.bad_request("El valor del pago debe ser mayor a cero.", "invalid_amount")
+    tid = principal.tenant_id
+    async with get_session() as session:
+        prestamo = await _get_active(session, Prestamo, loan_id, tid)
+        if prestamo is None:
+            raise ApiError.not_found("Préstamo no encontrado.")
+        cuota = (
+            await _get_active(session, Cuota, payload.cuota_id, tid) if payload.cuota_id else None
+        )
+        if payload.cuota_id and (cuota is None or cuota.prestamo_id != prestamo.id):
+            raise ApiError.bad_request("La cuota no pertenece a este préstamo.", "invalid_installment")
+        valor = Decimal(str(payload.valor))
+        session.add(
+            Pago(
+                tenant_id=tid,
+                cliente_id=prestamo.cliente_id,
+                prestamo_id=prestamo.id,
+                cuota_id=cuota.id if cuota else None,
+                valor=valor,
+                metodo_pago=payload.metodo_pago or "efectivo",
+                registrado_por=principal.admin.email,
+            )
+        )
+        if cuota is not None:
+            cuota.estatus = "pagada"
+        prestamo.saldo = (prestamo.saldo or Decimal(0)) - valor
+        caja = await _caja_de(session, tid, prestamo.cartera_id)
+        caja.saldo_actual = (caja.saldo_actual or Decimal(0)) + valor
+        _audit(
+            session,
+            tid,
+            "pago",
+            prestamo.id,
+            "crear",
+            despues={
+                "valor": float(valor),
+                "metodo": payload.metodo_pago,
+                "cuota_id": str(cuota.id) if cuota else None,
+            },
+        )
+    return Response(status_code=204)
+
+
+class CreditIn(BaseModel):
+    valor: float
+    metodo_pago: str = "efectivo"
+
+
+@router.post("/loans/{loan_id}/credits", status_code=204)
+async def register_loan_credit(
+    loan_id: uuid.UUID,
+    payload: CreditIn,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:clientes", write=True))],
+) -> Response:
+    """Abono al préstamo sin cuota: baja el saldo y suma a la caja."""
+    if payload.valor <= 0:
+        raise ApiError.bad_request("El valor del abono debe ser mayor a cero.", "invalid_amount")
+    tid = principal.tenant_id
+    async with get_session() as session:
+        prestamo = await _get_active(session, Prestamo, loan_id, tid)
+        if prestamo is None:
+            raise ApiError.not_found("Préstamo no encontrado.")
+        valor = Decimal(str(payload.valor))
+        session.add(
+            Abono(
+                tenant_id=tid,
+                prestamo_id=prestamo.id,
+                cliente_id=prestamo.cliente_id,
+                valor=valor,
+                metodo_pago=payload.metodo_pago or "efectivo",
+                registrado_por=principal.admin.email,
+            )
+        )
+        prestamo.saldo = (prestamo.saldo or Decimal(0)) - valor
+        caja = await _caja_de(session, tid, prestamo.cartera_id)
+        caja.saldo_actual = (caja.saldo_actual or Decimal(0)) + valor
+        _audit(
+            session,
+            tid,
+            "abono",
+            prestamo.id,
+            "crear",
+            despues={"valor": float(valor), "metodo": payload.metodo_pago},
+        )
     return Response(status_code=204)

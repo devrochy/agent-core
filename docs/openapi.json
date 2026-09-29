@@ -6276,6 +6276,259 @@
             }
           }
         }
+      },
+      "get": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Client Detail",
+        "operationId": "client_detail_api_v1_pack_cobranza_clients__client_id__get",
+        "parameters": [
+          {
+            "name": "client_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Client Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/clients/{client_id}/loans": {
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Create Loan",
+        "description": "Crea el préstamo, su plan de cuotas y descuenta el desembolso de la caja.",
+        "operationId": "create_loan_api_v1_pack_cobranza_clients__client_id__loans_post",
+        "parameters": [
+          {
+            "name": "client_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Client Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoanIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Loan"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/loans/{loan_id}/payments": {
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Register Loan Payment",
+        "description": "Registra el pago: marca la cuota, baja el saldo y suma a la caja.",
+        "operationId": "register_loan_payment_api_v1_pack_cobranza_loans__loan_id__payments_post",
+        "parameters": [
+          {
+            "name": "loan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Loan Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/loans/{loan_id}/credits": {
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Register Loan Credit",
+        "description": "Abono al préstamo sin cuota: baja el saldo y suma a la caja.",
+        "operationId": "register_loan_credit_api_v1_pack_cobranza_loans__loan_id__credits_post",
+        "parameters": [
+          {
+            "name": "loan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Loan Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreditIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/pack/calendar/status": {
@@ -7214,6 +7467,34 @@
         ],
         "title": "CategorySave"
       },
+      "ClientDetail": {
+        "properties": {
+          "cliente": {
+            "$ref": "#/components/schemas/ClientRow"
+          },
+          "prestamos": {
+            "items": {
+              "$ref": "#/components/schemas/Loan"
+            },
+            "type": "array",
+            "title": "Prestamos"
+          },
+          "movimientos": {
+            "items": {
+              "$ref": "#/components/schemas/ClientMovement"
+            },
+            "type": "array",
+            "title": "Movimientos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cliente",
+          "prestamos",
+          "movimientos"
+        ],
+        "title": "ClientDetail"
+      },
       "ClientIn": {
         "properties": {
           "nombre": {
@@ -7267,6 +7548,40 @@
           "cartera_id"
         ],
         "title": "ClientIn"
+      },
+      "ClientMovement": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "tipo": {
+            "type": "string",
+            "title": "Tipo"
+          },
+          "fecha": {
+            "type": "string",
+            "title": "Fecha"
+          },
+          "valor": {
+            "type": "number",
+            "title": "Valor"
+          },
+          "metodo": {
+            "type": "string",
+            "title": "Metodo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tipo",
+          "fecha",
+          "valor",
+          "metodo"
+        ],
+        "title": "ClientMovement"
       },
       "ClientRow": {
         "properties": {
@@ -8010,6 +8325,24 @@
           "by_conversation"
         ],
         "title": "CostsResponse"
+      },
+      "CreditIn": {
+        "properties": {
+          "valor": {
+            "type": "number",
+            "title": "Valor"
+          },
+          "metodo_pago": {
+            "type": "string",
+            "title": "Metodo Pago",
+            "default": "efectivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "valor"
+        ],
+        "title": "CreditIn"
       },
       "DashboardResponse": {
         "properties": {
@@ -8816,6 +9149,41 @@
         ],
         "title": "Injection"
       },
+      "Installment": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "numero": {
+            "type": "integer",
+            "title": "Numero"
+          },
+          "valor": {
+            "type": "number",
+            "title": "Valor"
+          },
+          "vence": {
+            "type": "string",
+            "format": "date",
+            "title": "Vence"
+          },
+          "estatus": {
+            "type": "string",
+            "title": "Estatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "numero",
+          "valor",
+          "vence",
+          "estatus"
+        ],
+        "title": "Installment"
+      },
       "LeadColumn": {
         "properties": {
           "key": {
@@ -9013,6 +9381,99 @@
         },
         "type": "object",
         "title": "LlmUpdate"
+      },
+      "Loan": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "valor": {
+            "type": "number",
+            "title": "Valor"
+          },
+          "saldo": {
+            "type": "number",
+            "title": "Saldo"
+          },
+          "num_cuotas": {
+            "type": "integer",
+            "title": "Num Cuotas"
+          },
+          "tipo_interes": {
+            "type": "number",
+            "title": "Tipo Interes"
+          },
+          "fecha_otorgado": {
+            "type": "string",
+            "format": "date",
+            "title": "Fecha Otorgado"
+          },
+          "estatus": {
+            "type": "string",
+            "title": "Estatus"
+          },
+          "cuotas": {
+            "items": {
+              "$ref": "#/components/schemas/Installment"
+            },
+            "type": "array",
+            "title": "Cuotas"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "valor",
+          "saldo",
+          "num_cuotas",
+          "tipo_interes",
+          "fecha_otorgado",
+          "estatus",
+          "cuotas"
+        ],
+        "title": "Loan"
+      },
+      "LoanIn": {
+        "properties": {
+          "valor": {
+            "type": "number",
+            "title": "Valor"
+          },
+          "num_cuotas": {
+            "type": "integer",
+            "title": "Num Cuotas",
+            "default": 1
+          },
+          "tipo_interes": {
+            "type": "number",
+            "title": "Tipo Interes",
+            "default": 0.0
+          },
+          "dias_entre_cuotas": {
+            "type": "integer",
+            "title": "Dias Entre Cuotas",
+            "default": 1
+          },
+          "fecha_otorgado": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fecha Otorgado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "valor"
+        ],
+        "title": "LoanIn"
       },
       "LoginRequest": {
         "properties": {
@@ -10133,6 +10594,36 @@
           "password"
         ],
         "title": "PasswordReset"
+      },
+      "PaymentIn": {
+        "properties": {
+          "valor": {
+            "type": "number",
+            "title": "Valor"
+          },
+          "metodo_pago": {
+            "type": "string",
+            "title": "Metodo Pago",
+            "default": "efectivo"
+          },
+          "cuota_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cuota Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "valor"
+        ],
+        "title": "PaymentIn"
       },
       "PaymentLink": {
         "properties": {
