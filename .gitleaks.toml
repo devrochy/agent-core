@@ -1,0 +1,21 @@
+# Configuración de gitleaks para agent-core.
+#
+# Los hallazgos del histórico son EXCLUSIVAMENTE valores ficticios de tests y
+# constantes de CI (claves de prueba, no secretos reales). Se permiten por path
+# de tests y por valor exacto de las constantes de CI: un secreto real, con otro
+# valor o en otro archivo, sigue siendo detectado.
+title = "agent-core gitleaks config"
+
+[[allowlists]]
+description = "Fixtures de test (valores ficticios) y archivos de test históricos"
+paths = ['''(^|/)tests/''']
+
+[[allowlists]]
+description = "Constantes de CI/claves de prueba embebidas en conftest y workflows"
+regexTarget = "match"
+regexes = [
+    '''ci-only-not-a-secret-app-key''',
+    '''GpsiZ2sgMd4SvLHGp4Bs5xdaQLlQ1cByyK6DCNxVwL4=''',
+    '''3sJ8kZ0mQ1nR5tV7wY9bC2eF4gH6jL8mN0pQ2rS4tU6=''',
+    '''MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=''',
+]
