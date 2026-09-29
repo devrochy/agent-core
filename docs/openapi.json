@@ -14027,7 +14027,14 @@
             "title": "Key"
           },
           "ok": {
-            "type": "boolean",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Ok"
           },
           "detail": {
@@ -14044,8 +14051,7 @@
         },
         "type": "object",
         "required": [
-          "key",
-          "ok"
+          "key"
         ],
         "title": "PreflightOut"
       },

@@ -60,12 +60,10 @@ from core.admin.meta_costs_service import (
 )
 from core.admin.meta_health_service import (
     diagnose_connection,
-    register_channel_subscription,
     resubscribe_waba,
     set_billing_status,
     set_connection_status,
     soft_delete_connection,
-    webhook_subscriptions_status,
 )
 from core.admin.meta_numbers_service import (
     add_number,
@@ -2091,71 +2089,6 @@ async def connection_delete(request: Request, connection_id: uuid.UUID):
 
 
 # ------------------------------------------------------------------ meta requisitos (preflight)
-async def _require_owner_or_master(request: Request, tenant_id: uuid.UUID | None) -> bool:
-    """"owner/admin" del ticket, traducido a los dos roles elevados que
-    existen hoy: `Admin.role == "master"` (superadmin de plataforma) o
-    `TenantUser.role == "owner"` del tenant activo -- primer uso real de
-    este último campo en una ruta (existía desde el modelo, nunca antes
-    verificado)."""
-    from core.db.models import TenantUser
-
-    admin = await current_admin(request)
-    if admin is None:
-        return False
-    if admin.role == "master":
-        return True
-    if tenant_id is None:
-        return False
-    async with get_session() as session:
-        row = (
-            await session.execute(
-                select(TenantUser).where(TenantUser.tenant_id == tenant_id, TenantUser.admin_id == admin.id)
-            )
-        ).scalar_one_or_none()
-    return row is not None and row.role == "owner"
-
-async def _webhook_subscriptions_status(tid: uuid.UUID | None) -> list[dict[str, Any]]:
-    """Delegación a `meta_health_service.webhook_subscriptions_status` (fuente única)."""
-    return await webhook_subscriptions_status(tid)
-
-@router.get("/conexiones/webhooks", response_class=HTMLResponse)
-async def meta_webhooks_page(request: Request):
-    ctx = await _base_context(request, "connections")
-    if ctx is None:
-        return _login_redirect()
-
-    tid = get_current_tenant_id()
-    rows = await _webhook_subscriptions_status(tid)
-    can_manage = await _require_owner_or_master(request, tid)
-    ctx.update(subscriptions=rows, can_manage=can_manage)
-    return _render("meta_webhooks.html", ctx)
-
-
-@router.get("/conexiones/webhooks.json")
-async def meta_webhooks_json(request: Request):
-    if await current_admin(request) is None:
-        return _login_redirect()
-
-    tid = get_current_tenant_id()
-    rows = await _webhook_subscriptions_status(tid)
-    return {"subscriptions": rows}
-
-
-@router.post("/conexiones/webhooks/registrar")
-async def meta_webhooks_register(request: Request, channel: str = Form(...)):
-    tid = get_current_tenant_id()
-    if not await _require_owner_or_master(request, tid):
-        return HTMLResponse("No tenés permiso para re-registrar suscripciones (se requiere owner o master).", status_code=403)
-
-    error = await register_channel_subscription(tid, channel)
-    if error is not None:
-        return RedirectResponse(
-            f"/admin/conexiones/webhooks?flash={error}&flash_type=danger", status_code=303
-        )
-    return RedirectResponse("/admin/conexiones/webhooks?flash=Suscripción registrada", status_code=303)
-
-
-# ------------------------------------------------------------------ wizard de Embedded Signup (WhatsApp)
 @router.get("/conexiones/wizard/whatsapp/elegir-entorno", response_class=HTMLResponse)
 async def meta_wizard_whatsapp_elegir_entorno(request: Request):
     """Pantalla previa al wizard: sin efecto secundario, solo deja elegir
