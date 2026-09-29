@@ -5345,6 +5345,64 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Create Device",
+        "description": "Genera un dispositivo para la app de campo.\n\nEl `codigo` y la `api_key` se devuelven **una sola vez**: en la base solo queda\nel hash de la API key (paridad con el clásico, ADR-0057).",
+        "operationId": "create_device_api_v1_pack_cobranza_devices_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceCreated"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/pack/cobranza/devices/{device_id}/status": {
@@ -9579,6 +9637,75 @@
           "billing"
         ],
         "title": "DashboardResponse"
+      },
+      "DeviceCreate": {
+        "properties": {
+          "gestor_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gestor Id"
+          },
+          "cartera_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cartera Id"
+          },
+          "imei": {
+            "type": "string",
+            "title": "Imei",
+            "default": ""
+          },
+          "whatsapp": {
+            "type": "string",
+            "title": "Whatsapp",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "DeviceCreate"
+      },
+      "DeviceCreated": {
+        "properties": {
+          "codigo": {
+            "type": "string",
+            "title": "Codigo"
+          },
+          "api_key": {
+            "type": "string",
+            "title": "Api Key"
+          },
+          "gestor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gestor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "codigo",
+          "api_key"
+        ],
+        "title": "DeviceCreated"
       },
       "DeviceRow": {
         "properties": {

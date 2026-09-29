@@ -9,6 +9,7 @@ sigue en el panel clásico enlazado.
 
 from __future__ import annotations
 
+import secrets
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -3019,3 +3020,58 @@ async def delete_note(
             raise ApiError.not_found("Nota no encontrada.")
         nota.deleted_at = datetime.now(UTC)
     return Response(status_code=204)
+
+
+# ------------------------------------------------ alta de dispositivos (3.5)
+class DeviceCreate(BaseModel):
+    gestor_id: uuid.UUID | None = None
+    cartera_id: uuid.UUID | None = None
+    imei: str = ""
+    whatsapp: str = ""
+
+
+class DeviceCreated(BaseModel):
+    codigo: str
+    api_key: str
+    gestor: str | None = None
+
+
+@router.post("/devices", response_model=DeviceCreated, status_code=201)
+async def create_device(
+    payload: DeviceCreate,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:dispositivos", write=True))],
+) -> DeviceCreated:
+    """Genera un dispositivo para la app de campo.
+
+    El `codigo` y la `api_key` se devuelven **una sola vez**: en la base solo queda
+    el hash de la API key (paridad con el clásico, ADR-0057).
+    """
+    tid = principal.tenant_id
+    async with get_session() as session:
+        gestor = None
+        if payload.gestor_id is not None:
+            gestor = await _get_active(session, Gestor, payload.gestor_id, tid)
+            if gestor is None:
+                raise ApiError.bad_request("El gestor indicado no existe.", "invalid_collector")
+        if payload.cartera_id is not None and await _get_active(
+            session, Cartera, payload.cartera_id, tid
+        ) is None:
+            raise ApiError.bad_request("La cartera indicada no existe.", "invalid_portfolio")
+        codigo = str(uuid.uuid4())
+        api_key = secrets.token_urlsafe(32)
+        session.add(
+            Device(
+                tenant_id=tid,
+                codigo=codigo,
+                api_key_hash=hash_password(api_key),
+                gestor_id=gestor.id if gestor is not None else None,
+                cartera_id=payload.cartera_id,
+                imei=(payload.imei or "").strip() or None,
+                whatsapp_number=(payload.whatsapp or "").strip() or None,
+            )
+        )
+        return DeviceCreated(
+            codigo=codigo,
+            api_key=api_key,
+            gestor=f"{gestor.nombre} {gestor.apellido or ''}".strip() if gestor else None,
+        )
