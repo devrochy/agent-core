@@ -4525,6 +4525,116 @@
         }
       }
     },
+    "/api/v1/admin/settings/advanced/spec": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Get Raw Spec",
+        "description": "AgentSpec activo tal cual (editor crudo de Configuración → Avanzado).",
+        "operationId": "get_raw_spec_api_v1_admin_settings_advanced_spec_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecPayload"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Save Raw Spec",
+        "description": "Valida el JSON contra el contrato del AgentSpec y guarda si cambió.\n\n`save_spec_if_changed` solo crea versión cuando el contenido difiere, así que\nguardar el mismo spec es un no-op (no ensucia el historial).",
+        "operationId": "save_raw_spec_api_v1_admin_settings_advanced_spec_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpecPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecPayload"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/commerce/dashboard": {
       "get": {
         "tags": [
@@ -9337,6 +9447,12 @@
             },
             "type": "array",
             "title": "Eval Runs"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Spec",
+            "default": {}
           }
         },
         "type": "object",
@@ -15218,6 +15334,20 @@
           "tools"
         ],
         "title": "SkillsUpdate"
+      },
+      "SpecPayload": {
+        "properties": {
+          "spec": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Spec"
+          }
+        },
+        "type": "object",
+        "required": [
+          "spec"
+        ],
+        "title": "SpecPayload"
       },
       "SpecVersion": {
         "properties": {

@@ -391,6 +391,8 @@ class AdvancedResponse(BaseModel):
     guardrails_text: str
     flow: FlowResponse
     eval_runs: list[EvalRunItem]
+    # AgentSpec activo tal cual: alimenta el editor crudo del panel.
+    spec: dict[str, Any] = {}
 
 
 @router.get("/advanced", response_model=AdvancedResponse)
@@ -407,7 +409,9 @@ async def get_advanced(
     )
 
     spec = await load_active_spec()
+    spec = await load_active_spec()
     return AdvancedResponse(
+        spec=spec.model_dump(mode="json"),
         versions=[SpecVersion(**v) for v in await list_spec_versions(principal.tenant_id)],
         llm=LlmSettings(**await read_llm(principal.tenant_id)),
         guardrails_text=read_custom_guardrails(spec),
@@ -472,3 +476,38 @@ async def save_guardrails_settings(
     return GuardrailsSettings(
         guardrails_text=read_custom_guardrails(spec), ignored=ignoradas
     )
+
+
+class SpecPayload(BaseModel):
+    spec: dict[str, Any]
+
+
+@router.get("/advanced/spec", response_model=SpecPayload)
+async def get_raw_spec(
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> SpecPayload:
+    """AgentSpec activo tal cual (editor crudo de Configuración → Avanzado)."""
+    spec = await load_active_spec()
+    return SpecPayload(spec=spec.model_dump(mode="json"))
+
+
+@router.put("/advanced/spec", response_model=SpecPayload)
+async def save_raw_spec(
+    payload: SpecPayload,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> SpecPayload:
+    """Valida el JSON contra el contrato del AgentSpec y guarda si cambió.
+
+    `save_spec_if_changed` solo crea versión cuando el contenido difiere, así que
+    guardar el mismo spec es un no-op (no ensucia el historial).
+    """
+    from agentcore_contracts import AgentSpec
+    from pydantic import ValidationError
+
+    try:
+        nuevo = AgentSpec.model_validate(payload.spec)
+    except ValidationError as exc:
+        raise ApiError.bad_request(f"Spec inválido: {str(exc)[:240]}", "invalid_spec") from exc
+    spec = await load_active_spec()
+    await save_spec_if_changed(spec, nuevo.model_dump(mode="json"), principal.tenant_id)
+    return SpecPayload(spec=nuevo.model_dump(mode="json"))
