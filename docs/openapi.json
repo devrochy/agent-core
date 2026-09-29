@@ -7133,6 +7133,129 @@
         }
       }
     },
+    "/api/v1/pack/cobranza/expenses/{expense_id}/approve": {
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Approve Expense",
+        "description": "Aprueba el gasto: descuenta su valor de la caja de la cartera (una sola vez).",
+        "operationId": "approve_expense_api_v1_pack_cobranza_expenses__expense_id__approve_post",
+        "parameters": [
+          {
+            "name": "expense_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Expense Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/owner-charges/{charge_id}/links": {
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Create Payment Link",
+        "description": "Crea un link de pago para el cobro del propietario (monto = cobro calculado).",
+        "operationId": "create_payment_link_api_v1_pack_cobranza_owner_charges__charge_id__links_post",
+        "parameters": [
+          {
+            "name": "charge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Charge Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentLinkIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentLink"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/calendar/status": {
       "get": {
         "tags": [
@@ -9219,6 +9342,11 @@
       },
       "Expense": {
         "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
           "fecha": {
             "type": "string",
             "title": "Fecha"
@@ -9238,6 +9366,7 @@
         },
         "type": "object",
         "required": [
+          "id",
           "fecha",
           "descripcion",
           "valor",
@@ -11325,6 +11454,24 @@
           "estado"
         ],
         "title": "PaymentLink"
+      },
+      "PaymentLinkIn": {
+        "properties": {
+          "referencia": {
+            "type": "string",
+            "title": "Referencia"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "referencia",
+          "url"
+        ],
+        "title": "PaymentLinkIn"
       },
       "PermissionItem": {
         "properties": {

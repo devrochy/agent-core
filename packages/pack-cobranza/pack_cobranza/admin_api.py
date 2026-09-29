@@ -1279,6 +1279,7 @@ class Injection(BaseModel):
 
 
 class Expense(BaseModel):
+    id: uuid.UUID
     fecha: str
     descripcion: str
     valor: float
@@ -1434,6 +1435,7 @@ async def portfolio_detail(
         ],
         gastos=[
             Expense(
+                id=g.id,
                 fecha=g.fecha_hora.strftime("%Y-%m-%d") if g.fecha_hora else "",
                 descripcion=g.descripcion,
                 valor=float(g.valor or 0),
@@ -2668,4 +2670,77 @@ async def create_liquidation(
             cobrado=float(liquidacion.total_cobrado or 0),
             gastos=float(liquidacion.total_gastos or 0),
             comision=float(liquidacion.comision_valor or 0),
+        )
+
+
+class ExpenseApproval(BaseModel):
+    """Sin cuerpo: la aprobación no lleva datos extra (paridad con el clásico)."""
+
+
+@router.post("/expenses/{expense_id}/approve", status_code=204)
+async def approve_expense(
+    expense_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras", write=True))],
+) -> Response:
+    """Aprueba el gasto: descuenta su valor de la caja de la cartera (una sola vez)."""
+    tid = principal.tenant_id
+    async with get_session() as session:
+        gasto = await _get_active(session, Gasto, expense_id, tid)
+        if gasto is None:
+            raise ApiError.not_found("Gasto no encontrado.")
+        if gasto.aprobado:
+            return Response(status_code=204)
+        gasto.aprobado = True
+        caja = await _caja_de(session, tid, gasto.cartera_id)
+        caja.saldo_actual = (caja.saldo_actual or Decimal(0)) - (gasto.valor or Decimal(0))
+        _audit(
+            session,
+            tid,
+            "gasto",
+            gasto.id,
+            "editar",
+            antes={"aprobado": False},
+            despues={"aprobado": True},
+            motivo="Gasto aprobado",
+        )
+    return Response(status_code=204)
+
+
+class PaymentLinkIn(BaseModel):
+    referencia: str
+    url: str
+
+
+@router.post("/owner-charges/{charge_id}/links", response_model=PaymentLink, status_code=201)
+async def create_payment_link(
+    charge_id: uuid.UUID,
+    payload: PaymentLinkIn,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:cobros", write=True))],
+) -> PaymentLink:
+    """Crea un link de pago para el cobro del propietario (monto = cobro calculado)."""
+    referencia = payload.referencia.strip()
+    url = payload.url.strip()
+    if not referencia or not url:
+        raise ApiError.bad_request("Referencia y URL son obligatorias.", "missing_fields")
+    if not url.startswith(("http://", "https://")):
+        raise ApiError.bad_request("La URL debe empezar por http:// o https://.", "invalid_url")
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cobro = await _get_active(session, CobroPropietario, charge_id, tid)
+        if cobro is None:
+            raise ApiError.not_found("Cobro no encontrado.")
+        link = LinkPago(
+            tenant_id=tid,
+            cobro_id=cobro.id,
+            referencia=referencia,
+            url=url,
+            monto=cobro.monto_calculado,
+        )
+        session.add(link)
+        await session.flush()
+        return PaymentLink(
+            referencia=link.referencia,
+            url=link.url,
+            monto=float(link.monto or 0),
+            estado=link.estado,
         )
