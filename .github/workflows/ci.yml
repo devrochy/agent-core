@@ -45,9 +45,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Entorno Python (self-hosted)
+        # El runner es Linux Mint: `actions/setup-python` no tiene builds para esa
+        # distro, así que se usa el Python del propio runner en un venv aislado.
+        run: |
+          python3 --version
+          python3 -c "import sys; assert sys.version_info >= (3, 12), 'Se requiere Python 3.12+'"
+          python3 -m venv .venv-ci
+          echo "$PWD/.venv-ci/bin" >> "$GITHUB_PATH"
+          .venv-ci/bin/python -m pip install --upgrade pip
 
       - name: Instalar (core + plugins)
         run: |
