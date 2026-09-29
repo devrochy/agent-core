@@ -3513,8 +3513,13 @@
           }
         },
         "responses": {
-          "204": {
-            "description": "Successful Response"
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -3820,6 +3825,319 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/invitations/pending": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · invitaciones"
+        ],
+        "summary": "List Pending",
+        "operationId": "list_pending_api_v1_admin_invitations_pending_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/invitations": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · invitaciones"
+        ],
+        "summary": "Create Invitation",
+        "operationId": "create_invitation_api_v1_admin_invitations_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitationCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/invitations/{invitation_id}/accept": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · invitaciones"
+        ],
+        "summary": "Accept Invitation",
+        "operationId": "accept_invitation_api_v1_admin_invitations__invitation_id__accept_post",
+        "parameters": [
+          {
+            "name": "invitation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Invitation Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/invitations/{invitation_id}/reject": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · invitaciones"
+        ],
+        "summary": "Reject Invitation",
+        "operationId": "reject_invitation_api_v1_admin_invitations__invitation_id__reject_post",
+        "parameters": [
+          {
+            "name": "invitation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Invitation Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/invitations/{invitation_id}/revoke": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · invitaciones"
+        ],
+        "summary": "Revoke Invitation",
+        "operationId": "revoke_invitation_api_v1_admin_invitations__invitation_id__revoke_post",
+        "parameters": [
+          {
+            "name": "invitation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Invitation Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/invitations/count": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · invitaciones"
+        ],
+        "summary": "Count Pending",
+        "operationId": "count_pending_api_v1_admin_invitations_count_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "integer",
+                  "title": "Response Count Pending Api V1 Admin Invitations Count Get"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -6309,7 +6627,7 @@
           "pack · cobranza"
         ],
         "summary": "Create Collector",
-        "description": "Alta del gestor: crea su cuenta del core (Admin + TenantUser) y su perfil (ADR-0066).",
+        "description": "Alta del gestor: crea su cuenta del core (Admin + TenantUser) y su perfil (ADR-0066).\n\nSi la identidad ya existe (mismo correo), no se duplica: se crea una **invitación**\nque el usuario debe aceptar y se devuelve `{\"resultado\": \"invitado\"}` (ADR-0081).",
         "operationId": "create_collector_api_v1_pack_cobranza_collectors_post",
         "parameters": [
           {
@@ -6345,7 +6663,9 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Collector"
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Collector Api V1 Pack Cobranza Collectors Post"
                 }
               }
             }
@@ -12758,6 +13078,80 @@
         ],
         "title": "InstallmentIn"
       },
+      "InvitationCreate": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "title": "Email",
+            "default": ""
+          },
+          "admin_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Admin Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "default": "colaborador"
+          },
+          "pack_roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Pack Roles",
+            "default": []
+          },
+          "tenant": {
+            "type": "string",
+            "title": "Tenant",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "InvitationCreate"
+      },
+      "InvitationItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "tenantId": {
+            "type": "string",
+            "title": "Tenantid"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "rol": {
+            "type": "string",
+            "title": "Rol"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tenantId",
+          "slug",
+          "nombre",
+          "rol"
+        ],
+        "title": "InvitationItem"
+      },
       "LeadColumn": {
         "properties": {
           "key": {
@@ -14325,6 +14719,27 @@
           "url"
         ],
         "title": "PaymentLinkIn"
+      },
+      "PendingResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/InvitationItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "PendingResponse"
       },
       "PermissionItem": {
         "properties": {

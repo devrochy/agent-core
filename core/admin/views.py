@@ -850,7 +850,7 @@ async def collaborators_create(
     me = await current_admin(request)
     if not await _require_collaborators(request, write=True):
         return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
-    error = await create_collaborator(
+    resultado = await create_collaborator(
         actor=me,
         email=email,
         password=password,
@@ -859,9 +859,11 @@ async def collaborators_create(
         tenant_slug=tenant,
         pack_roles=pack_roles,
     )
-    if error is not None:
-        return _collab_redirect(error, "danger")
+    if isinstance(resultado, str):
+        return _collab_redirect(resultado, "danger")
     _audit("create_collaborator", me.email if me else "?", email, role=role, tenant=tenant or "*")
+    if resultado.estado == "invitado":
+        return _collab_redirect(f"invitación enviada a {email}")
     return _collab_redirect(f"colaborador {email} creado")
 
 

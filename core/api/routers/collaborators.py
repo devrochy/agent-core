@@ -11,6 +11,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -187,12 +188,12 @@ def _fail(error: str | None) -> None:
         raise ApiError.bad_request(error, "collaborator_error")
 
 
-@router.post("", status_code=204)
+@router.post("", status_code=200)
 async def create_collaborator_endpoint(
     payload: CollaboratorCreate,
     principal: Annotated[Principal, Depends(require("collaborators", write=True))],
-) -> Response:
-    error = await create_collaborator(
+) -> JSONResponse:
+    resultado = await create_collaborator(
         actor=principal.admin,
         email=payload.email,
         password=payload.password,
@@ -201,15 +202,17 @@ async def create_collaborator_endpoint(
         tenant_slug=payload.tenant,
         pack_roles=payload.pack_roles,
     )
-    _fail(error)
+    if isinstance(resultado, str):
+        raise ApiError.bad_request(resultado, "collaborator_error")
     audit(
         "create_collaborator",
         principal.admin.email,
         payload.email,
         role=payload.role,
         tenant=payload.tenant or "*",
+        resultado=resultado.estado,
     )
-    return Response(status_code=204)
+    return JSONResponse({"resultado": resultado.estado})
 
 
 @router.post("/{admin_id}/password", status_code=204)

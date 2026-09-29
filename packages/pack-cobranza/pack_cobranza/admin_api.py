@@ -1705,12 +1705,16 @@ def _collector_values(payload: CollectorIn) -> dict[str, str]:
     }
 
 
-@router.post("/collectors", response_model=Collector, status_code=201)
+@router.post("/collectors", status_code=201)
 async def create_collector(
     payload: CollectorIn,
     principal: Annotated[Principal, Depends(require("pack_cobranza:gestores", write=True))],
-) -> Collector:
-    """Alta del gestor: crea su cuenta del core (Admin + TenantUser) y su perfil (ADR-0066)."""
+) -> dict[str, Any]:
+    """Alta del gestor: crea su cuenta del core (Admin + TenantUser) y su perfil (ADR-0066).
+
+    Si la identidad ya existe (mismo correo), no se duplica: se crea una **invitación**
+    que el usuario debe aceptar y se devuelve `{"resultado": "invitado"}` (ADR-0081).
+    """
     tid = principal.tenant_id
     correo = (payload.correo or "").strip().lower()
     password = payload.password or ""
@@ -1723,7 +1727,18 @@ async def create_collector(
             await session.execute(select(Admin).where(Admin.email == correo))
         ).scalar_one_or_none()
         if existente is not None:
-            raise ApiError.bad_request("Ya existe una cuenta con ese correo.", "email_taken")
+            from core.admin.invitations_service import crear_invitacion
+
+            error = await crear_invitacion(
+                tenant_id=tid,
+                admin_id=existente.id,
+                invited_by=principal.admin.id,
+                role="colaborador",
+                pack_roles=["pack_cobranza:gestor"],
+            )
+            if error is not None:
+                raise ApiError.bad_request(error, "invitation_error")
+            return {"resultado": "invitado"}
         values = _collector_values(payload)
         admin = Admin(email=correo, password_hash=hash_password(password), role="colaborador")
         session.add(admin)
@@ -1733,7 +1748,7 @@ async def create_collector(
         session.add(gestor)
         await session.flush()
         _audit(session, tid, "gestor", gestor.id, "crear", despues={"correo": correo})
-        return _as_collector(gestor)
+        return {"resultado": "creado", "collector": _as_collector(gestor).model_dump()}
 
 
 @router.put("/collectors/{collector_id}", response_model=Collector)
