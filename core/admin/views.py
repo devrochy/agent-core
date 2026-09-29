@@ -2091,103 +2091,6 @@ async def connection_delete(request: Request, connection_id: uuid.UUID):
 
 
 # ------------------------------------------------------------------ meta requisitos (preflight)
-@router.get("/conexiones/meta-requisitos", response_class=HTMLResponse)
-async def meta_requisitos_page(request: Request):
-    ctx = await _base_context(request, "connections")
-    if ctx is None:
-        return _login_redirect()
-
-    from core.db.models import MetaSetupChecklist, Tenant
-    from core.gateway.meta_preflight import MANUAL_STEPS, resolve_app_credentials, run_preflight
-
-    tid = get_current_tenant_id()
-    tenant_slug = ""
-    if tid is not None:
-        async with get_session() as session:
-            tenant = await session.get(Tenant, tid)
-            tenant_slug = tenant.slug if tenant else ""
-
-    config = await resolve_app_credentials(tid)
-    checks = await run_preflight(tid, tenant_slug)
-
-    async with get_session() as session:
-        done_rows = (
-            await session.execute(select(MetaSetupChecklist).where(MetaSetupChecklist.tenant_id == tid))
-        ).scalars().all()
-    done_by_key = {row.step_key: row for row in done_rows}
-
-    app_dashboard_base = (
-        f"https://developers.facebook.com/apps/{config.app_id}/" if config else "https://developers.facebook.com/apps/"
-    )
-    steps = [
-        {
-            "key": step["key"],
-            "label": step["label"],
-            "link": app_dashboard_base + step["link_suffix"] if config else "https://developers.facebook.com/apps/",
-            "done": done_by_key[step["key"]].done if step["key"] in done_by_key else False,
-            "notes": done_by_key[step["key"]].notes if step["key"] in done_by_key else "",
-        }
-        for step in MANUAL_STEPS
-    ]
-
-    ctx.update(steps=steps, checks=checks, meta_configured=config is not None)
-    return _render("meta_requisitos.html", ctx)
-
-
-@router.get("/conexiones/meta-requisitos.json")
-async def meta_requisitos_json(request: Request):
-    if await current_admin(request) is None:
-        return _login_redirect()
-
-    from core.db.models import Tenant
-    from core.gateway.meta_preflight import run_preflight
-
-    tid = get_current_tenant_id()
-    tenant_slug = ""
-    if tid is not None:
-        async with get_session() as session:
-            tenant = await session.get(Tenant, tid)
-            tenant_slug = tenant.slug if tenant else ""
-
-    checks = await run_preflight(tid, tenant_slug)
-    return {"checks": [c.model_dump() for c in checks]}
-
-
-@router.post("/conexiones/meta-requisitos/paso")
-async def meta_requisitos_toggle(
-    request: Request,
-    step_key: str = Form(...),
-    done: str = Form(default=""),
-    notes: str = Form(default=""),
-):
-    admin = await current_admin(request)
-    if admin is None:
-        return _login_redirect()
-
-    from core.db.models import MetaSetupChecklist
-
-    tid = get_current_tenant_id()
-    is_done = done == "on"
-    async with get_session() as session:
-        row = (
-            await session.execute(
-                select(MetaSetupChecklist).where(
-                    MetaSetupChecklist.tenant_id == tid, MetaSetupChecklist.step_key == step_key
-                )
-            )
-        ).scalar_one_or_none()
-        if row is None:
-            row = MetaSetupChecklist(tenant_id=tid, step_key=step_key)
-            session.add(row)
-        row.done = is_done
-        row.notes = notes or None
-        row.done_by = admin.id if is_done else None
-        row.done_at = utcnow() if is_done else None
-
-    return RedirectResponse("/admin/conexiones/meta-requisitos?flash=Guardado", status_code=303)
-
-
-# ------------------------------------------------------------------ suscripciones de webhook (app de Meta)
 async def _require_owner_or_master(request: Request, tenant_id: uuid.UUID | None) -> bool:
     """"owner/admin" del ticket, traducido a los dos roles elevados que
     existen hoy: `Admin.role == "master"` (superadmin de plataforma) o
@@ -2211,11 +2114,9 @@ async def _require_owner_or_master(request: Request, tenant_id: uuid.UUID | None
         ).scalar_one_or_none()
     return row is not None and row.role == "owner"
 
-
 async def _webhook_subscriptions_status(tid: uuid.UUID | None) -> list[dict[str, Any]]:
     """Delegación a `meta_health_service.webhook_subscriptions_status` (fuente única)."""
     return await webhook_subscriptions_status(tid)
-
 
 @router.get("/conexiones/webhooks", response_class=HTMLResponse)
 async def meta_webhooks_page(request: Request):
@@ -3066,56 +2967,6 @@ async def _production_manual_steps(tid: uuid.UUID) -> list[dict[str, Any]]:
     ]
 
 
-@router.get("/conexiones/produccion", response_class=HTMLResponse)
-async def meta_produccion_page(request: Request):
-    ctx = await _base_context(request, "connections")
-    if ctx is None:
-        return _login_redirect()
-
-    tid = get_current_tenant_id()
-    manual_steps = await _production_manual_steps(tid)
-    ctx.update(manual_steps=manual_steps, auto_checks=None)
-    return _render("meta_produccion.html", ctx)
-
-
-@router.post("/conexiones/produccion/ejecutar", response_class=HTMLResponse)
-async def meta_produccion_ejecutar(request: Request):
-    """Corre los 9 checks automáticos on-demand. La mayoría solo dan una
-    respuesta con sentido contra un despliegue de producción real -- en
-    cualquier otro entorno (incluida esta misma instancia si no es
-    producción) van a dar `False`/`None`, y el panel lo muestra tal cual,
-    sin disfrazarlo."""
-    from core.gateway import meta_production_readiness as readiness
-
-    if await current_admin(request) is None:
-        return _login_redirect()
-
-    ctx = await _base_context(request, "connections")
-    if ctx is None:
-        return _login_redirect()
-
-    tid = get_current_tenant_id()
-    settings = get_settings()
-    callback_url = f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"
-    verify_token = settings.whatsapp_verify_token
-
-    auto_checks = []
-    auto_checks.append(await readiness.check_webhook_handshake(callback_url, verify_token))
-    auto_checks.append(await readiness.check_app_subscriptions_complete(settings.meta_app_id))
-    auto_checks.append(readiness.check_prod_secret_differs_from_dev(settings.meta_app_secret))
-    auto_checks.append(readiness.check_token_keys_configured())
-    auto_checks.append(await readiness.check_worker_heartbeat_and_dlq())
-    auto_checks.append(await readiness.check_rls_forced())
-    auto_checks.append(readiness.check_rls_tests_pass())
-    auto_checks.append(readiness.check_no_secret_leak_in_templates())
-    auto_checks.append(await readiness.check_connections_health_except_billing(tid))
-
-    manual_steps = await _production_manual_steps(tid)
-    ctx.update(manual_steps=manual_steps, auto_checks=[c.model_dump(mode="json") for c in auto_checks])
-    return _render("meta_produccion.html", ctx)
-
-
-# ------------------------------------------------------------------ costos
 @router.get("/costos", response_class=HTMLResponse)
 async def costs_page(request: Request):
     ctx = await _base_context(request, "costs")

@@ -2613,6 +2613,217 @@
         }
       }
     },
+    "/api/v1/admin/meta/checklist/requirements": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Checklist Requirements",
+        "description": "Requisitos de puesta en marcha + los checks automáticos de Meta.",
+        "operationId": "checklist_requirements_api_v1_admin_meta_checklist_requirements_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChecklistOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/checklist/production": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Checklist Production",
+        "description": "Lista de producción: los mismos pasos manuales, con su estado.",
+        "operationId": "checklist_production_api_v1_admin_meta_checklist_production_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChecklistOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/checklist/step": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Checklist Step",
+        "description": "Marca o desmarca un paso del checklist (con nota opcional).",
+        "operationId": "checklist_step_api_v1_admin_meta_checklist_step_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChecklistStepIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/checklist/production/run": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Run Production Checks",
+        "description": "Corre las comprobaciones de puesta en producción (9 checks on-demand).",
+        "operationId": "run_production_checks_api_v1_admin_meta_checklist_production_run_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PreflightOut"
+                  },
+                  "title": "Response Run Production Checks Api V1 Admin Meta Checklist Production Run Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/collaborators/pack-roles": {
       "get": {
         "tags": [
@@ -9430,6 +9641,91 @@
         ],
         "title": "CategorySave"
       },
+      "ChecklistOut": {
+        "properties": {
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/ChecklistStep"
+            },
+            "type": "array",
+            "title": "Steps"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/PreflightOut"
+            },
+            "type": "array",
+            "title": "Checks",
+            "default": []
+          },
+          "meta_configured": {
+            "type": "boolean",
+            "title": "Meta Configured",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "steps"
+        ],
+        "title": "ChecklistOut"
+      },
+      "ChecklistStep": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "link": {
+            "type": "string",
+            "title": "Link"
+          },
+          "done": {
+            "type": "boolean",
+            "title": "Done",
+            "default": false
+          },
+          "notes": {
+            "type": "string",
+            "title": "Notes",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "link"
+        ],
+        "title": "ChecklistStep"
+      },
+      "ChecklistStepIn": {
+        "properties": {
+          "step_key": {
+            "type": "string",
+            "title": "Step Key"
+          },
+          "done": {
+            "type": "boolean",
+            "title": "Done",
+            "default": false
+          },
+          "notes": {
+            "type": "string",
+            "title": "Notes",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "step_key"
+        ],
+        "title": "ChecklistStepIn"
+      },
       "ClientChange": {
         "properties": {
           "id": {
@@ -13723,6 +14019,35 @@
           "lng"
         ],
         "title": "PositionIn"
+      },
+      "PreflightOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "ok"
+        ],
+        "title": "PreflightOut"
       },
       "ProductOut": {
         "properties": {

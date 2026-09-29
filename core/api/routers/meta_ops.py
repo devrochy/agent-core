@@ -15,6 +15,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from core.admin.meta_health_service import (
     diagnose_connection,
@@ -49,6 +50,7 @@ from core.admin.waweb_service import (
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.config import get_settings
+from core.db.session import get_session
 
 router = APIRouter(prefix="/admin/meta", tags=["admin · meta"])
 
@@ -468,3 +470,147 @@ async def create_connection_template(
     except GraphError as exc:
         raise ApiError.bad_request(str(getattr(exc, "message", exc))[:200], "graph_error") from exc
     return Response(status_code=201)
+
+# ------------------------------------------------- checklist de puesta en marcha
+class ChecklistStep(BaseModel):
+    key: str
+    label: str
+    link: str
+    done: bool = False
+    notes: str = ""
+
+
+class PreflightOut(BaseModel):
+    key: str
+    # `None` = no evaluable en este entorno (los checks de producción devuelven
+    # False/None fuera de un despliegue real; se muestran tal cual).
+    ok: bool | None = None
+    detail: str | None = None
+
+
+class ChecklistOut(BaseModel):
+    steps: list[ChecklistStep]
+    checks: list[PreflightOut] = []
+    meta_configured: bool = False
+
+
+class ChecklistStepIn(BaseModel):
+    step_key: str
+    done: bool = False
+    notes: str = ""
+
+
+async def _checklist_steps(tenant_id: Any) -> tuple[list[ChecklistStep], bool]:
+    """Pasos manuales de Meta con su estado (checklist del tenant)."""
+
+    from core.db.models import MetaSetupChecklist
+    from core.gateway.meta_preflight import MANUAL_STEPS, resolve_app_credentials
+
+    config = await resolve_app_credentials(tenant_id)
+    base = (
+        f"https://developers.facebook.com/apps/{config.app_id}/"
+        if config
+        else "https://developers.facebook.com/apps/"
+    )
+    async with get_session() as session:
+        filas = (
+            await session.execute(
+                select(MetaSetupChecklist).where(MetaSetupChecklist.tenant_id == tenant_id)
+            )
+        ).scalars().all()
+    estado = {f.step_key: f for f in filas}
+    return (
+        [
+            ChecklistStep(
+                key=paso["key"],
+                label=paso["label"],
+                link=base + paso.get("link_suffix", ""),
+                done=bool(getattr(estado.get(paso["key"]), "done", False)),
+                notes=getattr(estado.get(paso["key"]), "notes", "") or "",
+            )
+            for paso in MANUAL_STEPS
+        ],
+        config is not None,
+    )
+
+
+@router.get("/checklist/requirements", response_model=ChecklistOut)
+async def checklist_requirements(
+    principal: Annotated[Principal, Depends(require("connections"))],
+) -> ChecklistOut:
+    """Requisitos de puesta en marcha + los checks automáticos de Meta."""
+    from core.db.models import Tenant
+    from core.gateway.meta_preflight import run_preflight
+
+    steps, meta_configured = await _checklist_steps(principal.tenant_id)
+    slug = ""
+    async with get_session() as session:
+        tenant = await session.get(Tenant, principal.tenant_id)
+        slug = tenant.slug if tenant else ""
+    checks = await run_preflight(principal.tenant_id, slug)
+    return ChecklistOut(
+        steps=steps,
+        checks=[PreflightOut(key=c.key, ok=c.ok, detail=c.detail) for c in checks],
+        meta_configured=meta_configured,
+    )
+
+
+@router.get("/checklist/production", response_model=ChecklistOut)
+async def checklist_production(
+    principal: Annotated[Principal, Depends(require("connections"))],
+) -> ChecklistOut:
+    """Lista de producción: los mismos pasos manuales, con su estado."""
+    steps, meta_configured = await _checklist_steps(principal.tenant_id)
+    return ChecklistOut(steps=steps, meta_configured=meta_configured)
+
+
+@router.post("/checklist/step", status_code=204)
+async def checklist_step(
+    payload: ChecklistStepIn,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> Response:
+    """Marca o desmarca un paso del checklist (con nota opcional)."""
+
+    from core.db.models import MetaSetupChecklist
+
+    if not payload.step_key.strip():
+        raise ApiError.bad_request("Falta el paso.", "missing_step")
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                select(MetaSetupChecklist).where(
+                    MetaSetupChecklist.tenant_id == principal.tenant_id,
+                    MetaSetupChecklist.step_key == payload.step_key,
+                )
+            )
+        ).scalar_one_or_none()
+        if fila is None:
+            fila = MetaSetupChecklist(
+                tenant_id=principal.tenant_id, step_key=payload.step_key
+            )
+            session.add(fila)
+        fila.done = payload.done
+        fila.notes = payload.notes.strip() or None
+    return Response(status_code=204)
+
+@router.post("/checklist/production/run", response_model=list[PreflightOut])
+async def run_production_checks(
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> list[PreflightOut]:
+    """Corre las comprobaciones de puesta en producción (9 checks on-demand)."""
+    from core.gateway import meta_production_readiness as readiness
+
+    settings = get_settings()
+    callback_url = f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"
+    checks = [
+        await readiness.check_webhook_handshake(callback_url, settings.whatsapp_verify_token),
+        await readiness.check_app_subscriptions_complete(settings.meta_app_id),
+        readiness.check_prod_secret_differs_from_dev(settings.meta_app_secret),
+        readiness.check_token_keys_configured(),
+        await readiness.check_worker_heartbeat_and_dlq(),
+        await readiness.check_rls_forced(),
+        readiness.check_rls_tests_pass(),
+        readiness.check_no_secret_leak_in_templates(),
+        await readiness.check_connections_health_except_billing(principal.tenant_id),
+    ]
+    return [PreflightOut(key=c.key, ok=c.ok, detail=c.detail) for c in checks]
