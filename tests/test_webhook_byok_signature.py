@@ -33,7 +33,10 @@ async def test_secretos_priorizan_el_del_negocio(monkeypatch) -> None:
         return tenant_id
 
     async def fake_secret(tid: uuid.UUID) -> str:
+        from core.shared.tenant import get_current_tenant_id
+
         assert tid == tenant_id
+        assert get_current_tenant_id() == tenant_id  # el token vive bajo RLS de tenant
         return "byok-secret"
 
     monkeypatch.setattr("core.shared.tenant.resolve_tenant_for_phone", fake_resolve_phone, raising=True)
@@ -59,9 +62,12 @@ async def test_sin_negocio_queda_solo_el_del_framework(monkeypatch) -> None:
         return None
 
     monkeypatch.setattr("core.shared.tenant.resolve_tenant_for_phone", sin_tenant, raising=True)
+    import pytest
+
     monkeypatch.setattr(
         "core.gateway.webhook_route_tenant._resolve_tenant_for_waba", sin_waba, raising=True
     )
+    assert pytest is not None
     monkeypatch.setattr(
         webhooks,
         "get_settings",

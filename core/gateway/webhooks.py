@@ -88,62 +88,62 @@ async def verify_webhook_tenant(
     return Response(status_code=403)
 
 
-def _phone_number_id_from_payload(payload: dict[str, Any]) -> str:
-    """`phone_number_id` del primer change (metadata de WhatsApp Cloud API)."""
+async def _tenant_y_secretos(payload: dict[str, Any]) -> tuple[uuid.UUID | None, list[str]]:
+    """Negocios y secretos con los que puede venir firmado el webhook.
+
+    Por cada entry se resuelve su negocio (teléfono -> WABA) y se recolecta el
+    **secret efectivo del negocio** (BYOK / conexión manual) y luego el del
+    framework (`.env`). Dos bugs reales corregidos acá (2026-09-29):
+    - la ruta genérica validaba solo con el secret del framework: con BYOK toda
+      entrega terminaba en 401;
+    - el token BYOK vive bajo RLS de tenant (`meta_private.meta_tokens`): hay
+      que resolverlo dentro de `tenant_scope` o la lectura cae al `.env`.
+    """
+    from core.gateway.connections import resolve_effective_app_secret
+    from core.gateway.webhook_route_tenant import _resolve_tenant_for_waba
+    from core.shared.tenant import resolve_tenant_for_phone
+
+    tenants: list[uuid.UUID] = []
     for entry in payload.get("entry") or []:
+        tenant_id: uuid.UUID | None = None
         for change in entry.get("changes") or []:
             value = change.get("value") or {}
             metadata = value.get("metadata") or {}
-            if metadata.get("phone_number_id"):
-                return str(metadata["phone_number_id"])
-    return ""
-
-
-async def _tenant_y_secretos(payload: dict[str, Any]) -> tuple[uuid.UUID | None, list[str]]:
-    """Negocio y secretos con los que puede venir firmado el webhook.
-
-    Orden: **secret efectivo del negocio** (BYOK / conexión manual) y luego el
-    del framework (`.env`). La ruta genérica validaba solo con el del framework:
-    con BYOK Meta firma con la app del negocio y toda entrega terminaba en 401.
-    """
-    from core.gateway.connections import resolve_effective_app_secret
-    from core.shared.tenant import resolve_tenant_for_phone
-
-    settings = get_settings()
-    tenant_id: uuid.UUID | None = None
-    telefono = _phone_number_id_from_payload(payload)
-    if telefono:
-        try:
-            tenant_id = await resolve_tenant_for_phone(telefono)
-        except Exception:
-            log.exception("webhook_tenant_lookup_failed", phone_number_id=telefono)
-    if tenant_id is None:
-        from core.gateway.webhook_route_tenant import _resolve_tenant_for_waba
-
-        for entry in payload.get("entry") or []:
-            waba_id = str(entry.get("id") or "").strip()
-            if not waba_id:
+            telefono = str(metadata.get("phone_number_id") or "").strip()
+            if not telefono:
                 continue
             try:
-                tenant_id = await _resolve_tenant_for_waba(waba_id)
+                tenant_id = await resolve_tenant_for_phone(telefono)
             except Exception:
-                log.exception("webhook_waba_lookup_failed", waba_id=waba_id)
+                log.exception("webhook_tenant_lookup_failed", phone_number_id=telefono)
             if tenant_id is not None:
                 break
+        if tenant_id is None:
+            waba_id = str(entry.get("id") or "").strip()
+            if waba_id:
+                try:
+                    tenant_id = await _resolve_tenant_for_waba(waba_id)
+                except Exception:
+                    log.exception("webhook_waba_lookup_failed", waba_id=waba_id)
+        if tenant_id is not None and tenant_id not in tenants:
+            tenants.append(tenant_id)
 
     secretos: list[str] = []
-    if tenant_id is not None:
+    for tenant_id in tenants:
         try:
-            propio = await resolve_effective_app_secret(tenant_id)
+            async with tenant_scope(tenant_id):
+                propio = await resolve_effective_app_secret(tenant_id)
         except Exception:
             log.exception("webhook_tenant_secret_failed", tenant_id=str(tenant_id))
             propio = ""
-        if propio:
+        if propio and propio not in secretos:
             secretos.append(propio)
+
+    settings = get_settings()
     marco = settings.whatsapp_app_secret or settings.meta_app_secret
     if marco and marco not in secretos:
         secretos.append(marco)
-    return tenant_id, secretos
+    return (tenants[0] if tenants else None), secretos
 
 
 @router.post("/whatsapp")
