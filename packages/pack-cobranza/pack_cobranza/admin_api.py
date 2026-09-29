@@ -32,6 +32,7 @@ from .models import (
     AuditoriaCartera,
     Caja,
     CajaAjuste,
+    CambioCliente,
     Cartera,
     CarteraApertura,
     CarteraConfig,
@@ -1855,6 +1856,7 @@ class ClientDetail(BaseModel):
     cliente: ClientRow
     prestamos: list[Loan]
     movimientos: list[ClientMovement]
+    cambios: list[ClientChange] = []
 
 
 async def _caja_de(session: Any, tid: uuid.UUID, cartera_id: uuid.UUID) -> Caja:
@@ -1929,6 +1931,21 @@ async def client_detail(
             .scalars()
             .all()
         )
+        cambios = (
+            (
+                await session.execute(
+                    select(CambioCliente)
+                    .where(
+                        CambioCliente.tenant_id == tid,
+                        CambioCliente.cliente_id == cliente.id,
+                        CambioCliente.estado == "pendiente",
+                    )
+                    .order_by(CambioCliente.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
         abonos = (
             (
                 await session.execute(
@@ -1979,6 +1996,7 @@ async def client_detail(
     movimientos.sort(key=lambda m: m.fecha, reverse=True)
     return ClientDetail(
         cliente=_as_client(cliente, cartera),
+        cambios=[_as_change(c) for c in cambios],
         prestamos=[
             Loan(
                 id=p.id,
@@ -3388,3 +3406,110 @@ async def optimize_route(
             tiempo_min=tiempo,
             fecha=hoy.isoformat(),
         )
+
+
+# ------------------------------------- cambios de cliente (cierre 3.5)
+class ClientChange(BaseModel):
+    id: uuid.UUID
+    campos_propuestos: dict[str, Any]
+    estado: str
+    solicitado_por: str
+    fecha: str
+    motivo_rechazo: str | None = None
+
+
+def _as_change(row: CambioCliente) -> ClientChange:
+    return ClientChange(
+        id=row.id,
+        campos_propuestos=row.campos_propuestos or {},
+        estado=row.estado,
+        solicitado_por=row.solicitado_por_rol or "",
+        fecha=row.created_at.strftime("%Y-%m-%d %H:%M") if row.created_at else "",
+        motivo_rechazo=row.motivo_rechazo,
+    )
+
+
+class ClientChangeDecision(BaseModel):
+    decision: str
+    motivo: str = ""
+
+
+CHANGE_FIELDS = (
+    "nombre",
+    "apellido",
+    "negocio",
+    "telefono_whatsapp",
+    "tipo_documento",
+    "numero_documento",
+)
+
+
+@router.get("/client-changes", response_model=list[ClientChange])
+async def list_client_changes(
+    principal: Annotated[Principal, Depends(require("pack_cobranza:clientes"))],
+    cliente_id: uuid.UUID | None = None,
+    estado: str = "pendiente",
+) -> list[ClientChange]:
+    tid = principal.tenant_id
+    query = select(CambioCliente).where(CambioCliente.tenant_id == tid)
+    if cliente_id is not None:
+        query = query.where(CambioCliente.cliente_id == cliente_id)
+    if estado:
+        query = query.where(CambioCliente.estado == estado)
+    async with get_session() as session:
+        rows = (
+            (await session.execute(query.order_by(CambioCliente.created_at.desc()).limit(200)))
+            .scalars()
+            .all()
+        )
+    return [_as_change(r) for r in rows]
+
+
+@router.post("/client-changes/{change_id}/decision", response_model=ClientChange)
+async def decide_client_change(
+    change_id: uuid.UUID,
+    payload: ClientChangeDecision,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:clientes", write=True))],
+) -> ClientChange:
+    """Aprueba (aplica los campos propuestos al cliente) o rechaza (con motivo)."""
+    if payload.decision not in ("aprobar", "rechazar"):
+        raise ApiError.bad_request("Decisión inválida: usa 'aprobar' o 'rechazar'.", "invalid_decision")
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cambio = (
+            await session.execute(
+                select(CambioCliente).where(
+                    CambioCliente.id == change_id, CambioCliente.tenant_id == tid
+                )
+            )
+        ).scalar_one_or_none()
+        if cambio is None:
+            raise ApiError.not_found("Cambio no encontrado.")
+        if cambio.estado != "pendiente":
+            raise ApiError.bad_request("El cambio ya fue revisado.", "already_reviewed")
+        aplicados: dict[str, Any] = {}
+        if payload.decision == "aprobar":
+            cliente = await _get_active(session, Cliente, cambio.cliente_id, tid)
+            if cliente is None:
+                raise ApiError.not_found("Cliente no encontrado.")
+            for campo, valor in (cambio.campos_propuestos or {}).items():
+                if campo in CHANGE_FIELDS and valor is not None:
+                    setattr(cliente, campo, str(valor))
+                    aplicados[campo] = str(valor)
+            cambio.estado = "aprobado"
+        else:
+            cambio.estado = "rechazado"
+            cambio.motivo_rechazo = payload.motivo.strip() or None
+        cambio.revisado_por = principal.admin.id
+        cambio.revisado_en = datetime.now(UTC)
+        _audit(
+            session,
+            tid,
+            "cambio_cliente",
+            cambio.id,
+            "editar",
+            antes={"estado": "pendiente"},
+            despues={"estado": cambio.estado, **aplicados},
+            motivo=cambio.motivo_rechazo,
+        )
+        return _as_change(cambio)

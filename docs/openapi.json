@@ -8000,6 +8000,156 @@
         }
       }
     },
+    "/api/v1/pack/cobranza/client-changes": {
+      "get": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "List Client Changes",
+        "operationId": "list_client_changes_api_v1_pack_cobranza_client_changes_get",
+        "parameters": [
+          {
+            "name": "cliente_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cliente Id"
+            }
+          },
+          {
+            "name": "estado",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "pendiente",
+              "title": "Estado"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClientChange"
+                  },
+                  "title": "Response List Client Changes Api V1 Pack Cobranza Client Changes Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/client-changes/{change_id}/decision": {
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Decide Client Change",
+        "description": "Aprueba (aplica los campos propuestos al cliente) o rechaza (con motivo).",
+        "operationId": "decide_client_change_api_v1_pack_cobranza_client_changes__change_id__decision_post",
+        "parameters": [
+          {
+            "name": "change_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Change Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientChangeDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientChange"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/calendar/status": {
       "get": {
         "tags": [
@@ -8954,6 +9104,70 @@
         ],
         "title": "CategorySave"
       },
+      "ClientChange": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "campos_propuestos": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Campos Propuestos"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "solicitado_por": {
+            "type": "string",
+            "title": "Solicitado Por"
+          },
+          "fecha": {
+            "type": "string",
+            "title": "Fecha"
+          },
+          "motivo_rechazo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Rechazo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "campos_propuestos",
+          "estado",
+          "solicitado_por",
+          "fecha"
+        ],
+        "title": "ClientChange"
+      },
+      "ClientChangeDecision": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "title": "Decision"
+          },
+          "motivo": {
+            "type": "string",
+            "title": "Motivo",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "title": "ClientChangeDecision"
+      },
       "ClientDetail": {
         "properties": {
           "cliente": {
@@ -8972,6 +9186,14 @@
             },
             "type": "array",
             "title": "Movimientos"
+          },
+          "cambios": {
+            "items": {
+              "$ref": "#/components/schemas/ClientChange"
+            },
+            "type": "array",
+            "title": "Cambios",
+            "default": []
           }
         },
         "type": "object",
