@@ -14918,6 +14918,29 @@
             "type": "number",
             "title": "Saldo"
           },
+          "mora": {
+            "type": "number",
+            "title": "Mora",
+            "default": 0.0
+          },
+          "cobrado_30d": {
+            "type": "number",
+            "title": "Cobrado 30D",
+            "default": 0.0
+          },
+          "gastos_total": {
+            "type": "number",
+            "title": "Gastos Total",
+            "default": 0.0
+          },
+          "reportes_diarios": {
+            "items": {
+              "$ref": "#/components/schemas/ReporteDiarioOut"
+            },
+            "type": "array",
+            "title": "Reportes Diarios",
+            "default": []
+          },
           "caja": {
             "$ref": "#/components/schemas/PortfolioCaja"
           },
@@ -15577,6 +15600,49 @@
           "gastos"
         ],
         "title": "ReportRow"
+      },
+      "ReporteDiarioOut": {
+        "properties": {
+          "fecha": {
+            "type": "string",
+            "title": "Fecha"
+          },
+          "cobrado": {
+            "type": "number",
+            "title": "Cobrado"
+          },
+          "prestado": {
+            "type": "number",
+            "title": "Prestado"
+          },
+          "visitados": {
+            "type": "integer",
+            "title": "Visitados"
+          },
+          "sin_pago": {
+            "type": "integer",
+            "title": "Sin Pago"
+          },
+          "inicio": {
+            "type": "string",
+            "title": "Inicio"
+          },
+          "fin": {
+            "type": "string",
+            "title": "Fin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fecha",
+          "cobrado",
+          "prestado",
+          "visitados",
+          "sin_pago",
+          "inicio",
+          "fin"
+        ],
+        "title": "ReporteDiarioOut"
       },
       "Reports": {
         "properties": {

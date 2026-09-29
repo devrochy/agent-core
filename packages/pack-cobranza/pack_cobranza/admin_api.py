@@ -57,6 +57,7 @@ from .models import (
     Prestamo,
     Promesa,
     ReglaNegociacion,
+    ReporteDiario,
     SyncEvento,
     Visita,
 )
@@ -1299,6 +1300,16 @@ class EstadisticaSnapshot(BaseModel):
     datos: dict[str, Any]
 
 
+class ReporteDiarioOut(BaseModel):
+    fecha: str
+    cobrado: float
+    prestado: float
+    visitados: int
+    sin_pago: int
+    inicio: str
+    fin: str
+
+
 class PortfolioDetail(BaseModel):
     id: uuid.UUID
     nombre: str
@@ -1311,6 +1322,12 @@ class PortfolioDetail(BaseModel):
     clientes: int
     prestamos: int
     saldo: float
+    # KPIs del clásico (cartera_estadisticas): mora, cobrado de los últimos 30
+    # días y gastos activos totales.
+    mora: float = 0.0
+    cobrado_30d: float = 0.0
+    gastos_total: float = 0.0
+    reportes_diarios: list[ReporteDiarioOut] = []
     caja: PortfolioCaja
     liquidaciones: list[Liquidation]
     inyecciones: list[Injection]
@@ -1425,6 +1442,57 @@ async def portfolio_detail(
             .scalars()
             .all()
         )
+        desde_mes = datetime.now(UTC) - timedelta(days=30)
+        prestamo_ids = select(Prestamo.id).where(
+            Prestamo.tenant_id == tid,
+            Prestamo.cartera_id == cartera.id,
+            Prestamo.deleted_at.is_(None),
+        )
+        mora = (
+            await session.execute(
+                select(func.coalesce(func.sum(Cuota.valor_esperado), 0)).where(
+                    Cuota.tenant_id == tid,
+                    Cuota.prestamo_id.in_(prestamo_ids),
+                    Cuota.estatus == "atrasada",
+                    Cuota.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one()
+        cobrado_30d = (
+            await session.execute(
+                select(func.coalesce(func.sum(Pago.valor), 0)).where(
+                    Pago.tenant_id == tid,
+                    Pago.prestamo_id.in_(prestamo_ids),
+                    Pago.fecha_hora >= desde_mes,
+                    Pago.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one()
+        gastos_total = (
+            await session.execute(
+                select(func.coalesce(func.sum(Gasto.valor), 0)).where(
+                    Gasto.tenant_id == tid,
+                    Gasto.cartera_id == cartera.id,
+                    Gasto.estado == "activo",
+                    Gasto.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one()
+        reportes = (
+            (
+                await session.execute(
+                    select(ReporteDiario)
+                    .where(
+                        ReporteDiario.tenant_id == tid,
+                        ReporteDiario.cartera_id == cartera.id,
+                    )
+                    .order_by(ReporteDiario.fecha.desc())
+                    .limit(14)
+                )
+            )
+            .scalars()
+            .all()
+        )
     return PortfolioDetail(
         id=cartera.id,
         nombre=cartera.nombre,
@@ -1437,6 +1505,21 @@ async def portfolio_detail(
         clientes=int(clientes),
         prestamos=len(prestamos),
         saldo=float(sum((p.saldo for p in prestamos), Decimal(0))),
+        mora=float(mora or 0),
+        cobrado_30d=float(cobrado_30d or 0),
+        gastos_total=float(gastos_total or 0),
+        reportes_diarios=[
+            ReporteDiarioOut(
+                fecha=r.fecha.isoformat(),
+                cobrado=float(r.cobrado or 0),
+                prestado=float(r.prestado or 0),
+                visitados=len(r.clientes_visitados or []),
+                sin_pago=len(r.clientes_sin_pago or []),
+                inicio=r.hora_inicio or "",
+                fin=r.hora_fin or "",
+            )
+            for r in reportes
+        ],
         caja=PortfolioCaja(
             saldo_inicial=float(caja.saldo_inicial) if caja else 0.0,
             saldo_actual=float(caja.saldo_actual) if caja else 0.0,

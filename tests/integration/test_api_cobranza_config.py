@@ -110,3 +110,19 @@ async def test_coercion_de_tipos_como_el_clasico(app_client) -> None:
     assert values["dias_no_laborables"] == "solo_domingos"
     # Lo no enviado queda en el default del modelo (el clásico tampoco lo pisaba).
     assert values["periodo_liquidacion"] == "diario"
+
+
+async def test_detalle_expone_los_kpis_del_clasico(app_client) -> None:
+    """El detalle de cartera trae mora, cobrado de 30 días, gastos y reportes diarios."""
+    tid, cartera_id = await _tenant_con_cartera()
+    headers = await api_headers(app_client, tid)
+
+    r = await app_client.get(f"/api/v1/pack/cobranza/portfolios/{cartera_id}", headers=headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    for clave in ("mora", "cobrado_30d", "gastos_total", "reportes_diarios"):
+        assert clave in body, f"falta {clave} en el detalle"
+    assert body["mora"] == 0
+    assert body["cobrado_30d"] == 0
+    assert body["gastos_total"] == 0
+    assert body["reportes_diarios"] == []
