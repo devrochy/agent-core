@@ -1,6 +1,6 @@
-"""Rutas admin de suscripciones de webhook a nivel de app
-(`/admin/conexiones/webhooks*`): gate owner/master, y que la respuesta JSON
-nunca exponga `app_secret`/`verify_token`."""
+"""Suscripciones de webhook a nivel de app en la API nueva
+(`/api/v1/admin/meta/webhooks*`): exige sesión, registrar exige owner/master, y
+la respuesta JSON nunca expone `app_secret`/`verify_token`."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import os
 import uuid
 
 import pytest
+from _api_helpers import ADMIN_EMAIL, api_headers, uniq
 from sqlalchemy import select
 
 pytestmark = [
@@ -19,37 +20,19 @@ pytestmark = [
 ]
 
 
-def _uniq(prefix: str) -> str:
-    return f"{prefix}-{uuid.uuid4().hex[:6]}"
-
-
-async def _login(app_client, email: str, password: str) -> str:
-    r = await app_client.post("/admin/login", data={"email": email, "password": password})
-    assert r.status_code == 303, f"login falló para {email}: {r.text}"
-    return r.headers["set-cookie"].split(";")[0]
-
-
-async def _switch_tenant(app_client, session_cookie: str, tenant_id: uuid.UUID) -> str:
-    r = await app_client.post(
-        "/admin/switch-tenant", headers={"Cookie": session_cookie}, data={"tenant_id": str(tenant_id)}
-    )
-    ac_tenant = next(c.split(";")[0] for c in r.headers.get_list("set-cookie") if "ac_tenant" in c)
-    return f"{session_cookie}; {ac_tenant}"
-
-
 async def _make_tenant_with_connection(channel: str = "whatsapp") -> uuid.UUID:
     from core.db.models import MetaConnection
     from core.db.session import get_session
     from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
-    slug = _uniq("subs-admin")
+    slug = uniq("subs-admin")
     tid, _ = await onboard_tenant(
         name=f"Tenant suscripciones {slug}",
         slug=slug,
         business_description="Test de rutas admin de suscripciones.",
         persona={"tone": "cercano"},
-        admin_email="admin@local",
+        admin_email=ADMIN_EMAIL,
     )
     async with tenant_scope(tid):
         async with get_session() as session:
@@ -65,51 +48,54 @@ async def _make_tenant_with_connection(channel: str = "whatsapp") -> uuid.UUID:
     return tid
 
 
-async def test_json_requiere_sesion(app_client):
-    r = await app_client.get("/admin/conexiones/webhooks.json")
-    assert r.status_code == 303
-    assert r.headers["location"] == "/admin/login"
+async def test_listado_requiere_sesion(app_client) -> None:
+    r = await app_client.get("/api/v1/admin/meta/webhooks")
+    assert r.status_code == 401
 
 
-async def test_registrar_devuelve_403_sin_rol_owner_o_master(app_client):
+async def test_registrar_devuelve_403_sin_rol_owner_o_master(app_client) -> None:
     """Un admin sin `TenantUser.role == 'owner'` y sin `Admin.role == 'master'`
-    no puede re-registrar -- criterio de aceptación implícito del ticket
-    (gate "solo owner/admin"), traducido a los roles reales de este repo."""
+    no puede re-registrar -- gate "solo owner/admin" del endpoint."""
     from core.admin.auth import hash_password
     from core.db.models import Admin, TenantUser
     from core.db.session import get_session
 
     tid = await _make_tenant_with_connection()
 
-    colaborador_email = f"{_uniq('colaborador')}@example.test"
+    colaborador_email = f"{uniq('colaborador')}@example.test"
     async with get_session() as session:
-        colaborador = Admin(email=colaborador_email, password_hash=hash_password("clave-segura-123"), role="colaborador")
+        colaborador = Admin(
+            email=colaborador_email,
+            password_hash=hash_password("clave-segura-123"),
+            role="colaborador",
+        )
         session.add(colaborador)
         await session.flush()
         session.add(TenantUser(tenant_id=tid, admin_id=colaborador.id, role="colaborador"))
         await session.commit()
 
-    session_cookie = await _login(app_client, colaborador_email, "clave-segura-123")
-    cookie = await _switch_tenant(app_client, session_cookie, tid)
-
+    headers = await api_headers(app_client, tid, email=colaborador_email, password="clave-segura-123")
     r = await app_client.post(
-        "/admin/conexiones/webhooks/registrar", headers={"Cookie": cookie}, data={"channel": "whatsapp"}
+        "/api/v1/admin/meta/webhooks/register",
+        json={"channel": "whatsapp"},
+        headers=headers,
     )
     assert r.status_code == 403
 
 
-async def test_registrar_permite_a_owner_del_tenant(app_client, monkeypatch):
-    """Un `TenantUser.role == 'owner'` (sin ser `master`) SÍ puede re-registrar
-    -- primer uso real de este rol en una ruta."""
+async def test_registrar_permite_a_owner_del_tenant(app_client, monkeypatch) -> None:
+    """Un `TenantUser.role == 'owner'` (sin ser `master`) SÍ puede re-registrar."""
     from core.admin.auth import hash_password
     from core.db.models import Admin, TenantUser
     from core.db.session import get_session
 
     tid = await _make_tenant_with_connection()
 
-    owner_email = f"{_uniq('owner')}@example.test"
+    owner_email = f"{uniq('owner')}@example.test"
     async with get_session() as session:
-        owner = Admin(email=owner_email, password_hash=hash_password("clave-segura-123"), role="colaborador")
+        owner = Admin(
+            email=owner_email, password_hash=hash_password("clave-segura-123"), role="colaborador"
+        )
         session.add(owner)
         await session.flush()
         session.add(TenantUser(tenant_id=tid, admin_id=owner.id, role="owner"))
@@ -121,29 +107,37 @@ async def test_registrar_permite_a_owner_del_tenant(app_client, monkeypatch):
     from core.gateway.meta_subscriptions import AppSubscriptionStatus
 
     async def _fake_resolve(tenant_id, channel="whatsapp"):
-        return AppCredentials(app_id="app-fake", app_secret="s3cr3t-no-debe-salir", config_id="", graph_api_version="v21.0")
+        return AppCredentials(
+            app_id="app-fake",
+            app_secret="s3cr3t-no-debe-salir",
+            config_id="",
+            graph_api_version="v21.0",
+        )
 
     async def _fake_upsert(config, object_, *, callback_url, verify_token):
         return AppSubscriptionStatus(
-            meta_app_id=config.app_id, object=object_, callback_url=callback_url, active=True,
-            fields=["messages"], last_checked_at=None, last_error=None,
+            meta_app_id=config.app_id,
+            object=object_,
+            callback_url=callback_url,
+            active=True,
+            fields=["messages"],
+            last_checked_at=None,
+            last_error=None,
         )
 
     monkeypatch.setattr(preflight_mod, "resolve_app_credentials", _fake_resolve)
     monkeypatch.setattr(subs_mod, "upsert_app_subscription", _fake_upsert)
 
-    session_cookie = await _login(app_client, owner_email, "clave-segura-123")
-    cookie = await _switch_tenant(app_client, session_cookie, tid)
-
+    headers = await api_headers(app_client, tid, email=owner_email, password="clave-segura-123")
     r = await app_client.post(
-        "/admin/conexiones/webhooks/registrar", headers={"Cookie": cookie}, data={"channel": "whatsapp"}
+        "/api/v1/admin/meta/webhooks/register",
+        json={"channel": "whatsapp"},
+        headers=headers,
     )
-    assert r.status_code == 303
-    assert "danger" not in r.headers["location"]
-    assert "s3cr3t-no-debe-salir" not in r.headers["location"]
+    assert r.status_code == 204, r.text
 
 
-async def test_json_no_expone_secretos(app_client):
+async def test_listado_no_expone_secretos(app_client) -> None:
     from core.db.models import MetaAppSubscription, MetaConnection
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -168,10 +162,8 @@ async def test_json_no_expone_secretos(app_client):
         )
         await session.commit()
 
-    session_cookie = await _login(app_client, "admin@local", "admin123")
-    cookie = await _switch_tenant(app_client, session_cookie, tid)
-
-    r = await app_client.get("/admin/conexiones/webhooks.json", headers={"Cookie": cookie})
+    headers = await api_headers(app_client, tid)
+    r = await app_client.get("/api/v1/admin/meta/webhooks", headers=headers)
     assert r.status_code == 200
     body = r.text
     assert "app_secret" not in body
