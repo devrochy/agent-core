@@ -7256,6 +7256,136 @@
         }
       }
     },
+    "/api/v1/pack/cobranza/expenses": {
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Create Expense",
+        "description": "Registra un gasto de la cartera (nace sin aprobar: no toca la caja hasta aprobarse).",
+        "operationId": "create_expense_api_v1_pack_cobranza_expenses_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpenseCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Expense"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/expenses/{expense_id}": {
+      "put": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Update Expense",
+        "description": "Edita un gasto SIN aprobar.\n\nEl clásico permite editar también los aprobados, pero eso descuadra la caja\n(el valor descontado no se ajusta): aquí se bloquea a propósito.",
+        "operationId": "update_expense_api_v1_pack_cobranza_expenses__expense_id__put",
+        "parameters": [
+          {
+            "name": "expense_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Expense Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpenseIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Expense"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/calendar/status": {
       "get": {
         "tags": [
@@ -9373,6 +9503,48 @@
           "aprobado"
         ],
         "title": "Expense"
+      },
+      "ExpenseCreate": {
+        "properties": {
+          "descripcion": {
+            "type": "string",
+            "title": "Descripcion"
+          },
+          "valor": {
+            "type": "number",
+            "title": "Valor"
+          },
+          "cartera_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cartera Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "descripcion",
+          "valor",
+          "cartera_id"
+        ],
+        "title": "ExpenseCreate"
+      },
+      "ExpenseIn": {
+        "properties": {
+          "descripcion": {
+            "type": "string",
+            "title": "Descripcion"
+          },
+          "valor": {
+            "type": "number",
+            "title": "Valor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "descripcion",
+          "valor"
+        ],
+        "title": "ExpenseIn"
       },
       "FlowResponse": {
         "properties": {

@@ -2744,3 +2744,82 @@ async def create_payment_link(
             monto=float(link.monto or 0),
             estado=link.estado,
         )
+
+
+class ExpenseIn(BaseModel):
+    descripcion: str
+    valor: float
+
+
+class ExpenseCreate(ExpenseIn):
+    cartera_id: uuid.UUID
+
+
+def _as_expense(row: Gasto) -> Expense:
+    return Expense(
+        id=row.id,
+        fecha=row.fecha_hora.strftime("%Y-%m-%d") if row.fecha_hora else "",
+        descripcion=row.descripcion,
+        valor=float(row.valor or 0),
+        aprobado=bool(row.aprobado),
+    )
+
+
+def _expense_values(payload: ExpenseIn) -> dict[str, Any]:
+    descripcion = payload.descripcion.strip()
+    if not descripcion:
+        raise ApiError.bad_request("La descripción es obligatoria.", "missing_description")
+    if payload.valor <= 0:
+        raise ApiError.bad_request("El valor del gasto debe ser mayor a cero.", "invalid_amount")
+    return {"descripcion": descripcion, "valor": Decimal(str(payload.valor))}
+
+
+@router.post("/expenses", response_model=Expense, status_code=201)
+async def create_expense(
+    payload: ExpenseCreate,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras", write=True))],
+) -> Expense:
+    """Registra un gasto de la cartera (nace sin aprobar: no toca la caja hasta aprobarse)."""
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await _get_active(session, Cartera, payload.cartera_id, tid)
+        if cartera is None:
+            raise ApiError.bad_request("La cartera indicada no existe.", "invalid_portfolio")
+        values = _expense_values(payload)
+        gasto = Gasto(
+            tenant_id=tid,
+            cartera_id=cartera.id,
+            descripcion=values["descripcion"],
+            valor=values["valor"],
+            aprobado=False,
+        )
+        session.add(gasto)
+        await session.flush()
+        return _as_expense(gasto)
+
+
+@router.put("/expenses/{expense_id}", response_model=Expense)
+async def update_expense(
+    expense_id: uuid.UUID,
+    payload: ExpenseIn,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras", write=True))],
+) -> Expense:
+    """Edita un gasto SIN aprobar.
+
+    El clásico permite editar también los aprobados, pero eso descuadra la caja
+    (el valor descontado no se ajusta): aquí se bloquea a propósito.
+    """
+    tid = principal.tenant_id
+    async with get_session() as session:
+        gasto = await _get_active(session, Gasto, expense_id, tid)
+        if gasto is None:
+            raise ApiError.not_found("Gasto no encontrado.")
+        if gasto.aprobado:
+            raise ApiError.bad_request(
+                "El gasto ya está aprobado: no se puede editar (descuadraría la caja).",
+                "expense_approved",
+            )
+        values = _expense_values(payload)
+        gasto.descripcion = values["descripcion"]
+        gasto.valor = values["valor"]
+        return _as_expense(gasto)
