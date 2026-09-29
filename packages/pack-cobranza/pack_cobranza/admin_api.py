@@ -2902,6 +2902,15 @@ CARTERA_CONFIG_FIELDS: list[tuple[str, str]] = [
     ("registro_documento_cliente", "bool"),
     ("bloqueo_automatico_clientes", "bool"),
     ("borrar_clientes_sin_deuda", "bool"),
+    # Campos del clásico que faltaban en la API: sin esto el panel nuevo no podía
+    # leerlos ni guardarlos (el guardado los dejaba intactos, pero eran invisibles).
+    ("permitir_cambio_fecha_prestamo", "bool"),
+    ("dias_no_laborables", "text"),
+    ("periodo_liquidacion", "text"),
+    ("dias_anticipacion_notificacion", "int"),
+    ("aviso_dia_cobro", "bool"),
+    ("umbral_mora_notificacion", "int"),
+    ("ruta_habilitada", "bool"),
 ]
 
 
@@ -2917,6 +2926,8 @@ def _config_values(cfg: CarteraConfig | None) -> dict[str, Any]:
             values[nombre] = bool(actual) if actual is not None else False
         elif tipo == "int":
             values[nombre] = int(actual) if actual is not None else 0
+        elif tipo == "text":
+            values[nombre] = str(actual) if actual is not None else ""
         else:
             values[nombre] = float(actual) if actual is not None else 0.0
     return values
@@ -2970,6 +2981,8 @@ async def save_portfolio_config(
             bruto = payload.values[nombre]
             if tipo == "bool":
                 setattr(cfg, nombre, bool(bruto))
+            elif tipo == "text":
+                setattr(cfg, nombre, str(bruto or ""))
             elif tipo == "int":
                 try:
                     setattr(cfg, nombre, int(bruto or 0))
