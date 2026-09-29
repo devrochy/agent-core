@@ -52,12 +52,21 @@ class WaWebConnector:
     # este tiempo, se recicla (Neonize puede dejar de emitir QR tras un timeout
     # de login SIN marcar el socket como cerrado → quedaba en "esperando QR").
     pairing_timeout_s: float = 45.0
+    # Si `connect()` no termina en este tiempo el socket se recicla: un `await`
+    # eterno en la conexión congelaba TODO el connector (ningún tenant más
+    # arrancaba sesión y el watchdog ni llegaba a correr).
+    connect_timeout_s: float = 90.0
+    # Tras N reciclados sin QR se limpia la sesión guardada: Neonize deja de
+    # emitir QR después de un timeout de login y reciclar sin limpiar no lo
+    # recupera (bug real visto en producción: bucle infinito de watchdog).
+    pairing_reset_after: int = 3
     now: Callable[[], float] = time.monotonic
     _tasks: dict[uuid.UUID, asyncio.Task] = field(default_factory=dict, init=False)
     _stop: set[uuid.UUID] = field(default_factory=set, init=False)
     _sockets: dict[uuid.UUID, WaWebSocket] = field(default_factory=dict, init=False)
     _qr_at: dict[uuid.UUID, float] = field(default_factory=dict, init=False)
     _connected: set[uuid.UUID] = field(default_factory=set, init=False)
+    _pairing_trips: dict[uuid.UUID, int] = field(default_factory=dict, init=False)
 
     async def run(self) -> None:
         """Bucle principal: barre sesiones y arranca/detiene sockets."""
@@ -83,6 +92,7 @@ class WaWebConnector:
                         log.warning("waweb_sweep_disconnect_failed", tenant_id=str(tenant_id))
                 del self._tasks[tenant_id]
                 self._stop.discard(tenant_id)
+                self._pairing_trips.pop(tenant_id, None)
         for ctx in contexts:
             if ctx.tenant_id not in self._tasks and ctx.tenant_id not in self._stop:
                 self._tasks[ctx.tenant_id] = asyncio.create_task(self.run_session(ctx))
@@ -96,11 +106,16 @@ class WaWebConnector:
                 await self.registry.set_status(ctx.tenant_id, status.CONNECTING)
                 sock = self.socket_factory()
                 self._sockets[ctx.tenant_id] = sock
-                await sock.connect(
-                    session_dir=work_dir,
-                    on_qr=lambda qr: self._on_qr(ctx, qr),
-                    on_status=lambda st, detail=None, jid=None: self._on_status(ctx, st, detail, jid),
-                    on_message=lambda ev: self._on_message(ctx, ev),
+                await asyncio.wait_for(
+                    sock.connect(
+                        session_dir=work_dir,
+                        on_qr=lambda qr: self._on_qr(ctx, qr),
+                        on_status=lambda st, detail=None, jid=None: self._on_status(
+                            ctx, st, detail, jid
+                        ),
+                        on_message=lambda ev: self._on_message(ctx, ev),
+                    ),
+                    timeout=self.connect_timeout_s,
                 )
                 attempt = 0
                 await self._drain_until_closed(ctx, sock)
@@ -152,13 +167,35 @@ class WaWebConnector:
                 if ctx.tenant_id not in self._connected:
                     ultimo = max(self._qr_at.get(ctx.tenant_id, 0.0), inicio)
                     if self.now() - ultimo > self.pairing_timeout_s:
-                        log.warning("waweb_pairing_watchdog", tenant_id=str(ctx.tenant_id))
+                        trips = self._pairing_trips.get(ctx.tenant_id, 0) + 1
+                        self._pairing_trips[ctx.tenant_id] = trips
+                        log.warning(
+                            "waweb_pairing_watchdog",
+                            tenant_id=str(ctx.tenant_id),
+                            trips=trips,
+                        )
+                        if trips >= self.pairing_reset_after:
+                            # Reciclar en vano no recupera el QR: se limpia la
+                            # sesión guardada para volver a emitirlo desde cero.
+                            try:
+                                await self.store.clear(ctx.tenant_id)
+                                self._pairing_trips[ctx.tenant_id] = 0
+                                log.warning(
+                                    "waweb_pairing_session_cleared",
+                                    tenant_id=str(ctx.tenant_id),
+                                )
+                            except Exception:
+                                log.exception(
+                                    "waweb_pairing_clear_failed",
+                                    tenant_id=str(ctx.tenant_id),
+                                )
                         sock.closed.set()
                         break
                 await self.sleep(0.05)
 
     async def _on_qr(self, ctx: SessionContext, qr: str) -> None:
         self._qr_at[ctx.tenant_id] = self.now()
+        self._pairing_trips.pop(ctx.tenant_id, None)
         await handoff.publish_qr(str(ctx.tenant_id), qr)
         # `detail=""` limpia un `last_error` previo (p. ej. de un intento fallido).
         await self.registry.set_status(ctx.tenant_id, status.PENDING_QR, detail="")
@@ -169,6 +206,7 @@ class WaWebConnector:
         mapped = _STATUS_MAP.get(backend_status, status.ERROR)
         if mapped == status.CONNECTED:
             self._connected.add(ctx.tenant_id)
+            self._pairing_trips.pop(ctx.tenant_id, None)
         else:
             self._connected.discard(ctx.tenant_id)
         await self.registry.set_status(ctx.tenant_id, mapped, detail=detail, jid=jid)

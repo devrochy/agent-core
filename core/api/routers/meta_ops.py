@@ -324,6 +324,7 @@ class WawebState(BaseModel):
     risk_ok: bool
     jid: str | None = None
     qr_image: str | None = None
+    last_error: str | None = None
 
 
 @router.get("/waweb", response_model=WawebState)

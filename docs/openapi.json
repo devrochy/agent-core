@@ -16913,6 +16913,17 @@
               }
             ],
             "title": "Qr Image"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
           }
         },
         "type": "object",

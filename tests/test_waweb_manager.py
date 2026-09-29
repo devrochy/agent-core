@@ -257,3 +257,116 @@ async def test_watchdog_vinculacion_recicla_socket_sin_qr(tmp_path: Path) -> Non
 
     assert len(sockets) == 2
     assert sockets[0].closed.is_set()
+
+
+async def test_connect_colgado_se_recicla_por_timeout(tmp_path: Path) -> None:
+    """Un `connect()` que nunca termina no puede congelar el connector.
+
+    Bug real: el `await connect()` de un tenant quedó colgado para siempre y el
+    proceso entero dejó de arrancar sesiones de los demás (ni el watchdog corría).
+    """
+    ctx = _ctx()
+    registry = FakeRegistry([ctx])
+    sockets: list[Any] = []
+    connector_holder: dict[str, Any] = {}
+    secuencia: list[str] = []
+
+    async def on_set(_tenant_id: uuid.UUID, new_status: str) -> None:
+        secuencia.append(new_status)
+
+    registry.on_set = on_set
+
+    class SocketColgado(FakeSocket):
+        async def connect(self, *, session_dir, on_qr, on_status, on_message):
+            self.session_dir = session_dir
+            await asyncio.sleep(3600)  # se queda colgado para siempre
+
+    def factory() -> Any:
+        connector = connector_holder["connector"]
+        if not sockets:
+            sock: Any = SocketColgado()
+        else:
+            connector._stop.add(ctx.tenant_id)
+            sock = FakeSocket()
+        sockets.append(sock)
+        return sock
+
+    async def _sleep(_: float) -> None:
+        return None
+
+    async def _noop_drain(*a: Any, **k: Any) -> bool:
+        return False
+
+    async def _alert(*a: Any, **k: Any) -> None:
+        return None
+
+    async def _policy(_tenant_id: uuid.UUID) -> WaWebPolicy:
+        return WaWebPolicy()
+
+    connector = WaWebConnector(
+        registry=registry,
+        store=FakeStore(tmp_path),
+        socket_factory=factory,
+        policy_loader=_policy,
+        drainer=_noop_drain,
+        sleep=_sleep,
+        alert=_alert,
+        connect_timeout_s=0.1,
+    )
+    connector_holder["connector"] = connector
+
+    await asyncio.wait_for(connector.run_session(ctx), timeout=3)
+
+    assert len(sockets) == 2, "el socket colgado debe reciclarse"
+    # El timeout de conexión quedó registrado como error antes de reciclar.
+    assert status.ERROR in secuencia
+
+
+async def test_watchdog_limpia_la_sesion_tras_n_reciclados(tmp_path: Path) -> None:
+    """Tras N reciclados sin QR se limpia la sesión guardada (Neonize deja de
+    emitir QR después de un timeout de login; reciclar sin limpiar no lo cura)."""
+    ctx = _ctx()
+    registry = FakeRegistry([ctx])
+    reloj = {"t": 0.0}
+    sockets: list[Any] = []
+
+    class SocketMudo(FakeSocket):
+        async def connect(self, *, session_dir, on_qr, on_status, on_message):
+            self.session_dir = session_dir
+            self.callbacks = {"qr": on_qr, "status": on_status, "message": on_message}
+
+    def factory() -> Any:
+        sock = SocketMudo()
+        sockets.append(sock)
+        if len(sockets) >= 3:
+            connector._stop.add(ctx.tenant_id)
+        return sock
+
+    async def _sleep(segundos: float) -> None:
+        reloj["t"] += max(segundos, 0.05)
+
+    async def _noop_drain(*a: Any, **k: Any) -> bool:
+        return False
+
+    async def _alert(*a: Any, **k: Any) -> None:
+        return None
+
+    async def _policy(_tenant_id: uuid.UUID) -> WaWebPolicy:
+        return WaWebPolicy()
+
+    connector = WaWebConnector(
+        registry=registry,
+        store=FakeStore(tmp_path),
+        socket_factory=factory,
+        policy_loader=_policy,
+        drainer=_noop_drain,
+        sleep=_sleep,
+        alert=_alert,
+        now=lambda: reloj["t"],
+        pairing_timeout_s=0.2,
+        pairing_reset_after=2,
+    )
+
+    await asyncio.wait_for(connector.run_session(ctx), timeout=3)
+
+    assert connector.store.cleared == [ctx.tenant_id], "debe limpiar la sesión al 2º reciclado"
