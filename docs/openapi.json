@@ -6531,6 +6531,177 @@
         }
       }
     },
+    "/api/v1/pack/cobranza/installments/{installment_id}": {
+      "put": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Update Installment",
+        "operationId": "update_installment_api_v1_pack_cobranza_installments__installment_id__put",
+        "parameters": [
+          {
+            "name": "installment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Installment Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallmentIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Installment"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Delete Installment",
+        "operationId": "delete_installment_api_v1_pack_cobranza_installments__installment_id__delete",
+        "parameters": [
+          {
+            "name": "installment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Installment Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/credits/{credit_id}": {
+      "delete": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Delete Credit",
+        "operationId": "delete_credit_api_v1_pack_cobranza_credits__credit_id__delete",
+        "parameters": [
+          {
+            "name": "credit_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Credit Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/calendar/status": {
       "get": {
         "tags": [
@@ -9183,6 +9354,30 @@
           "estatus"
         ],
         "title": "Installment"
+      },
+      "InstallmentIn": {
+        "properties": {
+          "valor": {
+            "type": "number",
+            "title": "Valor"
+          },
+          "vence": {
+            "type": "string",
+            "format": "date",
+            "title": "Vence"
+          },
+          "estatus": {
+            "type": "string",
+            "title": "Estatus",
+            "default": "pendiente"
+          }
+        },
+        "type": "object",
+        "required": [
+          "valor",
+          "vence"
+        ],
+        "title": "InstallmentIn"
       },
       "LeadColumn": {
         "properties": {

@@ -706,6 +706,7 @@ def _audit(
     entidad_id: uuid.UUID,
     operacion: str,
     *,
+    antes: dict[str, Any] | None = None,
     despues: dict[str, Any] | None = None,
     motivo: str | None = None,
 ) -> None:
@@ -715,6 +716,7 @@ def _audit(
             entidad=entidad,
             entidad_id=entidad_id,
             operacion=operacion,
+            valores_antes=antes,
             valores_despues=despues,
             motivo=motivo,
             actor_rol="admin",
@@ -2171,5 +2173,99 @@ async def register_loan_credit(
             prestamo.id,
             "crear",
             despues={"valor": float(valor), "metodo": payload.metodo_pago},
+        )
+    return Response(status_code=204)
+
+
+# ---------------------------------------- cuotas y abonos (cierre de 3.2)
+class InstallmentIn(BaseModel):
+    valor: float
+    vence: date
+    estatus: str = "pendiente"
+
+
+INSTALLMENT_STATUSES = ("pendiente", "pagada", "atrasada", "parcial")
+
+
+@router.put("/installments/{installment_id}", response_model=Installment)
+async def update_installment(
+    installment_id: uuid.UUID,
+    payload: InstallmentIn,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:clientes", write=True))],
+) -> Installment:
+    if payload.valor <= 0:
+        raise ApiError.bad_request("El valor de la cuota debe ser mayor a cero.", "invalid_amount")
+    estatus = payload.estatus if payload.estatus in INSTALLMENT_STATUSES else "pendiente"
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cuota = await _get_active(session, Cuota, installment_id, tid)
+        if cuota is None:
+            raise ApiError.not_found("Cuota no encontrada.")
+        antes = {
+            "valor": float(cuota.valor_esperado or 0),
+            "vence": cuota.fecha_vencimiento.isoformat(),
+            "estatus": cuota.estatus,
+        }
+        cuota.valor_esperado = Decimal(str(payload.valor))
+        cuota.fecha_vencimiento = payload.vence
+        cuota.estatus = estatus
+        _audit(
+            session,
+            tid,
+            "cuota",
+            cuota.id,
+            "editar",
+            antes=antes,
+            despues={"valor": payload.valor, "vence": payload.vence.isoformat(), "estatus": estatus},
+        )
+        return Installment(
+            id=cuota.id,
+            numero=cuota.numero_cuota,
+            valor=float(cuota.valor_esperado or 0),
+            vence=cuota.fecha_vencimiento,
+            estatus=cuota.estatus,
+        )
+
+
+@router.delete("/installments/{installment_id}", status_code=204)
+async def delete_installment(
+    installment_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:clientes", write=True))],
+) -> Response:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cuota = await _get_active(session, Cuota, installment_id, tid)
+        if cuota is None:
+            raise ApiError.not_found("Cuota no encontrada.")
+        cuota.deleted_at = datetime.now(UTC)
+        _audit(
+            session,
+            tid,
+            "cuota",
+            cuota.id,
+            "eliminar",
+            antes={"valor": float(cuota.valor_esperado or 0), "numero": cuota.numero_cuota},
+        )
+    return Response(status_code=204)
+
+
+@router.delete("/credits/{credit_id}", status_code=204)
+async def delete_credit(
+    credit_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:clientes", write=True))],
+) -> Response:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        abono = await _get_active(session, Abono, credit_id, tid)
+        if abono is None:
+            raise ApiError.not_found("Abono no encontrado.")
+        abono.deleted_at = datetime.now(UTC)
+        _audit(
+            session,
+            tid,
+            "abono",
+            abono.id,
+            "eliminar",
+            antes={"valor": float(abono.valor or 0)},
         )
     return Response(status_code=204)
