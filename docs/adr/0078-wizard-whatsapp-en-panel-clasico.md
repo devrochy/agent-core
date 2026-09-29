@@ -1,6 +1,6 @@
 # ADR-0078 — El wizard de WhatsApp (Embedded Signup/BYOK) permanece en el panel clásico
 
-- **Estado:** aceptado
+- **Estado:** superado por ADR-0080 (2026-09-29)
 - **Fecha:** 2026-09-28
 
 ## Contexto
