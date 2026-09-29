@@ -2408,3 +2408,50 @@ async def register_position(
             )
         )
     return Response(status_code=204)
+
+
+class InjectionIn(BaseModel):
+    valor: float
+    comentario: str = ""
+
+
+@router.post("/portfolios/{cartera_id}/injections", response_model=Injection, status_code=201)
+async def create_injection(
+    cartera_id: uuid.UUID,
+    payload: InjectionIn,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras", write=True))],
+) -> Injection:
+    """Aporte de capital a la cartera: crea la inyección y suma a la caja."""
+    if payload.valor <= 0:
+        raise ApiError.bad_request("El valor de la inyección debe ser mayor a cero.", "invalid_amount")
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await _get_active(session, Cartera, cartera_id, tid)
+        if cartera is None:
+            raise ApiError.not_found("Cartera no encontrada.")
+        valor = Decimal(str(payload.valor))
+        inyeccion = Inyeccion(
+            tenant_id=tid,
+            cartera_id=cartera.id,
+            valor=valor,
+            comentario=payload.comentario.strip() or None,
+        )
+        session.add(inyeccion)
+        await session.flush()
+        caja = await _caja_de(session, tid, cartera.id)
+        caja.saldo_actual = (caja.saldo_actual or Decimal(0)) + valor
+        _audit(
+            session,
+            tid,
+            "inyeccion",
+            inyeccion.id,
+            "crear",
+            despues={"valor": float(valor)},
+            motivo="Aporte de capital",
+        )
+        return Injection(
+            fecha=inyeccion.fecha_hora.strftime("%Y-%m-%d") if inyeccion.fecha_hora else "",
+            valor=float(inyeccion.valor or 0),
+            comentario=inyeccion.comentario or "",
+            estado=inyeccion.estado,
+        )
