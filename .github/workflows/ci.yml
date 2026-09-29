@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `develop` recibe lotes por push directo además de PRs: se gatean igual.
+    branches: [main, develop]
   pull_request:
 
 jobs:
