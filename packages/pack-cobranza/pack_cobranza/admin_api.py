@@ -32,6 +32,7 @@ from .models import (
     Cartera,
     CarteraApertura,
     CarteraConfig,
+    CarteraNota,
     Cliente,
     CobroPropietario,
     ConversacionPropietario,
@@ -2823,3 +2824,198 @@ async def update_expense(
         gasto.descripcion = values["descripcion"]
         gasto.valor = values["valor"]
         return _as_expense(gasto)
+
+
+# ------------------------------- configuración de cartera y notas (3.5)
+# (nombre, tipo) — espejo de _CONFIG_FIELDS del panel clásico.
+CARTERA_CONFIG_FIELDS: list[tuple[str, str]] = [
+    ("cuotas_minimas_prestamo", "int"),
+    ("cuotas_atraso_umbral", "int"),
+    ("manejo_cupo_activo", "bool"),
+    ("cupo_default", "num"),
+    ("recargo_activo", "bool"),
+    ("bloquear_cambio_interes", "bool"),
+    ("comision_activa", "bool"),
+    ("comision_porcentaje", "num"),
+    ("mostrar_fecha_ultima_liquidada", "bool"),
+    ("mostrar_caja", "bool"),
+    ("mostrar_cobrado_liquidada", "bool"),
+    ("mostrar_prestamos", "bool"),
+    ("mostrar_cobro_estimado", "bool"),
+    ("ocultar_cartera", "bool"),
+    ("eliminar_prestamos_apk", "bool"),
+    ("eliminar_pagos_apk", "bool"),
+    ("eliminar_abonos_apk", "bool"),
+    ("eliminar_gastos_apk", "bool"),
+    ("eliminar_inyeccion_apk", "bool"),
+    ("registrar_inyeccion_apk", "bool"),
+    ("generar_reportes_apk", "bool"),
+    ("reconocimiento_facial_activo", "bool"),
+    ("registro_documento_cliente", "bool"),
+    ("bloqueo_automatico_clientes", "bool"),
+    ("borrar_clientes_sin_deuda", "bool"),
+]
+
+
+class PortfolioConfig(BaseModel):
+    values: dict[str, Any]
+
+
+def _config_values(cfg: CarteraConfig | None) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    for nombre, tipo in CARTERA_CONFIG_FIELDS:
+        actual = getattr(cfg, nombre, None) if cfg is not None else None
+        if tipo == "bool":
+            values[nombre] = bool(actual) if actual is not None else False
+        elif tipo == "int":
+            values[nombre] = int(actual) if actual is not None else 0
+        else:
+            values[nombre] = float(actual) if actual is not None else 0.0
+    return values
+
+
+@router.get("/portfolios/{cartera_id}/config", response_model=PortfolioConfig)
+async def get_portfolio_config(
+    cartera_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras"))],
+) -> PortfolioConfig:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await _get_active(session, Cartera, cartera_id, tid)
+        if cartera is None:
+            raise ApiError.not_found("Cartera no encontrada.")
+        cfg = (
+            await session.execute(
+                select(CarteraConfig).where(
+                    CarteraConfig.tenant_id == tid, CarteraConfig.cartera_id == cartera.id
+                )
+            )
+        ).scalar_one_or_none()
+        return PortfolioConfig(values=_config_values(cfg))
+
+
+@router.put("/portfolios/{cartera_id}/config", response_model=PortfolioConfig)
+async def save_portfolio_config(
+    cartera_id: uuid.UUID,
+    payload: PortfolioConfig,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras", write=True))],
+) -> PortfolioConfig:
+    """Guarda la configuración de la cartera (misma coerción de tipos que el clásico)."""
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await _get_active(session, Cartera, cartera_id, tid)
+        if cartera is None:
+            raise ApiError.not_found("Cartera no encontrada.")
+        cfg = (
+            await session.execute(
+                select(CarteraConfig).where(
+                    CarteraConfig.tenant_id == tid, CarteraConfig.cartera_id == cartera.id
+                )
+            )
+        ).scalar_one_or_none()
+        if cfg is None:
+            cfg = CarteraConfig(tenant_id=tid, cartera_id=cartera.id)
+            session.add(cfg)
+        for nombre, tipo in CARTERA_CONFIG_FIELDS:
+            if nombre not in payload.values:
+                continue
+            bruto = payload.values[nombre]
+            if tipo == "bool":
+                setattr(cfg, nombre, bool(bruto))
+            elif tipo == "int":
+                try:
+                    setattr(cfg, nombre, int(bruto or 0))
+                except (TypeError, ValueError):
+                    continue
+            else:
+                try:
+                    setattr(cfg, nombre, Decimal(str(bruto or 0)))
+                except Exception:
+                    continue
+        await session.flush()
+        return PortfolioConfig(values=_config_values(cfg))
+
+
+class NoteIn(BaseModel):
+    nota: str
+
+
+class NoteRow(BaseModel):
+    id: uuid.UUID
+    nota: str
+    fecha: str
+    autor: str
+
+
+def _as_note(row: CarteraNota) -> NoteRow:
+    return NoteRow(
+        id=row.id,
+        nota=row.nota,
+        fecha=row.created_at.strftime("%Y-%m-%d %H:%M") if row.created_at else "",
+        autor=row.creado_por_rol or "",
+    )
+
+
+@router.get("/portfolios/{cartera_id}/notes", response_model=list[NoteRow])
+async def list_notes(
+    cartera_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras"))],
+) -> list[NoteRow]:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await _get_active(session, Cartera, cartera_id, tid)
+        if cartera is None:
+            raise ApiError.not_found("Cartera no encontrada.")
+        notas = (
+            (
+                await session.execute(
+                    select(CarteraNota)
+                    .where(
+                        CarteraNota.tenant_id == tid,
+                        CarteraNota.cartera_id == cartera.id,
+                        CarteraNota.deleted_at.is_(None),
+                    )
+                    .order_by(CarteraNota.created_at.desc())
+                    .limit(100)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return [_as_note(n) for n in notas]
+
+
+@router.post("/portfolios/{cartera_id}/notes", response_model=NoteRow, status_code=201)
+async def create_note(
+    cartera_id: uuid.UUID,
+    payload: NoteIn,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras", write=True))],
+) -> NoteRow:
+    nota = payload.nota.strip()
+    if not nota:
+        raise ApiError.bad_request("La nota no puede estar vacía.", "missing_note")
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await _get_active(session, Cartera, cartera_id, tid)
+        if cartera is None:
+            raise ApiError.not_found("Cartera no encontrada.")
+        row = CarteraNota(
+            tenant_id=tid, cartera_id=cartera.id, nota=nota, creado_por_rol="admin"
+        )
+        session.add(row)
+        await session.flush()
+        return _as_note(row)
+
+
+@router.delete("/notes/{note_id}", status_code=204)
+async def delete_note(
+    note_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras", write=True))],
+) -> Response:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        nota = await _get_active(session, CarteraNota, note_id, tid)
+        if nota is None:
+            raise ApiError.not_found("Nota no encontrada.")
+        nota.deleted_at = datetime.now(UTC)
+    return Response(status_code=204)

@@ -7386,6 +7386,315 @@
         }
       }
     },
+    "/api/v1/pack/cobranza/portfolios/{cartera_id}/config": {
+      "get": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Get Portfolio Config",
+        "operationId": "get_portfolio_config_api_v1_pack_cobranza_portfolios__cartera_id__config_get",
+        "parameters": [
+          {
+            "name": "cartera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cartera Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortfolioConfig"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Save Portfolio Config",
+        "description": "Guarda la configuración de la cartera (misma coerción de tipos que el clásico).",
+        "operationId": "save_portfolio_config_api_v1_pack_cobranza_portfolios__cartera_id__config_put",
+        "parameters": [
+          {
+            "name": "cartera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cartera Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortfolioConfig"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortfolioConfig"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/portfolios/{cartera_id}/notes": {
+      "get": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "List Notes",
+        "operationId": "list_notes_api_v1_pack_cobranza_portfolios__cartera_id__notes_get",
+        "parameters": [
+          {
+            "name": "cartera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cartera Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NoteRow"
+                  },
+                  "title": "Response List Notes Api V1 Pack Cobranza Portfolios  Cartera Id  Notes Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Create Note",
+        "operationId": "create_note_api_v1_pack_cobranza_portfolios__cartera_id__notes_post",
+        "parameters": [
+          {
+            "name": "cartera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cartera Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoteIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoteRow"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/notes/{note_id}": {
+      "delete": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Delete Note",
+        "operationId": "delete_note_api_v1_pack_cobranza_notes__note_id__delete",
+        "parameters": [
+          {
+            "name": "note_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Note Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/calendar/status": {
       "get": {
         "tags": [
@@ -11030,6 +11339,48 @@
         ],
         "title": "Monitoring"
       },
+      "NoteIn": {
+        "properties": {
+          "nota": {
+            "type": "string",
+            "title": "Nota"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nota"
+        ],
+        "title": "NoteIn"
+      },
+      "NoteRow": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "nota": {
+            "type": "string",
+            "title": "Nota"
+          },
+          "fecha": {
+            "type": "string",
+            "title": "Fecha"
+          },
+          "autor": {
+            "type": "string",
+            "title": "Autor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "nota",
+          "fecha",
+          "autor"
+        ],
+        "title": "NoteRow"
+      },
       "NumbersResponse": {
         "properties": {
           "numbers": {
@@ -12161,6 +12512,20 @@
           "actualizado"
         ],
         "title": "PortfolioCaja"
+      },
+      "PortfolioConfig": {
+        "properties": {
+          "values": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Values"
+          }
+        },
+        "type": "object",
+        "required": [
+          "values"
+        ],
+        "title": "PortfolioConfig"
       },
       "PortfolioDetail": {
         "properties": {
