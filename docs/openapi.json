@@ -5104,6 +5104,66 @@
         }
       }
     },
+    "/api/v1/pack/commerce/products/import": {
+      "post": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Import Products Csv",
+        "description": "Importa productos desde un CSV (columnas `name` y `price`, paridad con el clásico).",
+        "operationId": "import_products_csv_api_v1_pack_commerce_products_import_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_import_products_csv_api_v1_pack_commerce_products_import_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/cobranza/summary": {
       "get": {
         "tags": [
@@ -9422,6 +9482,20 @@
         ],
         "title": "BillingSummary"
       },
+      "Body_import_products_csv_api_v1_pack_commerce_products_import_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_import_products_csv_api_v1_pack_commerce_products_import_post"
+      },
       "BotState": {
         "properties": {
           "bot_paused": {
@@ -11689,6 +11763,19 @@
           "assistant_name"
         ],
         "title": "IdentityUpdate"
+      },
+      "ImportResult": {
+        "properties": {
+          "created": {
+            "type": "integer",
+            "title": "Created"
+          }
+        },
+        "type": "object",
+        "required": [
+          "created"
+        ],
+        "title": "ImportResult"
       },
       "Injection": {
         "properties": {

@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, File, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -595,3 +596,55 @@ async def update_order_status(
         order.status = payload.status
         order.status_changed_at = datetime.now(UTC)
     return Response(status_code=204)
+
+
+class ImportResult(BaseModel):
+    created: int
+
+
+@router.post("/products/import", response_model=ImportResult, status_code=201)
+async def import_products_csv(
+    file: Annotated[UploadFile, File()],
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> ImportResult:
+    """Importa productos desde un CSV (columnas `name` y `price`, paridad con el clásico)."""
+    import csv
+    import io
+
+    contenido = (await file.read()).decode("utf-8", errors="ignore")
+    filas = list(csv.DictReader(io.StringIO(contenido)))
+    if not filas or "name" not in filas[0] or "price" not in filas[0]:
+        raise ApiError.bad_request("CSV inválido: requiere columnas name y price", "invalid_csv")
+
+    creados = 0
+    async with get_session() as session:
+        for fila in filas:
+            nombre = str(fila.get("name") or "").strip()
+            if not nombre:
+                continue
+            try:
+                precio = Decimal(str(fila.get("price") or "0").replace(",", "").strip())
+            except Exception:
+                continue
+            producto = Product(
+                name=nombre,
+                description=str(fila.get("description") or "").strip(),
+                category_id=None,
+            )
+            session.add(producto)
+            await session.flush()
+            variante = ProductVariant(
+                product_id=producto.id,
+                sku=str(fila.get("sku") or "").strip() or f"SKU-{producto.id.hex[:8]}",
+                price=precio,
+            )
+            session.add(variante)
+            await session.flush()
+            try:
+                stock = int(str(fila.get("stock") or "0").strip() or 0)
+            except ValueError:
+                stock = 0
+            session.add(Inventory(variant_id=variante.id, stock_quantity=stock))
+            producto.has_variants = False
+            creados += 1
+    return ImportResult(created=creados)
