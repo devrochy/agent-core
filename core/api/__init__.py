@@ -24,6 +24,7 @@ from core.api.routers import (
     meta_ops,
     plan,
     platform,
+    playground,
     plugins,
     settings,
     tenants,
@@ -35,6 +36,7 @@ api_router.include_router(me.router)
 api_router.include_router(tenants.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(conversations.router)
+api_router.include_router(playground.router)
 api_router.include_router(escalations.router)
 api_router.include_router(leads.router)
 api_router.include_router(plugins.router)

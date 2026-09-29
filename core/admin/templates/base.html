@@ -65,7 +65,6 @@
       {% endif %}
       {% if perms and perms.get('connections') %}
       <li><a class="nav-link {% if section == 'connections' %}active{% endif %}" href="/admin/conexiones">Conexiones</a></li>
-      <li><a class="nav-link {% if section == 'asistente' %}active{% endif %}" href="/admin/asistente/probar">Probar asistente</a></li>
       {% endif %}
       {% if perms and perms.get('plugins') %}
       <li><a class="nav-link {% if section == 'plugins' %}active{% endif %}" href="/admin/plugins">Plugins</a></li>

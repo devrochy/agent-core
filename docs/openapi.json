@@ -629,6 +629,162 @@
         }
       }
     },
+    "/api/v1/admin/playground": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · playground"
+        ],
+        "summary": "Playground History",
+        "description": "Historial de la prueba (working memory del canal `test`).",
+        "operationId": "playground_history_api_v1_admin_playground_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/playground/message": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · playground"
+        ],
+        "summary": "Playground Message",
+        "description": "Procesa un turno contra el loop real y devuelve la respuesta del asistente.",
+        "operationId": "playground_message_api_v1_admin_playground_message_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TurnIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/playground/reset": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · playground"
+        ],
+        "summary": "Playground Reset",
+        "description": "Cierra la prueba actual y arranca una nueva desde cero.",
+        "operationId": "playground_reset_api_v1_admin_playground_reset_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/escalations": {
       "get": {
         "tags": [
@@ -10727,6 +10883,23 @@
         ],
         "title": "HealthResponse"
       },
+      "HistoryOut": {
+        "properties": {
+          "turns": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Turns"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turns"
+        ],
+        "title": "HistoryOut"
+      },
       "IdentitySettings": {
         "properties": {
           "assistant_name": {
@@ -14606,6 +14779,48 @@
           "plan_id"
         ],
         "title": "TenantPlanUpdate"
+      },
+      "TurnIn": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "TurnIn"
+      },
+      "TurnOut": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
+          "escalated": {
+            "type": "boolean",
+            "title": "Escalated",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "TurnOut"
       },
       "TypeOut": {
         "properties": {
