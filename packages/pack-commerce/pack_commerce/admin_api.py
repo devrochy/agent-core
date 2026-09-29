@@ -375,6 +375,11 @@ async def delete_category(
 
 
 # ------------------------------------------------------------------ promociones
+PROMOTION_TYPES = ("temporada", "volumen", "campaña")
+# Mismos segmentos que `skills.classify_customer` (ADR-036).
+PROMOTION_SEGMENTS = ("nuevo", "ocasional", "frecuente", "fiel", "inactivo")
+
+
 class PromotionOut(BaseModel):
     id: uuid.UUID
     type: str
@@ -384,7 +389,10 @@ class PromotionOut(BaseModel):
     valid_to: datetime | None
     category_id: uuid.UUID | None
     product_id: uuid.UUID | None
+    variant_id: uuid.UUID | None = None
+    include_child_categories: bool = True
     eligible_segments: list[str] | None
+    created_at: datetime | None = None
 
 
 class PromotionSave(BaseModel):
@@ -395,6 +403,90 @@ class PromotionSave(BaseModel):
     valid_to: datetime | None = None
     category_id: uuid.UUID | None = None
     product_id: uuid.UUID | None = None
+    variant_id: uuid.UUID | None = None
+    include_child_categories: bool = True
+    eligible_segments: list[str] | None = None
+    active: bool | None = None
+
+
+def _validate_promotion(payload: PromotionSave) -> None:
+    """Validación semántica de la promoción.
+
+    El formulario clásico solo validaba `required` y rangos HTML: una promoción
+    de tipo `volumen` sin escalones, o con descuento fuera de rango, quedaba
+    guardada y el motor la ignoraba en silencio.
+    """
+    if payload.type not in PROMOTION_TYPES:
+        raise ApiError.bad_request(
+            f"Tipo de promoción inválido: {payload.type}", "invalid_type"
+        )
+    if payload.valid_from and payload.valid_to and payload.valid_to <= payload.valid_from:
+        raise ApiError.bad_request(
+            "La vigencia termina antes de empezar.", "invalid_dates"
+        )
+    reglas = payload.rules or {}
+    if not isinstance(reglas, dict):
+        raise ApiError.bad_request("Las reglas deben ser un objeto.", "invalid_rules")
+    pct = reglas.get("discount_pct")
+    if pct is not None:
+        try:
+            pct_num = float(pct)
+        except (TypeError, ValueError) as exc:
+            raise ApiError.bad_request("El descuento debe ser un número.", "invalid_discount") from exc
+        if not 0 <= pct_num <= 100:
+            raise ApiError.bad_request(
+                "El descuento debe estar entre 0 y 100.", "invalid_discount"
+            )
+    tiers = reglas.get("tiers")
+    if tiers is not None:
+        if not isinstance(tiers, list) or not tiers:
+            raise ApiError.bad_request(
+                "Los escalones de volumen deben ser una lista con al menos uno.",
+                "invalid_tiers",
+            )
+        for tier in tiers:
+            if not isinstance(tier, dict):
+                raise ApiError.bad_request("Escalón de volumen inválido.", "invalid_tiers")
+            try:
+                minimo = int(tier.get("min"))
+            except (TypeError, ValueError) as exc:
+                raise ApiError.bad_request(
+                    "Cada escalón necesita una cantidad mínima.", "invalid_tiers"
+                ) from exc
+            if minimo < 1:
+                raise ApiError.bad_request(
+                    "La cantidad mínima del escalón debe ser 1 o más.", "invalid_tiers"
+                )
+            if tier.get("max") is not None:
+                try:
+                    maximo = int(tier["max"])
+                except (TypeError, ValueError) as exc:
+                    raise ApiError.bad_request("Cantidad máxima inválida.", "invalid_tiers") from exc
+                if maximo < minimo:
+                    raise ApiError.bad_request(
+                        "El máximo del escalón no puede ser menor que el mínimo.", "invalid_tiers"
+                    )
+            tpct = tier.get("discount_pct")
+            if tpct is None and not str(tier.get("free_item_sku") or "").strip():
+                raise ApiError.bad_request(
+                    "Cada escalón necesita un descuento o un artículo de regalo.",
+                    "invalid_tiers",
+                )
+            if tpct is not None:
+                try:
+                    tpct_num = float(tpct)
+                except (TypeError, ValueError) as exc:
+                    raise ApiError.bad_request("Descuento del escalón inválido.", "invalid_tiers") from exc
+                if not 0 <= tpct_num <= 100:
+                    raise ApiError.bad_request(
+                        "El descuento del escalón debe estar entre 0 y 100.", "invalid_tiers"
+                    )
+    if payload.eligible_segments is not None:
+        desconocidos = [s for s in payload.eligible_segments if s not in PROMOTION_SEGMENTS]
+        if desconocidos:
+            raise ApiError.bad_request(
+                f"Segmento desconocido: {', '.join(desconocidos)}", "invalid_segments"
+            )
 
 
 def _promotion_out(p: Promotion) -> PromotionOut:
@@ -407,7 +499,10 @@ def _promotion_out(p: Promotion) -> PromotionOut:
         valid_to=p.valid_to,
         category_id=p.category_id,
         product_id=p.product_id,
+        variant_id=p.variant_id,
+        include_child_categories=bool(getattr(p, "include_child_categories", True)),
         eligible_segments=list(p.eligible_segments) if p.eligible_segments else None,
+        created_at=p.created_at,
     )
 
 
@@ -436,6 +531,7 @@ async def save_promotion(
     principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
 ) -> Response:
     tenant_id = principal.tenant_id
+    _validate_promotion(payload)
     async with get_session() as session:
         resolved_category: uuid.UUID | None = None
         if payload.category_id is not None:
@@ -458,6 +554,11 @@ async def save_promotion(
             promotion.valid_to = payload.valid_to
             promotion.category_id = resolved_category
             promotion.product_id = resolved_product
+            promotion.variant_id = payload.variant_id
+            promotion.include_child_categories = payload.include_child_categories
+            promotion.eligible_segments = payload.eligible_segments
+            if payload.active is not None:
+                promotion.active = payload.active
         else:
             session.add(
                 Promotion(
@@ -467,6 +568,10 @@ async def save_promotion(
                     valid_to=payload.valid_to,
                     category_id=resolved_category,
                     product_id=resolved_product,
+                    variant_id=payload.variant_id,
+                    include_child_categories=payload.include_child_categories,
+                    eligible_segments=payload.eligible_segments,
+                    active=True if payload.active is None else payload.active,
                 )
             )
     return Response(status_code=204)

@@ -15335,6 +15335,23 @@
             ],
             "title": "Product Id"
           },
+          "variant_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variant Id"
+          },
+          "include_child_categories": {
+            "type": "boolean",
+            "title": "Include Child Categories",
+            "default": true
+          },
           "eligible_segments": {
             "anyOf": [
               {
@@ -15348,6 +15365,18 @@
               }
             ],
             "title": "Eligible Segments"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
           }
         },
         "type": "object",
@@ -15435,6 +15464,48 @@
               }
             ],
             "title": "Product Id"
+          },
+          "variant_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variant Id"
+          },
+          "include_child_categories": {
+            "type": "boolean",
+            "title": "Include Child Categories",
+            "default": true
+          },
+          "eligible_segments": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eligible Segments"
+          },
+          "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active"
           }
         },
         "type": "object",
