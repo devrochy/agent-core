@@ -468,6 +468,38 @@ class AdminPermission(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class TenantInvitation(Base):
+    """Invitación a que un admin se una a un tenant (ADR-0081).
+
+    Tabla de SISTEMA (sin RLS): el invitado debe poder verla ANTES de tener acceso
+    al tenant, igual que `tenant_user` (ADR-0012). `estado` es
+    `pendiente | aceptada | rechazada | revocada`.
+    """
+
+    __tablename__ = "tenant_invitations"
+    __table_args__ = (
+        Index(
+            "uq_tenant_invitation_pending",
+            "tenant_id",
+            "admin_id",
+            unique=True,
+            postgresql_where=text("estado = 'pendiente'"),
+        ),
+        Index("ix_tenant_invitations_admin", "admin_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"))
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("admins.id"))
+    invited_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id"))
+    role: Mapped[str] = mapped_column(Text, default="colaborador")  # owner | colaborador
+    pack_roles: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    estado: Mapped[str] = mapped_column(Text, default="pendiente")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
 # ---------------------------------------------------------------- escalamiento
 class Escalation(Base):
     """Handoff a humano — mecanismo NATIVO del core (los plugins lo disparan vía MCPHost).

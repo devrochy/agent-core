@@ -27,7 +27,7 @@ from sqlalchemy import func, select
 from core.admin.auth import current_admin, hash_password
 from core.admin.context import base_context
 from core.admin.form_generator import parse_json_schema_form, render_json_schema_form
-from core.db.models import Admin, Conversation, Escalation, TenantUser
+from core.db.models import Admin, Conversation, Escalation, TenantInvitation, TenantUser
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
@@ -297,6 +297,26 @@ async def _save(entity: str, record_id: str | None, values: dict[str, Any]) -> N
                     return
                 existente = (await session.execute(select(Admin).where(Admin.email == correo))).scalar_one_or_none()
                 if existente is not None:
+                    # Identidad existente: se invita al negocio (ADR-0081), sin duplicar.
+                    pendiente = (
+                        await session.execute(
+                            select(TenantInvitation).where(
+                                TenantInvitation.tenant_id == tid,
+                                TenantInvitation.admin_id == existente.id,
+                                TenantInvitation.estado == "pendiente",
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if pendiente is None:
+                        session.add(
+                            TenantInvitation(
+                                tenant_id=tid,
+                                admin_id=existente.id,
+                                role="colaborador",
+                                pack_roles=["pack_cobranza:gestor"],
+                                estado="pendiente",
+                            )
+                        )
                     return
                 admin = Admin(email=correo, password_hash=hash_password(password), role="colaborador")
                 session.add(admin)

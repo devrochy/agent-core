@@ -20,6 +20,7 @@ from core.api.routers import (
     dashboard,
     dlq,
     escalations,
+    invitations,
     leads,
     me,
     meta_ops,
@@ -47,6 +48,7 @@ api_router.include_router(connections.router)
 api_router.include_router(meta_ops.router)
 api_router.include_router(meta_wizard.router)
 api_router.include_router(collaborators.router)
+api_router.include_router(invitations.router)
 api_router.include_router(costs.router)
 api_router.include_router(plan.router)
 api_router.include_router(platform.router)

@@ -8,6 +8,7 @@ la lógica de permisos (ADR-0076/0077).
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import delete, func, select
@@ -24,6 +25,13 @@ log = get_logger(__name__)
 
 VALID_ROLES = ("master", "owner", "colaborador")
 VALID_ACCESS = ("read", "write")
+
+
+@dataclass(slots=True)
+class AltaResultado:
+    """Resultado de un alta: cuenta creada o invitación enviada (ADR-0081)."""
+
+    estado: str  # "creado" | "invitado"
 
 
 # ------------------------------------------------------------------ helpers
@@ -117,7 +125,7 @@ async def create_collaborator(
     username: str = "",
     tenant_slug: str = "",
     pack_roles: list[str] | None = None,
-) -> str | None:
+) -> AltaResultado | str:
     is_master = actor.role == "master"
     email = email.strip().lower()
     if not email or not password:
@@ -144,8 +152,27 @@ async def create_collaborator(
         existing = (
             await session.execute(select(Admin).where(Admin.email == email))
         ).scalar_one_or_none()
-        if existing is not None:
+        existing_id = existing.id if existing is not None else None
+
+    if existing_id is not None:
+        # Identidad ya registrada: no se duplica ni se toca su contraseña; se
+        # invita al negocio y el usuario debe aceptar (ADR-0081).
+        if tenant_id is None:
             return f"el admin {email} ya existe"
+        from core.admin.invitations_service import crear_invitacion
+
+        error = await crear_invitacion(
+            tenant_id=tenant_id,
+            admin_id=existing_id,
+            invited_by=actor.id,
+            role=tenant_role,
+            pack_roles=pack_roles or [],
+        )
+        if error is not None:
+            return error
+        return AltaResultado(estado="invitado")
+
+    async with get_session() as session:
         new_admin = Admin(
             email=email,
             username=username.strip() or None,
@@ -159,7 +186,7 @@ async def create_collaborator(
             session.add(TenantUser(tenant_id=tenant_id, admin_id=new_admin.id, role=tenant_role))
 
     await apply_pack_roles(pack_roles or [], tenant_id, new_admin_id)
-    return None
+    return AltaResultado(estado="creado")
 
 
 async def reset_password(*, actor: Admin, admin_id: uuid.UUID, password: str) -> str | None:
