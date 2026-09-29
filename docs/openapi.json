@@ -11040,6 +11040,26 @@
         ],
         "title": "EscalationItem"
       },
+      "EstadisticaSnapshot": {
+        "properties": {
+          "fecha": {
+            "type": "string",
+            "format": "date",
+            "title": "Fecha"
+          },
+          "datos": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Datos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fecha",
+          "datos"
+        ],
+        "title": "EstadisticaSnapshot"
+      },
       "EvalRunItem": {
         "properties": {
           "id": {
@@ -13930,6 +13950,14 @@
             },
             "type": "array",
             "title": "Gastos"
+          },
+          "estadisticas": {
+            "items": {
+              "$ref": "#/components/schemas/EstadisticaSnapshot"
+            },
+            "type": "array",
+            "title": "Estadisticas",
+            "default": []
           }
         },
         "type": "object",

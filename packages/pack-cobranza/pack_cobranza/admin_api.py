@@ -36,6 +36,7 @@ from .models import (
     Cartera,
     CarteraApertura,
     CarteraConfig,
+    CarteraEstadisticasSnapshot,
     CarteraNota,
     CarteraOptimizadaLog,
     Cliente,
@@ -1293,6 +1294,11 @@ class Expense(BaseModel):
     aprobado: bool
 
 
+class EstadisticaSnapshot(BaseModel):
+    fecha: date
+    datos: dict[str, Any]
+
+
 class PortfolioDetail(BaseModel):
     id: uuid.UUID
     nombre: str
@@ -1309,6 +1315,7 @@ class PortfolioDetail(BaseModel):
     liquidaciones: list[Liquidation]
     inyecciones: list[Injection]
     gastos: list[Expense]
+    estadisticas: list[EstadisticaSnapshot] = []
 
 
 @router.get("/portfolios/{cartera_id}", response_model=PortfolioDetail)
@@ -1403,6 +1410,21 @@ async def portfolio_detail(
             .scalars()
             .all()
         )
+        snapshots = (
+            (
+                await session.execute(
+                    select(CarteraEstadisticasSnapshot)
+                    .where(
+                        CarteraEstadisticasSnapshot.tenant_id == tid,
+                        CarteraEstadisticasSnapshot.cartera_id == cartera.id,
+                    )
+                    .order_by(CarteraEstadisticasSnapshot.fecha.desc())
+                    .limit(30)
+                )
+            )
+            .scalars()
+            .all()
+        )
     return PortfolioDetail(
         id=cartera.id,
         nombre=cartera.nombre,
@@ -1449,6 +1471,9 @@ async def portfolio_detail(
                 aprobado=bool(g.aprobado),
             )
             for g in gastos
+        ],
+        estadisticas=[
+            EstadisticaSnapshot(fecha=snap.fecha, datos=snap.datos or {}) for snap in snapshots
         ],
     )
 
