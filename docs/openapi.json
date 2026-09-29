@@ -7063,6 +7063,76 @@
         }
       }
     },
+    "/api/v1/pack/cobranza/portfolios/{cartera_id}/liquidations": {
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Create Liquidation",
+        "description": "Genera la liquidación del período (misma cuenta que el panel clásico).",
+        "operationId": "create_liquidation_api_v1_pack_cobranza_portfolios__cartera_id__liquidations_post",
+        "parameters": [
+          {
+            "name": "cartera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cartera Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LiquidationIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Liquidation"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/calendar/status": {
       "get": {
         "tags": [
@@ -9929,6 +9999,17 @@
           "comision"
         ],
         "title": "Liquidation"
+      },
+      "LiquidationIn": {
+        "properties": {
+          "periodo": {
+            "type": "string",
+            "title": "Periodo",
+            "default": "diario"
+          }
+        },
+        "type": "object",
+        "title": "LiquidationIn"
       },
       "LlmSettings": {
         "properties": {

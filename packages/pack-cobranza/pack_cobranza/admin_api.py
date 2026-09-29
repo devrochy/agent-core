@@ -50,6 +50,7 @@ from .models import (
     Promesa,
     ReglaNegociacion,
     SyncEvento,
+    Visita,
 )
 
 PLUGIN_ID = "pack_cobranza"
@@ -2454,4 +2455,217 @@ async def create_injection(
             valor=float(inyeccion.valor or 0),
             comentario=inyeccion.comentario or "",
             estado=inyeccion.estado,
+        )
+
+
+class LiquidationIn(BaseModel):
+    periodo: str = "diario"
+
+
+LIQUIDATION_PERIODS = ("diario", "semanal", "quincenal", "mensual")
+
+
+@router.post("/portfolios/{cartera_id}/liquidations", response_model=Liquidation, status_code=201)
+async def create_liquidation(
+    cartera_id: uuid.UUID,
+    payload: LiquidationIn,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras", write=True))],
+) -> Liquidation:
+    """Genera la liquidación del período (misma cuenta que el panel clásico)."""
+    periodo = payload.periodo if payload.periodo in LIQUIDATION_PERIODS else "diario"
+    hoy = date.today()
+    desde = {
+        "diario": hoy,
+        "semanal": hoy - timedelta(days=7),
+        "quincenal": hoy - timedelta(days=15),
+        "mensual": hoy - timedelta(days=30),
+    }[periodo]
+    desde_dt = datetime.combine(desde, datetime.min.time(), tzinfo=UTC)
+    hoy_dt = datetime.combine(hoy, datetime.min.time(), tzinfo=UTC)
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await _get_active(session, Cartera, cartera_id, tid)
+        if cartera is None:
+            raise ApiError.not_found("Cartera no encontrada.")
+        prestamo_ids = select(Prestamo.id).where(
+            Prestamo.tenant_id == tid, Prestamo.cartera_id == cartera.id
+        )
+        cobrado = Decimal(
+            (
+                await session.execute(
+                    select(func.coalesce(func.sum(Pago.valor), 0)).where(
+                        Pago.tenant_id == tid,
+                        Pago.prestamo_id.in_(prestamo_ids),
+                        Pago.fecha_hora >= desde_dt,
+                        Pago.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        prestado = Decimal(
+            (
+                await session.execute(
+                    select(func.coalesce(func.sum(Prestamo.valor), 0)).where(
+                        Prestamo.tenant_id == tid,
+                        Prestamo.cartera_id == cartera.id,
+                        Prestamo.fecha_otorgado >= desde,
+                        Prestamo.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        gastos = Decimal(
+            (
+                await session.execute(
+                    select(func.coalesce(func.sum(Gasto.valor), 0)).where(
+                        Gasto.tenant_id == tid,
+                        Gasto.cartera_id == cartera.id,
+                        Gasto.estado == "activo",
+                        Gasto.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        inyeccion = Decimal(
+            (
+                await session.execute(
+                    select(func.coalesce(func.sum(Inyeccion.valor), 0)).where(
+                        Inyeccion.tenant_id == tid,
+                        Inyeccion.cartera_id == cartera.id,
+                        Inyeccion.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        suma_cartera = Decimal(
+            (
+                await session.execute(
+                    select(func.coalesce(func.sum(Prestamo.saldo), 0)).where(
+                        Prestamo.tenant_id == tid,
+                        Prestamo.cartera_id == cartera.id,
+                        Prestamo.estatus == "vigente",
+                        Prestamo.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        estimado = Decimal(
+            (
+                await session.execute(
+                    select(func.coalesce(func.sum(Cuota.valor_esperado), 0)).where(
+                        Cuota.tenant_id == tid,
+                        Cuota.prestamo_id.in_(prestamo_ids),
+                        Cuota.estatus.in_(("pendiente", "atrasada")),
+                        Cuota.fecha_vencimiento <= hoy,
+                        Cuota.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        cfg = (
+            await session.execute(
+                select(CarteraConfig).where(
+                    CarteraConfig.tenant_id == tid, CarteraConfig.cartera_id == cartera.id
+                )
+            )
+        ).scalar_one_or_none()
+        comision_pct = cfg.comision_porcentaje if cfg is not None else Decimal(0)
+        comision = (cobrado * comision_pct / Decimal(100)).quantize(Decimal("1"))
+        caja = await _caja_de(session, tid, cartera.id)
+        clientes = (
+            (
+                await session.execute(
+                    select(Cliente).where(
+                        Cliente.tenant_id == tid,
+                        Cliente.cartera_id == cartera.id,
+                        Cliente.deleted_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        vigentes = (
+            (
+                await session.execute(
+                    select(Prestamo.cliente_id).where(
+                        Prestamo.tenant_id == tid,
+                        Prestamo.cartera_id == cartera.id,
+                        Prestamo.estatus == "vigente",
+                        Prestamo.deleted_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        con_prestamo = set(vigentes)
+        visitas = (
+            await session.execute(
+                select(Visita.cliente_id, Visita.resultado).where(
+                    Visita.tenant_id == tid,
+                    Visita.cartera_id == cartera.id,
+                    Visita.fecha == hoy,
+                    Visita.deleted_at.is_(None),
+                )
+            )
+        ).all()
+        pagaron = {v.cliente_id for v in visitas if v.resultado == "pago"}
+        pagos_hoy = (
+            (
+                await session.execute(
+                    select(Pago.fecha_hora)
+                    .where(
+                        Pago.tenant_id == tid,
+                        Pago.prestamo_id.in_(prestamo_ids),
+                        Pago.fecha_hora >= hoy_dt,
+                        Pago.deleted_at.is_(None),
+                    )
+                    .order_by(Pago.fecha_hora)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        horas = [pg.strftime("%H:%M") for pg in pagos_hoy if pg is not None]
+        detalle = {
+            "pagaron": len(pagaron),
+            "faltan": max(len(con_prestamo - pagaron), 0),
+            "totalDia": len(con_prestamo),
+            "sinCuentas": max(len(clientes) - len(con_prestamo), 0),
+            "horaPrimera": horas[0] if horas else None,
+            "horaUltima": horas[-1] if horas else None,
+        }
+        liquidacion = Liquidacion(
+            tenant_id=tid,
+            cartera_id=cartera.id,
+            fecha=hoy,
+            periodo=periodo,
+            caja_anterior=caja.saldo_inicial,
+            caja_actual=caja.saldo_actual,
+            total_cobrado=cobrado,
+            total_prestado=prestado,
+            total_gastos=gastos,
+            comision_porcentaje=comision_pct,
+            comision_valor=comision,
+            estimado_acobrar=estimado,
+            total_inyeccion=inyeccion,
+            suma_cartera=suma_cartera,
+            detalle=detalle,
+        )
+        session.add(liquidacion)
+        await session.flush()
+        return Liquidation(
+            cartera=cartera.nombre,
+            fecha=liquidacion.fecha,
+            periodo=liquidacion.periodo,
+            cobrado=float(liquidacion.total_cobrado or 0),
+            gastos=float(liquidacion.total_gastos or 0),
+            comision=float(liquidacion.comision_valor or 0),
         )
