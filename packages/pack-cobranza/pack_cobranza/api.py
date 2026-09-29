@@ -5,7 +5,9 @@ propio JWT** (ver `auth.py`); el core no conoce a los usuarios de campo. El logi
 es por **dispositivo** (código + API key) contra el slug del tenant.
 
 Endpoints:
-- `POST /auth/login` — login de dispositivo → token.
+- `POST /auth/dispositivo` — login de dispositivo → token. (Era `/auth/login`; se
+  renombró en ADR-0081 para liberar `/auth/login`, que ahora es el login unificado
+  de usuario/contraseña en `api_gestor.py`.)
 - `GET  /mis-carteras` — carteras del gestor.
 - `GET  /carteras/{id}/clientes-dia` — clientes del día.
 - `POST /sync/eventos` — sincronización offline idempotente (visita|pago|abono).
@@ -55,7 +57,7 @@ async def _auth(authorization: str | None) -> tuple[uuid.UUID, dict[str, Any]] |
     return await token_tenant(authorization.split(" ", 1)[1].strip())
 
 
-@router.post("/auth/login")
+@router.post("/auth/dispositivo")
 async def login(request: Request) -> JSONResponse:
     body = await request.json()
     slug = str(body.get("tenant") or "").strip()

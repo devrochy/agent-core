@@ -31,11 +31,11 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from core.admin.auth import hash_password, verify_password
-from core.db.models import Admin, TenantUser
+from core.db.models import Admin, Tenant, TenantUser
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
-from pack_cobranza.auth import issue_token, pack_secret, token_tenant
+from pack_cobranza.auth import issue_token, pack_secret, token_tenant, verify_token
 from pack_cobranza.estadisticas import conteos_cartera
 from pack_cobranza.evidencias import EvidenciaError, guardar_archivo, guardar_evidencia
 from pack_cobranza.models import (
@@ -97,6 +97,44 @@ async def _auth(authorization: str | None) -> tuple[uuid.UUID, dict[str, Any]] |
     return await token_tenant(authorization.split(" ", 1)[1].strip())
 
 
+def _membresia_token(admin_id: uuid.UUID) -> str:
+    """Token de membresía (ADR-0081 §5): firmado con `APP_SECRET_KEY`, scope invitaciones."""
+    from core.config import get_settings
+
+    return issue_token(
+        {"admin_id": str(admin_id), "typ": "membresia"},
+        get_settings().app_secret_key,
+        ttl_hours=1,
+    )
+
+
+def _admin_de_membresia(token: str) -> uuid.UUID | None:
+    from core.config import get_settings
+
+    payload = verify_token(token, get_settings().app_secret_key)
+    if payload is None or payload.get("typ") != "membresia":
+        return None
+    try:
+        return uuid.UUID(str(payload.get("admin_id")))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _admin_de_token(authorization: str | None) -> uuid.UUID | None:
+    """Identidad del admin desde un token de campo (pack) o de membresía."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    auth = await token_tenant(token)
+    if auth is not None:
+        admin_id = auth[1].get("admin_id")
+        try:
+            return uuid.UUID(str(admin_id)) if admin_id else None
+        except (TypeError, ValueError):
+            return None
+    return _admin_de_membresia(token)
+
+
 async def _admin_por_credenciales(session, usuario: str, password: str) -> Admin | None:
     admin = (
         await session.execute(
@@ -108,8 +146,272 @@ async def _admin_por_credenciales(session, usuario: str, password: str) -> Admin
     return admin
 
 
+def _perfil_admin(admin: Admin) -> dict[str, str]:
+    return {
+        "id": str(admin.id),
+        "usuario": _usuario_de(admin),
+        "nombre": _usuario_de(admin),
+        "apellido": "",
+    }
+
+
+async def _gestor_de(session, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> Gestor | None:
+    """Perfil `Gestor` activo del admin en el tenant, si existe."""
+    gestor = (
+        await session.execute(
+            select(Gestor).where(
+                Gestor.tenant_id == tenant_id,
+                Gestor.admin_id == admin_id,
+                Gestor.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if gestor is None or gestor.estatus != "activo":
+        return None
+    return gestor
+
+
+async def _membresias_de_campo(admin: Admin, *, solo: uuid.UUID | None = None) -> list[dict[str, Any]]:
+    """Negocios donde el admin accede a la API de campo, con su rol (ADR-0081).
+
+    - `master` (rol `global`: master de plataforma o permiso global) → acceso total.
+    - `owner` del tenant → acceso total (`propietario`).
+    - colaborador con perfil `Gestor` activo → `gestor` (scopeado a sus carteras).
+    Solo tenants activos con `pack_cobranza` habilitado en su AgentSpec.
+    """
+    from core.agents.spec import enabled_packs, load_active_spec
+    from core.shared.tenant import admin_tenants
+
+    filas = await admin_tenants(admin.id)
+    if not filas:
+        return []
+    if solo is not None:
+        filas = [f for f in filas if f[0] == solo]
+        if not filas:
+            return []
+    ids = [tid for tid, _n, _r in filas]
+    async with get_session() as session:
+        activos = {
+            t.id: t
+            for t in (
+                await session.execute(
+                    select(Tenant).where(
+                        Tenant.id.in_(ids),
+                        Tenant.status == "active",
+                        Tenant.deleted_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        }
+    out: list[dict[str, Any]] = []
+    for tid, _nombre, role in filas:
+        tenant = activos.get(tid)
+        if tenant is None:
+            continue
+        async with tenant_scope(tid):
+            spec = await load_active_spec(tid)
+            if PLUGIN_ID not in enabled_packs(spec):
+                continue
+            if role in ("global", "owner"):
+                out.append(
+                    {
+                        "tenantId": str(tid),
+                        "slug": tenant.slug,
+                        "nombre": tenant.name,
+                        "rol": "master" if role == "global" else "propietario",
+                        "gestorId": None,
+                    }
+                )
+                continue
+            async with get_session() as session:
+                gestor = await _gestor_de(session, tid, admin.id)
+            if gestor is not None:
+                out.append(
+                    {
+                        "tenantId": str(tid),
+                        "slug": tenant.slug,
+                        "nombre": tenant.name,
+                        "rol": "gestor",
+                        "gestorId": str(gestor.id),
+                    }
+                )
+    return out
+
+
+async def _enforcement_dispositivo(
+    request: Request, session, tenant_id: uuid.UUID, gestor: Gestor, imei: str, whatsapp: str
+) -> tuple[bool, str] | JSONResponse:
+    """Vinculación de dispositivo (ADR-0068): (vinculado, estado) o 403."""
+    dispositivos = (
+        await session.execute(
+            select(Device).where(
+                Device.tenant_id == tenant_id,
+                Device.gestor_id == gestor.id,
+                Device.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    activos_imei = [d for d in dispositivos if d.estado == "activo" and d.imei]
+    legacy_activo = any(d.estado == "activo" and not d.imei for d in dispositivos)
+    if activos_imei:
+        if imei and any(d.imei == imei for d in activos_imei):
+            return True, "activo"
+        session.add(
+            IntentoAcceso(
+                tenant_id=tenant_id,
+                gestor_id=gestor.id,
+                imei=imei or None,
+                whatsapp_number=whatsapp or None,
+                resultado="denegado",
+                motivo="dispositivo no autorizado",
+                ip=request.client.host if request.client else None,
+            )
+        )
+        return JSONResponse({"error": "dispositivo no autorizado"}, status_code=403)
+    if legacy_activo:
+        return True, "activo"
+    if any(d.estado == "pendiente" for d in dispositivos):
+        return False, "pendiente"
+    return False, "none"
+
+
+async def _sesion_de_membresia(
+    request: Request, admin: Admin, membresia: dict[str, Any], imei: str, whatsapp: str
+) -> JSONResponse:
+    """Emite los tokens del negocio elegido (ADR-0081)."""
+    tenant_id = uuid.UUID(str(membresia["tenantId"]))
+    rol = str(membresia["rol"])
+    gestor_id = uuid.UUID(str(membresia["gestorId"])) if membresia.get("gestorId") else None
+    async with tenant_scope(tenant_id):
+        secret = await pack_secret()
+        if not secret:
+            return JSONResponse({"error": "pack sin secreto de firma"}, status_code=503)
+        vinculado, estado_dispositivo, telefono = False, "none", ""
+        async with get_session() as session:
+            if rol == "gestor" and gestor_id is not None:
+                gestor = await get_owned(session, Gestor, gestor_id)
+                if gestor is None or gestor.estatus != "activo":
+                    return JSONResponse({"error": "no es gestor de esta cartera"}, status_code=403)
+                res = await _enforcement_dispositivo(request, session, tenant_id, gestor, imei, whatsapp)
+                if isinstance(res, JSONResponse):
+                    return res
+                vinculado, estado_dispositivo = res
+                telefono = gestor.telefono or ""
+                perfil = {
+                    "id": str(gestor.id),
+                    "usuario": _usuario_de(admin),
+                    "nombre": gestor.nombre,
+                    "apellido": gestor.apellido or "",
+                }
+            else:
+                perfil = _perfil_admin(admin)
+            tokens = _par_tokens(secret, tenant_id, admin.id, rol=rol, gestor_id=gestor_id)
+    return JSONResponse(
+        {
+            **tokens,
+            "rol": rol,
+            "perfil": perfil,
+            "tenantId": str(tenant_id),
+            "tenantSlug": membresia.get("slug"),
+            "tenantNombre": membresia.get("nombre"),
+            "telefono": telefono,
+            "dispositivoVinculado": vinculado,
+            "estadoDispositivo": estado_dispositivo,
+            "requiereVinculacion": rol == "gestor" and not vinculado,
+            "gestor": perfil if rol == "gestor" else None,
+            "propietario": perfil if rol != "gestor" else None,
+        }
+    )
+
+
+@router.post("/auth/login")
+async def login(request: Request) -> JSONResponse:
+    """Login unificado (ADR-0081): sin slug ni rol; resuelve membresías del admin.
+
+    Sin `tenant`: 0 negocios → 401; 1 → tokens; varios → `seleccionRequerida` + lista.
+    Con `tenant`: emite los tokens del negocio indicado (slug o UUID).
+    """
+    body = await request.json()
+    usuario = str(body.get("usuario") or "").strip()
+    password = str(body.get("password") or "")
+    ref = str(body.get("tenant") or "").strip()
+    imei = str(body.get("imei") or "").strip()
+    whatsapp = str(body.get("whatsapp") or "").strip()
+    if not (usuario and password):
+        return JSONResponse({"error": "faltan datos"}, status_code=400)
+
+    async with get_session() as session:
+        admin = await _admin_por_credenciales(session, usuario, password)
+    if admin is None:
+        return JSONResponse({"error": "credenciales inválidas"}, status_code=401)
+
+    solo = await _tenant_id_por_ref(ref) if ref else None
+    if ref and solo is None:
+        return JSONResponse({"error": "tenant desconocido"}, status_code=401)
+    membresias = await _membresias_de_campo(admin, solo=solo)
+
+    if ref:
+        if not membresias:
+            return JSONResponse({"error": "sin acceso a ese negocio"}, status_code=403)
+        return await _sesion_de_membresia(request, admin, membresias[0], imei, whatsapp)
+    if not membresias:
+        from core.admin.invitations_service import pendientes_de
+
+        invitaciones = await pendientes_de(admin.id)
+        if invitaciones:
+            return JSONResponse(
+                {
+                    "requiereMembresia": True,
+                    "membresiaToken": _membresia_token(admin.id),
+                    "invitaciones": invitaciones,
+                }
+            )
+        return JSONResponse({"error": "sin acceso a la app de campo"}, status_code=403)
+    if len(membresias) == 1:
+        return await _sesion_de_membresia(request, admin, membresias[0], imei, whatsapp)
+    return JSONResponse(
+        {
+            "seleccionRequerida": True,
+            "negocios": [
+                {"slug": m["slug"], "nombre": m["nombre"], "rol": m["rol"]} for m in membresias
+            ],
+        }
+    )
+
+
+async def _tenant_id_por_ref(ref: str) -> uuid.UUID | None:
+    """Resuelve un tenant por slug o UUID (ambos válidos como `tenant`)."""
+    cond = Tenant.slug == ref
+    if len(ref) == 36:
+        try:
+            cond = Tenant.id == uuid.UUID(ref)
+        except ValueError:
+            cond = Tenant.slug == ref
+    async with get_session() as session:
+        return (
+            await session.execute(
+                select(Tenant.id).where(
+                    cond, Tenant.status == "active", Tenant.deleted_at.is_(None)
+                )
+            )
+        ).scalar_one_or_none()
+
+
 @router.post("/auth/gestor/login")
 async def gestor_login(request: Request) -> JSONResponse:
+    """Compatibilidad (ADR-0081): login del gestor con tenant explícito."""
+    return await _login_con_tenant(request, "gestor")
+
+
+@router.post("/auth/propietario/login")
+async def propietario_login(request: Request) -> JSONResponse:
+    """Compatibilidad (ADR-0081): login del propietario con tenant explícito."""
+    return await _login_con_tenant(request, "propietario")
+
+
+async def _login_con_tenant(request: Request, rol_esperado: str) -> JSONResponse:
     body = await request.json()
     slug = str(body.get("tenant") or "").strip()
     usuario = str(body.get("usuario") or "").strip()
@@ -125,74 +427,62 @@ async def gestor_login(request: Request) -> JSONResponse:
     if tenant_id is None:
         return JSONResponse({"error": "tenant desconocido"}, status_code=401)
 
-    async with tenant_scope(tenant_id):
-        secret = await pack_secret()
-        if not secret:
-            return JSONResponse({"error": "pack sin secreto de firma"}, status_code=503)
-        async with get_session() as session:
-            admin = await _admin_por_credenciales(session, usuario, password)
-            if admin is None:
-                return JSONResponse({"error": "credenciales inválidas"}, status_code=401)
-            if await _tenant_link(session, tenant_id, admin.id) is None:
-                return JSONResponse({"error": "sin acceso a este tenant"}, status_code=403)
-            gestor = (
-                await session.execute(select(Gestor).where(Gestor.tenant_id == tenant_id, Gestor.admin_id == admin.id, Gestor.deleted_at.is_(None)))
-            ).scalar_one_or_none()
-            if gestor is None or gestor.estatus != "activo":
-                return JSONResponse({"error": "no es gestor de esta cartera"}, status_code=403)
-            # Autovinculación (HU-39/43): si el gestor ya tiene un equipo activo con
-            # IMEI, se exige coincidir; si es el primer vínculo, no bloquea.
-            dispositivos = (
-                await session.execute(select(Device).where(Device.tenant_id == tenant_id, Device.gestor_id == gestor.id, Device.deleted_at.is_(None)))
-            ).scalars().all()
-            activos_imei = [d for d in dispositivos if d.estado == "activo" and d.imei]
-            legacy_activo = any(d.estado == "activo" and not d.imei for d in dispositivos)
-            vinculado, estado_dispositivo = False, "none"
-            if activos_imei:
-                if imei and any(d.imei == imei for d in activos_imei):
-                    vinculado, estado_dispositivo = True, "activo"
-                else:
-                    session.add(IntentoAcceso(tenant_id=tenant_id, gestor_id=gestor.id, imei=imei or None, whatsapp_number=whatsapp or None, resultado="denegado", motivo="dispositivo no autorizado", ip=request.client.host if request.client else None))
-                    return JSONResponse({"error": "dispositivo no autorizado"}, status_code=403)
-            elif legacy_activo:
-                vinculado, estado_dispositivo = True, "activo"
-            elif any(d.estado == "pendiente" for d in dispositivos):
-                estado_dispositivo = "pendiente"
-            tokens = _par_tokens(secret, tenant_id, admin.id, rol="gestor", gestor_id=gestor.id)
-            perfil = {"id": str(gestor.id), "usuario": _usuario_de(admin), "nombre": gestor.nombre, "apellido": gestor.apellido or ""}
-            telefono = gestor.telefono or ""
-    return JSONResponse({**tokens, "gestor": perfil, "telefono": telefono, "dispositivoVinculado": vinculado, "estadoDispositivo": estado_dispositivo, "requiereVinculacion": not vinculado})
+    async with get_session() as session:
+        admin = await _admin_por_credenciales(session, usuario, password)
+    if admin is None:
+        return JSONResponse({"error": "credenciales inválidas"}, status_code=401)
+
+    membresias = await _membresias_de_campo(admin, solo=tenant_id)
+    if not membresias:
+        error = "no es gestor de esta cartera" if rol_esperado == "gestor" else "no es propietario de este tenant"
+        return JSONResponse({"error": error}, status_code=403)
+    membresia = membresias[0]
+    if rol_esperado == "gestor" and membresia["rol"] != "gestor":
+        return JSONResponse({"error": "no es gestor de esta cartera"}, status_code=403)
+    if rol_esperado == "propietario" and membresia["rol"] not in ("propietario", "master"):
+        return JSONResponse({"error": "no es propietario de este tenant"}, status_code=403)
+    return await _sesion_de_membresia(request, admin, membresia, imei, whatsapp)
 
 
-@router.post("/auth/propietario/login")
-async def propietario_login(request: Request) -> JSONResponse:
-    body = await request.json()
-    slug = str(body.get("tenant") or "").strip()
-    usuario = str(body.get("usuario") or "").strip()
-    password = str(body.get("password") or "")
-    if not (slug and usuario and password):
-        return JSONResponse({"error": "faltan datos"}, status_code=400)
+@router.get("/auth/invitaciones")
+async def invitaciones(authorization: str | None = Header(default=None)) -> JSONResponse:
+    """Invitaciones pendientes del usuario (ADR-0081). Acepta token de campo o de membresía."""
+    admin_id = await _admin_de_token(authorization)
+    if admin_id is None:
+        return JSONResponse({"error": "no autorizado"}, status_code=401)
+    from core.admin.invitations_service import pendientes_de
 
-    from core.tenants import resolve_tenant_by_slug
+    return JSONResponse(await pendientes_de(admin_id))
 
-    tenant_id = await resolve_tenant_by_slug(slug)
-    if tenant_id is None:
-        return JSONResponse({"error": "tenant desconocido"}, status_code=401)
 
-    async with tenant_scope(tenant_id):
-        secret = await pack_secret()
-        if not secret:
-            return JSONResponse({"error": "pack sin secreto de firma"}, status_code=503)
-        async with get_session() as session:
-            admin = await _admin_por_credenciales(session, usuario, password)
-            if admin is None:
-                return JSONResponse({"error": "credenciales inválidas"}, status_code=401)
-            link = await _tenant_link(session, tenant_id, admin.id)
-            if link is None or link.role != "owner":
-                return JSONResponse({"error": "no es propietario de este tenant"}, status_code=403)
-            tokens = _par_tokens(secret, tenant_id, admin.id, rol="propietario")
-            perfil = {"id": str(admin.id), "usuario": _usuario_de(admin), "nombre": _usuario_de(admin), "apellido": ""}
-    return JSONResponse({**tokens, "propietario": perfil})
+@router.post("/auth/invitaciones/{invitation_id}/aceptar")
+async def aceptar_invitacion(
+    invitation_id: uuid.UUID, authorization: str | None = Header(default=None)
+) -> JSONResponse:
+    admin_id = await _admin_de_token(authorization)
+    if admin_id is None:
+        return JSONResponse({"error": "no autorizado"}, status_code=401)
+    from core.admin.invitations_service import aceptar_invitacion as _aceptar
+
+    error = await _aceptar(invitation_id=invitation_id, admin_id=admin_id)
+    if error is not None:
+        return JSONResponse({"error": error}, status_code=400)
+    return JSONResponse({"ok": True})
+
+
+@router.post("/auth/invitaciones/{invitation_id}/rechazar")
+async def rechazar_invitacion(
+    invitation_id: uuid.UUID, authorization: str | None = Header(default=None)
+) -> JSONResponse:
+    admin_id = await _admin_de_token(authorization)
+    if admin_id is None:
+        return JSONResponse({"error": "no autorizado"}, status_code=401)
+    from core.admin.invitations_service import rechazar_invitacion as _rechazar
+
+    error = await _rechazar(invitation_id=invitation_id, admin_id=admin_id)
+    if error is not None:
+        return JSONResponse({"error": error}, status_code=400)
+    return JSONResponse({"ok": True})
 
 
 async def _tenant_link(session, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> TenantUser | None:
@@ -326,9 +616,13 @@ def _hoy() -> date:
 
 
 async def _carteras_visibles(session, tenant_id: uuid.UUID, payload: dict[str, Any]) -> list[Cartera]:
-    """Carteras que el token puede ver: todas para el propietario; las suyas para el gestor."""
+    """Carteras que el token puede ver: todas con acceso total; las suyas para el gestor.
+
+    Acceso total (todas las carteras del tenant): `master`, `propietario` y cualquier
+    rol distinto de `gestor` (ADR-0081). El gestor solo ve las carteras asignadas.
+    """
     q = select(Cartera).where(Cartera.tenant_id == tenant_id, Cartera.deleted_at.is_(None)).order_by(Cartera.nombre)
-    if payload.get("rol") != "propietario":
+    if payload.get("rol") == "gestor":
         gid = payload.get("gestor_id")
         if not gid:
             return []
@@ -341,7 +635,7 @@ async def _cartera_visible(session, tenant_id: uuid.UUID, payload: dict[str, Any
 
 
 async def _permisos_de(session, tenant_id: uuid.UUID, payload: dict[str, Any]) -> list[dict[str, Any]]:
-    if payload.get("rol") == "propietario":
+    if payload.get("rol") != "gestor":
         return [{"permiso": p, "habilitado": True} for p in GESTOR_PERMISOS]
     gid = payload.get("gestor_id")
     if not gid:
