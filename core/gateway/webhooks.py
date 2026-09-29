@@ -88,6 +88,64 @@ async def verify_webhook_tenant(
     return Response(status_code=403)
 
 
+def _phone_number_id_from_payload(payload: dict[str, Any]) -> str:
+    """`phone_number_id` del primer change (metadata de WhatsApp Cloud API)."""
+    for entry in payload.get("entry") or []:
+        for change in entry.get("changes") or []:
+            value = change.get("value") or {}
+            metadata = value.get("metadata") or {}
+            if metadata.get("phone_number_id"):
+                return str(metadata["phone_number_id"])
+    return ""
+
+
+async def _tenant_y_secretos(payload: dict[str, Any]) -> tuple[uuid.UUID | None, list[str]]:
+    """Negocio y secretos con los que puede venir firmado el webhook.
+
+    Orden: **secret efectivo del negocio** (BYOK / conexión manual) y luego el
+    del framework (`.env`). La ruta genérica validaba solo con el del framework:
+    con BYOK Meta firma con la app del negocio y toda entrega terminaba en 401.
+    """
+    from core.gateway.connections import resolve_effective_app_secret
+    from core.shared.tenant import resolve_tenant_for_phone
+
+    settings = get_settings()
+    tenant_id: uuid.UUID | None = None
+    telefono = _phone_number_id_from_payload(payload)
+    if telefono:
+        try:
+            tenant_id = await resolve_tenant_for_phone(telefono)
+        except Exception:
+            log.exception("webhook_tenant_lookup_failed", phone_number_id=telefono)
+    if tenant_id is None:
+        from core.gateway.webhook_route_tenant import _resolve_tenant_for_waba
+
+        for entry in payload.get("entry") or []:
+            waba_id = str(entry.get("id") or "").strip()
+            if not waba_id:
+                continue
+            try:
+                tenant_id = await _resolve_tenant_for_waba(waba_id)
+            except Exception:
+                log.exception("webhook_waba_lookup_failed", waba_id=waba_id)
+            if tenant_id is not None:
+                break
+
+    secretos: list[str] = []
+    if tenant_id is not None:
+        try:
+            propio = await resolve_effective_app_secret(tenant_id)
+        except Exception:
+            log.exception("webhook_tenant_secret_failed", tenant_id=str(tenant_id))
+            propio = ""
+        if propio:
+            secretos.append(propio)
+    marco = settings.whatsapp_app_secret or settings.meta_app_secret
+    if marco and marco not in secretos:
+        secretos.append(marco)
+    return tenant_id, secretos
+
+
 @router.post("/whatsapp")
 async def receive_whatsapp(request: Request) -> Response:
     """Endpoint genérico: una sola App de Meta compartida (`.env`), puede
@@ -95,23 +153,28 @@ async def receive_whatsapp(request: Request) -> Response:
     -- se resuelve el tenant de CADA entry por separado, nunca uno solo
     para todo el payload."""
     raw_body = await request.body()
-    settings = get_settings()
-    app_secret = settings.whatsapp_app_secret or settings.meta_app_secret
     headers = {k.lower(): v for k, v in request.headers.items()}
-
-    if app_secret:
-        from core.gateway.webhook_verify import verify_signature
-
-        if not verify_signature(raw_body, headers.get("x-hub-signature-256", ""), app_secret):
-            log.warning("webhook_signature_invalid")
-            await _alert_on_invalid_signature(settings.meta_app_id)
-            return Response(status_code=401)
 
     try:
         payload = json.loads(raw_body)
     except json.JSONDecodeError:
         log.warning("webhook_payload_no_json")
         return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
+
+    # La firma puede venir con la app del framework (`.env`) o con la del negocio
+    # (BYOK / conexión manual): se prueban los secretos aplicables.
+    tenant_id, secretos = await _tenant_y_secretos(payload)
+    if secretos:
+        from core.gateway.webhook_verify import verify_signature
+
+        firma = headers.get("x-hub-signature-256", "")
+        if not any(verify_signature(raw_body, firma, secreto) for secreto in secretos):
+            log.warning(
+                "webhook_signature_invalid",
+                tenant_id=str(tenant_id) if tenant_id else None,
+            )
+            await _alert_on_invalid_signature(get_settings().meta_app_id)
+            return Response(status_code=401)
 
     return await _process_payload(payload, known_tenant_id=None, dev_fallback=True)
 
