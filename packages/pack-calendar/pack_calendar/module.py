@@ -12,8 +12,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter
 
 from core.mcp.types import BaseModule, GuardrailResult
 from core.shared.logger import get_logger
@@ -30,7 +29,6 @@ PLUGIN_ID = "pack_calendar"
 log = get_logger(__name__)
 
 # OAuth: conserva la URL vieja (ver docstring).
-oauth_router = APIRouter(prefix=f"/admin/plugins/{PLUGIN_ID}", tags=[PLUGIN_ID])
 
 
 # Afirmaciones del LLM sobre acciones de citas que SOLO son válidas si la tool
@@ -72,83 +70,6 @@ _COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
         {"list_client_appointments"},
     ),
 }
-
-
-@oauth_router.get("/oauth")
-async def start_oauth(request: Request):  # type: ignore[no-untyped-def]
-    """Redirige a Google para conectar la cuenta del negocio."""
-    from core.admin.auth import current_admin
-    from core.admin.permissions import require_section
-    from core.plugin_manager import plugin_manager
-
-    if await current_admin(request) is None:
-        return RedirectResponse("/admin/login", status_code=303)
-    # Escribe credenciales: exige permiso de escritura (no alcanza con estar logueado).
-    if not await require_section(request, "plugins", write=True):
-        return RedirectResponse(
-            "/admin/conexiones?flash=Sin permiso para conectar cuentas&flash_type=danger",
-            status_code=303,
-        )
-    from core.shared.exceptions import PluginConfigError
-
-    try:
-        config = await plugin_manager.load_config(PLUGIN_ID)
-    except PluginConfigError:
-        config = None
-    if config is None:
-        return RedirectResponse(
-            "/calendar/configuracion?flash=Configurá primero client_id y secret&flash_type=danger",
-            status_code=303,
-        )
-    from pack_calendar.oauth import build_authorization_url
-
-    return RedirectResponse(build_authorization_url(config.client_id))  # type: ignore[attr-defined]
-
-
-@oauth_router.get("/oauth/callback")
-async def oauth_callback(request: Request, code: str = ""):  # type: ignore[no-untyped-def]
-    from core.admin.auth import current_admin
-    from core.admin.permissions import require_section
-    from core.plugin_manager import plugin_manager
-
-    if await current_admin(request) is None:
-        return RedirectResponse("/admin/login", status_code=303)
-    # El callback guarda credenciales: exige escritura (evita que un colaborador
-    # de solo lectura pise la conexión del tenant vía GET).
-    if not await require_section(request, "plugins", write=True):
-        return HTMLResponse("Sin permiso.", status_code=403)
-    if not code:
-        return HTMLResponse("<h3>Autorización cancelada.</h3>", status_code=400)
-
-    from core.shared.exceptions import PluginConfigError
-
-    try:
-        config = await plugin_manager.load_config(PLUGIN_ID)
-    except PluginConfigError:
-        config = None
-    if config is None:
-        return RedirectResponse(
-            "/calendar/?flash=El pack no está configurado&flash_type=danger", status_code=303
-        )
-
-    from core.shared.exceptions import PluginError
-    from pack_calendar.oauth import exchange_code, save_tokens
-
-    try:
-        tokens = await exchange_code(
-            config.client_id,  # type: ignore[attr-defined]
-            config.client_secret.get_secret_value(),  # type: ignore[attr-defined]
-            code,
-        )
-        await save_tokens(tokens)
-    except PluginError as exc:
-        from urllib.parse import quote
-
-        log.warning("calendar_oauth_callback_failed", error=str(exc)[:200])
-        return RedirectResponse(
-            f"/calendar/?flash={quote(str(exc)[:140])}&flash_type=danger", status_code=303
-        )
-    return RedirectResponse("/calendar/?flash=Google Calendar conectado ✓", status_code=303)
 
 
 class GoogleCalendarModule(BaseModule):
@@ -211,4 +132,4 @@ class GoogleCalendarModule(BaseModule):
 
     def extra_admin_routers(self) -> list[APIRouter]:
         """Router OAuth con la URL vieja (redirect URI de Google Console)."""
-        return [oauth_router]
+        return []

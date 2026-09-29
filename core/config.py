@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     app_env: Literal["development", "production"] = Field(default="development", alias="APP_ENV")
     app_secret_key: str = Field(default="change-me", alias="APP_SECRET_KEY")
     public_base_url: str = Field(default="http://localhost:8000", alias="PUBLIC_BASE_URL")
+    # URL del panel nuevo: a donde vuelve el navegador tras el OAuth de Google.
+    # En producción suele coincidir con el origen público; en dev apunta al :3200.
+    panel_base_url: str = Field(default="", alias="PANEL_BASE_URL")
     # Prefijo de ruta bajo el que se sirve la app detrás de un proxy inverso
     # (p. ej. "/agent-core" en Coolify/Tailscale). Vacío = servida en la raíz.
     # El proxy QUITA el prefijo al reenviar; para las URLs que genera la app

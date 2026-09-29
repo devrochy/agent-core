@@ -9137,6 +9137,116 @@
           }
         }
       }
+    },
+    "/api/v1/pack/calendar/oauth/start": {
+      "get": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Oauth Start",
+        "description": "Inicia el OAuth2 de Google (302 a accounts.google.com).",
+        "operationId": "oauth_start_api_v1_pack_calendar_oauth_start_get",
+        "parameters": [
+          {
+            "name": "next",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "/calendario",
+              "title": "Next"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/oauth/callback": {
+      "get": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Oauth Callback",
+        "description": "Vuelve de Google: intercambia el código, guarda los tokens y regresa al panel.\n\nEl navegador llega desde Google (sin la cookie de sesión del panel), así que la\nautenticación se apoya en la cookie `oauth_next` que dejó `/oauth/start` (ya\nautenticado): sin ella no se procesa nada.",
+        "operationId": "oauth_callback_api_v1_pack_calendar_oauth_callback_get",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Code"
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Error"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

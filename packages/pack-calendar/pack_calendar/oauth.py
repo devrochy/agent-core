@@ -47,10 +47,15 @@ def redirect_uri() -> str:
     return f"{get_settings().public_base_url}/admin/plugins/{PLUGIN_ID}/oauth/callback"
 
 
-def build_authorization_url(client_id: str) -> str:
+def api_redirect_uri() -> str:
+    """Callback servido por la API (`/api/v1`), que es la superficie vigente."""
+    return f"{get_settings().public_base_url}/api/v1/pack/{PLUGIN_ID}/oauth/callback"
+
+
+def build_authorization_url(client_id: str, *, redirect: str | None = None) -> str:
     params = {
         "client_id": client_id,
-        "redirect_uri": redirect_uri(),
+        "redirect_uri": redirect or redirect_uri(),
         "response_type": "code",
         "scope": SCOPES,
         "access_type": "offline",   # imprescindible para recibir refresh_token
@@ -59,7 +64,13 @@ def build_authorization_url(client_id: str) -> str:
     return f"{AUTH_URL}?{urlencode(params)}"
 
 
-async def exchange_code(client_id: str, client_secret: str, code: str) -> dict[str, Any]:
+async def exchange_code(
+    client_id: str,
+    client_secret: str,
+    code: str,
+    *,
+    redirect: str | None = None,
+) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
             TOKEN_URL,
@@ -68,7 +79,7 @@ async def exchange_code(client_id: str, client_secret: str, code: str) -> dict[s
                 "client_secret": client_secret,
                 "code": code,
                 "grant_type": "authorization_code",
-                "redirect_uri": redirect_uri(),
+                "redirect_uri": redirect or redirect_uri(),
             },
         )
     if response.status_code != 200:

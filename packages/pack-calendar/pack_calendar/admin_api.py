@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -321,3 +321,90 @@ async def create_appointment(
             google_event_id=cita.google_event_id,
             appointment_type_id=cita.appointment_type_id,
         )
+
+
+def _panel_base() -> str:
+    from core.config import get_settings
+
+    base = (get_settings().panel_base_url or get_settings().public_base_url).rstrip("/")
+    return base
+
+
+async def _calendar_config() -> Any:
+    """Config del pack (None si no está configurado — p. ej. admin master)."""
+    from core.plugin_manager import plugin_manager
+
+    try:
+        return await plugin_manager.load_config(PLUGIN_ID)
+    except Exception:
+        return None
+
+
+@router.get("/oauth/start", status_code=302)
+async def oauth_start(
+    principal: Annotated[Principal, Depends(require("pack_calendar:conexion", write=True))],
+    next: str = "/calendario",
+) -> Response:
+    """Inicia el OAuth2 de Google (302 a accounts.google.com)."""
+    from fastapi.responses import RedirectResponse
+
+    from pack_calendar.oauth import api_redirect_uri, build_authorization_url
+
+    config = await _calendar_config()
+    if config is None or not (getattr(config, "client_id", "") or "").strip():
+        raise ApiError.bad_request(
+            "Configura las credenciales de Google del pack de Calendario antes de conectar.",
+            "not_configured",
+        )
+    destino = next if next.startswith("/") else "/calendario"
+    respuesta = RedirectResponse(
+        build_authorization_url(config.client_id, redirect=api_redirect_uri()), status_code=302
+    )
+    respuesta.set_cookie("oauth_next", destino, max_age=600, httponly=True, samesite="lax", path="/")
+    return respuesta
+
+
+@router.get("/oauth/callback", status_code=302)
+async def oauth_callback(
+    request: Request,
+    code: str = "",
+    error: str = "",
+) -> Response:
+    """Vuelve de Google: intercambia el código, guarda los tokens y regresa al panel.
+
+    El navegador llega desde Google (sin la cookie de sesión del panel), así que la
+    autenticación se apoya en la cookie `oauth_next` que dejó `/oauth/start` (ya
+    autenticado): sin ella no se procesa nada.
+    """
+    from fastapi.responses import RedirectResponse
+
+    from core.shared.logger import get_logger
+    from pack_calendar.oauth import api_redirect_uri, exchange_code, save_tokens
+
+    log = get_logger(__name__)
+    marcador = request.cookies.get("oauth_next")
+    if not marcador:
+        # Nadie inició el flujo desde el panel: no se procesa el código.
+        return RedirectResponse(f"{_panel_base()}/calendario?google=error", status_code=302)
+    destino = marcador if marcador.startswith("/") else "/calendario"
+
+    def volver(estado: str) -> RedirectResponse:
+        return RedirectResponse(f"{_panel_base()}{destino}?google={estado}", status_code=302)
+
+    if error or not code:
+        return volver("cancelado")
+    config = await _calendar_config()
+    if config is None:
+        return volver("error")
+    try:
+        tokens = await exchange_code(
+            config.client_id,
+            config.client_secret.get_secret_value(),
+            code,
+            redirect=api_redirect_uri(),
+        )
+        await save_tokens(tokens)
+    except Exception:
+        log.exception("calendar_oauth_exchange_failed")
+        return volver("error")
+    return volver("ok")
