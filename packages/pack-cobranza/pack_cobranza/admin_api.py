@@ -28,7 +28,9 @@ from .models import (
     Abono,
     AuditoriaCartera,
     Caja,
+    CajaAjuste,
     Cartera,
+    CarteraApertura,
     CarteraConfig,
     Cliente,
     CobroPropietario,
@@ -43,6 +45,7 @@ from .models import (
     Liquidacion,
     MensajePropietario,
     Pago,
+    PosicionGestor,
     Prestamo,
     Promesa,
     ReglaNegociacion,
@@ -2267,5 +2270,141 @@ async def delete_credit(
             abono.id,
             "eliminar",
             antes={"valor": float(abono.valor or 0)},
+        )
+    return Response(status_code=204)
+
+
+# ------------------------------------------------------------ caja (3.3)
+class CashAdjustment(BaseModel):
+    valor_nuevo: float
+    motivo: str
+
+
+@router.get("/portfolios/{cartera_id}/cash", response_model=PortfolioCaja)
+async def get_cash(
+    cartera_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras"))],
+) -> PortfolioCaja:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await _get_active(session, Cartera, cartera_id, tid)
+        if cartera is None:
+            raise ApiError.not_found("Cartera no encontrada.")
+        caja = (
+            await session.execute(
+                select(Caja).where(Caja.tenant_id == tid, Caja.cartera_id == cartera.id)
+            )
+        ).scalar_one_or_none()
+    return PortfolioCaja(
+        saldo_inicial=float(caja.saldo_inicial) if caja else 0.0,
+        saldo_actual=float(caja.saldo_actual) if caja else 0.0,
+        actualizado=caja.updated_at.strftime("%Y-%m-%d %H:%M") if caja and caja.updated_at else "",
+    )
+
+
+@router.post("/portfolios/{cartera_id}/cash/adjustment", status_code=204)
+async def adjust_cash(
+    cartera_id: uuid.UUID,
+    payload: CashAdjustment,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras", write=True))],
+) -> Response:
+    """Ajuste manual de caja: deja el saldo en el valor indicado y registra el motivo."""
+    motivo = payload.motivo.strip()
+    if not motivo:
+        raise ApiError.bad_request("Indica el motivo del ajuste.", "missing_reason")
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await _get_active(session, Cartera, cartera_id, tid)
+        if cartera is None:
+            raise ApiError.not_found("Cartera no encontrada.")
+        caja = await _caja_de(session, tid, cartera.id)
+        anterior = caja.saldo_actual or Decimal(0)
+        nuevo = Decimal(str(payload.valor_nuevo))
+        caja.saldo_actual = nuevo
+        session.add(
+            CajaAjuste(
+                tenant_id=tid,
+                caja_id=caja.id,
+                valor_anterior=anterior,
+                valor_nuevo=nuevo,
+                motivo=motivo,
+                actor_rol="admin",
+            )
+        )
+        _audit(
+            session,
+            tid,
+            "caja",
+            caja.id,
+            "editar",
+            antes={"saldo": float(anterior)},
+            despues={"saldo": float(nuevo)},
+            motivo=motivo,
+        )
+    return Response(status_code=204)
+
+
+@router.post("/portfolios/{cartera_id}/cash/closing", status_code=204)
+async def close_cash(
+    cartera_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras", write=True))],
+) -> Response:
+    """Cierre del día: genera el snapshot de la cartera (liquidación)."""
+    from pack_cobranza.jobs import snapshot_cartera
+
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await _get_active(session, Cartera, cartera_id, tid)
+        if cartera is None:
+            raise ApiError.not_found("Cartera no encontrada.")
+        await snapshot_cartera(session, tid, cartera)
+    return Response(status_code=204)
+
+
+@router.post("/portfolios/{cartera_id}/cash/opening", status_code=204)
+async def open_cash(
+    cartera_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras", write=True))],
+) -> Response:
+    """Apertura del día: marca la hora de inicio de la jornada de la cartera."""
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await _get_active(session, Cartera, cartera_id, tid)
+        if cartera is None:
+            raise ApiError.not_found("Cartera no encontrada.")
+        session.add(
+            CarteraApertura(
+                tenant_id=tid,
+                cartera_id=cartera.id,
+                fecha=date.today(),
+                hora_inicio=datetime.now(UTC).strftime("%H:%M"),
+            )
+        )
+    return Response(status_code=204)
+
+
+class PositionIn(BaseModel):
+    lat: float
+    lng: float
+
+
+@router.post("/portfolios/{cartera_id}/position", status_code=204)
+async def register_position(
+    cartera_id: uuid.UUID,
+    payload: PositionIn,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras", write=True))],
+) -> Response:
+    """Posición del gestor (se usa desde la app de campo; aquí queda disponible)."""
+    if not (-90 <= payload.lat <= 90) or not (-180 <= payload.lng <= 180):
+        raise ApiError.bad_request("Coordenadas fuera de rango.", "invalid_coordinates")
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await _get_active(session, Cartera, cartera_id, tid)
+        if cartera is None:
+            raise ApiError.not_found("Cartera no encontrada.")
+        session.add(
+            PosicionGestor(
+                tenant_id=tid, cartera_id=cartera.id, lat=payload.lat, lng=payload.lng
+            )
         )
     return Response(status_code=204)

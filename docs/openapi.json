@@ -6702,6 +6702,297 @@
         }
       }
     },
+    "/api/v1/pack/cobranza/portfolios/{cartera_id}/cash": {
+      "get": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Get Cash",
+        "operationId": "get_cash_api_v1_pack_cobranza_portfolios__cartera_id__cash_get",
+        "parameters": [
+          {
+            "name": "cartera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cartera Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortfolioCaja"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/portfolios/{cartera_id}/cash/adjustment": {
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Adjust Cash",
+        "description": "Ajuste manual de caja: deja el saldo en el valor indicado y registra el motivo.",
+        "operationId": "adjust_cash_api_v1_pack_cobranza_portfolios__cartera_id__cash_adjustment_post",
+        "parameters": [
+          {
+            "name": "cartera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cartera Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CashAdjustment"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/portfolios/{cartera_id}/cash/closing": {
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Close Cash",
+        "description": "Cierre del día: genera el snapshot de la cartera (liquidación).",
+        "operationId": "close_cash_api_v1_pack_cobranza_portfolios__cartera_id__cash_closing_post",
+        "parameters": [
+          {
+            "name": "cartera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cartera Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/portfolios/{cartera_id}/cash/opening": {
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Open Cash",
+        "description": "Apertura del día: marca la hora de inicio de la jornada de la cartera.",
+        "operationId": "open_cash_api_v1_pack_cobranza_portfolios__cartera_id__cash_opening_post",
+        "parameters": [
+          {
+            "name": "cartera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cartera Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/portfolios/{cartera_id}/position": {
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Register Position",
+        "description": "Posición del gestor (se usa desde la app de campo; aquí queda disponible).",
+        "operationId": "register_position_api_v1_pack_cobranza_portfolios__cartera_id__position_post",
+        "parameters": [
+          {
+            "name": "cartera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cartera Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PositionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/calendar/status": {
       "get": {
         "tags": [
@@ -7537,6 +7828,24 @@
           "default_duration_minutes"
         ],
         "title": "CalendarStatus"
+      },
+      "CashAdjustment": {
+        "properties": {
+          "valor_nuevo": {
+            "type": "number",
+            "title": "Valor Nuevo"
+          },
+          "motivo": {
+            "type": "string",
+            "title": "Motivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "valor_nuevo",
+          "motivo"
+        ],
+        "title": "CashAdjustment"
       },
       "CatalogResponse": {
         "properties": {
@@ -11520,6 +11829,24 @@
           "nombre"
         ],
         "title": "PortfolioIn"
+      },
+      "PositionIn": {
+        "properties": {
+          "lat": {
+            "type": "number",
+            "title": "Lat"
+          },
+          "lng": {
+            "type": "number",
+            "title": "Lng"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lat",
+          "lng"
+        ],
+        "title": "PositionIn"
       },
       "ProductOut": {
         "properties": {
