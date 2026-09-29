@@ -79,7 +79,6 @@ def rutas_clasicas() -> dict[str, list[str]]:
     for archivo, prefijo in CLASICO:
         if not archivo.exists():
             continue
-        rutas = sorted({prefijo + r if not r.startswith("/") else prefijo + r for r in RUTA.findall(archivo.read_text())})
         rutas = sorted({(prefijo + r).replace("//", "/") for r in RUTA.findall(archivo.read_text())})
         if rutas:
             por_archivo[str(archivo.relative_to(RAIZ))] = rutas

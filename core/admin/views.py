@@ -14,11 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from agentcore_contracts import AgentSpec
-from fastapi import APIRouter, Form, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
 
 from core.admin.advanced_service import (
     list_spec_versions,
@@ -106,7 +105,6 @@ from core.agents.spec import (
 from core.billing.enforcement import QuotaExceeded
 from core.config import get_settings
 from core.db.models import (
-    WIZARD_STEPS,
     Admin,
     AdminPermission,
     AppSettings,
@@ -1726,7 +1724,7 @@ async def connections_page(request: Request):
     ]
 
     # URL del webhook por tenant (cada app tiene el suyo: /webhooks/whatsapp/<slug>).
-    from core.db.models import PhoneNumber, Tenant
+    from core.db.models import Tenant
     from core.tenants import tenant_webhook_url
 
     tenant_slug = ""
@@ -2089,354 +2087,12 @@ async def connection_delete(request: Request, connection_id: uuid.UUID):
 
 
 # ------------------------------------------------------------------ meta requisitos (preflight)
-@router.get("/conexiones/wizard/whatsapp/elegir-entorno", response_class=HTMLResponse)
-async def meta_wizard_whatsapp_elegir_entorno(request: Request):
-    """Pantalla previa al wizard: sin efecto secundario, solo deja elegir
-    si esta conexión es de prueba (número gratis de Meta, sin requisitos
-    de revisión) o de producción (número real, requiere el checklist de
-    /admin/conexiones/meta-requisitos)."""
-    ctx = await _base_context(request, "connections")
-    if ctx is None:
-        return _login_redirect()
-
-    from core.db.models import Tenant
-    from core.tenants import tenant_webhook_url
-
-    tenant_slug = ""
-    tid = get_current_tenant_id()
-    if tid is not None:
-        async with get_session() as session:
-            tenant = await session.get(Tenant, tid)
-            tenant_slug = tenant.slug if tenant else ""
-
-    settings = get_settings()
-    ctx.update(
-        webhook_url=tenant_webhook_url(tenant_slug) if tenant_slug else "",
-        whatsapp_verify_token=settings.whatsapp_verify_token,
-    )
-    return _render("meta_wizard_elegir_entorno.html", ctx)
-
-
-@router.get("/conexiones/wizard/whatsapp", response_class=HTMLResponse)
-async def meta_wizard_whatsapp_page(request: Request, environment: str = Query(default="production")):
-    ctx = await _base_context(request, "connections")
-    if ctx is None:
-        return _login_redirect()
-
-    if environment not in ("sandbox", "production"):
-        return RedirectResponse("/admin/conexiones/wizard/whatsapp/elegir-entorno", status_code=303)
-
-    from core.gateway.meta_onboarding import (
-        WizardError,
-        run_automatic_steps,
-        start_or_resume_wizard,
-    )
-
-    admin = await current_admin(request)
-    tid = get_current_tenant_id()
-
-    try:
-        wizard = await start_or_resume_wizard(
-            tid, "whatsapp", environment=environment, admin_id=admin.id if admin else None
-        )
-        wizard = await run_automatic_steps(wizard.id)
-    except WizardError as exc:
-        ctx.update(setup_error=str(exc), wizard=None)
-        return _render("meta_wizard_whatsapp.html", ctx)
-
-    settings = get_settings()
-    ctx.update(
-        setup_error=None,
-        wizard=wizard,
-        wizard_steps=list(WIZARD_STEPS),
-        meta_app_id=settings.meta_app_id,
-        meta_config_id=settings.meta_config_id,
-        graph_api_version=settings.graph_api_version,
-    )
-
-    if environment == "production":
-        manual_steps = await _production_manual_steps(tid)
-        ctx.update(production_requisitos_completos=all(step["done"] for step in manual_steps))
-    else:
-        ctx.update(production_requisitos_completos=None)
-
-    if wizard.current_step == "done" and wizard.connection_id is not None:
-        async with get_session() as session:
-            waba = (
-                await session.execute(
-                    select(WabaAccount).where(
-                        WabaAccount.connection_id == wizard.connection_id, WabaAccount.tenant_id == tid
-                    )
-                )
-            ).scalars().first()
-            phone = (
-                await session.execute(
-                    select(PhoneNumber).where(
-                        PhoneNumber.connection_id == wizard.connection_id, PhoneNumber.tenant_id == tid
-                    )
-                )
-            ).scalars().first()
-            template_count = (
-                await session.execute(
-                    select(func.count()).select_from(MessageTemplate).where(
-                        MessageTemplate.waba_account_id == waba.id
-                    )
-                )
-            ).scalar() if waba is not None else 0
-        ctx.update(summary_waba=waba, summary_phone=phone, summary_template_count=template_count)
-
-    return _render("meta_wizard_whatsapp.html", ctx)
-
-
-@router.post("/conexiones/wizard/whatsapp/probar-conexion")
-async def meta_wizard_whatsapp_probar_conexion(request: Request, connection_id: str = Form(...)):
-    """Verificación real bajo demanda (no espera al cron de salud): handshake
-    de webhook en vivo + los 7 health checks de la conexión (mismo criterio
-    que el botón "Diagnosticar" de /admin/conexiones/salud, reusa las mismas
-    funciones -- no se agrega ningún check nuevo)."""
-    from core.gateway import meta_production_readiness as readiness
-    from core.gateway.meta_health import decide_status, run_health_checks
-
-    if await current_admin(request) is None:
-        return _login_redirect()
-
-    tid = get_current_tenant_id()
-    url = "/admin/conexiones/wizard/whatsapp"
-
-    async with get_session() as session:
-        connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
-    if connection is None:
-        return RedirectResponse(f"{url}?flash=Conexión no encontrada&flash_type=danger", status_code=303)
-
-    settings = get_settings()
-    callback_url = f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"
-    handshake = await readiness.check_webhook_handshake(callback_url, settings.whatsapp_verify_token)
-    checks = await run_health_checks(connection, tid)
-    new_status, reason = decide_status(checks)
-
-    async with get_session() as session:
-        db_connection = await get_owned(session, MetaConnection, uuid.UUID(connection_id), tid)
-        if db_connection is not None:
-            db_connection.health = checks
-            db_connection.status = new_status
-            db_connection.status_reason = reason
-            db_connection.last_health_check_at = utcnow()
-
-    todo_ok = handshake.ok is True and all(v.get("ok") is True for v in checks.values() if v.get("key") != "billing")
-    flash = "Prueba de conexión OK" if todo_ok else "La prueba de conexión encontró problemas -- revisá el resumen"
-    flash_type = "success" if todo_ok else "warning"
-    return RedirectResponse(
-        f"{url}?environment={connection.environment}&flash={flash}&flash_type={flash_type}", status_code=303
-    )
-
-
-@router.post("/conexiones/wizard/whatsapp-byok/guardar")
-async def meta_wizard_whatsapp_byok_guardar(
-    request: Request,
-    app_id: str = Form(...),
-    app_secret: str = Form(...),
-    phone_number_id: str = Form(...),
-    access_token: str = Form(...),
-    waba_id: str = Form(...),
-    verify_token: str = Form(default=""),
-):
-    """Alta de una conexión de WhatsApp con la app PROPIA del tenant (BYOK)
-    para modo prueba -- a diferencia del wizard de Embedded Signup, acá no
-    hay OAuth: se verifican las credenciales contra Graph API y se guardan
-    directo (mismo criterio que el modal legado de ChannelConnection, pero
-    persistiendo en MetaConnection para que el resto del panel -- salud,
-    promoción a producción -- la vea igual que una conexión de Embedded Signup."""
-    from core.gateway.meta_byok import ByokError, save_byok_connection
-
-    admin = await current_admin(request)
-    if admin is None:
-        return _login_redirect()
-
-    tid = get_current_tenant_id()
-    elegir_url = "/admin/conexiones/wizard/whatsapp/elegir-entorno"
-
-    try:
-        await save_byok_connection(
-            tid, admin.id, app_id.strip(), app_secret.strip(), phone_number_id.strip(), access_token.strip(),
-            waba_id.strip(), verify_token=verify_token.strip() or None,
-        )
-    except ByokError as exc:
-        return RedirectResponse(f"{elegir_url}?flash={str(exc)[:140]}&flash_type=danger", status_code=303)
-    except IntegrityError as exc:
-        # Red de seguridad: nunca un 500 crudo por una violación de unique.
-        log.warning("byok_guardar_integrity_error", error=str(exc)[:200])
-        return RedirectResponse(
-            f"{elegir_url}?flash=No se pudo guardar la conexión: el número o la app "
-            "ya están asociados a otra conexión&flash_type=danger",
-            status_code=303,
-        )
-
-    return RedirectResponse(
-        "/admin/conexiones/salud?flash=Conexión de prueba guardada -- probála con \"Diagnosticar\"",
-        status_code=303,
-    )
-
-
-@router.post("/conexiones/wizard/whatsapp-byok/token/inspect")
-async def meta_byok_token_inspect(
-    request: Request,
-    app_id: str = Form(...),
-    app_secret: str = Form(...),
-    access_token: str = Form(...),
-):
-    """Verifica un access token contra Meta (`/debug_token`): validez,
-    expiración (0 = no expira) y scopes. Para el asistente del wizard BYOK.
-    Nunca loguea el token."""
-    from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_token_tools import inspect_token
-
-    if await current_admin(request) is None:
-        return JSONResponse({"ok": False, "error": "no autenticado"}, status_code=401)
-    if not app_id.strip() or not app_secret.strip() or not access_token.strip():
-        return JSONResponse({"ok": False, "error": "Faltan App ID, App Secret o token"}, status_code=200)
-    try:
-        info = await inspect_token(app_id.strip(), app_secret.strip(), access_token.strip())
-    except GraphError as exc:
-        return JSONResponse({"ok": False, "error": exc.message}, headers=_NO_STORE)
-    return JSONResponse({"ok": True, **info}, headers=_NO_STORE)
-
-
-@router.post("/conexiones/wizard/whatsapp-byok/token/extend")
-async def meta_byok_token_extend(
-    request: Request,
-    app_id: str = Form(...),
-    app_secret: str = Form(...),
-    access_token: str = Form(...),
-):
-    """Canjea un token temporal por uno long-lived (~60 días). Devuelve el
-    token nuevo para que el wizard lo ponga en el campo (nunca se loguea)."""
-    from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_token_tools import extend_token
-
-    if await current_admin(request) is None:
-        return JSONResponse({"ok": False, "error": "no autenticado"}, status_code=401)
-    if not app_id.strip() or not app_secret.strip() or not access_token.strip():
-        return JSONResponse({"ok": False, "error": "Faltan App ID, App Secret o token"}, status_code=200)
-    try:
-        result = await extend_token(app_id.strip(), app_secret.strip(), access_token.strip())
-    except GraphError as exc:
-        return JSONResponse({"ok": False, "error": exc.message}, headers=_NO_STORE)
-    return JSONResponse({"ok": True, **result}, headers=_NO_STORE)
-
-
-@router.post("/conexiones/wizard/whatsapp/exchange")
-async def meta_wizard_whatsapp_exchange(request: Request):
-    """Llamada por el listener de `postMessage` apenas llega el evento
-    `FINISH*` -- el `code` de Meta tiene TTL de 30s, así que esto tiene que
-    responder rápido. Nunca devuelve el token, solo `{connectionId, nextStep}`."""
-    from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_onboarding import WizardError, exchange_code, persist_finish_payload
-
-    if await current_admin(request) is None:
-        return JSONResponse({"error": "no autenticado"}, status_code=401)
-
-    body = await request.json()
-    wizard_id = body.get("wizard_id")
-    code = body.get("code")
-    event_type = body.get("event_type", "FINISH")
-    if not wizard_id or not code:
-        return JSONResponse({"error": "faltan wizard_id/code"}, status_code=400)
-
-    try:
-        wizard_id_uuid = uuid.UUID(str(wizard_id))
-        view = await persist_finish_payload(
-            wizard_id_uuid,
-            event_type,
-            waba_id=body.get("waba_id"),
-            phone_number_id=body.get("phone_number_id"),
-            business_id=body.get("business_id"),
-        )
-        view = await exchange_code(view.id, str(code))
-    except WizardError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
-    except GraphError as exc:
-        from core.gateway.meta_subscriptions import humanize_subscription_error
-
-        return JSONResponse(
-            {"error": humanize_subscription_error(exc), "fbtraceId": exc.fbtrace_id}, status_code=502
-        )
-
-    return JSONResponse({"connectionId": str(view.connection_id), "nextStep": view.current_step})
-
-
-@router.post("/conexiones/wizard/whatsapp/cancelar-evento")
-async def meta_wizard_whatsapp_cancel(request: Request):
-    """Beacon del listener en el evento `CANCEL` -- analítica de abandono,
-    nunca lleva `code` ni token (la función de destino ni acepta esos campos)."""
-    from core.gateway.meta_onboarding import record_cancel_or_progress
-
-    if await current_admin(request) is None:
-        return JSONResponse({"error": "no autenticado"}, status_code=401)
-
-    body = await request.json()
-    wizard_id = body.get("wizard_id")
-    if not wizard_id:
-        return JSONResponse({"error": "falta wizard_id"}, status_code=400)
-
-    await record_cancel_or_progress(
-        uuid.UUID(str(wizard_id)),
-        current_step=body.get("current_step"),
-        error_code=body.get("error_code"),
-        error_message=body.get("error_message"),
-        error_id=body.get("error_id"),
-        session_id=body.get("session_id"),
-    )
-    return JSONResponse({"status": "ok"})
-
-
-@router.post("/conexiones/wizard/whatsapp/registrar-numero")
-async def meta_wizard_whatsapp_register_number(request: Request, wizard_id: str = Form(...)):
-    """El PIN lo genera el sistema -- este form no lleva ningún campo de
-    PIN, solo confirma la acción. El PIN nunca aparece en esta respuesta."""
-    from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_onboarding import WizardError, register_number_step, run_automatic_steps
-
-    if await current_admin(request) is None:
-        return _login_redirect()
-
-    try:
-        view = await register_number_step(uuid.UUID(wizard_id))
-        await run_automatic_steps(view.id)
-    except (WizardError, GraphError) as exc:
-        detail = exc.message if isinstance(exc, GraphError) else str(exc)
-        return RedirectResponse(
-            f"/admin/conexiones/wizard/whatsapp?flash={detail[:140]}&flash_type=danger", status_code=303
-        )
-
-    return RedirectResponse("/admin/conexiones/wizard/whatsapp", status_code=303)
-
-
-@router.post("/conexiones/wizard/whatsapp/fijar-pin-nuevo")
-async def meta_wizard_whatsapp_set_new_pin(request: Request, wizard_id: str = Form(...)):
-    """Remediación manual de un 133005 (PIN mismatch) -- nunca automática."""
-    from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_onboarding import WizardError, run_automatic_steps, set_new_pin_step
-
-    if await current_admin(request) is None:
-        return _login_redirect()
-
-    try:
-        view = await set_new_pin_step(uuid.UUID(wizard_id))
-        await run_automatic_steps(view.id)
-    except (WizardError, GraphError) as exc:
-        detail = exc.message if isinstance(exc, GraphError) else str(exc)
-        return RedirectResponse(
-            f"/admin/conexiones/wizard/whatsapp?flash={detail[:140]}&flash_type=danger", status_code=303
-        )
-
-    return RedirectResponse("/admin/conexiones/wizard/whatsapp?flash=PIN nuevo fijado", status_code=303)
-
 
 # ------------------------------------------------------------------ números adicionales de una WABA
 # Prefijo "meta/" para no chocar con /conexiones/{connection_id}/... de
 # arriba, que son rutas de ChannelConnection (modelo viejo/distinto).
 async def _resolve_waba_and_token(connection_id: uuid.UUID, tenant_id: uuid.UUID | None):
-    from core.db.models import MetaConnection, WabaAccount
+    from core.db.models import MetaConnection
     from core.gateway import meta_token_store
     from core.gateway.meta_onboarding import TOKEN_KIND
 
@@ -2595,7 +2251,6 @@ def _build_template_components(form: dict[str, str]) -> list[dict[str, Any]]:
 
 @router.post("/conexiones/meta/{connection_id}/plantillas/{template_id}/editar")
 async def meta_connection_plantilla_editar(request: Request, connection_id: str, template_id: str, category: str = Form(None)):
-    from core.db.models import MessageTemplate
     from core.gateway.meta_errors import GraphError
     from core.gateway.meta_templates import TemplateValidationError, update_template
 
@@ -2642,7 +2297,6 @@ async def meta_connection_plantilla_eliminar(request: Request, connection_id: st
 @router.post("/conexiones/meta/{connection_id}/plantillas/{template_id}/eliminar-traduccion")
 async def meta_connection_plantilla_eliminar_traduccion(request: Request, connection_id: str, template_id: str):
     """Borra SOLO esta versión de idioma."""
-    from core.db.models import MessageTemplate
     from core.gateway.meta_errors import GraphError
     from core.gateway.meta_templates import delete_template_one_language
 
@@ -2807,70 +2461,6 @@ async def meta_health_set_billing_status(request: Request, connection_id: str, m
         "/admin/conexiones/salud?flash=Estado de facturación actualizado", status_code=303
     )
 
-
-@router.get("/conexiones/manual", response_class=HTMLResponse)
-async def meta_manual_connection_page(request: Request):
-    """Ruta de escape: cargar waba_id/phone_number_id/token a mano cuando
-    el Embedded Signup falla -- deliberadamente frágil, es la salida en
-    self-hosted cuando el wizard normal no funciona."""
-    ctx = await _base_context(request, "connections")
-    if ctx is None:
-        return _login_redirect()
-    return _render("meta_manual.html", ctx)
-
-
-@router.post("/conexiones/manual")
-async def meta_manual_connection_submit(
-    request: Request, waba_id: str = Form(...), phone_number_id: str = Form(...),
-    token: str = Form(...), business_id: str = Form(""),
-):
-    from core.gateway import meta_token_store
-    from core.gateway.meta_health import check_token_valid
-    from core.gateway.meta_onboarding import TOKEN_KIND
-
-    admin = await current_admin(request)
-    if admin is None:
-        return _login_redirect()
-
-    from core.gateway.meta_preflight import resolve_app_credentials
-
-    tid = get_current_tenant_id()
-    url = "/admin/conexiones/manual"
-    settings = get_settings()
-
-    # `debug_token` necesita las credenciales de LA APP que emitió el
-    # token -- si el tenant es BYOK (tiene su propia app configurada), se
-    # usan esas; si no, cae a la app compartida de `.env` (hallazgo
-    # auditor-multitenant 2026-09-20: antes usaba siempre la global sin
-    # considerar BYOK).
-    app_creds = await resolve_app_credentials(tid, "whatsapp")
-    app_id = app_creds.app_id if app_creds else settings.meta_app_id
-    app_secret = app_creds.app_secret if app_creds else settings.meta_app_secret
-
-    # Valida el token ANTES de guardar nada -- no se persiste un token roto a ciegas.
-    check = await check_token_valid(token, app_id, app_secret, settings.graph_api_version)
-    if check.ok is False:
-        return RedirectResponse(f"{url}?flash={check.detail[:200]}&flash_type=danger", status_code=303)
-
-    async with get_session() as session:
-        connection = MetaConnection(
-            tenant_id=tid, channel="whatsapp", meta_app_id=app_id,
-            business_id=business_id or None, status="connected", connected_by=admin.id,
-            connected_at=utcnow(),
-        )
-        session.add(connection)
-        await session.flush()
-        waba = WabaAccount(tenant_id=tid, connection_id=connection.id, waba_id=waba_id)
-        session.add(waba)
-        await session.flush()
-        session.add(
-            PhoneNumber(tenant_id=tid, connection_id=connection.id, waba_account_id=waba.id, phone_number_id=phone_number_id)
-        )
-        connection_id = connection.id
-
-    await meta_token_store.put_token(connection_id, TOKEN_KIND, business_id or str(connection_id), token, tenant_id=tid)
-
-    return RedirectResponse("/admin/conexiones/salud?flash=Conexión manual creada", status_code=303)
 
 
 # ------------------------------------------------------------------ checklist de promoción a producción

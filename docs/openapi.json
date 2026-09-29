@@ -2824,6 +2824,429 @@
         }
       }
     },
+    "/api/v1/admin/meta/wizard": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · wizard whatsapp"
+        ],
+        "summary": "Wizard State",
+        "description": "Qué puede ofrecer el wizard en este entorno (app de Meta configurada o no).",
+        "operationId": "wizard_state_api_v1_admin_meta_wizard_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WizardState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/wizard/session": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · wizard whatsapp"
+        ],
+        "summary": "Wizard Session",
+        "description": "Arranca (o reanuda) la sesión del wizard para el negocio.",
+        "operationId": "wizard_session_api_v1_admin_meta_wizard_session_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WizardSessionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WizardSessionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/wizard/exchange": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · wizard whatsapp"
+        ],
+        "summary": "Wizard Exchange",
+        "description": "Canjea el código del Embedded Signup (el popup ya pudo dar waba/phone).",
+        "operationId": "wizard_exchange_api_v1_admin_meta_wizard_exchange_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WizardExchangeIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Wizard Exchange Api V1 Admin Meta Wizard Exchange Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/wizard/number": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · wizard whatsapp"
+        ],
+        "summary": "Wizard Number",
+        "description": "Paso «registrar el número» del wizard.",
+        "operationId": "wizard_number_api_v1_admin_meta_wizard_number_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WizardStepIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WizardSessionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/wizard/pin": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · wizard whatsapp"
+        ],
+        "summary": "Wizard Pin",
+        "description": "Paso «fijar PIN nuevo» (verificación en dos pasos).",
+        "operationId": "wizard_pin_api_v1_admin_meta_wizard_pin_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WizardStepIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WizardSessionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/wizard/byok": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · wizard whatsapp"
+        ],
+        "summary": "Wizard Byok",
+        "description": "Alta con app propia (BYOK): guarda credenciales, suscribe la WABA y deja la conexión.",
+        "operationId": "wizard_byok_api_v1_admin_meta_wizard_byok_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WizardByokIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Wizard Byok Api V1 Admin Meta Wizard Byok Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/manual": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · wizard whatsapp"
+        ],
+        "summary": "Manual Connection",
+        "description": "Carga manual de respaldo: valida el token y crea conexión + WABA + número.",
+        "operationId": "manual_connection_api_v1_admin_meta_manual_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualConnectionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Manual Connection Api V1 Admin Meta Manual Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/collaborators/pack-roles": {
       "get": {
         "tags": [
@@ -12559,6 +12982,34 @@
         ],
         "title": "LoginResponse"
       },
+      "ManualConnectionIn": {
+        "properties": {
+          "waba_id": {
+            "type": "string",
+            "title": "Waba Id"
+          },
+          "phone_number_id": {
+            "type": "string",
+            "title": "Phone Number Id"
+          },
+          "token": {
+            "type": "string",
+            "title": "Token"
+          },
+          "business_id": {
+            "type": "string",
+            "title": "Business Id",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "waba_id",
+          "phone_number_id",
+          "token"
+        ],
+        "title": "ManualConnectionIn"
+      },
       "ManualFormResponse": {
         "properties": {
           "type_id": {
@@ -16180,6 +16631,170 @@
           "subscriptions"
         ],
         "title": "WebhooksResponse"
+      },
+      "WizardByokIn": {
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "title": "App Id"
+          },
+          "app_secret": {
+            "type": "string",
+            "title": "App Secret"
+          },
+          "phone_number_id": {
+            "type": "string",
+            "title": "Phone Number Id"
+          },
+          "access_token": {
+            "type": "string",
+            "title": "Access Token"
+          },
+          "waba_id": {
+            "type": "string",
+            "title": "Waba Id"
+          },
+          "verify_token": {
+            "type": "string",
+            "title": "Verify Token",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "app_id",
+          "app_secret",
+          "phone_number_id",
+          "access_token",
+          "waba_id"
+        ],
+        "title": "WizardByokIn"
+      },
+      "WizardExchangeIn": {
+        "properties": {
+          "wizard_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Wizard Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type",
+            "default": "FINISH"
+          },
+          "waba_id": {
+            "type": "string",
+            "title": "Waba Id",
+            "default": ""
+          },
+          "phone_number_id": {
+            "type": "string",
+            "title": "Phone Number Id",
+            "default": ""
+          },
+          "business_id": {
+            "type": "string",
+            "title": "Business Id",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "wizard_id",
+          "code"
+        ],
+        "title": "WizardExchangeIn"
+      },
+      "WizardSessionIn": {
+        "properties": {
+          "environment": {
+            "type": "string",
+            "title": "Environment",
+            "default": "production"
+          }
+        },
+        "type": "object",
+        "title": "WizardSessionIn"
+      },
+      "WizardSessionOut": {
+        "properties": {
+          "wizard_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Wizard Id"
+          },
+          "step": {
+            "type": "string",
+            "title": "Step"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "wizard_id",
+          "step"
+        ],
+        "title": "WizardSessionOut"
+      },
+      "WizardState": {
+        "properties": {
+          "meta_configured": {
+            "type": "boolean",
+            "title": "Meta Configured"
+          },
+          "app_id": {
+            "type": "string",
+            "title": "App Id"
+          },
+          "config_id": {
+            "type": "string",
+            "title": "Config Id"
+          },
+          "environments": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Environments"
+          }
+        },
+        "type": "object",
+        "required": [
+          "meta_configured",
+          "app_id",
+          "config_id",
+          "environments"
+        ],
+        "title": "WizardState"
+      },
+      "WizardStepIn": {
+        "properties": {
+          "wizard_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Wizard Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "wizard_id"
+        ],
+        "title": "WizardStepIn"
       },
       "core__api__routers__dashboard__Kpi": {
         "properties": {

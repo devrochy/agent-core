@@ -23,6 +23,7 @@ from core.api.routers import (
     leads,
     me,
     meta_ops,
+    meta_wizard,
     plan,
     platform,
     playground,
@@ -44,6 +45,7 @@ api_router.include_router(leads.router)
 api_router.include_router(plugins.router)
 api_router.include_router(connections.router)
 api_router.include_router(meta_ops.router)
+api_router.include_router(meta_wizard.router)
 api_router.include_router(collaborators.router)
 api_router.include_router(costs.router)
 api_router.include_router(plan.router)
