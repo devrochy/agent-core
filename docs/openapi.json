@@ -7753,6 +7753,133 @@
         }
       }
     },
+    "/api/v1/pack/cobranza/collectors/{collector_id}/permissions": {
+      "get": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Get Collector Permissions",
+        "operationId": "get_collector_permissions_api_v1_pack_cobranza_collectors__collector_id__permissions_get",
+        "parameters": [
+          {
+            "name": "collector_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Collector Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectorPermissions"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Save Collector Permissions",
+        "description": "Marca/desmarca la matriz del gestor (14 permisos; los desconocidos se ignoran).",
+        "operationId": "save_collector_permissions_api_v1_pack_cobranza_collectors__collector_id__permissions_put",
+        "parameters": [
+          {
+            "name": "collector_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Collector Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectorPermissionsUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectorPermissions"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/calendar/status": {
       "get": {
         "tags": [
@@ -9093,6 +9220,46 @@
           "nombre"
         ],
         "title": "CollectorIn"
+      },
+      "CollectorPermissions": {
+        "properties": {
+          "catalogo": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Catalogo"
+          },
+          "activos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Activos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "catalogo",
+          "activos"
+        ],
+        "title": "CollectorPermissions"
+      },
+      "CollectorPermissionsUpdate": {
+        "properties": {
+          "permisos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Permisos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "permisos"
+        ],
+        "title": "CollectorPermissionsUpdate"
       },
       "CommerceDashboard": {
         "properties": {

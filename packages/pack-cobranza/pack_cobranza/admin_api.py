@@ -24,6 +24,7 @@ from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.db.models import Admin, Conversation, Escalation, TenantUser
 from core.db.session import get_owned, get_session
+from pack_cobranza.permisos import GESTOR_PERMISOS
 
 from .models import (
     Abono,
@@ -41,6 +42,7 @@ from .models import (
     Device,
     Gasto,
     Gestor,
+    GestorPermiso,
     IntentoAcceso,
     Inyeccion,
     LinkPago,
@@ -3075,3 +3077,85 @@ async def create_device(
             api_key=api_key,
             gestor=f"{gestor.nombre} {gestor.apellido or ''}".strip() if gestor else None,
         )
+
+
+# ------------------------------------------- permisos del gestor (3.5)
+class CollectorPermissions(BaseModel):
+    catalogo: list[str]
+    activos: list[str]
+
+
+async def _permisos_de(session: Any, tid: uuid.UUID, gestor_id: uuid.UUID) -> list[str]:
+    rows = (
+        (
+            await session.execute(
+                select(GestorPermiso).where(
+                    GestorPermiso.tenant_id == tid, GestorPermiso.gestor_id == gestor_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [row.permiso for row in rows if row.habilitado]
+
+
+@router.get("/collectors/{collector_id}/permissions", response_model=CollectorPermissions)
+async def get_collector_permissions(
+    collector_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:gestores"))],
+) -> CollectorPermissions:
+    tid = principal.tenant_id
+    async with get_session() as session:
+        gestor = await _get_active(session, Gestor, collector_id, tid)
+        if gestor is None:
+            raise ApiError.not_found("Gestor no encontrado.")
+        activos = await _permisos_de(session, tid, gestor.id)
+    return CollectorPermissions(catalogo=list(GESTOR_PERMISOS), activos=activos)
+
+
+class CollectorPermissionsUpdate(BaseModel):
+    permisos: list[str]
+
+
+@router.put("/collectors/{collector_id}/permissions", response_model=CollectorPermissions)
+async def save_collector_permissions(
+    collector_id: uuid.UUID,
+    payload: CollectorPermissionsUpdate,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:gestores", write=True))],
+) -> CollectorPermissions:
+    """Marca/desmarca la matriz del gestor (14 permisos; los desconocidos se ignoran)."""
+    marcados = {p for p in payload.permisos if p in GESTOR_PERMISOS}
+    tid = principal.tenant_id
+    async with get_session() as session:
+        gestor = await _get_active(session, Gestor, collector_id, tid)
+        if gestor is None:
+            raise ApiError.not_found("Gestor no encontrado.")
+        existentes = (
+            (
+                await session.execute(
+                    select(GestorPermiso).where(
+                        GestorPermiso.tenant_id == tid, GestorPermiso.gestor_id == gestor.id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        por_permiso = {row.permiso: row for row in existentes}
+        for permiso in GESTOR_PERMISOS:
+            row = por_permiso.get(permiso)
+            if row is None:
+                session.add(
+                    GestorPermiso(
+                        tenant_id=tid,
+                        gestor_id=gestor.id,
+                        permiso=permiso,
+                        habilitado=permiso in marcados,
+                    )
+                )
+            else:
+                row.habilitado = permiso in marcados
+        await session.flush()
+        activos = await _permisos_de(session, tid, gestor.id)
+    return CollectorPermissions(catalogo=list(GESTOR_PERMISOS), activos=activos)
