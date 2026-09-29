@@ -13,6 +13,7 @@ import secrets
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from math import asin, cos, radians, sin, sqrt
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Response
@@ -35,6 +36,7 @@ from .models import (
     CarteraApertura,
     CarteraConfig,
     CarteraNota,
+    CarteraOptimizadaLog,
     Cliente,
     CobroPropietario,
     ConversacionPropietario,
@@ -3159,3 +3161,230 @@ async def save_collector_permissions(
         await session.flush()
         activos = await _permisos_de(session, tid, gestor.id)
     return CollectorPermissions(catalogo=list(GESTOR_PERMISOS), activos=activos)
+
+
+# --------------------------------------------- trayectoria del día (3.5)
+class RouteClient(BaseModel):
+    id: uuid.UUID
+    cliente: str
+    telefono: str
+    saldo: float
+    mora: int
+    riesgo: str
+    lat: float | None
+    lng: float | None
+
+
+class RoutePlan(BaseModel):
+    orden: list[uuid.UUID]
+    distancia_km: float
+    tiempo_min: int
+    fecha: str
+
+
+class RouteOut(BaseModel):
+    clientes: list[RouteClient]
+    plan: RoutePlan | None
+
+
+async def _clientes_del_dia(
+    session: Any, tid: uuid.UUID, cartera_id: uuid.UUID
+) -> list[RouteClient]:
+    """Clientes a visitar: préstamo vigente con cuotas pendientes o atrasadas."""
+    clientes = (
+        (
+            await session.execute(
+                select(Cliente).where(
+                    Cliente.tenant_id == tid,
+                    Cliente.cartera_id == cartera_id,
+                    Cliente.deleted_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    out: list[RouteClient] = []
+    hoy = date.today()
+    for c in clientes:
+        prestamos = (
+            (
+                await session.execute(
+                    select(Prestamo.id).where(
+                        Prestamo.tenant_id == tid,
+                        Prestamo.cliente_id == c.id,
+                        Prestamo.estatus == "vigente",
+                        Prestamo.deleted_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not prestamos:
+            continue
+        cuotas = (
+            (
+                await session.execute(
+                    select(Cuota).where(
+                        Cuota.tenant_id == tid,
+                        Cuota.prestamo_id.in_(prestamos),
+                        Cuota.estatus.in_(("pendiente", "atrasada")),
+                        Cuota.deleted_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        saldo = sum((q.valor_esperado for q in cuotas), Decimal(0))
+        mora = max(
+            ((hoy - q.fecha_vencimiento).days for q in cuotas if q.fecha_vencimiento < hoy),
+            default=0,
+        )
+        out.append(
+            RouteClient(
+                id=c.id,
+                cliente=f"{c.nombre} {c.apellido or ''}".strip(),
+                telefono=c.telefono_whatsapp or "",
+                saldo=float(saldo),
+                mora=mora,
+                riesgo=c.color_riesgo or "blanco",
+                lat=float(c.lat) if c.lat is not None else None,
+                lng=float(c.lng) if c.lng is not None else None,
+            )
+        )
+    out.sort(key=lambda r: r.mora, reverse=True)
+    return out
+
+
+def _haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    r = 6371.0
+    dlat = radians(b[0] - a[0])
+    dlng = radians(b[1] - a[1])
+    h = sin(dlat / 2) ** 2 + cos(radians(a[0])) * cos(radians(b[0])) * sin(dlng / 2) ** 2
+    return 2 * r * asin(sqrt(h))
+
+
+def _ordenar_trayecto(
+    clientes: list[RouteClient], inicio: tuple[float, float] | None
+) -> tuple[list[uuid.UUID], float]:
+    """Orden de visita por vecino más cercano (misma heurística que el clásico)."""
+    puntos = [c for c in clientes if c.lat is not None and c.lng is not None]
+    if not puntos:
+        return [], 0.0
+    restantes = list(puntos)
+    orden: list[uuid.UUID] = []
+    km = 0.0
+    if inicio is None:
+        primero = restantes.pop(0)
+        orden.append(primero.id)
+        actual = (primero.lat or 0.0, primero.lng or 0.0)
+    else:
+        actual = inicio
+    while restantes:
+        sig = min(restantes, key=lambda c: _haversine_km(actual, (c.lat or 0.0, c.lng or 0.0)))
+        km += _haversine_km(actual, (sig.lat or 0.0, sig.lng or 0.0))
+        orden.append(sig.id)
+        actual = (sig.lat or 0.0, sig.lng or 0.0)
+        restantes.remove(sig)
+    return orden, km
+
+
+async def _ultimo_plan(session: Any, tid: uuid.UUID, cartera_id: uuid.UUID) -> RoutePlan | None:
+    row = (
+        await session.execute(
+            select(CarteraOptimizadaLog)
+            .where(
+                CarteraOptimizadaLog.tenant_id == tid,
+                CarteraOptimizadaLog.cartera_id == cartera_id,
+            )
+            .order_by(CarteraOptimizadaLog.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    return RoutePlan(
+        orden=[uuid.UUID(str(c)) for c in (row.orden_clientes or [])],
+        distancia_km=float(row.distancia_estimada_km or 0),
+        tiempo_min=int(row.tiempo_estimado_min or 0),
+        fecha=row.fecha.isoformat(),
+    )
+
+
+@router.get("/portfolios/{cartera_id}/route", response_model=RouteOut)
+async def get_route(
+    cartera_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras"))],
+) -> RouteOut:
+    """Clientes del día (mora desc) y el último plan de trayecto guardado."""
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await _get_active(session, Cartera, cartera_id, tid)
+        if cartera is None:
+            raise ApiError.not_found("Cartera no encontrada.")
+        clientes = await _clientes_del_dia(session, tid, cartera.id)
+        plan = await _ultimo_plan(session, tid, cartera.id)
+    return RouteOut(clientes=clientes, plan=plan)
+
+
+@router.post("/portfolios/{cartera_id}/route/optimize", response_model=RoutePlan, status_code=201)
+async def optimize_route(
+    cartera_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_cobranza:carteras", write=True))],
+) -> RoutePlan:
+    """Optimiza el trayecto (vecino más cercano), guarda el plan y lo audita."""
+    tid = principal.tenant_id
+    async with get_session() as session:
+        cartera = await _get_active(session, Cartera, cartera_id, tid)
+        if cartera is None:
+            raise ApiError.not_found("Cartera no encontrada.")
+        clientes = await _clientes_del_dia(session, tid, cartera.id)
+        apertura = (
+            await session.execute(
+                select(CarteraApertura)
+                .where(
+                    CarteraApertura.tenant_id == tid, CarteraApertura.cartera_id == cartera.id
+                )
+                .order_by(CarteraApertura.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        inicio = (
+            (float(apertura.lat), float(apertura.lng))
+            if apertura is not None and apertura.lat is not None and apertura.lng is not None
+            else None
+        )
+        orden, km = _ordenar_trayecto(clientes, inicio)
+        if not orden:
+            raise ApiError.bad_request(
+                "Sin clientes con ubicación para optimizar.", "no_located_clients"
+            )
+        tiempo = int(km / 20 * 60) + len(orden) * 5
+        hoy = date.today()
+        session.add(
+            CarteraOptimizadaLog(
+                tenant_id=tid,
+                cartera_id=cartera.id,
+                fecha=hoy,
+                orden_clientes=[str(c) for c in orden],
+                distancia_estimada_km=Decimal(str(round(km, 2))),
+                tiempo_estimado_min=tiempo,
+                tipo="planificada",
+            )
+        )
+        _audit(
+            session,
+            tid,
+            "trayecto",
+            cartera.id,
+            "crear",
+            despues={"clientes": len(orden), "km": round(km, 2)},
+        )
+        return RoutePlan(
+            orden=orden,
+            distancia_km=round(km, 2),
+            tiempo_min=tiempo,
+            fecha=hoy.isoformat(),
+        )

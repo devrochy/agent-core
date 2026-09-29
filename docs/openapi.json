@@ -7880,6 +7880,126 @@
         }
       }
     },
+    "/api/v1/pack/cobranza/portfolios/{cartera_id}/route": {
+      "get": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Get Route",
+        "description": "Clientes del día (mora desc) y el último plan de trayecto guardado.",
+        "operationId": "get_route_api_v1_pack_cobranza_portfolios__cartera_id__route_get",
+        "parameters": [
+          {
+            "name": "cartera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cartera Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/cobranza/portfolios/{cartera_id}/route/optimize": {
+      "post": {
+        "tags": [
+          "pack · cobranza"
+        ],
+        "summary": "Optimize Route",
+        "description": "Optimiza el trayecto (vecino más cercano), guarda el plan y lo audita.",
+        "operationId": "optimize_route_api_v1_pack_cobranza_portfolios__cartera_id__route_optimize_post",
+        "parameters": [
+          {
+            "name": "cartera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cartera Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutePlan"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/calendar/status": {
       "get": {
         "tags": [
@@ -13558,6 +13678,128 @@
           "section"
         ],
         "title": "RevokeRequest"
+      },
+      "RouteClient": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "cliente": {
+            "type": "string",
+            "title": "Cliente"
+          },
+          "telefono": {
+            "type": "string",
+            "title": "Telefono"
+          },
+          "saldo": {
+            "type": "number",
+            "title": "Saldo"
+          },
+          "mora": {
+            "type": "integer",
+            "title": "Mora"
+          },
+          "riesgo": {
+            "type": "string",
+            "title": "Riesgo"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lat"
+          },
+          "lng": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lng"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "cliente",
+          "telefono",
+          "saldo",
+          "mora",
+          "riesgo",
+          "lat",
+          "lng"
+        ],
+        "title": "RouteClient"
+      },
+      "RouteOut": {
+        "properties": {
+          "clientes": {
+            "items": {
+              "$ref": "#/components/schemas/RouteClient"
+            },
+            "type": "array",
+            "title": "Clientes"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutePlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "clientes",
+          "plan"
+        ],
+        "title": "RouteOut"
+      },
+      "RoutePlan": {
+        "properties": {
+          "orden": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Orden"
+          },
+          "distancia_km": {
+            "type": "number",
+            "title": "Distancia Km"
+          },
+          "tiempo_min": {
+            "type": "integer",
+            "title": "Tiempo Min"
+          },
+          "fecha": {
+            "type": "string",
+            "title": "Fecha"
+          }
+        },
+        "type": "object",
+        "required": [
+          "orden",
+          "distancia_km",
+          "tiempo_min",
+          "fecha"
+        ],
+        "title": "RoutePlan"
       },
       "Rules": {
         "properties": {
