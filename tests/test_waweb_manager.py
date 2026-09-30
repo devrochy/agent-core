@@ -369,7 +369,9 @@ async def test_watchdog_limpia_la_sesion_tras_n_reciclados(tmp_path: Path) -> No
 
     await asyncio.wait_for(connector.run_session(ctx), timeout=3)
 
-    assert connector.store.cleared == [ctx.tenant_id], "debe limpiar la sesión al 2º reciclado"
+    assert connector.store.cleared.count(ctx.tenant_id) >= 2, (
+        "debe limpiar al iniciar el ciclo sin vincular y otra vez al 2º reciclado"
+    )
 
 
 async def test_socket_con_qr_no_se_recicla_por_timeout(tmp_path: Path) -> None:
@@ -427,4 +429,5 @@ async def test_socket_con_qr_no_se_recicla_por_timeout(tmp_path: Path) -> None:
     await asyncio.wait_for(connector.run_session(ctx), timeout=3)
 
     assert len(sockets) == 1, "con un QR emitido no debe reciclarse el socket"
-    assert connector.store.cleared == []
+    # Solo la limpieza inicial (sesión sin vincular), no reciclados del watchdog.
+    assert connector.store.cleared.count(ctx.tenant_id) == 1

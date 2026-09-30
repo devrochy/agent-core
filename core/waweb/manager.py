@@ -108,6 +108,12 @@ class WaWebConnector:
         attempt = 0
         while ctx.tenant_id not in self._stop:
             try:
+                if ctx.status in (status.PENDING_QR, status.ERROR):
+                    # Sesión que NUNCA se vinculó: el directorio de trabajo puede
+                    # tener restos de intentos previos, y Neonize entonces "reanuda"
+                    # en vez de emitir un QR nuevo (visto en vivo: timeout de login
+                    # sin QR y sin que corriera el watchdog). Se limpia al empezar.
+                    await self.store.clear(ctx.tenant_id)
                 await self.store.materialize(ctx.tenant_id, work_dir)
                 await self.registry.set_status(ctx.tenant_id, status.CONNECTING)
                 self._qr_cycles.discard(ctx.tenant_id)
