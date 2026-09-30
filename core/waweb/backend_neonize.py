@@ -25,6 +25,13 @@ from core.waweb.backend import InboundEvent, MessageHandler, QrHandler, StatusHa
 
 log = get_logger(__name__)
 
+# Neonize (el puente Go de fondo) tiene una condición de carrera real: crear o
+# conectar dos clientes a la vez revienta el proceso con `fatal error: concurrent
+# map writes` (visto en vivo con dos negocios con sesión en el mismo conector).
+# Un lock global serializa TODAS las llamadas al puente Go -- el throughput de
+# vinculación no importa, la estabilidad sí.
+_BRIDGE_LOCK = asyncio.Lock()
+
 
 def _import_neonize():  # type: ignore[no-untyped-def]
     try:
@@ -81,7 +88,9 @@ class NeonizeSocket:
         from neonize.utils.jid import jid_is_lid
 
         session_dir.mkdir(parents=True, exist_ok=True)
-        client = NewAClient(str(session_dir / "session.db"))
+        # Todo lo que toca el puente Go va serializado (ver `_BRIDGE_LOCK`).
+        async with _BRIDGE_LOCK:
+            client = NewAClient(str(session_dir / "session.db"))
         self._client = client
 
         async def _qr(_c: object, data_qr: object) -> None:
@@ -154,20 +163,21 @@ class NeonizeSocket:
             "ConnectFailureEv": _failure,
             "MessageEv": _message,
         }
-        for name, handler in handlers.items():
-            event_type = getattr(ev, name, None)
-            if event_type is not None and hasattr(client, "event"):
-                client.event(event_type)(handler)
-            else:
-                log.warning("waweb_neonize_event_ausente", event_name=name)
+        async with _BRIDGE_LOCK:
+            for name, handler in handlers.items():
+                event_type = getattr(ev, name, None)
+                if event_type is not None and hasattr(client, "event"):
+                    client.event(event_type)(handler)
+                else:
+                    log.warning("waweb_neonize_event_ausente", event_name=name)
 
-        # El QR va por su propio callback (`event.qr`), no por `EVENT_TO_INT`.
-        client.event.qr(_qr)
+            # El QR va por su propio callback (`event.qr`), no por `EVENT_TO_INT`.
+            client.event.qr(_qr)
 
-        await on_status("connecting", None)
-        await client.connect()
-        # `idle()` mantiene el socket vivo en segundo plano.
-        self._idle_task = asyncio.create_task(client.idle())
+            await on_status("connecting", None)
+            await client.connect()
+            # `idle()` mantiene el socket vivo en segundo plano.
+            self._idle_task = asyncio.create_task(client.idle())
 
     async def send(self, *, to: str, text: str, image_url: str | None = None) -> str:
         if self._client is None:
@@ -177,7 +187,8 @@ class NeonizeSocket:
         body = text if not image_url else f"{text}\n{image_url}".strip()
         from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import Message
 
-        sent = await self._client.send_message(jid, Message(conversation=body))
+        async with _BRIDGE_LOCK:
+            sent = await self._client.send_message(jid, Message(conversation=body))
         return str(getattr(sent, "ID", "") or "")
 
     async def disconnect(self) -> None:
@@ -185,7 +196,8 @@ class NeonizeSocket:
             self._idle_task.cancel()
         if self._client is not None:
             try:
-                await self._client.disconnect()
+                async with _BRIDGE_LOCK:
+                    await self._client.disconnect()
             except Exception:
                 log.warning("waweb_neonize_disconnect_failed")
         self.closed.set()
