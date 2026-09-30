@@ -41,12 +41,10 @@ class FakeBackend:
         self.error = error
         self.sent: list[dict[str, Any]] = []
 
-    async def send_text(
-        self, *, connection_id: str, to: str, text: str, image_url: str | None = None
-    ) -> str:
+    async def send(self, *, to: str, text: str, image_url: str | None = None) -> str:
         if self.error:
             raise RuntimeError(self.error)
-        self.sent.append({"connection_id": connection_id, "to": to, "text": text, "image_url": image_url})
+        self.sent.append({"to": to, "text": text, "image_url": image_url})
         return self.wamid
 
 
@@ -170,6 +168,53 @@ async def test_drain_once_procesa_un_job(monkeypatch: pytest.MonkeyPatch) -> Non
     assert processed is True
     assert backend.sent
     assert "waweb:reply:r9" in fake.replies
+
+
+class _SocketConFirmaReal:
+    """Solo `send(*, to, text, image_url)`: el shape exacto de NeonizeSocket."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+
+    async def send(self, *, to: str, text: str, image_url: str | None = None) -> str:
+        self.sent.append({"to": to, "text": text, "image_url": image_url})
+        return "WA-REAL"
+
+
+@pytest.mark.asyncio
+async def test_drain_once_usa_la_firma_real_del_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regresión: el drenaje llamaba `backend.send_text`, un método que el
+    socket real (NeonizeSocket) NO tiene. El envío moría con AttributeError en
+    el conector, el reply viajaba al worker y el worker lo mandaba a la DLQ
+    tras agotar reintentos (visto en vivo en el entorno test)."""
+    job = {"request_id": "r10", "connection_id": "waweb:x", "to": "57300", "text": "hola"}
+    fake = FakeRedis(job=job)
+    monkeypatch.setattr(handoff, "get_redis", lambda: fake)
+    backend = _SocketConFirmaReal()
+
+    processed = await outbound.drain_once(
+        uuid.UUID(int=1), backend, WaWebPolicy(send_min_delay_ms=0, send_max_delay_ms=0), sleep=_noop
+    )
+
+    assert processed is True
+    assert backend.sent == [{"to": "57300", "text": "hola", "image_url": None}]
+    assert json.loads(fake.replies["waweb:reply:r10"][0]) == {"ok": True, "wamid": "WA-REAL"}
+
+
+def test_el_socket_real_y_el_drenaje_hablan_la_misma_firma() -> None:
+    """Contrato: `NeonizeSocket.send` y el `SendBackend` del drenaje deben tener
+    la misma firma. El módulo de Neonize se importa sin instalarlo: el puente
+    se carga de forma perezosa dentro de `connect()`."""
+    import inspect
+
+    from core.waweb.backend_neonize import NeonizeSocket
+
+    assert list(inspect.signature(NeonizeSocket.send).parameters) == [
+        "self",
+        "to",
+        "text",
+        "image_url",
+    ]
 
 
 async def _noop(_: float) -> None:
