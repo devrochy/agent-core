@@ -1,150 +1,165 @@
 # Despliegue en Coolify
 
-Runbook del despliegue de agent-core en Coolify (misma máquina de desarrollo,
-igual que agent-sale). Un solo entorno por ahora, siguiendo la rama `develop`.
+Runbook del despliegue de agent-core y del panel en Coolify (misma máquina de
+desarrollo). **Dos entornos** en el proyecto **SolversHub** (`xqrxaj7by6yclupym5u9rcvj`):
 
-| Recurso        | Nombre           | UUID                    | Detalles |
-| -------------- | ---------------- | ----------------------- | -------- |
-| Proyecto       | Agent Core       | `xqrxaj7by6yclupym5u9rcvj` | env `production` (`mihlppg36bf846gpu7zfu2h3`) |
-| Postgres       | agent-core-postgres | `huvhzaxim2notqkcxqa5930a` | `pgvector/pgvector:pg17`, db `agent_core`, port loopback `127.0.0.1:5439:5432` |
-| Redis          | agent-core-redis | `gk9bagcojtdrtofcx8tdxkiq` | `redis:7.2`, port loopback `127.0.0.1:6381:6379` |
-| App            | agent-core-test  | `ggzjdyc7zsemt6kzafx5rg7m` | source GitHub `devrochy/agent-core` rama `develop`, build pack `Dockerfile`, puerto contenedor `8000`, ports `127.0.0.1:3003:8000`, health `/healthz` |
+| Entorno | Dominio | Rama |
+| --- | --- | --- |
+| `production` | `https://app.solvershub.site` | `main` (release) |
+| `test` | `https://test.solvershub.site` | `develop` |
 
-## Dominio público
+> A producción se llega por una **release** (`develop` → `main`), no por un merge
+> directo: el app de producción despliega la rama `main`.
 
-agent-core (test) se sirve en **`https://app.solvershub.site`** vía **Cloudflare
-Tunnel** (outbound: no se abren puertos ni se gestiona TLS). `solvershub.site`
-está en Cloudflare; el tunnel publica:
+## Recursos
 
-```
-https://app.solvershub.site → http://localhost:3003  (agent-core test)
-```
+### Producción — env `production` (`mihlppg36bf846gpu7zfu2h3`)
 
-- El conector **`cloudflared`** corre como **recurso Docker en Coolify** con el
-  `TUNNEL_TOKEN` del tunnel y `--network host` para alcanzar `http://localhost:3003`.
-- El **Public Hostname** del tunnel (`app.solvershub.site` → `http://localhost:3003`)
-  se configura en Zero Trust → Networks → Tunnels; eso crea el DNS (CNAME).
-- **Cloudflare Access**: aplicación para `app.solvershub.site` con policy *Allow*;
-  **Bypass** para `/webhooks/*` y `/healthz` (Meta y el health check no autentican).
-- El host dedicado sirve la app en la **raíz**: `ROOT_PATH` queda **vacío** y el
-  panel funciona en `https://app.solvershub.site/admin`.
+| Recurso | Nombre | UUID | Detalles |
+| --- | --- | --- | --- |
+| Postgres | agent-core-postgres | `huvhzaxim2notqkcxqa5930a` | `pgvector/pgvector:pg17` + PostGIS, db `agent_core` |
+| Redis | agent-core-redis | `gk9bagcojtdrtofcx8tdxkiq` | `redis:7.2` |
+| App | agent-core | `ggzjdyc7zsemt6kzafx5rg7m` | `devrochy/agent-core` · `main` · `127.0.0.1:3003:8000` · health `/healthz` |
+| Beat | agent-core-beat | `hwh7s5gscnn1k3yqf88xceja` | Celery beat |
+| Worker | agent-core-worker | `wv6kycjeae0lmfj11dprkasq` | Celery worker |
 
-> Reemplaza a la Funnel de Tailscale (`https://devrochy.tail2ad60a.ts.net/agent-core`),
-> que se degradaba de forma intermitente (el TLS público se cortaba y Meta dejaba
-> de entregar webhooks) y requería `sudo systemctl restart tailscaled`.
+### Test — env `test` (`vs22dwtxgnmlfelvkeft3flt`)
 
-## Variables de entorno (App, por API/UI de Coolify)
+| Recurso | Nombre | UUID | Detalles |
+| --- | --- | --- | --- |
+| Postgres | agent-core-test-postgres | `48h2r2laml64eyrggfg6eqld` | `pgvector/pgvector:pg17` + PostGIS, db `agent_core` |
+| Redis | agent-core-test-redis | `rqkxxnen7ysp7xmqhocrbidw` | `redis:7.2` |
+| App | agent-core-test | `tr0vpdei5av6szcgwpe1vwcg` | `devrochy/agent-core` · `develop` · `3013:8000` · health `/healthz` |
+| Panel | panel-web-test | `eyfamlms7ipmba4h6cct2i4a` | `devrochy/solvershub-panel` · `main` · base `/apps/panel-web` · `3014:3000` · health `/login` |
+| Beat | clone-of-agent-core-test-beat | `set9kgdxianzvsmprklzyym7` | Celery beat |
+| Worker | clone-of-agent-core-test-work | `uqfcdd4a3cf5d4iqa0uosrp0` | Celery worker |
 
-| Variable | Valor |
-| --- | --- |
-| `APP_ENV` | `production` (**no disponible en build**) |
-| `PUBLIC_BASE_URL` | `https://app.solvershub.site` |
-| `ROOT_PATH` | *(vacío)* — host dedicado, la app se sirve en la raíz |
-| `DATABASE_URL` | `postgresql+asyncpg://app_runtime:app_runtime@huvhzaxim2notqkcxqa5930a:5432/agent_core` |
-| `MIGRATIONS_DATABASE_URL` | `postgresql+asyncpg://agent_core_migrations:<pw>@huvhzaxim2notqkcxqa5930a:5432/agent_core` |
-| `REDIS_URL` | `redis://default:<pw>@gk9bagcojtdrtofcx8tdxkiq:6379/0` |
-| `MASTER_ENCRYPTION_KEY` | Fernet, propia del entorno |
-| `APP_SECRET_KEY` | hex aleatorio |
-| `LLM_PROVIDER` | `deepseek` |
-| `LLM_API_KEY` | clave del proveedor |
-| `LLM_MODEL` | `deepseek-chat` |
-| `DEMO_MODE` | `false` |
-| `LOG_LEVEL` | `info` |
-| `AGENT_CORE_ROLE` | `api` |
+El panel de test llama a la API por **red interna**:
+`AGENT_CORE_API_URL=http://172.18.0.1:3013` (gateway del host; el alias por
+nombre de contenedor cambia en cada deploy).
+
+## Dominios y túneles (Cloudflare)
+
+`solvershub.site` está en Cloudflare. Hay **dos túneles**:
+
+- **`solvershub`** (`442da5f7-a3fa-4226-9450-2951be30b9d3`): token, config remota
+  (dashboard). Sirve **producción**: `app.solvershub.site → http://localhost:3003`.
+  El conector corre con `~/.cloudflared/run-solvershub.sh` (crontab `@reboot`).
+- **`solvershub-test`** (`88c17ba2-7a02-4300-8a7a-a154d32804df`): **local**
+  (`~/.cloudflared/solvershub-test.yml`), sirve **test** con ruteo por path:
+
+  ```
+  test.solvershub.site  ^/api/pack/pack_cobranza(/|$) → localhost:3013   (API del pack / APK)
+  test.solvershub.site  ^/webhooks(/|$)               → localhost:3013
+  test.solvershub.site  ^/healthz$                    → localhost:3013
+  test.solvershub.site  (resto, incl. /api/* del BFF) → localhost:3014   (panel)
+  ```
+
+  El conector corre con `~/.cloudflared/run-solvershub-test.sh` (crontab `@reboot`).
+
+> El panel y la API **comparten el prefijo `/api`**: por eso el ruteo es fino
+> (`/api/pack/pack_cobranza/*` a la API; el resto de `/api/*` al panel). La
+> `/api/v1` de la API no se expone: la consume el panel server-side por red interna.
+
+**Access:** `app.solvershub.site` tiene policy *Allow* con bypass en
+`/webhooks/*` y `/healthz`. **Pendiente:** Access para `test.solvershub.site`
+(requiere API token de Cloudflare con *Access: Apps and Policies*).
+
+## Variables de entorno de la app
+
+| Variable | Producción | Test |
+| --- | --- | --- |
+| `APP_ENV` | `production` (**no disponible en build**) | `production` |
+| `PUBLIC_BASE_URL` | `https://app.solvershub.site` | `https://test.solvershub.site` |
+| `ROOT_PATH` | *(vacío)* | *(vacío)* |
+| `DATABASE_URL` | `…app_runtime:app_runtime@huvhzaxim2notqkcxqa5930a:5432/agent_core` | `…@48h2r2laml64eyrggfg6eqld:5432/agent_core` |
+| `MIGRATIONS_DATABASE_URL` | `…agent_core_migrations:<pw>@huvhzaxim2notqkcxqa5930a:5432/agent_core` | `…postgres:<pw>@48h2r2laml64eyrggfg6eqld:5432/agent_core` |
+| `REDIS_URL` | `redis://default:<pw>@gk9bagcojtdrtofcx8tdxkiq:6379/0` | `redis://default:<pw>@rqkxxnen7ysp7xmqhocrbidw:6379/0` |
+| `AGENT_CORE_ROLE` | `api` | `api` |
 
 Notas:
 
 - **Roles de Postgres:** el runtime conecta como `app_runtime` (lo crea la
   migración `0003`, password `app_runtime`); las migraciones corren como
-  `agent_core_migrations` (SUPERUSER, creado a mano). Así RLS se aplica de
-  verdad y la password maestra de Coolify no entra en el entorno de la app.
-- **`APP_ENV` va "Not available during build"** (mismo gotcha que agent-sale):
-  las variables de la app se inyectan también en el build.
-- **`PUBLIC_BASE_URL` es la URL pública del host**: de ahí salen el webhook del
-  tenant y los OAuth de packs.
+  superusuario. Así RLS se aplica de verdad.
+- **`APP_ENV` va "Not available during build"** (las variables de la app se
+  inyectan también en el build).
+- Los pares no listados (`MASTER_ENCRYPTION_KEY`, `APP_SECRET_KEY`, `LLM_*`,
+  `TOKEN_*`, `WOMPI_*`) son **propios de cada entorno**.
 
 ## Despliegue
 
 **La imagen hornea los packs** (`packages/pack-*` y `plugins/`) y el Dockerfile
-declara `ENTRYPOINT ["/app/scripts/entrypoint.sh"]`: en Coolify no hay
-bind-mounts como en compose, y sin el entrypoint las migraciones no corren (el
-arranque moría con `password authentication failed for user "app_runtime"`).
-
-- Migraciones y plugins corren en el **arranque del contenedor** (entrypoint),
-  no como comando pre-deployment de Coolify (que corre dentro de la imagen
-  vieja). Pre/post-deployment configurados como `echo skip`.
-- El entrypoint hace `mkdir -p plugins` antes de `flock`: en la imagen de
-  Coolify el dir `plugins/` no existe (git no trackea dirs vacíos y el
-  `.install.lock` está gitignoreado).
-
-Para desplegar por API (token de la sección "Operar por API"):
+declara `ENTRYPOINT ["/app/scripts/entrypoint.sh"]`: sin él las migraciones no
+corren. Migraciones y plugins corren en el **arranque del contenedor**; los
+pre/post-deployment de Coolify están en `echo skip`.
 
 ```bash
+TOKEN=<api token de Coolify>
 curl -X POST -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" -d '{}' \
-  "http://127.0.0.1:8000/api/v1/applications/ggzjdyc7zsemt6kzafx5rg7m/start"
+  "http://127.0.0.1:8000/api/v1/applications/<uuid>/start"   # deploy de una app
 ```
 
-> El deploy de una app en Coolify es `POST /applications/{uuid}/start`
-> (`action_deploy`), no `/deploy`.
+## Sembrar datos de demo (test)
 
-## Onboarding de un tenant (E2E)
-
-El alta puede hacerse desde el panel (`https://app.solvershub.site/admin/tenants`),
-o con el CLI dentro del contenedor (usa la BD desplegada y valida contra la Graph API):
+El contenedor trae `scripts/seed_demo_login.py` (ADR-0081): crea dos negocios con
+`pack_cobranza`, un gestor compartido, un invitado con invitación pendiente y un
+master. Todos con contraseña `demo12345`.
 
 ```bash
-APP=$(docker ps --format '{{.Names}}' | grep ggzjdyc | head -1)
-docker exec "$APP" agent-core tenant create --non-interactive \
-  --name "E2E Test" --slug e2e --business "Tenant de prueba" \
-  --wa-label "WhatsApp E2E" \
-  --wa-phone-number-id <phone_number_id> \
-  --wa-app-secret <app_secret> \
-  --wa-access-token <access_token> \
-  --wa-verify-token <verify_token>
+APP=$(docker ps --format '{{.Names}}' | grep tr0vp | head -1)
+docker exec "$APP" python scripts/seed_demo_login.py
 ```
-
-Luego en Meta (App → WhatsApp → Configuration):
-
-- Callback URL: `https://app.solvershub.site/webhooks/whatsapp/<slug>`
-- Verify token: el de la conexión del tenant
-- Campo `messages`
-
-> **Access token de Meta en dev caduca cada 24 h.** Regenerarlo en la app de
-> Meta antes de cada prueba y volver a cargarlo (CLI o panel).
 
 ## Verificación post-despliegue
 
 ```bash
+# producción
 docker ps --format '{{.Names}}\t{{.Status}}' | grep ggzjdyc        # Up (healthy)
-curl -s http://127.0.0.1:3003/healthz                              # {"status":"ok"}
-curl -s https://app.solvershub.site/healthz                        # desde internet (Cloudflare)
-curl -s "https://app.solvershub.site/webhooks/whatsapp/<slug>?hub.mode=subscribe&hub.verify_token=<vt>&hub.challenge=x"  # → x
-# migraciones al head:
-docker exec huvhzaxim2notqkcxqa5930a psql -U postgres -d agent_core -tAc "SELECT version_num FROM alembic_version;"   # 0038
-# el rol de runtime existe:
-docker exec huvhzaxim2notqkcxqa5930a psql -U postgres -d agent_core -tAc "SELECT rolname FROM pg_roles WHERE rolname='app_runtime';"
+curl -s https://app.solvershub.site/healthz                        # {"status":"ok"}
+# test
+curl -s https://test.solvershub.site/healthz                       # {"status":"ok"}
+curl -s -o /dev/null -w "%{http_code}\n" https://test.solvershub.site/login   # 200
+# login unificado (ADR-0081): el gestor demo debe devolver seleccionRequerida
+curl -s -X POST https://test.solvershub.site/api/pack/pack_cobranza/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"usuario":"gestor@demo.test","password":"demo12345"}'
+# migraciones al head (0042 = tenant_invitations)
+docker exec 48h2r2laml64eyrggfg6eqld psql -U postgres -d agent_core -tAc "SELECT version_num FROM alembic_version;"
+# el rol de runtime existe
+docker exec 48h2r2laml64eyrggfg6eqld psql -U postgres -d agent_core -tAc "SELECT rolname FROM pg_roles WHERE rolname='app_runtime';"
 ```
 
 ## Gotchas conocidos
 
-- **El panel requiere un host en la raíz.** Con host dedicado (`app.solvershub.site`)
-  funciona directo; si se sirve bajo un prefijo de ruta, usar `ROOT_PATH` (ADR-0073).
-- **Puertos por defecto de Coolify chocan con agent-sale:** las apps/databases
-  nuevas traen `3000:xxxx` de port mapping; cambiarlo a loopback con puerto
-  libre (`127.0.0.1:5439`, `127.0.0.1:6381`, `127.0.0.1:3003`) antes del primer
-  start.
+- **PostGIS no viene en `pgvector/pgvector`.** El pack-cobranza exige la extensión
+  (ADR-0058); la imagen `pgvector` no la trae y las migraciones fallan
+  (`Could not open extension control file … postgis`). Instalarla en el contenedor
+  (`apt-get install -y postgresql-17-postgis-3`) **o usar una imagen propia**
+  (el repo trae `docker/postgres/Dockerfile`, hoy en `pg16`: alinear a `pg17`).
+  ⚠️ Instalarlo a mano se pierde si el contenedor se recrea.
+- **Puertos de Coolify y loopback.** La API de Coolify **rechaza** el formato
+  `127.0.0.1:puerto:puerto` en `ports_mappings` (solo acepta `hostPort:containerPort`,
+  que publica en `0.0.0.0`). El loopback se configura en la **UI**, o se cierra
+  con firewall (`sudo ufw deny <puerto>`). El túnel entra por `localhost`, así que
+  cerrar el puerto no rompe el dominio.
+- **App privada:** crear con `POST /api/v1/applications/private-github-app` y
+  `github_app_uuid` (la GitHub App instalada); `/applications/public` falla en
+  `git ls-remote` con `could not read Username for 'https://github.com'`.
+- **Panel:** contexto de build `apps/panel-web` (`base_directory`), Dockerfile
+  `/Dockerfile`; healthcheck HTTP a `127.0.0.1:3000/login` (requiere `curl` en la
+  imagen, ya incluido). Con `output: "standalone"`.
+- **`cloudflared tunnel route dns` por nombre puede fallar** (`Tunnel not found`);
+  usar el **UUID** del túnel.
 - **Un contenedor atascado en crash-loop bloquea el siguiente deploy**
   (`No such container` al limpiar). `docker rm -f <container>` y redesplegar.
-- **El webhook de Meta exige 443**: lo sirve Cloudflare (TLS en el edge) y el
-  tunnel reenvía a `http://localhost:3003`. No hace falta abrir puertos en el host.
+- **El webhook de Meta exige 443**: lo sirve Cloudflare (TLS en el edge).
 - **Los valores de env de Coolify van cifrados** en su BD (Laravel): no
   insertarlos por SQL, usar la UI o la API.
+- **`POST /applications/{uuid}/restart` no recrea el contenedor**: para que tomen
+  efecto cambios de env hay que **redeploy** (`/start`).
 
 ## Operar por API (token)
 
-El API de Coolify arranca deshabilitado. Se activa en
-`/settings/advanced` → API access (o `UPDATE instance_settings SET
-is_api_enabled=true WHERE id=0;`). Los tokens se guardan con hash (Sanctum);
-para el formato exacto ver `personal_access_tokens` (token = sha256 del
-plaintext, y se envía `Authorization: Bearer <id>|<plaintext>`).
+El API de Coolify se activa en `/settings/advanced` → API access. Los tokens se
+guardan con hash; se envía `Authorization: Bearer <id>|<plaintext>`.
