@@ -17,7 +17,7 @@ desarrollo). **Dos entornos** en el proyecto **SolversHub** (`xqrxaj7by6yclupym5
 
 | Recurso | Nombre | UUID | Detalles |
 | --- | --- | --- | --- |
-| Postgres | agent-core-postgres | `huvhzaxim2notqkcxqa5930a` | `pgvector/pgvector:pg17` + PostGIS, db `agent_core` |
+| Postgres | agent-core-postgres | `huvhzaxim2notqkcxqa5930a` | `pgvector/pgvector:pg17` + PostGIS **instalado a mano** (pendiente migrar a la imagen propia), db `agent_core` |
 | Redis | agent-core-redis | `gk9bagcojtdrtofcx8tdxkiq` | `redis:7.2` |
 | App | agent-core | `ggzjdyc7zsemt6kzafx5rg7m` | `devrochy/agent-core` · `main` · `127.0.0.1:3003:8000` · health `/healthz` |
 | Beat | agent-core-beat | `hwh7s5gscnn1k3yqf88xceja` | Celery beat |
@@ -27,7 +27,7 @@ desarrollo). **Dos entornos** en el proyecto **SolversHub** (`xqrxaj7by6yclupym5
 
 | Recurso | Nombre | UUID | Detalles |
 | --- | --- | --- | --- |
-| Postgres | agent-core-test-postgres | `48h2r2laml64eyrggfg6eqld` | `pgvector/pgvector:pg17` + PostGIS, db `agent_core` |
+| Postgres | agent-core-test-postgres | `48h2r2laml64eyrggfg6eqld` | **imagen propia** `127.0.0.1:5000/solvershub-postgres:pg17-postgis` (pgvector + PostGIS), db `agent_core` |
 | Redis | agent-core-test-redis | `rqkxxnen7ysp7xmqhocrbidw` | `redis:7.2` |
 | App | agent-core-test | `tr0vpdei5av6szcgwpe1vwcg` | `devrochy/agent-core` · `develop` · `3013:8000` · health `/healthz` |
 | Panel | panel-web-test | `eyfamlms7ipmba4h6cct2i4a` | `devrochy/solvershub-panel` · `main` · base `/apps/panel-web` · `3014:3000` · health `/login` |
@@ -133,11 +133,23 @@ docker exec 48h2r2laml64eyrggfg6eqld psql -U postgres -d agent_core -tAc "SELECT
 ## Gotchas conocidos
 
 - **PostGIS no viene en `pgvector/pgvector`.** El pack-cobranza exige la extensión
-  (ADR-0058); la imagen `pgvector` no la trae y las migraciones fallan
-  (`Could not open extension control file … postgis`). Instalarla en el contenedor
-  (`apt-get install -y postgresql-17-postgis-3`) **o usar una imagen propia**
-  (el repo trae `docker/postgres/Dockerfile`, hoy en `pg16`: alinear a `pg17`).
-  ⚠️ Instalarlo a mano se pierde si el contenedor se recrea.
+  (ADR-0058); la imagen oficial no la trae y las migraciones fallan
+  (`Could not open extension control file … postgis`). Se usa una **imagen propia**:
+  `docker/postgres/Dockerfile` (`FROM pgvector/pgvector:pg17` + `postgresql-17-postgis-3`).
+  Coolify hace `docker compose pull` **en cada arranque**, así que la imagen debe ser
+  **pullable** (una imagen solo local no sirve). Se publica en un **registry local**:
+
+  ```bash
+  docker run -d --name solvershub-registry --restart always -p 127.0.0.1:5000:5000 registry:2
+  docker build -t solvershub-postgres:pg17-postgis docker/postgres
+  docker tag solvershub-postgres:pg17-postgis 127.0.0.1:5000/solvershub-postgres:pg17-postgis
+  docker push 127.0.0.1:5000/solvershub-postgres:pg17-postgis
+  # en Coolify, la DB usa: 127.0.0.1:5000/solvershub-postgres:pg17-postgis
+  ```
+
+  Docker trata `127.0.0.1` como registry inseguro permitido (no hace falta tocar
+  `daemon.json`). **Dependencia:** el registry debe estar arriba para reiniciar la
+  DB; corre con `--restart always`.
 - **Puertos de Coolify y loopback.** La API de Coolify **rechaza** el formato
   `127.0.0.1:puerto:puerto` en `ports_mappings` (solo acepta `hostPort:containerPort`,
   que publica en `0.0.0.0`). El loopback se configura en la **UI**, o se cierra
