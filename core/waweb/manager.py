@@ -142,6 +142,14 @@ class WaWebConnector:
                     await self.store.persist(ctx.tenant_id, work_dir)
                 except Exception:
                     log.exception("waweb_session_persist_failed")
+                # Un ciclo que termina NO deja socket vivo: las reconexiones
+                # internas de Neonize competirían con el próximo socket y el
+                # servidor reemplaza un stream (visto en vivo: doble auth +
+                # StreamReplaced + mensajes perdidos).
+                try:
+                    await sock.disconnect()
+                except Exception:
+                    log.warning("waweb_session_disconnect_failed", tenant_id=str(ctx.tenant_id))
             if ctx.tenant_id in self._stop:
                 self._sockets.pop(ctx.tenant_id, None)
                 return
@@ -296,7 +304,7 @@ class WaWebConnector:
                     log.warning("waweb_duplicate_disconnect_failed", tenant_id=str(ctx.tenant_id))
 
     async def _on_message(self, ctx: SessionContext, event: InboundEvent) -> None:
-        await inbound_mod.publish_inbound(
+        accepted = await inbound_mod.publish_inbound(
             tenant_id=ctx.tenant_id,
             connection_external_id=ctx.connection_external_id,
             sender=event.sender,
@@ -305,3 +313,12 @@ class WaWebConnector:
             customer_name=event.customer_name,
             media=event.media,
         )
+        if accepted:
+            log.info(
+                "waweb_inbound_publicado",
+                tenant_id=str(ctx.tenant_id),
+                wamid=event.wamid,
+                sender=event.sender,
+            )
+        else:
+            log.info("waweb_inbound_duplicado", tenant_id=str(ctx.tenant_id), wamid=event.wamid)

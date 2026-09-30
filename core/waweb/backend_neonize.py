@@ -9,6 +9,7 @@ connector está probado con un backend falso; acá se mapean los eventos reales:
 - `LoggedOutEv` (`.Reason`)    → `logged_out` (+ cierra; el manager no reconecta)
 - `TemporaryBanEv` (`.Code`)   → `banned` (+ alerta crítica; sí reconecta)
 - `ConnectFailureEv`           → `error`
+- `StreamReplacedEv`           → `disconnected` (+ cierra: el servidor la reemplazó)
 - `MessageEv` (`Info.MessageSource`, `Info.ID`, `Message`) → `InboundEvent`
 
 No importa `neonize` a nivel de módulo: si no está instalado, falla con un
@@ -132,6 +133,16 @@ class NeonizeSocket:
             await on_status("error", detail[:200] or None, None)
             self.closed.set()
 
+        async def _stream_replaced(_c: object, _event: object) -> None:
+            # Otra conexión con la misma sesión ganó el stream: este socket
+            # queda sordo (ni recibe ni envía). Si no se cierra, el manager
+            # cree que la sesión está viva y se pierden mensajes en silencio
+            # (visto en vivo: "Got replaced stream error, sending
+            # StreamReplaced event" tras el auto-reconnect interno de Neonize).
+            log.warning("waweb_stream_replaced")
+            await on_status("disconnected", "conexión reemplazada por otra sesión", None)
+            self.closed.set()
+
         async def _message(_c: object, event: object) -> None:
             info = getattr(event, "Info", None)
             source = getattr(info, "MessageSource", None)
@@ -161,6 +172,7 @@ class NeonizeSocket:
             "LoggedOutEv": _logged_out,
             "TemporaryBanEv": _banned,
             "ConnectFailureEv": _failure,
+            "StreamReplacedEv": _stream_replaced,
             "MessageEv": _message,
         }
         async with _BRIDGE_LOCK:
