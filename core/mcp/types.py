@@ -144,6 +144,12 @@ class MCPTool:
     # Tipos de conexión activos que la tool necesita para ofrecerse/ejecutarse
     # (ADR-0072; ej. ["google_calendar"]). Ortogonal a packs/salud/scopes.
     requires_connection_types: list[str] = field(default_factory=list)
+    # Gating condicional (ADR-0084): si se define, decide POR REQUEST si la tool
+    # puede ofrecerse, recibiendo los tipos de conexión activos del tenant. Se usa
+    # cuando el requisito depende de la config del pack (p. ej. pack-calendar en
+    # modo `interno` no necesita Google; en modo `google` sí). Tiene prioridad
+    # sobre `requires_connection_types`.
+    connection_predicate: Callable[[set[str]], Awaitable[bool]] | None = None
 
 
 @dataclass
