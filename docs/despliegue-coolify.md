@@ -62,8 +62,23 @@ nombre de contenedor cambia en cada deploy).
 > `/api/v1` de la API no se expone: la consume el panel server-side por red interna.
 
 **Access:** `app.solvershub.site` tiene policy *Allow* con bypass en
-`/webhooks/*` y `/healthz`. **Pendiente:** Access para `test.solvershub.site`
-(requiere API token de Cloudflare con *Access: Apps and Policies*).
+`/webhooks/*` y `/healthz`.
+
+En **test**, hay una app de Access por hostname con las rutas que necesitan
+quedar públicas (la APK no puede hacer SSO):
+
+| Dominio (app de Access) | Policy |
+| --- | --- |
+| `test.solvershub.site` | **Allow** (emails del equipo) |
+| `test.solvershub.site/api/pack/pack_cobranza` | **Bypass** (API de campo / APK) |
+| `test.solvershub.site/webhooks` | **Bypass** (Meta) |
+| `test.solvershub.site/healthz` | **Bypass** (health check) |
+
+La app raíz protege el panel; el bypass de la API se logra con una Access app
+**por path** (Cloudflare evalúa la ruta más específica). Account
+`0c0150bffadc10e3f8b01426cfc76ada`, zona `solvershub.site`
+`f34c3ab32cc37679cd556455a17e9224`. Para sumar gente al `Allow`, editar la
+policy en Zero Trust → Access → Applications.
 
 ## Variables de entorno de la app
 
