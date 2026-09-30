@@ -17,7 +17,7 @@ desarrollo). **Dos entornos** en el proyecto **SolversHub** (`xqrxaj7by6yclupym5
 
 | Recurso | Nombre | UUID | Detalles |
 | --- | --- | --- | --- |
-| Postgres | agent-core-postgres | `huvhzaxim2notqkcxqa5930a` | `pgvector/pgvector:pg17` + PostGIS **instalado a mano** (pendiente migrar a la imagen propia), db `agent_core` |
+| Postgres | agent-core-postgres | `huvhzaxim2notqkcxqa5930a` | **imagen propia** `127.0.0.1:5000/solvershub-postgres:pg17-postgis` (pgvector + PostGIS), db `agent_core` |
 | Redis | agent-core-redis | `gk9bagcojtdrtofcx8tdxkiq` | `redis:7.2` |
 | App | agent-core | `ggzjdyc7zsemt6kzafx5rg7m` | `devrochy/agent-core` · `main` · `127.0.0.1:3003:8000` · health `/healthz` |
 | Beat | agent-core-beat | `hwh7s5gscnn1k3yqf88xceja` | Celery beat |
