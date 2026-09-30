@@ -67,6 +67,11 @@ class WaWebConnector:
     _qr_at: dict[uuid.UUID, float] = field(default_factory=dict, init=False)
     _connected: set[uuid.UUID] = field(default_factory=set, init=False)
     _pairing_trips: dict[uuid.UUID, int] = field(default_factory=dict, init=False)
+    # Negocios cuyo socket ACTUAL ya emitió al menos un QR. El watchdog solo
+    # recicla si NO hubo ningún QR en este ciclo: antes reciclaba también las
+    # sesiones sanas "esperando escaneo" (el QR tiene >45 s sin escanear), lo que
+    # reiniciaba el vínculo cada ~45 s y castigaba la conexión con WhatsApp.
+    _qr_cycles: set[uuid.UUID] = field(default_factory=set, init=False)
 
     async def run(self) -> None:
         """Bucle principal: barre sesiones y arranca/detiene sockets."""
@@ -93,6 +98,7 @@ class WaWebConnector:
                 del self._tasks[tenant_id]
                 self._stop.discard(tenant_id)
                 self._pairing_trips.pop(tenant_id, None)
+                self._qr_cycles.discard(tenant_id)
         for ctx in contexts:
             if ctx.tenant_id not in self._tasks and ctx.tenant_id not in self._stop:
                 self._tasks[ctx.tenant_id] = asyncio.create_task(self.run_session(ctx))
@@ -104,6 +110,7 @@ class WaWebConnector:
             try:
                 await self.store.materialize(ctx.tenant_id, work_dir)
                 await self.registry.set_status(ctx.tenant_id, status.CONNECTING)
+                self._qr_cycles.discard(ctx.tenant_id)
                 sock = self.socket_factory()
                 self._sockets[ctx.tenant_id] = sock
                 await asyncio.wait_for(
@@ -166,7 +173,10 @@ class WaWebConnector:
                         log.exception("waweb_session_persist_failed")
                 if ctx.tenant_id not in self._connected:
                     ultimo = max(self._qr_at.get(ctx.tenant_id, 0.0), inicio)
-                    if self.now() - ultimo > self.pairing_timeout_s:
+                    if (
+                        ctx.tenant_id not in self._qr_cycles
+                        and self.now() - ultimo > self.pairing_timeout_s
+                    ):
                         trips = self._pairing_trips.get(ctx.tenant_id, 0) + 1
                         self._pairing_trips[ctx.tenant_id] = trips
                         log.warning(
@@ -195,6 +205,7 @@ class WaWebConnector:
 
     async def _on_qr(self, ctx: SessionContext, qr: str) -> None:
         self._qr_at[ctx.tenant_id] = self.now()
+        self._qr_cycles.add(ctx.tenant_id)
         self._pairing_trips.pop(ctx.tenant_id, None)
         await handoff.publish_qr(str(ctx.tenant_id), qr)
         # `detail=""` limpia un `last_error` previo (p. ej. de un intento fallido).

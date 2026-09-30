@@ -370,3 +370,61 @@ async def test_watchdog_limpia_la_sesion_tras_n_reciclados(tmp_path: Path) -> No
     await asyncio.wait_for(connector.run_session(ctx), timeout=3)
 
     assert connector.store.cleared == [ctx.tenant_id], "debe limpiar la sesión al 2º reciclado"
+
+
+async def test_socket_con_qr_no_se_recicla_por_timeout(tmp_path: Path) -> None:
+    """Un QR ya emitido NO se recicla: la sesión sana espera a que la escaneen.
+
+    Regresión real: el watchdog reciclaba también las sesiones con QR vigente
+    (porque el QR llevaba >45 s sin escanear), reiniciando el vínculo cada ~45 s.
+    """
+    ctx = _ctx()
+    registry = FakeRegistry([ctx])
+    reloj = {"t": 0.0}
+    sockets: list[Any] = []
+    holder: dict[str, Any] = {}
+
+    class SocketSoloQr(FakeSocket):
+        async def connect(self, *, session_dir, on_qr, on_status, on_message):
+            self.session_dir = session_dir
+            self.callbacks = {"qr": on_qr, "status": on_status, "message": on_message}
+            # Emite un QR pero NUNCA reporta "connected" (falta el escaneo).
+            await on_qr("QR-DE-PRUEBA")
+
+    def factory() -> Any:
+        sock = SocketSoloQr()
+        sockets.append(sock)
+        return sock
+
+    async def _sleep(segundos: float) -> None:
+        reloj["t"] += max(segundos, 0.05)
+        # Bien pasado el timeout del watchdog, cortamos el bucle a mano.
+        if reloj["t"] > 1.0:
+            holder["connector"]._stop.add(ctx.tenant_id)
+
+    async def _noop_drain(*a: Any, **k: Any) -> bool:
+        return False
+
+    async def _alert(*a: Any, **k: Any) -> None:
+        return None
+
+    async def _policy(_tenant_id: uuid.UUID) -> WaWebPolicy:
+        return WaWebPolicy()
+
+    connector = WaWebConnector(
+        registry=registry,
+        store=FakeStore(tmp_path),
+        socket_factory=factory,
+        policy_loader=_policy,
+        drainer=_noop_drain,
+        sleep=_sleep,
+        alert=_alert,
+        now=lambda: reloj["t"],
+        pairing_timeout_s=0.2,
+    )
+    holder["connector"] = connector
+
+    await asyncio.wait_for(connector.run_session(ctx), timeout=3)
+
+    assert len(sockets) == 1, "con un QR emitido no debe reciclarse el socket"
+    assert connector.store.cleared == []
