@@ -89,3 +89,7 @@ Se crean con `/adr`.
 | 0079 | API admin de packs bajo `/api/v1/pack/<id>` (punto de extensión) | aceptado |
 | [0080](0080-wizard-whatsapp-en-panel-nuevo.md) | El wizard de WhatsApp se reconstruye en el panel nuevo (supera el 0078) |
 | [0081](0081-login-unificado-e-invitaciones.md) | Identidad unificada: login sin slug, selección de negocio y membresía por invitación | aceptado |
+| [0082](0082-suscripcion-recurrente-de-cartera.md) | Suscripción recurrente de la cartera (Opción 2, base) | aceptado |
+| [0083](0083-pack-subscriptions-opcional.md) | `pack_subscriptions`: suscripción de cliente final sobre planes (Opción 1, opcional) | aceptado |
+| [0084](0084-calendario-interno-pack-calendar.md) | Calendario interno del pack-calendar (sin Google) | aceptado |
+| [0085](0085-persistencia-artefactos-tenant.md) | Persistencia de los artefactos de tenant en despliegue | aceptado |
