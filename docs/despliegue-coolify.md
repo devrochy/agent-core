@@ -80,6 +80,29 @@ La app raíz protege el panel; el bypass de la API se logra con una Access app
 `f34c3ab32cc37679cd556455a17e9224`. Para sumar gente al `Allow`, editar la
 policy en Zero Trust → Access → Applications.
 
+### Conector de WhatsApp Web (QR)
+
+El canal `waweb` (ADR-0074) necesita un servicio **aparte** del api: sin él, el
+panel muestra la tarjeta del QR pero nadie la genera/publica en Redis.
+
+| Entorno | Recurso | UUID | Detalles |
+| --- | --- | --- | --- |
+| test | agent-core-test-connector | `yqd5gq5j1r1wrgqtjedom16m` | `devrochy/agent-core` · `develop` · mismo Dockerfile |
+
+Configuración clave (Coolify → app → General):
+- **Custom Docker Options**: `--entrypoint /app/scripts/entrypoint-connector.sh --tmpfs /tmp/waweb-sessions`
+- **Health check**: desactivado (no expone HTTP).
+- **Variables**: las mismas del api (copiadas) + `AGENT_CORE_ROLE=connector`,
+  `WAWEB_ENABLED=true`, `WAWEB_SESSION_DIR=/tmp/waweb-sessions`.
+
+Notas aprendidas en vivo (2026-09-30):
+- **No** agregar `--sysctl net.ipv6.conf.all.disable_ipv6=1`: colgaba a Neonize.
+- Neonize (Go) revienta con `concurrent map writes` si se conectan dos sesiones a
+  la vez: el conector serializa el puente con un lock global.
+- La sesión sin vincular se limpia al iniciar cada ciclo (si no, Neonize
+  "reanuda" credenciales viejas y nunca emite QR).
+- El watchdog solo recicla sockets que **no** emitieron ningún QR en el ciclo.
+
 ## Variables de entorno de la app
 
 | Variable | Producción | Test |
