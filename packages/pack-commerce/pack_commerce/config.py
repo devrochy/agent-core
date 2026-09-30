@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 
 from core.mcp.types import BasePluginConfig
 
@@ -41,6 +41,20 @@ class CRMConfig(BasePluginConfig):
     # ---------------------------------------------------------------- montos y pagos
     monto_alto_threshold: float = Field(
         default=1_000_000, description="Monto en COP que dispara escalamiento a humano"
+    )
+    # Gate determinístico en crear_pedido (incidente real 2026-09-11, tenant
+    # yopoldo): un pedido con pago_en_linea por debajo del mínimo real de la
+    # pasarela (Wompi: $150.000 COP, ver pack_payments/providers/wompi.py::
+    # MIN_AMOUNT_COP) nunca puede completarse -- pack_commerce no puede
+    # importar esa constante (invariante 5, ningún pack importa de otro), así
+    # que este valor es la política propia de pack_commerce, con un default
+    # que hoy coincide con el mínimo real. Antes de esto, `crear_pedido`
+    # dejaba pasar cualquier monto con pago_en_linea y el rechazo solo
+    # ocurría (si el modelo llegaba a llamarla) en generar_link_pago, ya
+    # tarde para redirigir la conversación con naturalidad.
+    pago_en_linea_monto_minimo: float = Field(
+        default=150_000,
+        description="Monto mínimo en COP para aceptar pago_en_linea al crear un pedido",
     )
     # Cuentas de transferencia visibles al cliente (nunca pasan por el LLM).
     # Formato: [{"entity","accountType","accountNumber","holderName","holderDocument"}]
@@ -96,4 +110,67 @@ class CRMConfig(BasePluginConfig):
             "Tu pedido {public_order_number} quedó confirmado por transferencia.\n\n{transfer_block}"
         ),
         description="Mensaje de confirmación de pedido por transferencia",
+    )
+
+    # ---------------------------------------------------------------- crm_completion_check (ADR-0025)
+    completion_claims_disabled: str = Field(
+        default="",
+        description=(
+            "Nombres de claims incorporados a desactivar, separados por coma "
+            "(pedido, link_de_pago, asesor_humano, dato_de_contacto_guardado). "
+            "Vacío = todos activos."
+        ),
+    )
+    completion_claims_custom: str = Field(
+        default="",
+        max_length=4000,
+        json_schema_extra={"format": "textarea"},
+        description=(
+            "Claims propios de este negocio para crm_completion_check, uno por "
+            "línea (máx. 4000 caracteres en total -- este guardrail corre en "
+            "CADA turno de conversación). "
+            "`etiqueta: frase uno | frase dos => tool_uno, tool_dos`. "
+            "Las frases NUNCA se interpretan como regex (se escapan). Si el "
+            "nombre coincide con un claim incorporado, lo reemplaza."
+        ),
+    )
+
+    # ---------------------------------------------------------------- intake de leads (ADR-0055 superseded)
+    lead_intake_enabled: bool = Field(
+        default=False,
+        description=(
+            "Aceptar leads desde landings externas por la API pública del pack "
+            "(/api/pack/pack_commerce/leads/<slug>). Desactivado por defecto."
+        ),
+    )
+    lead_intake_secret: SecretStr = Field(
+        default=SecretStr(""),
+        description=(
+            "Secreto compartido del intake. La landing lo envía en el header "
+            "X-Intake-Secret. Vacío = intake sin configurar (503)."
+        ),
+    )
+    lead_intake_allowed_origins: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Orígenes permitidos para el formulario alojado (iframe). Vacío = sin "
+            "restricción de origen."
+        ),
+    )
+    lead_intake_turnstile: SecretStr = Field(
+        default=SecretStr(""),
+        description=(
+            "Secret key del widget Cloudflare Turnstile de ESTE negocio. Si está "
+            "definido, el intake exige y valida el token (siteverify). Vacío = sin "
+            "Turnstile."
+        ),
+    )
+    lead_intake_default_status: str = Field(
+        default="nuevo", description="Estado inicial del lead capturado por intake"
+    )
+    lead_intake_default_interest: str = Field(
+        default="", description="Interés por defecto si el formulario no lo envía"
+    )
+    lead_intake_source: str = Field(
+        default="landing", description="Origen (source) guardado en el lead del intake"
     )

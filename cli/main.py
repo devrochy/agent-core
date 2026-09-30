@@ -1,29 +1,36 @@
 """CLI de agent-core.
 
 Comandos:
-  agent-core init                      Wizard de nuevo asistente (.env + sdd/ + BD + admin)
-  agent-core status                    Estado del sistema
-  agent-core configure [tone|llm]      Reconfiguración puntual
+  agent-core init                         Bootstrap de una instalación nueva (.env + sdd/ + BD + admin)
+  agent-core tenant create|list|seed|docs|deactivate|activate|purge  Alta y operación de tenants (multi-tenant)
+  agent-core admin create|link|grant|revoke|password|list   Admins del panel y sus permisos (ADR-0047)
+  agent-core status                       Estado del sistema
+  agent-core configure [tone|llm]         Reconfiguración puntual
   agent-core plugin list|install|remove|scaffold
   agent-core db migrate|seed
   agent-core sdd update|show
+  agent-core meta doctor                  Diagnóstico de WhatsApp Cloud API (Meta)
 """
 
 from __future__ import annotations
 
 import typer
 
+from cli.commands.admin import app as admin_app
 from cli.commands.agent import app as agent_app
 from cli.commands.configure import app as configure_app
 from cli.commands.db import app as db_app
 from cli.commands.doctor import doctor_command
+from cli.commands.flow import app as flow_app
 from cli.commands.init import init_command
+from cli.commands.meta import app as meta_app
 from cli.commands.plugin import app as plugin_app
 from cli.commands.sdd import app as sdd_app
+from cli.commands.tenant import app as tenant_app
 
 app = typer.Typer(
     name="agent-core",
-    help="Framework de asistentes IA: monolito modular con plugins embebidos.",
+    help="Framework multi-tenant de agentes IA: un solo código base sirve a todos los clientes.",
     no_args_is_help=True,
 )
 
@@ -34,6 +41,10 @@ app.add_typer(configure_app, name="configure", help="Reconfiguración del asiste
 app.add_typer(db_app, name="db", help="Base de datos")
 app.add_typer(sdd_app, name="sdd", help="System Design Document vivo")
 app.add_typer(agent_app, name="agent", help="Releases y rollback del AgentSpec (ADR-0009/0016)")
+app.add_typer(tenant_app, name="tenant", help="Alta y operación de tenants (multi-tenant, ADR-0001)")
+app.add_typer(flow_app, name="flow", help="Flujo de atención por pack/tenant (ADR-0054)")
+app.add_typer(admin_app, name="admin", help="Admins del panel: alta y permisos (ADR-0047)")
+app.add_typer(meta_app, name="meta", help="Diagnóstico de WhatsApp Cloud API (Meta)")
 
 
 @app.command()

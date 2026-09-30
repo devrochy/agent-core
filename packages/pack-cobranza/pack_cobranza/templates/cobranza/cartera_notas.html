@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Notas de la cartera{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Notas · {{ cartera }}</h1>
+{% include "cobranza/_cartera_nav.html" %}
+
+<div class="card mb-3"><div class="card-body">
+  <form method="post" action="/cobranza/carteras/{{ record_id }}/notas/guardar" class="d-flex gap-2">
+    <input type="text" name="nota" class="form-control" placeholder="Escribe una nota…" required>
+    <button class="btn btn-primary">Agregar</button>
+  </form>
+</div></div>
+
+<table class="table table-hover">
+  <thead><tr><th>Fecha</th><th>Nota</th><th class="text-end">Acciones</th></tr></thead>
+  <tbody>
+    {% for n in notas %}
+    <tr>
+      <td class="text-nowrap">{{ n.fecha }}</td>
+      <td>{{ n.nota }}</td>
+      <td class="text-end">
+        <form method="post" action="/cobranza/notas/{{ n.id }}/eliminar" class="d-inline" onsubmit="return confirm('¿Eliminar la nota?');">
+          <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="3" class="text-secondary">Sin notas</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Cliente · {{ cliente }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-3">
+  <div>
+    <h1 class="fs-3 mb-1">{{ cliente }}</h1>
+    <p class="text-secondary mb-0">
+      {{ documento or "sin documento" }} · {{ telefono or "sin teléfono" }} · {{ negocio or "sin negocio" }}
+      · Cartera: {{ cartera }} · Riesgo: <span class="badge bg-{{ 'danger' if riesgo == 'rojo' else ('primary' if riesgo == 'azul' else 'secondary') }}">{{ riesgo }}</span>
+    </p>
+  </div>
+  <div class="d-flex gap-2">
+    {% if customer_id %}<a class="btn btn-outline-primary" href="{{ '/admin/conversaciones/' + conv_id if conv_id else '/admin/conversaciones' }}"><i class="bi bi-chat-dots"></i> Conversación</a>{% endif %}
+    <a class="btn btn-outline-secondary" href="/cobranza/clientes">Volver</a>
+  </div>
+</div>
+{% if cambios %}
+<div class="alert alert-warning">
+  <strong>Cambios pendientes de aprobación:</strong>
+  {% for c in cambios %}
+  <div class="d-flex align-items-center gap-2 mt-2">
+    <code class="flex-grow-1">{{ c.campos }}</code>
+    <form method="post" action="/cobranza/cambios/{{ c.id }}/decision" class="d-inline">
+      <input type="hidden" name="decision" value="aprobar">
+      <button class="btn btn-sm btn-success">Aprobar</button>
+    </form>
+    <form method="post" action="/cobranza/cambios/{{ c.id }}/decision" class="d-inline">
+      <input type="hidden" name="decision" value="rechazar">
+      <button class="btn btn-sm btn-outline-danger">Rechazar</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="row g-3 mb-3">
+  <div class="col-md-6">
+    <div class="card"><div class="card-body">
+      <h2 class="fs-6">Nuevo préstamo</h2>
+      <form method="post" action="/cobranza/clientes/{{ record_id }}/prestamo" class="row g-2">
+        <div class="col-6"><input type="number" step="1000" name="valor" class="form-control form-control-sm" placeholder="Valor" required></div>
+        <div class="col-6"><input type="number" name="num_cuotas" class="form-control form-control-sm" placeholder="Cuotas" value="12" required></div>
+        <div class="col-4"><input type="number" step="0.01" name="tipo_interes" class="form-control form-control-sm" placeholder="Interés %" value="0"></div>
+        <div class="col-4"><input type="number" name="dias_entre_cuotas" class="form-control form-control-sm" placeholder="Días/cuota" value="1"></div>
+        <div class="col-4"><input type="date" name="fecha_otorgado" class="form-control form-control-sm"></div>
+        <div class="col-12"><button class="btn btn-sm btn-primary">Crear préstamo</button></div>
+      </form>
+    </div></div>
+  </div>
+</div>
+
+{% for p in prestamos %}
+<div class="card mb-3">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Préstamo {{ p.fecha }} · valor {{ p.valor }} · <strong>saldo {{ p.saldo }}</strong> · {{ p.num_cuotas }} cuotas · <span class="badge bg-secondary">{{ p.estatus }}</span></span>
+    <div class="d-flex gap-1">
+      <form method="post" action="/cobranza/prestamos/{{ p.id }}/abono" class="d-flex gap-1">
+        <input type="number" step="1000" name="valor" class="form-control form-control-sm" style="width:120px" placeholder="Abono" required>
+        <button class="btn btn-sm btn-outline-primary">Abonar</button>
+      </form>
+    </div>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm mb-0">
+      <thead><tr><th>#</th><th>Vence</th><th>Valor</th><th>Estatus</th><th class="text-end">Acciones</th></tr></thead>
+      <tbody>
+        {% for c in p.cuotas %}
+        <tr>
+          <td>{{ c.numero }}</td><td>{{ c.vence }}</td><td>{{ c.valor }}</td>
+          <td><span class="badge bg-{{ 'success' if c.estatus == 'pagada' else ('danger' if c.estatus == 'atrasada' else 'secondary') }}">{{ c.estatus }}</span></td>
+          <td class="text-end">
+            {% if c.estatus != 'pagada' %}
+            <form method="post" action="/cobranza/prestamos/{{ p.id }}/pago" class="d-inline">
+              <input type="hidden" name="cuota_id" value="{{ c.id }}">
+              <input type="hidden" name="valor" value="{{ c.valor }}">
+              <button class="btn btn-sm btn-outline-success" title="Registrar pago de la cuota">Pagar</button>
+            </form>
+            {% endif %}
+            <a href="/cobranza/cuotas/{{ c.id }}/editar" class="btn btn-sm btn-outline-secondary" title="Editar cuota"><i class="bi bi-pencil"></i></a>
+            <form method="post" action="/cobranza/cuotas/{{ c.id }}/eliminar" class="d-inline" onsubmit="return confirm('¿Eliminar la cuota?');">
+              <button class="btn btn-sm btn-outline-danger" title="Eliminar"><i class="bi bi-trash"></i></button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<p class="text-secondary">Sin préstamos.</p>
+{% endfor %}
+
+<h2 class="fs-5 mt-4">Abonos</h2>
+<table class="table table-sm">
+  <thead><tr><th>Fecha</th><th>Valor</th><th>Método</th><th class="text-end">Acciones</th></tr></thead>
+  <tbody>
+    {% for a in abonos %}
+    <tr>
+      <td>{{ a.fecha }}</td><td>{{ a.valor }}</td><td>{{ a.metodo }}</td>
+      <td class="text-end">
+        <form method="post" action="/cobranza/abonos/{{ a.id }}/eliminar" class="d-inline" onsubmit="return confirm('¿Eliminar el abono?');">
+          <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="text-secondary">Sin abonos</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2 class="fs-5 mt-4">Evidencias</h2>
+<p class="text-secondary small">Fotos faciales y documentos del cliente (se cargan desde la app de campo).</p>
+<div class="row g-2">
+  {% for e in evidencias %}
+  <div class="col-6 col-md-3">
+    <div class="card h-100"><div class="card-body p-2">
+      <div class="text-secondary small">{{ e.tipo }} · {{ e.fecha }}</div>
+      {% if e.es_imagen %}
+      <a href="/cobranza/clientes/{{ record_id }}/evidencia/{{ e.id }}" target="_blank">
+        <img src="/cobranza/clientes/{{ record_id }}/evidencia/{{ e.id }}" alt="{{ e.tipo }}" class="img-fluid rounded mt-1" style="max-height: 150px; object-fit: cover;">
+      </a>
+      {% else %}
+      <a href="/cobranza/clientes/{{ record_id }}/evidencia/{{ e.id }}" target="_blank" class="btn btn-sm btn-outline-secondary mt-1">Abrir documento</a>
+      {% endif %}
+      {% if e.nombre %}<div class="text-secondary small text-truncate">{{ e.nombre }}</div>{% endif %}
+    </div></div>
+  </div>
+  {% else %}
+  <p class="text-secondary">Sin evidencias.</p>
+  {% endfor %}
+</div>
+{% endblock %}

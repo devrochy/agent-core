@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Estadísticas de la cartera{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Estadísticas · {{ cartera }}</h1>
+{% include "cobranza/_cartera_nav.html" %}
+<div class="row g-3">
+  {% for k in kpis %}
+  <div class="col-6 col-md-4">
+    <div class="card kpi-card"><div class="card-body">
+      <div class="text-secondary small">{{ k.label }}</div>
+      <div class="value">{{ k.value }}</div>
+    </div></div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="d-flex justify-content-end my-3">
+  <form method="post" action="/cobranza/carteras/{{ record_id }}/cierre">
+    <button class="btn btn-outline-primary btn-sm">Generar cierre del día</button>
+  </form>
+</div>
+
+<h2 class="fs-5">Reportes diarios</h2>
+<div class="card mb-4"><div class="card-body p-0">
+<table class="table table-sm table-hover mb-0">
+  <thead><tr><th>Fecha</th><th>Horario</th><th class="text-end">Cobrado</th><th class="text-end">Prestado</th><th class="text-end">Visitados</th><th class="text-end">Sin pago</th></tr></thead>
+  <tbody>
+    {% for r in reportes %}
+    <tr>
+      <td>{{ r.fecha }}</td><td class="text-secondary">{{ r.inicio }}{% if r.fin %} – {{ r.fin }}{% endif %}</td>
+      <td class="text-end">{{ "{:,.0f}".format(r.cobrado) }}</td>
+      <td class="text-end">{{ "{:,.0f}".format(r.prestado) }}</td>
+      <td class="text-end">{{ r.visitados }}</td>
+      <td class="text-end">{{ r.sin_pago }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="text-secondary text-center py-3">Sin cierres registrados</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div></div>
+
+<h2 class="fs-5">Histórico de KPIs</h2>
+<div class="card"><div class="card-body p-0">
+<table class="table table-sm mb-0">
+  <thead><tr><th>Fecha</th><th class="text-end">Clientes</th><th class="text-end">Préstamos vigentes</th><th class="text-end">Saldo</th><th class="text-end">Mora</th><th class="text-end">Cobrado del día</th></tr></thead>
+  <tbody>
+    {% for s in snapshots %}
+    <tr>
+      <td>{{ s.fecha }}</td>
+      <td class="text-end">{{ s.clientes }}</td>
+      <td class="text-end">{{ s.prestamos_vigentes }}</td>
+      <td class="text-end">{{ "{:,.0f}".format(s.saldo) }}</td>
+      <td class="text-end">{{ "{:,.0f}".format(s.mora) }}</td>
+      <td class="text-end">{{ "{:,.0f}".format(s.cobrado_dia) }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="text-secondary text-center py-3">Sin snapshots. Genera el cierre del día.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div></div>
+{% endblock %}

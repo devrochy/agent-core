@@ -7,7 +7,10 @@ on:
 
 jobs:
   evals-full:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
+    concurrency:
+      group: evals-nightly
+      cancel-in-progress: false
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -15,34 +18,49 @@ jobs:
           POSTGRES_USER: agent_core
           POSTGRES_PASSWORD: agent_core
           POSTGRES_DB: agent_core
-        ports: ["5432:5432"]
+        ports: ["55432:5432"]
         options: >-
           --health-cmd "pg_isready -U agent_core"
           --health-interval 5s
           --health-retries 12
       redis:
         image: redis:7-alpine
-        ports: ["6379:6379"]
+        ports: ["56379:6379"]
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-retries 12
     env:
-      DATABASE_URL: postgresql+asyncpg://app_runtime:app_runtime@localhost:5432/agent_core
-      MIGRATIONS_DATABASE_URL: postgresql+asyncpg://agent_core:agent_core@localhost:5432/agent_core
-      REDIS_URL: redis://localhost:6379/0
-      MASTER_ENCRYPTION_KEY: ci-only-not-a-secret-master-key
+      DATABASE_URL: postgresql+asyncpg://app_runtime:app_runtime@localhost:55432/agent_core
+      MIGRATIONS_DATABASE_URL: postgresql+asyncpg://agent_core:agent_core@localhost:55432/agent_core
+      REDIS_URL: redis://localhost:56379/0
+      MASTER_ENCRYPTION_KEY: GpsiZ2sgMd4SvLHGp4Bs5xdaQLlQ1cByyK6DCNxVwL4=
+      # Mismos que `ci.yml`: sin estas, los escenarios fallan al cifrar contenido.
+      TOKEN_MASTER_KEYS: '{"k1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}'
+      TOKEN_ACTIVE_KEY_ID: k1
       APP_SECRET_KEY: ci-only-not-a-secret-app-key
       APP_ENV: development
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Entorno Python (self-hosted)
+        # Mismo motivo que el gate: el runner es Linux Mint y setup-python no
+        # tiene builds para esa distro → venv con el Python del runner.
+        run: |
+          python3 --version
+          python3 -c "import sys; assert sys.version_info >= (3, 12), 'Se requiere Python 3.12+'"
+          python3 -m venv .venv-ci
+          echo "$PWD/.venv-ci/bin" >> "$GITHUB_PATH"
+          .venv-ci/bin/python -m pip install --upgrade pip
       - name: Instalar
         run: |
+          pip install -e packages/contracts
           pip install -e ".[dev]"
           bash scripts/install_plugins.sh
+      - name: Postgres del CI con PostGIS (lo exige pack-cobranza, ADR-0058)
+        run: |
+          docker exec ${{ job.services.postgres.id }} \
+            bash -c "apt-get update -qq && apt-get install -y -qq postgresql-16-postgis-3"
+
       - name: Migrar y sembrar
         run: |
           agent-core db migrate

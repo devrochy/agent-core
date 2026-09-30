@@ -69,12 +69,12 @@ agent-core plugin install pack-commerce
 El entry_point de setuptools es solo el mecanismo de **descubrimiento** — no levanta
 ningún proceso. `plugin_manager.scan()` hace `ep.load()` y obtiene una clase Python.
 
-## Multi-asistente = multi-despliegue (no multi-tenant)
+## Multi-tenant = multi-fila, no multi-despliegue
 
-Lección directa de agent-sale (ADR-032: diseñaron multi-tenant con RLS y lo
-desmontaron 36 migraciones después): **un negocio = un despliegue completo** con su
-propia BD, su Redis y sus plugins. Aislar clientes por infraestructura es más simple,
-más seguro y más barato de operar que aislarlos por filas.
+El aislamiento entre clientes se resuelve con `tenant_id` + RLS (ADR-0001), no
+con un despliegue por cliente. Un solo proceso sirve a todos los tenants; cada
+cliente es una fila en `tenants` con su `AgentSpec`, sus canales y sus packs.
 
-¿Necesitas 10 asistentes? 10 clones del repo, 10 `agent-core init`, 10 docker-compose.
-El SDD de cada uno documenta su configuración exacta.
+¿Necesitas más clientes? `agent-core tenant create` (CLI) o `/admin/tenants/nuevo`
+(panel). La documentación y los datos de cada tenant viven en
+`TENANTS_ROOT/<slug>/` — fuera del código del framework (ver `docs/MULTITENANT.md`).

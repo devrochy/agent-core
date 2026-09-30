@@ -16,11 +16,15 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from core.agents.responses import load_response
+from core.agents.spec import load_active_spec
+from core.billing.enforcement import QuotaExceeded, enforce_metric
 from core.config import DEBOUNCE_DELAY_MS, get_settings
 from core.db.models import (
     AppSettings,
@@ -28,7 +32,9 @@ from core.db.models import (
     Conversation,
     Customer,
     Message,
+    PhoneNumber,
     ProcessedEvent,
+    utcnow,
 )
 from core.db.session import get_session
 from core.gateway.sender import send_to_conversation
@@ -39,6 +45,7 @@ from core.orchestrator.escalation import (
     ESCALATION_REPLY,
     escalate,
     matches_escalation_keywords,
+    within_business_hours,
 )
 from core.orchestrator.loop import process_conversation
 from core.orchestrator.turn_gate import run_turn
@@ -133,6 +140,17 @@ async def handle_inbound(fields: dict[str, str]) -> bool:
         return False
 
     async with tenant_scope(tenant_id):
+        # Ciclo de vida + billing: mensajes de un tenant suspendido/eliminado o
+        # con el plan vencido se descartan (ACK) sin procesar (ADR-0001/0045).
+        from core.billing.enforcement import is_tenant_operational
+
+        if not await is_tenant_operational(uuid.UUID(tenant_id)):
+            log.warning(
+                "inbound_tenant_not_operational",
+                tenant_id=tenant_id,
+                message_id=fields.get("external_message_id"),
+            )
+            return False
         if not await _claim_event(uuid.UUID(tenant_id), fields):
             log.info(
                 "event_already_processed",
@@ -170,7 +188,18 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
     media_context = fields.get("media_context", "")
     effective_message = f"{content}\n{media_context}".strip() if media_context else content
 
-    conversation, customer, app_settings = await _resolve_conversation(fields)
+    try:
+        conversation, customer, app_settings = await _resolve_conversation(fields)
+    except QuotaExceeded as exc:
+        # Bloqueo duro de cuota (ADR-0045): se descarta el inbound sin procesar.
+        log.warning(
+            "inbound_quota_exceeded",
+            tenant_id=get_current_tenant_id(),
+            metric=exc.metric,
+            used=exc.used,
+            limit=exc.limit,
+        )
+        return
 
     # ---------------- kill-switch en 3 niveles
     paused = (
@@ -195,10 +224,44 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
         return
 
     # ---------------- escalamiento por keywords
-    keywords = list((app_settings.escalation_config if app_settings else {}).get("keywords", []))
+    escalation_cfg = dict(app_settings.escalation_config or {}) if app_settings else {}
+    keywords = list(escalation_cfg.get("keywords", []))
     if matches_escalation_keywords(effective_message, keywords or None):
+        # Resolver el texto ANTES de escalar (auditor-multitenant): si
+        # load_active_spec falla (ej. BD caída), no queremos dejar la
+        # conversación ya marcada `escalated`/`bot_paused` sin haber podido
+        # avisarle nada al cliente -- y el claim de idempotencia de este
+        # evento ya se insertó en _claim_event, así que un reintento
+        # posterior lo vería como duplicado y no volvería a intentar nada.
+        # `load_active_spec()` sin tenant explícito resuelve el de la
+        # conversación en curso vía el `tenant_scope` que `handle_inbound`
+        # ya abrió más arriba en la pila (mismo patrón que loop.py:171).
+        spec = await load_active_spec()
+        escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
         await escalate(conversation.id, reason="keyword", summary=effective_message[:200])
-        await send_to_conversation(conversation.id, ESCALATION_REPLY)
+        await send_to_conversation(conversation.id, escalation_text)
+        return
+
+    # ---------------- horario de atención (ADR-0051)
+    # Fuera de horario: se responde el mensaje configurado y NO se procesa el turno
+    # con el LLM (ahorra costo y evita prometer atención que no hay). Sin config,
+    # `within_business_hours` devuelve True (fail-open).
+    business_hours = escalation_cfg.get("business_hours")
+    if business_hours and not within_business_hours(business_hours):
+        out_msg = str(escalation_cfg.get("out_of_hours_message") or "").strip()
+        if out_msg:
+            text = out_msg
+            for key, value in (
+                ("{assistant_name}", app_settings.assistant_name if app_settings else ""),
+                ("{business_description}", app_settings.business_description if app_settings else ""),
+            ):
+                text = text.replace(key, value or "")
+            delivered = await send_to_conversation(conversation.id, text)
+            if not delivered:
+                # Mismo criterio que el camino inmediato: si el envío falla, se
+                # escala para que una persona retome (el claim de idempotencia ya
+                # se quemó, no habrá reintento).
+                await escalate(conversation.id, reason="send_failed", summary=text[:200])
         return
 
     # ---------------- velocidad de respuesta
@@ -250,16 +313,36 @@ async def _resolve_conversation(
             )
         ).scalar_one_or_none()
         if customer is None:
+            # Cuota de clientes (ADR-0045): solo bloquea el ALTA de un cliente
+            # nuevo; los clientes existentes se siguen atendiendo. Se pasa la
+            # sesión abierta para no anidar otra (RLS es transaction-scoped).
+            await enforce_metric(tenant_id, "clientes", session=session)
             contact_phone = external_id.removeprefix("whatsapp:") if channel == "whatsapp" else None
-            customer = Customer(
-                tenant_id=tenant_id,
-                channel=channel,
-                external_id=external_id,
-                name=name,
-                contact_phone=contact_phone,
-            )
-            session.add(customer)
-            await session.flush()
+            try:
+                async with session.begin_nested():
+                    customer = Customer(
+                        tenant_id=tenant_id,
+                        channel=channel,
+                        external_id=external_id,
+                        name=name,
+                        contact_phone=contact_phone,
+                    )
+                    session.add(customer)
+                    await session.flush()
+            except IntegrityError:
+                # Ráfaga de mensajes del mismo cliente procesados concurrentemente
+                # (ADR-0013): otro turno ya ganó la carrera y creó el Customer.
+                # El SAVEPOINT se revirtió solo; se relee la fila ganadora.
+                customer = (
+                    await session.execute(
+                        select(Customer).where(
+                            Customer.tenant_id == tenant_id,
+                            Customer.channel == channel,
+                            Customer.external_id == external_id,
+                            Customer.deleted_at.is_(None),
+                        )
+                    )
+                ).scalar_one()
         elif name and not customer.name:
             customer.name = name
 
@@ -271,6 +354,23 @@ async def _resolve_conversation(
                 )
             )
         ).scalar_one_or_none()
+
+        # Puente para conexiones del wizard de Embedded Signup (ADR-0030):
+        # no tienen fila en channel_connections, pero sí una en phone_numbers.
+        # Corre EN PARALELO al lookup de arriba, nunca lo reemplaza.
+        # tenant_id explícito además de la unicidad global de phone_number_id
+        # (defensa en profundidad, mismo criterio que get_owned() -- hallazgo
+        # auditor-multitenant, 2026-09-22: la unicidad global es hoy la única
+        # garantía real, no depender solo de eso).
+        meta_phone = (
+            await session.execute(
+                select(PhoneNumber).where(
+                    PhoneNumber.phone_number_id == connection_external_id,
+                    PhoneNumber.tenant_id == tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        meta_connection_id = meta_phone.connection_id if meta_phone else None
 
         conversation = (
             await session.execute(
@@ -288,22 +388,33 @@ async def _resolve_conversation(
 
         is_new = conversation is None
         if conversation is None:
+            # Cuota de conversaciones (ADR-0045): solo bloquea ABRIR una nueva;
+            # las conversaciones ya abiertas siguen respondiendo. Sesión abierta
+            # reutilizada (mismo criterio que el gate de clientes).
+            await enforce_metric(tenant_id, "conversaciones", session=session)
             conversation = Conversation(
                 tenant_id=tenant_id,
                 customer_id=customer.id,
                 channel=channel,
                 connection_id=connection.id if connection else None,
+                meta_connection_id=meta_connection_id,
             )
             session.add(conversation)
             await session.flush()
-        elif connection and conversation.connection_id != connection.id:
-            conversation.connection_id = connection.id  # responder por donde escribió
+        else:
+            if connection and conversation.connection_id != connection.id:
+                conversation.connection_id = connection.id  # responder por donde escribió
+            if meta_connection_id and conversation.meta_connection_id != meta_connection_id:
+                conversation.meta_connection_id = meta_connection_id
 
     if is_new:
         await event_bus.emit(
             ON_CONVERSATION_STARTED, conversation_id=conversation.id, customer_id=customer.id
         )
     return conversation, customer, app_settings
+
+
+_SERVICE_WINDOW_HOURS = 24
 
 
 async def _persist_inbound(
@@ -325,6 +436,13 @@ async def _persist_inbound(
                     idempotency_key=fields.get("external_message_id") or None,
                 )
             )
+            # Ventana de 24h de WhatsApp: cada inbound la refresca --
+            # validada por `sender.py::validate_service_window` antes de
+            # encolar un envío libre.
+            if fields.get("provider") == "meta" and fields.get("channel") == "whatsapp":
+                conversation = await session.get(Conversation, conversation_id)
+                if conversation is not None:
+                    conversation.service_window_expires_at = utcnow() + timedelta(hours=_SERVICE_WINDOW_HOURS)
         return True
     except IntegrityError:
         log.info("inbound_duplicate_ignored", message_id=fields.get("external_message_id"))

@@ -11,9 +11,15 @@ venv/
 .ruff_cache/
 .pytest_cache/
 sdd/*.md
+sdd/.state.json
 !sdd/templates/
 .DS_Store
+.obsidian/
 *.sqlite3
 storage/
 plugins/.install.lock
-.claude/
+.claude/settings.local.json
+.spike/
+
+# Datos y documentación de tenants (por despliegue, fuera del framework)
+/tenants/

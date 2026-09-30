@@ -62,4 +62,117 @@
     </tbody>
   </table>
 </div>
+
+<h1 class="fs-3 mb-4 mt-5 d-flex justify-content-between align-items-center">
+  Costos de WhatsApp (Meta)
+  <form method="post" action="/admin/costos/meta/sync" class="d-inline">
+    <button class="btn btn-outline-secondary btn-sm">Sincronizar ahora</button>
+  </form>
+</h1>
+
+<div class="alert alert-warning">
+  <strong>Cambios de facturación de Meta:</strong>
+  <ul class="mb-0">
+    <li><strong>Desde el 1 de agosto de 2026:</strong> los mensajes de Meta Business Agent se facturan
+      POR TOKEN (2,00 USD por millón de tokens, ~4-5 centavos USD por mensaje) -- categoría separada,
+      no se mezcla con plantillas. Sin fuente de ingesta automática todavía: informativo.</li>
+    <li><strong>Desde el 1 de octubre de 2026:</strong> Meta cobra los MENSAJES DE SERVICIO y las
+      plantillas UTILITY enviadas dentro de la ventana abierta de 24h, a las mismas tarifas que
+      utility/authentication por mercado -- sin volume tiers para servicio.</li>
+  </ul>
+  <p class="mb-0 mt-2 small">
+    No hay ninguna franquicia de mensajes gratis confirmada oficialmente por Meta para mensajes de
+    servicio o utility dentro de la ventana.
+    {% if meta_service_allowance_hypothesis_enabled %}
+    (Excepto: hipótesis de 1000 mensajes/mes gratis por número ACTIVADA en este panel -- cifra de
+    fuente secundaria, sin confirmar contra la primera factura real. Nunca afecta el monto mostrado,
+    que siempre viene de Meta.)
+    {% endif %}
+    Sigue siendo gratis: la ventana de free entry point de 72h (Click to WhatsApp Ads / botones CTA
+    de Página).
+  </p>
+</div>
+
+{% if not meta_wabas %}
+<div class="alert alert-secondary">Este tenant todavía no tiene ninguna WABA conectada.</div>
+{% endif %}
+
+<div class="card mb-4">
+  <div class="card-header fw-semibold">Por categoría y país (30 días) -- <code>cost</code> de Meta</div>
+  <table class="table mb-0">
+    <thead><tr><th>Categoría</th><th>País</th><th>Volumen</th><th>Costo</th></tr></thead>
+    <tbody>
+      {% for row in meta_by_category_country %}
+      <tr>
+        <td>{{ row.category }}</td>
+        <td>{{ row.country }}</td>
+        <td>{{ row.volume }}</td>
+        <td>${{ "%.4f"|format(row.cost) }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="text-secondary text-center py-4">Sin datos de pricing_analytics todavía.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header fw-semibold">Por número de teléfono (30 días)</div>
+  <table class="table mb-0">
+    <thead><tr><th>Número</th><th>Volumen</th><th>Costo</th></tr></thead>
+    <tbody>
+      {% for row in meta_by_phone %}
+      <tr>
+        <td>{{ row.phone_number }}</td>
+        <td>{{ row.volume }}</td>
+        <td>${{ "%.4f"|format(row.cost) }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="text-secondary text-center py-4">Sin datos todavía.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header fw-semibold">
+    Diferencia webhooks vs. pricing_analytics (volumen, no dólares)
+  </div>
+  <div class="card-body pb-0">
+    <p class="text-secondary small">
+      Cuántos mensajes facturables vio el webhook en tiempo real por categoría, contra el volumen que
+      reportó Meta en <code>pricing_analytics</code> para esa misma categoría -- el webhook nunca trae
+      un monto en dólares, así que esto compara CANTIDADES, no costos. Una diferencia grande es señal
+      de un desajuste a investigar (recategorización, evento perdido, etc.).
+    </p>
+  </div>
+  <table class="table mb-0">
+    <thead><tr><th>Categoría</th><th>Webhooks (conteo)</th><th>pricing_analytics (volumen)</th><th>Diferencia</th></tr></thead>
+    <tbody>
+      {% for row in meta_discrepancy %}
+      <tr class="{{ 'table-warning' if row.diff != 0 else '' }}">
+        <td>{{ row.category }}</td>
+        <td>{{ row.webhook_count }}</td>
+        <td>{{ row.pricing_volume }}</td>
+        <td>{{ row.diff }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="text-secondary text-center py-4">Sin datos todavía.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <div class="card-body d-flex justify-content-between align-items-center">
+    <div>
+      <h5 class="card-title fs-6 mb-1">Paso manual de facturación</h5>
+      <p class="text-secondary small mb-0">
+        El alta del método de pago del cliente no tiene API -- se configura a mano en WhatsApp Manager
+        / Business Settings.
+      </p>
+    </div>
+    <a href="/admin/costos/meta/creditos" class="btn btn-outline-primary btn-sm">Ver líneas de crédito</a>
+  </div>
+</div>
 {% endblock %}

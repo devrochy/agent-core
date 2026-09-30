@@ -16,6 +16,9 @@ ROLE="${AGENT_CORE_ROLE:-api}"
 PLUGIN_LOCK="plugins/.install.lock"
 
 install_plugins() {
+  # El lock vive en ./plugins: si el dir no existe (imagen sin bind-mounts,
+  # ej. Coolify) hay que crearlo antes de flock.
+  mkdir -p plugins
   # Packs (packages/pack-*) y plugins heredados (plugins/)
   for dir in packages/pack-*/ plugins/*/; do
     [ -f "${dir}pyproject.toml" ] || continue

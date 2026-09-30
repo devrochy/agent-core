@@ -1,0 +1,31 @@
+# Datos de tenants por despliegue: nunca dentro de la imagen
+tenants
+.env
+
+# Entornos y cachés locales
+.git
+.venv
+venv
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+build
+dist
+storage
+
+# Código de test/docs que no hace falta en runtime.
+# OJO: los playbooks de los packs (packages/pack-*/playbooks/*.md) son RUNTIME
+# y se cargan vía load_playbook: no se excluyen con *.md.
+tests
+evals
+docs
+sdd/*.md
+!sdd/templates/
+
+# Artefactos del editor/OS
+.DS_Store
+.claude
+.obsidian

@@ -195,10 +195,21 @@ def remove(name: str = typer.Argument(...)) -> None:
 
 
 @app.command()
-def scaffold(name: str = typer.Argument(..., help="Nombre del nuevo plugin, ej: mod-mi-plugin")) -> None:
-    """Genera la estructura base de un plugin nuevo."""
-    plugin_id = normalize(name)
-    base = Path("plugins") / plugin_id
+def scaffold(name: str = typer.Argument(..., help="Nombre del nuevo pack, ej: fidelidad o pack-fidelidad")) -> None:
+    """Genera la estructura base de un pack nuevo en packages/pack-<nombre>/.
+
+    Antes generaba en plugins/<nombre>/ (heredado del monolito pre-ADR-0020).
+    El código nuevo va en packages/pack-* (CLAUDE.md) — este comando ya
+    entrega la estructura ahí directamente, sin el paso manual de mover
+    carpetas que documentaba plugin-dev.md.
+    """
+    raw = normalize(name)
+    domain = raw
+    for prefix in ("pack_", "mod_"):
+        if domain.startswith(prefix):
+            domain = domain[len(prefix) :]
+    plugin_id = f"pack_{domain}"
+    base = Path("packages") / f"pack-{domain.replace('_', '-')}"
     package = base / plugin_id
     if base.exists():
         console.print(f"[red]{base} ya existe.[/red]")
@@ -211,17 +222,20 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "{plugin_id.replace("_", "-")}"
+name = "{base.name}"
 version = "0.1.0"
-description = "Plugin {plugin_id} para agent-core"
+description = "Pack {domain} para agent-core"
 requires-python = ">=3.12"
 dependencies = []
 
 [project.entry-points."agent_core.plugins"]
 {plugin_id} = "{plugin_id}.module:Module"
 
+[tool.setuptools.packages.find]
+include = ["{plugin_id}*"]
+
 [tool.agent_core.plugin]
-# entidades que este plugin gestiona (para el wizard de importación)
+# entidades que este pack gestiona (para el wizard de importación)
 # entities = {{ "mi_tabla" = ["campo1", "campo2"] }}
 '''
     )

@@ -8,6 +8,7 @@ pipeline (dedupe, debounce, cuota por tenant, RLS), no el modelo.
 from __future__ import annotations
 
 import os
+import uuid
 from pathlib import Path
 
 # El conftest raíz (tests/) fija una DATABASE_URL falsa para los tests unitarios
@@ -38,6 +39,11 @@ pytestmark = pytest.mark.skipif(
 T1 = "00000000-0000-0000-0000-000000000001"
 PHONE = "1234567890"
 
+# UUIDs dedicados para los tenants de PRUEBA (espacio reservado, no colisiona con
+# tenants reales; 0000...0002 está ocupado por formoto).
+TEST_ALPHA_ID = uuid.UUID("10000000-0000-0000-0000-000000000001")
+TEST_BETA_ID = uuid.UUID("10000000-0000-0000-0000-000000000002")
+
 
 class FakeResponse:
     def __init__(self, text: str) -> None:
@@ -51,10 +57,15 @@ class FakeResponse:
 
 class FakeProvider:
     provider_name = "fake"
+    pricing_per_mtok = (0.0, 0.0)
 
     def __init__(self, recorded: list[str], delay_s: float = 0.0) -> None:
         self._recorded = recorded
         self._delay = delay_s
+
+    def estimate_cost_usd(self, input_tokens: int, output_tokens: int) -> float:
+        cin, cout = self.pricing_per_mtok
+        return (input_tokens * cin + output_tokens * cout) / 1_000_000
 
     async def generate(self, **kwargs: Any) -> FakeResponse:
         import asyncio
@@ -87,7 +98,9 @@ def recorded() -> list[str]:
 @pytest.fixture(autouse=True)
 def _stub_llm_and_outbound(recorded: list[str], monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("core.orchestrator.loop.resolve_provider", lambda *a, **k: FakeProvider(recorded))
-    monkeypatch.setattr("core.gateway.sender.outbound_adapter_for", lambda *a, **k: FakeOutbound())
+    # El envío real ahora pasa por la tarea Celery (`core/tasks/outbound_send.py`),
+    # no por `sender.py` directamente -- se parchea ahí.
+    monkeypatch.setattr("core.tasks.outbound_send.outbound_adapter_for", lambda *a, **k: FakeOutbound())
     return recorded
 
 
@@ -105,6 +118,95 @@ async def _clean_redis():
     yield
 
 
+@pytest.fixture(autouse=True)
+async def _reset_test_tenants_state():
+    """Prepara los tenants de PRUEBA para un arranque limpio.
+
+    Contrarresta la contaminación de una BD local reusada entre corridas:
+    1. Un test anterior deja `conversations.status='escalated'`/`bot_paused` para
+       un `customer_external_id` fijo (wa-555, wa-777, ...), y el consumidor
+       descarta el inbound nuevo de ese contacto sin procesarlo.
+    2. El tenant de prueba acumula miles de `customers`/`conversations` de
+       corridas previas, superando la cuota del plan `free` (ADR-0045) y haciendo
+       que el gate de billing bloquee turnos legítimos del test.
+
+    Solo toca los UUIDs reservados de test, nunca tenants reales.
+    """
+    from sqlalchemy import select
+
+    from core.db.models import ChannelConnection, Conversation, Customer, TenantSubscription
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    test_ids = (TEST_ALPHA_ID, TEST_BETA_ID)
+
+    async def _reset() -> None:
+        for tid in test_ids:
+            async with tenant_scope(tid):
+                async with get_session() as session:
+                    # Conexiones primarias duplicadas: `resolve_credentials`
+                    # (`sender.py`) usa `scalar_one_or_none` y revienta con
+                    # `MultipleResultsFound` si quedan varias de corridas previas.
+                    # Se deja UNA primaria (la de `tenant_setup`, external_id=PHONE).
+                    primaries = (
+                        await session.execute(
+                            select(ChannelConnection).where(
+                                ChannelConnection.tenant_id == tid,
+                                ChannelConnection.is_primary.is_(True),
+                                ChannelConnection.active.is_(True),
+                                ChannelConnection.deleted_at.is_(None),
+                            )
+                        )
+                    ).scalars().all()
+                    if len(primaries) > 1:
+                        keeper = next(
+                            (c for c in primaries if c.external_id == PHONE), primaries[0]
+                        )
+                        for conn in primaries:
+                            if conn.id != keeper.id:
+                                conn.is_primary = False
+                    for conv in (
+                        await session.execute(
+                            select(Conversation).where(
+                                Conversation.tenant_id == tid,
+                                Conversation.status.in_(["open", "escalated"]),
+                            )
+                        )
+                    ).scalars().all():
+                        conv.status = "closed"
+                        conv.bot_paused = False
+                    for cust in (
+                        await session.execute(
+                            select(Customer).where(Customer.tenant_id == tid, Customer.bot_paused.is_(True))
+                        )
+                    ).scalars().all():
+                        cust.bot_paused = False
+                    # Plan de prueba con período largo: el enforcement de cuotas
+                    # se prueba en `test_billing_*`, no debe gatear los tests de
+                    # pipeline que reusan el tenant acumulado.
+                    sub = (
+                        await session.execute(
+                            select(TenantSubscription).where(
+                                TenantSubscription.tenant_id == tid,
+                                TenantSubscription.deleted_at.is_(None),
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if sub is not None:
+                        # Plan empresarial (ilimitado): los tests de pipeline no
+                        # deben gatearse por cuotas acumuladas de corridas previas.
+                        sub.plan_id = "empresarial"
+                        sub.status = "active"
+                        from datetime import UTC, datetime, timedelta
+
+                        sub.period_end = datetime.now(UTC) + timedelta(days=3650)
+                        sub.trial_ends_at = None
+
+    await _reset()
+    yield
+    await _reset()
+
+
 @pytest.fixture(scope="module")
 async def app_client() -> AsyncIterator[httpx.AsyncClient]:
     from core.main import app
@@ -116,7 +218,12 @@ async def app_client() -> AsyncIterator[httpx.AsyncClient]:
 
 @pytest.fixture(scope="module")
 async def tenant_setup():
-    """Tenant #1 (seed) con conexión de canal + tenant #2. Devuelve (t1, t2)."""
+    """Dos tenants de PRUEBA auto-contenidos (no dependen del seed del framework).
+
+    Usa UUIDs fijos conocidos (T1/T2) para que las referencias de los tests sigan
+    valiendo sin exigir que `tenant-1` exista en la BD (la suite crea los suyos).
+    Devuelve (t1, t2) con conexiones de canal.
+    """
     from sqlalchemy import select
 
     from core.db.models import ChannelConnection, Tenant
@@ -124,10 +231,14 @@ async def tenant_setup():
     from core.shared.tenant import tenant_scope
 
     async with get_session() as session:
-        t1 = (await session.execute(select(Tenant).where(Tenant.slug == "tenant-1"))).scalar_one()
-        t2 = (await session.execute(select(Tenant).where(Tenant.slug == "tenant-2"))).scalar_one_or_none()
+        t1 = await session.get(Tenant, TEST_ALPHA_ID)
+        if t1 is None:
+            t1 = Tenant(id=TEST_ALPHA_ID, name="Test Alpha", slug="test-alpha", status="active")
+            session.add(t1)
+            await session.flush()
+        t2 = await session.get(Tenant, TEST_BETA_ID)
         if t2 is None:
-            t2 = Tenant(name="Tenant #2", slug="tenant-2")
+            t2 = Tenant(id=TEST_BETA_ID, name="Test Beta", slug="test-beta", status="active")
             session.add(t2)
             await session.flush()
         t1_id, t2_id = t1.id, t2.id
@@ -156,27 +267,73 @@ async def tenant_setup():
 
 
 @pytest.fixture(scope="module")
-async def formoto_setup():
-    """Asegura el tenant FORMOTO (onboarding idempotente). Devuelve (t1, formoto_id)."""
+async def moto_setup():
+    """Tenant de ejemplo genérico con pack_commerce + catálogo (ADR-0001).
+
+    Onboarding idempotente vía core.onboarding + seed del catálogo desde
+    tests/fixtures/tenants/moto/catalog.json. Devuelve (t1, moto_id).
+    """
+    import json
+
     from sqlalchemy import select
 
     from core.db.models import Tenant
     from core.db.session import get_session
 
-    async with get_session() as session:
-        formoto = (
-            await session.execute(select(Tenant).where(Tenant.slug == "formoto"))
-        ).scalar_one_or_none()
-    if formoto is None:
-        from scripts.onboard_formoto import onboard
+    MOTO_SLUG = "tenant-moto"
+    CATALOG_PATH = (
+        Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "tenants" / "moto" / "catalog.json"
+    )
 
-        await onboard()
+    # Siempre a través de onboard_tenant (idempotente: si el tenant ya existe,
+    # solo rellena lo que falte -- ej. una BD local vieja con el Tenant creado
+    # pero sin AppSettings, de antes de que `escalation_config` existiera).
+    # `seed_catalog` también es idempotente (docstring propio).
+    from cli.commands.tenant import seed_catalog
+    from core.onboarding import onboard_tenant
+
+    moto_id, _ = await onboard_tenant(
+        name="Tenant de ejemplo (moto)",
+        slug=MOTO_SLUG,
+        business_description="Tienda de repuestos y accesorios de moto (ejemplo genérico).",
+        persona={"role": "asistente de ventas", "tone": "cercano"},
+        escalation_triggers=["asesor", "humano", "reclamo", "queja", "compatibilidad"],
+        packs=["pack_commerce"],
+        admin_email="admin@local",
+    )
+    catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+    await seed_catalog(moto_id, catalog)
+
+    # El admin de tests siempre debe poder ver el tenant de ejemplo (idempotente).
+    from core.db.models import Admin, TenantUser
+
     async with get_session() as session:
-        t1 = (await session.execute(select(Tenant).where(Tenant.slug == "tenant-1"))).scalar_one()
-        formoto = (
-            await session.execute(select(Tenant).where(Tenant.slug == "formoto"))
+        admin = (
+            await session.execute(select(Admin).where(Admin.email == "admin@local"))
+        ).scalar_one_or_none()
+        if admin is not None:
+            link = (
+                await session.execute(
+                    select(TenantUser).where(
+                        TenantUser.tenant_id == moto_id, TenantUser.admin_id == admin.id
+                    )
+                )
+            ).scalar_one_or_none()
+            if link is None:
+                session.add(TenantUser(tenant_id=moto_id, admin_id=admin.id, role="owner"))
+                await session.commit()
+
+    async with get_session() as session:
+        # t1 = el tenant de prueba "alpha" (TEST_ALPHA_ID); lo crea tenant_setup si falta.
+        t1 = await session.get(Tenant, TEST_ALPHA_ID)
+        if t1 is None:
+            t1 = Tenant(id=TEST_ALPHA_ID, name="Test Alpha", slug="test-alpha", status="active")
+            session.add(t1)
+            await session.flush()
+        moto = (
+            await session.execute(select(Tenant).where(Tenant.slug == MOTO_SLUG))
         ).scalar_one()
-    return t1.id, formoto.id
+    return t1.id, moto.id
 
 
 def _meta_payload(phone_id: str, wa_id: str, message_id: str, body: str) -> dict[str, Any]:
@@ -207,3 +364,33 @@ def _meta_payload(phone_id: str, wa_id: str, message_id: str, body: str) -> dict
             }
         ],
     }
+
+
+def _sign_meta(body: bytes, secret: str) -> dict[str, str]:
+    """Cabecera `X-Hub-Signature-256` con el HMAC del App Secret efectivo.
+
+    El webhook GENÉRICO (`/webhooks/whatsapp`) verifica la firma cuando hay un
+    App Secret configurado (`.env` `WHATSAPP_APP_SECRET` o BYOK del tenant). Los
+    tests que postean sin firmar dan 401 en cuanto el entorno tiene el secreto
+    (BYOK E2E en `.env`) -- antes pasaban solo porque el `.env` local no lo
+    tenía. Helper compartido para no repetir el HMAC en cada test.
+    """
+    import hashlib
+    import hmac
+
+    digest = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return {"X-Hub-Signature-256": f"sha256={digest}"}
+
+
+def _meta_request(payload: dict[str, Any]) -> tuple[bytes, dict[str, str]]:
+    """Cuerpo crudo + headers firmados con el App Secret de `.env` (webhook genérico)."""
+    import json as _json
+
+    from core.config import get_settings
+
+    body = _json.dumps(payload).encode()
+    secret = get_settings().whatsapp_app_secret or get_settings().meta_app_secret or ""
+    headers = {"Content-Type": "application/json"}
+    if secret:
+        headers.update(_sign_meta(body, secret))
+    return body, headers

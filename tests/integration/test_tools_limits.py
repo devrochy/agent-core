@@ -29,6 +29,7 @@ class ToolUseResponse:
 
 class ToolUseProvider:
     provider_name = "fake"
+    pricing_per_mtok = (0.0, 0.0)
 
     def __init__(self) -> None:
         self.calls = 0
@@ -38,6 +39,10 @@ class ToolUseProvider:
         resp = ToolUseResponse()
         resp.tool_calls = [types.SimpleNamespace(id="c1", name="get_customer_profile", arguments={})]
         return resp
+
+    def estimate_cost_usd(self, input_tokens: int, output_tokens: int) -> float:
+        cin, cout = self.pricing_per_mtok
+        return (input_tokens * cin + output_tokens * cout) / 1_000_000
 
 
 async def _make_conversation(tid: uuid.UUID) -> uuid.UUID:

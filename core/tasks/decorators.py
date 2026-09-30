@@ -9,19 +9,19 @@ Uso en un plugin (ver docs/PLUGIN-CONTRACT.md § Cron):
         ...
 
 El decorador:
-1. Envuelve la corrutina en una tarea Celery síncrona (asyncio.run).
+1. Envuelve la corrutina en una tarea Celery síncrona (`run_async`, loop persistente).
 2. La agrega al beat_schedule con el crontab dado.
 3. La tarea NO corre si el plugin está inactivo (guard automático).
 """
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from celery.schedules import crontab
 
+from core.shared.async_bridge import run_async
 from core.shared.logger import get_logger
 from core.tasks.celery_app import celery
 
@@ -53,7 +53,7 @@ def register_cron(plugin_id: str, cron_expression: str) -> Callable[[AsyncJob], 
                 log.info("cron_skipped_plugin_inactive", plugin=plugin_id, task=task_name)
                 return
             try:
-                asyncio.run(fn())
+                run_async(fn())
             except Exception:
                 log.exception("cron_task_failed", plugin=plugin_id, task=task_name)
 

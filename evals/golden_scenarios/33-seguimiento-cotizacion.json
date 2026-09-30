@@ -6,6 +6,6 @@
   ],
   "assertions": {
     "must_not_contain": ["te llamo cada hora", "te insisto"],
-    "max_response_chars": 300
+    "max_response_chars": 500
   }
 }

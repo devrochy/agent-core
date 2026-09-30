@@ -1,7 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Configuración{% endblock %}
 {% block content %}
-<h1 class="fs-3 mb-4">Configuración</h1>
+<h1 class="fs-3 mb-1">Configuración</h1>
+
+{% include "_config_tabs.html" %}
+
+{% if tab == 'identidad' %}
 <div class="row g-3">
   <div class="col-md-6">
     <div class="card mb-3">
@@ -29,6 +33,43 @@
               {% endfor %}
             </select>
           </div>
+          <hr>
+          <p class="text-secondary small mb-2">Personalidad del agente (AgentSpec)</p>
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Tono del AgentSpec</label>
+              <select name="persona_tone" class="form-select">
+                {% for t in ['formal', 'neutral', 'cercano', 'informal'] %}
+                <option value="{{ t }}" {% if spec['persona']['tone'] == t %}selected{% endif %}>{{ t }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Calidez (0-5)</label>
+              <input class="form-control" type="number" min="0" max="5" name="persona_warmth"
+                     value="{{ spec['persona']['warmth'] }}">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Emojis</label>
+              <select name="persona_emojis" class="form-select">
+                {% for e in ['none', 'sparse', 'free'] %}
+                <option value="{{ e }}" {% if spec['persona']['emojis'] == e %}selected{% endif %}>{{ e }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Longitud máx. de respuesta</label>
+              <input class="form-control" type="number" name="persona_max_length" min="0"
+                     value="{{ spec['persona']['maxLength'] }}">
+              <div class="form-text">0 = sin límite.</div>
+            </div>
+            <div class="col-md-8">
+              <label class="form-label">Frases prohibidas (separadas por coma)</label>
+              <input class="form-control" name="persona_forbidden"
+                     value="{{ spec['persona']['forbiddenPhrases'] | join(', ') }}">
+            </div>
+          </div>
+          <hr>
           <div class="mb-3">
             <label class="form-label">Velocidad de respuesta</label>
             <select name="debounce_mode" class="form-select">
@@ -38,6 +79,94 @@
             </select>
             <div class="form-text">Cuánto espera el bot a que el cliente termine de escribir.</div>
           </div>
+          <div class="mb-3">
+            <label class="form-label">Reintentos de guardrail antes de escalar</label>
+            <input type="number" name="guardrail_max_retries" class="form-control" min="0" max="5"
+                   value="{{ behavior.guardrail_max_retries if behavior.guardrail_max_retries is not none else 1 }}">
+            <div class="form-text">
+              Si una respuesta no pasa una validación (monto, alucinación de cierre), cuántas veces
+              se le pide corregirla antes de escalar a un asesor. Default: 1.
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Difficulty router: mensaje largo (caracteres)</label>
+            <input type="number" name="difficulty_long_message_threshold" class="form-control" min="50" max="5000"
+                   value="{{ behavior.difficulty_long_message_threshold if behavior.difficulty_long_message_threshold is not none else 400 }}">
+            <div class="form-text">
+              Un mensaje más largo que esto suma puntos de "dificultad" y puede escalar al modelo de
+              razonamiento (más lento, sin herramientas). Default: 400.
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Difficulty router: turnos sin resolver</label>
+            <input type="number" name="difficulty_turnos_sin_resolver_threshold" class="form-control" min="1" max="20"
+                   value="{{ behavior.difficulty_turnos_sin_resolver_threshold if behavior.difficulty_turnos_sin_resolver_threshold is not none else 2 }}">
+            <div class="form-text">
+              Cuántos turnos seguidos sin resolver suman puntos de dificultad. Default: 2.
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Difficulty router: puntaje para razonamiento</label>
+            <input type="number" name="difficulty_score_threshold" class="form-control" min="1" max="10"
+                   value="{{ behavior.difficulty_score_threshold if behavior.difficulty_score_threshold is not none else 2 }}">
+            <div class="form-text">
+              A partir de qué puntaje total el turno usa el modelo de razonamiento en vez del
+              default. Default: 2.
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Palabras que disparan escalamiento a una persona</label>
+            <input type="text" name="escalation_keywords" class="form-control"
+                   value="{{ escalation_keywords | join(', ') }}">
+            <div class="form-text">
+              Si el cliente menciona alguna de estas palabras (separadas por coma), el bot pausa
+              y escala a una persona. Vacío = usa las palabras por defecto (asesor, humano,
+              persona real, reclamo, queja).
+            </div>
+          </div>
+          <hr>
+          <p class="text-secondary small mb-2">Horario de atención</p>
+          <div class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label">Zona horaria</label>
+              <input type="text" name="business_tz" class="form-control"
+                     placeholder="America/Bogota" value="{{ (escalation.business_hours or {}).get('tz', '') }}">
+            </div>
+            <div class="col-md-8">
+              <label class="form-label">Franjas (una por línea: día 0-6, HH:MM-HH:MM)</label>
+              <textarea name="business_ranges" class="form-control font-monospace" rows="4"
+                        placeholder="0 08:00-18:00&#10;1 08:00-18:00">{{ escalation_ranges_text }}</textarea>
+              <div class="form-text">Día: 0=lunes … 6=domingo. Vacío = siempre abierto.</div>
+            </div>
+            <div class="col-12">
+              <label class="form-label">Mensaje fuera de horario</label>
+              <textarea name="out_of_hours_message" class="form-control" rows="2"
+                        placeholder="¡Gracias por escribirnos! Nuestro horario es...">{{ escalation.out_of_hours_message or '' }}</textarea>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Autoescalar tras N turnos sin resolver</label>
+              <input type="number" name="auto_escalate_after_turns" class="form-control" min="0" max="20"
+                     value="{{ escalation.auto_escalate_after_turns or 0 }}">
+              <div class="form-text">0 = desactivado.</div>
+            </div>
+          </div>
+          <hr>
+          {% if all_guardrails %}
+          <div class="mb-3">
+            <label class="form-label">Guardrails desactivados</label>
+            {% for g in all_guardrails %}
+            <div class="form-check">
+              <input type="checkbox" class="form-check-input" name="disabled_guardrails" value="{{ g.name }}"
+                     id="guardrail-{{ g.name }}"
+                     {{ 'checked' if g.name in behavior.get('disabled_guardrails', []) }}>
+              <label class="form-check-label" for="guardrail-{{ g.name }}">{{ g.name }} <span class="text-secondary small">({{ g.plugin_id }})</span></label>
+            </div>
+            {% endfor %}
+            <div class="form-text">
+              Marcado = ese guardrail puntual NO corre para este tenant. El resto del pack sigue activo.
+            </div>
+          </div>
+          {% endif %}
           <button class="btn btn-primary">Guardar</button>
         </form>
       </div>
@@ -45,18 +174,21 @@
   </div>
   <div class="col-md-6">
     <div class="card mb-3">
-      <div class="card-header fw-semibold">Kill-switch global</div>
+      <div class="card-header fw-semibold">Pausar el agente</div>
       <div class="card-body">
-        <p class="text-secondary small">Si pausas el bot, los mensajes se guardan pero nadie recibe respuesta automática.</p>
+        <p class="text-secondary small">
+          Si pausás el bot, los mensajes se guardan pero nadie recibe respuesta automática
+          (aplica solo a este negocio).
+        </p>
         <form method="post" action="/admin/configuracion/toggle-bot">
           <button class="btn btn-{{ 'success' if s.bot_paused else 'danger' }}">
-            {{ 'Reanudar bot' if s.bot_paused else 'Pausar bot globalmente' }}
+            {{ 'Reanudar bot' if s.bot_paused else 'Pausar bot' }}
           </button>
         </form>
       </div>
     </div>
     <div class="card">
-      <div class="card-header fw-semibold">LLM (BYOK)</div>
+      <div class="card-header fw-semibold">Modelo de IA (BYOK)</div>
       <div class="card-body">
         <form method="post" action="/admin/configuracion/llm">
           <div class="mb-3">
@@ -77,12 +209,322 @@
             <label class="form-label">API Key</label>
             <input type="password" name="llm_api_key" class="form-control"
                    placeholder="{{ '••••••••' if s.llm_api_key_encrypted else 'sk-...' }}">
-            <div class="form-text">Se guarda cifrada (Fernet). Vacío = conservar la actual.</div>
+            <div class="form-text">Se guarda cifrada. Vacío = conservar la actual.</div>
           </div>
-          <button class="btn btn-primary">Guardar LLM</button>
+          <button class="btn btn-primary">Guardar modelo</button>
         </form>
       </div>
     </div>
   </div>
 </div>
+{% endif %}
+
+{% if tab == 'cerebro' %}
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header fw-semibold">Modelo del agente</div>
+      <div class="card-body">
+        <form method="post" action="/admin/configuracion/cerebro" class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Modelo primario</label>
+            <input class="form-control" name="model_primary" value="{{ spec['model']['primary'] }}">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Temperatura (0-2)</label>
+            <input class="form-control" type="number" step="0.1" min="0" max="2"
+                   name="model_temperature" value="{{ spec['model']['temperature'] }}">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Máx. tools por turno</label>
+            <input class="form-control" type="number" min="1" max="50"
+                   name="policy_max_tool_calls" value="{{ spec['policies']['maxToolCallsPerTurn'] }}">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Modelo de fallback (opcional)</label>
+            <input class="form-control" name="model_fallback" value="{{ spec['model']['fallback'] or '' }}"
+                   placeholder="se usa si el primario falla">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Modelo de razonamiento (opcional)</label>
+            <input class="form-control" name="model_router" value="{{ spec['model']['router'] or '' }}"
+                   placeholder="para turnos difíciles (difficulty router)">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Presupuesto USD/conversación</label>
+            <input class="form-control" type="number" step="0.01" min="0"
+                   name="policy_budget" value="{{ spec['policies']['budgetUsdPerConversation'] or 0 }}">
+          </div>
+          <div class="col-12">
+            <button class="btn btn-primary">Guardar cerebro</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="alert alert-light border small mb-0">
+      <strong>Modelo de IA (BYOK)</strong> (proveedor/api key) se configura en la pestaña
+      <a href="/admin/configuracion">Identidad</a>. El modelo de razonamiento por defecto
+      viene del <code>.env</code>; acá lo definís por tenant.
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if tab == 'memoria' %}
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header fw-semibold">Memoria del agente</div>
+      <div class="card-body">
+        <form method="post" action="/admin/configuracion/memoria" class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Turnos de contexto (working memory)</label>
+            <input class="form-control" type="number" min="1" max="200"
+                   name="memory_short_term_turns" value="{{ spec['memory']['shortTermTurns'] }}">
+            <div class="form-text">Cuántos turnos recientes ve el modelo. Default: 30.</div>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Recall: topK</label>
+            <input class="form-control" type="number" min="0" max="20"
+                   name="rag_top_k" value="{{ (spec['memory']['rag'] or {}).get('topK', 0) }}">
+            <div class="form-text">0 = desactivado.</div>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Recall: similitud mínima</label>
+            <input class="form-control" type="number" step="0.05" min="0" max="1"
+                   name="rag_min_score" value="{{ (spec['memory']['rag'] or {}).get('minScore', 0.6) }}">
+            <div class="form-text">0.6 = recall permisivo; 0.9 = solo coincidencias muy cercanas.</div>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-primary">Guardar memoria</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="alert alert-light border small mb-0">
+      La memoria semántica (recall) requiere un proveedor de embeddings configurado
+      en el <code>.env</code> (<code>EMBEDDING_PROVIDER</code>). Sin él, el recall
+      queda inactivo aunque esté configurado acá.
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if tab == 'habilidades' %}
+<div class="card">
+  <div class="card-header fw-semibold">
+    Flujo de atención
+    {% if flow_source %}<span class="badge text-bg-secondary">{{ flow_source }}</span>{% endif %}
+  </div>
+  <div class="card-body">
+    <p class="text-secondary small">
+      Base de comportamiento del pack: cada etapa agrupa las tools que corresponden
+      a ese momento de la atención. Se personaliza por tenant en
+      <code>TENANTS_ROOT/&lt;slug&gt;/flow.json</code> (agregar/quitar/reordenar tools
+      o etapas). Sincronizá con <code>agent-core flow sync &lt;slug&gt;</code>.
+    </p>
+    {% if flow_sections %}
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
+        <thead>
+          <tr><th>#</th><th>Etapa</th><th>Herramientas</th></tr>
+        </thead>
+        <tbody>
+          {% for s in flow_sections %}
+          <tr>
+            <td class="text-secondary">{{ loop.index }}</td>
+            <td>
+              <b>{{ s.label }}</b>
+              {% if s.purpose %}<div class="text-secondary small">{{ s.purpose }}</div>{% endif %}
+            </td>
+            <td>{% for t in s.tools %}<code>{{ t }}</code>{{ " " if not loop.last }}{% endfor %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if flow_unknown %}
+    <div class="alert alert-warning py-2 small mb-0">
+      Tools del flujo no disponibles para este tenant:
+      {% for t in flow_unknown %}<code>{{ t }}</code>{{ " " if not loop.last }}{% endfor %}
+    </div>
+    {% endif %}
+    {% else %}
+    <p class="text-secondary small mb-0">Sin flujo: habilitá un pack con <code>flow.json</code> o corré <code>agent-core flow sync &lt;slug&gt;</code>.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mt-3">
+  <div class="card-header fw-semibold">Habilidades (tools)</div>
+  <div class="card-body">
+    <p class="text-secondary small">
+      Habilitá o deshabilitá tools del asistente y poné límites. Los <b>packs</b>
+      (conjuntos de capacidades) se gestionan en <a href="/admin/plugins">Plugins</a>.
+    </p>
+    <form method="post" action="/admin/configuracion/habilidades">
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead>
+            <tr><th>Tool</th><th>Pack</th><th>Activa</th><th>Máx./conversación</th><th>Requiere confirmar</th></tr>
+          </thead>
+          <tbody>
+            {% set bindings = {} %}
+            {% for b in spec['tools'] %}{% set _ = bindings.update({b['tool']: b}) %}{% endfor %}
+            {% for t in all_tools %}
+            {% set b = bindings.get(t.name, {}) %}
+            <tr>
+              <td>
+                <code>{{ t.name }}</code>
+                <div class="text-secondary small">{{ t.description[:90] }}</div>
+              </td>
+              <td><span class="badge text-bg-secondary">{{ t.plugin_id }}</span></td>
+              <td>
+                <input type="checkbox" class="form-check-input" name="tool_enabled:{{ t.name }}"
+                       {% if b.get('enabled', true) %}checked{% endif %}>
+              </td>
+              <td>
+                <input type="number" class="form-control form-control-sm" style="max-width:100px"
+                       min="0" name="tool_maxcalls:{{ t.name }}"
+                       value="{{ b.get('maxCallsPerConversation') or 0 }}">
+              </td>
+              <td>
+                <input type="checkbox" class="form-check-input" name="tool_requires:{{ t.name }}"
+                       {% if b.get('requiresConfirmation') %}checked{% endif %}>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="text-secondary">No hay tools registradas.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <button class="btn btn-primary">Guardar habilidades</button>
+    </form>
+  </div>
+</div>
+
+<div class="card mt-3">
+  <div class="card-header fw-semibold">Tools declarativas (HTTP)</div>
+  <div class="card-body">
+    <p class="text-secondary small">
+      Definí tools del negocio sin escribir código (ADR-0052): cada una llama a un
+      endpoint HTTP autorizado. JSON con <code>name</code>, <code>description</code>,
+      <code>method</code> (GET/POST), <code>url</code> (con <code>{param}</code>),
+      <code>allowed_domains</code>, y opcional <code>headers</code>/<code>parameters</code>/<code>body</code>.
+    </p>
+    <form method="post" action="/admin/configuracion/habilidades">
+      <textarea name="declarative_tools_json" class="form-control font-monospace" rows="8"
+                placeholder='[{"name": "consultar_pedido", "description": "Estado de pedido", "method": "GET", "url": "https://api.negocio.com/orders/{order_id}", "allowed_domains": ["api.negocio.com"]}]'>{{ declarative_tools_json }}</textarea>
+      <button class="btn btn-primary mt-2">Guardar tools declarativas</button>
+    </form>
+  </div>
+</div>
+
+<div class="card mt-3">
+  <div class="card-header fw-semibold">Guardrails propios del negocio</div>
+  <div class="card-body">
+    <p class="text-secondary small">
+      Reglas propias además de los guardrails de los packs. Una regla por línea:
+      <code>forbidden_phrase | frase1, frase2 | retry|escalate</code>,
+      <code>required_tool | frase que afirma | nombre_tool | retry|escalate</code> o
+      <code>max_length | 500 | retry|escalate</code>. Se guardan en el AgentSpec.
+    </p>
+    <form method="post" action="/admin/configuracion/habilidades">
+      <textarea name="guardrails_text" class="form-control font-monospace" rows="5"
+                placeholder="forbidden_phrase | garantizado, 100% seguro | retry">{{ guardrails_text }}</textarea>
+      <button class="btn btn-primary mt-2">Guardar guardrails</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{% if tab == 'avanzado' %}
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header fw-semibold">AgentSpec (JSON crudo) <span class="text-secondary small">— modo avanzado</span></div>
+      <div class="card-body">
+        <p class="text-secondary small">
+          La configuración normal del agente se edita en las pestañas
+          <a href="/admin/configuracion">Identidad</a>, <a href="/admin/configuracion?tab=cerebro">Cerebro</a>,
+          <a href="/admin/configuracion?tab=memoria">Memoria</a> y <a href="/admin/configuracion?tab=habilidades">Habilidades</a>.
+          Este editor es para ajustes finos: si lo llenás, <b>reemplaza todo el formulario</b>
+          (debe ser un AgentSpec válido, contrato v2). Guardar crea y activa una versión nueva.
+        </p>
+        <form method="post" action="/admin/spec">
+          <textarea class="form-control font-monospace" name="raw_json" rows="14"
+                    placeholder='{"id": "...", "version": "1.0.0", "tenantId": "...", "persona": {...}, ...}'></textarea>
+          <div class="d-flex justify-content-between align-items-center mt-3">
+            <span class="text-secondary small">Guardar y activar nueva versión</span>
+            <button class="btn btn-primary">Guardar AgentSpec</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header fw-semibold">Versiones del AgentSpec</div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0">
+          <thead><tr><th>Versión</th><th>Activa</th><th>Creada</th><th></th></tr></thead>
+          <tbody>
+            {% for v in versions %}
+            <tr>
+              <td>{{ v.version }}</td>
+              <td>{% if v.is_active %}<span class="badge bg-success">activa</span>{% else %}—{% endif %}</td>
+              <td class="text-secondary small">{{ v.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+              <td class="text-end">
+                {% if not v.is_active %}
+                <form method="post" action="/admin/configuracion/spec/activar" class="d-inline"
+                      onsubmit="return confirm('¿Activar la versión {{ v.version }}? Reemplaza la activa.');">
+                  <input type="hidden" name="record_id" value="{{ v.id }}">
+                  <button class="btn btn-sm btn-outline-primary py-0">Activar</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="text-secondary small">Sin versiones.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="alert alert-light border small mt-3 mb-0">
+      Las <b>extensions</b> (personalización por tenant) y otros campos sin UI se editan
+      aquí en el JSON. Los <b>packs</b> se habilitan en <a href="/admin/plugins">Plugins</a>.
+    </div>
+    <div class="card mt-3">
+      <div class="card-header fw-semibold">Calidad (evals)</div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Spec</th><th>Ref</th><th>Resultado</th><th>Fecha</th></tr></thead>
+          <tbody>
+            {% for e in eval_runs %}
+            <tr>
+              <td>v{{ e.spec_version }}</td>
+              <td class="text-secondary small">{{ e.git_ref }}</td>
+              <td>
+                <span class="badge text-bg-{{ 'success' if e.total and e.passed == e.total else 'warning' }}">
+                  {{ e.passed }}/{{ e.total }}
+                </span>
+              </td>
+              <td class="text-secondary small">{{ e.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="text-secondary small">Sin corridas. Corré <code>python evals/runner.py --tenant &lt;slug&gt;</code>.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
 {% endblock %}

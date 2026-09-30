@@ -2,7 +2,9 @@
   "name": "objecion-promocion-no-aplica-09",
   "requires_plugins": ["pack_commerce"],
   "conversation": [
-    {"role": "user", "content": "Me dijeron que hay 2x1 en todo. Aplica a mi pedido, ¿no?"}
+    {"role": "user", "content": "Quiero cotizar 2 unidades del A-001."},
+    {"role": "assistant", "content": "Tu cotización #COT-011 por 2 unidades del A-001 queda en $36.000."},
+    {"role": "user", "content": "Me dijeron que hay 2x1 en todo. ¿Aplica a mi cotización #COT-011?"}
   ],
   "assertions": {
     "must_call_tool": "aplicar_promocion",

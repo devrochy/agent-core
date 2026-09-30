@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Editar cuota{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Editar cuota #{{ cuota.numero }}</h1>
+<p class="text-secondary">Los cambios quedan registrados en la auditoría.</p>
+
+<div class="card"><div class="card-body">
+  <form method="post" action="/cobranza/cuotas/{{ cuota.id }}/editar" class="row g-3" style="max-width: 640px;">
+    <div class="col-md-4">
+      <label class="form-label">Valor esperado</label>
+      <input type="number" step="1" min="1" name="valor" value="{{ cuota.valor|int }}" class="form-control" required>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Fecha de vencimiento</label>
+      <input type="date" name="vence" value="{{ cuota.vence }}" class="form-control" required>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Estatus</label>
+      <select name="estatus" class="form-select">
+        {% for e in estatus %}<option value="{{ e }}" {{ 'selected' if e == cuota.estatus else '' }}>{{ e }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-12">
+      <button class="btn btn-primary">Guardar</button>
+      {% if cliente_id %}<a href="/cobranza/clientes/{{ cliente_id }}" class="btn btn-link">Cancelar</a>{% endif %}
+    </div>
+  </form>
+</div></div>
+{% endblock %}

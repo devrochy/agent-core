@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Cobranza · Resumen{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-3">Cobranza</h1>
+<div class="row g-3">
+  {% for k in kpis %}
+  <div class="col-6 col-md-3">
+    <div class="card kpi-card"><div class="card-body">
+      <div class="text-secondary small">{{ k.label }}</div>
+      <div class="value">{{ k.value }}</div>
+    </div></div>
+  </div>
+  {% endfor %}
+</div>
+<p class="text-secondary mt-3">
+  Gestiona <a href="/cobranza/carteras">Carteras</a>, <a href="/cobranza/gestores">Gestores</a>,
+  <a href="/cobranza/clientes">Clientes</a> y <a href="/cobranza/cobros">Cobros</a>.
+</p>
+{% endblock %}

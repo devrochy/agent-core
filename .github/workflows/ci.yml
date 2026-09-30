@@ -2,12 +2,18 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `develop` recibe lotes por push directo además de PRs: se gatean igual.
+    branches: [main, develop]
   pull_request:
 
 jobs:
   gate:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
+    # Seguridad: no ejecutar workflows de PRs de forks en el runner self-hosted.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    concurrency:
+      group: ci-${{ github.ref }}
+      cancel-in-progress: true
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -15,7 +21,7 @@ jobs:
           POSTGRES_USER: agent_core
           POSTGRES_PASSWORD: agent_core
           POSTGRES_DB: agent_core
-        ports: ["5432:5432"]
+        ports: ["55432:5432"]
         options: >-
           --health-cmd "pg_isready -U agent_core"
           --health-interval 5s
@@ -23,34 +29,55 @@ jobs:
           --health-retries 12
       redis:
         image: redis:7-alpine
-        ports: ["6379:6379"]
+        ports: ["56379:6379"]
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-retries 12
     env:
-      DATABASE_URL: postgresql+asyncpg://app_runtime:app_runtime@localhost:5432/agent_core
-      MIGRATIONS_DATABASE_URL: postgresql+asyncpg://agent_core:agent_core@localhost:5432/agent_core
-      REDIS_URL: redis://localhost:6379/0
-      MASTER_ENCRYPTION_KEY: ci-only-not-a-secret-master-key
+      DATABASE_URL: postgresql+asyncpg://app_runtime:app_runtime@localhost:55432/agent_core
+      MIGRATIONS_DATABASE_URL: postgresql+asyncpg://agent_core:agent_core@localhost:55432/agent_core
+      REDIS_URL: redis://localhost:56379/0
+      MASTER_ENCRYPTION_KEY: GpsiZ2sgMd4SvLHGp4Bs5xdaQLlQ1cByyK6DCNxVwL4=
+      TOKEN_MASTER_KEYS: '{"k1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}'
+      TOKEN_ACTIVE_KEY_ID: k1
       APP_SECRET_KEY: ci-only-not-a-secret-app-key
       APP_ENV: development
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Entorno Python (self-hosted)
+        # El runner es Linux Mint: `actions/setup-python` no tiene builds para esa
+        # distro, así que se usa el Python del propio runner en un venv aislado.
+        run: |
+          python3 --version
+          python3 -c "import sys; assert sys.version_info >= (3, 12), 'Se requiere Python 3.12+'"
+          python3 -m venv .venv-ci
+          echo "$PWD/.venv-ci/bin" >> "$GITHUB_PATH"
+          .venv-ci/bin/python -m pip install --upgrade pip
 
       - name: Instalar (core + plugins)
         run: |
+          pip install -e packages/contracts
           pip install -e ".[dev]"
           bash scripts/install_plugins.sh
 
       - name: Lint
         run: ruff check core cli scripts alembic evals tests
 
+      - name: Postgres del CI con PostGIS (lo exige pack-cobranza, ADR-0058)
+        # El servicio arranca de `pgvector/pgvector:pg16` (sin PostGIS). El pack
+        # de cobranza necesita la extensión, así que se instala en el contenedor
+        # antes de migrar. En producción se usa docker/postgres/Dockerfile.
+        run: |
+          docker exec ${{ job.services.postgres.id }} \
+            bash -c "apt-get update -qq && apt-get install -y -qq postgresql-16-postgis-3"
+
       - name: Migrar y sembrar
+        env:
+          # Password determinística solo para que los tests de integración puedan
+          # loguearse (default de init_db.py es aleatoria, correcto en producción).
+          ADMIN_PASSWORD: admin123
         run: |
           agent-core db migrate
           python scripts/init_db.py
@@ -58,8 +85,31 @@ jobs:
       - name: Tests unitarios
         run: pytest -q
 
+      - name: Tests de integración (aislamiento multi-tenant, RLS, webhooks)
+        env:
+          AGENT_CORE_INTEGRATION: "1"
+        run: pytest tests/integration -q
+
       - name: Gate de evals (subconjunto crítico)
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         # Camino feliz + manipulación + escalamiento: las regresiones que importan.
         run: python evals/runner.py "06,07,08,21,22,23,24,25,26"
+
+  # Escaneo de secretos sobre la historia (falla si aparece una credencial real).
+  # Las claves de prueba del repo están allowlisteadas en `.gitleaks.toml`.
+  secret-scan:
+    runs-on: [self-hosted, linux, x64]
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks (secret scan)
+        # Binario fijado en $RUNNER_TEMP: sin caché ni /tmp (que dejaba trabado
+        # a `gitleaks-action` en el runner self-hosted).
+        run: |
+          VER=8.24.3
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/gitleaks" detect --source . --redact -v

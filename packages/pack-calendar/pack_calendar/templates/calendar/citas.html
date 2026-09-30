@@ -1,0 +1,537 @@
+{% extends "base.html" %}
+{% block title %}Calendar · Citas{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4">Calendar · Citas</h1>
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div></div>
+  <button class="btn btn-outline-secondary btn-sm" id="btn-actividades">
+    <i class="bi bi-clock-history"></i> Actividades
+  </button>
+</div>
+<div class="alert alert-warning d-none" id="google-error-alert">
+  No se pudieron cargar los eventos de Google (revisá la conexión en Calendar · Conexión).
+  Mostrando las citas del asistente.
+</div>
+<div class="alert alert-success d-none" id="toast-ok"></div>
+<div class="alert alert-danger d-none" id="toast-error"></div>
+<div class="card">
+  <div class="card-body">
+    <div id="calendar"></div>
+  </div>
+</div>
+
+{# Modal de detalle de la cita/evento #}
+<div class="modal fade" id="modal-cita" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="modal-cita-titulo">Cita</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="modal-cita-cuerpo"></div>
+      <div class="modal-footer" id="modal-cita-acciones"></div>
+    </div>
+  </div>
+</div>
+
+{# Modal crear/editar cita #}
+<div class="modal fade" id="modal-form" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="form-cita" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title" id="modal-form-titulo">Nueva cita</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="f-id" value="">
+          <div class="mb-3">
+            <label class="form-label" for="f-title">Título *</label>
+            <input type="text" class="form-control" id="f-title" required maxlength="200" placeholder="Ej: Cita con Carlos Ruiz">
+          </div>
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label class="form-label" for="f-type">Tipo de cita</label>
+              <select class="form-select" id="f-type">
+                <option value="">— Sin tipo —</option>
+              </select>
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label" for="f-email">Cliente (email)</label>
+              <input type="email" class="form-control" id="f-email" placeholder="cliente@mail.com">
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label class="form-label" for="f-start">Inicio</label>
+              <input type="datetime-local" class="form-control" id="f-start" required>
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label" for="f-end">Fin</label>
+              <input type="datetime-local" class="form-control" id="f-end" required>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="f-notes">Notas</label>
+            <textarea class="form-control" id="f-notes" rows="2"></textarea>
+          </div>
+          <div class="form-check" id="f-notify-wrap">
+            <input class="form-check-input" type="checkbox" id="f-notify" checked>
+            <label class="form-check-label" for="f-notify">Avisar al cliente por WhatsApp si cambia el horario</label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+          <button type="submit" class="btn btn-primary" id="f-submit">Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{# Modal de confirmación al mover/redimensionar una cita #}
+<div class="modal fade" id="modal-confirmar" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Confirmar movimiento</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p id="confirmar-texto" class="mb-3"></p>
+        <div class="form-check" id="confirmar-notify-wrap">
+          <input class="form-check-input" type="checkbox" id="confirmar-notify" checked>
+          <label class="form-check-label" for="confirmar-notify">Avisar al cliente por WhatsApp</label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" id="confirmar-cancelar">Cancelar</button>
+        <button type="button" class="btn btn-primary" id="confirmar-aceptar">Confirmar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# Modal de actividades/historial de las citas #}
+<div class="modal fade" id="modal-actividades" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="modal-actividades-titulo">Actividades de las citas</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="modal-actividades-cuerpo">
+        <div class="text-secondary">Cargando…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@fullcalendar/core@6.1.15/locales/es.global.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const defaultDurationMin = {{ calendar_default_duration | tojson }};
+  const calendarEl = document.getElementById('calendar');
+  let tipos = [];
+  let pendingInfo = null; // info del eventDrop/eventResize a la espera de confirmación
+
+  function toast(msg, ok) {
+    const el = document.getElementById(ok ? 'toast-ok' : 'toast-error');
+    el.textContent = msg;
+    el.classList.remove('d-none');
+    setTimeout(function () { el.classList.add('d-none'); }, 4000);
+  }
+
+  // El calendario usa la zona horaria del navegador del admin (timeZone 'local'):
+  // FullCalendar expone Dates reales y todo (bloque, form, modal) queda en la
+  // misma hora. No hace falta ninguna conversión de zona horaria acá.
+  function toLocalValue(d) {
+    const pad = function (n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+           'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  function fmt(fecha) {
+    if (!fecha) return '—';
+    const d = fecha instanceof Date ? fecha : new Date(fecha);
+    try { return d.toLocaleString('es-CO', { dateStyle: 'full', timeStyle: 'short' }); }
+    catch (e) { return d.toLocaleString(); }
+  }
+
+  function fmtEvent(ev) {
+    if (!ev.start) return '—';
+    if (ev.allDay) {
+      const s = ev.start.toLocaleDateString('es-CO', { dateStyle: 'full' });
+      const e = ev.end && ev.end.getTime() > ev.start.getTime()
+        ? ev.end.toLocaleDateString('es-CO', { dateStyle: 'full' }) : null;
+      return e && e !== s ? s + ' → ' + e : s;
+    }
+    const s = fmt(ev.start);
+    const e = ev.end && ev.end.getTime() !== ev.start.getTime() ? fmt(ev.end) : null;
+    return e ? s + ' → ' + e : s;
+  }
+
+  function badge(estado) {
+    const map = { scheduled: ['agendada', 'success'], cancelled: ['cancelada', 'secondary'], confirmed: ['confirmado', 'info'] };
+    const [label, tipo] = map[estado] || [estado, 'secondary'];
+    return '<span class="badge text-bg-' + tipo + '">' + label + '</span>';
+  }
+
+  function tipoNombre(id) {
+    const t = tipos.find(function (x) { return x.id === id; });
+    return t ? t.name : '';
+  }
+
+  async function cargarTipos() {
+    try {
+      const r = await fetch('/calendar/tipos.json', { credentials: 'same-origin' });
+      if (!r.ok) return;
+      const data = await r.json();
+      tipos = data.tipos || [];
+      const sel = document.getElementById('f-type');
+      tipos.forEach(function (t) {
+        const opt = document.createElement('option');
+        opt.value = t.id; opt.textContent = t.name + ' (' + t.duration_minutes + ' min)';
+        sel.appendChild(opt);
+      });
+    } catch (e) { /* opcional */ }
+  }
+
+  function cargarTiposCita(d) {
+    const sel = document.getElementById('f-type');
+    sel.value = d || '';
+  }
+
+  function abrirForm(mode, prefill) {
+    document.getElementById('modal-form-titulo').textContent = mode === 'edit' ? 'Editar cita' : 'Nueva cita';
+    document.getElementById('f-submit').textContent = mode === 'edit' ? 'Guardar cambios' : 'Crear cita';
+    document.getElementById('form-cita').dataset.mode = mode;
+    // El aviso por WhatsApp aplica al editar (cambio de horario), no al crear.
+    document.getElementById('f-notify-wrap').classList.toggle('d-none', mode !== 'edit');
+    if (mode === 'create') {
+      document.getElementById('f-id').value = '';
+      document.getElementById('f-title').value = '';
+      document.getElementById('f-email').value = '';
+      document.getElementById('f-notes').value = '';
+      document.getElementById('f-notify').checked = true;
+      cargarTiposCita('');
+    } else {
+      const p = prefill.extendedProps || {};
+      document.getElementById('f-id').value = p.appointment_id || '';
+      document.getElementById('f-title').value = prefill.title || '';
+      document.getElementById('f-email').value = p.attendee_email || '';
+      document.getElementById('f-notes').value = p.description || '';
+      document.getElementById('f-notify').checked = true;
+      cargarTiposCita(p.appointment_type_id || '');
+    }
+    document.getElementById('f-start').value = prefill.start ? toLocalValue(prefill.start) : '';
+    document.getElementById('f-end').value = prefill.end ? toLocalValue(prefill.end) : '';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-form')).show();
+  }
+
+  async function abrirActividades(appointmentId) {
+    document.getElementById('modal-actividades-titulo').textContent =
+      appointmentId ? 'Historial de la cita' : 'Actividades de las citas';
+    document.getElementById('modal-actividades-cuerpo').innerHTML = '<div class="text-secondary">Cargando…</div>';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-actividades')).show();
+    try {
+      const r = await fetch('/calendar/actividades.json', { credentials: 'same-origin' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      let items = (data.actividades || []);
+      if (appointmentId) {
+        items = items.filter(function (a) { return a.appointment_id === appointmentId; });
+      }
+      if (!items.length) {
+        document.getElementById('modal-actividades-cuerpo').innerHTML =
+          '<p class="text-secondary mb-0">Todavía no hay actividades registradas.</p>';
+        return;
+      }
+      const etiquetas = { programada: 'Programada', reprogramada: 'Reprogramada', cancelada: 'Cancelada' };
+      const badges = { programada: 'success', reprogramada: 'info', cancelada: 'danger' };
+      document.getElementById('modal-actividades-cuerpo').innerHTML =
+        '<ul class="list-group">' +
+        items.map(function (a) {
+          const titulo = '<strong>' + (a.title || 'Cita') + '</strong>';
+          const etiqueta = '<span class="badge text-bg-' + (badges[a.action] || 'secondary') + '">' +
+            (etiquetas[a.action] || a.action) + '</span>';
+          const cuando = a.new_start ? 'Nuevo: ' + fmt(new Date(a.new_start))
+            : (a.old_start ? 'Cancelada (era ' + fmt(new Date(a.old_start)) + ')' : '');
+          const origen = a.actor === 'panel' ? 'Panel' : 'Asistente';
+          return '<li class="list-group-item">' +
+            '<div class="d-flex justify-content-between align-items-center">' + titulo + ' ' + etiqueta +
+            '<small class="text-secondary">' + fmt(new Date(a.created_at)) + ' · ' + origen + '</small></div>' +
+            (cuando ? '<small class="text-secondary">' + cuando + '</small>' : '') +
+            '</li>';
+        }).join('') +
+        '</ul>';
+    } catch (e) {
+      document.getElementById('modal-actividades-cuerpo').innerHTML =
+        '<div class="text-danger">No se pudieron cargar las actividades.</div>';
+    }
+  }
+
+  function abrirDetalle(info) {
+    const p = info.event.extendedProps || {};
+    const estado = p.status || 'confirmed';
+    document.getElementById('modal-cita-titulo').textContent = info.event.title;
+    document.getElementById('modal-cita-cuerpo').innerHTML =
+      '<dl class="row mb-0">' +
+        '<dt class="col-sm-4">Cuándo</dt><dd class="col-sm-8">' + fmtEvent(info.event) + '</dd>' +
+        '<dt class="col-sm-4">Estado</dt><dd class="col-sm-8">' + badge(estado) + '</dd>' +
+        '<dt class="col-sm-4">Origen</dt><dd class="col-sm-8">' +
+          (p.source === 'asistente' ? 'Asistente' : 'Google (externo)') + '</dd>' +
+        (p.appointment_type_id && tipoNombre(p.appointment_type_id) ? '<dt class="col-sm-4">Tipo</dt><dd class="col-sm-8">' + tipoNombre(p.appointment_type_id) + '</dd>' : '') +
+        (p.attendee_email ? '<dt class="col-sm-4">Cliente</dt><dd class="col-sm-8">' + p.attendee_email + '</dd>' : '') +
+        (p.description ? '<dt class="col-sm-4">Detalle</dt><dd class="col-sm-8">' + p.description + '</dd>' : '') +
+        '<dt class="col-sm-4">Cómo editar</dt><dd class="col-sm-8 text-secondary">' +
+          (p.source === 'asistente' ? 'Arrastrá el bloque para moverlo; estirá el borde para cambiar la duración.' : 'Arrastralo para moverlo (evento externo).') +
+        '</dd>' +
+      '</dl>';
+    const acciones = document.getElementById('modal-cita-acciones');
+    acciones.innerHTML = '';
+    if (p.appointment_id) {
+      const ed = document.createElement('button');
+      ed.className = 'btn btn-outline-primary me-1';
+      ed.textContent = 'Editar';
+      ed.addEventListener('click', function () {
+        bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-cita')).hide();
+        abrirForm('edit', info.event);
+      });
+      acciones.appendChild(ed);
+
+      const hist = document.createElement('button');
+      hist.className = 'btn btn-outline-secondary me-1';
+      hist.textContent = 'Historial';
+      hist.addEventListener('click', function () {
+        bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-cita')).hide();
+        abrirActividades(p.appointment_id);
+      });
+      acciones.appendChild(hist);
+    }
+    if (p.html_link) {
+      const a = document.createElement('a');
+      a.className = 'btn btn-outline-secondary me-1';
+      a.href = p.html_link; a.target = '_blank'; a.rel = 'noopener';
+      a.textContent = 'Abrir en Google';
+      acciones.appendChild(a);
+    }
+    if (p.can_cancel) {
+      const b = document.createElement('button');
+      b.className = 'btn btn-outline-danger';
+      b.textContent = 'Cancelar cita';
+      b.addEventListener('click', async function () {
+        if (!confirm('¿Cancelar esta cita? Se borra también en Google Calendar.')) return;
+        try {
+          const r = await fetch('/calendar/citas/' + p.appointment_id + '/cancelar',
+            { method: 'POST', credentials: 'same-origin' });
+          if (!r.ok && r.status !== 303) throw new Error('HTTP ' + r.status);
+          toast('Cita cancelada ✓', true);
+          bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-cita')).hide();
+          calendar.refetchEvents();
+        } catch (e) {
+          toast('No se pudo cancelar la cita', false);
+        }
+      });
+      acciones.appendChild(b);
+    }
+    if (!acciones.children.length) {
+      const cerrar = document.createElement('button');
+      cerrar.className = 'btn btn-secondary';
+      cerrar.setAttribute('data-bs-dismiss', 'modal');
+      cerrar.textContent = 'Cerrar';
+      acciones.appendChild(cerrar);
+    }
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-cita')).show();
+  }
+
+  async function guardarForm(ev) {
+    ev.preventDefault();
+    const mode = document.getElementById('form-cita').dataset.mode;
+    const startRaw = new Date(document.getElementById('f-start').value);
+    const endRaw = new Date(document.getElementById('f-end').value);
+    if (isNaN(startRaw) || isNaN(endRaw) || endRaw <= startRaw) {
+      toast('El fin debe ser posterior al inicio', false);
+      return;
+    }
+    const body = {
+      title: document.getElementById('f-title').value.trim(),
+      attendee_email: document.getElementById('f-email').value.trim(),
+      notes: document.getElementById('f-notes').value.trim(),
+      appointment_type_id: document.getElementById('f-type').value || null,
+      start: startRaw.toISOString(),
+      end: endRaw.toISOString(),
+      notify: document.getElementById('f-notify').checked
+    };
+    if (!body.title) { toast('El título es obligatorio', false); return; }
+    const id = document.getElementById('f-id').value;
+    try {
+      const url = mode === 'edit' ? '/calendar/citas/' + id : '/calendar/citas/crear';
+      const method = mode === 'edit' ? 'PATCH' : 'POST';
+      const r = await fetch(url, {
+        method: method, credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await r.json().catch(function () { return {}; });
+      if (!r.ok) {
+        toast(data.detail || 'Error al guardar la cita', false);
+        return;
+      }
+      const base = mode === 'edit' ? 'Cita actualizada' : 'Cita creada';
+      toast(base + (data.notified ? ' y se avisó al cliente por WhatsApp ✓' : ' ✓'), true);
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-form')).hide();
+      calendar.refetchEvents();
+    } catch (e) {
+      toast('No se pudo guardar la cita', false);
+    }
+  }
+
+  async function aplicarMovimiento(info, notify) {
+    const p = info.event.extendedProps || {};
+    const body = {
+      start: info.event.start ? info.event.start.toISOString() : null,
+      end: info.event.end ? info.event.end.toISOString() : null,
+      notify: notify
+    };
+    let url;
+    if (p.appointment_id) {
+      url = '/calendar/citas/' + p.appointment_id;
+    } else if (p.google_event_id) {
+      url = '/calendar/citas/google/' + encodeURIComponent(p.google_event_id);
+    } else {
+      calendar.refetchEvents();
+      return;
+    }
+    try {
+      const r = await fetch(url, {
+        method: 'PATCH', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await r.json().catch(function () { return {}; });
+      if (!r.ok) {
+        toast(data.detail || 'No se pudo mover la cita', false);
+        calendar.refetchEvents();
+        return;
+      }
+      toast(data.notified ? 'Cita movida y se avisó al cliente por WhatsApp ✓' : 'Cita movida ✓', true);
+      calendar.refetchEvents();
+    } catch (e) {
+      toast('No se pudo mover la cita', false);
+      calendar.refetchEvents();
+    }
+  }
+
+  function pedirConfirmacion(info) {
+    const p = info.event.extendedProps || {};
+    const ev = info.event;
+    const oldEv = info.oldEvent;
+    const de = oldEv && oldEv.start
+      ? fmt(oldEv.start) + (oldEv.end && oldEv.end.getTime() !== oldEv.start.getTime() ? ' → ' + fmt(oldEv.end) : '')
+      : '—';
+    const a = ev.start
+      ? fmt(ev.start) + (ev.end && ev.end.getTime() !== ev.start.getTime() ? ' → ' + fmt(ev.end) : '')
+      : '—';
+    document.getElementById('confirmar-texto').textContent =
+      'Mover "' + (ev.title || 'Cita') + '" de ' + de + ' a ' + a + '.';
+    const wrap = document.getElementById('confirmar-notify-wrap');
+    const box = document.getElementById('confirmar-notify');
+    if (p.appointment_id) {
+      wrap.classList.remove('d-none');
+      box.checked = true;
+    } else {
+      wrap.classList.add('d-none');
+      box.checked = false;
+    }
+    pendingInfo = info;
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-confirmar')).show();
+  }
+
+  const calendar = new FullCalendar.Calendar(calendarEl, {
+    initialView: 'timeGridWeek',
+    initialDate: {{ calendar_initial_date | tojson }},
+    locale: 'es',
+    timeZone: 'local',
+    height: 'auto',
+    nowIndicator: true,
+    selectable: true,
+    selectMirror: true,
+    editable: true,
+    eventStartEditable: true,
+    eventDurationEditable: true,
+    headerToolbar: {
+      left: 'prev,next today',
+      center: 'title',
+      right: 'dayGridMonth,timeGridWeek,timeGridDay'
+    },
+    buttonText: { month: 'Mes', week: 'Semana', day: 'Día', today: 'Hoy' },
+    select: function (info) {
+      // timeZone 'local': info.start/end son Dates reales de la tz del navegador.
+      const start = new Date(info.start);
+      let end = info.end ? new Date(info.end) : new Date(start.getTime() + defaultDurationMin * 60000);
+      if (info.allDay) {
+        // Selección de día completo (vista mes): arrancar a las 09:00 local.
+        start.setHours(9, 0, 0, 0);
+        end = new Date(start.getTime() + defaultDurationMin * 60000);
+      }
+      abrirForm('create', { start: start, end: end });
+    },
+    events: function (info, success, failure) {
+      const params = '?start=' + encodeURIComponent(info.start.toISOString()) +
+                     '&end=' + encodeURIComponent(info.end.toISOString());
+      fetch('/calendar/citas/calendario.json' + params, { credentials: 'same-origin' })
+        .then(function (r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.json(); })
+        .then(function (data) {
+          if (data.google_error) {
+            document.getElementById('google-error-alert').classList.remove('d-none');
+          } else {
+            document.getElementById('google-error-alert').classList.add('d-none');
+          }
+          success(data.events || []);
+        })
+        .catch(failure);
+    },
+    eventSourceFailure: function () {
+      document.getElementById('google-error-alert').classList.remove('d-none');
+    },
+    eventClick: abrirDetalle,
+    eventDrop: pedirConfirmacion,
+    eventResize: pedirConfirmacion,
+    eventDidMount: function (info) {
+      if ((info.event.extendedProps.status || '') === 'cancelled') {
+        info.el.style.opacity = 0.45;
+        info.el.style.textDecoration = 'line-through';
+      }
+    }
+  });
+  document.getElementById('form-cita').addEventListener('submit', guardarForm);
+
+  // Confirmación de mover/redimensionar: confirmar -> PATCH (con notify);
+  // cancelar o cerrar -> revert() (la cita vuelve a su lugar).
+  document.getElementById('confirmar-aceptar').addEventListener('click', async function () {
+    const info = pendingInfo;
+    const notify = document.getElementById('confirmar-notify').checked;
+    pendingInfo = null;
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-confirmar')).hide();
+    if (info) await aplicarMovimiento(info, notify);
+  });
+  function cancelarMovimiento() {
+    if (pendingInfo) { pendingInfo.revert(); pendingInfo = null; }
+  }
+  document.getElementById('confirmar-cancelar').addEventListener('click', function () {
+    cancelarMovimiento();
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-confirmar')).hide();
+  });
+  document.getElementById('modal-confirmar').addEventListener('hidden.bs.modal', cancelarMovimiento);
+
+  document.getElementById('btn-actividades').addEventListener('click', function () {
+    abrirActividades(null);
+  });
+
+  cargarTipos();
+  calendar.render();
+});
+</script>
+{% endblock %}

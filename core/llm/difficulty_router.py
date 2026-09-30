@@ -23,6 +23,8 @@ COMPLEX_SIGNALS = re.compile(
 )
 
 LONG_MESSAGE_THRESHOLD = 400  # caracteres
+TURNOS_SIN_RESOLVER_THRESHOLD = 2
+DIFFICULTY_SCORE_THRESHOLD = 2
 
 
 @dataclass
@@ -39,11 +41,20 @@ def route_model(
     reasoning_model: str,
     routing_enabled: bool,
     requires_tools: bool,
+    long_message_threshold: int = LONG_MESSAGE_THRESHOLD,
+    turnos_sin_resolver_threshold: int = TURNOS_SIN_RESOLVER_THRESHOLD,
+    score_threshold: int = DIFFICULTY_SCORE_THRESHOLD,
 ) -> RoutingDecision:
     """Decide el modelo del turno.
 
     `requires_tools=True` fuerza el modelo default: deepseek-reasoner no soporta
     function calling y el agentic loop necesita tools disponibles.
+
+    Los 3 umbrales son parametrizables por tenant (pedido explícito del
+    usuario, ROADMAP): `AppSettings.behavior_config` en `loop.py` resuelve
+    y clampea los valores del tenant, con estas constantes como fallback
+    global si no configuró nada. Los PESOS de cada señal (2/1/2 puntos)
+    siguen fijos -- son detalle interno, no lo que se pidió parametrizar.
     """
     if not routing_enabled or requires_tools:
         return RoutingDecision(model=default_model, reason="default", allow_tools=True)
@@ -51,11 +62,11 @@ def route_model(
     difficulty_score = 0
     if COMPLEX_SIGNALS.search(message):
         difficulty_score += 2
-    if len(message) > LONG_MESSAGE_THRESHOLD:
+    if len(message) > long_message_threshold:
         difficulty_score += 1
-    if turnos_sin_resolver >= 2:
+    if turnos_sin_resolver >= turnos_sin_resolver_threshold:
         difficulty_score += 2
 
-    if difficulty_score >= 2:
+    if difficulty_score >= score_threshold:
         return RoutingDecision(model=reasoning_model, reason="complex_signals", allow_tools=False)
     return RoutingDecision(model=default_model, reason="default", allow_tools=True)

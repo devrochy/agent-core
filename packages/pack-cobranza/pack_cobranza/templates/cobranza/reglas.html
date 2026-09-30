@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Reglas de negociación{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Reglas de negociación</h1>
+<p class="text-secondary">El asistente evalúa cada propuesta contra estas reglas (determinista). Una fila por tenant.</p>
+<div class="card">
+  <div class="card-body">
+    <form method="post" action="/cobranza/reglas" class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label" for="max_dias_prorroga">Días máximos de prórroga</label>
+        <input type="number" name="max_dias_prorroga" id="max_dias_prorroga" class="form-control" value="{{ values.max_dias_prorroga }}">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label" for="min_abono_pct">Abono mínimo (%)</label>
+        <input type="number" step="0.01" name="min_abono_pct" id="min_abono_pct" class="form-control" value="{{ values.min_abono_pct }}">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label" for="max_reprogramaciones">Máximo de reprogramaciones</label>
+        <input type="number" name="max_reprogramaciones" id="max_reprogramaciones" class="form-control" value="{{ values.max_reprogramaciones }}">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label" for="umbral_saldo_autonomo">Umbral de saldo autónomo (0 = sin límite)</label>
+        <input type="number" step="1000" name="umbral_saldo_autonomo" id="umbral_saldo_autonomo" class="form-control" value="{{ values.umbral_saldo_autonomo }}">
+      </div>
+      <div class="col-12"><button class="btn btn-primary">Guardar</button></div>
+    </form>
+  </div>
+</div>
+{% endblock %}

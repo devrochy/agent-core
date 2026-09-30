@@ -52,7 +52,7 @@ idiomáticas. Equivalencias directas:
 - El flujo del turno (webhook → stream → consumer → debounce → loop → guardrails → splitter)
 - El modelo de datos (mismas tablas, mismos UNIQUE, mismo trigger de audit)
 
-## Costos estimados (asistente pequeño: ~500 conversaciones/mes)
+## Costos estimados (tenant pequeño: ~500 conversaciones/mes)
 
 | Rubro | Estimado/mes |
 |---|---|

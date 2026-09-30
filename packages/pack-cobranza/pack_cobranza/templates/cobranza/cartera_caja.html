@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Caja de la cartera{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Caja · {{ cartera }}</h1>
+{% include "cobranza/_cartera_nav.html" %}
+
+<div class="row g-3 mb-3">
+  <div class="col-6 col-md-3"><div class="card kpi-card"><div class="card-body">
+    <div class="text-secondary small">Saldo inicial</div><div class="value">{{ "{:,.0f}".format(saldo_inicial) }}</div>
+  </div></div></div>
+  <div class="col-6 col-md-3"><div class="card kpi-card"><div class="card-body">
+    <div class="text-secondary small">Entradas</div><div class="value text-success">{{ "{:,.0f}".format(entradas) }}</div>
+  </div></div></div>
+  <div class="col-6 col-md-3"><div class="card kpi-card"><div class="card-body">
+    <div class="text-secondary small">Salidas</div><div class="value text-danger">{{ "{:,.0f}".format(salidas) }}</div>
+  </div></div></div>
+  <div class="col-6 col-md-3"><div class="card kpi-card"><div class="card-body">
+    <div class="text-secondary small">Saldo actual</div><div class="value">{{ "{:,.0f}".format(saldo_actual) }}</div>
+  </div></div></div>
+</div>
+
+<div class="card mb-3"><div class="card-body">
+  <h2 class="fs-6">Ajuste manual de caja</h2>
+  <p class="text-secondary small mb-2">Corrige el saldo (arqueo, error de digitación). Queda en la auditoría con su motivo.</p>
+  <form method="post" action="/cobranza/carteras/{{ record_id }}/caja/ajuste" class="row g-2 align-items-end">
+    <div class="col-md-3"><label class="form-label">Saldo nuevo</label><input type="number" step="1" name="valor_nuevo" value="{{ saldo_actual|int }}" class="form-control form-control-sm" required></div>
+    <div class="col-md-5"><label class="form-label">Motivo</label><input type="text" name="motivo" class="form-control form-control-sm" placeholder="Arqueo de caja" required></div>
+    <div class="col-md-3"><button class="btn btn-primary btn-sm">Ajustar caja</button></div>
+  </form>
+</div></div>
+
+<h2 class="fs-5">Movimientos</h2>
+<div class="card"><div class="card-body p-0">
+<table class="table table-sm table-hover mb-0">
+  <thead><tr><th>Fecha</th><th>Tipo</th><th>Detalle</th><th class="text-end">Valor</th></tr></thead>
+  <tbody>
+    {% for m in movimientos %}
+    <tr>
+      <td class="text-nowrap">{{ m.fecha }}</td>
+      <td>{{ m.tipo }}</td>
+      <td class="text-secondary">{{ m.detalle }}</td>
+      <td class="text-end text-{{ 'success' if m.signo == '+' else 'danger' }}">{{ m.signo }}{{ "{:,.0f}".format(m.valor) }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="text-secondary text-center py-3">Sin movimientos</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div></div>
+{% endblock %}

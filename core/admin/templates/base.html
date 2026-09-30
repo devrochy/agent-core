@@ -14,6 +14,26 @@
     .sidebar .nav-link.active, .sidebar .nav-link:hover { color: #fff; background: rgba(255,255,255,.08); }
     .content { flex: 1; padding: 1.5rem; background: #f6f7f9; }
     .kpi-card .value { font-size: 1.8rem; font-weight: 700; }
+    /* Grupos de packs desplegables (ADR-0047): <details> nativo, sin JS. */
+    .sidebar details.pack-group > summary { cursor: pointer; list-style: none; }
+    .sidebar details.pack-group > summary::-webkit-details-marker { display: none; }
+    .sidebar details.pack-group > summary::after { content: "▸"; float: right; opacity: .7; }
+    .sidebar details.pack-group[open] > summary::after { content: "▾"; }
+    /* Acento propio del panel: "Probar asistente" (Fase CT). Distinto del azul
+       de Embedded Signup, del verde de "activa" y del cian de info. */
+    .btn-accent {
+      --bs-btn-color: #fff;
+      --bs-btn-bg: #4f46e5;
+      --bs-btn-border-color: #4f46e5;
+      --bs-btn-hover-color: #fff;
+      --bs-btn-hover-bg: #4338ca;
+      --bs-btn-hover-border-color: #4338ca;
+      --bs-btn-focus-shadow-rgb: 79, 70, 229;
+      --bs-btn-active-color: #fff;
+      --bs-btn-active-bg: #4338ca;
+      --bs-btn-active-border-color: #4338ca;
+    }
+    .text-accent { color: #4f46e5 !important; }
   </style>
   {% block extra_head %}{% endblock %}
 </head>
@@ -31,27 +51,80 @@
     </form>
     {% endif %}
     <ul class="nav nav-pills flex-column gap-1">
+      {% if perms and perms.get('dashboard') %}
       <li><a class="nav-link {% if section == 'dashboard' %}active{% endif %}" href="/admin">Dashboard</a></li>
+      {% endif %}
+      {% if perms and perms.get('leads') %}
+      <li><a class="nav-link {% if section == 'leads' %}active{% endif %}" href="/admin/leads">Leads</a></li>
+      {% endif %}
+      {% if perms and perms.get('conversations') %}
       <li><a class="nav-link {% if section == 'conversations' %}active{% endif %}" href="/admin/conversaciones">Conversaciones</a></li>
+      {% endif %}
+      {% if perms and perms.get('escalations') %}
       <li><a class="nav-link {% if section == 'escalations' %}active{% endif %}" href="/admin/escalaciones">Escalaciones</a></li>
+      {% endif %}
+      {% if perms and perms.get('connections') %}
       <li><a class="nav-link {% if section == 'connections' %}active{% endif %}" href="/admin/conexiones">Conexiones</a></li>
+      {% endif %}
+      {% if perms and perms.get('plugins') %}
       <li><a class="nav-link {% if section == 'plugins' %}active{% endif %}" href="/admin/plugins">Plugins</a></li>
-      <li><a class="nav-link {% if section == 'spec' %}active{% endif %}" href="/admin/spec">AgentSpec</a></li>
+      {% endif %}
+      {% if perms and perms.get('costs') %}
       <li><a class="nav-link {% if section == 'costs' %}active{% endif %}" href="/admin/costos">Costos LLM</a></li>
+      {% endif %}
+      {% if perms and perms.get('plan') %}
+      <li><a class="nav-link {% if section == 'plan' %}active{% endif %}" href="/admin/plan">Plan y consumo</a></li>
+      {% endif %}
+      {% if perms and perms.get('tenants') %}
+      <li><a class="nav-link {% if section == 'tenants' %}active{% endif %}" href="/admin/tenants">Tenants</a></li>
+      {% endif %}
+      {% if perms and perms.get('collaborators') %}
+      <li><a class="nav-link {% if section == 'collaborators' %}active{% endif %}" href="/admin/colaboradores">Colaboradores</a></li>
+      {% endif %}
+      {% if perms and perms.get('settings') %}
       <li><a class="nav-link {% if section == 'settings' %}active{% endif %}" href="/admin/configuracion">Configuración</a></li>
+      {% endif %}
     </ul>
     {% if plugin_menu %}
     <hr class="text-secondary">
+    {% set current = request.url.path %}
+    {% set is_master = admin and admin.role == 'master' %}
     {% for group in plugin_menu %}
-    <div class="text-secondary text-uppercase small px-2 mb-1">{{ group['name'] }}</div>
-    <ul class="nav nav-pills flex-column gap-1 mb-2">
-      {% for item in group['items'] %}
-      {% set current = request.url.path %}
-      {% set item_base = item['path'].rstrip('/') %}
-      {% set is_active = current == item['path'] or current == item_base or (current.startswith(item_base + '/') and item_base.count('/') >= 2) %}
-      <li><a class="nav-link {% if is_active %}active{% endif %}" href="{{ item['path'] }}">{{ item['label'] }}</a></li>
-      {% endfor %}
-    </ul>
+    {# Visibilidad por sub-sección (ADR-0063) y por rol (ADR-0061). #}
+    {% set visible = [] %}
+    {% for item in group['items'] %}
+    {% set skey = item.get('section_key') or group['id'] %}
+    {% if (not perms or perms.get(skey)) and (is_master or not item.get('master_only')) %}
+    {% set _ = visible.append(item) %}
+    {% endif %}
+    {% endfor %}
+    {% if visible %}
+    {# El grupo se muestra desplegable; arranca abierto si contiene la sección activa. #}
+    {% set ns = namespace(active=false) %}
+    {% for item in visible %}
+    {% set item_base = item['path'].rstrip('/') %}
+    {% if current == item['path'] or current == item_base or (current.startswith(item_base + '/') and item_base.count('/') >= 2) %}
+    {% set ns.active = true %}
+    {% endif %}
+    {% endfor %}
+    <details class="pack-group" {% if ns.active %}open{% endif %}>
+      <summary class="text-secondary text-uppercase small px-2 mb-1">{{ group['name'] }}</summary>
+      <ul class="nav nav-pills flex-column gap-1 mb-2">
+        {# Sub-secciones (ADR-0061): etiqueta al cambiar de `section`, preservando el orden. #}
+        {% set sec_ns = namespace(last=None) %}
+        {% for item in visible %}
+        {% set sec = item.get('section') %}
+        {% if sec and sec != sec_ns.last %}
+        <li class="text-secondary text-uppercase px-2 mt-2" style="font-size:.68rem; letter-spacing:.06em;">{{ sec }}</li>
+        {% set sec_ns.last = sec %}
+        {% endif %}
+        {% set item_base = item['path'].rstrip('/') %}
+        {% set is_active = current == item['path'] or current == item_base or (current.startswith(item_base + '/') and item_base.count('/') >= 2) %}
+        <li><a class="nav-link {% if is_active %}active{% endif %}" href="{{ item['path'] }}">{{ item['label'] }}</a></li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
     {% endfor %}
     {% endif %}
     <div class="mt-auto pt-3">
@@ -65,6 +138,24 @@
     <div class="alert alert-{{ flash_type or 'success' }} alert-dismissible fade show">
       {{ flash }}
       <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+    {% endif %}
+    {% if billing and not billing.operational %}
+    <div class="alert alert-danger d-flex justify-content-between align-items-center">
+      <span><strong>Servicio detenido:</strong> el plan venció o no está activo.</span>
+      <a class="btn btn-sm btn-light" href="/admin/plan">Ver planes</a>
+    </div>
+    {% elif billing and billing.alert_metric %}
+    <div class="alert alert-danger d-flex justify-content-between align-items-center">
+      <span><strong>Límite alcanzado:</strong> {{ billing.alert_metric.label }} ({{ billing.alert_metric.used }}/{{ billing.alert_metric.limit }}).</span>
+      <a class="btn btn-sm btn-light" href="/admin/plan">Mejorar plan</a>
+    </div>
+    {% elif billing and billing.warning_metric %}
+    <div class="alert alert-warning d-flex justify-content-between align-items-center">
+      <span><strong>Cerca del límite:</strong> te {{ 'queda' if billing.warning_metric.remaining == 1 else 'quedan' }}
+        {{ billing.warning_metric.remaining }}
+        {{ billing.warning_metric.unit }} de {{ billing.warning_metric.label }} en tu plan.</span>
+      <a class="btn btn-sm btn-light" href="/admin/plan">Ver plan</a>
     </div>
     {% endif %}
     {% block content %}{% endblock %}

@@ -9,7 +9,10 @@ name: ${COMPOSE_PROJECT_NAME:?falta COMPOSE_PROJECT_NAME en el .env. Añádelo (
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    # pgvector + PostGIS en la misma base (ADR-0058). Ver docker/postgres/Dockerfile.
+    build:
+      context: ./docker/postgres
+    image: agent-core-postgres:pg16-pgvector-postgis
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-agent_core}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent_core}
@@ -112,6 +115,30 @@ services:
       - ./sdd:/app/sdd
       - ./packages:/app/packages
       - ./plugins:/app/plugins
+    depends_on:
+      core-api:
+        condition: service_healthy
+
+  # Canal WhatsApp Web no oficial (ADR-0074). Apagado por defecto: solo arranca
+  # con `--profile waweb` Y `WAWEB_ENABLED=true`. Un socket por tenant.
+  waweb-connector:
+    build: .
+    entrypoint: ["/app/scripts/entrypoint-connector.sh"]
+    profiles: ["waweb"]
+    env_file: .env
+    environment:
+      AGENT_CORE_ROLE: connector
+      DATABASE_URL: postgresql+asyncpg://app_runtime:app_runtime@postgres:5432/${POSTGRES_DB:-agent_core}
+      MIGRATIONS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agent_core}:${POSTGRES_PASSWORD:-agent_core}@postgres:5432/${POSTGRES_DB:-agent_core}
+      REDIS_URL: redis://redis:6379/0
+      WAWEB_SESSION_DIR: /tmp/waweb-sessions
+    volumes:
+      - ./packages:/app/packages
+      - ./plugins:/app/plugins
+    # Las credenciales de sesión viven en RAM; la copia durable y cifrada está
+    # en `waweb_sessions.creds_encrypted`.
+    tmpfs:
+      - /tmp/waweb-sessions
     depends_on:
       core-api:
         condition: service_healthy

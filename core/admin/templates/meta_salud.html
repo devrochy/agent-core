@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Salud de conexiones Meta{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4 d-flex justify-content-between align-items-center">
+  Salud de conexiones Meta
+  <a href="/admin/conexiones/manual" class="btn btn-outline-secondary btn-sm">
+    Configurar manualmente
+  </a>
+</h1>
+
+{% if not connections %}
+<div class="alert alert-secondary">
+  Este tenant todavía no tiene ninguna conexión de Meta. Si el Embedded Signup no
+  funciona, usá <a href="/admin/conexiones/manual">Configurar manualmente</a>.
+</div>
+{% endif %}
+
+{% for connection in connections %}
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>
+      <span class="fw-semibold">{{ connection.channel }}</span> --
+      {% if connection.status == "connected" %}
+        <span class="badge text-bg-success">conectado</span>
+      {% elif connection.status == "degraded" %}
+        <span class="badge text-bg-warning">degradado</span>
+      {% elif connection.status == "error" %}
+        <span class="badge text-bg-danger">error</span>
+      {% else %}
+        <span class="badge text-bg-secondary">{{ connection.status }}</span>
+      {% endif %}
+      {% if connection.status_reason %}
+      <span class="text-secondary small">-- {{ connection.status_reason }}</span>
+      {% endif %}
+      {% set exp = token_expiry.get(connection.id) %}
+      {% if exp %}
+        {% if exp < now %}
+        <span class="badge text-bg-danger" title="El access token venció -- reconectá la app">token vencido</span>
+        {% elif (exp - now).days <= 7 %}
+        <span class="badge text-bg-warning" title="El access token vence pronto">token vence en {{ (exp - now).days }}d</span>
+        {% else %}
+        <span class="badge text-bg-secondary" title="Vencimiento del access token">token vence {{ exp.strftime('%Y-%m-%d') }}</span>
+        {% endif %}
+      {% else %}
+        <span class="badge text-bg-light border" title="Sin expiración registrada (token permanente, o conexión anterior al registro de expiración)">token sin vencimiento</span>
+      {% endif %}
+    </span>
+    <span class="d-flex gap-2 align-items-center">
+      <span class="text-secondary small">
+        {% if connection.last_health_check_at %}
+        último chequeo: {{ connection.last_health_check_at.strftime("%Y-%m-%d %H:%M") }}
+        {% else %}
+        nunca se diagnosticó
+        {% endif %}
+      </span>
+      <form method="post" action="/admin/conexiones/salud/{{ connection.id }}/diagnosticar">
+        <button class="btn btn-primary btn-sm">Diagnosticar</button>
+      </form>
+    </span>
+  </div>
+  <div class="card-body">
+    <table class="table table-sm align-middle mb-0">
+      <tbody>
+        {% for key, check in (connection.health or {}).items() %}
+        <tr>
+          <td style="width: 2.5rem">
+            {% if check.ok is true %}
+              <span class="badge text-bg-success">OK</span>
+            {% elif check.ok is none %}
+              <span class="badge text-bg-secondary">?</span>
+            {% else %}
+              <span class="badge text-bg-danger">&times;</span>
+            {% endif %}
+          </td>
+          <td class="fw-semibold text-nowrap">{{ key }}</td>
+          <td class="small text-secondary">{{ check.detail }}</td>
+          <td class="text-end" style="width: 14rem">
+            {% if check.ok == false and check.repair_action == "subscribe_waba" %}
+            <form method="post" action="/admin/conexiones/salud/{{ connection.id }}/resubscribe-waba">
+              <button class="btn btn-sm btn-outline-warning">Re-suscribir WABA</button>
+            </form>
+            {% elif check.ok == false and check.repair_action == "resubscribe_app" %}
+            <form method="post" action="/admin/conexiones/webhooks/registrar">
+              <input type="hidden" name="channel" value="{{ connection.channel }}">
+              <button class="btn btn-sm btn-outline-warning">Re-suscribir app</button>
+            </form>
+            {% elif check.ok == false and check.repair_action == "sync_templates" %}
+            <form method="post" action="/admin/costos/meta/sync">
+              <button class="btn btn-sm btn-outline-warning">Sincronizar plantillas</button>
+            </form>
+            {% elif check.repair_action == "configure_billing" %}
+            <a href="/admin/costos/meta/creditos" class="btn btn-sm btn-outline-secondary">Configurar facturación</a>
+            {% elif check.repair_action == "reauthorize" %}
+            <a href="/admin/conexiones/wizard/whatsapp" class="btn btn-sm btn-outline-danger">Reautorizar</a>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="text-secondary text-center py-4">Sin diagnóstico todavía -- click en "Diagnosticar".</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}

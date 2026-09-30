@@ -1,6 +1,12 @@
 # ADR-008 · Single-tenant por despliegue + SDD vivo generado por CLI
 
-**Estado**: Aceptada · **Fecha**: 2026-08-19
+**Estado**: SUPERSEDED por [ADR-0001](../adr/0001-multitenant-pooled-rls.md) · **Fecha**: 2026-08-19
+
+> Este ADR describía el modelo single-tenant heredado ("un negocio = un despliegue").
+> El framework actual es multi-tenant pooled con RLS: cada cliente es un tenant en
+> el mismo despliegue (ADR-0001), y los artefactos del tenant viven en
+> `TENANTS_ROOT/<slug>/` — no en `sdd/`. Se conserva como historia; no refleja el
+> framework vigente (ver `docs/MULTITENANT.md`).
 
 ## Contexto
 

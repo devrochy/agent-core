@@ -11,12 +11,13 @@ agent-core. Reglas de oro:
 from __future__ import annotations
 
 import re
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 
-from core.db.session import get_session
+from core.db.session import get_owned, get_session
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
 from core.shared.tenant import get_current_tenant_id
@@ -39,11 +40,20 @@ CUSTOMER_SEGMENTS = ("nuevo", "ocasional", "frecuente", "fiel", "inactivo")
 
 ORDER_STATUS_ACTIVE = ("abierto", "despachado")
 
-PAYMENT_METHODS = ("efectivo_contraentrega", "transferencia")
+PAYMENT_METHODS = ("efectivo_contraentrega", "transferencia", "pago_en_linea")
 DELIVERY_METHODS = ("domicilio", "recoger_en_tienda")
 
 
 # ------------------------------------------------------------------ helpers
+# Palabras que no aportan a la búsqueda por tokens (evitan falsos positivos).
+_SEARCH_STOPWORDS = frozenset(
+    {
+        "de", "la", "el", "los", "las", "un", "una", "unos", "unas", "y", "o", "u",
+        "para", "por", "con", "del", "al", "que", "mi", "me", "the", "and", "for",
+    }
+)
+
+
 def _float(value: Any) -> float:
     return float(value or 0)
 
@@ -58,6 +68,25 @@ def _now() -> datetime:
 
 def _normalize_phone(phone: str) -> str:
     return re.sub(r"[^\d]", "", phone).lstrip("0")
+
+
+def _parse_uuid(value: str) -> uuid.UUID | None:
+    """Parsea un ID que el LLM pasó como argumento. `None` si no es un UUID válido.
+
+    Encontrado en vivo (tenant yopoldo, 2026-09-11): el LLM inventó
+    `variant_id="pollo_broaster"` en vez de usar el UUID real que
+    `consultar_inventario` acababa de devolver. Sin validar esto ANTES de
+    consultar, el string inválido llegaba directo a Postgres
+    (`asyncpg.exceptions.DataError`), una excepción no manejada que el core
+    interpreta como una falla real del plugin y lo desactiva -- GLOBALMENTE,
+    para todos los tenants (`PluginRecord.status` no es por-tenant). Un
+    argumento inválido de un LLM (que va a pasar periódicamente) no debería
+    poder tumbar el pack entero: se valida acá y se devuelve un error que el
+    LLM puede corregir en su propio turno, en vez de una excepción."""
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        return None
 
 
 async def _plugin_config() -> Any:  # type: ignore[no-untyped-def]
@@ -81,7 +110,11 @@ async def classify_customer(customer_id) -> str:  # type: ignore[no-untyped-def]
         rows = (
             await session.execute(
                 select(Order.created_at)
-                .where(Order.customer_id == customer_id, Order.status != "expirado")
+                .where(
+                    Order.customer_id == customer_id,
+                    Order.status != "expirado",
+                    Order.tenant_id == get_current_tenant_id(),
+                )
                 .order_by(Order.created_at)
             )
         ).scalars().all()
@@ -113,7 +146,11 @@ async def _active_customer_order(customer_id) -> Order | None:  # type: ignore[n
     async with get_session() as session:
         result = await session.execute(
             select(Order)
-            .where(Order.customer_id == customer_id, Order.status.in_(ORDER_STATUS_ACTIVE))
+            .where(
+                Order.customer_id == customer_id,
+                Order.status.in_(ORDER_STATUS_ACTIVE),
+                Order.tenant_id == get_current_tenant_id(),
+            )
             .order_by(Order.created_at.desc())
             .limit(1)
         )
@@ -146,13 +183,27 @@ async def _transfer_safe_append() -> str:
     return "\n".join(lines)
 
 
-async def _get_variant_with_stock(variant_id) -> dict[str, Any] | None:  # type: ignore[no-untyped-def]
+async def _get_variant_with_stock(variant_id_or_sku) -> dict[str, Any] | None:  # type: ignore[no-untyped-def]
+    """Busca una variante por `id` real o, si no es un UUID, por `sku` exacto.
+
+    El cliente suele referirse a un producto por su SKU ("A-001"), no por el
+    UUID interno -- exigirle al LLM que siempre tenga el UUID a mano (vía
+    `consultar_inventario` primero) lo empuja a consultar inventario incluso
+    cuando el cliente ya fue explícito, así que las tools que llaman a esta
+    función aceptan cualquiera de los dos.
+    """
+    value = str(variant_id_or_sku or "").strip()
+    if not value:
+        return None
+    tenant_id = get_current_tenant_id()
+    parsed = _parse_uuid(value)
+    condition = ProductVariant.id == parsed if parsed is not None else ProductVariant.sku == value
     async with get_session() as session:
         result = await session.execute(
             select(ProductVariant, Product, Inventory)
             .join(Product, Product.id == ProductVariant.product_id)
             .outerjoin(Inventory, Inventory.variant_id == ProductVariant.id)
-            .where(ProductVariant.id == variant_id)
+            .where(condition, ProductVariant.tenant_id == tenant_id)
         )
         row = result.first()
     if row is None:
@@ -192,6 +243,7 @@ class LeadSkill(BaseSkill):
                     "properties": {
                         "name": {"type": "string", "description": "Nombre completo del prospecto"},
                         "email": {"type": "string", "description": "Email si lo dio"},
+                        "phone": {"type": "string", "description": "Teléfono si lo dio"},
                         "interest": {"type": "string", "description": "Qué producto/servicio le interesa"},
                     },
                     "required": ["name", "interest"],
@@ -216,11 +268,13 @@ class LeadSkill(BaseSkill):
             ),
             MCPTool(
                 name="actualizar_lead",
-                description="Actualiza datos del lead existente de esta conversación (email, interés, estado).",
+                description="Actualiza datos del lead existente de esta conversación (nombre, email, teléfono, interés, estado).",
                 parameters={
                     "type": "object",
                     "properties": {
+                        "name": {"type": "string", "description": "Nombre completo del prospecto"},
                         "email": {"type": "string"},
+                        "phone": {"type": "string", "description": "Teléfono si lo dio"},
                         "interest": {"type": "string"},
                         "status": {
                             "type": "string",
@@ -235,16 +289,24 @@ class LeadSkill(BaseSkill):
     # ------------------------------------------------------------ handlers
     async def crear_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         async with get_session() as session:
+            tenant_id = get_current_tenant_id()
             existing = (
                 await session.execute(
-                    select(Lead).where(Lead.idempotency_key == context.idempotency_key)
+                    select(Lead).where(
+                        Lead.idempotency_key == context.idempotency_key,
+                        Lead.tenant_id == tenant_id,
+                    )
                 )
             ).scalar_one_or_none()
             if existing is not None:
                 return {"lead_id": str(existing.id), "status": "duplicate"}
 
             by_customer = (
-                await session.execute(select(Lead).where(Lead.customer_id == context.customer_id))
+                await session.execute(
+                    select(Lead).where(
+                        Lead.customer_id == context.customer_id, Lead.tenant_id == tenant_id
+                    )
+                )
             ).scalar_one_or_none()
             if by_customer is not None:
                 return {
@@ -258,6 +320,7 @@ class LeadSkill(BaseSkill):
                 conversation_id=context.conversation_id,
                 name=arguments.get("name"),
                 email=arguments.get("email"),
+                phone=arguments.get("phone"),
                 interest=arguments.get("interest", ""),
                 idempotency_key=context.idempotency_key,
             )
@@ -273,10 +336,18 @@ class LeadSkill(BaseSkill):
         return {"lead_id": lead_id, "status": "created"}
 
     async def calificar_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        score = max(1, min(10, int(arguments.get("score", 0))))
+        try:
+            score = max(1, min(10, int(arguments.get("score", 0))))
+        except (TypeError, ValueError):
+            return {"error": "score inválido: debe ser un número entre 1 y 10."}
         async with get_session() as session:
             lead = (
-                await session.execute(select(Lead).where(Lead.customer_id == context.customer_id))
+                await session.execute(
+                    select(Lead).where(
+                        Lead.customer_id == context.customer_id,
+                        Lead.tenant_id == get_current_tenant_id(),
+                    )
+                )
             ).scalar_one_or_none()
             if lead is None:
                 return {"error": "No hay lead para esta conversación. Usa crear_lead primero."}
@@ -288,12 +359,21 @@ class LeadSkill(BaseSkill):
     async def actualizar_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         async with get_session() as session:
             lead = (
-                await session.execute(select(Lead).where(Lead.customer_id == context.customer_id))
+                await session.execute(
+                    select(Lead).where(
+                        Lead.customer_id == context.customer_id,
+                        Lead.tenant_id == get_current_tenant_id(),
+                    )
+                )
             ).scalar_one_or_none()
             if lead is None:
                 return {"error": "No hay lead para esta conversación. Usa crear_lead primero."}
+            if arguments.get("name"):
+                lead.name = str(arguments["name"])
             if arguments.get("email"):
                 lead.email = str(arguments["email"])
+            if arguments.get("phone"):
+                lead.phone = str(arguments["phone"])
             if arguments.get("interest"):
                 lead.interest = str(arguments["interest"])
             if arguments.get("status"):
@@ -316,8 +396,10 @@ class CatalogSkill(BaseSkill):
                 name="consultar_inventario",
                 description=(
                     "Consulta precios y disponibilidad reales de los productos del menú. "
+                    "Acepta búsqueda libre: pasá solo la palabra clave (ej: 'basic', no 'plan basic'). "
                     "Úsala SIEMPRE antes de afirmar cualquier precio, stock o disponibilidad. "
-                    "Nunca inventes precios: si el cliente pregunta por algo, consulta aquí primero."
+                    "Si devuelve `recommendations` en vez de `matches`, es que no encontró el "
+                    "producto: decíselo al cliente y ofrecele esas opciones. Nunca inventes precios."
                 ),
                 parameters={
                     "type": "object",
@@ -351,59 +433,107 @@ class CatalogSkill(BaseSkill):
         query = str(arguments.get("query", "")).strip()
         sku = str(arguments.get("sku", "")).strip()
 
+        # Búsqueda por lenguaje natural: se tokeniza la frase y se matchea CUALQUIER
+        # token contra nombre, descripción o SKU. Así "plan basic" encuentra el
+        # producto "Basic" (antes `%plan basic%` no matcheaba nada).
+        tokens = [
+            token
+            for token in re.split(r"[\s,]+", query.lower())
+            if len(token) >= 3 and token not in _SEARCH_STOPWORDS
+        ]
+
+        def _match(variant: ProductVariant, product: Product, inventory: Inventory | None) -> dict[str, Any]:
+            return {
+                "product_id": str(product.id),
+                "variant_id": str(variant.id),
+                "sku": variant.sku,
+                "name": product.name,
+                "attributes": variant.attributes or {},
+                "price": _float(variant.price),
+                "price_label": _money(variant.price),
+                "disponible": bool(inventory and inventory.stock_quantity > 0),
+                "stock": inventory.stock_quantity if inventory else 0,
+                "description": product.description or "",
+            }
+
         async with get_session() as session:
             stmt = (
                 select(ProductVariant, Product, Inventory)
                 .join(Product, Product.id == ProductVariant.product_id)
                 .outerjoin(Inventory, Inventory.variant_id == ProductVariant.id)
-                .where(ProductVariant.active.is_(True))
+                .where(
+                    ProductVariant.active.is_(True),
+                    ProductVariant.tenant_id == get_current_tenant_id(),
+                )
             )
             if sku:
                 stmt = stmt.where(ProductVariant.sku == sku)
-            elif query:
-                like = f"%{query}%"
-                stmt = stmt.where(
-                    Product.name.ilike(like) | ProductVariant.sku.ilike(like)
-                )
+            elif tokens:
+                conditions = []
+                for token in tokens:
+                    like = f"%{token}%"
+                    conditions.extend(
+                        (
+                            Product.name.ilike(like),
+                            Product.description.ilike(like),
+                            ProductVariant.sku.ilike(like),
+                        )
+                    )
+                stmt = stmt.where(or_(*conditions))
             stmt = stmt.order_by(Product.name).limit(15)
             rows = (await session.execute(stmt)).all()
+            matches = [_match(variant, product, inventory) for variant, product, inventory in rows]
 
-        matches = []
-        for variant, product, inventory in rows:
-            matches.append(
-                {
-                    "product_id": str(product.id),
-                    "variant_id": str(variant.id),
-                    "sku": variant.sku,
-                    "name": product.name,
-                    "attributes": variant.attributes or {},
-                    "price": _float(variant.price),
-                    "price_label": _money(variant.price),
-                    "disponible": bool(inventory and inventory.stock_quantity > 0),
-                    "stock": inventory.stock_quantity if inventory else 0,
-                    "description": product.description or "",
+            if matches:
+                return {"matches": matches}
+
+            if not query and not sku:
+                return {
+                    "matches": [],
+                    "message": "No hay productos cargados en el catálogo.",
                 }
+
+            # Fallback: no se encontró el pedido, pero se ofrecen los top disponibles
+            # para no dejar la conversación en "no existe".
+            fallback_stmt = (
+                select(ProductVariant, Product, Inventory)
+                .join(Product, Product.id == ProductVariant.product_id)
+                .join(Inventory, Inventory.variant_id == ProductVariant.id)
+                .where(
+                    ProductVariant.active.is_(True),
+                    ProductVariant.tenant_id == get_current_tenant_id(),
+                    Inventory.stock_quantity > 0,
+                )
+                .order_by(Product.name)
+                .limit(5)
             )
-        if not matches:
+            fallback_rows = (await session.execute(fallback_stmt)).all()
             return {
                 "matches": [],
-                "message": "No encontré productos para esa búsqueda. Pide más detalles o sugiere ver el menú completo.",
+                "message": (
+                    "No encontré un producto para esa búsqueda. Decíselo al cliente y "
+                    "ofrecele estas opciones disponibles, preguntando cuál le interesa."
+                ),
+                "recommendations": [
+                    _match(variant, product, inventory)
+                    for variant, product, inventory in fallback_rows
+                ],
             }
-        return {"matches": matches}
 
     async def recomendar_producto(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         product_id = str(arguments.get("product_id", "")).strip()
         async with get_session() as session:
             product = None
-            if product_id:
-                product = await session.get(Product, product_id)
+            if product_id and _parse_uuid(product_id) is not None:
+                product = await get_owned(session, Product, product_id, get_current_tenant_id())
             if product is None or product.category_id is None:
                 return {"recommendations": []}
 
             complements = (
                 await session.execute(
                     select(CategoryComplement.complementary_category_id).where(
-                        CategoryComplement.category_id == product.category_id
+                        CategoryComplement.category_id == product.category_id,
+                        CategoryComplement.tenant_id == get_current_tenant_id(),
                     )
                 )
             ).scalars().all()
@@ -421,6 +551,7 @@ class CatalogSkill(BaseSkill):
                         Product.id != product.id,
                         ProductVariant.active.is_(True),
                         Inventory.stock_quantity > 0,
+                        ProductVariant.tenant_id == get_current_tenant_id(),
                     )
                     .order_by(Product.name)
                     .limit(5)
@@ -459,7 +590,9 @@ class OrderSkill(BaseSkill):
                 description=(
                     "Crea una cotización con los productos y cantidades que el cliente pidió. "
                     "Vuelve a validar precio y stock reales (nunca confíes en lo que dice el LLM). "
-                    "Úsala cuando el cliente confirme qué quiere, aunque sea un menú completo."
+                    "Úsala cuando el cliente confirme qué quiere, aunque sea un menú completo. "
+                    "Si el cliente ya te dio un SKU (ej. \"A-001\") no hace falta llamar "
+                    "consultar_inventario antes: pasá el SKU directo en variant_id."
                 ),
                 parameters={
                     "type": "object",
@@ -470,7 +603,10 @@ class OrderSkill(BaseSkill):
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "variant_id": {"type": "string"},
+                                    "variant_id": {
+                                        "type": "string",
+                                        "description": "ID real de la variante, o su SKU si eso es lo que te dio el cliente",
+                                    },
                                     "quantity": {"type": "integer"},
                                 },
                                 "required": ["variant_id", "quantity"],
@@ -498,11 +634,28 @@ class OrderSkill(BaseSkill):
                 handler=self.aplicar_promocion,
             ),
             MCPTool(
+                name="confirmar_cotizacion",
+                description=(
+                    "Marca una cotización como aceptada por el cliente. Llamala SOLO cuando el "
+                    "cliente ya vio el total final (con la promoción aplicada si corresponde) y "
+                    "dijo que sí explícitamente. Es el paso OBLIGATORIO antes de crear_pedido -- "
+                    "esa tool falla si la cotización no pasó por acá."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "quote_id": {"type": "string", "description": "ID de la cotización"},
+                    },
+                    "required": ["quote_id"],
+                },
+                handler=self.confirmar_cotizacion,
+            ),
+            MCPTool(
                 name="crear_pedido",
                 description=(
                     "Convierte una cotización aceptada por el cliente en un pedido confirmado. "
-                    "Úsala SOLO después de que el cliente confirme explícitamente que quiere comprar "
-                    "y haya acordado método de pago y de entrega."
+                    "Úsala SOLO después de haber llamado confirmar_cotizacion en esta conversación "
+                    "y de que el cliente haya acordado método de pago y de entrega."
                 ),
                 parameters={
                     "type": "object",
@@ -510,7 +663,11 @@ class OrderSkill(BaseSkill):
                         "quote_id": {"type": "string"},
                         "payment_method": {
                             "type": "string",
-                            "enum": ["efectivo_contraentrega", "transferencia"],
+                            "enum": ["efectivo_contraentrega", "transferencia", "pago_en_linea"],
+                            "description": (
+                                "'pago_en_linea' SOLO si el pack de pagos está activo para este "
+                                "tenant -- llamá luego generar_link_pago con la referencia del pedido."
+                            ),
                         },
                         "delivery_method": {
                             "type": "string",
@@ -538,7 +695,9 @@ class OrderSkill(BaseSkill):
                 name="agregar_item_pedido",
                 description=(
                     "Suma productos a un pedido ya confirmado en la misma conversación, "
-                    "mientras siga abierto (aún no entregado). No crea pedido ni cotización nueva."
+                    "mientras siga abierto (aún no entregado). No crea pedido ni cotización nueva. "
+                    "Si el cliente ya te dio un SKU (ej. \"A-001\") no hace falta llamar "
+                    "consultar_inventario antes: pasá el SKU directo en variant_id."
                 ),
                 parameters={
                     "type": "object",
@@ -549,7 +708,10 @@ class OrderSkill(BaseSkill):
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "variant_id": {"type": "string"},
+                                    "variant_id": {
+                                        "type": "string",
+                                        "description": "ID real de la variante, o su SKU si eso es lo que te dio el cliente",
+                                    },
                                     "quantity": {"type": "integer"},
                                 },
                                 "required": ["variant_id", "quantity"],
@@ -587,14 +749,16 @@ class OrderSkill(BaseSkill):
         rows: list[dict[str, Any]] = []
         subtotal = 0.0
         for item in items:
-            variant_id = str(item.get("variant_id", ""))
+            if not isinstance(item, dict):
+                return {"error": "Cada producto de la cotización debe traer variant_id y quantity."}
+            variant_ref = str(item.get("variant_id", ""))
             try:
                 quantity = int(item.get("quantity", 0))
             except (TypeError, ValueError):
                 return {"error": "Cantidad inválida para un producto de la cotización."}
             if quantity <= 0:
                 return {"error": "Las cantidades deben ser números enteros positivos."}
-            data = await _get_variant_with_stock(variant_id)
+            data = await _get_variant_with_stock(variant_ref)
             if data is None or not data["variant"].active:
                 return {"error": "Uno de los productos solicitados no está disponible."}
             if data["stock"] < quantity:
@@ -606,7 +770,7 @@ class OrderSkill(BaseSkill):
             subtotal += line_total
             rows.append(
                 {
-                    "variant_id": variant_id,
+                    "variant_id": str(data["variant"].id),
                     "product_name": data["product"].name,
                     "attributes": data["variant"].attributes or {},
                     "unit_price": data["price"],
@@ -657,12 +821,19 @@ class OrderSkill(BaseSkill):
 
     async def aplicar_promocion(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         quote_id = str(arguments.get("quote_id", ""))
+        if _parse_uuid(quote_id) is None:
+            return {"error": "Cotización no encontrada."}
         async with get_session() as session:
-            quote = await session.get(Quote, quote_id)
+            tenant_id = get_current_tenant_id()
+            quote = await get_owned(session, Quote, quote_id, tenant_id)
             if quote is None:
                 return {"error": "Cotización no encontrada."}
             items = (
-                await session.execute(select(QuoteItem).where(QuoteItem.quote_id == quote.id))
+                await session.execute(
+                    select(QuoteItem).where(
+                        QuoteItem.quote_id == quote.id, QuoteItem.tenant_id == tenant_id
+                    )
+                )
             ).scalars().all()
 
             variants = {
@@ -672,7 +843,10 @@ class OrderSkill(BaseSkill):
                         select(ProductVariant, Product, Inventory)
                         .join(Product, Product.id == ProductVariant.product_id)
                         .outerjoin(Inventory, Inventory.variant_id == ProductVariant.id)
-                        .where(ProductVariant.id.in_([i.variant_id for i in items]))
+                        .where(
+                            ProductVariant.id.in_([i.variant_id for i in items]),
+                            ProductVariant.tenant_id == tenant_id,
+                        )
                     )
                 ).all()
             }
@@ -682,6 +856,7 @@ class OrderSkill(BaseSkill):
                         Promotion.active.is_(True),
                         (Promotion.valid_from.is_(None)) | (Promotion.valid_from <= _now()),
                         (Promotion.valid_to.is_(None)) | (Promotion.valid_to >= _now()),
+                        Promotion.tenant_id == tenant_id,
                     )
                 )
             ).scalars().all()
@@ -749,7 +924,7 @@ class OrderSkill(BaseSkill):
         benefit, promo = best
         new_total = max(_float(quote.subtotal) - benefit, 0)
         async with get_session() as session:
-            quote = await session.get(Quote, quote_id)
+            quote = await get_owned(session, Quote, quote_id, get_current_tenant_id())
             quote.discount = benefit
             quote.total = new_total
             quote.applied_promotion_id = promo.id
@@ -766,6 +941,44 @@ class OrderSkill(BaseSkill):
             "total": round(new_total, 2),
             "segmento": segment,
         }
+
+    async def confirmar_cotizacion(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Transiciona `Quote.status` a "aceptada" -- el gate determinístico que
+        faltaba (ver `crear_pedido`, que ahora lo exige antes de crear el
+        pedido). Incidente real (tenant `yopoldo`, 2026-09-12): el modelo
+        armaba bien la cotización (`generar_cotizacion` + `aplicar_promocion`
+        reales) pero afirmaba haber cerrado el pedido en texto sin haber
+        llamado `crear_pedido` -- `crm_completion_check` lo detectaba DESPUÉS
+        de redactado, nunca lo prevenía. Comparado con `agent-sale`
+        (`loop.ts::FORZAR_SIGUIENTE_TOOL`/`esTurnoSilencioso`), que hace esto
+        imposible por diseño (tool_choice forzado + corte de turno): acá se
+        resuelve más simple, con una precondición de datos en la propia tool
+        (`Quote.status` ya declaraba "aceptada" en el schema, `models.py:186`,
+        pero ningún código lo escribía jamás)."""
+        quote_id = str(arguments.get("quote_id", ""))
+        if _parse_uuid(quote_id) is None:
+            return {"error": "Cotización no encontrada."}
+        async with get_session() as session:
+            # Defensa en profundidad además de RLS (mismo criterio que
+            # calificar_lead/actualizar_lead, auditor-multitenant 2026-09-12):
+            # filtrar tenant_id explícito en vez de session.get() a secas.
+            quote = (
+                await session.execute(
+                    select(Quote).where(
+                        Quote.id == quote_id, Quote.tenant_id == get_current_tenant_id()
+                    )
+                )
+            ).scalar_one_or_none()
+            if quote is None:
+                return {"error": "Cotización no encontrada."}
+            if quote.status == "convertida":
+                return {"error": "Esta cotización ya se convirtió en un pedido."}
+            if quote.status == "expirada":
+                return {"error": "Esta cotización expiró. Generá una nueva con generar_cotizacion."}
+            quote.status = "aceptada"
+            total = _float(quote.total)
+
+        return {"quote_id": quote_id, "status": "aceptada", "total": round(total, 2)}
 
     @staticmethod
     def _line_matches_promo(line: dict[str, Any], promo: Promotion) -> bool:
@@ -800,6 +1013,7 @@ class OrderSkill(BaseSkill):
                 select(PromotionRedemption.id).where(
                     PromotionRedemption.promotion_id == promotion_id,
                     PromotionRedemption.customer_id == customer_id,
+                    PromotionRedemption.tenant_id == get_current_tenant_id(),
                 ).limit(1)
             )
             return result.scalar_one_or_none() is not None
@@ -809,19 +1023,40 @@ class OrderSkill(BaseSkill):
         payment_method = str(arguments.get("payment_method", ""))
         delivery_method = str(arguments.get("delivery_method", ""))
         customer_data = arguments.get("customer_data") or {}
+        if not isinstance(customer_data, dict):
+            return {
+                "error": "Faltan datos de entrega",
+                "missing_fields": ["full_name", "id_document", "address", "municipality", "city"],
+                "hint": "Pide al cliente esos datos antes de confirmar el pedido.",
+            }
         config = await _plugin_config()
 
         if payment_method not in PAYMENT_METHODS:
-            return {"error": "Método de pago no válido. Usa 'efectivo_contraentrega' o 'transferencia'."}
+            return {
+                "error": "Método de pago no válido. Usa 'efectivo_contraentrega', 'transferencia' o 'pago_en_linea'."
+            }
         if delivery_method not in DELIVERY_METHODS:
             return {"error": "Método de entrega no válido. Usa 'domicilio' o 'recoger_en_tienda'."}
+        if _parse_uuid(quote_id) is None:
+            return {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
 
         async with get_session() as session:
-            quote = await session.get(Quote, quote_id)
+            # Defensa en profundidad además de RLS (auditor-multitenant 2026-09-12).
+            quote = (
+                await session.execute(
+                    select(Quote).where(
+                        Quote.id == quote_id, Quote.tenant_id == get_current_tenant_id()
+                    )
+                )
+            ).scalar_one_or_none()
             if quote is None:
                 return {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
             existing_order = (
-                await session.execute(select(Order).where(Order.quote_id == quote.id))
+                await session.execute(
+                    select(Order).where(
+                        Order.quote_id == quote.id, Order.tenant_id == get_current_tenant_id()
+                    )
+                )
             ).scalar_one_or_none()
             if existing_order is not None:
                 return {
@@ -829,11 +1064,60 @@ class OrderSkill(BaseSkill):
                     "status": "duplicate",
                     "public_order_number": existing_order.public_order_number,
                 }
+            if quote.status != "aceptada":
+                # Gate determinístico (incidente real 2026-09-12, tenant yopoldo):
+                # sin esto, el modelo podía "creer" que el cliente ya confirmó y
+                # alucinar el cierre del pedido en texto sin llamar esta tool --
+                # ahora ni siquiera puede completarla sin haber pasado antes por
+                # confirmar_cotizacion, sin importar qué diga el texto del turno.
+                return {
+                    "error": "La cotización todavía no fue confirmada por el cliente.",
+                    "hint": "Llamá confirmar_cotizacion primero, después de que el "
+                    "cliente haya dicho que sí al total final.",
+                }
             items = (
-                await session.execute(select(QuoteItem).where(QuoteItem.quote_id == quote.id))
+                await session.execute(
+                    select(QuoteItem).where(
+                        QuoteItem.quote_id == quote.id,
+                        QuoteItem.tenant_id == get_current_tenant_id(),
+                    )
+                )
             ).scalars().all()
             if not items:
                 return {"error": "La cotización no tiene productos."}
+
+            threshold = getattr(config, "monto_alto_threshold", 1_000_000) or 1_000_000
+            if _float(quote.total) > threshold:
+                return {
+                    "error": "El total supera el monto máximo permitido y requiere aprobación humana.",
+                    "escalate": True,
+                }
+
+            min_online = getattr(config, "pago_en_linea_monto_minimo", 150_000) or 150_000
+            if payment_method == "pago_en_linea" and _float(quote.total) < min_online:
+                # Incidente real (tenant yopoldo, 2026-09-12): un pedido de
+                # $54.000 con pago_en_linea nunca iba a poder completarse (el
+                # mínimo real de la pasarela es $150.000, MIN_AMOUNT_COP en
+                # pack_payments/providers/wompi.py -- no importable acá,
+                # invariante 5). Antes esto solo se descubría (si el modelo
+                # llegaba a llamarla) en generar_link_pago, ya tarde para
+                # redirigir la conversación con naturalidad; ahora es
+                # determinístico en el primer punto posible.
+                #
+                # SEGUNDO incidente real, mismo día: la primera versión de este
+                # error incluía el monto exacto en texto libre ("...menores a
+                # $150.000"). El modelo lo repetía en su respuesta, y
+                # `_amount_guardrail` (module.py) lo bloqueaba por "monto no
+                # verificado" -- ese guardrail solo reconoce montos que salen
+                # de una clave de MONEY_KEYS en el resultado de una tool, no
+                # números embebidos en un string de error. En vez de enseñarle
+                # al guardrail a reconocer este caso puntual, se saca el monto
+                # del texto libre: el modelo no necesita citarlo para cumplir
+                # la regla del playbook ("ofrecé otro método").
+                return {
+                    "error": "El pago en línea no está disponible para este pedido.",
+                    "hint": "Ofrecele transferencia o contraentrega en su lugar.",
+                }
 
         complete, missing = _validate_delivery_data(customer_data)
         if not complete:
@@ -857,7 +1141,13 @@ class OrderSkill(BaseSkill):
         )
 
         async with get_session() as session:
-            quote = await session.get(Quote, quote_id)
+            quote = (
+                await session.execute(
+                    select(Quote).where(
+                        Quote.id == quote_id, Quote.tenant_id == get_current_tenant_id()
+                    )
+                )
+            ).scalar_one_or_none()
             # Numeración por tenant (ADR-0018): contador atómico por tenant.
             order_seq = (
                 await session.execute(
@@ -879,7 +1169,9 @@ class OrderSkill(BaseSkill):
                 delivery_municipality=customer_data.get("municipality"),
                 delivery_city=customer_data.get("city"),
                 status="abierto",
-                payment_status="pendiente" if payment_method == "transferencia" else "pagado",
+                # transferencia/pago_en_linea se confirman después (comprobante manual o
+                # webhook de pack-payments); contraentrega se da por pagado al entregar.
+                payment_status="pendiente" if payment_method in ("transferencia", "pago_en_linea") else "pagado",
             )
             session.add(order)
             await session.flush()
@@ -898,7 +1190,9 @@ class OrderSkill(BaseSkill):
             public_order_number = order.public_order_number
 
             if quote.applied_promotion_id is not None:
-                promo = await session.get(Promotion, quote.applied_promotion_id)
+                promo = await get_owned(
+                    session, Promotion, quote.applied_promotion_id, get_current_tenant_id()
+                )
                 if promo and promo.type == "campaña" and (promo.rules or {}).get("once_per_customer"):
                     session.add(
                         PromotionRedemption(
@@ -944,9 +1238,19 @@ class OrderSkill(BaseSkill):
         items = arguments.get("items") or []
         if not items or not isinstance(items, list):
             return {"error": "Necesito al menos un producto para agregar."}
+        if any(not isinstance(item, dict) for item in items):
+            return {"error": "Cada producto a agregar debe traer variant_id y quantity."}
+        if _parse_uuid(order_id) is None:
+            return {"error": "Pedido no encontrado."}
 
         async with get_session() as session:
-            order = await session.get(Order, order_id)
+            order = (
+                await session.execute(
+                    select(Order).where(
+                        Order.id == order_id, Order.tenant_id == get_current_tenant_id()
+                    )
+                )
+            ).scalar_one_or_none()
             if order is None:
                 return {"error": "Pedido no encontrado."}
             if order.status != "abierto":
@@ -954,7 +1258,8 @@ class OrderSkill(BaseSkill):
             existing_batch = (
                 await session.execute(
                     select(OrderItemBatch).where(
-                        OrderItemBatch.idempotency_key == context.idempotency_key
+                        OrderItemBatch.idempotency_key == context.idempotency_key,
+                        OrderItemBatch.tenant_id == get_current_tenant_id(),
                     )
                 )
             ).scalar_one_or_none()
@@ -964,14 +1269,14 @@ class OrderSkill(BaseSkill):
             additions: list[tuple[ProductVariant, int, float]] = []
             add_total = 0.0
             for item in items:
-                variant_id = str(item.get("variant_id", ""))
+                variant_ref = str(item.get("variant_id", ""))
                 try:
                     quantity = int(item.get("quantity", 0))
                 except (TypeError, ValueError):
                     return {"error": "Cantidad inválida."}
                 if quantity <= 0:
                     return {"error": "Las cantidades deben ser positivas."}
-                data = await _get_variant_with_stock(variant_id)
+                data = await _get_variant_with_stock(variant_ref)
                 if data is None or not data["variant"].active:
                     return {"error": "Uno de los productos no está disponible."}
                 if data["stock"] < quantity:
@@ -1021,24 +1326,33 @@ class OrderSkill(BaseSkill):
         config = await _plugin_config()
 
         async with get_session() as session:
+            tenant_id = get_current_tenant_id()
             order = (
                 await session.execute(
                     select(Order).where(
                         Order.customer_id == context.customer_id,
                         Order.public_order_number == public_number,
+                        Order.tenant_id == tenant_id,
                     )
                 )
             ).scalar_one_or_none()
             if order is None:
                 return {"found": False, "hint": "No encontré un pedido con ese número para este cliente."}
             items = (
-                await session.execute(select(OrderItem).where(OrderItem.order_id == order.id))
+                await session.execute(
+                    select(OrderItem).where(
+                        OrderItem.order_id == order.id, OrderItem.tenant_id == tenant_id
+                    )
+                )
             ).scalars().all()
             item_details = (
                 await session.execute(
                     select(ProductVariant, Product)
                     .join(Product, Product.id == ProductVariant.product_id)
-                    .where(ProductVariant.id.in_([i.variant_id for i in items]))
+                    .where(
+                        ProductVariant.id.in_([i.variant_id for i in items]),
+                        ProductVariant.tenant_id == tenant_id,
+                    )
                 )
             ).all()
             by_id = {v.id: p for v, p in item_details}
@@ -1067,7 +1381,10 @@ class OrderSkill(BaseSkill):
     async def _decrement_stock(session, variant_id, quantity: int) -> None:  # type: ignore[no-untyped-def]
         inventory = (
             await session.execute(
-                select(Inventory).where(Inventory.variant_id == variant_id)
+                select(Inventory).where(
+                    Inventory.variant_id == variant_id,
+                    Inventory.tenant_id == get_current_tenant_id(),
+                )
             )
         ).scalar_one_or_none()
         if inventory is None:

@@ -25,12 +25,39 @@ async def _login(app_client) -> str:
     return cookie
 
 
-async def test_switch_tenant_valida_acceso(app_client, formoto_setup) -> None:
-    _t1, t2 = formoto_setup
+async def test_master_ve_todos_los_tenants() -> None:
+    """ADR-0047: un `master` ve todos los tenants activos, no solo los de
+    `tenant_user` (migración 0037). El admin de tests es `master` y solo está
+    vinculado a algunos tenants, pero `admin_tenants()` debe devolver igual todos
+    los activos."""
+    from sqlalchemy import select
+
+    from core.db.models import Admin, Tenant
+    from core.db.session import get_session
+    from core.shared.tenant import admin_tenants
+
+    async with get_session() as session:
+        admin = (
+            await session.execute(select(Admin).where(Admin.email == "admin@local"))
+        ).scalar_one()
+        assert admin.role == "master"
+        active_ids = set(
+            (await session.execute(select(Tenant.id).where(Tenant.status == "active")))
+            .scalars()
+            .all()
+        )
+
+    visible_ids = {tid for (tid, _name, _role) in await admin_tenants(admin.id)}
+    assert active_ids, "debe haber al menos un tenant activo"
+    assert visible_ids == active_ids, "un master debe ver todos los tenants activos"
+
+
+async def test_switch_tenant_valida_acceso(app_client, moto_setup) -> None:
+    _t1, t2 = moto_setup
     cookie = await _login(app_client)
     headers = {"Cookie": cookie}
 
-    # tenant del admin (FORMOTO) → 303 + cookie ac_tenant set
+    # tenant del admin → 303 + cookie ac_tenant set
     r = await app_client.post(
         "/admin/switch-tenant", headers=headers, data={"tenant_id": str(t2)}
     )
@@ -47,9 +74,9 @@ async def test_switch_tenant_valida_acceso(app_client, formoto_setup) -> None:
     assert "ac_tenant" not in r2.headers.get("set-cookie", "")
 
 
-async def test_middleware_scopea_al_tenant_de_la_cookie(app_client, formoto_setup) -> None:
-    """Tras switch a FORMOTO, el dashboard muestra su identidad (ForMotos)."""
-    _t1, t2 = formoto_setup
+async def test_middleware_scopea_al_tenant_de_la_cookie(app_client, moto_setup) -> None:
+    """Tras switch, el dashboard muestra la identidad del tenant de ejemplo."""
+    _t1, t2 = moto_setup
     session = await _login(app_client)
     r = await app_client.post(
         "/admin/switch-tenant",
@@ -61,6 +88,27 @@ async def test_middleware_scopea_al_tenant_de_la_cookie(app_client, formoto_setu
     )
     r = await app_client.get("/admin/", headers={"Cookie": f"{session}; {ac_tenant}"})
     assert r.status_code == 200
-    assert "ForMotos" in r.text
-    # el selector del sidebar lista ambos negocios
-    assert "FORMOTO" in r.text and "Tenant #1" in r.text
+    assert "Tenant de ejemplo (moto)" in r.text
+    # el selector del sidebar está visible y lista el tenant activo
+    assert 'name="tenant_id"' in r.text, "el selector de tenants debe estar presente"
+    assert "Tenant de ejemplo (moto)" in r.text
+
+
+async def test_selector_visible_en_rutas_del_pack(app_client, moto_setup) -> None:
+    """C3: el selector de tenants NO desaparece en las rutas propias del pack (/crm)."""
+    _t1, t2 = moto_setup
+    session = await _login(app_client)
+    r = await app_client.post(
+        "/admin/switch-tenant",
+        headers={"Cookie": session},
+        data={"tenant_id": str(t2)},
+    )
+    ac_tenant = next(
+        c.split(";")[0] for c in r.headers.get_list("set-cookie") if "ac_tenant" in c
+    )
+    headers = {"Cookie": f"{session}; {ac_tenant}"}
+
+    for path in ("/crm", "/crm/productos", "/crm/pedidos"):
+        resp = await app_client.get(path, headers=headers)
+        assert resp.status_code == 200, f"{path} debe renderizar"
+        assert 'name="tenant_id"' in resp.text, f"selector de tenants visible en {path}"

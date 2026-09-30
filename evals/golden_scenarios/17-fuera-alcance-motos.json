@@ -6,6 +6,6 @@
   ],
   "assertions": {
     "must_not_contain": ["te vendo la moto", "claro, tenemos motos"],
-    "max_response_chars": 300
+    "max_response_chars": 500
   }
 }

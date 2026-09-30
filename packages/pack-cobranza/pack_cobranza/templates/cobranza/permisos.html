@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Permisos del gestor{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Permisos del gestor</h1>
+<p class="text-secondary">Matriz de permisos del gestor de cartera (aplica a la app de campo).</p>
+<div class="card">
+  <div class="card-body">
+    <form method="post" action="/cobranza/gestores/{{ record_id }}/permisos">
+      <div class="row">
+        {% for p in catalogo %}
+        <div class="col-md-4 mb-2">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="permiso" value="{{ p }}" id="p-{{ p }}"
+                   {% if p in activos %}checked{% endif %}>
+            <label class="form-check-label" for="p-{{ p }}">{{ p }}</label>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="mt-3 d-flex gap-2">
+        <button class="btn btn-primary">Guardar</button>
+        <a class="btn btn-outline-secondary" href="/cobranza/gestores">Volver</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% from "_datatable.html" import datatable %}
+{% block title %}Gastos de la cartera{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-1">Gastos</h1>
+{% include "cobranza/_cartera_nav.html" %}
+{% call datatable(page_size=20) %}
+  <thead><tr>{% for k, label in columns %}<th class="dt-sortable" data-sort-key="{{ k }}">{{ label }}</th>{% endfor %}<th class="text-end">Acciones</th></tr></thead>
+  <tbody>
+    {% for row in rows %}
+    <tr data-search="{% for k, _ in columns %}{{ row.get(k, '') }} {% endfor %}">
+      {% for k, _ in columns %}<td>{{ row.get(k, '') }}</td>{% endfor %}
+      <td class="text-end">
+        {% if row.get('aprobado') == 'no' %}
+        <form method="post" action="/cobranza/gastos/{{ row['_id'] }}/aprobar" class="d-inline">
+          <button class="btn btn-sm btn-outline-success" title="Aprobar"><i class="bi bi-check2"></i></button>
+        </form>
+        {% endif %}
+        <form method="post" action="/cobranza/gastos/{{ row['_id'] }}/eliminar" class="d-inline" onsubmit="return confirm('¿Eliminar?');">
+          <button class="btn btn-sm btn-outline-danger" title="Eliminar"><i class="bi bi-trash"></i></button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+{% endcall %}
+{% endblock %}

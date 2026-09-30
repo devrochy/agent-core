@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Números de WhatsApp{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4 d-flex justify-content-between align-items-center">
+  Números de WhatsApp
+  <span>
+    <a href="/admin/conexiones/meta/{{ connection.id }}/plantillas" class="btn btn-outline-primary btn-sm">
+      <i class="bi bi-file-earmark-text"></i> Plantillas
+    </a>
+    <a href="/admin/conexiones/wizard/whatsapp" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-arrow-left"></i> Volver
+    </a>
+  </span>
+</h1>
+
+{% if sync_error %}
+<div class="alert alert-warning">No se pudo actualizar desde Meta: {{ sync_error }}. Mostrando lo último guardado.</div>
+{% endif %}
+{% if not waba %}
+<div class="alert alert-secondary">Esta conexión todavía no tiene una WABA asociada.</div>
+{% endif %}
+
+<div class="card mb-4">
+  <div class="card-body">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Número</th>
+          <th>Nombre verificado</th>
+          <th>Calidad</th>
+          <th>Verificación</th>
+          <th>Registrado</th>
+          <th class="text-end">Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for n in numbers %}
+        <tr>
+          <td><code>{{ n.display_phone_number or n.phone_number_id }}</code></td>
+          <td>{{ n.verified_name or "—" }}</td>
+          <td>{{ n.quality_rating or "—" }}</td>
+          <td>
+            {% if n.code_verification_status == "VERIFIED" %}
+              <span class="badge text-bg-success">verificado</span>
+            {% else %}
+              <span class="badge text-bg-secondary">{{ n.code_verification_status or "sin verificar" }}</span>
+            {% endif %}
+          </td>
+          <td>{% if n.registered %}<span class="badge text-bg-success">sí</span>{% else %}<span class="badge text-bg-secondary">no</span>{% endif %}</td>
+          <td class="text-end">
+            {% if n.code_verification_status != "VERIFIED" %}
+            <div class="d-flex gap-2 justify-content-end flex-wrap">
+              <form method="post" action="/admin/conexiones/meta/{{ connection.id }}/numeros/{{ n.phone_number_id }}/solicitar-codigo" class="d-flex gap-1">
+                <select name="code_method" class="form-select form-select-sm">
+                  <option value="SMS">SMS</option>
+                  <option value="VOICE">Llamada</option>
+                </select>
+                <button class="btn btn-sm btn-outline-primary">Enviar código</button>
+              </form>
+              <form method="post" action="/admin/conexiones/meta/{{ connection.id }}/numeros/{{ n.phone_number_id }}/verificar" class="d-flex gap-1">
+                <input type="text" name="code" class="form-control form-control-sm" placeholder="Código" style="width: 6rem" required>
+                <button class="btn btn-sm btn-primary">Verificar</button>
+              </form>
+            </div>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="text-secondary">Todavía no hay números.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if waba %}
+<div class="card">
+  <div class="card-body">
+    <h5 class="card-title fs-6">Agregar número</h5>
+    <form method="post" action="/admin/conexiones/meta/{{ connection.id }}/numeros/agregar" class="row g-2 align-items-end">
+      <div class="col-auto">
+        <label class="form-label">Código de país</label>
+        <input type="text" name="cc" class="form-control" placeholder="57" required>
+      </div>
+      <div class="col-auto">
+        <label class="form-label">Número (sin + ni prefijo)</label>
+        <input type="text" name="phone_number" class="form-control" placeholder="3001234567" required>
+      </div>
+      <div class="col-auto">
+        <label class="form-label">Nombre verificado</label>
+        <input type="text" name="verified_name" class="form-control" required>
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-primary">Agregar</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<script>
+// Countdown de reenvío (UX -- el rate limit real es server-side, Redis).
+document.querySelectorAll('form[action*="solicitar-codigo"]').forEach(function (form) {
+  var key = "resend_until:" + form.action;
+  form.addEventListener("submit", function () {
+    try { localStorage.setItem(key, String(Date.now() + 60000)); } catch (e) {}
+  });
+  var btn = form.querySelector("button");
+  function tick() {
+    var until = 0;
+    try { until = parseInt(localStorage.getItem(key) || "0", 10); } catch (e) {}
+    var remaining = Math.ceil((until - Date.now()) / 1000);
+    if (remaining > 0) {
+      btn.disabled = true;
+      btn.textContent = "Reenviar en " + remaining + "s";
+      setTimeout(tick, 1000);
+    } else {
+      btn.disabled = false;
+      btn.textContent = "Enviar código";
+    }
+  }
+  tick();
+});
+</script>
+{% endblock %}

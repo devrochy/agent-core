@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Calendar · Configuración{% endblock %}
+{% block content %}
+<h1 class="fs-3 mb-4">Calendar · Horarios y calendario</h1>
+<div class="card">
+  <div class="card-body">
+    <form method="post" action="/calendar/configuracion" class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label">Client ID (OAuth2 de Google)</label>
+        <input type="text" name="client_id" class="form-control" value="{{ config.client_id }}" required>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Client Secret</label>
+        <input type="password" name="client_secret" class="form-control"
+               placeholder="{{ '•••••••• (sin cambios)' if config.has_secret else '' }}" autocomplete="off">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Calendario</label>
+        <input type="text" name="calendar_id" class="form-control" value="{{ config.calendar_id }}">
+        <div class="form-text">primary = calendario principal.</div>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Zona horaria</label>
+        <input type="text" name="timezone" class="form-control" value="{{ config.timezone }}">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Duración por defecto (min)</label>
+        <input type="number" name="event_duration_minutes" class="form-control" value="{{ config.event_duration_minutes }}" min="5">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Bloque al proponer horarios (min)</label>
+        <input type="number" name="slot_minutes" class="form-control" value="{{ config.slot_minutes }}" min="5">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Margen entre citas (min)</label>
+        <input type="number" name="buffer_minutes" class="form-control" value="{{ config.buffer_minutes }}" min="0">
+      </div>
+      <div class="col-12">
+        <label class="form-label">Horario de atención (JSON por día)</label>
+        <textarea name="business_hours" class="form-control font-monospace" rows="4">{{ config.business_hours }}</textarea>
+        <div class="form-text">
+          Formato <code>{"mon": "09:00-19:00", ..., "sun": ""}</code>; vacío = cerrado.
+        </div>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Mensaje al cliente cuando se mueve su cita (WhatsApp)</label>
+        <textarea name="appointment_moved_message" class="form-control" rows="3">{{ config.appointment_moved_message }}</textarea>
+        <div class="form-text">
+          Placeholders: <code>{fecha}</code>, <code>{hora}</code>, <code>{titulo}</code>. Si queda vacío se usa el mensaje por defecto.
+        </div>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Mensaje al cliente cuando se cancela su cita (WhatsApp)</label>
+        <textarea name="appointment_cancelled_message" class="form-control" rows="3">{{ config.appointment_cancelled_message }}</textarea>
+        <div class="form-text">
+          Placeholders: <code>{fecha}</code>, <code>{hora}</code>, <code>{titulo}</code>. Si queda vacío se usa el mensaje por defecto.
+        </div>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Mensaje resumen al cancelar varias citas (WhatsApp)</label>
+        <textarea name="appointments_cancelled_summary" class="form-control" rows="2">{{ config.appointments_cancelled_summary }}</textarea>
+        <div class="form-text">
+          Placeholder: <code>{cantidad}</code>. Si queda vacío se usa el mensaje por defecto.
+        </div>
+      </div>
+      <div class="col-12">
+        <button class="btn btn-primary">Guardar configuración</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

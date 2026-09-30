@@ -7,16 +7,25 @@ plugins para que sus tareas @register_cron queden registradas.
 from __future__ import annotations
 
 from celery import Celery
-from celery.signals import worker_init
+from celery.schedules import crontab
+from celery.signals import beat_init, worker_init
 
 from core.config import get_settings
+from core.shared.async_bridge import run_async
+from core.shared.logger import get_logger
 
+log = get_logger(__name__)
 settings = get_settings()
 
 celery = Celery(
     "agent_core",
     broker=settings.redis_url,
     backend=settings.redis_url,
+    # `include` (no un import suelto): garantiza que el worker registre las
+    # tasks definidas en estos módulos al finalizar el arranque. Sin esto,
+    # `core.outbound_send` quedaba como "unregistered task" y los mensajes de
+    # salida nunca se enviaban.
+    include=["core.tasks.outbound_send"],
 )
 celery.conf.update(
     task_serializer="json",
@@ -30,11 +39,202 @@ celery.conf.update(
 )
 
 
-@worker_init.connect
-def _load_plugins_on_worker_start(**_kwargs: object) -> None:
-    """El worker necesita los plugins cargados para resolver sus tareas."""
+# ---------------------------------------------------------------- cron de core
+# Salud de suscripciones de webhook de Meta (cada 15 min): capacidad de
+# CORE, no de un pack -- no pasa por `register_cron` (core/tasks/decorators.py),
+# que está atado a `plugin_manager.is_active(plugin_id)` y no tiene sentido
+# para algo que no es un plugin. Se registra directo acá.
+_META_SUBSCRIPTIONS_HEALTH_TASK = "core.meta_subscriptions_health_check"
+
+
+@celery.task(name=_META_SUBSCRIPTIONS_HEALTH_TASK)
+def _meta_subscriptions_health_check() -> None:
+    from core.tasks.meta_subscriptions_health import check_all_subscriptions_health
+
+    try:
+        run_async(check_all_subscriptions_health())
+    except Exception:
+        log.exception("cron_task_failed", task=_META_SUBSCRIPTIONS_HEALTH_TASK)
+
+
+celery.conf.beat_schedule[_META_SUBSCRIPTIONS_HEALTH_TASK] = {
+    "task": _META_SUBSCRIPTIONS_HEALTH_TASK,
+    "schedule": crontab(minute="*/15"),
+}
+
+# Sync de plantillas de WhatsApp (cada hora): el webhook `message_template_
+# status_update` es la fuente de verdad real, esto es solo el fallback.
+_MESSAGE_TEMPLATE_SYNC_TASK = "core.message_template_sync"
+
+
+@celery.task(name=_MESSAGE_TEMPLATE_SYNC_TASK)
+def _message_template_sync() -> None:
+    from core.tasks.message_template_sync import sync_all_waba_templates
+
+    try:
+        run_async(sync_all_waba_templates())
+    except Exception:
+        log.exception("cron_task_failed", task=_MESSAGE_TEMPLATE_SYNC_TASK)
+
+
+celery.conf.beat_schedule[_MESSAGE_TEMPLATE_SYNC_TASK] = {
+    "task": _MESSAGE_TEMPLATE_SYNC_TASK,
+    "schedule": crontab(minute="0"),
+}
+
+# Sync de `pricing_analytics` (diario, de madrugada): el webhook `statuses`
+# (con su objeto `pricing`) llega en tiempo real pero NUNCA trae un monto
+# en dólares -- esto es lo único que sincroniza el `cost` autoritativo.
+_META_PRICING_SYNC_TASK = "core.meta_pricing_sync"
+
+
+@celery.task(name=_META_PRICING_SYNC_TASK)
+def _meta_pricing_sync() -> None:
+    from core.tasks.meta_pricing_sync import sync_all_waba_pricing
+
+    try:
+        run_async(sync_all_waba_pricing())
+    except Exception:
+        log.exception("cron_task_failed", task=_META_PRICING_SYNC_TASK)
+
+
+celery.conf.beat_schedule[_META_PRICING_SYNC_TASK] = {
+    "task": _META_PRICING_SYNC_TASK,
+    "schedule": crontab(hour="2", minute="0"),
+}
+
+# Salud completa de conexiones Meta (horaria) -- `app_subscription_active`
+# (15 min) sigue siendo `core.meta_subscriptions_health_check`, este cron
+# solo LEE ese resultado, nunca repite el GET.
+_META_HEALTH_CHECK_TASK = "core.meta_health_check"
+
+
+@celery.task(name=_META_HEALTH_CHECK_TASK)
+def _meta_health_check() -> None:
+    from core.tasks.meta_health_check import check_all_connections_health
+
+    try:
+        run_async(check_all_connections_health())
+    except Exception:
+        log.exception("cron_task_failed", task=_META_HEALTH_CHECK_TASK)
+
+
+celery.conf.beat_schedule[_META_HEALTH_CHECK_TASK] = {
+    "task": _META_HEALTH_CHECK_TASK,
+    "schedule": crontab(minute="30"),
+}
+
+# Alerta de access tokens de Meta vencidos/por vencer (diaria, de madrugada).
+_META_TOKEN_EXPIRY_TASK = "core.meta_token_expiry_check"
+
+
+@celery.task(name=_META_TOKEN_EXPIRY_TASK)
+def _meta_token_expiry_check() -> None:
+    from core.tasks.meta_token_expiry_check import check_tokens_expiry
+
+    try:
+        run_async(check_tokens_expiry())
+    except Exception:
+        log.exception("cron_task_failed", task=_META_TOKEN_EXPIRY_TASK)
+
+
+celery.conf.beat_schedule[_META_TOKEN_EXPIRY_TASK] = {
+    "task": _META_TOKEN_EXPIRY_TASK,
+    "schedule": crontab(hour="3", minute="15"),
+}
+
+# Retención de la memoria semántica (ADR-0053; no-op si MEMORY_RETENTION_DAYS=0).
+_MEMORY_RETENTION_TASK = "core.memory_retention"
+
+
+@celery.task(name=_MEMORY_RETENTION_TASK)
+def _memory_retention() -> None:
+    from core.tasks.memory_retention import purge_expired_memory
+
+    try:
+        run_async(purge_expired_memory())
+    except Exception:
+        log.exception("cron_task_failed", task=_MEMORY_RETENTION_TASK)
+
+
+celery.conf.beat_schedule[_MEMORY_RETENTION_TASK] = {
+    "task": _MEMORY_RETENTION_TASK,
+    "schedule": crontab(hour="3", minute="45"),
+}
+
+# Heartbeat del worker (cada 1 min) -- la única forma de que el checklist
+# de promoción a producción (core/gateway/meta_production_readiness.py::
+# check_worker_heartbeat_and_dlq) sepa que el worker de Celery está vivo,
+# no solo que existe la cola.
+_WORKER_HEARTBEAT_TASK = "core.worker_heartbeat"
+_WORKER_HEARTBEAT_KEY = "worker:heartbeat"
+_WORKER_HEARTBEAT_TTL_S = 180
+
+
+@celery.task(name=_WORKER_HEARTBEAT_TASK)
+def _worker_heartbeat() -> None:
+    async def _set_heartbeat() -> None:
+        from datetime import UTC, datetime
+
+        from core.memory.working import get_redis
+
+        redis = get_redis()
+        await redis.set(_WORKER_HEARTBEAT_KEY, datetime.now(UTC).isoformat(), ex=_WORKER_HEARTBEAT_TTL_S)
+
+    try:
+        run_async(_set_heartbeat())
+    except Exception:
+        log.exception("cron_task_failed", task=_WORKER_HEARTBEAT_TASK)
+
+
+celery.conf.beat_schedule[_WORKER_HEARTBEAT_TASK] = {
+    "task": _WORKER_HEARTBEAT_TASK,
+    "schedule": crontab(minute="*/1"),
+}
+
+# Normalización de suscripciones vencidas (diaria): pasa `trialing`->`expired` y
+# `active`->`past_due` para que el panel refleje el estado real (ADR-0045). El
+# bloqueo efectivo NO depende de este cron (se evalúa en vivo en webhook/consumer).
+_BILLING_LIFECYCLE_TASK = "core.billing_lifecycle"
+
+
+@celery.task(name=_BILLING_LIFECYCLE_TASK)
+def _billing_lifecycle() -> None:
+    from core.tasks.billing_lifecycle import normalize_expired_subscriptions
+
+    try:
+        run_async(normalize_expired_subscriptions())
+    except Exception:
+        log.exception("cron_task_failed", task=_BILLING_LIFECYCLE_TASK)
+
+
+celery.conf.beat_schedule[_BILLING_LIFECYCLE_TASK] = {
+    "task": _BILLING_LIFECYCLE_TASK,
+    "schedule": crontab(hour="4", minute="0"),
+}
+
+
+def _load_plugins() -> None:
+    """Carga los plugins (entry_points) e importa los jobs para que corran los
+    `@register_cron` de los packs. Necesario tanto en el worker como en el beat."""
+    from core.observability.sentry_setup import configure_sentry
     from core.plugin_manager import plugin_manager
 
+    configure_sentry()  # no-op sin SENTRY_ENABLED/SENTRY_DSN -- el worker también reporta
     plugin_manager.scan()
     # Importa los módulos de jobs para que los decoradores corran
     import core.tasks.decorators  # noqa: F401
+
+
+@worker_init.connect
+def _load_plugins_on_worker_start(**_kwargs: object) -> None:
+    """El worker necesita los plugins cargados para resolver sus tareas."""
+    _load_plugins()
+
+
+@beat_init.connect
+def _load_plugins_on_beat_start(**_kwargs: object) -> None:
+    """El beat NO ejecuta `worker_init`: sin este escaneo, los `@register_cron`
+    de los packs nunca entran al `beat_schedule` y sus crons (p. ej. los
+    follow-ups de pack-commerce) no se programan."""
+    _load_plugins()

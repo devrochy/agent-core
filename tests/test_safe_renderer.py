@@ -54,3 +54,28 @@ def test_strip_oculta_las_claves_reservadas_al_llm() -> None:
 def test_strip_no_altera_un_resultado_normal() -> None:
     original = {"total": 10, "moneda": "COP"}
     assert strip_reserved_keys(original) == original
+
+
+def test_apply_no_duplica_si_el_modelo_ya_escribio_el_append() -> None:
+    """Regresión: el LLM copió el link del resultado y el core lo volvía a
+    agregar (doble 'Tu cita quedó agendada'). Con dedup no se repite."""
+    link = "📅 Tu cita quedó agendada: https://g/abc"
+    extras = extract_safe_extras([{"_safe_append": link}])
+    resultado = apply_safe_extras("Listo, tu cita quedó agendada.\n\n" + link, extras)
+    assert resultado.count(link) == 1
+
+
+def test_apply_deduplica_appends_identicos_de_varias_tools() -> None:
+    extras = extract_safe_extras(
+        [{"_safe_append": "Link: https://g/1"}, {"_safe_append": "Link: https://g/1"}]
+    )
+    resultado = apply_safe_extras("Listo.", extras)
+    assert resultado.count("Link: https://g/1") == 1
+
+
+def test_apply_concatena_appends_distintos() -> None:
+    extras = extract_safe_extras(
+        [{"_safe_append": "A: 1"}, {"_safe_append": "B: 2"}]
+    )
+    resultado = apply_safe_extras("Listo.", extras)
+    assert "A: 1" in resultado and "B: 2" in resultado

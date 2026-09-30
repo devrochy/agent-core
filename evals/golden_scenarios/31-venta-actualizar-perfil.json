@@ -2,6 +2,8 @@
   "name": "venta-actualizar-perfil-26",
   "requires_plugins": ["pack_commerce"],
   "conversation": [
+    {"role": "user", "content": "Hola, soy Luis y quiero comprar para mi negocio."},
+    {"role": "assistant", "content": "¡Hola Luis! Ya te registré como interesado en el CRM. ¿Hay algo más que quieras contarme?"},
     {"role": "user", "content": "Por si acaso, mi teléfono es 3111234567 y prefiero que me llamen por la tarde."}
   ],
   "assertions": {

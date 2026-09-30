@@ -19,6 +19,7 @@ class BaseLLMProvider(ABC):
         messages: list[LLMMessage],
         tools: list[LLMToolSchema] | None = None,
         max_tokens: int = 4096,
+        temperature: float | None = None,
     ) -> LLMResponse:
         """Una llamada completa (no streaming). El agentic loop usa esta ruta."""
 
@@ -29,6 +30,7 @@ class BaseLLMProvider(ABC):
         messages: list[LLMMessage],
         tools: list[LLMToolSchema] | None = None,
         max_tokens: int = 4096,
+        temperature: float | None = None,
     ) -> AsyncIterator[str]:
         """Streaming de texto (para canales que lo soporten, ej. web chat)."""
 

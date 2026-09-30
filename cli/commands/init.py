@@ -1,7 +1,12 @@
-"""agent-core init: wizard de creación de un nuevo asistente.
+"""agent-core init: bootstrap de una instalación nueva del framework.
+
+Prepara un despliegue multi-tenant desde cero: .env con credenciales, SDD vivo
+(sdd/*.md), infraestructura (postgres + redis) y el admin master. Los clientes
+se dan de alta DESPUÉS con `agent-core tenant create` (cada cliente es un tenant
+con su AgentSpec — ADR-0001).
 
 Flujo:
-1. Respuestas del negocio (wizard interactivo, o banderas con --non-interactive).
+1. Respuestas del despliegue (wizard interactivo, o banderas con --non-interactive).
 2. Detecta puertos publicables, evitando los que reclama cualquier contenedor.
 3. Genera .env con credenciales, puertos y nombre de proyecto Docker.
 4. Genera el SDD vivo (sdd/*.md desde plantillas).
@@ -68,6 +73,11 @@ APP_HOST_PORT={app_host_port}
 
 MASTER_ENCRYPTION_KEY={fernet_key}
 
+# Cifrado AES-256-GCM (custodia de tokens Meta y todo cifrado nuevo). MASTER_
+# ENCRYPTION_KEY arriba queda solo para leer datos viejos en formato Fernet.
+TOKEN_MASTER_KEYS={token_master_keys}
+TOKEN_ACTIVE_KEY_ID={token_active_key_id}
+
 LLM_PROVIDER={llm_provider}
 LLM_API_KEY={llm_api_key}
 LLM_MODEL={llm_model}
@@ -122,8 +132,8 @@ def init_command(
     skip_db: bool = typer.Option(False, "--skip-db", help="No tocar la BD (solo .env + sdd/)"),
     skip_docker: bool = typer.Option(False, "--skip-docker", help="No levantar docker-compose"),
 ) -> None:
-    """Wizard interactivo: crea un nuevo asistente desde el core."""
-    console.print(Panel.fit("🤖 [bold]agent-core init[/bold] — nuevo asistente", border_style="cyan"))
+    """Wizard interactivo: bootstrap de una instalación nueva del framework."""
+    console.print(Panel.fit("🤖 [bold]agent-core init[/bold] — nueva instalación", border_style="cyan"))
 
     if Path(".env").exists() and not force:
         if non_interactive:
@@ -231,10 +241,15 @@ def init_command(
     )
 
     # ---- .env
+    import base64
+    import json
+
     from cryptography.fernet import Fernet
 
     db_info = parse_db_url(answers["database_url"])
     llm_conf = llm_defaults(answers["llm_provider"])
+    token_key_id = "k1"
+    token_master_keys = json.dumps({token_key_id: base64.b64encode(os.urandom(32)).decode()})
 
     Path(".env").write_text(
         ENV_TEMPLATE.format(
@@ -250,6 +265,8 @@ def init_command(
             redis_host_port=redis_host_port,
             app_host_port=app_host_port,
             fernet_key=Fernet.generate_key().decode(),
+            token_master_keys=token_master_keys,
+            token_active_key_id=token_key_id,
             llm_provider=answers["llm_provider"],
             llm_api_key=answers["llm_api_key"],
             llm_model=answers["llm_model"],

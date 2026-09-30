@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "sections": [
+    {
+      "id": "saludo",
+      "label": "Saludo y descubrimiento",
+      "purpose": "Recibir al cliente y detectar su intención: si quiere información o comprar (venta) o agendar una demo/reunión (agendamiento). Registrar sus datos de interés.",
+      "pack": "pack_commerce",
+      "tools": [
+        "crear_lead",
+        "consultar_inventario",
+        "recomendar_producto",
+        "calificar_lead",
+        "actualizar_lead"
+      ]
+    },
+    {
+      "id": "cotizacion",
+      "label": "Cotización",
+      "purpose": "Armar la cotización con precios y stock reales, aplicar promociones y confirmar el total con el cliente.",
+      "pack": "pack_commerce",
+      "tools": ["generar_cotizacion", "aplicar_promocion", "confirmar_cotizacion"]
+    },
+    {
+      "id": "pedido",
+      "label": "Pedido y cierre",
+      "purpose": "Confirmar el pedido, resolver el pago y responder por su estado.",
+      "pack": "pack_commerce",
+      "tools": ["crear_pedido", "agregar_item_pedido", "generar_link_pago", "consultar_estado_pedido"]
+    },
+    {
+      "id": "escalamiento",
+      "label": "Escalamiento a un asesor",
+      "purpose": "Pasar la conversación a una persona cuando corresponda (queja, pedido explícito o fuera de alcance).",
+      "pack": "core",
+      "tools": ["escalate_to_human"]
+    }
+  ]
+}

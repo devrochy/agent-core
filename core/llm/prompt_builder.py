@@ -18,6 +18,10 @@ from dataclasses import dataclass, field
 
 from agentcore_contracts import AgentSpec
 
+from core.shared.logger import get_logger
+
+log = get_logger(__name__)
+
 
 @dataclass
 class PromptContext:
@@ -25,7 +29,11 @@ class PromptContext:
     business_description: str
     language: str = "es"
     tone: str = "cercano"
+    warmth: int = 3
+    emojis: str = "sparse"
+    max_length: int = 500
     brand_voice: str = ""
+    flow_summary: str = ""            # flujo de atención del tenant (ADR-0054)
     active_skills_summary: str = ""   # descripción de las skills activas del turno
     recalled_memories: list[str] = field(default_factory=list)  # Capa 3 (RAG)
     entity_profile: str = ""          # Capa 2 (perfil del cliente)
@@ -33,20 +41,31 @@ class PromptContext:
     @property
     def template_vars(self) -> dict[str, str]:
         language_names = {"es": "español", "en": "inglés", "pt": "portugués"}
+        emoji_names = {
+            "none": "no uses emojis",
+            "sparse": "usa emojis con moderación",
+            "free": "podés usar emojis libremente",
+        }
         return {
             "assistant_name": self.assistant_name,
             "business_description": self.business_description,
             "language": language_names.get(self.language, self.language),
+            # v2.0.0 (ADR-0050): la persona llega a los playbooks como variables,
+            # así el tono/calidez/emojis configurados tienen efecto real.
+            "tone": self.tone,
+            "warmth": str(self.warmth),
+            "emojis": emoji_names.get(self.emojis, self.emojis),
+            "max_length": str(self.max_length),
         }
 
 
 async def _render_playbook(
-    spec: AgentSpec, ref_name: str, vars_: dict[str, str]
+    spec: AgentSpec, ref_name: str, vars_: dict[str, str], tenant_slug: str | None
 ) -> str | None:
     """Carga el playbook y sustituye placeholders. None si no está en el índice."""
     from core.agents.playbooks import load_playbook
 
-    content = await load_playbook(spec, ref_name)
+    content = await load_playbook(spec, ref_name, tenant_slug=tenant_slug)
     if content is None:
         return None
     try:
@@ -58,17 +77,50 @@ async def _render_playbook(
 
 async def build_system_blocks(spec: AgentSpec, ctx: PromptContext) -> list[str]:
     """Ensambla los bloques del system prompt desde el spec + playbooks + turno."""
+    import uuid
+
     blocks: list[str] = []
+
+    # Override por tenant (ADR-0026): se resuelve UNA VEZ acá, no dentro de
+    # cada llamada a load_playbook -- este loop puede pedir 4-6 playbooks por
+    # turno, y una query de slug por cada uno sería un N+1 real.
+    tenant_slug: str | None = None
+    try:
+        from core.shared.tenant import tenant_slug as _tenant_slug
+
+        tenant_slug = await _tenant_slug(uuid.UUID(spec.tenantId))
+    except Exception:
+        # `tenantId` inválido (specs de test) o la BD no responde: el
+        # override es una capa extra, no la fuente de verdad -- degradar a
+        # "sin override" en vez de tumbar el ensamblado del prompt entero.
+        # Se loggea igual para que un fallo persistente de BD no quede
+        # invisible (antes era un `pass` silencioso).
+        log.warning("tenant_slug_resolve_failed", tenant_id=spec.tenantId, exc_info=True)
+    if tenant_slug is None:
+        # "" (no None) le dice a load_playbook "ya se intentó, no hay slug"
+        # -- evita que cada llamada del loop de abajo reintente la misma
+        # query si la resolución de arriba falló (ej. BD caída).
+        tenant_slug = ""
 
     # 1. Playbooks del tenant, en el orden del índice (identidad, tono, reglas...)
     for ref in spec.playbooks:
-        rendered = await _render_playbook(spec, ref.name, ctx.template_vars)
+        rendered = await _render_playbook(spec, ref.name, ctx.template_vars, tenant_slug)
         if rendered:
             blocks.append(rendered)
 
     # 2. Voz de marca (dato del tenant, estable por negocio)
     if ctx.brand_voice:
         blocks.append(f"## Voz de marca\n{ctx.brand_voice}")
+
+    # 2b. Flujo de atención (ADR-0054): estable por tenant, va antes de los bloques
+    # dinámicos para no invalidar el cache. Es la "base de comportamiento" del pack.
+    if ctx.flow_summary:
+        blocks.append(
+            "## Flujo de atención\n"
+            "Seguí estas etapas, en orden, según lo que pida el cliente. "
+            "Cada etapa lista las herramientas que corresponden a ese momento:\n"
+            f"{ctx.flow_summary}"
+        )
 
     # 3. Contexto dinámico del turno (va al final; no invalida el cache estable)
     dynamic_parts: list[str] = []

@@ -10,6 +10,7 @@ Mapeo de tipos del JSON Schema:
   integer / number   -> <input type="number"> (min/max)
   string + enum      -> <select>
   string + format:password (writeOnly) -> <input type="password"> (cifrado al guardar)
+  string + format:textarea -> <textarea> (texto largo, ej. DSL multi-línea)
   string (default)   -> <input type="text">
   title / description -> label y texto de ayuda
 """
@@ -81,21 +82,34 @@ def _render_prop(name: str, prop: dict[str, Any], current: Any, required: bool) 
   {help_html}
 </div>"""
 
+    # string + format=textarea -> <textarea> (texto largo, reusable para
+    # cualquier campo futuro, no específico a un caso)
+    if ptype == "string" and prop.get("format") == "textarea":
+        value = "" if isinstance(default, dict) else html.escape(str(default or ""))
+        return f"""
+<div class="mb-3">
+  <label class="form-label" for="{name}">{label}</label>
+  <textarea class="form-control" id="{name}" name="{name}" rows="4" {required_attr}>{value}</textarea>
+  {help_html}
+</div>"""
+
     # number / integer
     if ptype in ("number", "integer"):
         step = "1" if ptype == "integer" else "any"
         min_attr = f' min="{prop["minimum"]}"' if "minimum" in prop else ""
         max_attr = f' max="{prop["maximum"]}"' if "maximum" in prop else ""
+        num_value = "" if default is None else html.escape(str(default))
         return f"""
 <div class="mb-3">
   <label class="form-label" for="{name}">{label}</label>
   <input type="number" step="{step}" class="form-control" id="{name}" name="{name}"
-         value="{html.escape(str(default))}" {required_attr}{min_attr}{max_attr}>
+         value="{num_value}" {required_attr}{min_attr}{max_attr}>
   {help_html}
 </div>"""
 
-    # string (default)
-    value = "" if isinstance(default, dict) else html.escape(str(default))
+    # string (default). `None` (campo sin valor ni default) NO debe renderizarse
+    # como el texto "None".
+    value = "" if default is None or isinstance(default, dict) else html.escape(str(default))
     return f"""
 <div class="mb-3">
   <label class="form-label" for="{name}">{label}</label>

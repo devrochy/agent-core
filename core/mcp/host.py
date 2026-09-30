@@ -22,6 +22,7 @@ from core.mcp.types import (
     GuardrailFn,
     MCPResource,
     MCPTool,
+    ScopedHttp,
     SkillInfo,
     ToolContext,
 )
@@ -63,6 +64,14 @@ class MCPHost:
                  tools=[t.name for t in skill.get_tools()])
 
     def register_guardrail(self, name: str, fn: GuardrailFn, priority: int = 10) -> None:
+        # Unicidad de `name`, mismo criterio que `register_skill`/tools de
+        # arriba: el toggle individual por tenant (ADR de parametrización,
+        # `AppSettings.behavior_config["disabled_guardrails"]`) filtra por
+        # NOMBRE -- si dos packs pudieran registrar el mismo nombre, apagar
+        # uno apagaría el del otro pack sin que el admin se entere
+        # (hallazgo de `auditor-multitenant`).
+        if any(g.name == name for g in self._guardrails):
+            raise PluginError(self._active_plugin, f"Guardrail duplicado: {name}")
         self._guardrails.append(
             Guardrail(name=name, fn=fn, priority=priority, plugin_id=self._active_plugin)
         )
@@ -120,6 +129,10 @@ class MCPHost:
         aplicar el enablement por tenant en la costura de ejecución (ADR-0019)."""
         return self._tools.get(tool_name)
 
+    def get_tools(self) -> list[MCPTool]:
+        """Todas las tools registradas (para la pestaña Habilidades, ADR-0050)."""
+        return list(self._tools.values())
+
     def get_guardrails(self) -> list[Guardrail]:
         return list(self._guardrails)
 
@@ -155,11 +168,16 @@ mcp_host = MCPHost()
 
 
 def new_tool_context(
-    conversation_id: uuid.UUID, customer_id: uuid.UUID, idempotency_key: str, channel: str
+    conversation_id: uuid.UUID,
+    customer_id: uuid.UUID,
+    idempotency_key: str,
+    channel: str,
+    http: ScopedHttp | None = None,
 ) -> ToolContext:
     return ToolContext(
         conversation_id=conversation_id,
         customer_id=customer_id,
         idempotency_key=idempotency_key,
         channel=channel,
+        http=http,
     )

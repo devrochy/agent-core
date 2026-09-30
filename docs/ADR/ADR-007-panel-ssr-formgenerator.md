@@ -1,6 +1,6 @@
 # ADR-007 · Panel SSR (Jinja2 + Bootstrap 5) + FormGenerator desde Pydantic
 
-**Estado**: Aceptada · **Fecha**: 2026-08-19
+**Estado**: Reemplazada por ADR-0076 · **Fecha**: 2026-08-19
 
 ## Contexto
 

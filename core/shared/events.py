@@ -16,6 +16,7 @@ from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from core.shared.async_bridge import run_async
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
@@ -31,6 +32,10 @@ ON_ESCALATION_TRIGGERED = "escalation.triggered"  # payload: conversation_id, re
 ON_PLUGIN_ACTIVATED = "plugin.activated"          # payload: plugin_id
 ON_PLUGIN_DISABLED = "plugin.disabled"            # payload: plugin_id, reason
 ON_TOOL_EXECUTED = "tool.executed"                # payload: tool_name, plugin_id, conversation_id
+# Pagos (ADR-0067): el pack de pagos los emite; otros packs (p. ej. cobranza) se
+# suscriben para registrar el cobro. Contrato compartido del core.
+ON_PAYMENT_CONFIRMED = "payment.confirmed"        # payload: reference, provider, provider_reference, amount
+ON_PAYMENT_REJECTED = "payment.rejected"          # payload: reference, provider, provider_reference, amount
 
 
 class EventBus:
@@ -64,7 +69,7 @@ class EventBus:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            asyncio.run(self.emit(event, **payload))
+            run_async(self.emit(event, **payload))
             return
         # Guardar la referencia: sin ella el recolector puede llevarse la task
         # antes de que termine y el evento se pierde en silencio.

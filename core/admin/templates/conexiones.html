@@ -2,16 +2,61 @@
 {% from "_datatable.html" import datatable %}
 {% block title %}Conexiones{% endblock %}
 {% block content %}
+<div class="card mb-4" style="border-left: 5px solid #4f46e5;">
+  <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-3">
+    <div>
+      <div class="fs-5 fw-bold"><i class="bi bi-robot text-accent"></i> Probar asistente</div>
+      <div class="text-secondary">Conversá con el asistente ahora, sin conectar WhatsApp.</div>
+    </div>
+    <a href="/admin/asistente/probar" class="btn btn-accent btn-lg fw-semibold" aria-label="Abrir prueba del asistente">
+      <i class="bi bi-play-fill"></i> Probar asistente
+    </a>
+  </div>
+</div>
 <h1 class="fs-3 mb-4 d-flex justify-content-between align-items-center">
   Conexiones
-  <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modal-nueva-conexion">
-    <i class="bi bi-plus-lg"></i> Agregar conexión
-  </button>
+  <span>
+    <a href="/admin/conexiones/salud" class="btn btn-outline-secondary">
+      <i class="bi bi-heart-pulse"></i> Salud de conexiones
+    </a>
+    <a href="/admin/conexiones/produccion" class="btn btn-outline-secondary">
+      <i class="bi bi-rocket-takeoff"></i> Promoción a producción
+    </a>
+    <a href="/admin/conexiones/meta-requisitos" class="btn btn-outline-secondary">
+      <i class="bi bi-list-check"></i> Requisitos de Meta
+    </a>
+    <a href="/admin/conexiones/webhooks" class="btn btn-outline-secondary">
+      <i class="bi bi-broadcast"></i> Suscripciones de webhook
+    </a>
+    <a href="/admin/conexiones/wizard/whatsapp" class="btn btn-primary">
+      <i class="bi bi-whatsapp"></i> Conectar con Embedded Signup
+    </a>
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modal-nueva-conexion">
+      <i class="bi bi-plus-lg"></i> Agregar conexión
+    </button>
+  </span>
 </h1>
 <p class="text-secondary mb-4">
   Por acá entran y salen los mensajes de WhatsApp. Guarda las credenciales de tu app de
   Meta y quedarán cifradas en la base de datos (Fernet), sin depender del <code>.env</code>.
 </p>
+
+{% if webhook_url %}
+<div class="card mb-4">
+  <div class="card-body">
+    <h5 class="card-title fs-6">Webhook de este tenant</h5>
+    <p class="mb-2 small text-secondary">
+      Regístralo en Meta (app → WhatsApp → Configuration) con el Verify token de la conexión.
+    </p>
+    <div class="input-group input-group-sm mb-1">
+      <span class="input-group-text">Callback URL</span>
+      <input type="text" class="form-control font-monospace" value="{{ webhook_url }}" readonly
+             onclick="this.select()">
+    </div>
+    <div class="form-text">Cada app/tenant tiene su propio webhook (<code>/webhooks/whatsapp/&lt;slug&gt;</code>).</div>
+  </div>
+</div>
+{% endif %}
 
 {% if connections %}
 {% call datatable(filter_fields=[
@@ -27,8 +72,9 @@
   <thead>
     <tr>
       <th class="dt-sortable" data-sort-key="label">Conexión</th>
-      <th class="dt-sortable" data-sort-key="phone">Phone Number ID</th>
-      <th class="dt-sortable" data-sort-key="canal">Canal / Proveedor</th>
+      <th class="dt-sortable" data-sort-key="origen">Origen</th>
+      <th class="dt-sortable" data-sort-key="phone">Número / App ID</th>
+      <th class="dt-sortable" data-sort-key="canal">Canal</th>
       <th class="dt-sortable" data-sort-key="fecha">Creada</th>
       <th class="dt-sortable" data-sort-key="estado">Estado</th>
       <th class="text-end">Acciones</th>
@@ -36,20 +82,56 @@
   </thead>
   <tbody>
     {% for c in connections %}
-    <tr data-search="{{ c.label }} {{ c.external_id }} {{ c.channel }} {{ c.provider }} {{ 'activa' if c.active else 'inactiva' }}"
+    <tr data-search="{{ c.label }} {{ c.external_id }} {{ c.channel }} {{ c.origen }} {{ 'activa' if c.active else 'inactiva' }}"
         data-filter-estado="{{ c.active|string|lower }}" data-filter-principal="{{ c.is_primary|string|lower }}"
-        data-sort-label="{{ c.label }}" data-sort-phone="{{ c.external_id }}" data-sort-canal="{{ c.channel }} {{ c.provider }}"
+        data-sort-label="{{ c.label }}" data-sort-origen="{{ c.origen }}" data-sort-phone="{{ c.external_id }}" data-sort-canal="{{ c.channel }}"
         data-sort-fecha="{{ c.created_at.strftime('%Y-%m-%d %H:%M') if c.created_at }}" data-sort-estado="{{ c.active|string|lower }}">
       <td class="fw-semibold">{{ c.label }}</td>
+      <td>
+        {% if c.tipo == "channel_connection" %}
+        <span class="badge text-bg-secondary" title="Formulario manual de WhatsApp Cloud API">{{ c.origen }}</span>
+        {% elif c.origen == "Embedded Signup" %}
+        <span class="badge text-bg-primary" title="OAuth con la app del framework">{{ c.origen }}</span>
+        {% else %}
+        <span class="badge text-bg-info" title="App de Meta propia del tenant">{{ c.origen }}</span>
+        {% endif %}
+      </td>
       <td><code>{{ c.external_id }}</code></td>
-      <td>{{ c.channel }} · {{ c.provider }}</td>
+      <td>{{ c.channel }}</td>
       <td class="small text-secondary">{{ c.created_at.strftime('%Y-%m-%d %H:%M') if c.created_at }}</td>
       <td>
         {% if c.active %}<span class="badge text-bg-success">activa</span>{% else %}<span class="badge text-bg-secondary">inactiva</span>{% endif %}
         {% if c.is_primary %}<span class="badge text-bg-primary">principal</span>{% endif %}
+        {% if c.coexistencia %}<span class="badge text-bg-info" title="El número sigue en la app de WhatsApp Business (Cloud API en paralelo)">coexistencia</span>{% endif %}
       </td>
       <td class="text-end">
+        {% if c.tipo == "meta_connection" %}
         <div class="dt-actions-row">
+          <a href="/admin/conexiones/meta/{{ c.id }}/plantillas" class="btn btn-outline-primary" title="Plantillas de esta conexión">
+            <i class="bi bi-file-earmark-text"></i>
+          </a>
+          <a href="{{ c.detail_url }}" class="btn btn-outline-secondary" title="Ver salud / diagnosticar">
+            <i class="bi bi-heart-pulse"></i>
+          </a>
+          {% if c.active %}
+          <form method="post" action="/admin/conexiones/meta/{{ c.id }}/desactivar" class="d-inline">
+            <button class="btn btn-outline-secondary" title="Desactivar"><i class="bi bi-pause-circle"></i></button>
+          </form>
+          {% else %}
+          <form method="post" action="/admin/conexiones/meta/{{ c.id }}/activar" class="d-inline">
+            <button class="btn btn-outline-success" title="Activar"><i class="bi bi-play-circle"></i></button>
+          </form>
+          {% endif %}
+          <form method="post" action="/admin/conexiones/meta/{{ c.id }}/eliminar" class="d-inline"
+                onsubmit="return confirm('¿Eliminar esta conexión? Va a dejar de recibir mensajes.');">
+            <button class="btn btn-outline-danger" title="Eliminar"><i class="bi bi-trash"></i></button>
+          </form>
+        </div>
+        {% else %}
+        <div class="dt-actions-row">
+          {% if c.edit_url %}
+          <a href="{{ c.edit_url }}" class="btn btn-outline-secondary" title="Editar conexión"><i class="bi bi-pencil"></i></a>
+          {% endif %}
           {% if c.active and not c.is_primary %}
           <form method="post" action="/admin/conexiones/{{ c.id }}/primaria" class="d-inline">
             <button class="btn btn-outline-primary" title="Marcar principal"><i class="bi bi-star"></i></button>
@@ -69,6 +151,7 @@
             <button class="btn btn-outline-danger" title="Eliminar"><i class="bi bi-trash"></i></button>
           </form>
         </div>
+        {% endif %}
       </td>
     </tr>
     {% endfor %}
@@ -83,41 +166,40 @@
 <div class="modal fade" id="modal-nueva-conexion" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-lg">
     <div class="modal-content">
-      <form method="post" action="/admin/conexiones/guardar">
-        <div class="modal-header">
-          <h5 class="modal-title">Configurar WhatsApp (Meta Cloud API)</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-        </div>
-        <div class="modal-body">
-          <div class="row g-3">
-            <div class="col-md-6">
-              <label class="form-label">Nombre de la conexión</label>
-              <input type="text" name="label" class="form-control" placeholder="Número principal" required>
+      <div class="modal-header">
+        <h5 class="modal-title">Elegí el canal a conectar</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        {% for group in catalog %}
+        <div class="mb-3">
+          <div class="text-secondary text-uppercase fw-semibold mb-2" style="font-size:.72rem; letter-spacing:.06em;">{{ group.label }}</div>
+          <div class="row row-cols-2 row-cols-md-3 g-3">
+            {% for item in group['items'] %}
+            <div class="col">
+              {% if item.available %}
+              <a href="{{ item.url }}" class="card text-decoration-none text-body h-100 text-center py-3">
+                <i class="bi {{ item.icon }} fs-1 mb-2"></i>
+                <div class="fw-semibold">{{ item.label }}</div>
+                {% if item.description %}<div class="small text-secondary">{{ item.description }}</div>{% endif %}
+              </a>
+              {% else %}
+              <div class="card h-100 text-center py-3 opacity-50" aria-disabled="true">
+                <i class="bi {{ item.icon }} fs-1 mb-2"></i>
+                <div class="fw-semibold">{{ item.label }}</div>
+                {% if item.description %}<div class="small text-secondary">{{ item.description }}</div>{% endif %}
+                <span class="badge text-bg-secondary mx-auto mt-1">Próximamente</span>
+              </div>
+              {% endif %}
             </div>
-            <div class="col-md-6">
-              <label class="form-label">Phone Number ID</label>
-              <input type="text" name="phone_number_id" class="form-control" placeholder="1256590580865995" required>
-              <div class="form-text">Meta Business Suite → WhatsApp → Número de teléfono.</div>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">App Secret (firma HMAC)</label>
-              <input type="password" name="app_secret" class="form-control" placeholder="App Secret" required>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Access Token</label>
-              <input type="password" name="access_token" class="form-control" placeholder="Token permanente" required>
-            </div>
-            <div class="col-md-12">
-              <label class="form-label">Verify Token (handshake del webhook)</label>
-              <input type="text" name="verify_token" class="form-control" placeholder="Token que registras en Meta">
-            </div>
+            {% endfor %}
           </div>
         </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-          <button class="btn btn-primary"><i class="bi bi-check-lg"></i> Verificar y guardar conexión</button>
-        </div>
-      </form>
+        {% endfor %}
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+      </div>
     </div>
   </div>
 </div>

@@ -20,13 +20,21 @@ from typing import TYPE_CHECKING, Annotated, Any
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from core.db.session import get_session
+# Importar `jobs` a nivel de módulo registra los `@register_cron` en Celery
+# (worker y beat) apenas se escanea el plugin -- no dentro de `on_activate()`,
+# que solo corre en el proceso API y dejaba los crons de los packs sin
+# programar/registrar en el worker. La ejecución sigue condicionada a que el
+# plugin esté activo (guard del decorador).
+import pack_commerce.jobs  # noqa: F401
+from core.db.session import get_owned, get_session
 from core.mcp.types import BaseModule, GuardrailResult
 from core.shared.events import ON_CONVERSATION_STARTED
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from pack_commerce.admin_api import router as admin_api_router
+from pack_commerce.api import router as leads_router
 from pack_commerce.config import CRMConfig
 from pack_commerce.models import (
     Category,
@@ -38,8 +46,9 @@ from pack_commerce.models import (
     Product,
     ProductVariant,
     Promotion,
+    Quote,
 )
-from pack_commerce.skills import CatalogSkill, LeadSkill, OrderSkill
+from pack_commerce.skills import CatalogSkill, LeadSkill, OrderSkill, classify_customer
 
 if TYPE_CHECKING:
     from core.mcp.host import MCPHost
@@ -49,6 +58,147 @@ log = get_logger(__name__)
 PLUGIN_ID = "pack_commerce"
 
 MONEY_IN_TEXT = re.compile(r"\$\s?[\d.,]+")
+
+# Claves bajo las que un resultado de tool puede traer un monto real (puerto
+# directo de MONEY_KEYS/walkForKeys de agent-sale, src/shared/observability/
+# priceGuardrail.ts) -- por NOMBRE de clave, no "cualquier número", para no
+# confundir un stock/quantity numérico con un monto verificado.
+MONEY_KEYS = {"price", "unit_price", "line_total", "subtotal", "total", "discount"}
+
+# Clave reservada del core (docs/SAFE-RENDERER.md, core/orchestrator/safe_renderer.py)
+# -- se usa el literal, NO se importa: los packs no pueden importar de
+# core.orchestrator.* (invariante nº5/allowlist de CLAUDE.md), mismo criterio ya
+# usado acá para "_safe_append".
+_TOOL_NAME_KEY = "_tool_name"
+
+# Frases que afirman que una acción de negocio quedó resuelta -> deben
+# corresponder a una tool REALMENTE llamada en ESTE turno, o es una "phantom
+# completion": el modelo dice que hizo algo sin haberlo hecho. Encontrado en
+# vivo (tenant yopoldo, 2026-09-11): tras 2 intentos fallidos de generar_cotizacion
+# (variant_id inventado), el modelo terminó diciendo "cerré tu pedido, en un
+# momentico el asesor te pasa el link" sin haber llamado crear_pedido NI
+# generar_link_pago NI escalado de verdad -- el cliente quedaba esperando algo
+# que nunca iba a pasar. Mismo principio que _amount_guardrail, pero para
+# acciones en vez de montos.
+#
+# Los patrones usan raíces (`\w*`) en vez de conjugaciones exactas: la primera
+# versión de este guardrail (solo "cerré tu pedido"/"te envío el link") la
+# esquivó SIN querer el propio modelo al decir "Cerramos tu pedido... Ahora
+# mismo te genero el link" en un incidente posterior (mismo día) -- ninguna
+# forma exacta de "decirlo" cubre todas las conjugaciones que un LLM puede
+# elegir, así que se prioriza la raíz del verbo + la palabra clave del tema
+# por sobre la frase exacta.
+COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
+    "pedido": (
+        re.compile(
+            r"cerr\w*\s+(?:tu|el|los?|la)?\s*pedido|"
+            r"pedido\b(?:\W+\w+){0,3}\W+(?:confirmad\w*|cerrad\w*|cread\w*|generad\w*)",
+            re.IGNORECASE,
+        ),
+        {"crear_pedido", "consultar_estado_pedido"},
+    ),
+    "link_de_pago": (
+        # Cualquier mención de "link de/para pago(ar)" en el texto LIBRE del
+        # modelo (nunca en el _safe_append, que corre después de los
+        # guardrails) implica que se está anunciando -- si no llamó la tool,
+        # es una promesa vacía sin importar el verbo que haya usado.
+        re.compile(r"link\s+(?:de\s+pago|para\s+pagar)", re.IGNORECASE),
+        {"generar_link_pago"},
+    ),
+    "asesor_humano": (
+        re.compile(
+            r"comuniqu\w*\s+con\s+un\s+asesor|un\s+asesor\s+te\s+\w*|"
+            r"pas[eé]\s+con\s+un\s+(?:asesor|humano)|en\s+un\s+momentico\s+te\s+contactan",
+            re.IGNORECASE,
+        ),
+        {"escalate_to_human"},
+    ),
+    # Deuda registrada en el ROADMAP (sesión 2026-09-11, evals): el modelo a
+    # veces DICE que guardó un dato de contacto del lead ("ya guardé tu
+    # teléfono") sin haber llamado la tool -- mismo mecanismo, cierra ese
+    # hallazgo también. Acotado a datos de CONTACTO específicamente (no
+    # "guardé"/"registré" a secas, que también aplicaría a "guardé tu pedido"
+    # y generaría falsos positivos contra la categoría "pedido" de arriba).
+    "dato_de_contacto_guardado": (
+        re.compile(
+            r"(?:guard[eé]|registr[eé]|anot[eé])\s+(?:tu|el|los?|la)\s*"
+            r"(?:tel[eé]fono|correo|email|nombre|direcci[oó]n|nu?mero)",
+            re.IGNORECASE,
+        ),
+        {"crear_lead", "calificar_lead", "actualizar_lead", "update_customer_profile", "remember_fact"},
+    ),
+}
+
+
+_MAX_CUSTOM_COMPLETION_CLAIM_LINES = 50
+
+
+def _parse_custom_completion_claims(raw: str) -> dict[str, tuple[re.Pattern[str], set[str]]]:
+    """Parsea `CRMConfig.completion_claims_custom` (ADR-0025): una línea por
+    claim, `etiqueta: frase uno | frase dos => tool_uno, tool_dos`. Nunca
+    acepta regex crudo -- las frases se escapan (`re.escape`) antes de
+    compilar, elimina el riesgo de ReDoS por diseño (no hay ninguna otra
+    parte del repo que compile un regex proveniente de config/BD/form, así
+    que no hay infraestructura de mitigación que reusar). Una línea mal
+    formada se ignora con un warning, nunca revienta el guardrail (mismo
+    criterio de fail-open que el resto de `core/orchestrator/guardrails.py`).
+
+    Tope de líneas (defensa en profundidad, además del `max_length` del
+    campo en `CRMConfig`): este guardrail corre en CADA turno de
+    conversación de ESE tenant -- sin límite, una config con miles de
+    líneas degradaría la latencia de ese tenant en cada turno (hallazgo de
+    `auditor-multitenant`, no es fuga cross-tenant sino un costo de
+    "vecino ruidoso" dentro del propio proceso compartido).
+    """
+    result: dict[str, tuple[re.Pattern[str], set[str]]] = {}
+    for lineno, raw_line in enumerate(raw.splitlines(), start=1):
+        if lineno > _MAX_CUSTOM_COMPLETION_CLAIM_LINES:
+            log.warning("completion_claims_custom_truncado", limite=_MAX_CUSTOM_COMPLETION_CLAIM_LINES)
+            break
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line or "=>" not in line:
+            log.warning("completion_claim_custom_malformado", line=lineno)
+            continue
+        label, _, rest = line.partition(":")
+        phrases_part, _, tools_part = rest.partition("=>")
+        label = label.strip()
+        phrases = [p.strip() for p in phrases_part.split("|") if p.strip()]
+        tools = {t.strip() for t in tools_part.split(",") if t.strip()}
+        if not label or not phrases or not tools:
+            log.warning("completion_claim_custom_incompleto", line=lineno)
+            continue
+        result[label] = (
+            re.compile("|".join(re.escape(p) for p in phrases), re.IGNORECASE),
+            tools,
+        )
+    return result
+
+
+def _extract_monetary_values(node: Any, key: str | None = None) -> list[float]:
+    """Recorre `node` recursivamente (listas y dicts anidados) y colecciona los
+    números que aparecen bajo una clave de `MONEY_KEYS`.
+
+    Antes, `_amount_guardrail` solo miraba los valores de primer nivel del
+    dict de resultado de cada tool -- `consultar_inventario`/`recomendar_producto`
+    devuelven el precio anidado dentro de `matches`/`recommendations` (una
+    lista), así que el guardrail nunca podía verificarlo y bloqueaba CUALQUIER
+    respuesta que mencionara un precio de catálogo real (encontrado en vivo:
+    tenant yopoldo, "Pollo Broaster" a $60.000 escalaba siempre, no de forma
+    intermitente). El escaneo por nombre de clave (no "cualquier número")
+    también evita que un `stock`/`quantity` se cuele como monto verificado.
+    """
+    values: list[float] = []
+    if isinstance(node, list):
+        for item in node:
+            values.extend(_extract_monetary_values(item))
+    elif isinstance(node, dict):
+        for child_key, child_value in node.items():
+            values.extend(_extract_monetary_values(child_value, child_key))
+    elif isinstance(node, (int, float)) and key is not None and key in MONEY_KEYS:
+        values.append(float(node))
+    return values
 
 admin_router = APIRouter(prefix="/crm", tags=[PLUGIN_ID])
 
@@ -71,23 +221,15 @@ def _iso(dt: datetime | None) -> str:
 
 
 async def _require_admin(request: Request) -> dict[str, Any] | None:
-    from core.admin.auth import current_admin
-    from core.config import get_settings
-    from core.db.models import AppSettings
-    from core.plugin_manager import plugin_manager
+    """Contexto común del panel (incluye el selector de tenants) o None si no hay sesión.
 
-    admin = await current_admin(request)
-    if admin is None:
-        return None
-    async with get_session() as session:
-        app_settings = (await session.execute(select(AppSettings).limit(1))).scalar_one_or_none()
-    return {
-        "request": request,
-        "section": "crm",
-        "admin": admin,
-        "assistant_name": app_settings.assistant_name if app_settings else get_settings().app_name,
-        "plugin_menu": plugin_manager.active_admin_menu(),
-    }
+    Reutiliza `core.admin.context.base_context` en vez de construir un contexto
+    parcial: así todas las rutas del pack reciben `tenants`, `active_tenant_id` y
+    `flash`, igual que las páginas del core. Los packs dependen del core.
+    """
+    from core.admin.context import base_context
+
+    return await base_context(request, "crm")
 
 
 def _login_redirect() -> RedirectResponse:
@@ -101,11 +243,20 @@ async def crm_dashboard(request: Request):
     ctx = await _require_admin(request)
     if ctx is None:
         return _login_redirect()
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        leads = (await session.execute(select(Lead))).scalars().all()
-        products = (await session.execute(select(Product))).scalars().all()
-        promotions = (await session.execute(select(Promotion))).scalars().all()
-        orders = (await session.execute(select(Order))).scalars().all()
+        leads = (
+            await session.execute(select(Lead).where(Lead.tenant_id == tenant_id))
+        ).scalars().all()
+        products = (
+            await session.execute(select(Product).where(Product.tenant_id == tenant_id))
+        ).scalars().all()
+        promotions = (
+            await session.execute(select(Promotion).where(Promotion.tenant_id == tenant_id))
+        ).scalars().all()
+        orders = (
+            await session.execute(select(Order).where(Order.tenant_id == tenant_id))
+        ).scalars().all()
     ctx.update(
         kpi={
             "leads": len(leads),
@@ -124,46 +275,166 @@ async def crm_dashboard(request: Request):
 async def _leads_list() -> list[dict[str, Any]]:
     """Filas para el renderizador por descriptor (Sprint 4, Fase D).
 
+    Todo `Customer` del tenant ES un lead: no hace falta crear ni sincronizar
+    nada (mismo diseño que agent-sale, ADR-036 "clasificación de cliente en 5
+    niveles y rediseño de leads") — apenas alguien escribe por primera vez ya
+    existe su `Customer` (`core/orchestrator/consumer.py::_resolve_conversation`),
+    y `estado`/`segmento` se calculan en vivo contra su actividad real, sin
+    depender de que el LLM llame ninguna tool. `pack_commerce_leads` sigue
+    existiendo solo como enriquecimiento opcional de nombre/interés (lo que el
+    LLM o un admin haya capturado en la conversación).
+
     Filtro explícito por tenant (defensa en profundidad, además de RLS): el panel
     es multi-tenant y una policy caída no debe convertir esto en una fuga."""
+    from core.db.models import Conversation, Customer, Escalation, Message
+
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        rows = (
+        customers = (
             await session.execute(
-                select(Lead)
-                .where(Lead.tenant_id == get_current_tenant_id())
-                .order_by(Lead.last_activity_at.desc())
+                select(Customer)
+                .where(Customer.tenant_id == tenant_id, Customer.deleted_at.is_(None))
+                .order_by(Customer.created_at.desc())
                 .limit(200)
             )
         ).scalars().all()
-    return [
-        {
-            "_id": str(lead.id),
-            "name": lead.name or "",
-            "interest": lead.interest or "",
-            "score": lead.score,
-            "status": lead.status,
-            "last_activity": _iso(lead.last_activity_at) if lead.last_activity_at else "",
+
+        order_customer_ids = set(
+            (
+                await session.execute(
+                    select(Order.customer_id).where(Order.tenant_id == tenant_id).distinct()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        quote_customer_ids = set(
+            (
+                await session.execute(
+                    select(Quote.customer_id).where(Quote.tenant_id == tenant_id).distinct()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        escalated_customer_ids = set(
+            (
+                await session.execute(
+                    select(Conversation.customer_id)
+                    .join(Escalation, Escalation.conversation_id == Conversation.id)
+                    .where(Conversation.tenant_id == tenant_id)
+                    .distinct()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        order_stats = {
+            row.customer_id: (row.pedidos, row.ultima_compra)
+            for row in (
+                await session.execute(
+                    select(
+                        Order.customer_id,
+                        func.count().label("pedidos"),
+                        func.max(Order.created_at).label("ultima_compra"),
+                    )
+                    .where(Order.tenant_id == tenant_id, Order.status != "expirado")
+                    .group_by(Order.customer_id)
+                )
+            ).all()
         }
-        for lead in rows
-    ]
+        last_message_at = {
+            row.customer_id: row.ultimo_mensaje
+            for row in (
+                await session.execute(
+                    select(
+                        Conversation.customer_id,
+                        func.max(Message.created_at).label("ultimo_mensaje"),
+                    )
+                    .join(Message, Message.conversation_id == Conversation.id)
+                    .where(Conversation.tenant_id == tenant_id)
+                    .group_by(Conversation.customer_id)
+                )
+            ).all()
+        }
+        leads_by_customer = {
+            lead.customer_id: lead
+            for lead in (
+                await session.execute(select(Lead).where(Lead.tenant_id == tenant_id))
+            )
+            .scalars()
+            .all()
+            if lead.customer_id is not None
+        }
+
+    rows: list[dict[str, Any]] = []
+    for c in customers:
+        lead = leads_by_customer.get(c.id)
+        if c.id in order_customer_ids:
+            estado = "con_pedido"
+        elif c.id in escalated_customer_ids:
+            estado = "escalada"
+        elif c.id in quote_customer_ids:
+            estado = "con_cotizacion"
+        else:
+            estado = "sin_actividad_comercial"
+        pedidos, _ultima_compra = order_stats.get(c.id, (0, None))
+        activity = last_message_at.get(c.id) or c.created_at
+        rows.append(
+            {
+                "_id": str(c.id),
+                "name": (lead.name if lead else None) or c.name or c.external_id,
+                "interest": (lead.interest if lead else "") or "",
+                "segment": await classify_customer(c.id),
+                "estado": estado,
+                "pedidos": pedidos,
+                "last_activity": _iso(activity) if activity else "",
+            }
+        )
+    rows.sort(key=lambda r: r["last_activity"], reverse=True)
+    return rows
 
 
 async def _leads_save(record_id: str | None, values: dict[str, Any]) -> None:
+    """`record_id` es el `customer.id` (no un `lead.id`): estado/segmento ya se
+    calculan solos, lo único editable a mano es el enriquecimiento de
+    nombre/interés — se crea la fila de `Lead` si todavía no existía."""
     if record_id is None:
         return
     try:
-        lead_uuid = uuid.UUID(record_id)
+        customer_uuid = uuid.UUID(record_id)
     except ValueError:
         return
+    from core.db.models import Customer
+
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        lead = await session.get(Lead, lead_uuid)
-        if lead is not None:
-            score = values.get("score")
-            if isinstance(score, int):
-                lead.score = max(0, min(10, score))
-            if values.get("status") in ("nuevo", "calificado", "contactado", "convertido", "perdido"):
-                lead.status = values["status"]
-            lead.last_activity_at = datetime.now(UTC)
+        # customer_id es FK lógica (sin constraint física) — validar que el
+        # customer exista y sea de este tenant antes de crear/tocar el Lead,
+        # para no dejar una referencia colgante hacia otro tenant.
+        customer = (
+            await session.execute(
+                select(Customer).where(
+                    Customer.id == customer_uuid, Customer.tenant_id == tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+        if customer is None:
+            return
+
+        lead = (
+            await session.execute(
+                select(Lead).where(Lead.customer_id == customer_uuid, Lead.tenant_id == tenant_id)
+            )
+        ).scalar_one_or_none()
+        if lead is None:
+            lead = Lead(customer_id=customer_uuid, idempotency_key=f"manual:{customer_uuid}")
+            session.add(lead)
+        if "name" in values:
+            lead.name = str(values["name"]) or None
+        if "interest" in values:
+            lead.interest = str(values["interest"] or "")
+        lead.last_activity_at = datetime.now(UTC)
 
 
 # ------------------------------------------------------------------ productos
@@ -172,11 +443,26 @@ async def crm_products(request: Request):
     ctx = await _require_admin(request)
     if ctx is None:
         return _login_redirect()
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        products = (await session.execute(select(Product).order_by(Product.name))).scalars().all()
-        variants = (await session.execute(select(ProductVariant))).scalars().all()
-        inventory = (await session.execute(select(Inventory))).scalars().all()
-        categories = (await session.execute(select(Category).order_by(Category.name))).scalars().all()
+        products = (
+            await session.execute(
+                select(Product).where(Product.tenant_id == tenant_id).order_by(Product.name)
+            )
+        ).scalars().all()
+        variants = (
+            await session.execute(select(ProductVariant).where(ProductVariant.tenant_id == tenant_id))
+        ).scalars().all()
+        inventory = (
+            await session.execute(select(Inventory).where(Inventory.tenant_id == tenant_id))
+        ).scalars().all()
+        categories = (
+            await session.execute(
+                select(Category)
+                .where(Category.deleted_at.is_(None), Category.tenant_id == tenant_id)
+                .order_by(Category.name)
+            )
+        ).scalars().all()
     cat_by_id = {c.id: c for c in categories}
     inv_by_variant = {i.variant_id: i for i in inventory}
     variant_by_product: dict[str, list[ProductVariant]] = {}
@@ -223,16 +509,29 @@ async def product_save(
 ):
     if await _require_admin(request) is None:
         return _login_redirect()
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
+        # Defensa en profundidad, mismo criterio que `parent_id` en
+        # category_save: no dejar `Product.category_id` colgando hacia una
+        # categoría de otro tenant (o inexistente) sin validarla primero.
+        resolved_category_id: uuid.UUID | None = None
+        if category_id:
+            category = await get_owned(session, Category, category_id, tenant_id)
+            if category is not None:
+                resolved_category_id = category.id
+
         if product_id:
-            product = await session.get(Product, product_id)
+            product = await get_owned(session, Product, product_id, tenant_id)
             if product is not None:
                 product.name = name
                 product.description = description
-                product.category_id = uuid.UUID(category_id) if category_id else None
+                product.category_id = resolved_category_id
                 variant = (
                     await session.execute(
-                        select(ProductVariant).where(ProductVariant.product_id == product.id)
+                        select(ProductVariant).where(
+                            ProductVariant.product_id == product.id,
+                            ProductVariant.tenant_id == tenant_id,
+                        )
                     )
                 ).scalars().first()
                 if variant is not None:
@@ -240,7 +539,10 @@ async def product_save(
                     variant.price = price or variant.price
                     inv = (
                         await session.execute(
-                            select(Inventory).where(Inventory.variant_id == variant.id)
+                            select(Inventory).where(
+                                Inventory.variant_id == variant.id,
+                                Inventory.tenant_id == tenant_id,
+                            )
                         )
                     ).scalar_one_or_none()
                     if inv is None:
@@ -248,9 +550,7 @@ async def product_save(
                     else:
                         inv.stock_quantity = stock
         else:
-            product = Product(name=name, description=description)
-            if category_id:
-                product.category_id = uuid.UUID(category_id)
+            product = Product(name=name, description=description, category_id=resolved_category_id)
             session.add(product)
             await session.flush()
             variant = ProductVariant(
@@ -276,6 +576,7 @@ async def product_import_csv(request: Request, file: Annotated[UploadFile, File(
             status_code=303,
         )
     created = 0
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
         for row in rows:
             name = (row.get("name") or "").strip()
@@ -289,7 +590,13 @@ async def product_import_csv(request: Request, file: Annotated[UploadFile, File(
             product = Product(name=name, description=description)
             if cat_name:
                 cat = (
-                    await session.execute(select(Category).where(Category.name == cat_name))
+                    await session.execute(
+                        select(Category).where(
+                            Category.name == cat_name,
+                            Category.deleted_at.is_(None),
+                            Category.tenant_id == tenant_id,
+                        )
+                    )
                 ).scalar_one_or_none()
                 if cat is not None:
                     product.category_id = cat.id
@@ -313,9 +620,20 @@ async def crm_categories(request: Request):
     ctx = await _require_admin(request)
     if ctx is None:
         return _login_redirect()
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        categories = (await session.execute(select(Category).order_by(Category.sort_order, Category.name))).scalars().all()
-        complements = (await session.execute(select(CategoryComplement))).scalars().all()
+        categories = (
+            await session.execute(
+                select(Category)
+                .where(Category.deleted_at.is_(None), Category.tenant_id == tenant_id)
+                .order_by(Category.sort_order, Category.name)
+            )
+        ).scalars().all()
+        complements = (
+            await session.execute(
+                select(CategoryComplement).where(CategoryComplement.tenant_id == tenant_id)
+            )
+        ).scalars().all()
     comp_by_cat: dict[str, list[str]] = {}
     for c in complements:
         comp_by_cat.setdefault(str(c.category_id), []).append(str(c.complementary_category_id))
@@ -328,6 +646,7 @@ async def crm_categories(request: Request):
                 nodes.append(
                     {
                         "id": c.id,
+                        "parent_id": c.parent_id,
                         "name": c.name,
                         "sort_order": c.sort_order,
                         "active": c.active,
@@ -352,14 +671,51 @@ async def category_save(
 ):
     if await _require_admin(request) is None:
         return _login_redirect()
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
         parent = uuid.UUID(parent_id) if parent_id else None
+        if parent is not None:
+            # Defensa en profundidad además de RLS: filtro tenant_id explícito
+            # en vez de session.get() a secas -- si `parent` no existe o es de
+            # otro tenant, devuelve None en ambos casos, se rechaza en vez de
+            # asignar igual (dejaría un parent_id colgando hacia otro tenant).
+            # Una categoría eliminada (soft-delete) tampoco es un padre válido.
+            parent_category = await get_owned(session, Category, parent, tenant_id)
+            if parent_category is None or parent_category.deleted_at is not None:
+                return RedirectResponse(
+                    "/crm/categorias?flash=Categoría padre no encontrada&flash_type=danger",
+                    status_code=303,
+                )
         if category_id:
-            category = await session.get(Category, category_id)
-            if category is not None:
-                category.name = name
-                category.parent_id = parent
-                category.sort_order = sort_order
+            category = await get_owned(session, Category, category_id, tenant_id)
+            if category is None:
+                # Antes de este fix, `session.get()` también devolvía `None`
+                # acá sin filtro explícito -- el código seguía de largo y
+                # reventaba más abajo con `category.id` sin definir (500 en
+                # vez de un flash controlado). Mismo criterio que
+                # `category_delete` para "no existe/es de otro tenant".
+                return RedirectResponse(
+                    "/crm/categorias?flash=Categoría no encontrada&flash_type=danger",
+                    status_code=303,
+                )
+            if parent is not None:
+                # Una categoría no puede ser su propia padre ni un descendiente
+                # de sí misma (eso la dejaría inalcanzable en el árbol del listado).
+                ancestor_id: uuid.UUID | None = parent
+                seen: set[uuid.UUID] = set()
+                while ancestor_id is not None and ancestor_id not in seen:
+                    if ancestor_id == category.id:
+                        return RedirectResponse(
+                            "/crm/categorias?flash=Una categoría no puede ser su propia"
+                            " categoría padre ni descendiente de sí misma&flash_type=danger",
+                            status_code=303,
+                        )
+                    seen.add(ancestor_id)
+                    ancestor = await get_owned(session, Category, ancestor_id, tenant_id)
+                    ancestor_id = ancestor.parent_id if ancestor is not None else None
+            category.name = name
+            category.parent_id = parent
+            category.sort_order = sort_order
         else:
             category = Category(name=name, parent_id=parent, sort_order=sort_order)
             session.add(category)
@@ -367,7 +723,10 @@ async def category_save(
 
         if category_id:
             await session.execute(
-                CategoryComplement.__table__.delete().where(CategoryComplement.category_id == category.id)
+                CategoryComplement.__table__.delete().where(
+                    CategoryComplement.category_id == category.id,
+                    CategoryComplement.tenant_id == tenant_id,
+                )
             )
         for raw in complements.split(","):
             comp = raw.strip()
@@ -379,8 +738,55 @@ async def category_save(
                 continue
             if comp_uuid == category.id:
                 continue
-            session.add(CategoryComplement(category_id=category.id, complementary_category_id=comp_uuid))
+            # Defensa en profundidad, mismo criterio que `parent_id` más
+            # arriba: no encadenar `complementary_category_id` a un UUID
+            # ajeno sin verificar que exista y sea del tenant activo.
+            complement = await get_owned(session, Category, comp_uuid, tenant_id)
+            if complement is None:
+                continue
+            session.add(
+                CategoryComplement(category_id=category.id, complementary_category_id=comp_uuid)
+            )
     return RedirectResponse("/crm/categorias?flash=Categoría guardada", status_code=303)
+
+
+@admin_router.post("/categorias/eliminar")
+async def category_delete(request: Request, category_id: str = Form(default="")):
+    """Soft-delete (invariante nº 8): marca deleted_at, nunca borra la fila.
+
+    Se niega si tiene hijos activos — reparentarlos automáticamente sería
+    sorprendente, y dejarlos huérfanos los volvería inalcanzables en el árbol
+    (mismo problema ya arreglado para el ciclo de auto-referencia)."""
+    if await _require_admin(request) is None:
+        return _login_redirect()
+    try:
+        category_uuid = uuid.UUID(category_id)
+    except ValueError:
+        return RedirectResponse("/crm/categorias?flash=Categoría inválida&flash_type=danger", status_code=303)
+    tenant_id = get_current_tenant_id()
+    async with get_session() as session:
+        category = await get_owned(session, Category, category_uuid, tenant_id)
+        if category is None or category.deleted_at is not None:
+            return RedirectResponse(
+                "/crm/categorias?flash=Categoría no encontrada&flash_type=danger", status_code=303
+            )
+        has_children = (
+            await session.execute(
+                select(Category).where(
+                    Category.parent_id == category_uuid,
+                    Category.deleted_at.is_(None),
+                    Category.tenant_id == tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if has_children is not None:
+            return RedirectResponse(
+                "/crm/categorias?flash=No se puede eliminar: tiene subcategorías activas."
+                " Movelas o eliminalas primero.&flash_type=danger",
+                status_code=303,
+            )
+        category.deleted_at = datetime.now(UTC)
+    return RedirectResponse("/crm/categorias?flash=Categoría eliminada", status_code=303)
 
 
 # ------------------------------------------------------------------ promociones
@@ -389,10 +795,27 @@ async def crm_promotions(request: Request):
     ctx = await _require_admin(request)
     if ctx is None:
         return _login_redirect()
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        promotions = (await session.execute(select(Promotion).order_by(Promotion.created_at.desc()))).scalars().all()
-        categories = (await session.execute(select(Category).order_by(Category.name))).scalars().all()
-        products = (await session.execute(select(Product).order_by(Product.name))).scalars().all()
+        promotions = (
+            await session.execute(
+                select(Promotion)
+                .where(Promotion.tenant_id == tenant_id)
+                .order_by(Promotion.created_at.desc())
+            )
+        ).scalars().all()
+        categories = (
+            await session.execute(
+                select(Category)
+                .where(Category.deleted_at.is_(None), Category.tenant_id == tenant_id)
+                .order_by(Category.name)
+            )
+        ).scalars().all()
+        products = (
+            await session.execute(
+                select(Product).where(Product.tenant_id == tenant_id).order_by(Product.name)
+            )
+        ).scalars().all()
     ctx.update(
         promotions=[
             {
@@ -439,16 +862,31 @@ async def promotion_save(
     def parse_dt(s: str | None) -> datetime | None:
         return datetime.fromisoformat(s) if s else None
 
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
+        # Defensa en profundidad, mismo criterio que `parent_id`/`category_id`
+        # en category_save/product_save: no dejar category_id/product_id
+        # colgando hacia una fila de otro tenant sin validarla primero.
+        resolved_category_id: uuid.UUID | None = None
+        if category_id:
+            cat = await get_owned(session, Category, category_id, tenant_id)
+            if cat is not None:
+                resolved_category_id = cat.id
+        resolved_product_id: uuid.UUID | None = None
+        if product_id:
+            prod = await get_owned(session, Product, product_id, tenant_id)
+            if prod is not None:
+                resolved_product_id = prod.id
+
         if promotion_id:
-            promo = await session.get(Promotion, promotion_id)
+            promo = await get_owned(session, Promotion, promotion_id, tenant_id)
             if promo is not None:
                 promo.type = promo_type
                 promo.rules = rules
                 promo.valid_from = parse_dt(valid_from)
                 promo.valid_to = parse_dt(valid_to)
-                promo.category_id = uuid.UUID(category_id) if category_id else None
-                promo.product_id = uuid.UUID(product_id) if product_id else None
+                promo.category_id = resolved_category_id
+                promo.product_id = resolved_product_id
                 promo.eligible_segments = segments_list
         else:
             promo = Promotion(
@@ -456,8 +894,8 @@ async def promotion_save(
                 rules=rules,
                 valid_from=parse_dt(valid_from),
                 valid_to=parse_dt(valid_to),
-                category_id=uuid.UUID(category_id) if category_id else None,
-                product_id=uuid.UUID(product_id) if product_id else None,
+                category_id=resolved_category_id,
+                product_id=resolved_product_id,
                 eligible_segments=segments_list,
             )
             session.add(promo)
@@ -469,7 +907,7 @@ async def promotion_toggle(request: Request, promotion_id: uuid.UUID):
     if await _require_admin(request) is None:
         return _login_redirect()
     async with get_session() as session:
-        promo = await session.get(Promotion, promotion_id)
+        promo = await get_owned(session, Promotion, promotion_id, get_current_tenant_id())
         if promo is not None:
             promo.active = not promo.active
     return RedirectResponse("/crm/promociones?flash=Promoción actualizada", status_code=303)
@@ -481,10 +919,26 @@ async def crm_orders(request: Request):
     ctx = await _require_admin(request)
     if ctx is None:
         return _login_redirect()
+    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        orders = (await session.execute(select(Order).order_by(Order.created_at.desc()).limit(200))).scalars().all()
-        items = (await session.execute(select(OrderItem))).scalars().all()
-        variants = (await session.execute(select(ProductVariant, Product).join(Product, Product.id == ProductVariant.product_id))).all()
+        orders = (
+            await session.execute(
+                select(Order)
+                .where(Order.tenant_id == tenant_id)
+                .order_by(Order.created_at.desc())
+                .limit(200)
+            )
+        ).scalars().all()
+        items = (
+            await session.execute(select(OrderItem).where(OrderItem.tenant_id == tenant_id))
+        ).scalars().all()
+        variants = (
+            await session.execute(
+                select(ProductVariant, Product)
+                .join(Product, Product.id == ProductVariant.product_id)
+                .where(ProductVariant.tenant_id == tenant_id, Product.tenant_id == tenant_id)
+            )
+        ).all()
     var_by_id = {v.id: p for v, p in variants}
     items_by_order: dict[str, list[dict[str, Any]]] = {}
     for i in items:
@@ -523,7 +977,7 @@ async def order_update_status(request: Request, order_id: uuid.UUID, status: str
     if await _require_admin(request) is None:
         return _login_redirect()
     async with get_session() as session:
-        order = await session.get(Order, order_id)
+        order = await get_owned(session, Order, order_id, get_current_tenant_id())
         if order is not None and status in ("abierto", "despachado", "entregado", "cancelado", "expirado"):
             order.status = status
             order.status_changed_at = datetime.now(UTC)
@@ -547,17 +1001,26 @@ class CRMModule(BaseModule):
         {"label": "Pedidos", "path": "/crm/pedidos"},
     ]
     admin_router = admin_router
+
+    def admin_api_routes(self) -> list[Any]:
+        """API admin consumida por el panel nuevo (ADR-0079)."""
+        return [admin_api_router]
     declared_skills: list[type] = [  # noqa: RUF012
         LeadSkill,
         CatalogSkill,
         OrderSkill,
     ]
 
+    def public_routes(self) -> list[Any]:
+        """API pública del pack (ADR-0057): intake de leads desde landings."""
+        return [leads_router]
+
     def on_activate(self, host: MCPHost) -> None:
         host.register_skill(LeadSkill())
         host.register_skill(CatalogSkill())
         host.register_skill(OrderSkill())
         host.register_guardrail("crm_amount_check", self._amount_guardrail, priority=5)
+        host.register_guardrail("crm_completion_check", self._completion_guardrail, priority=6)
 
         # Vistas por descriptor (Fase D, Sprint 4): la del panel se sirve con HTML
         # genérico — cero plantillas/rutas propias del pack.
@@ -568,8 +1031,15 @@ class CRMModule(BaseModule):
         # en plugin_configs y un tenant puede desactivarla sin afectar al resto).
         host.subscribe(ON_CONVERSATION_STARTED, self._on_conversation_started)
 
-        # importar jobs.py registra los @register_cron en Celery Beat
-        import pack_commerce.jobs  # noqa: F401
+        # Coordinación con pack-payments SIN importarlo (invariante nº5, ADR-0023):
+        # el nombre del evento es el contrato real, un string literal acordado en
+        # esa ADR -- no una constante compartida entre packs.
+        host.subscribe("payment.confirmed", self._on_payment_confirmed)
+        host.subscribe("payment.rejected", self._on_payment_rejected)
+
+        # Los `@register_cron` de `jobs.py` se registran al importar el módulo
+        # (ver import a nivel de módulo arriba), no acá -- así el worker y el
+        # beat también los registran al escanear el plugin.
 
     def _register_views(self) -> None:
         from core.admin.view_registry import (
@@ -589,8 +1059,9 @@ class CRMModule(BaseModule):
                     columns=[
                         TableColumn(key="name", label="Lead"),
                         TableColumn(key="interest", label="Interés"),
-                        TableColumn(key="score", label="Score"),
-                        TableColumn(key="status", label="Estado"),
+                        TableColumn(key="segment", label="Clasificación"),
+                        TableColumn(key="estado", label="Estado"),
+                        TableColumn(key="pedidos", label="Pedidos"),
                         TableColumn(key="last_activity", label="Última actividad"),
                     ],
                     filters=[
@@ -598,32 +1069,32 @@ class CRMModule(BaseModule):
                             key="estado",
                             label="Estado",
                             options=[
-                                {"value": "nuevo", "label": "Nuevo"},
-                                {"value": "calificado", "label": "Calificado"},
-                                {"value": "contactado", "label": "Contactado"},
-                                {"value": "convertido", "label": "Convertido"},
-                                {"value": "perdido", "label": "Perdido"},
+                                {"value": "con_pedido", "label": "Con pedido"},
+                                {"value": "escalada", "label": "Escalada"},
+                                {"value": "con_cotizacion", "label": "Con cotización"},
+                                {"value": "sin_actividad_comercial", "label": "Sin actividad"},
                             ],
-                        )
+                        ),
+                        TableFilter(
+                            key="segment",
+                            label="Clasificación",
+                            options=[
+                                {"value": "nuevo", "label": "Nuevo"},
+                                {"value": "ocasional", "label": "Ocasional"},
+                                {"value": "frecuente", "label": "Frecuente"},
+                                {"value": "fiel", "label": "Fiel"},
+                                {"value": "inactivo", "label": "Inactivo"},
+                            ],
+                        ),
                     ],
                     page_size=20,
                 ),
                 form={
                     "type": "object",
                     "properties": {
-                        "score": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 10,
-                            "title": "Score (0-10)",
-                        },
-                        "status": {
-                            "type": "string",
-                            "enum": ["nuevo", "calificado", "contactado", "convertido", "perdido"],
-                            "title": "Estado",
-                        },
+                        "name": {"type": "string", "title": "Nombre"},
+                        "interest": {"type": "string", "title": "Interés"},
                     },
-                    "required": ["status"],
                 },
             ),
             list_handler=_leads_list,
@@ -658,7 +1129,11 @@ class CRMModule(BaseModule):
 
         async with get_session() as session:
             existing = (
-                await session.execute(select(Lead).where(Lead.customer_id == customer_id))
+                await session.execute(
+                    select(Lead).where(
+                        Lead.customer_id == customer_id, Lead.tenant_id == tenant_id
+                    )
+                )
             ).scalar_one_or_none()
             if existing is None:
                 session.add(
@@ -670,6 +1145,48 @@ class CRMModule(BaseModule):
                     )
                 )
                 log.info("lead_draft_created", conversation_id=str(conversation_id))
+
+    async def _on_payment_confirmed(
+        self, reference: str, provider: str, provider_reference: str, amount: float
+    ) -> None:
+        await self._update_order_payment_status(reference, "pagado")
+
+    async def _on_payment_rejected(
+        self, reference: str, provider: str, provider_reference: str, amount: float
+    ) -> None:
+        await self._update_order_payment_status(reference, "rechazado")
+
+    async def _update_order_payment_status(self, reference: str, payment_status: str) -> None:
+        """Reacciona a eventos de `pack-payments` (ADR-0023) sin importarlo: por
+        convención, `reference` es el `public_order_number` que `crear_pedido`
+        le pasó a `generar_link_pago`. Si no matchea ninguna Order, se loggea y
+        se ignora -- pack-payments no sabe qué es una Order, la correlación es
+        responsabilidad de este lado.
+        """
+        tenant_id = get_current_tenant_id()
+        if tenant_id is None:
+            return
+        from core.agents.spec import enabled_packs, load_active_spec
+
+        spec = await load_active_spec(tenant_id)
+        if self.id not in enabled_packs(spec):
+            return
+
+        async with get_session() as session:
+            order = (
+                await session.execute(
+                    select(Order).where(
+                        Order.tenant_id == tenant_id,
+                        Order.public_order_number == reference,
+                    )
+                )
+            ).scalar_one_or_none()
+            if order is None:
+                log.warning("payment_event_no_matching_order", reference=reference, payment_status=payment_status)
+                return
+            order.payment_status = payment_status
+            order.status_changed_at = datetime.now(UTC)
+            log.info("order_payment_status_updated", order_id=str(order.id), payment_status=payment_status)
 
     # ------------------------------------------------------------ guardrail
     async def _amount_guardrail(
@@ -685,9 +1202,8 @@ class CRMModule(BaseModule):
 
         known: set[str] = set()
         for result in tool_results:
-            for value in result.values():
-                if isinstance(value, (int, float)):
-                    known.add(f"{value:g}")
+            for value in _extract_monetary_values(result):
+                known.add(f"{value:g}")
 
         def normalize(amount: str) -> str:
             return amount.replace("$", "").replace(".", "").replace(",", "").strip()
@@ -701,6 +1217,61 @@ class CRMModule(BaseModule):
                     retry_instruction=(
                         "Mencionaste un monto que no proviene de ninguna herramienta. "
                         "No cites cifras específicas salvo que una herramienta las haya devuelto."
+                    ),
+                )
+        return GuardrailResult(passed=True)
+
+    async def _resolved_completion_claims(self) -> dict[str, tuple[re.Pattern[str], set[str]]]:
+        """Combina `COMPLETION_CLAIMS` (incorporados) con la config de ESTE
+        tenant (ADR-0025): quita los deshabilitados
+        (`completion_claims_disabled`), agrega/reemplaza los custom
+        (`completion_claims_custom`). Fail-open ante config ausente/inválida
+        -- nunca debe romper el guardrail (mismo criterio que
+        `_plugin_config()` en `skills.py`)."""
+        from core.plugin_manager import plugin_manager
+
+        claims = dict(COMPLETION_CLAIMS)
+        try:
+            config = await plugin_manager.load_config(PLUGIN_ID)
+        except Exception:
+            config = None
+        if config is None:
+            return claims
+        disabled = {
+            n.strip() for n in (config.completion_claims_disabled or "").split(",") if n.strip()
+        }
+        for name in disabled:
+            claims.pop(name, None)
+        claims.update(_parse_custom_completion_claims(config.completion_claims_custom or ""))
+        return claims
+
+    async def _completion_guardrail(
+        self, response_text: str, tool_results: list[dict[str, Any]]
+    ) -> GuardrailResult:
+        """Si la respuesta afirma que una acción de negocio quedó resuelta
+        (pedido confirmado, link de pago enviado, asesor contactado) pero
+        ninguna tool que respalde esa afirmación corrió en este turno, bloquear.
+
+        No es infalible (es texto libre, no todas las formas de decirlo están
+        cubiertas), pero corta el caso real encontrado: el modelo prometiendo
+        algo que nunca iba a pasar, dejando al cliente esperando en el vacío.
+        Los claims son los incorporados + los que este tenant haya
+        configurado/desactivado (ADR-0025, `_resolved_completion_claims`).
+        """
+        called_tools = {
+            result.get(_TOOL_NAME_KEY) for result in tool_results if isinstance(result, dict)
+        }
+        claims = await self._resolved_completion_claims()
+        for label, (pattern, required_tools) in claims.items():
+            if pattern.search(response_text) and not (called_tools & required_tools):
+                return GuardrailResult(
+                    passed=False,
+                    reason=f"Afirmación de '{label}' sin la tool correspondiente en este turno",
+                    retry_instruction=(
+                        f"Dijiste que se completó una acción de '{label}' pero no llamaste la "
+                        "herramienta correspondiente en este turno. Llamala ahora mismo, o si no "
+                        "podés completarla de verdad, decilo explícitamente en vez de prometer "
+                        "algo que no vas a cumplir."
                     ),
                 )
         return GuardrailResult(passed=True)

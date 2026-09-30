@@ -2,7 +2,7 @@
   "name": "venta-crear-lead-25",
   "requires_plugins": ["pack_commerce"],
   "conversation": [
-    {"role": "user", "content": "Me llamo Ana y quiero que me contacten para una compra grande de mi empresa."}
+    {"role": "user", "content": "Me llamo Ana y quiero hacer una compra grande para un evento de mi empresa. ¿Me contactan para coordinar?"}
   ],
   "assertions": {
     "must_call_tool": "crear_lead",

@@ -105,6 +105,7 @@ class AnthropicProvider(BaseLLMProvider):
         messages: list[LLMMessage],
         tools: list[LLMToolSchema] | None = None,
         max_tokens: int = 4096,
+        temperature: float | None = None,
     ) -> LLMResponse:
         payload: dict[str, Any] = {
             "model": self.model,
@@ -112,6 +113,8 @@ class AnthropicProvider(BaseLLMProvider):
             "system": self._serialize_system(system_blocks),
             "messages": self._serialize_messages(messages),
         }
+        if temperature is not None:
+            payload["temperature"] = temperature
         if tools:
             payload["tools"] = self._serialize_tools(tools)
 
@@ -162,6 +165,7 @@ class AnthropicProvider(BaseLLMProvider):
         messages: list[LLMMessage],
         tools: list[LLMToolSchema] | None = None,
         max_tokens: int = 4096,
+        temperature: float | None = None,
     ) -> AsyncIterator[str]:
         payload: dict[str, Any] = {
             "model": self.model,
@@ -170,6 +174,8 @@ class AnthropicProvider(BaseLLMProvider):
             "messages": self._serialize_messages(messages),
             "stream": True,
         }
+        if temperature is not None:
+            payload["temperature"] = temperature
         async with httpx.AsyncClient(timeout=120) as client:
             async with client.stream(
                 "POST", API_URL, json=payload, headers=self._headers()

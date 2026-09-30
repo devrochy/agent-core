@@ -2,7 +2,19 @@
   "name": "seguimiento-calificar-lead-22",
   "requires_plugins": ["pack_commerce"],
   "conversation": [
-    {"role": "user", "content": "Sí, estoy interesado en comprar pero necesito saber el presupuesto total."}
+    {"role": "user", "content": "Hola, soy Marta y me interesa comprar para mi negocio."},
+    {
+      "role": "assistant",
+      "content": "¡Hola Marta! Ya te registré como interesada. Para orientarte mejor, ¿qué productos buscas y más o menos qué presupuesto manejas?",
+      "tool_calls": [
+        {
+          "name": "crear_lead",
+          "arguments": {"name": "Marta", "interest": "comprar para su negocio"},
+          "result": {"lead_id": "d4d3f8d2-3c4d-6e5f-b06f-7c8d9e0f1a2b", "status": "created"}
+        }
+      ]
+    },
+    {"role": "user", "content": "Sí, estoy interesada en comprar bastante cantidad, mi presupuesto total es de un millón de pesos."}
   ],
   "assertions": {
     "must_call_tool": "calificar_lead",

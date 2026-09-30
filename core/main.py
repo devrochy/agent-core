@@ -14,11 +14,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from core.admin.auth import SESSION_COOKIE, TENANT_COOKIE, current_admin
+from core.admin.permissions import effective_access, pack_prefixes, required_section
 from core.admin.views import router as admin_router
+from core.api import api_router
+from core.api.errors import ApiError, api_error_handler
 from core.config import get_settings
 from core.gateway.webhooks import router as webhooks_router
 from core.mcp.host import mcp_host
@@ -38,9 +41,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     log.info("starting", app=settings.app_name, env=settings.app_env)
 
+    from core.observability.sentry_setup import configure_sentry
+
+    configure_sentry()  # no-op sin SENTRY_ENABLED/SENTRY_DSN
+
     # 1. Detectar y registrar plugins (entry_points)
     plugin_manager.scan()
     await plugin_manager.sync_registry()
+    # 1b. Espejar el catálogo de planes a la tabla `plans` (ADR-0045)
+    from core.billing.plans import sync_plans
+
+    await sync_plans()
+    # 1c. Espejar el catálogo de tipos de conexión a `connection_types` (ADR-0069)
+    from core.gateway.connection_types import sync_connection_types
+
+    await sync_connection_types()
     # 2. Activar los que estaban configurados/activos
     await plugin_manager.activate_all_configured()
     # 3. Crash recovery del debounce
@@ -56,10 +71,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("shutdown")
 
 
-app = FastAPI(title="agent-core", lifespan=lifespan, docs_url=None, redoc_url=None)
+app = FastAPI(
+    title="agent-core",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    # Sin esquema en vivo: el contrato se exporta offline (scripts/export_openapi.py)
+    # y de ahí se generan los tipos TS del panel/app (ADR-0077).
+    openapi_url=None,
+)
+app.add_exception_handler(ApiError, api_error_handler)
 
 app.include_router(webhooks_router)
 app.include_router(admin_router)
+# API JSON unificada (ADR-0076/0077): se autentica sola por realms.
+app.include_router(api_router)
 
 # Estáticos del panel (table.css/table.js del motor data-table)
 _admin_static = Path(__file__).resolve().parent / "admin" / "static"
@@ -75,6 +101,40 @@ for _module in plugin_manager.list_modules():
     plugin_router = getattr(_module, "admin_router", None)
     if plugin_router is not None:
         app.include_router(plugin_router)
+    # Routers admin extra (pestañas de Configuración, ADR-0049): por contrato el
+    # prefijo debe quedar bajo /admin para que el gate del panel aplique.
+    for _extra in _module.extra_admin_routers():
+        _prefix = getattr(_extra, "prefix", "")
+        if not _prefix.startswith("/admin"):
+            log.warning("extra_admin_router_fuera_de_admin", plugin=_module.id, prefix=_prefix)
+            continue
+        app.include_router(_extra)
+    # API admin del pack (ADR-0079): el core solo monta; el pack hereda la
+    # identidad de admin vía `core.api.deps`.
+    for _api in _module.admin_api_routes():
+        _aprefix = getattr(_api, "prefix", "")
+        if not _aprefix.startswith("/api/v1/pack/"):
+            log.warning("admin_api_router_fuera_de_api_v1_pack", plugin=_module.id, prefix=_aprefix)
+            continue
+        app.include_router(_api)
+    # Rutas públicas del pack (ADR-0057): la app de campo se autentica sola.
+    for _public in _module.public_routes():
+        _pprefix = getattr(_public, "prefix", "")
+        if not _pprefix.startswith("/api/pack/"):
+            log.warning("public_router_fuera_de_api_pack", plugin=_module.id, prefix=_pprefix)
+            continue
+        app.include_router(_public)
+
+# Prefijos de UI admin de los packs (ej. /crm → pack_commerce), para el gate por
+# sección del middleware (ADR-0047). Se calcula una vez, tras el scan.
+_PACK_PREFIXES = pack_prefixes(plugin_manager.list_modules())
+
+
+def _forbidden(request: Request):
+    """403 del gate de sección; JSON si la ruta lo pide, HTML si no."""
+    if request.url.path.endswith(".json") or "application/json" in request.headers.get("accept", ""):
+        return JSONResponse({"detail": "Sin permiso para esta sección."}, status_code=403)
+    return HTMLResponse("Sin permiso para esta sección.", status_code=403)
 
 
 @app.get("/healthz")
@@ -84,33 +144,69 @@ async def healthz() -> dict[str, str]:
 
 @app.middleware("http")
 async def tenant_context_middleware(request: Request, call_next):
-    """Establece el contexto de tenant (ADR-0012) para rutas autenticadas.
+    """Establece el contexto de tenant (ADR-0012) y aplica el gate de sección (ADR-0047).
 
     Allowlist de rutas públicas (webhooks, healthz, login, estáticos); para todo
-    lo demás, si hay cookie de sesión, resuelve admin -> tenant_user -> tenant_scope.
-    Así cubre el panel (/admin), los routers de plugins (/crm, /calendar) y cualquier
-    ruta futura sin tener que acordarse de registrar prefijos.
+    lo demás, si hay cookie de sesión, resuelve admin -> tenant_user -> tenant_scope
+    y, salvo `master`, exige el permiso de la sección de la ruta (read para GET,
+    write para el resto). Así cubre el panel (/admin), los routers de plugins
+    (/crm, /calendar) y cualquier ruta futura sin tener que acordarse de prefijos.
     """
     path = request.url.path
-    if path == "/" or path.startswith(("/webhooks", "/healthz", "/admin/login", "/static")):
+    if path == "/" or path.startswith(
+        (
+            "/webhooks",
+            "/healthz",
+            "/api/pack",  # API pública de packs (ADR-0057): se autentica sola
+            "/api/v1",  # API unificada (ADR-0077): resuelve identidad y tenant en `deps`
+            "/admin/login",
+            "/admin/logout",
+            "/admin/switch-tenant",
+            "/static",
+        )
+    ):
         return await call_next(request)
     if SESSION_COOKIE not in request.cookies:
         return await call_next(request)
     admin = await current_admin(request)
-    if admin is not None:
-        tenants = await admin_tenants(admin.id)
-        if tenants:
-            # Selector de tenant (C3, Sprint 4): la cookie ac_tenant decide el
-            # tenant activo del panel; si no es válida o falta, el primero.
-            target = str(tenants[0][0])
-            cookie_tenant = request.cookies.get(TENANT_COOKIE)
-            if cookie_tenant and any(str(t[0]) == cookie_tenant for t in tenants):
-                target = cookie_tenant
-            async with tenant_scope(uuid.UUID(target)):
-                return await call_next(request)
-    return await call_next(request)
+    if admin is None:
+        return await call_next(request)
+
+    tenants = await admin_tenants(admin.id)
+    target: uuid.UUID | None = None
+    if tenants:
+        # Selector de tenant (C3, Sprint 4): la cookie ac_tenant decide el
+        # tenant activo del panel; si no es válida o falta, el primero.
+        target = tenants[0][0]
+        cookie_tenant = request.cookies.get(TENANT_COOKIE)
+        if cookie_tenant and any(str(t[0]) == cookie_tenant for t in tenants):
+            target = uuid.UUID(cookie_tenant)
+
+    required = required_section(path, request.method, _PACK_PREFIXES)
+    async with tenant_scope(target):
+        # Default-deny: cualquier ruta autenticada que no esté mapeada a una
+        # sección se rechaza (las públicas ya salieron por la allowlist de arriba).
+        if required is None:
+            return _forbidden(request)
+        if admin.role != "master":
+            section, write = required
+            access = await effective_access(admin, section, target)
+            if access is None or (write and access != "write"):
+                return _forbidden(request)
+        return await call_next(request)
 
 
 @app.get("/")
 async def root() -> RedirectResponse:
     return RedirectResponse("/admin")
+
+
+# Soporte de despliegue bajo prefijo de ruta (ADR-0073). Se agrega AL FINAL para
+# quedar como middleware más externo: reescribe las URLs salientes (Location/HTML)
+# de TODAS las respuestas, incluidas las de otros middlewares. Sin ROOT_PATH es
+# no-op (la app se sirve en la raíz).
+if get_settings().root_path:
+    from core.admin.path_prefix import PathPrefixMiddleware
+
+    app.add_middleware(PathPrefixMiddleware, prefix=get_settings().root_path)
+
