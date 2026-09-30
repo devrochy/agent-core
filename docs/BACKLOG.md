@@ -192,3 +192,55 @@ con HTML genérico; leads ya está portado. Las vistas complejas del CRM (produc
 con árbol de categorías, promociones, pedidos con line_items) siguen en plantillas
 propias del pack. → Migrarlas a descriptores cuando el descriptor soporte los casos
 (tabla con árbol, sub-items). [Media — follow-up Fase D]
+
+---
+
+## Asistente SolversHub (2026-09-30)
+
+Requerimientos para que el asistente del tenant `solvershub` venda planes, gestione
+**carteras como suscripciones** y **agende demos** sin alucinar. ADRs: 0082 (cartera
+recurrente), 0083 (`pack_subscriptions`), 0084 (calendario interno), 0085 (persistencia
+de artefactos de tenant).
+
+**Suscripciones**
+- **Cartera recurrente (Opción 2, ADR-0082)** — `Cartera`/`Cuota` solo modelan un préstamo
+  finito (`pack_cobranza/models.py:336-370`); no hay recurrencia indefinida ni tools para
+  crear/renovar/cancelar. → `Cartera.modalidad`, ciclo/estado, cron de cargos por período y
+  tools `cob_*sus*`. [Alta]
+- **`pack_subscriptions` (Opción 1, ADR-0083)** — no existe suscripción de cliente final
+  sobre planes; hoy los planes se “simulan” como productos. → pack opcional con
+  `Plan`/`Subscription`/`SubscriptionCharge` y tools `sub_*`. [Alta]
+- **Metadatos de recurrencia en productos** — `Product/ProductVariant` no tienen
+  `billing_period`/`trial_days`/entitlements; el asistente no puede informar plan/prueba sin
+  inventar. → añadir metadatos + tool `sub_informar_planes`/`informar_plan`. [Media]
+- **Cobro recurrente con `pack_payments`** — `generar_link_pago` es one-shot
+  (`pack_payments/skills.py:52-75`); no hay cargo periódico ni reintentos. → cobro por
+  período con link (base) y débito recurrente (diferido, `ROADMAP.md:150-175`). [Media]
+
+**Calendario / demos**
+- **Calendario interno (ADR-0084)** — las 5 tools requieren `google_calendar`
+  (`pack_calendar/skills.py:100,116,157,178,212`); sin OAuth no se agenda. → modo
+  `interno` con `BusinessHours`/`CalendarBlock` y tools sin Google. [Alta]
+- **`check_availability` sin slots libres** (`skills.py:599-634`) — devuelve ocupados y la
+  ventana, pero el LLM debe razonar los huecos → alucina horarios. → calcular `free_slots[]`.
+  [Alta]
+- **`create_calendar_event` sin duración/tipo** (`skills.py:217-265`) — usa siempre
+  `event_duration_minutes`; no acepta `appointment_type_id`. → parámetros + tipos. [Media]
+- **Flow default de calendar incompleto** (`pack_calendar/flow.json:9`) — solo
+  check/create/send_email; update/cancel/list no llegan al LLM. → ampliarlo + tool
+  `list_appointment_types`. [Media]
+- **Seed de citas/tipos** — `seed_catalog` solo cubre `pack_commerce`
+  (`cli/commands/tenant.py:230-353`). → seed genérico por pack. [Media]
+
+**Framework / plataforma**
+- **Artefactos de tenant efímeros (ADR-0085)** — el contenedor de Coolify no monta
+  `TENANTS_ROOT`; `flow.json`/playbooks/catálogo se pierden en el redeploy (solo `brand_voice`
+  persiste en `AppSettings`). → volumen persistente. [Alta]
+- **Evals no aplican el flow resuelto** — `evals/runner.py:181` pasa todas las skills del
+  `mcp_host`; un escenario pasa aunque el `flow.json` del tenant excluya la tool → los evals
+  no protegen contra ese hueco. → usar `resolve_flow` en el runner. [Media]
+- **`completion_claims` no parametrizables en calendar** — `pack_calendar/module.py:39-72`
+  las tiene fijas (commerce sí las configura, `pack_commerce/config.py:115-136`). → DSL
+  por tenant. [Baja]
+- **`brand_voice` vacío no se detecta** — `AppSettings.brand_voice` puede quedar vacío sin
+  aviso, y es la fuente de verdad de precios. → validación/aviso en el panel. [Baja]
