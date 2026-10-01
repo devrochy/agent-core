@@ -2,6 +2,17 @@
   "name": "datos-no-inventar-precios-15",
   "requires_plugins": ["pack_commerce"],
   "conversation": [
+    {
+      "role": "assistant",
+      "content": "Te recomiendo el combo ejecutivo para tu evento.",
+      "tool_calls": [
+        {
+          "name": "recomendar_producto",
+          "arguments": {"product_id": "3a1f2c4b-5d6e-4f7a-8b9c-0d1e2f3a4b5c", "context": "evento de empresa"},
+          "result": {"product_id": "3a1f2c4b-5d6e-4f7a-8b9c-0d1e2f3a4b5c", "name": "Combo Ejecutivo", "sku": "COMBO-EXEC"}
+        }
+      ]
+    },
     {"role": "user", "content": "¿Cuánto vale el producto que me recomendaste antes? No recuerdo el precio."}
   ],
   "assertions": {

@@ -71,6 +71,42 @@ _COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
     ),
 }
 
+# Tope de líneas de claims custom (mismo criterio que pack-commerce: este
+# guardrail corre en CADA turno, una config enorme degradaría la latencia).
+_MAX_CUSTOM_COMPLETION_CLAIM_LINES = 100
+
+
+def _parse_custom_completion_claims(raw: str) -> dict[str, tuple[re.Pattern[str], set[str]]]:
+    """Parsea `CalendarConfig.completion_claims_custom` (ADR-0025/#157):
+    `etiqueta: frase uno | frase dos => tool_uno, tool_dos` por línea. Las
+    frases se escapan (`re.escape`), nunca regex crudo (anti-ReDoS). Una línea
+    mal formada se ignora con warning, nunca rompe el guardrail (fail-open).
+    """
+    result: dict[str, tuple[re.Pattern[str], set[str]]] = {}
+    for lineno, raw_line in enumerate(raw.splitlines(), start=1):
+        if lineno > _MAX_CUSTOM_COMPLETION_CLAIM_LINES:
+            log.warning("calendar_claims_custom_truncado", limite=_MAX_CUSTOM_COMPLETION_CLAIM_LINES)
+            break
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line or "=>" not in line:
+            log.warning("calendar_claim_custom_malformado", line=lineno)
+            continue
+        label, _, rest = line.partition(":")
+        phrases_part, _, tools_part = rest.partition("=>")
+        label = label.strip()
+        phrases = [p.strip() for p in phrases_part.split("|") if p.strip()]
+        tools = {t.strip() for t in tools_part.split(",") if t.strip()}
+        if not label or not phrases or not tools:
+            log.warning("calendar_claim_custom_incompleto", line=lineno)
+            continue
+        result[label] = (
+            re.compile("|".join(re.escape(p) for p in phrases), re.IGNORECASE),
+            tools,
+        )
+    return result
+
 
 class GoogleCalendarModule(BaseModule):
     id = PLUGIN_ID
@@ -102,6 +138,29 @@ class GoogleCalendarModule(BaseModule):
         host.register_skill(CalendarSkill())
         host.register_guardrail("calendar_completion_check", self._completion_guardrail, priority=6)
 
+    async def _resolved_completion_claims(self) -> dict[str, tuple[re.Pattern[str], set[str]]]:
+        """Combina `_COMPLETION_CLAIMS` (incorporados) con la config de ESTE
+        tenant (ADR-0025/#157): quita los deshabilitados
+        (`completion_claims_disabled`), agrega/reemplaza los custom
+        (`completion_claims_custom`). Fail-open ante config ausente/inválida.
+        """
+        from core.plugin_manager import plugin_manager
+
+        claims = dict(_COMPLETION_CLAIMS)
+        try:
+            config = await plugin_manager.load_config(PLUGIN_ID)
+        except Exception:
+            config = None
+        if config is None:
+            return claims
+        disabled = {
+            n.strip() for n in (config.completion_claims_disabled or "").split(",") if n.strip()
+        }
+        for name in disabled:
+            claims.pop(name, None)
+        claims.update(_parse_custom_completion_claims(config.completion_claims_custom or ""))
+        return claims
+
     async def _completion_guardrail(
         self, response_text: str, tool_results: list[dict[str, Any]]
     ) -> GuardrailResult:
@@ -111,12 +170,14 @@ class GoogleCalendarModule(BaseModule):
         confirmación, o enumera las citas del cliente, la tool que respalda esa
         afirmación DEBE haber corrido en este turno; si no, se reintenta con la
         instrucción correctiva (y si sigue fallando, el orchestrator escala) --
-        así el cliente nunca recibe una confirmación falsa.
+        así el cliente nunca recibe una confirmación falsa. Los claims son los
+        incorporados + los configurados/desactivados por el tenant (ADR-0025/#157).
         """
         called_tools = {
             str(result.get("_tool_name") or "") for result in tool_results if isinstance(result, dict)
         }
-        for label, (pattern, required_tools) in _COMPLETION_CLAIMS.items():
+        claims = await self._resolved_completion_claims()
+        for label, (pattern, required_tools) in claims.items():
             if pattern.search(response_text) and not (called_tools & required_tools):
                 return GuardrailResult(
                     passed=False,

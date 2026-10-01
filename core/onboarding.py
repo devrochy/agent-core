@@ -358,4 +358,39 @@ async def onboard_tenant(
             log.warning("tenant_flow_seed_failed", slug=slug, exc_info=True)
 
     ensure_tenant_docs(slug, name, business_description)
+    await ensure_brand_voice(tenant_id, slug)
     return tenant_id, steps
+
+
+async def ensure_brand_voice(tenant_id: uuid.UUID, slug: str) -> bool:
+    """Siembra `AppSettings.brand_voice` desde `TENANTS_ROOT/<slug>/docs/voz-de-marca.md`
+    si está vacío (#158). La voz de marca es la fuente de verdad de precios/políticas;
+    un asistente sin ella alucina. Devuelve True si la sembró.
+    """
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    voice_path = tenant_dir(slug) / "docs" / "voz-de-marca.md"
+    if not voice_path.exists():
+        return False
+    content = voice_path.read_text(encoding="utf-8").strip()
+    if not content:
+        return False
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            settings = (
+                await session.execute(
+                    select(AppSettings).where(
+                        AppSettings.tenant_id == tenant_id,
+                        AppSettings.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if settings is None:
+                settings = AppSettings(tenant_id=tenant_id)
+                session.add(settings)
+                await session.flush()
+            if settings.brand_voice and settings.brand_voice.strip():
+                return False
+            settings.brand_voice = content
+    return True

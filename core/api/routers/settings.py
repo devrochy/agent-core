@@ -45,6 +45,7 @@ class IdentitySettings(BaseModel):
     assistant_name: str
     business_description: str
     brand_voice: str
+    brand_voice_warning: bool = False  # True si quedó vacía (#158): el asistente no tiene voz de marca
     tono: str
     debounce_mode: str
     guardrail_max_retries: int
@@ -151,6 +152,7 @@ def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) 
         assistant_name=(app_settings.assistant_name if app_settings else "") or "",
         business_description=(app_settings.business_description if app_settings else "") or "",
         brand_voice=(app_settings.brand_voice if app_settings else "") or "",
+        brand_voice_warning=not bool(((app_settings.brand_voice if app_settings else "") or "").strip()),
         tono=behavior.get("tono", "calido"),
         debounce_mode=behavior.get("debounce_mode", "natural"),
         guardrail_max_retries=int(behavior.get("guardrail_max_retries", 1) or 0),

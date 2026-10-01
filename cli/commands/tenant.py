@@ -214,7 +214,7 @@ async def _onboard(answers: dict) -> tuple[uuid.UUID, list[str]]:
 
 
 def _maybe_seed(slug: str, tenant_id: uuid.UUID) -> None:
-    from core.onboarding import load_tenant_catalog
+    from core.onboarding import ensure_brand_voice, load_tenant_catalog
 
     data = load_tenant_catalog(slug)
     if data:
@@ -225,6 +225,8 @@ def _maybe_seed(slug: str, tenant_id: uuid.UUID) -> None:
             console.print(f"✓ [green]Catálogo importado desde {slug}/catalog.json[/green]")
     asyncio.run(seed_pack_plugins(slug, tenant_id))
     console.print(f"✓ [green]Seed de packs completado para {slug}[/green]")
+    if asyncio.run(ensure_brand_voice(tenant_id, slug)):
+        console.print(f"✓ [green]brand_voice sembrada desde {slug}/docs/voz-de-marca.md[/green]")
 
 
 async def seed_pack_plugins(slug: str, tenant_id: uuid.UUID) -> list[str]:
@@ -365,16 +367,33 @@ async def seed_catalog(tenant_id: uuid.UUID, data: dict) -> list[str]:
                         ProductVariant.product_id == product.id,
                     )
                     variant = (await session.execute(vstmt)).scalars().first()
+                    attrs = variante.get("attributes", {}) or {}
+                    plan_meta = {
+                        "billing_period": attrs.get("periodicidad") or attrs.get("billing_period"),
+                        "trial_days": attrs.get("trial_dias") or attrs.get("trial_days"),
+                        "entitlements": attrs.get("limites") or attrs.get("entitlements"),
+                    }
                     if variant is None:
                         variant = ProductVariant(
                             product_id=product.id,
                             sku=variante["sku"],
-                            attributes=variante.get("attributes", {}),
+                            attributes=attrs,
                             price=variante["price"],
                             active=True,
+                            billing_period=plan_meta["billing_period"],
+                            trial_days=int(plan_meta["trial_days"]) if plan_meta["trial_days"] else None,
+                            entitlements=plan_meta["entitlements"],
                         )
                         session.add(variant)
                         await session.flush()
+                    else:
+                        variant.attributes = attrs
+                        if plan_meta["billing_period"]:
+                            variant.billing_period = plan_meta["billing_period"]
+                        if plan_meta["trial_days"]:
+                            variant.trial_days = int(plan_meta["trial_days"])
+                        if plan_meta["entitlements"]:
+                            variant.entitlements = plan_meta["entitlements"]
                     existing_stock = (
                         await session.execute(
                             select(Inventory).where(
@@ -441,6 +460,10 @@ def seed(slug: str = typer.Argument(..., help="Slug del tenant (ej: formoto)")) 
             console.print(f"  · {s}")
         for s in await seed_pack_plugins(slug, tenant.id):
             console.print(f"  · {s}")
+        from core.onboarding import ensure_brand_voice
+
+        if await ensure_brand_voice(tenant.id, slug):
+            console.print("  · brand_voice sembrada desde docs/voz-de-marca.md")
 
     asyncio.run(_run())
 

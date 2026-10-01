@@ -12714,6 +12714,11 @@
             "type": "string",
             "title": "Brand Voice"
           },
+          "brand_voice_warning": {
+            "type": "boolean",
+            "title": "Brand Voice Warning",
+            "default": false
+          },
           "tono": {
             "type": "string",
             "title": "Tono"

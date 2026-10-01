@@ -128,6 +128,10 @@ class ProductVariant(TenantMixin, Base):
     sku: Mapped[str] = mapped_column(Text)
     attributes: Mapped[dict] = mapped_column(JSONB, default=dict)  # {"talla": "M"} | {} si sin atributos
     price: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
+    # Recurrencia del plan (ADR-0083, #153): None = producto one-shot (sin suscripción).
+    billing_period: Mapped[str | None] = mapped_column(Text, default=None)  # "mensual"|"anual"
+    trial_days: Mapped[int | None] = mapped_column(Integer, default=None)
+    entitlements: Mapped[dict | None] = mapped_column(JSONB, default=None)  # límites del plan
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

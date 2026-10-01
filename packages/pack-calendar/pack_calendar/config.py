@@ -86,6 +86,27 @@ class CalendarConfig(BasePluginConfig):
         ),
         json_schema_extra={"format": "textarea"},
     )
+    # ---------------------------------------------------------- completion_claims (ADR-0025/#157)
+    completion_claims_disabled: str = Field(
+        default="",
+        description=(
+            "Nombres de claims incorporados a desactivar, separados por coma "
+            "(agendada, reagendada, cancelada, correo_enviado, listado). "
+            "Vacío = todos activos."
+        ),
+    )
+    completion_claims_custom: str = Field(
+        default="",
+        max_length=4000,
+        json_schema_extra={"format": "textarea"},
+        description=(
+            "Claims propios de este negocio para calendar_completion_check, uno por "
+            "línea (máx. 4000 caracteres). "
+            "`etiqueta: frase uno | frase dos => tool_uno, tool_dos`. "
+            "Las frases NUNCA se interpretan como regex (se escapan). Si el "
+            "nombre coincide con un claim incorporado, lo reemplaza."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_source(self) -> CalendarConfig:
