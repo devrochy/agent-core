@@ -125,6 +125,20 @@ Notas:
 - Los pares no listados (`MASTER_ENCRYPTION_KEY`, `APP_SECRET_KEY`, `LLM_*`,
   `TOKEN_*`, `WOMPI_*`) son **propios de cada entorno**.
 
+## Persistencia de artefactos de tenant (`TENANTS_ROOT`)
+
+Los artefactos por tenant (`flow.json`, `playbooks/`, `catalog.json`, `docs/`) viven
+en **`TENANTS_ROOT`** (`/app/tenants`) en el filesystem (ADR-0085). **Sin volumen se
+pierden en cada redeploy** — el contenedor de Coolify no los persiste.
+
+- **`docker-compose.yml`**: volumen nombrado **`tenants-data`** montado en
+  `/app/tenants` en `core-api`, `celery-worker` y `celery-beat` (los tres leen/escriben
+  artefactos). El entrypoint hace `mkdir -p $TENANTS_ROOT`.
+- **Coolify**: montar un **volumen persistente en `/app/tenants`** en la app, el worker
+  y el beat del entorno (mismo volumen en los tres, o se desincronizan).
+- **Backup**: incluir ese volumen (hoy el contenido vive dentro del contenedor).
+- Follow-up: mover `flow`/playbooks a BD (versionado) — ver issue de persistencia.
+
 ## Despliegue
 
 **La imagen hornea los packs** (`packages/pack-*` y `plugins/`) y el Dockerfile
