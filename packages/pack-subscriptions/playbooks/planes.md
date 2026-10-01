@@ -1,15 +1,17 @@
-# Planes (pack_subscriptions)
+# Planes (productos con recurrencia en commerce)
 
-Suscripción de cliente final a un servicio recurrente (mensual).
+Los planes son **productos del catálogo de commerce** (variante con
+`billing_period`, `trial_days` y `entitlements`). La información de planes la
+da el asistente con las tools de commerce (`consultar_inventario` /
+`informar_plan`), NO con tools de este pack.
 
-## Reglas no negociables
-- **Nunca inventar precios**: todo monto sale de `sub_informar_planes`. Si no llamaste la tool, no digas cifras.
-- **Nunca afirmar que un plan "se contrató"** sin `sub_crear_suscripcion` (o sin que el pedido de tienda se haya pagado y activado la suscripción).
-- Si no hay planes configurados para el tenant, decilo y ofrecé escalar; no describas un plan que no existe.
-- Un plan puede ser un producto de tienda (variante vinculada): la **venta** ocurre por el flujo de commerce; la **activación** la hace el pack al confirmarse el pago.
+## Cómo se contrata (una sola vía)
+1. El cliente elige el plan → el asistente lo informa con commerce (`consultar_inventario`/`informar_plan`).
+2. Se arma cotización → pedido → link de pago (commerce + payments).
+3. Al **pagarse el pedido**, la suscripción se activa automáticamente (hook del core).
 
-## Flujo del asistente
-1. `sub_informar_planes` → nombre, precio, periodicidad, prueba.
-2. Cliente confirma plan → `sub_crear_suscripcion` (o venta por tienda).
-3. Gestión → `sub_consultar_suscripcion`, `sub_cambiar_plan`, `sub_pausar_suscripcion`, `sub_cancelar_suscripcion`, `sub_renovar_suscripcion`.
-4. Cobro del período → `sub_link_pago` (link/QR; si no hay pasarela, coordinar otro medio).
+Este pack solo **gestiona** la suscripción resultante (`sub_*`) y cobra los períodos siguientes (`sub_link_pago`).
+
+## Reglas
+- Nunca afirmar que una suscripción "se activó" sin que un pedido se haya pagado.
+- Si el cliente pregunta por precios de planes, usar las tools de commerce (nunca inventar montos).

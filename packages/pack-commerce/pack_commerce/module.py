@@ -1191,10 +1191,10 @@ class CRMModule(BaseModule):
                 await self._activate_plans_for_order(session, order)
 
     async def _activate_plans_for_order(self, session, order: Order) -> None:
-        """Opción B (ADR-0083): si el pedido pagado incluye variantes que son Planes
-        de pack_subscriptions, activa la suscripción del Customer vía el registry del
-        core (sin importar el pack, invariante nº5). Idempotente: el pack solo crea
-        si el cliente aún no tiene suscripción activa.
+        """Plan como producto (ADR-0083): si el pedido pagado incluye variantes con
+        recurrencia (`billing_period`), activa la suscripción del Customer vía el
+        registry del core (sin importar el pack, invariante nº5). Commerce lee SU
+        propia variante y entrega el snapshot del plan; idempotente en el pack.
         """
         items = (
             await session.execute(
@@ -1216,16 +1216,32 @@ class CRMModule(BaseModule):
             return
 
         for item in items:
-            info = await subscription_registry.plan_for_variant(str(item.variant_id), enabled=enabled)
-            if info is None:
+            variant = (
+                await session.execute(
+                    select(ProductVariant).where(
+                        ProductVariant.tenant_id == get_current_tenant_id(),
+                        ProductVariant.id == item.variant_id,
+                    )
+                )
+            ).scalars().first()
+            if variant is None or not variant.billing_period:
                 continue
+            product = await session.get(Product, variant.product_id)
+            plan = {
+                "nombre": product.name if product else variant.sku,
+                "precio": float(variant.price or 0),
+                "moneda": "COP",
+                "periodicidad": variant.billing_period,
+                "trial_dias": variant.trial_days or 0,
+            }
             await subscription_registry.activate_for_customer(
                 customer_id=order.customer_id,
                 variant_id=str(item.variant_id),
+                plan=plan,
                 reference=order.public_order_number,
                 enabled=enabled,
             )
-            log.info("order_activates_subscription", order_id=str(order.id), plan=info.get("nombre"))
+            log.info("order_activates_subscription", order_id=str(order.id), plan=plan["nombre"])
 
     # ------------------------------------------------------------ guardrail
     async def _amount_guardrail(

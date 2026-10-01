@@ -5498,6 +5498,66 @@
         }
       }
     },
+    "/api/v1/pack/pack_subscriptions/suscripciones": {
+      "post": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Crear Suscripcion Manual",
+        "description": "Crea (o reutiliza) la suscripción de un `Customer` a un plan.",
+        "operationId": "crear_suscripcion_manual_api_v1_pack_pack_subscriptions_suscripciones_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CrearSuscripcionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuscripcionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/commerce/dashboard": {
       "get": {
         "tags": [
@@ -11967,6 +12027,62 @@
         ],
         "title": "CostsResponse"
       },
+      "CrearSuscripcionBody": {
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Customer Id",
+            "description": "Customer del core (pivote multi-pack)."
+          },
+          "variant_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variant Id",
+            "description": "Variante de commerce (si aplica)."
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre",
+            "description": "Nombre del plan."
+          },
+          "precio": {
+            "type": "number",
+            "title": "Precio",
+            "description": "Valor del período.",
+            "default": 0
+          },
+          "moneda": {
+            "type": "string",
+            "title": "Moneda",
+            "default": "COP"
+          },
+          "periodicidad": {
+            "type": "string",
+            "title": "Periodicidad",
+            "default": "mensual"
+          },
+          "trial_dias": {
+            "type": "integer",
+            "title": "Trial Dias",
+            "description": "Días de prueba (0 = sin prueba).",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "customer_id",
+          "nombre"
+        ],
+        "title": "CrearSuscripcionBody"
+      },
       "CreditIn": {
         "properties": {
           "valor": {
@@ -16622,6 +16738,35 @@
           "kpis"
         ],
         "title": "Summary"
+      },
+      "SuscripcionOut": {
+        "properties": {
+          "creada": {
+            "type": "boolean",
+            "title": "Creada"
+          },
+          "suscripcion_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Suscripcion Id"
+          },
+          "plan": {
+            "type": "string",
+            "title": "Plan"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "creada",
+          "suscripcion_id",
+          "plan",
+          "estado"
+        ],
+        "title": "SuscripcionOut"
       },
       "SyncRow": {
         "properties": {
