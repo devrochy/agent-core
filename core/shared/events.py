@@ -62,7 +62,7 @@ class EventBus:
                 if inspect.isawaitable(result):
                     await result
             except Exception:
-                log.exception("event_handler_failed", event=event, handler=repr(handler))
+                log.exception("event_handler_failed", event_name=event, handler=repr(handler))
 
     def emit_nowait(self, event: str, **payload: Any) -> None:
         """Emite sin esperar (fire-and-forget) desde contexto síncrono."""
