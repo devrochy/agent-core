@@ -227,7 +227,13 @@ class SubscriptionsSkill(BaseSkill):
             reference=reference, amount=float(cargo.monto or 0), description=f"Suscripción {sub.concepto}"
         )
         async with get_session() as session:
-            cargo.referencia = link.reference
+            # `cargo` quedó detachado de la sesión anterior: re-buscar por id para
+            # persistir la referencia del link (escribir sobre el objeto detached
+            # no se guarda).
+            fila = await session.get(SubscriptionCharge, cargo.id)
+            if fila is not None:
+                fila.referencia = link.reference
+                await session.flush()
         return {
             "encontrado": True,
             "plan": sub.concepto,
