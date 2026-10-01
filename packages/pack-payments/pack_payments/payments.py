@@ -8,6 +8,8 @@ en el checkout, así que la capacidad publica **un** método "pago en línea / Q
 
 from __future__ import annotations
 
+import uuid
+
 from core.db.session import get_session
 from core.payments import PaymentCapabilityError, PaymentLink, PaymentMethod
 from core.shared.logger import get_logger
@@ -59,6 +61,10 @@ class WompiPaymentCapability:
                     amount=amount,
                     currency=config.currency,
                     payment_link_url=link.payment_link_url,
+                    # La capacidad no tiene ToolContext (la consume otro pack):
+                    # idempotencia por reference la garantiza el índice único, este
+                    # key solo debe satisfacer el NOT NULL (ADR-0067).
+                    idempotency_key=str(uuid.uuid4()),
                 )
             )
         return PaymentLink(

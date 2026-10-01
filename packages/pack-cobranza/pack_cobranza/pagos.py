@@ -80,9 +80,16 @@ async def _on_payment_confirmed(reference: str | None = None, amount: Any = None
     tenant_id = get_current_tenant_id()
     if tenant_id is None or not reference:
         return
+    from core.agents.spec import enabled_packs, load_active_spec
+
     async with tenant_scope(tenant_id):
+        # Guard de enablement: este handler está suscrito de forma global (event
+        # bus), pero SOLO debe procesar pagos de tenants con cobranza activa.
+        spec = await load_active_spec(tenant_id)
+        if "pack_cobranza" not in enabled_packs(spec):
+            return
         async with get_session() as session:
-            link = (await session.execute(select(LinkPago).where(LinkPago.tenant_id == tenant_id, LinkPago.referencia == reference, LinkPago.deleted_at.is_(None)))).scalar_one_or_none()
+            link = (await session.execute(select(LinkPago).where(LinkPago.tenant_id == tenant_id, LinkPago.referencia == reference))).scalar_one_or_none()
             if link is None or link.cuota_id is None or link.estado == "usado":
                 return
             cuota = await get_owned(session, Cuota, link.cuota_id)
