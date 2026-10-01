@@ -234,9 +234,10 @@ class LeadSkill(BaseSkill):
             MCPTool(
                 name="crear_lead",
                 description=(
-                    "Registra un nuevo prospecto (lead) en el CRM. Úsala cuando el cliente "
-                    "muestre interés y ya tengas al menos su nombre. NO la uses dos veces "
-                    "para la misma persona: si ya existe, usa actualizar_lead."
+                    "Registra un nuevo prospecto (lead) en el CRM. Úsala de inmediato cuando "
+                    "el cliente se presenta (da su nombre) y muestra intención de comprar o "
+                    "de que lo contacten. NO la uses dos veces para la misma persona: si ya "
+                    "existe, usa actualizar_lead."
                 ),
                 parameters={
                     "type": "object",
@@ -254,7 +255,9 @@ class LeadSkill(BaseSkill):
                 name="calificar_lead",
                 description=(
                     "Asigna una puntuación 1-10 al lead según presupuesto, urgencia y poder de "
-                    "decisión. Úsala después de hacer al menos 2 preguntas de calificación."
+                    "decisión. Úsala cuando el lead confirme un presupuesto o monto de compra: "
+                    "es el momento de calificar, no de consultar inventario ni de volver a "
+                    "crear/actualizar el lead."
                 ),
                 parameters={
                     "type": "object",
@@ -268,7 +271,12 @@ class LeadSkill(BaseSkill):
             ),
             MCPTool(
                 name="actualizar_lead",
-                description="Actualiza datos del lead existente de esta conversación (nombre, email, teléfono, interés, estado).",
+                description=(
+                    "Actualiza datos del lead ya registrado en esta conversación. Úsala DE "
+                    "INMEDIATO cuando el lead (registrado con crear_lead) te dé un dato nuevo: "
+                    "teléfono, email, interés o una corrección. No respondas 'ya anoté' sin "
+                    "haberla llamado."
+                ),
                 parameters={
                     "type": "object",
                     "properties": {
@@ -426,7 +434,65 @@ class CatalogSkill(BaseSkill):
                 },
                 handler=self.recomendar_producto,
             ),
+            MCPTool(
+                name="informar_plan",
+                description=(
+                    "Informa un PLAN o servicio recurrente por SKU o variante: precio, "
+                    "periodicidad, días de prueba y límites del plan (ADR-0083/#153). "
+                    "Úsala cuando el cliente pregunte por un plan/suscripción y tengas el "
+                    "SKU o variant_id (de consultar_inventario). Los montos SIEMPRE salen de aquí."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "sku": {"type": "string", "description": "SKU del plan, ej. 'PLAN-BASIC'"},
+                        "variant_id": {"type": "string", "description": "variant_id del plan"},
+                    },
+                },
+                handler=self.informar_plan,
+            ),
         ]
+
+    async def informar_plan(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Detalle del plan (recurrencia) por SKU o variant_id (#153)."""
+        sku = str(arguments.get("sku", "")).strip()
+        variant_id = _parse_uuid(str(arguments.get("variant_id", "")))
+
+        async with get_session() as session:
+            stmt = (
+                select(ProductVariant, Product)
+                .join(Product, Product.id == ProductVariant.product_id)
+                .where(
+                    ProductVariant.tenant_id == get_current_tenant_id(),
+                    ProductVariant.active.is_(True),
+                )
+            )
+            if variant_id is not None:
+                stmt = stmt.where(ProductVariant.id == variant_id)
+            elif sku:
+                stmt = stmt.where(ProductVariant.sku == sku)
+            else:
+                return {"error": "sku_o_variant_requeridos"}
+            row = (await session.execute(stmt.limit(1))).first()
+        if row is None:
+            return {"encontrado": False, "mensaje": "No encontré ese plan. Pasá el SKU o variant_id de consultar_inventario."}
+        variant, product = row[0], row[1]
+        plan = {
+            "encontrado": True,
+            "product_id": str(product.id),
+            "variant_id": str(variant.id),
+            "sku": variant.sku,
+            "name": product.name,
+            "price": _float(variant.price),
+            "price_label": _money(variant.price),
+            "billing_period": variant.billing_period,
+            "trial_days": variant.trial_days,
+            "entitlements": variant.entitlements or {},
+            "description": product.description or "",
+        }
+        if not variant.billing_period:
+            plan["aviso"] = "Este producto no tiene recurrencia configurada (one-shot)."
+        return plan
 
     # ------------------------------------------------------------ handlers
     async def consultar_inventario(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
@@ -454,6 +520,9 @@ class CatalogSkill(BaseSkill):
                 "disponible": bool(inventory and inventory.stock_quantity > 0),
                 "stock": inventory.stock_quantity if inventory else 0,
                 "description": product.description or "",
+                "billing_period": variant.billing_period,  # recurrencia del plan (#153)
+                "trial_days": variant.trial_days,
+                "entitlements": variant.entitlements,
             }
 
         async with get_session() as session:

@@ -13,7 +13,7 @@
   },
   "model": {
     "primary": "deepseek-chat",
-    "temperature": 0.3
+    "temperature": 0.0
   },
   "memory": {
     "shortTermTurns": 30,
@@ -60,5 +60,7 @@
     "maxToolCallsPerTurn": 10,
     "budgetUsdPerConversation": 0.5
   },
-  "packs": ["pack_commerce"]
+  "packs": [
+    "pack_commerce"
+  ]
 }

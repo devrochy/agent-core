@@ -4,7 +4,7 @@
     {
       "id": "saludo",
       "label": "Saludo y descubrimiento",
-      "purpose": "Recibir al cliente y detectar su intención: si quiere información o comprar (venta) o agendar una demo/reunión (agendamiento). Registrar sus datos de interés.",
+      "purpose": "Recibir al cliente y detectar su intención: si quiere información o comprar (venta) o agendar una demo/reunión (agendamiento). Si el cliente se presenta con nombre e intención de compra o de que lo contacten, registralo DE INMEDIATO con crear_lead antes de seguir preguntando. Cuando el lead confirme un presupuesto o monto de compra, calificalo con calificar_lead.",
       "pack": "pack_commerce",
       "tools": [
         "crear_lead",
