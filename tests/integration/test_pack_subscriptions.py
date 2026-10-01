@@ -176,6 +176,72 @@ async def test_link_pago_genera_cargo_y_webhook_lo_paga() -> None:
                 assert cargo.estado == "pagado"
 
 
+async def test_cron_genera_cargo_y_avanza_periodo() -> None:
+    """#156: el cron crea el cargo del período y avanza `proximo_cargo` (idempotente)."""
+    from datetime import UTC, datetime, timedelta
+
+    from pack_subscriptions.jobs import generar_cargos
+    from pack_subscriptions.models import Subscription, SubscriptionCharge
+    from sqlalchemy import select
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tenant_id = await _tenant_subs()
+    customer_id = uuid.uuid4()
+    vencido = datetime.now(UTC) - timedelta(days=1)
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            sub = Subscription(
+                tenant_id=tenant_id,
+                customer_id=customer_id,
+                concepto="Plan Basic",
+                estado="activa",
+                valor_periodo=200000,
+                moneda="COP",
+                proximo_cargo=vencido,
+                fecha_alta=vencido - timedelta(days=30),
+            )
+            session.add(sub)
+            await session.flush()
+            sub_id = sub.id
+
+    await generar_cargos()
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            cargos = (
+                await session.execute(
+                    select(SubscriptionCharge).where(
+                        SubscriptionCharge.tenant_id == tenant_id,
+                        SubscriptionCharge.subscription_id == sub_id,
+                        SubscriptionCharge.deleted_at.is_(None),
+                    )
+                )
+            ).scalars().all()
+            assert len(cargos) == 1
+            assert float(cargos[0].monto or 0) == 200000
+            assert cargos[0].estado == "pendiente"
+            assert cargos[0].periodo == vencido.strftime("%Y-%m")
+            sub = await session.get(Subscription, sub_id)
+            assert sub is not None and sub.proximo_cargo is not None and sub.proximo_cargo > vencido
+
+    # Idempotente: una segunda corrida no duplica el cargo del período ya vencido.
+    await generar_cargos()
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            n = (
+                await session.execute(
+                    select(SubscriptionCharge).where(
+                        SubscriptionCharge.tenant_id == tenant_id,
+                        SubscriptionCharge.subscription_id == sub_id,
+                        SubscriptionCharge.deleted_at.is_(None),
+                    )
+                )
+            ).scalars().all()
+            assert len(n) == 1
+
+
 async def test_opcion_b_commerce_activa_suscripcion() -> None:
     """Commerce vende el plan; al pagarse el pedido, el registry activa la
     suscripción del Customer (invariante nº5: sin imports entre packs)."""

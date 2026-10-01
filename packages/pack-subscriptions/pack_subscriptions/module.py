@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 
+import pack_subscriptions.jobs  # noqa: F401  # registra el @register_cron (ADR-0083/#156)
 from core.db.session import get_session
 from core.mcp.types import BaseModule, GuardrailResult
 from core.shared.logger import get_logger
