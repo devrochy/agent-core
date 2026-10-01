@@ -72,6 +72,12 @@ def test_skill_expone_tools_de_cliente() -> None:
         "cob_evaluar_negociacion",
         "cob_registrar_promesa_pago",
         "cob_registrar_abono",
+        "cob_consultar_suscripcion",
+        "cob_crear_suscripcion",
+        "cob_pausar_suscripcion",
+        "cob_cancelar_suscripcion",
+        "cob_renovar_suscripcion",
+        "cob_link_suscripcion",
     }
     # Las operaciones de administración NO deben estar en el asistente.
     assert "cob_registrar_gasto" not in names

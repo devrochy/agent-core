@@ -126,7 +126,9 @@ def suscribir() -> None:
     event_bus.subscribe(ON_PAYMENT_CONFIRMED, _on_payment_confirmed)
 
 
-async def crear_link_para_cuota(cuota: Cuota, cfg: CobranzaConfig) -> dict[str, Any]:
+async def crear_link_para_cuota(
+    cuota: Cuota, cfg: CobranzaConfig, *, cliente_id: uuid.UUID | None = None
+) -> dict[str, Any]:
     """Crea (o reutiliza) el link/QR de una cuota. Devuelve el payload para la app."""
     tid = get_current_tenant_id()
     async with get_session() as session:
@@ -142,9 +144,11 @@ async def crear_link_para_cuota(cuota: Cuota, cfg: CobranzaConfig) -> dict[str, 
     async with get_session() as session:
         existente = (await session.execute(select(LinkPago).where(LinkPago.tenant_id == tid, LinkPago.referencia == link.reference))).scalar_one_or_none()
         if existente is None:
-            session.add(LinkPago(tenant_id=tid, cuota_id=cuota.id, prestamo_id=cuota.prestamo_id, referencia=link.reference, url=link.url or "", monto=saldo))
+            session.add(LinkPago(tenant_id=tid, cuota_id=cuota.id, prestamo_id=cuota.prestamo_id, cliente_id=cliente_id, referencia=link.reference, url=link.url or "", monto=saldo))
         elif link.url:
             existente.url = link.url
+            if cliente_id is not None and existente.cliente_id is None:
+                existente.cliente_id = cliente_id
     return {
         "modo": "online",
         "monto": monto,

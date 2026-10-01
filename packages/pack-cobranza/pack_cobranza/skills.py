@@ -12,7 +12,7 @@ Modelo (ADR-0060): Propietario → **Cartera** → Cliente → Préstamo.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -30,6 +30,7 @@ from pack_cobranza.models import (
     Prestamo,
     Promesa,
     ReglaNegociacion,
+    Suscripcion,
 )
 
 log = get_logger(__name__)
@@ -210,6 +211,78 @@ class CobranzaSkill(BaseSkill):
                 },
                 handler=self.registrar_abono,
             ),
+            MCPTool(
+                name="cob_consultar_suscripcion",
+                description=(
+                    "Consulta la suscripción recurrente del cliente (servicio mensual): estado, "
+                    "valor del período, próximo cargo y últimos cargos. Usar cuando pregunte por su "
+                    "suscripción, su mensualidad o su próximo cobro."
+                ),
+                parameters={"type": "object", "properties": {}, "required": []},
+                handler=self.consultar_suscripcion,
+            ),
+            MCPTool(
+                name="cob_crear_suscripcion",
+                description=(
+                    "Crea una suscripción recurrente para el cliente (servicio mensual). Usar SOLO "
+                    "cuando el cliente confirmó explícitamente el servicio, el valor y la "
+                    "periodicidad. No inventes el valor: debe salir del catálogo o de lo acordado."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "concepto": {"type": "string", "description": "Nombre del servicio, ej. 'Plan Basic'"},
+                        "valor": {"type": "number", "description": "Valor por período (mensual)"},
+                        "dia_facturacion": {"type": "integer", "description": "Día del mes del cobro (1-28, opcional)"},
+                    },
+                    "required": ["concepto", "valor"],
+                },
+                handler=self.crear_suscripcion,
+            ),
+            MCPTool(
+                name="cob_pausar_suscripcion",
+                description=(
+                    "Pausa la suscripción del cliente (suspende los cargos). Usar solo cuando el "
+                    "cliente lo pida y confirme."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {"motivo": {"type": "string", "description": "Motivo (opcional)"}},
+                    "required": [],
+                },
+                handler=self.pausar_suscripcion,
+            ),
+            MCPTool(
+                name="cob_cancelar_suscripcion",
+                description=(
+                    "Cancela la suscripción del cliente (fin del servicio). Usar solo cuando el "
+                    "cliente lo pida explícitamente y confirme."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {"motivo": {"type": "string", "description": "Motivo (opcional)"}},
+                    "required": [],
+                },
+                handler=self.cancelar_suscripcion,
+            ),
+            MCPTool(
+                name="cob_renovar_suscripcion",
+                description=(
+                    "Reactiva una suscripción pausada (y reprograma el próximo cargo). Usar cuando "
+                    "el cliente pida reactivarla."
+                ),
+                parameters={"type": "object", "properties": {}, "required": []},
+                handler=self.renovar_suscripcion,
+            ),
+            MCPTool(
+                name="cob_link_suscripcion",
+                description=(
+                    "Genera el link/QR de pago del cargo del período pendiente de la suscripción. "
+                    "Usar cuando el cliente quiera pagar su mensualidad."
+                ),
+                parameters={"type": "object", "properties": {}, "required": []},
+                handler=self.link_suscripcion,
+            ),
         ]
         # NOTA (auditoría M3): las operaciones de administración/de campo (registrar
         # gasto, inyección, visita y generar liquidación) NO se exponen al asistente
@@ -381,3 +454,206 @@ class CobranzaSkill(BaseSkill):
 
     # Las operaciones de administración (gasto, inyección, visita, liquidación)
     # viven en el panel (`admin.py`), no en el asistente del cliente (auditoría M3).
+
+    # ------------------------------------------------------------ suscripción
+    async def _cliente_conversacion(self, session, context: ToolContext) -> Cliente | None:
+        customer_id = getattr(context, "customer_id", None)
+        if customer_id is None:
+            return None
+        return await _cliente_de_customer(session, customer_id)
+
+    async def _suscripcion_del_cliente(
+        self, session, cliente_id: uuid.UUID
+    ) -> Suscripcion | None:
+        return (
+            await session.execute(
+                select(Suscripcion)
+                .where(
+                    Suscripcion.tenant_id == get_current_tenant_id(),
+                    Suscripcion.cliente_id == cliente_id,
+                    Suscripcion.deleted_at.is_(None),
+                )
+                .order_by(Suscripcion.created_at.desc())
+            )
+        ).scalars().first()
+
+    async def consultar_suscripcion(
+        self, arguments: dict[str, Any], context: ToolContext
+    ) -> dict[str, Any]:
+        async with get_session() as session:
+            cliente = await self._cliente_conversacion(session, context)
+            if cliente is None:
+                return {"encontrado": False, "mensaje": "No encontré tu registro de cliente."}
+            sub = await self._suscripcion_del_cliente(session, cliente.id)
+            if sub is None:
+                return {"encontrado": False, "mensaje": "No tenés una suscripción registrada."}
+            cargos = (
+                await session.execute(
+                    select(Cuota)
+                    .where(
+                        Cuota.tenant_id == get_current_tenant_id(),
+                        Cuota.suscripcion_id == sub.id,
+                        Cuota.deleted_at.is_(None),
+                    )
+                    .order_by(Cuota.fecha_vencimiento.desc())
+                    .limit(6)
+                )
+            ).scalars().all()
+            return {
+                "encontrado": True,
+                "suscripcion_id": str(sub.id),
+                "concepto": sub.concepto,
+                "estado": sub.estado,
+                "valorPeriodo": float(sub.valor_periodo or 0),
+                "moneda": sub.moneda,
+                "periodicidad": sub.periodicidad,
+                "proximoCargo": sub.proximo_cargo.isoformat() if sub.proximo_cargo else None,
+                "cargos": [
+                    {
+                        "numero": c.numero_cuota,
+                        "valor": float(c.valor_esperado),
+                        "vence": c.fecha_vencimiento.isoformat(),
+                        "estatus": c.estatus,
+                    }
+                    for c in cargos
+                ],
+            }
+
+    async def crear_suscripcion(
+        self, arguments: dict[str, Any], context: ToolContext
+    ) -> dict[str, Any]:
+        from pack_cobranza.jobs import fecha_cargo
+
+        concepto = str(arguments.get("concepto") or "").strip()
+        valor = Decimal(str(arguments.get("valor") or 0))
+        dia = min(max(int(arguments.get("dia_facturacion") or 1), 1), 28)
+        if not concepto or valor <= 0:
+            return {
+                "error": "faltan_datos",
+                "mensaje": "Necesito el concepto del servicio y el valor del período (> 0).",
+            }
+        async with get_session() as session:
+            cliente = await self._cliente_conversacion(session, context)
+            if cliente is None:
+                return {"error": "cliente_no_encontrado"}
+            existente = await self._suscripcion_del_cliente(session, cliente.id)
+            if existente is not None and existente.estado in ("activa", "pausada"):
+                return {
+                    "ya_existe": True,
+                    "suscripcion_id": str(existente.id),
+                    "estado": existente.estado,
+                }
+            sub = Suscripcion(
+                tenant_id=get_current_tenant_id(),
+                cliente_id=cliente.id,
+                cartera_id=cliente.cartera_id,
+                concepto=concepto,
+                valor_periodo=valor,
+                dia_facturacion=dia,
+                estado="activa",
+                proximo_cargo=fecha_cargo(dia, _hoy(), estricto=False),
+                suscrito_en=datetime.now(UTC),
+            )
+            session.add(sub)
+            await session.flush()
+            return {
+                "creada": True,
+                "suscripcion_id": str(sub.id),
+                "concepto": concepto,
+                "valorPeriodo": float(valor),
+                "proximoCargo": sub.proximo_cargo.isoformat() if sub.proximo_cargo else None,
+            }
+
+    async def _cambiar_estado_suscripcion(
+        self, estado: str, arguments: dict[str, Any], context: ToolContext
+    ) -> dict[str, Any]:
+        motivo = str(arguments.get("motivo") or "").strip()
+        async with get_session() as session:
+            cliente = await self._cliente_conversacion(session, context)
+            if cliente is None:
+                return {"error": "cliente_no_encontrado"}
+            sub = await self._suscripcion_del_cliente(session, cliente.id)
+            if sub is None:
+                return {"encontrado": False, "mensaje": "No tenés una suscripción registrada."}
+            sub.estado = estado
+            if motivo:
+                sub.notas = motivo[:300]
+            if estado == "cancelada":
+                sub.cancelado_en = datetime.now(UTC)
+                sub.proximo_cargo = None
+            await session.flush()
+            return {"estado": estado, "suscripcion_id": str(sub.id)}
+
+    async def pausar_suscripcion(
+        self, arguments: dict[str, Any], context: ToolContext
+    ) -> dict[str, Any]:
+        return await self._cambiar_estado_suscripcion("pausada", arguments, context)
+
+    async def cancelar_suscripcion(
+        self, arguments: dict[str, Any], context: ToolContext
+    ) -> dict[str, Any]:
+        return await self._cambiar_estado_suscripcion("cancelada", arguments, context)
+
+    async def renovar_suscripcion(
+        self, arguments: dict[str, Any], context: ToolContext
+    ) -> dict[str, Any]:
+        from pack_cobranza.jobs import fecha_cargo
+
+        async with get_session() as session:
+            cliente = await self._cliente_conversacion(session, context)
+            if cliente is None:
+                return {"error": "cliente_no_encontrado"}
+            sub = await self._suscripcion_del_cliente(session, cliente.id)
+            if sub is None:
+                return {"encontrado": False, "mensaje": "No tenés una suscripción registrada."}
+            sub.estado = "activa"
+            sub.cancelado_en = None
+            if sub.proximo_cargo is None or sub.proximo_cargo < _hoy():
+                sub.proximo_cargo = fecha_cargo(int(sub.dia_facturacion or 1), _hoy(), estricto=False)
+            await session.flush()
+            return {
+                "estado": "activa",
+                "suscripcion_id": str(sub.id),
+                "proximoCargo": sub.proximo_cargo.isoformat() if sub.proximo_cargo else None,
+            }
+
+    async def link_suscripcion(
+        self, arguments: dict[str, Any], context: ToolContext
+    ) -> dict[str, Any]:
+        from pack_cobranza.pagos import config_del_tenant, crear_link_para_cuota
+
+        async with get_session() as session:
+            cliente = await self._cliente_conversacion(session, context)
+            if cliente is None:
+                return {"error": "cliente_no_encontrado"}
+            sub = await self._suscripcion_del_cliente(session, cliente.id)
+            if sub is None:
+                return {"encontrado": False, "mensaje": "No tenés una suscripción registrada."}
+            cuota = (
+                await session.execute(
+                    select(Cuota)
+                    .where(
+                        Cuota.tenant_id == get_current_tenant_id(),
+                        Cuota.suscripcion_id == sub.id,
+                        Cuota.estatus.in_(("pendiente", "atrasada")),
+                        Cuota.deleted_at.is_(None),
+                    )
+                    .order_by(Cuota.fecha_vencimiento.asc())
+                )
+            ).scalars().first()
+            if cuota is None:
+                return {
+                    "encontrado": True,
+                    "sin_cargo": True,
+                    "mensaje": "Todavía no hay un cargo pendiente para pagar.",
+                }
+            cfg = await config_del_tenant()
+        if cfg is None:
+            return {
+                "encontrado": True,
+                "sin_pasarela": True,
+                "monto": float(cuota.valor_esperado),
+                "mensaje": "El pago en línea no está configurado; coordinemos el pago por otro medio.",
+            }
+        payload = await crear_link_para_cuota(cuota, cfg, cliente_id=cliente.id)
+        return {"encontrado": True, "concepto": sub.concepto, "cuota_id": str(cuota.id), **payload}
