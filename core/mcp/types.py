@@ -230,6 +230,14 @@ class BaseModule(ABC):
         """
         return None
 
+    async def seed_data(self, tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
+        """Hook opcional de seed (ADR-0083, issue #154): importa `data` a la BD
+        del tenant de forma idempotente. El CLI/onboarding lo invoca para CADA
+        pack habilitado que tenga un archivo `TENANTS_ROOT/<slug>/<plugin_id>.json`.
+        Default: no-op.
+        """
+        return []
+
     def public_routes(self) -> list[Any]:
         """Routers PÚBLICOS del pack (sin sesión de admin), ej. la app de campo.
 

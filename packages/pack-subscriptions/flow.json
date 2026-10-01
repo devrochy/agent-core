@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "sections": [
+    {
+      "id": "sub_planes",
+      "label": "Información de planes",
+      "purpose": "Informar los planes/servicios recurrentes disponibles. Los precios SIEMPRE salen de sub_informar_planes: nunca inventar montos.",
+      "pack": "pack_subscriptions",
+      "tools": ["sub_informar_planes"]
+    },
+    {
+      "id": "sub_contratacion",
+      "label": "Contratación del plan",
+      "purpose": "Crear la suscripción del cliente a un plan SOLO cuando lo confirme explícitamente (o cuando el plan se compró en la tienda y hay que activarlo).",
+      "pack": "pack_subscriptions",
+      "tools": ["sub_crear_suscripcion"]
+    },
+    {
+      "id": "sub_gestion",
+      "label": "Gestión de la suscripción",
+      "purpose": "Consultar, cambiar, pausar, cancelar, renovar la suscripción y cobrar el período con un link de pago. Nunca afirmar un cambio sin llamar la tool.",
+      "pack": "pack_subscriptions",
+      "tools": [
+        "sub_consultar_suscripcion",
+        "sub_cambiar_plan",
+        "sub_pausar_suscripcion",
+        "sub_cancelar_suscripcion",
+        "sub_renovar_suscripcion",
+        "sub_link_pago"
+      ]
+    }
+  ]
+}
