@@ -178,7 +178,26 @@ async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tup
         assistant_name="Asistente de Prueba",
         business_description="Negocio de ejemplo para evaluación.",
     )
-    tools = to_llm_schemas(mcp_host.get_skill_tools([s.name for s in mcp_host.list_skills()]))
+    # Fidelidad con producción (ADR-0054/#155): el eval debe ver el MISMO subconjunto
+    # de tools que el asistente real — packs habilitados por el spec + flujo resuelto.
+    # Antes se pasaban TODAS las skills del host, así que un escenario podía pasar
+    # aunque el flujo del tenant excluyera la tool.
+    from core.agents.flow import resolve_flow
+    from core.agents.spec import enabled_packs
+
+    enabled = enabled_packs(spec)
+    candidate = [
+        tool
+        for tool in mcp_host.get_skill_tools([s.name for s in mcp_host.list_skills()])
+        if (tool.plugin_id or "core") in enabled
+    ]
+    flow = await resolve_flow(spec, available={t.name for t in candidate})
+    if flow is not None:
+        by_name = {t.name: t for t in candidate}
+        active = [by_name[name] for name in flow.tool_names if name in by_name]
+    else:
+        active = candidate
+    tools = to_llm_schemas(active)
     messages = _build_messages(scenario["conversation"])
     response = await provider.generate(
         system_blocks=await build_system_blocks(spec, ctx), messages=messages, tools=tools or None
