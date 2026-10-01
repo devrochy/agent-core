@@ -91,6 +91,33 @@ class Appointment(Base):
     )
 
 
+class CalendarBlock(Base):
+    """Bloqueo puntual de la agenda interna (vacaciones, ausencia, feriado).
+
+    Solo aplica al modo `interno` del pack (`CalendarConfig.source`), donde la
+    disponibilidad se calcula contra los horarios de atención y los bloqueos
+    (ADR-0084).
+    """
+
+    __tablename__ = "pack_calendar_blocks"
+    __table_args__ = (
+        Index("ix_pack_calendar_blocks_tenant_start", "tenant_id", "start_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, default=_tenant_or_raise
+    )
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class AppointmentEvent(Base):
     """Historial de acciones sobre una cita: programada / reprogramada / cancelada.
 

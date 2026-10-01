@@ -2,6 +2,17 @@
 name: citas
 description: Reglas de reagendado y cancelación de citas
 ---
+## Agendar una cita
+- **NUNCA inventes horarios libres.** Antes de proponer cualquier hora, llamá
+  `check_availability` con la fecha y ofrecé al cliente **solo** horarios que
+  aparezcan en `free_slots`. Si `free_slots` está vacío, decí que no hay
+  disponibilidad ese día y proponé otra fecha.
+- Si el negocio ofrece varios servicios, usá `list_appointment_types` para
+  elegir el tipo correcto (p. ej. una **demo**) y pasá `appointment_type_id` al
+  crear; si el cliente pide una duración concreta, pasá `duration_minutes`.
+- Creá la cita con `create_calendar_event` **solo** cuando el cliente confirmó
+  fecha y hora exactas de la lista de `free_slots`.
+
 ## Reagendar una cita existente
 - Si el cliente pide **mover/reagendar/reprogramar** una cita ya agendada, usá
   SIEMPRE la tool `update_calendar_event` (mueve la cita existente a la nueva

@@ -1,13 +1,19 @@
-"""CalendarSkill: agendamiento de citas contra Google Calendar API.
+"""CalendarSkill: agendamiento con **agenda interna** o **Google Calendar**.
 
-La cita se espeja en `pack_calendar_appointments` (para el panel) con su
-`google_event_id`. `check_availability` considera el horario de atención
-configurado (`CalendarConfig.business_hours`) además de los eventos ocupados.
+Modo (ADR-0084, `CalendarConfig.source`):
+- `interno` (default): la agenda vive en `pack_calendar_appointments` +
+  `pack_calendar_blocks`; la disponibilidad se calcula contra los horarios de
+  atención (`business_hours`). No requiere Google.
+- `google`: crea/mueve/borra el evento en Google Calendar y lo espeja local.
+
+En ambos modos `check_availability` devuelve `free_slots` calculados (no solo los
+ocupados), para que el asistente no invente horarios.
 """
 
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -24,6 +30,7 @@ from pack_calendar.oauth import get_access_token
 CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 PLUGIN_ID = "pack_calendar"
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+_SOURCE_TTL_SECONDS = 60.0
 
 
 def _as_uuid(value: Any) -> uuid.UUID | None:
@@ -59,73 +66,177 @@ async def _google_delete_event(config: CalendarConfig, token: str, google_event_
         raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}")
 
 
+def _open_window(config: CalendarConfig, date: str) -> str:
+    """Ventana de atención ("HH:MM-HH:MM") del día, o "" si está cerrado."""
+    try:
+        parsed = json.loads(config.business_hours or "{}")
+        weekday = datetime.fromisoformat(date).weekday()
+        return str(parsed.get(WEEKDAYS[weekday], "") or "")
+    except (ValueError, json.JSONDecodeError):
+        return ""
+
+
+def _free_slots(
+    window: str,
+    intervals: list[tuple[datetime, datetime]],
+    tz: ZoneInfo,
+    date: str,
+    *,
+    slot_minutes: int,
+    duration_minutes: int,
+    buffer_minutes: int,
+    limit: int = 12,
+) -> list[str]:
+    """Horarios libres ("HH:MM") del día: ventana − ocupados − margen.
+
+    Determinista y puro (testeable): evita que el LLM razone los huecos.
+    """
+    if not window or "-" not in window:
+        return []
+    start_s, _, end_s = window.partition("-")
+    try:
+        open_dt = datetime.fromisoformat(f"{date}T{start_s.strip()}:00").replace(tzinfo=tz)
+        close_dt = datetime.fromisoformat(f"{date}T{end_s.strip()}:00").replace(tzinfo=tz)
+    except ValueError:
+        return []
+    slot = timedelta(minutes=max(int(slot_minutes), 1))
+    duration = timedelta(minutes=max(int(duration_minutes), 1))
+    buffer = timedelta(minutes=max(int(buffer_minutes), 0))
+    out: list[str] = []
+    cursor = open_dt
+    while cursor + duration <= close_dt:
+        cand_start = cursor - buffer
+        cand_end = cursor + duration + buffer
+        if not any(cand_start < b_end and b_start < cand_end for (b_start, b_end) in intervals):
+            out.append(cursor.astimezone(tz).strftime("%H:%M"))
+            if len(out) >= limit:
+                break
+        cursor += slot
+    return out
+
+
 class CalendarSkill(BaseSkill):
     name = "calendar_skill"
-    description = "Agendamiento de citas en Google Calendar"
+    description = "Agendamiento de citas (agenda interna o Google Calendar)"
     keywords = ["cita", "agendar", "reservar", "reunión", "disponibilidad", "horario", "calendario"]
+
+    def __init__(self) -> None:
+        # Cache corto de la fuente por tenant: el predicado de conexión se evalúa
+        # por tool y por turno; sin esto cargaríamos la config N veces por turno.
+        self._source_cache: dict[uuid.UUID, tuple[float, str]] = {}
 
     async def _tenant_config(self) -> CalendarConfig:
         """Config del pack para el tenant ACTUAL (no una capturada en activación).
 
         Sin esto, el skill quedaría con el calendario de un solo tenant mientras
-        los tokens se resuelven por tenant: una fuga cruzada (escribir citas del
-        tenant B en el calendario del A). Carga por invocación.
+        los tokens se resuelven por tenant: una fuga cruzada. Carga por invocación.
         """
         from core.plugin_manager import plugin_manager
 
         config = await plugin_manager.load_config(PLUGIN_ID)
         if config is None:
-            raise PluginError(PLUGIN_ID, "Google Calendar no configurado para este tenant")
+            raise PluginError(PLUGIN_ID, "Agenda no configurada para este tenant")
         return config
 
+    async def _source(self) -> str:
+        tenant_id = get_current_tenant_id()
+        now = time.monotonic()
+        if tenant_id is not None:
+            cached = self._source_cache.get(tenant_id)
+            if cached is not None and now - cached[0] < _SOURCE_TTL_SECONDS:
+                return cached[1]
+        config = await self._tenant_config()
+        source = str(getattr(config, "source", "interno") or "interno")
+        if tenant_id is not None:
+            self._source_cache[tenant_id] = (now, source)
+        return source
+
+    async def _connections_ok(self, connected: set[str]) -> bool:
+        """Gating condicional (ADR-0084): interno no requiere Google; google sí."""
+        if await self._source() == "google":
+            return "google_calendar" in connected
+        return True
+
+    async def _google_token(self, config: CalendarConfig) -> str:
+        return await get_access_token(config.client_id, config.client_secret.get_secret_value())
+
+    async def _appointment_type(self, value: Any) -> Any | None:
+        """Tipo de cita activo por id (o None si no viene / no existe)."""
+        type_id = _as_uuid(value)
+        if type_id is None:
+            return None
+        from core.db.session import get_session
+        from pack_calendar.models import AppointmentType
+
+        tenant_id = get_current_tenant_id()
+        async with get_session() as session:
+            from sqlalchemy import select
+
+            return (
+                await session.execute(
+                    select(AppointmentType).where(
+                        AppointmentType.id == type_id,
+                        AppointmentType.tenant_id == tenant_id,
+                        AppointmentType.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+
     def get_tools(self) -> list[MCPTool]:
+        # Todas las tools usan `connection_predicate` (no `requires_connection_types`)
+        # porque el requisito de Google depende de la config del tenant (modo).
         return [
             MCPTool(
                 name="create_calendar_event",
                 description=(
-                    "Crea una cita en el calendario del negocio. Úsala SOLO cuando el cliente "
-                    "haya confirmado fecha y hora exactas. Fechas en formato ISO: 2026-08-20T15:00:00"
+                    "Crea una cita en la agenda del negocio. Úsala SOLO cuando el cliente "
+                    "haya confirmado fecha y hora exactas. Fechas en formato ISO: 2026-08-20T15:00:00. "
+                    "Si sabés el tipo de cita (ej. una demo), pasá appointment_type_id; si no, "
+                    "pasá duration_minutes."
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
-                        "title": {"type": "string", "description": "Título, ej: 'Cita con Carlos Ruiz'"},
+                        "title": {"type": "string", "description": "Título, ej: 'Demo con Carlos Ruiz'"},
                         "start_datetime": {"type": "string", "description": "Inicio ISO 8601 (hora local del negocio)"},
                         "description": {"type": "string", "description": "Detalle de la cita"},
                         "attendee_email": {"type": "string", "description": "Email del cliente si lo dio"},
+                        "appointment_type_id": {"type": "string", "description": "ID del tipo de cita (opcional)"},
+                        "duration_minutes": {"type": "integer", "description": "Duración en minutos (opcional; si no, la del tipo o la configurada)"},
                     },
                     "required": ["title", "start_datetime"],
                 },
                 handler=self.create_event,
-                requires_connection_types=["google_calendar"],
+                connection_predicate=self._connections_ok,
             ),
             MCPTool(
                 name="check_availability",
                 description=(
-                    "Consulta los eventos ya agendados y el horario de atención de una fecha "
-                    "para proponer horarios libres. Úsala ANTES de crear una cita."
+                    "Consulta la disponibilidad de una fecha y devuelve los horarios LIBRES "
+                    "reales (free_slots). Úsala SIEMPRE ANTES de proponer o crear una cita: "
+                    "ofrecé al cliente solo horarios de free_slots, nunca inventes."
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "date": {"type": "string", "description": "Fecha a consultar, formato YYYY-MM-DD"},
+                        "duration_minutes": {"type": "integer", "description": "Duración deseada en minutos (opcional)"},
                     },
                     "required": ["date"],
                 },
                 handler=self.check_availability,
-                requires_connection_types=["google_calendar"],
+                connection_predicate=self._connections_ok,
             ),
             MCPTool(
                 name="update_calendar_event",
                 description=(
                     "Reagenda/reprograma una cita YA EXISTENTE a una nueva fecha/hora (la MUEVE, "
                     "no crea otra). REGLA OBLIGATORIA: cuando el cliente pide reagendar/mover una "
-                    "cita ya agendada, NUNCA uses create_calendar_event (eso crea una cita NUEVA y "
-                    "duplica): usá SIEMPRE esta tool. Úsala SOLO cuando el cliente haya confirmado "
-                    "la nueva fecha y hora exactas. Si conocés el event_id que devolvió "
-                    "create_calendar_event, pasalo; si no, el sistema busca la próxima cita "
-                    "agendada del cliente por título o email. Fechas ISO 8601 en hora local del "
-                    "negocio."
+                    "cita ya agendada, NUNCA uses create_calendar_event: usá SIEMPRE esta tool. "
+                    "Úsala SOLO cuando el cliente haya confirmado la nueva fecha y hora exactas. "
+                    "Pasá el event_id que devolvió create_calendar_event/list_client_appointments; "
+                    "si no, el sistema busca la próxima cita del cliente por título o email. "
+                    "Fechas ISO 8601 en hora local del negocio."
                 ),
                 parameters={
                     "type": "object",
@@ -134,10 +245,7 @@ class CalendarSkill(BaseSkill):
                             "type": "string",
                             "description": "Nueva fecha/hora ISO 8601 (hora local del negocio), ej: 2026-09-30T14:00:00",
                         },
-                        "event_id": {
-                            "type": "string",
-                            "description": "ID del evento de Google (lo devuelve create_calendar_event). Opcional.",
-                        },
+                        "event_id": {"type": "string", "description": "ID del evento/cita. Opcional."},
                         "duration_minutes": {
                             "type": "integer",
                             "description": "Nueva duración en minutos (opcional; por defecto conserva la actual)",
@@ -154,7 +262,7 @@ class CalendarSkill(BaseSkill):
                     "required": ["start_datetime"],
                 },
                 handler=self.update_event,
-                requires_connection_types=["google_calendar"],
+                connection_predicate=self._connections_ok,
             ),
             MCPTool(
                 name="list_client_appointments",
@@ -175,25 +283,22 @@ class CalendarSkill(BaseSkill):
                     "required": [],
                 },
                 handler=self.list_appointments,
-                requires_connection_types=["google_calendar"],
+                connection_predicate=self._connections_ok,
             ),
             MCPTool(
                 name="cancel_calendar_event",
                 description=(
-                    "Cancela una o varias citas YA EXISTENTES (borra el evento de Google y las marca "
-                    "canceladas). REGLA OBLIGATORIA: cuando el cliente pide cancelar su cita/demo, "
-                    "NUNCA escales a un humano ni digas 'paso tu solicitud': usá SIEMPRE esta tool. "
-                    "Para cancelar VARIAS o TODAS, primero llamá list_client_appointments y usá los "
-                    "event_ids que devuelve, o pasá cancel_all=true (cancela todas las agendadas con "
-                    "el email del cliente). Úsala SOLO cuando el cliente pidió cancelar explícitamente "
-                    "y confirmó. Después de llamarla, comunicá al cliente EXACTAMENTE lo que devolvió "
-                    "la tool (status 'cancelled' con los ids, o 'not_found'); NUNCA afirmes que una "
-                    "cita se canceló si la tool no lo devolvió como cancelada."
+                    "Cancela una o varias citas YA EXISTENTES. REGLA OBLIGATORIA: cuando el cliente "
+                    "pide cancelar su cita/demo, NUNCA escales a un humano ni digas 'paso tu solicitud': "
+                    "usá SIEMPRE esta tool. Para cancelar VARIAS o TODAS, primero llamá "
+                    "list_client_appointments y usá los event_ids que devuelve, o pasá cancel_all=true. "
+                    "Úsala SOLO cuando el cliente pidió cancelar explícitamente y confirmó. Después, "
+                    "comunicá EXACTAMENTE lo que devolvió la tool (status 'cancelled' o 'not_found')."
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
-                        "event_id": {"type": "string", "description": "ID del evento de Google (opcional)"},
+                        "event_id": {"type": "string", "description": "ID del evento/cita (opcional)"},
                         "event_ids": {
                             "type": "array",
                             "items": {"type": "string"},
@@ -209,73 +314,134 @@ class CalendarSkill(BaseSkill):
                     "required": [],
                 },
                 handler=self.cancel_event,
-                requires_connection_types=["google_calendar"],
+                connection_predicate=self._connections_ok,
+            ),
+            MCPTool(
+                name="list_appointment_types",
+                description=(
+                    "Lista los tipos de cita/servicio configurados (nombre, duración y id). Úsala "
+                    "antes de agendar si el negocio ofrece varios servicios (p. ej. 'demo', "
+                    "'asesoría') para elegir el tipo correcto."
+                ),
+                parameters={"type": "object", "properties": {}, "required": []},
+                handler=self.list_appointment_types,
+                connection_predicate=self._connections_ok,
             ),
         ]
 
+    async def list_appointment_types(
+        self, arguments: dict[str, Any], context: ToolContext
+    ) -> dict[str, Any]:
+        from sqlalchemy import select
+
+        from core.db.session import get_session
+        from pack_calendar.models import AppointmentType
+
+        tenant_id = get_current_tenant_id()
+        async with get_session() as session:
+            rows = (
+                await session.execute(
+                    select(AppointmentType)
+                    .where(
+                        AppointmentType.tenant_id == tenant_id,
+                        AppointmentType.active.is_(True),
+                        AppointmentType.deleted_at.is_(None),
+                    )
+                    .order_by(AppointmentType.name.asc())
+                )
+            ).scalars().all()
+        return {
+            "types": [
+                {
+                    "appointment_type_id": str(r.id),
+                    "name": r.name,
+                    "duration_minutes": r.duration_minutes,
+                }
+                for r in rows
+            ],
+            "total": len(rows),
+        }
+
     # ------------------------------------------------------------ handlers
     async def create_event(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        source = await self._source()
         config = await self._tenant_config()
-        token = await get_access_token(
-            config.client_id, config.client_secret.get_secret_value()
-        )
         tz = ZoneInfo(config.timezone)
         start = datetime.fromisoformat(str(arguments["start_datetime"]))
         if start.tzinfo is None:
             start = start.replace(tzinfo=tz)
-        end = start + timedelta(minutes=config.event_duration_minutes)
 
-        body: dict[str, Any] = {
-            "summary": str(arguments.get("title", "Cita")),
-            "description": str(arguments.get("description", ""))
-            + f"\n[agent-core conversación {context.conversation_id}]",
-            "start": {"dateTime": start.isoformat(), "timeZone": config.timezone},
-            "end": {"dateTime": end.isoformat(), "timeZone": config.timezone},
-        }
-        if arguments.get("attendee_email"):
-            body["attendees"] = [{"email": str(arguments["attendee_email"])}]
+        appt_type = await self._appointment_type(arguments.get("appointment_type_id"))
+        duration = int(arguments.get("duration_minutes") or 0)
+        if duration <= 0:
+            duration = int(getattr(appt_type, "duration_minutes", 0) or 0) or config.event_duration_minutes
+        end = start + timedelta(minutes=duration)
+        title = str(arguments.get("title") or (getattr(appt_type, "name", "") or "Cita"))
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                f"{CALENDAR_API}/calendars/{config.calendar_id}/events",
-                json=body,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-        if response.status_code >= 400:
-            raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}")
-        event = response.json()
+        google_event_id: str | None = None
+        link = ""
+        if source == "google":
+            token = await self._google_token(config)
+            body: dict[str, Any] = {
+                "summary": title,
+                "description": str(arguments.get("description", ""))
+                + f"\n[agent-core conversación {context.conversation_id}]",
+                "start": {"dateTime": start.isoformat(), "timeZone": config.timezone},
+                "end": {"dateTime": end.isoformat(), "timeZone": config.timezone},
+            }
+            if arguments.get("attendee_email"):
+                body["attendees"] = [{"email": str(arguments["attendee_email"])}]
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(
+                    f"{CALENDAR_API}/calendars/{config.calendar_id}/events",
+                    json=body,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            if response.status_code >= 400:
+                raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}")
+            event = response.json()
+            google_event_id = event.get("id")
+            link = event.get("htmlLink", "")
 
-        appt_id = await self._mirror_appointment(event, arguments, context, start, end)
+        appt_id = await self._mirror_appointment(
+            arguments,
+            context,
+            start,
+            end,
+            google_event_id=google_event_id,
+            appointment_type_id=getattr(appt_type, "id", None),
+            title=title,
+        )
         await self._record_event(
             action="programada",
-            title=str(arguments.get("title", "Cita")),
+            title=title,
             appointment_id=appt_id,
             conversation_id=context.conversation_id,
             new_start=start,
         )
-
         return {
-            "event_id": event.get("id"),
+            "event_id": google_event_id or (str(appt_id) if appt_id else None),
             "status": "created",
             "start": start.isoformat(),
-            # SafeRenderer: el link exacto lo adjunta el core, el LLM no lo copia a mano.
-            # No se expone `link` como clave: si el modelo lo copiara al texto, el
-            # safe_append lo duplicaría.
-            "_safe_append": f"📅 Tu cita quedó agendada: {event.get('htmlLink', '')}",
+            # SafeRenderer: el link exacto lo adjunta el core; no se expone `link`
+            # como clave para que el modelo no lo copie a mano (lo duplicaría).
+            "_safe_append": f"📅 Tu cita quedó agendada: {link}" if link else "📅 Tu cita quedó agendada.",
         }
 
     async def _mirror_appointment(
         self,
-        event: dict[str, Any],
         arguments: dict[str, Any],
         context: ToolContext,
         start: datetime,
         end: datetime,
+        *,
+        google_event_id: str | None = None,
+        appointment_type_id: uuid.UUID | None = None,
+        title: str = "",
     ) -> uuid.UUID | None:
-        """Espeja la cita en la tabla del pack (para el panel). Best-effort.
+        """Espeja la cita en la tabla del pack (fuente de verdad en modo interno).
 
-        Devuelve el `id` de la fila espejo (para el historial de actividades) o
-        `None` si no se pudo persistir.
+        Devuelve el `id` de la fila espejo (para el historial) o `None` si no se pudo.
         """
         tenant_id = get_current_tenant_id()
         if tenant_id is None:
@@ -292,8 +458,9 @@ class CalendarSkill(BaseSkill):
                     tenant_id=tenant_id,
                     conversation_id=_as_uuid(context.conversation_id),
                     customer_id=_as_uuid(context.customer_id),
-                    google_event_id=event.get("id"),
-                    title=str(arguments.get("title", "Cita")),
+                    appointment_type_id=appointment_type_id,
+                    google_event_id=google_event_id,
+                    title=title or str(arguments.get("title", "Cita")),
                     attendee_email=(
                         str(arguments["attendee_email"])
                         if arguments.get("attendee_email")
@@ -355,9 +522,9 @@ class CalendarSkill(BaseSkill):
     ) -> list[Any]:
         """Citas `scheduled` del cliente (tenant actual), ordenadas por fecha.
 
-        Match: si `event_id` viene, coincidencia exacta; si no, por conversación
-        del contexto y/o título y/o `attendee_email` (OR). Con `upcoming_only`,
-        solo las futuras (`start_at >= now`).
+        Match: si `event_id` viene, coincide con el `google_event_id` o con el `id`
+        local (modo interno); si no, por conversación del contexto y/o título y/o
+        `attendee_email` (OR). Con `upcoming_only`, solo las futuras.
         """
         from sqlalchemy import or_, select
 
@@ -380,7 +547,11 @@ class CalendarSkill(BaseSkill):
             if upcoming_only:
                 q = q.where(Appointment.start_at >= datetime.now(UTC))
             if event_id:
-                q = q.where(Appointment.google_event_id == event_id)
+                cond = Appointment.google_event_id == event_id
+                eid = _as_uuid(event_id)
+                if eid is not None:
+                    cond = or_(cond, Appointment.id == eid)
+                q = q.where(cond)
             else:
                 filters: list[Any] = []
                 if email:
@@ -406,13 +577,13 @@ class CalendarSkill(BaseSkill):
         return future[0] if future else rows[0]
 
     async def list_appointments(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        """Enumera las citas agendadas (futuras) del cliente, numeradas y con event_id."""
+        """Enumera las citas agendadas (futuras) del cliente, numeradas y con id."""
         rows = await self._client_appointments(arguments, context, upcoming_only=True)
         return {
             "appointments": [
                 {
                     "index": i + 1,
-                    "event_id": r.google_event_id,
+                    "event_id": r.google_event_id or str(r.id),
                     "title": r.title,
                     "start": r.start_at.isoformat(),
                 }
@@ -444,13 +615,11 @@ class CalendarSkill(BaseSkill):
             return False
 
     async def update_event(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        """Reagenda una cita existente: mueve el evento en Google y el espejo local."""
+        """Reagenda una cita existente (agenda interna o Google)."""
         from pack_calendar.config import DEFAULT_MOVED_MESSAGE
 
+        source = await self._source()
         config = await self._tenant_config()
-        token = await get_access_token(
-            config.client_id, config.client_secret.get_secret_value()
-        )
         tz = ZoneInfo(config.timezone)
         start = datetime.fromisoformat(str(arguments["start_datetime"]))
         if start.tzinfo is None:
@@ -465,13 +634,15 @@ class CalendarSkill(BaseSkill):
             duration = max(1, int((appt.end_at - appt.start_at).total_seconds() // 60))
         end = start + timedelta(minutes=duration)
 
-        body: dict[str, Any] = {
-            "start": {"dateTime": start.isoformat(), "timeZone": config.timezone},
-            "end": {"dateTime": end.isoformat(), "timeZone": config.timezone},
-        }
-        event: dict[str, Any] = {}
-        if appt.google_event_id:
+        link = ""
+        if source == "google" and appt.google_event_id:
+            token = await self._google_token(config)
+            body: dict[str, Any] = {
+                "start": {"dateTime": start.isoformat(), "timeZone": config.timezone},
+                "end": {"dateTime": end.isoformat(), "timeZone": config.timezone},
+            }
             event = await _google_patch_event(config, token, appt.google_event_id, body)
+            link = event.get("htmlLink", "")
 
         from core.db.models import utcnow
         from core.db.session import get_owned, get_session
@@ -505,35 +676,33 @@ class CalendarSkill(BaseSkill):
         )
         return {
             "status": "updated",
-            "event_id": appt.google_event_id,
+            "event_id": appt.google_event_id or str(appt.id),
             "start": start.isoformat(),
             "notified": notified,
-            "_safe_append": f"📅 Tu cita quedó reagendada para el {fecha} a las {hora}: {event.get('htmlLink', '')}",
+            "_safe_append": (
+                f"📅 Tu cita quedó reagendada para el {fecha} a las {hora}: {link}"
+                if link
+                else f"📅 Tu cita quedó reagendada para el {fecha} a las {hora}."
+            ),
         }
 
     async def cancel_event(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        """Cancela UNA o VARIAS citas (o todas): borra el evento de Google y marca
-        el espejo local de cada una; registra el historial y notifica por WhatsApp
-        (mensaje individual o resumen si son varias)."""
+        """Cancela UNA o VARIAS citas (o todas) y notifica por WhatsApp."""
         from pack_calendar.config import DEFAULT_CANCELLED_MESSAGE, DEFAULT_CANCELLED_SUMMARY
 
+        source = await self._source()
         config = await self._tenant_config()
         event_ids = [str(e).strip() for e in (arguments.get("event_ids") or []) if str(e).strip()]
         cancel_all = bool(arguments.get("cancel_all", False))
         single_id = str(arguments.get("event_id") or "").strip()
 
+        rows: list[Any] = []
         if cancel_all:
             rows = await self._client_appointments(arguments, context, upcoming_only=True)
-        elif event_ids:
+        elif event_ids or single_id:
             client_rows = await self._client_appointments(arguments, context, upcoming_only=True)
-            wanted = set(event_ids)
-            rows = [r for r in client_rows if r.google_event_id and r.google_event_id in wanted]
-        elif single_id:
-            rows = [
-                r
-                for r in await self._client_appointments(arguments, context, upcoming_only=True)
-                if r.google_event_id == single_id
-            ]
+            wanted = set(event_ids) | ({single_id} if single_id else set())
+            rows = [r for r in client_rows if (r.google_event_id in wanted) or (str(r.id) in wanted)]
         else:
             appt = await self._find_appointment(arguments, context)
             rows = [appt] if appt else []
@@ -547,11 +716,9 @@ class CalendarSkill(BaseSkill):
 
         cancelled_ids: list[str] = []
         for row in rows:
-            if row.google_event_id:
+            if source == "google" and row.google_event_id:
                 try:
-                    token = await get_access_token(
-                        config.client_id, config.client_secret.get_secret_value()
-                    )
+                    token = await self._google_token(config)
                     await _google_delete_event(config, token, row.google_event_id)
                 except Exception:
                     pass  # best-effort: el espejo local manda para el panel
@@ -596,49 +763,136 @@ class CalendarSkill(BaseSkill):
             "event_id": cancelled_ids[0] if cancelled_ids else None,
         }
 
-    async def check_availability(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        config = await self._tenant_config()
-        token = await get_access_token(
-            config.client_id, config.client_secret.get_secret_value()
-        )
-        date = str(arguments["date"])
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(
-                f"{CALENDAR_API}/calendars/{config.calendar_id}/events",
-                params={
-                    "timeMin": f"{date}T00:00:00Z",
-                    "timeMax": f"{date}T23:59:59Z",
-                    "singleEvents": "true",
-                    "orderBy": "startTime",
-                },
-                headers={"Authorization": f"Bearer {token}"},
+    async def _local_busy(
+        self, date: str, tz: ZoneInfo
+    ) -> tuple[list[dict[str, str]], list[tuple[datetime, datetime]]]:
+        """Ocupados de la agenda interna del día: citas agendadas + bloqueos."""
+        from sqlalchemy import select
+
+        from core.db.session import get_session
+        from pack_calendar.models import Appointment, CalendarBlock
+
+        tenant_id = get_current_tenant_id()
+        day_start = datetime.fromisoformat(f"{date}T00:00:00").replace(tzinfo=tz)
+        day_end = day_start + timedelta(days=1)
+        out: list[dict[str, str]] = []
+        intervals: list[tuple[datetime, datetime]] = []
+        async with get_session() as session:
+            appts = (
+                await session.execute(
+                    select(Appointment).where(
+                        Appointment.tenant_id == tenant_id,
+                        Appointment.deleted_at.is_(None),
+                        Appointment.status == "scheduled",
+                        Appointment.start_at < day_end,
+                        Appointment.end_at > day_start,
+                    )
+                )
+            ).scalars().all()
+            blocks = (
+                await session.execute(
+                    select(CalendarBlock).where(
+                        CalendarBlock.tenant_id == tenant_id,
+                        CalendarBlock.deleted_at.is_(None),
+                        CalendarBlock.start_at < day_end,
+                        CalendarBlock.end_at > day_start,
+                    )
+                )
+            ).scalars().all()
+        for a in appts:
+            out.append(
+                {
+                    "start": a.start_at.astimezone(tz).isoformat(),
+                    "end": a.end_at.astimezone(tz).isoformat(),
+                    "summary": a.title or "(ocupado)",
+                }
             )
-        if response.status_code >= 400:
-            raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}: {response.text[:200]}")
-        events = response.json().get("items", [])
-        busy = [
-            {
-                "start": e.get("start", {}).get("dateTime", e.get("start", {}).get("date")),
-                "end": e.get("end", {}).get("dateTime", e.get("end", {}).get("date")),
-                "summary": e.get("summary", "(ocupado)"),
-            }
-            for e in events
-        ]
+            intervals.append((a.start_at, a.end_at))
+        for b in blocks:
+            out.append(
+                {
+                    "start": b.start_at.astimezone(tz).isoformat(),
+                    "end": b.end_at.astimezone(tz).isoformat(),
+                    "summary": b.reason or "(bloqueado)",
+                }
+            )
+            intervals.append((b.start_at, b.end_at))
+        return out, intervals
+
+    async def check_availability(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        source = await self._source()
+        config = await self._tenant_config()
+        tz = ZoneInfo(config.timezone)
+        date = str(arguments["date"])
+        duration = int(arguments.get("duration_minutes") or 0) or config.event_duration_minutes
+
+        if source == "google":
+            token = await self._google_token(config)
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(
+                    f"{CALENDAR_API}/calendars/{config.calendar_id}/events",
+                    params={
+                        "timeMin": f"{date}T00:00:00Z",
+                        "timeMax": f"{date}T23:59:59Z",
+                        "singleEvents": "true",
+                        "orderBy": "startTime",
+                    },
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            if response.status_code >= 400:
+                raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}: {response.text[:200]}")
+            events = response.json().get("items", [])
+            busy = [
+                {
+                    "start": e.get("start", {}).get("dateTime", e.get("start", {}).get("date")),
+                    "end": e.get("end", {}).get("dateTime", e.get("end", {}).get("date")),
+                    "summary": e.get("summary", "(ocupado)"),
+                }
+                for e in events
+            ]
+            intervals = [iv for iv in (_google_interval(e, tz) for e in events) if iv is not None]
+        else:
+            busy, intervals = await self._local_busy(date, tz)
+
+        window = _open_window(config, date)
         return {
             "date": date,
-            "business_hours": _open_window(config, date),
+            "source": source,
+            "business_hours": window,
             "slot_minutes": config.slot_minutes,
             "buffer_minutes": config.buffer_minutes,
+            "duration_minutes": duration,
             "busy_slots": busy,
+            "free_slots": _free_slots(
+                window,
+                intervals,
+                tz,
+                date,
+                slot_minutes=config.slot_minutes,
+                duration_minutes=duration,
+                buffer_minutes=config.buffer_minutes,
+            ),
             "total_events": len(busy),
         }
 
 
-def _open_window(config: CalendarConfig, date: str) -> str:
-    """Ventana de atención ("HH:MM-HH:MM") del día, o "" si está cerrado."""
+def _google_interval(event: dict[str, Any], tz: ZoneInfo) -> tuple[datetime, datetime] | None:
+    """Intervalo (start, end) tz-aware de un evento de Google; None si no parsea."""
+    start = event.get("start", {}) or {}
+    end = event.get("end", {}) or {}
     try:
-        parsed = json.loads(config.business_hours or "{}")
-        weekday = datetime.fromisoformat(date).weekday()
-        return str(parsed.get(WEEKDAYS[weekday], "") or "")
-    except (ValueError, json.JSONDecodeError):
-        return ""
+        if "dateTime" in start:
+            s = datetime.fromisoformat(start["dateTime"])
+            e = datetime.fromisoformat(end.get("dateTime", start["dateTime"]))
+            if s.tzinfo is None:
+                s = s.replace(tzinfo=tz)
+            if e.tzinfo is None:
+                e = e.replace(tzinfo=tz)
+            return s, e
+        if "date" in start:
+            s = datetime.fromisoformat(start["date"]).replace(tzinfo=tz)
+            e = datetime.fromisoformat(end.get("date", start["date"])).replace(tzinfo=tz)
+            return s, e
+    except (ValueError, TypeError):
+        return None
+    return None

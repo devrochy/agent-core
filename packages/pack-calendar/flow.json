@@ -4,9 +4,25 @@
     {
       "id": "agendamiento",
       "label": "Agendamiento de citas",
-      "purpose": "Consultar la disponibilidad real del calendario y crear la cita cuando el cliente confirme fecha y hora. Si el cliente dio su email, enviarle la confirmación.",
+      "purpose": "Consultar la disponibilidad real (free_slots) y crear la cita cuando el cliente confirme fecha y hora. Si el negocio ofrece varios servicios, elegir el tipo de cita. Si el cliente dio su email, enviarle la confirmación.",
       "pack": "pack_calendar",
-      "tools": ["check_availability", "create_calendar_event", "send_email"]
+      "tools": [
+        "check_availability",
+        "list_appointment_types",
+        "create_calendar_event",
+        "send_email"
+      ]
+    },
+    {
+      "id": "gestion-citas",
+      "label": "Gestión de citas",
+      "purpose": "Reagendar, listar o cancelar citas YA existentes del cliente. Reagendar SIEMPRE con update_calendar_event (nunca crear una nueva).",
+      "pack": "pack_calendar",
+      "tools": [
+        "list_client_appointments",
+        "update_calendar_event",
+        "cancel_calendar_event"
+      ]
     }
   ]
 }

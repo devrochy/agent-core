@@ -74,9 +74,9 @@ _COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
 
 class GoogleCalendarModule(BaseModule):
     id = PLUGIN_ID
-    name = "Google Calendar"
-    version = "2.0.0"
-    description = "Agendamiento de citas con OAuth2 de Google"
+    name = "Calendario y citas"
+    version = "2.1.0"
+    description = "Agendamiento con agenda interna (sin Google) o Google Calendar (ADR-0084)"
     requires_config = True
     config_schema = CalendarConfig
     # Submenú al habilitar el pack (ADR-0061/0063).

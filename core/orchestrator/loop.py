@@ -248,7 +248,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     from core.gateway.connections import active_connection_type_ids
 
     connected_types = await active_connection_type_ids(get_current_tenant_id())
-    candidate_tools = [t for t in candidate_tools if _connections_ok(t, connected_types)]
+    candidate_tools = [t for t in candidate_tools if await _connections_ok(t, connected_types)]
 
     flow = await resolve_flow(
         spec, available={t.name for t in candidate_tools}
@@ -263,7 +263,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         active_tools = [*active_tools, *tools_for_spec(spec)]
         flow_summary = ""
 
-    active_tools = [t for t in active_tools if _connections_ok(t, connected_types)]
+    active_tools = [t for t in active_tools if await _connections_ok(t, connected_types)]
 
     prompt_ctx = PromptContext(
         assistant_name=app_settings.assistant_name if app_settings else settings.app_name,
@@ -690,8 +690,20 @@ async def _execute_tool_safely(
     return result
 
 
-def _connections_ok(tool, connected_types: set[str]) -> bool:  # type: ignore[no-untyped-def]
-    """True si el tenant tiene conectados los tipos que la tool requiere (ADR-0072)."""
+async def _connections_ok(tool, connected_types: set[str]) -> bool:  # type: ignore[no-untyped-def]
+    """True si la tool puede ofrecerse según las conexiones del tenant (ADR-0072).
+
+    Si la tool declara `connection_predicate` (ADR-0084), es ella quien decide POR
+    REQUEST (requisito dependiente de la config del pack, p. ej. pack-calendar en
+    modo `interno` vs `google`). Un predicado que falla deniega (fail-closed): no se
+    ofrece una tool cuyo requisito no pudimos evaluar.
+    """
+    predicate = getattr(tool, "connection_predicate", None)
+    if predicate is not None:
+        try:
+            return bool(await predicate(connected_types))
+        except Exception:
+            return False
     required = getattr(tool, "requires_connection_types", None) or []
     return all(t in connected_types for t in required)
 
@@ -728,7 +740,19 @@ async def _tool_denial(
         tenant_id = get_current_tenant_id()
         if tenant_id is not None and await plugin_manager.is_disabled_for_tenant(tenant_id, tool.plugin_id):
             return f"La herramienta '{tool_name}' no está disponible en este momento."
-        if tool.requires_connection_types:
+        predicate = getattr(tool, "connection_predicate", None)
+        if predicate is not None:
+            # Requisito config-dependente (ADR-0084): se reevalúa a mitad de turno.
+            from core.gateway.connections import active_connection_type_ids
+
+            connected = await active_connection_type_ids(tenant_id)
+            try:
+                ok = bool(await predicate(connected))
+            except Exception:
+                ok = False
+            if not ok:
+                return f"La herramienta '{tool_name}' no está disponible en este momento."
+        elif tool.requires_connection_types:
             # Revocación a mitad de turno (ADR-0072): el pre-prompt ya la filtró,
             # pero un tool_call que llegó con la conexión ya caída se deniega acá.
             from core.gateway.connections import active_connection_type_ids
