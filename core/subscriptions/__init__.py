@@ -1,9 +1,10 @@
 """Capacidad de suscripciones del core (ADR-0083): puente entre packs.
 
 Un pack (p. ej. `pack_subscriptions`) **registra** una `SubscriptionCapability`;
-`pack_commerce` la **consume** (sin importarla, invariante nº5) para saber si un
-producto del catálogo es un Plan y activar la suscripción del `Customer` cuando un
-pedido con ese plan se paga. Mismo molde que `PaymentRegistry` (ADR-0067).
+`pack_commerce` la **consume** (sin importarla, invariante nº5): al pagarse un
+pedido que incluye un plan (variante con `billing_period`), commerce entrega un
+**snapshot** del plan (nombre, precio, moneda, periodicidad, trial) y el pack
+activa la suscripción del `Customer`. Mismo molde que `PaymentRegistry` (ADR-0067).
 """
 
 from __future__ import annotations
@@ -20,14 +21,19 @@ class SubscriptionError(Exception):
 class SubscriptionCapability(Protocol):
     plugin_id: str
 
-    async def plan_for_variant(self, variant_id: str) -> dict[str, Any] | None:
-        """Datos del Plan vinculado a una variante de catálogo, o None si no es un plan."""
-        ...
-
     async def activate_for_customer(
-        self, *, customer_id: uuid.UUID, variant_id: str, reference: str = ""
+        self,
+        *,
+        customer_id: uuid.UUID,
+        variant_id: str,
+        plan: dict[str, Any],
+        reference: str = "",
     ) -> dict[str, Any]:
-        """Activa/crea la suscripción del `Customer` tras comprar un Plan (idempotente)."""
+        """Activa/crea la suscripción del `Customer` a un plan (idempotente).
+
+        `plan` es el snapshot que aporta el caller (commerce/admin): nombre,
+        precio, moneda, periodicidad, trial_dias.
+        """
         ...
 
 
@@ -49,19 +55,12 @@ class SubscriptionRegistry:
                 return cap
         return None
 
-    async def plan_for_variant(
-        self, variant_id: str, enabled: set[str] | None = None
-    ) -> dict[str, Any] | None:
-        cap = self.capability_for(enabled)
-        if cap is None:
-            return None
-        return await cap.plan_for_variant(variant_id)
-
     async def activate_for_customer(
         self,
         *,
         customer_id: uuid.UUID,
         variant_id: str,
+        plan: dict[str, Any],
         reference: str = "",
         enabled: set[str] | None = None,
     ) -> dict[str, Any] | None:
@@ -69,7 +68,7 @@ class SubscriptionRegistry:
         if cap is None:
             return None
         return await cap.activate_for_customer(
-            customer_id=customer_id, variant_id=variant_id, reference=reference
+            customer_id=customer_id, variant_id=variant_id, plan=plan, reference=reference
         )
 
 

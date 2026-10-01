@@ -10,13 +10,15 @@ calendario y cobranza usan como pivote — ADR-0056).
 - `cancelada`: servicio finalizado; `fecha_cancelacion` documenta el fin.
 - `vencida`: (uso futuro) no se renovó el cargo.
 
-## Cobro del período (Opción B)
-- La **primera compra** del plan va por commerce (pedido → link). Al confirmarse el
-  pago, el pack **activa** la suscripción automáticamente (idempotente por cliente).
-- Los **períodos siguientes** se cobran con `sub_link_pago` → cargo `pendiente` del
-  período → `payment.confirmed` lo marca `pagado` (referencia `sub-<cargo.id>`).
+## Ciclo de vida (planes como productos)
+- La suscripción se **habilita** cuando un pedido de un plan (producto de commerce
+  con `billing_period`) se **paga**. El snapshot del plan lo aporta commerce; este
+  pack no guarda catálogo.
+- El admin puede crearla manualmente por API (`/api/v1/pack/pack_subscriptions/suscripciones`).
+- Los **períodos siguientes** se cobran con `sub_link_pago` o el cron `generar_cargos`
+  → cargo `pendiente` → `payment.confirmed` lo marca `pagado` (referencia `sub-<cargo.id>`).
 
 ## Reglas
 - No prometer cambios de estado sin llamar la tool (`sub_pausar_suscripcion`, etc.).
 - No cancelar sin confirmación explícita del cliente.
-- El valor del período sale del `Plan`; nunca inventarlo.
+- El valor del período sale del snapshot del plan; nunca inventarlo.
