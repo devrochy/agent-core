@@ -15,6 +15,10 @@ ROLE="${AGENT_CORE_ROLE:-api}"
 # contenedores comparten de verdad (/tmp es privado de cada contenedor).
 PLUGIN_LOCK="plugins/.install.lock"
 
+# Artefactos por tenant (flow.json, playbooks, catalog.json) — ADR-0085:
+# viven en TENANTS_ROOT (volumen persistente); se asegura el directorio.
+mkdir -p "${TENANTS_ROOT:-/app/tenants}"
+
 install_plugins() {
   # El lock vive en ./plugins: si el dir no existe (imagen sin bind-mounts,
   # ej. Coolify) hay que crearlo antes de flock.

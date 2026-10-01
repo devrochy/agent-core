@@ -65,6 +65,9 @@ services:
       - ./sdd:/app/sdd
       - ./packages:/app/packages
       - ./plugins:/app/plugins
+      # Artefactos por tenant (flow.json, playbooks, catalog.json) — ADR-0085:
+      # sin volumen, un redeploy los pierde.
+      - tenants-data:/app/tenants
     healthcheck:
       test:
         [
@@ -95,6 +98,9 @@ services:
       - ./sdd:/app/sdd
       - ./packages:/app/packages
       - ./plugins:/app/plugins
+      # Artefactos por tenant (flow.json, playbooks, catalog.json) — ADR-0085:
+      # sin volumen, un redeploy los pierde.
+      - tenants-data:/app/tenants
     depends_on:
       # Espera a core-api: es quien aplica las migraciones. Arrancar antes
       # significaría trabajar contra un esquema a medio migrar.
@@ -115,6 +121,9 @@ services:
       - ./sdd:/app/sdd
       - ./packages:/app/packages
       - ./plugins:/app/plugins
+      # Artefactos por tenant (flow.json, playbooks, catalog.json) — ADR-0085:
+      # sin volumen, un redeploy los pierde.
+      - tenants-data:/app/tenants
     depends_on:
       core-api:
         condition: service_healthy
@@ -145,3 +154,5 @@ services:
 
 volumes:
   pgdata:
+  # Artefactos de tenant (ADR-0085): persisten entre redeploys y se respaldan.
+  tenants-data:
