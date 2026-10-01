@@ -356,12 +356,52 @@ class Prestamo(TenantMixin, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class Cuota(TenantMixin, Base):
-    __tablename__ = "pack_cobranza_cuotas"
-    __table_args__ = (Index("ix_pack_cobranza_cuotas_tenant_prestamo", "tenant_id", "prestamo_id"),)
+class Suscripcion(TenantMixin, Base):
+    """Suscripción recurrente de un cliente al servicio (ADR-0082, Opción 2).
+
+    El cliente paga un valor por período (mensual). El **cargo del período** es una
+    `Cuota` con `suscripcion_id` (sin préstamo); un cron la genera al vencer
+    `proximo_cargo` y se cobra con `LinkPago`. Reusa `Cuota`/`Pago`/`LinkPago`.
+    """
+
+    __tablename__ = "pack_cobranza_suscripciones"
+    __table_args__ = (
+        Index("ix_pack_cobranza_suscripciones_tenant_cliente", "tenant_id", "cliente_id"),
+        Index("ix_pack_cobranza_suscripciones_tenant_proximo", "tenant_id", "proximo_cargo"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    prestamo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    cliente_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    cartera_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    concepto: Mapped[str] = mapped_column(Text, nullable=False)  # "Plan Basic", "Mantenimiento"…
+    valor_periodo: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    moneda: Mapped[str] = mapped_column(Text, default="COP")
+    periodicidad: Mapped[str] = mapped_column(Text, default="mensual")
+    dia_facturacion: Mapped[int] = mapped_column(Integer, default=1)  # 1..28
+    estado: Mapped[str] = mapped_column(Text, default="activa")  # activa|pausada|cancelada
+    proximo_cargo: Mapped[date | None] = mapped_column(Date, default=None)
+    suscrito_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    cancelado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    notas: Mapped[str] = mapped_column(Text, default="")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class Cuota(TenantMixin, Base):
+    __tablename__ = "pack_cobranza_cuotas"
+    __table_args__ = (
+        Index("ix_pack_cobranza_cuotas_tenant_prestamo", "tenant_id", "prestamo_id"),
+        Index("ix_pack_cobranza_cuotas_tenant_suscripcion", "tenant_id", "suscripcion_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # `prestamo_id` es nullable: en una suscripción (ADR-0082) el cargo del período
+    # cuelga de la suscripción, no de un préstamo.
+    prestamo_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    suscripcion_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
     numero_cuota: Mapped[int] = mapped_column(Integer, nullable=False)
     valor_esperado: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     fecha_vencimiento: Mapped[date] = mapped_column(Date, nullable=False)

@@ -25,7 +25,7 @@ from pack_cobranza.admin_api import router as admin_api_router
 from pack_cobranza.api import router as public_api_router
 from pack_cobranza.api_gestor import router as gestor_api_router
 from pack_cobranza.config import CobranzaConfig
-from pack_cobranza.guardrails import promesa_guardrail
+from pack_cobranza.guardrails import promesa_guardrail, suscripcion_guardrail
 from pack_cobranza.skills import CobranzaSkill
 
 if TYPE_CHECKING:
@@ -78,6 +78,7 @@ class CobranzaModule(BaseModule):
     def on_activate(self, host: MCPHost) -> None:
         host.register_skill(CobranzaSkill())
         host.register_guardrail("cob_promesa_check", promesa_guardrail, priority=6)
+        host.register_guardrail("cob_suscripcion_check", suscripcion_guardrail, priority=6)
         import pack_cobranza.pagos
 
         pack_cobranza.pagos.suscribir()

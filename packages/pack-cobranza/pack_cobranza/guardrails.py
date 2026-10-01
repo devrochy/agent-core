@@ -38,3 +38,47 @@ async def promesa_guardrail(
             ),
         )
     return GuardrailResult(passed=True)
+
+
+def _claim(pattern: str, tools: set[str]) -> tuple[re.Pattern[str], set[str]]:
+    return re.compile(pattern, re.IGNORECASE), tools
+
+
+# Afirmaciones sobre la suscripción (ADR-0082) que exigen la tool del turno.
+_SUSCRIPCION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
+    "creada": _claim(
+        r"suscripci[oó]n\s+(?:qued\w*\s+)?(?:activ\w*|creada|registrada|contratada)|"
+        r"(?:activ\w*|cre\w*|contrat\w*)\s+[^.]{0,30}suscripci[oó]n",
+        {"cob_crear_suscripcion"},
+    ),
+    "pausada": _claim(
+        r"suscripci[oó]n\s+(?:qued\w*\s+)?pausad\w*|paus\w+\s+(?:tu\s+)?suscripci",
+        {"cob_pausar_suscripcion"},
+    ),
+    "cancelada": _claim(
+        r"suscripci[oó]n\s+(?:qued\w*\s+)?(?:cancel\w*|anulad\w*)|cancel\w+\s+(?:tu\s+)?suscripci",
+        {"cob_cancelar_suscripcion"},
+    ),
+    "renovada": _claim(
+        r"suscripci[oó]n\s+(?:qued\w*\s+)?(?:renov\w*|reactivad\w*)|(?:renov\w*|reactiv\w+)\s+(?:tu\s+)?suscripci",
+        {"cob_renovar_suscripcion"},
+    ),
+}
+
+
+async def suscripcion_guardrail(
+    response_text: str, tool_results: list[dict[str, Any]]
+) -> GuardrailResult:
+    """Bloquea afirmar cambios en la suscripción sin la tool correspondiente (ADR-0082)."""
+    ran = {r.get("_tool_name") for r in (tool_results or [])}
+    for label, (pattern, tools) in _SUSCRIPCION_CLAIMS.items():
+        if pattern.search(response_text or "") and not (ran & tools):
+            return GuardrailResult(
+                passed=False,
+                reason=f"Afirmación de suscripción '{label}' sin la tool correspondiente.",
+                retry_instruction=(
+                    f"Dijiste que la suscripción quedó '{label}' pero no llamaste la herramienta "
+                    f"({', '.join(sorted(tools))}). Llamala ahora, o decí claramente que no se pudo."
+                ),
+            )
+    return GuardrailResult(passed=True)

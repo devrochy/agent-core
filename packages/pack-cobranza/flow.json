@@ -30,6 +30,20 @@
       "tools": ["cob_registrar_promesa_pago"]
     },
     {
+      "id": "suscripcion",
+      "label": "Suscripción recurrente del cliente",
+      "purpose": "Consultar, crear, pausar, cancelar o renovar el servicio mensual del cliente, y cobrar el período con un link de pago. Nunca afirmar un cambio sin llamar la tool.",
+      "pack": "pack_cobranza",
+      "tools": [
+        "cob_consultar_suscripcion",
+        "cob_crear_suscripcion",
+        "cob_pausar_suscripcion",
+        "cob_cancelar_suscripcion",
+        "cob_renovar_suscripcion",
+        "cob_link_suscripcion"
+      ]
+    },
+    {
       "id": "escalamiento",
       "label": "Escalamiento a un gestor",
       "purpose": "Pasar la conversación a una persona cuando haya disputa, queja, agresión o una negociación fuera de las reglas.",

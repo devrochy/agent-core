@@ -32,6 +32,7 @@ from pack_cobranza.models import (
     Pago,
     Prestamo,
     ReporteDiario,
+    Suscripcion,
     Visita,
 )
 
@@ -175,3 +176,64 @@ async def cierre_diario() -> None:
                 for cartera in carteras:
                     await snapshot_cartera(session, tenant_id, cartera)
             log.info("cobranza_cierre_diario", tenant_id=str(tenant_id))
+
+
+def fecha_cargo(dia: int, desde: date, *, estricto: bool = True) -> date:
+    """Primera fecha con día `dia` (1..28) en/después de `desde` (ADR-0082).
+
+    `estricto=True` exige una fecha POSTERIOR (para avanzar el período); `False`
+    permite el mismo día (alta de la suscripción). Puro y determinista.
+    """
+    dia = min(max(int(dia or 1), 1), 28)
+    year, month = desde.year, desde.month
+    candidato = date(year, month, dia)
+    if candidato < desde or (estricto and candidato == desde):
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+        candidato = date(year, month, dia)
+    return candidato
+
+
+@register_cron("pack_cobranza", "10 2 * * *")
+async def generar_cargos_suscripcion() -> None:
+    """Genera el cargo del período de cada suscripción activa vencida (ADR-0082).
+
+    Crea una `Cuota` (sin préstamo, con `suscripcion_id`) por el valor del período
+    y avanza `proximo_cargo` al siguiente ciclo. Idempotente por período: la próxima
+    corrida solo genera cuando el `proximo_cargo` vuelve a vencer.
+    """
+    hoy = date.today()
+    for tenant_id in await _tenant_ids():
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                subs = (
+                    await session.execute(
+                        select(Suscripcion).where(
+                            Suscripcion.tenant_id == tenant_id,
+                            Suscripcion.estado == "activa",
+                            Suscripcion.deleted_at.is_(None),
+                            Suscripcion.proximo_cargo.isnot(None),
+                            Suscripcion.proximo_cargo <= hoy,
+                        )
+                    )
+                ).scalars().all()
+                for sub in subs:
+                    generadas = (
+                        await session.execute(
+                            select(func.count())
+                            .select_from(Cuota)
+                            .where(Cuota.tenant_id == tenant_id, Cuota.suscripcion_id == sub.id)
+                        )
+                    ).scalar_one()
+                    session.add(
+                        Cuota(
+                            tenant_id=tenant_id,
+                            suscripcion_id=sub.id,
+                            prestamo_id=None,
+                            numero_cuota=int(generadas) + 1,
+                            valor_esperado=Decimal(sub.valor_periodo or 0),
+                            fecha_vencimiento=sub.proximo_cargo,
+                            estatus="pendiente",
+                        )
+                    )
+                    sub.proximo_cargo = fecha_cargo(int(sub.dia_facturacion or 1), sub.proximo_cargo)
+            log.info("cobranza_cargos_suscripcion", tenant_id=str(tenant_id), generadas=len(subs))
