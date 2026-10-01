@@ -217,13 +217,75 @@ def _maybe_seed(slug: str, tenant_id: uuid.UUID) -> None:
     from core.onboarding import load_tenant_catalog
 
     data = load_tenant_catalog(slug)
-    if not data:
-        return
-    if data.get("pack") != "pack_commerce":
-        console.print(f"[dim]catalog.json de {slug}: pack '{data.get('pack')}' sin seed conocido[/dim]")
-        return
-    asyncio.run(seed_catalog(tenant_id, data))
-    console.print(f"✓ [green]Catálogo importado desde {slug}/catalog.json[/green]")
+    if data:
+        if data.get("pack") != "pack_commerce":
+            console.print(f"[dim]catalog.json de {slug}: pack '{data.get('pack')}' sin seed conocido[/dim]")
+        else:
+            asyncio.run(seed_catalog(tenant_id, data))
+            console.print(f"✓ [green]Catálogo importado desde {slug}/catalog.json[/green]")
+    asyncio.run(seed_pack_plugins(slug, tenant_id))
+    console.print(f"✓ [green]Seed de packs completado para {slug}[/green]")
+
+
+async def seed_pack_plugins(slug: str, tenant_id: uuid.UUID) -> list[str]:
+    """Seed genérico por pack (ADR-0083, issue #154).
+
+    Importa `TENANTS_ROOT/<slug>/<plugin_id>.json` para cada pack detectado que
+    tenga uno y un `seed_data` no no-op (commerce usa `catalog.json`, por eso se
+    excluye). Antes de delegar, resuelve `variante_sku` → `variante_id` del
+    catálogo commerce: el CLI es el único que cruza tablas de packs.
+    """
+    import json
+    from pathlib import Path
+
+    from pack_commerce.models import ProductVariant
+
+    from core.config import get_settings
+    from core.db.session import get_session
+    from core.plugin_manager import plugin_manager
+    from core.shared.tenant import tenant_scope
+
+    root = Path(get_settings().tenants_root)
+    steps: list[str] = []
+
+    async def _resolve_skus(data: dict) -> dict:
+        planes = data.get("planes", []) if isinstance(data, dict) else []
+        if not planes:
+            return data
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                for plan in planes:
+                    sku = plan.get("variante_sku")
+                    if not sku or plan.get("variante_id"):
+                        continue
+                    row = (
+                        await session.execute(
+                            select(ProductVariant).where(
+                                ProductVariant.tenant_id == tenant_id,
+                                ProductVariant.sku == sku,
+                            )
+                        )
+                    ).scalars().first()
+                    if row is not None:
+                        plan["variante_id"] = str(row.id)
+        return data
+
+    for module in plugin_manager.list_modules():
+        if module.id == "pack_commerce":
+            continue
+        path = root / slug / f"{module.id}.json"
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            console.print(f"[yellow]{module.id}.json de {slug} no es JSON válido; se ignora[/yellow]")
+            continue
+        data = await _resolve_skus(data)
+        applied = await module.seed_data(tenant_id, data)
+        steps.extend(applied)
+        console.print(f"✓ [green]{module.id}.json importado desde {slug}/[/green]")
+    return steps
 
 
 # ------------------------------------------------------------------ seed
@@ -376,6 +438,8 @@ def seed(slug: str = typer.Argument(..., help="Slug del tenant (ej: formoto)")) 
             return
         steps = await seed_catalog(tenant.id, data)
         for s in steps:
+            console.print(f"  · {s}")
+        for s in await seed_pack_plugins(slug, tenant.id):
             console.print(f"  · {s}")
 
     asyncio.run(_run())

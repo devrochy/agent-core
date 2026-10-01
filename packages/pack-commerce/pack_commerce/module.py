@@ -1187,6 +1187,45 @@ class CRMModule(BaseModule):
             order.payment_status = payment_status
             order.status_changed_at = datetime.now(UTC)
             log.info("order_payment_status_updated", order_id=str(order.id), payment_status=payment_status)
+            if payment_status == "pagado":
+                await self._activate_plans_for_order(session, order)
+
+    async def _activate_plans_for_order(self, session, order: Order) -> None:
+        """Opción B (ADR-0083): si el pedido pagado incluye variantes que son Planes
+        de pack_subscriptions, activa la suscripción del Customer vía el registry del
+        core (sin importar el pack, invariante nº5). Idempotente: el pack solo crea
+        si el cliente aún no tiene suscripción activa.
+        """
+        items = (
+            await session.execute(
+                select(OrderItem).where(
+                    OrderItem.tenant_id == get_current_tenant_id(),
+                    OrderItem.order_id == order.id,
+                )
+            )
+        ).scalars().all()
+        if not items:
+            return
+
+        from core.agents.spec import enabled_packs, load_active_spec
+        from core.subscriptions import subscription_registry
+
+        spec = await load_active_spec(get_current_tenant_id())
+        enabled = enabled_packs(spec)
+        if "pack_subscriptions" not in enabled:
+            return
+
+        for item in items:
+            info = await subscription_registry.plan_for_variant(str(item.variant_id), enabled=enabled)
+            if info is None:
+                continue
+            await subscription_registry.activate_for_customer(
+                customer_id=order.customer_id,
+                variant_id=str(item.variant_id),
+                reference=order.public_order_number,
+                enabled=enabled,
+            )
+            log.info("order_activates_subscription", order_id=str(order.id), plan=info.get("nombre"))
 
     # ------------------------------------------------------------ guardrail
     async def _amount_guardrail(

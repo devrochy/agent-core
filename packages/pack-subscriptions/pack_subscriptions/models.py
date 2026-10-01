@@ -1,0 +1,108 @@
+"""Modelos de pack-subscriptions (ADR-0083).
+
+Suscripción de cliente final sobre un `Plan`. Toda tabla lleva `tenant_id`
+(invariante nº1), RLS, sin borrado físico (`deleted_at`). `customer_id`/
+`variante_id` son referencias lógicas (UUID sin constraint) al `Customer` del core
+y al catálogo de commerce respectivamente — el pack NO importa a otro pack.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Any
+
+from sqlalchemy import Boolean, DateTime, Index, Integer, Numeric, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from core.shared.tenant import get_current_tenant_id
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def _tenant_or_raise() -> uuid.UUID:
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        raise RuntimeError("INSERT pack_subscriptions_* sin tenant_scope")
+    return tenant_id
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Plan(Base):
+    """Plan (servicio recurrente) que el pack vende; vínculo opcional a un producto de commerce."""
+
+    __tablename__ = "pack_subscriptions_plans"
+    __table_args__ = (
+        Index("ix_pack_subscriptions_plans_tenant", "tenant_id", "activo"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, default=_tenant_or_raise)
+    nombre: Mapped[str] = mapped_column(Text, nullable=False)
+    descripcion: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    precio: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
+    moneda: Mapped[str] = mapped_column(Text, nullable=False, default="COP")
+    periodicidad: Mapped[str] = mapped_column(Text, nullable=False, default="mensual")
+    trial_dias: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    limites: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    variante_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)  # FK lógica commerce
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class Subscription(Base):
+    """Suscripción de un `Customer` a un `Plan` (ciclo, estado, próximo cargo)."""
+
+    __tablename__ = "pack_subscriptions_subscriptions"
+    __table_args__ = (
+        Index("ix_pack_subscriptions_subs_tenant_customer", "tenant_id", "customer_id"),
+        Index("ix_pack_subscriptions_subs_tenant_proximo", "tenant_id", "proximo_cargo"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, default=_tenant_or_raise)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica core
+    plan_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    variante_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)  # FK lógica commerce
+    concepto: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    estado: Mapped[str] = mapped_column(Text, nullable=False, default="trialing")  # trialing|activa|pausada|cancelada|vencida
+    valor_periodo: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
+    moneda: Mapped[str] = mapped_column(Text, nullable=False, default="COP")
+    periodo_actual_inicio: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    periodo_actual_fin: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    proximo_cargo: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trial_termina: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fecha_alta: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fecha_cancelacion: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class SubscriptionCharge(Base):
+    """Cargo por período de una suscripción (pendiente → pagado)."""
+
+    __tablename__ = "pack_subscriptions_charges"
+    __table_args__ = (
+        Index("ix_pack_subscriptions_charges_tenant_sub", "tenant_id", "subscription_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, default=_tenant_or_raise)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
+    periodo: Mapped[str] = mapped_column(Text, nullable=False)  # YYYY-MM
+    monto: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
+    estado: Mapped[str] = mapped_column(Text, nullable=False, default="pendiente")  # pendiente|pagado|rechazado
+    referencia: Mapped[str | None] = mapped_column(Text, default=None)
+    fecha_vencimiento: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

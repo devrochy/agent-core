@@ -182,7 +182,7 @@ async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tup
     # de tools que el asistente real — packs habilitados por el spec + flujo resuelto.
     # Antes se pasaban TODAS las skills del host, así que un escenario podía pasar
     # aunque el flujo del tenant excluyera la tool.
-    from core.agents.flow import resolve_flow
+    from core.agents.flow import render_flow, resolve_flow
     from core.agents.spec import enabled_packs
 
     enabled = enabled_packs(spec)
@@ -195,6 +195,7 @@ async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tup
     if flow is not None:
         by_name = {t.name: t for t in candidate}
         active = [by_name[name] for name in flow.tool_names if name in by_name]
+        ctx.flow_summary = render_flow(flow)  # mismo bloque que el loop real (ADR-0054)
     else:
         active = candidate
     tools = to_llm_schemas(active)
@@ -224,6 +225,12 @@ async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tup
                 actual = str(call.arguments.get(key, ""))
                 if str(expected_fragment).lower() not in actual.lower():
                     failures.append(f"argumento {key}='{actual}' no contiene '{expected_fragment}'")
+
+    if "must_call_any" in assertions:
+        called = [t.name for t in response.tool_calls]
+        allowed = assertions["must_call_any"]
+        if not (set(allowed) & set(called)):
+            failures.append(f"no llamó ninguna de {allowed} (llamó: {called})")
 
     max_chars = assertions.get("max_response_chars")
     if max_chars and len(response.content) > max_chars:
