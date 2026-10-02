@@ -82,12 +82,10 @@ def fake_capability(monkeypatch):
 
 async def _make_order(session, *, total: float = 185_000.0, status: str = "abierto"):
     from pack_commerce.models import Order
-    from sqlalchemy import func, select
+    from sqlalchemy import text
 
-    max_seq = (
-        await session.execute(
-            select(func.coalesce(func.max(Order.order_seq), 0)).where(Order.tenant_id == T1)
-        )
+    order_seq = (
+        await session.execute(text("select pack_commerce_next_order_seq(:t)"), {"t": T1})
     ).scalar()
     order = Order(
         tenant_id=T1,
@@ -100,7 +98,7 @@ async def _make_order(session, *, total: float = 185_000.0, status: str = "abier
         delivery_method="domicilio",
         total=total,
         idempotency_key=f"test:{uuid.uuid4().hex[:8]}",
-        order_seq=int(max_seq) + 1,
+        order_seq=int(order_seq),
     )
     session.add(order)
     await session.flush()
