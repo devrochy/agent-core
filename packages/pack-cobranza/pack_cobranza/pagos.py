@@ -95,12 +95,40 @@ async def _on_payment_confirmed(reference: str | None = None, amount: Any = None
             cuota = await get_owned(session, Cuota, link.cuota_id)
             if cuota is None:
                 return
-            prestamo = await get_owned(session, Prestamo, cuota.prestamo_id)
+            # La cuota puede ser de un préstamo O de una suscripción (sin préstamo,
+            # ADR-0082): el pago se cuelga del préstamo solo si existe (HU-SUB-02).
+            prestamo = (
+                await get_owned(session, Prestamo, cuota.prestamo_id)
+                if cuota.prestamo_id is not None
+                else None
+            )
             valor = Decimal(str(amount)) if amount is not None else Decimal(link.monto or 0)
+
+            # Pago previo de la cuota (abonos anteriores) -- para saber si este
+            # pago la deja saldada o es parcial (HU-SUB-02).
+            pagado_antes = Decimal(
+                (
+                    await session.execute(
+                        select(func.coalesce(func.sum(Pago.valor), 0)).where(
+                            Pago.tenant_id == tenant_id,
+                            Pago.cuota_id == cuota.id,
+                            Pago.deleted_at.is_(None),
+                        )
+                    )
+                ).scalar_one()
+                or 0
+            )
+            esperado = Decimal(cuota.valor_esperado or 0)
+            cliente_id = link.cliente_id or (prestamo.cliente_id if prestamo else None)
+            if cliente_id is None:
+                # Sin cliente resoluble no se puede registrar el pago (NOT NULL).
+                log.warning("cobranza_pago_sin_cliente", reference=reference, cuota_id=str(cuota.id))
+                return
+
             session.add(
                 Pago(
                     tenant_id=tenant_id,
-                    cliente_id=link.cliente_id or (prestamo.cliente_id if prestamo else uuid.uuid4()),
+                    cliente_id=cliente_id,
                     prestamo_id=cuota.prestamo_id,
                     cuota_id=cuota.id,
                     valor=valor,
@@ -109,7 +137,11 @@ async def _on_payment_confirmed(reference: str | None = None, amount: Any = None
                     idempotency_key=f"link-{reference}",
                 )
             )
-            cuota.estatus = "pagada"
+            # Saldada solo si el acumulado cubre el valor esperado; si no, sigue
+            # pendiente y queda como abono.
+            saldada = (pagado_antes + valor) >= esperado
+            if saldada:
+                cuota.estatus = "pagada"
             cartera_id = prestamo.cartera_id if prestamo else None
             if prestamo is not None:
                 prestamo.saldo = prestamo.saldo - valor
@@ -121,7 +153,10 @@ async def _on_payment_confirmed(reference: str | None = None, amount: Any = None
             session.add(
                 AuditoriaCartera(
                     tenant_id=tenant_id, entidad="pago", entidad_id=cuota.id, operacion="crear",
-                    valores_despues={"valor": float(valor), "metodo": "en_linea", "referencia": reference},
+                    valores_despues={
+                        "valor": float(valor), "metodo": "en_linea", "referencia": reference,
+                        "saldada": saldada, "pagado_antes": float(pagado_antes), "esperado": float(esperado),
+                    },
                     actor_rol="pasarela", motivo="Pago en línea confirmado",
                 )
             )
