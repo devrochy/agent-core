@@ -2,7 +2,7 @@
 
 Las migraciones `0001`+`0002` habilitaron RLS pero no la forzaron: el dueño de la
 tabla se saltaba la policy de aislamiento. Esta migración pone `FORCE ROW LEVEL
-SECURITY` en las tres tablas del pack, como el resto de los packs (N-36).
+SECURITY` en las tablas vivas del pack (`plans` se eliminó en `0002`).
 
 Revision ID: pack_subscriptions_0003
 Revises: pack_subscriptions_0002
@@ -19,7 +19,6 @@ branch_labels = None
 depends_on = None
 
 TABLES = (
-    "pack_subscriptions_plans",
     "pack_subscriptions_subscriptions",
     "pack_subscriptions_charges",
 )
