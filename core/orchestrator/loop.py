@@ -444,7 +444,17 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                 # resultado para verificar que una afirmación de "ya lo hice"
                 # en el texto corresponda a una tool REALMENTE llamada, no solo
                 # a que algún resultado exista.
-                all_tool_results.append({**result, TOOL_NAME_KEY: tool_call.name})
+                # _current_turn/_ok (HU-COM-02): distinguish el turno actual y el
+                # éxito; un `crear_pedido` fallido o de un turno anterior no
+                # respalda "tu pedido quedó confirmado".
+                all_tool_results.append(
+                    {
+                        **result,
+                        TOOL_NAME_KEY: tool_call.name,
+                        "_current_turn": True,
+                        "_ok": not (isinstance(result, dict) and result.get("error")),
+                    }
+                )
                 usage.tool_calls.append({"tool": tool_call.name})
                 messages.append(
                     LLMMessage(
@@ -843,7 +853,13 @@ async def _historical_tool_results(conversation_id: uuid.UUID) -> list[dict[str,
             .order_by(AuditLog.created_at.desc())
             .limit(40)
         )
-        return [row for row in result.scalars().all() if row is not None]
+        # Turnos ANTERIORES (HU-COM-02): no respaldan una afirmación de cierre
+        # del turno actual. Sí alimentan `_amount_guardrail` (montos ya vistos).
+        return [
+            {**row, "_current_turn": False}
+            for row in result.scalars().all()
+            if row is not None
+        ]
 
 
 async def _load_history(conversation_id: uuid.UUID) -> list[LLMMessage]:

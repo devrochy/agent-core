@@ -11,7 +11,7 @@ catálogo, siempre, no de forma intermitente.
 from __future__ import annotations
 
 import pytest
-from pack_commerce.module import CRMModule, _extract_monetary_values
+from pack_commerce.module import CRMModule, _extract_monetary_values, parse_money
 
 
 def test_extract_monetary_values_finds_nested_price_in_list():
@@ -95,3 +95,45 @@ async def test_amount_guardrail_passes_with_generar_cotizacion_shape():
         tool_results,
     )
     assert verdict.passed, verdict.reason
+
+
+# ---------------------------------------------------------------- HU-COM-02
+@pytest.mark.parametrize(
+    ("texto", "esperado"),
+    [
+        ("$1.800.000", 1_800_000.0),
+        ("1.800.000", 1_800_000.0),
+        ("$1.800.000,50", 1_800_000.5),
+        ("COP 1.800.000", 1_800_000.0),
+        ("$ 15", 15.0),
+        ("15", 15.0),
+        ("$60,000", 60_000.0),
+        ("60.000", 60_000.0),
+        ("", None),
+        ("sin cifras", None),
+    ],
+)
+def test_parse_money_formatos(texto: str, esperado: float | None) -> None:
+    assert parse_money(texto) == esperado
+
+
+@pytest.mark.asyncio
+async def test_amount_guardrail_acepta_montos_grandes():
+    """Un total de 1.800.000 mencionado como '$1.800.000' no debe bloquearse.
+
+    Antes, `f'{value:g}'` daba '1.8e+06' y nunca coincidía con '1800000':
+    el plan Empresarial no se podía vender (HU-COM-02).
+    """
+    module = CRMModule()
+    tool_results = [{"total": 1_800_000.0}]
+    verdict = await module._amount_guardrail("El plan Empresarial cuesta $1.800.000.", tool_results)
+    assert verdict.passed, verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_amount_guardrail_bloquea_monto_inventado_por_substring():
+    """'$15' con total 150.000 NO debe pasar por coincidencia de texto (HU-COM-02)."""
+    module = CRMModule()
+    tool_results = [{"total": 150_000.0}]
+    verdict = await module._amount_guardrail("Te queda en $15.", tool_results)
+    assert not verdict.passed, "un monto inventado no debe colarse por substring"
