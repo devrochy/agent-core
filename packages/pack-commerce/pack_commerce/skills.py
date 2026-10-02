@@ -20,6 +20,7 @@ from sqlalchemy import or_, select, text
 from core.db.session import get_owned, get_session
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
+from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from pack_commerce.models import (
     CategoryComplement,
@@ -37,6 +38,8 @@ from pack_commerce.models import (
 )
 
 CUSTOMER_SEGMENTS = ("nuevo", "ocasional", "frecuente", "fiel", "inactivo")
+
+log = get_logger(__name__)
 
 ORDER_STATUS_ACTIVE = ("abierto", "despachado")
 
@@ -735,7 +738,7 @@ class OrderSkill(BaseSkill):
                             "enum": ["efectivo_contraentrega", "transferencia", "pago_en_linea"],
                             "description": (
                                 "'pago_en_linea' SOLO si el pack de pagos está activo para este "
-                                "tenant -- llamá luego generar_link_pago con la referencia del pedido."
+                                "tenant -- llamá luego confirmar_pago_pedido con el id del pedido."
                             ),
                         },
                         "delivery_method": {
@@ -805,6 +808,27 @@ class OrderSkill(BaseSkill):
                     "required": ["public_order_number"],
                 },
                 handler=self.consultar_estado_pedido,
+            ),
+            MCPTool(
+                name="confirmar_pago_pedido",
+                description=(
+                    "Genera (o reutiliza) el link de pago en línea del pedido, con el total exacto "
+                    "calculado por el sistema. Úsala SOLO cuando el cliente eligió pagar en línea. "
+                    "Nunca pasás el monto: la tool lo toma del pedido y lo regenera si el cliente "
+                    "agregó productos. Si el total es menor al mínimo de la pasarela, devuelve un "
+                    "error de negocio: ofrecé transferencia o contraentrega en vez de reintentar."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "order_id": {
+                            "type": "string",
+                            "description": "ID del pedido creado por crear_pedido",
+                        },
+                    },
+                    "required": ["order_id"],
+                },
+                handler=self.confirmar_pago_pedido,
             ),
         ]
 
@@ -1169,7 +1193,7 @@ class OrderSkill(BaseSkill):
                 # mínimo real de la pasarela es $150.000, MIN_AMOUNT_COP en
                 # pack_payments/providers/wompi.py -- no importable acá,
                 # invariante 5). Antes esto solo se descubría (si el modelo
-                # llegaba a llamarla) en generar_link_pago, ya tarde para
+                # llegaba a llamarla) al generar el link, ya tarde para
                 # redirigir la conversación con naturalidad; ahora es
                 # determinístico en el primer punto posible.
                 #
@@ -1375,6 +1399,13 @@ class OrderSkill(BaseSkill):
                 )
                 await self._decrement_stock(session, variant.id, quantity)
             order.total = new_total
+            # El total cambió: el link de pago vigente queda obsoleto. Se sube la
+            # versión para que la próxima `confirmar_pago_pedido` emita `-rN` y la
+            # referencia anterior (y su link) dejen de ser válidas (HU-COM-01).
+            if order.payment_link_url is not None:
+                order.payment_link_version = (order.payment_link_version or 0) + 1
+                order.payment_link_url = None
+                order.payment_reference = None
 
         return {
             "order_id": order_id,
@@ -1382,6 +1413,87 @@ class OrderSkill(BaseSkill):
             "nuevo_total": round(new_total, 2),
             "agregados": [{"sku": v.sku, "quantity": q} for v, q, _p in additions],
         }
+
+    async def confirmar_pago_pedido(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Link de pago del pedido con el total del SERVIDOR (HU-COM-01, D-SPEC-09-1).
+
+        El LLM nunca pasa monto ni referencia: solo el `order_id`. La referencia
+        sube de versión (`OC-0001` -> `OC-0001-r2`) cuando el total cambió, lo que
+        invalida cualquier link anterior. Usa `payment_registry` del core, así que
+        no importa ningún pack de pagos (invariante nº5).
+        """
+        order_id = str(arguments.get("order_id", ""))
+        if _parse_uuid(order_id) is None:
+            return {"error": "Pedido no encontrado."}
+
+        async with get_session() as session:
+            order = await get_owned(session, Order, order_id, get_current_tenant_id())
+            if order is None:
+                return {"error": "Pedido no encontrado."}
+            if order.payment_status == "pagado":
+                return {
+                    "order_id": order_id,
+                    "status": "pagado",
+                    "public_order_number": order.public_order_number,
+                    "message": "Este pedido ya está pagado.",
+                }
+            if order.status != "abierto":
+                return {"error": "El pedido ya no está abierto; no se puede generar un link."}
+            total = _float(order.total)
+            base_reference = order.public_order_number
+            version = order.payment_link_version or 0
+
+        from core.payments import PaymentCapabilityError
+
+        capability = await self._payment_capability()
+        if capability is None:
+            return {
+                "error": "El pago en línea no está disponible para este negocio.",
+                "hint": "Ofrecele transferencia o contraentrega.",
+            }
+
+        # Si el pedido ya tenía link para el total actual, se reutiliza; si el
+        # total cambió (versión vigente), se emite una referencia nueva.
+        reference = base_reference if version == 0 else f"{base_reference}-r{version}"
+        try:
+            link = await capability.create_link(
+                reference=reference,
+                amount=total,
+                description=f"Pedido {base_reference}",
+                method="online",
+            )
+        except PaymentCapabilityError as exc:
+            # Rechazo de NEGOCIO (monto bajo el mínimo): resultado controlado,
+            # NO una falla que apague el pack (HU-ARCH-18).
+            log.warning("payment_link_rejected", order_id=order_id, reason=str(exc))
+            return {
+                "error": "monto_bajo_minimo",
+                "detail": "El total es menor al mínimo de la pasarela en línea.",
+                "hint": "Ofrecele transferencia o contraentrega.",
+            }
+
+        async with get_session() as session:
+            order = await get_owned(session, Order, order_id, get_current_tenant_id())
+            if order is not None:
+                order.payment_reference = reference
+                order.payment_link_url = link.url
+        return {
+            "order_id": order_id,
+            "status": "link_creado",
+            "public_order_number": base_reference,
+            "monto": round(total, 2),
+            "link": link.url or link.qr_payload,
+            # SafeRenderer: el link exacto lo adjunta el core.
+            "_safe_append": f"💳 Podés pagar tu pedido {base_reference} aquí: {link.url}",
+        }
+
+    async def _payment_capability(self):  # type: ignore[no-untyped-def]
+        """Capacidad de pago de un pack habilitado, vía el registro del core."""
+        from core.agents.spec import enabled_packs, load_active_spec
+        from core.payments import payment_registry
+
+        spec = await load_active_spec(get_current_tenant_id())
+        return payment_registry.capability_for(enabled_packs(spec))
 
     async def consultar_estado_pedido(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         raw = str(arguments.get("public_order_number", "")).strip()

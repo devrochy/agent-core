@@ -222,6 +222,11 @@ class Order(TenantMixin, Base):
     delivery_method: Mapped[str] = mapped_column(Text, default="domicilio")  # domicilio|recoger_en_tienda
     total: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
     idempotency_key: Mapped[str] = mapped_column(Text)
+    # Link de pago versionado (HU-COM-01): el total manda y, al cambiar, la
+    # referencia sube de versión (`OC-0001` -> `OC-0001-r2`) para invalidar el link.
+    payment_reference: Mapped[str | None] = mapped_column(Text, default=None)
+    payment_link_url: Mapped[str | None] = mapped_column(Text, default=None)
+    payment_link_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # Numeración por tenant (ADR-0018): la asigna crear_pedido vía crm_next_order_seq(tenant).
     order_seq: Mapped[int] = mapped_column(Integer, nullable=False)
     public_order_number: Mapped[str] = mapped_column(

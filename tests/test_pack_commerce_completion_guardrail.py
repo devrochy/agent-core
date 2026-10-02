@@ -6,7 +6,7 @@ Reproduce el incidente real (tenant `yopoldo`, 2026-09-11): tras 2 intentos
 fallidos de `generar_cotizacion` (variant_id inventado, ya corregido en un fix
 anterior), el modelo terminó diciendo "¡Listo, Robinson! Cerré tu pedido. 🎉
 Ahora te envío el link de pago por $54.000 [...] En un momentico el asesor te
-pasa el link" -- sin haber llamado `crear_pedido`, `generar_link_pago` NI
+pasa el link" -- sin haber llamado `crear_pedido`, `confirmar_pago_pedido` NI
 `escalate_to_human`. El cliente quedaba esperando algo que nunca iba a pasar.
 """
 
@@ -75,9 +75,9 @@ async def test_pedido_confirmado_blocks_without_crear_pedido():
 
 
 @pytest.mark.asyncio
-async def test_link_de_pago_passes_when_generar_link_pago_called():
+async def test_link_de_pago_passes_when_confirmar_pago_pedido_called():
     module = CRMModule()
-    tool_results = [_tool_result("generar_link_pago", reference="OC-0001", status="pendiente")]
+    tool_results = [_tool_result("confirmar_pago_pedido", order_id="o-1", status="link_creado")]
     verdict = await module._completion_guardrail(
         "Aquí tienes el link de pago: https://checkout.wompi.co/l/abc", tool_results
     )
@@ -85,7 +85,7 @@ async def test_link_de_pago_passes_when_generar_link_pago_called():
 
 
 @pytest.mark.asyncio
-async def test_link_de_pago_blocks_without_generar_link_pago():
+async def test_link_de_pago_blocks_without_confirmar_pago_pedido():
     module = CRMModule()
     verdict = await module._completion_guardrail("Te envío el link de pago ahora mismo.", [])
     assert not verdict.passed
