@@ -40,8 +40,7 @@ async def test_identity_guarda_y_devuelve_split_style(app_client) -> None:
     )
 
     r = await app_client.post("/admin/login", data={"email": "admin@local", "password": "admin123"})
-    if r.status_code != 303:
-        pytest.skip("login admin no disponible en este entorno")
+    assert r.status_code == 303, r.text
     session = r.headers["set-cookie"].split(";")[0]
     r2 = await app_client.post(
         "/admin/switch-tenant", headers={"Cookie": session}, data={"tenant_id": str(tid)}
@@ -50,14 +49,16 @@ async def test_identity_guarda_y_devuelve_split_style(app_client) -> None:
     cookie = f"{session}; {tenant_cookie}"
 
     # GET inicial: deriva `un_mensaje` (sin clave explícita).
-    current = (await app_client.get("/api/v1/settings/identity", headers={"Cookie": cookie})).json()
+    current_resp = await app_client.get("/api/v1/admin/settings", headers={"Cookie": cookie})
+    assert current_resp.status_code == 200, current_resp.text
+    current = current_resp.json()["identity"]
     assert current["split_style"] == "un_mensaje"
 
     # PUT con `varios_cortos`.
     payload = dict(current)
     payload["split_style"] = "varios_cortos"
     r3 = await app_client.put(
-        "/api/v1/settings/identity", headers={"Cookie": cookie}, json=payload
+        "/api/v1/admin/settings/identity", headers={"Cookie": cookie}, json=payload
     )
     assert r3.status_code == 200, r3.text
     assert r3.json()["split_style"] == "varios_cortos"
@@ -65,7 +66,7 @@ async def test_identity_guarda_y_devuelve_split_style(app_client) -> None:
     # PUT con un valor inválido: cae a `un_mensaje`.
     payload["split_style"] = "inventado"
     r4 = await app_client.put(
-        "/api/v1/settings/identity", headers={"Cookie": cookie}, json=payload
+        "/api/v1/admin/settings/identity", headers={"Cookie": cookie}, json=payload
     )
     assert r4.status_code == 200, r4.text
     assert r4.json()["split_style"] == "un_mensaje"
