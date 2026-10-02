@@ -93,3 +93,4 @@ Se crean con `/adr`.
 | [0083](0083-pack-subscriptions-opcional.md) | `pack_subscriptions`: suscripción de cliente final sobre planes (Opción 1, opcional) | aceptado |
 | [0084](0084-calendario-interno-pack-calendar.md) | Calendario interno del pack-calendar (sin Google) | aceptado |
 | [0085](0085-persistencia-artefactos-tenant.md) | Persistencia de los artefactos de tenant en despliegue | aceptado |
+| [0086](0086-modelos-deepseek-vigentes.md) | Modelos DeepSeek vigentes (V4): `deepseek-flash` con thinking explícito (supersede parcial de ADR-003) | aceptado |

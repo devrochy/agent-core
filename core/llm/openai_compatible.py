@@ -4,10 +4,13 @@ Cubre: DeepSeek (default del framework), OpenAI, xAI, Groq, Together, etc.
 Sin SDK: httpx nativo (mismo criterio que agent-sale ADR-010 — menos deps,
 control total del payload).
 
-DeepSeek:
-  - deepseek-chat     -> V3, function calling nativo, económico. Default.
-  - deepseek-reasoner -> R1, razonamiento profundo. NO soporta function calling:
-    el difficulty_router solo lo usa en turnos sin tools.
+DeepSeek (V4, vigente desde 2026):
+  - deepseek-flash -> V4.1-Flash. Function calling nativo. `thinking` se apaga
+    explícitamente para el turno normal y se enciende para razonamiento.
+  - deepseek-v4-pro -> tier superior (más caro); se elige tras evaluación.
+  Los nombres viejos `deepseek-chat` / `deepseek-reasoner` se discontinuaron el
+  2026-07-24; `resolve_thinking_for_model` los mapea por compatibilidad y se
+  registra un aviso.
 """
 
 from __future__ import annotations
@@ -38,21 +41,63 @@ MAX_RETRIES = 2
 RETRY_BACKOFF_S = 1.5
 
 # USD por millón de tokens (input, output) — actualizar si cambia el pricing.
+# Fuente: DeepSeek pricing 2026-07-24; OpenAI 2026. (verificado 2026-10-02)
 PRICING: dict[str, tuple[float, float]] = {
+    "deepseek-flash": (0.14, 0.28),
+    "deepseek-v4-flash": (0.14, 0.28),
+    "deepseek-v4-pro": (0.435, 0.87),
+    # Nombres discontinuados el 2026-07-24: se conservan solo para costear
+    # configs viejas mientras se migran, nunca como valor por defecto.
     "deepseek-chat": (0.27, 1.10),
     "deepseek-reasoner": (0.55, 2.19),
     "gpt-4o": (2.50, 10.00),
     "gpt-4o-mini": (0.15, 0.60),
 }
 
+# IDs que DeepSeek retiró el 2026-07-24. Cualquier config que los use se avisa
+# (y, si son el default, se sustituye por el vigente).
+RETIRED_DEEPSEEK_MODELS = frozenset({"deepseek-chat", "deepseek-reasoner"})
+
+
+def resolve_thinking_for_model(model: str, thinking: bool) -> bool:
+    """Traduce el modo deseado según el ID de modelo.
+
+    - `deepseek-v4-pro`: thinking opcional; se respeta `thinking`.
+    - `deepseek-flash`/`deepseek-v4-*`/desconocido compatible: se respeta.
+    - Viejos alias (discontinuados): se avisa y se devuelve su modo histórico
+      (chat=sin thinking, reasoner=con thinking) solo para no romper en seco.
+    """
+    if model in RETIRED_DEEPSEEK_MODELS:
+        log.warning(
+            "llm_model_discontinuado",
+            model=model,
+            note="DeepSeek discontinuó este ID el 2026-07-24; migrar a deepseek-flash (P-05).",
+        )
+        return model == "deepseek-reasoner"
+    return thinking
+
 
 class OpenAICompatibleProvider(BaseLLMProvider):
-    def __init__(self, api_key: str, model: str, base_url: str, provider_name: str = "openai_compatible") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        base_url: str,
+        provider_name: str = "openai_compatible",
+        thinking: bool | None = None,
+    ) -> None:
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.provider_name = provider_name
         self.pricing_per_mtok = PRICING.get(model, (0.0, 0.0))
+        # `None` = no enviar el campo (proveedores que no lo conocen, como OpenAI).
+        self.thinking = thinking
+
+    def _thinking_payload(self) -> dict[str, Any]:
+        if self.thinking is None or self.provider_name != "deepseek":
+            return {}
+        return {"thinking": {"type": "enabled" if self.thinking else "disabled"}}
 
     # ------------------------------------------------------------ serialización
     def _serialize_messages(self, system_blocks: list[str], messages: list[LLMMessage]) -> list[dict[str, Any]]:
@@ -106,6 +151,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             "model": self.model,
             "messages": self._serialize_messages(system_blocks, messages),
             "max_tokens": max_tokens,
+            **self._thinking_payload(),
         }
         if temperature is not None:
             payload["temperature"] = temperature
@@ -170,6 +216,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             "messages": self._serialize_messages(system_blocks, messages),
             "max_tokens": max_tokens,
             "stream": True,
+            **self._thinking_payload(),
         }
         if temperature is not None:
             payload["temperature"] = temperature

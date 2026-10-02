@@ -66,7 +66,7 @@ def test_agent_spec_shape() -> None:
             "forbiddenPhrases": [],
             "locale": "es-CO",
         },
-        model={"primary": "deepseek-chat", "temperature": 0.3},
+        model={"primary": "deepseek-flash", "temperature": 0.3},
         memory={"shortTermTurns": 30, "summarize": True},
         playbooks=[{"name": "ventas", "description": "Playbook de ventas"}],
         tools=[{"tool": "crear_lead", "enabled": True, "scopes": ["crm:lead:w"]}],

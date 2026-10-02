@@ -17,11 +17,15 @@ def resolve_provider(
     provider_key: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
+    thinking: bool | None = None,
 ) -> BaseLLMProvider:
     """Resuelve el proveedor activo.
 
     Prioridad: argumentos explícitos (config de BD/panel) > variables de entorno.
     DEMO_MODE (solo dev) fuerza un proveedor fake determinístico.
+
+    `thinking`: para DeepSeek V4, `False` para el turno normal y `True` para
+    razonamiento. `None` deja el default del proveedor (OpenAI ignora el campo).
     """
     settings = get_settings()
 
@@ -39,9 +43,13 @@ def resolve_provider(
     key = provider_key or settings.llm_provider
     resolved_api_key = api_key or settings.llm_api_key
     resolved_model = model or settings.llm_model
+    if thinking is None and key in ("deepseek", "openai_compatible"):
+        # En DeepSeek, un ID explícito (V4) enciende thinking por defecto; el
+        # turno normal debe apagarlo. `.env`/panel pueden sobreescribir.
+        thinking = settings.llm_thinking_default
 
     if key in ("deepseek", "openai", "openai_compatible"):
-        from core.llm.openai_compatible import OpenAICompatibleProvider
+        from core.llm.openai_compatible import OpenAICompatibleProvider, resolve_thinking_for_model
 
         base_urls = {
             "deepseek": "https://api.deepseek.com",
@@ -53,6 +61,9 @@ def resolve_provider(
             model=resolved_model,
             base_url=base_urls[key],
             provider_name=key,
+            thinking=resolve_thinking_for_model(resolved_model, bool(thinking))
+            if thinking is not None
+            else None,
         )
     if key == "anthropic":
         from core.llm.anthropic_provider import AnthropicProvider
