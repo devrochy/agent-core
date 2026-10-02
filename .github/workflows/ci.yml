@@ -63,7 +63,11 @@ jobs:
           bash scripts/install_plugins.sh
 
       - name: Lint
-        run: ruff check core cli scripts alembic evals tests
+        run: ruff check core cli scripts alembic evals tests packages
+
+      - name: Capas (import-linter)
+        # Invariante 5: ningún pack importa de otro pack; y contratos congelados.
+        run: lint-imports
 
       - name: Postgres del CI con PostGIS (lo exige pack-cobranza, ADR-0058)
         # El servicio arranca de `pgvector/pgvector:pg16` (sin PostGIS). El pack

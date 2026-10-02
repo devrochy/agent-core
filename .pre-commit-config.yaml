@@ -1,0 +1,23 @@
+# Red local para commits fuera de Claude Code (terminal, OpenCode, web de GitHub).
+# El CI es la red final (ruff en packages, import-linter, gate de RLS y de evals).
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.3
+    hooks:
+      - id: gitleaks
+
+  # Reutiliza la misma guarda de migraciones que el hook de Claude Code.
+  - repo: local
+    hooks:
+      - id: migraciones-rls
+        name: migraciones con tenant_id + RLS forzada
+        entry: python3 .claude/hooks/guards.py
+        language: system
+        pass_filenames: false
+        files: 'alembic/versions/.*\.py$'

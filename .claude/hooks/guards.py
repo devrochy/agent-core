@@ -54,6 +54,13 @@ MUTATING_HTTP_RE = re.compile(
 )
 
 MIGRATION_PY_RE = re.compile(r"(^|/)alembic/versions/[^/]+\.py$")
+# Leer `.env*` (secretos) por Bash: `.env.example` sí pasa. Cubre `cat`, `grep`,
+# `head`, `tail`, `sed`, `awk`, `source`/`.`, `xargs` y redirecciones.
+ENV_FILE_RE = re.compile(r"(?<![\w./-])\.env\b")
+ENV_EXAMPLE_RE = re.compile(r"\.env\.example\b")
+ENV_READ_RE = re.compile(
+    r"\b(cat|bat|less|more|head|tail|sed|awk|grep|rg|source|nl|strings|xxd|od)\b|(^|[;&|])\s*\.\s"
+)
 CREATES_TABLE_RE = re.compile(r"op\.create_table\s*\(|\bcreate\s+table\b", re.IGNORECASE)
 SYSTEM_TABLE_MARK = "tabla de sistema"
 # Se buscan sobre el texto en minúsculas y con los espacios colapsados.
@@ -105,6 +112,13 @@ def check_bash(tool_input: dict) -> None:
                 f"BLOQUEADO: el comando contiene '{pattern}'.\n"
                 "Las operaciones sobre producción se ejecutan a mano, nunca desde una sesión."
             )
+
+    if ENV_FILE_RE.search(command) and not ENV_EXAMPLE_RE.search(command) and ENV_READ_RE.search(command):
+        deny(
+            "BLOQUEADO: el comando lee un archivo `.env*` (secretos).\n"
+            "Usa `.env.example` para los nombres de las variables; los valores reales no "
+            "se leen desde una sesión."
+        )
 
     targets = [name for uuid, name in PROD_RESOURCES.items() if uuid in command_lower]
     operates = bool(OPERATE_RE.search(command)) and bool(targets)

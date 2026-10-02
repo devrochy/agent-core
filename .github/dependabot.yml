@@ -1,0 +1,10 @@
+# Solo alertas de seguridad: sin PR por cada versión nueva.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    # open-pull-requests-limit: 0 deja solo las alertas de seguridad (Dependabot
+    # security updates), sin PR de versiones normales.
