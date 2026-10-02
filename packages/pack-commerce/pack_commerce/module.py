@@ -57,7 +57,7 @@ log = get_logger(__name__)
 
 PLUGIN_ID = "pack_commerce"
 
-MONEY_IN_TEXT = re.compile(r"\$\s?[\d.,]+")
+MONEY_IN_TEXT = re.compile(r"\$\s?[\d][\d.,]*|\bCOP\s?[\d][\d.,]*")
 
 # Claves bajo las que un resultado de tool puede traer un monto real (puerto
 # directo de MONEY_KEYS/walkForKeys de agent-sale, src/shared/observability/
@@ -65,11 +65,69 @@ MONEY_IN_TEXT = re.compile(r"\$\s?[\d.,]+")
 # confundir un stock/quantity numérico con un monto verificado.
 MONEY_KEYS = {"price", "unit_price", "line_total", "subtotal", "total", "discount"}
 
-# Clave reservada del core (docs/SAFE-RENDERER.md, core/orchestrator/safe_renderer.py)
+# Claves reservadas del core (docs/SAFE-RENDERER.md, core/orchestrator/safe_renderer.py)
 # -- se usa el literal, NO se importa: los packs no pueden importar de
 # core.orchestrator.* (invariante nº5/allowlist de CLAUDE.md), mismo criterio ya
 # usado acá para "_safe_append".
 _TOOL_NAME_KEY = "_tool_name"
+# Flags que el loop estampa en cada tool_result (HU-COM-02): `_current_turn`
+# distingue el turno actual del histórico; `_ok` marca un resultado exitoso.
+_TURN_KEY = "_current_turn"
+_OK_KEY = "_ok"
+
+
+def parse_money(text: str, locale: str = "es-CO") -> float | None:
+    """Interpreta un monto de texto en formato del negocio (es-CO por defecto).
+
+    Acepta `$1.800.000`, `1.800.000`, `1.800.000,50`, `COP 1.800.000`,
+    `$ 15` y `15`. Devuelve `None` si no hay un número reconocible.
+
+    Regla de separadores (es-CO): el punto es de miles y la coma es decimal.
+    Si solo hay puntos repetidos (`1.800.000`) o un punto con 3 dígitos detrás,
+    se tratan como miles; si hay coma, la coma es el decimal.
+    """
+    if not text:
+        return None
+    # Quita símbolos y espacios (incluye espacio fino/no separable).
+    cleaned = re.sub(r"[^\d.,]", "", text).strip()
+    if not cleaned:
+        return None
+    cleaned = cleaned.replace("\u00a0", "").replace("\u202f", "")
+
+    if "." in cleaned and "," in cleaned:
+        # El separador decimal es el que aparece más a la derecha; el otro es de miles.
+        if cleaned.rfind(",") > cleaned.rfind("."):
+            normalized = cleaned.replace(".", "").replace(",", ".")
+        else:
+            normalized = cleaned.replace(",", "")
+    elif "," in cleaned:
+        # Varias comas, o la última parte con != 2 dígitos -> son de miles.
+        partes = cleaned.split(",")
+        decimal = len(partes) == 2 and 1 <= len(partes[-1]) <= 2
+        normalized = cleaned.replace(",", ".") if decimal else cleaned.replace(",", "")
+    else:
+        normalized = cleaned
+        # Puntos: varios, o uno con exactamente 3 dígitos detrás -> miles.
+        if "." in normalized:
+            partes = normalized.split(".")
+            if len(partes) > 2 or (len(partes) == 2 and len(partes[1]) == 3):
+                normalized = normalized.replace(".", "")
+
+    try:
+        from decimal import Decimal, InvalidOperation
+
+        return float(Decimal(normalized))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _normalized_amount_key(value: float) -> str:
+    """Clave de comparación de un monto: valor con 2 decimales, sin notación
+    científica (arregla el bloqueo de montos ≥ 1e6, HU-COM-02)."""
+    from decimal import Decimal
+
+    return str(Decimal(str(value)).quantize(Decimal("0.01")))
+
 
 # Frases que afirman que una acción de negocio quedó resuelta -> deben
 # corresponder a una tool REALMENTE llamada en ESTE turno, o es una "phantom
@@ -1288,14 +1346,15 @@ class CRMModule(BaseModule):
         known: set[str] = set()
         for result in tool_results:
             for value in _extract_monetary_values(result):
-                known.add(f"{value:g}")
-
-        def normalize(amount: str) -> str:
-            return amount.replace("$", "").replace(".", "").replace(",", "").strip()
+                known.add(_normalized_amount_key(value))
 
         for amount in amounts_in_text:
-            cleaned = normalize(amount)
-            if cleaned and not any(cleaned == normalize(k) or cleaned in k for k in known):
+            parsed = parse_money(amount)
+            if parsed is None:
+                continue
+            # Igualdad de VALOR (no substring): un "$15" con total 150.000 ya no
+            # pasa por coincidencia de texto (HU-COM-02).
+            if _normalized_amount_key(parsed) not in known:
                 return GuardrailResult(
                     passed=False,
                     reason=f"Monto no verificado en la respuesta: {amount}",
@@ -1342,9 +1401,19 @@ class CRMModule(BaseModule):
         algo que nunca iba a pasar, dejando al cliente esperando en el vacío.
         Los claims son los incorporados + los que este tenant haya
         configurado/desactivado (ADR-0025, `_resolved_completion_claims`).
+
+        Solo cuentan las tools del TURNO ACTUAL que terminaron bien (HU-COM-02):
+        un `crear_pedido` fallido o de un turno anterior no respalda "tu pedido
+        quedó confirmado". Si el resultado no trae los flags `_current_turn`/
+        `_ok` (llamada directa en tests), se asume turno actual y éxito para no
+        cambiar el comportamiento previo.
         """
         called_tools = {
-            result.get(_TOOL_NAME_KEY) for result in tool_results if isinstance(result, dict)
+            result.get(_TOOL_NAME_KEY)
+            for result in tool_results
+            if isinstance(result, dict)
+            and result.get(_TURN_KEY, True)
+            and result.get(_OK_KEY, True)
         }
         claims = await self._resolved_completion_claims()
         for label, (pattern, required_tools) in claims.items():

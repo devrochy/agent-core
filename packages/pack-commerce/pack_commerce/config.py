@@ -42,6 +42,14 @@ class CRMConfig(BasePluginConfig):
     monto_alto_threshold: float = Field(
         default=1_000_000, description="Monto en COP que dispara escalamiento a humano"
     )
+    # Umbral propio para planes recurrentes (HU-COM-02). `None` = un plan nunca
+    # escala por monto alto: el cobro ya pasa por el snapshot del servidor
+    # (HU-COM-01) y el negocio conoce su catálogo. Así se puede vender el plan
+    # Empresarial (1,8M) sin fricción.
+    monto_alto_planes_threshold: float | None = Field(
+        default=None,
+        description="Monto en COP que dispara escalamiento para planes recurrentes; None = nunca",
+    )
     # Gate determinístico en crear_pedido (incidente real 2026-09-11, tenant
     # yopoldo): un pedido con pago_en_linea por debajo del mínimo real de la
     # pasarela (Wompi: $150.000 COP, ver pack_payments/providers/wompi.py::

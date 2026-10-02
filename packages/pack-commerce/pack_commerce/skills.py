@@ -61,6 +61,34 @@ def _float(value: Any) -> float:
     return float(value or 0)
 
 
+def _monto_alto_threshold(config: Any, es_plan: bool) -> float | None:
+    """Umbral de escalamiento por monto (HU-COM-02).
+
+    Para planes recurrentes usa `monto_alto_planes_threshold`; `None` ahí
+    significa "un plan nunca escala por monto alto" (el cobro ya va por el
+    snapshot del servidor). Para pedidos normales, `monto_alto_threshold`.
+    """
+    if es_plan:
+        return getattr(config, "monto_alto_planes_threshold", None)
+    return getattr(config, "monto_alto_threshold", 1_000_000) or 1_000_000
+
+
+async def _es_pedido_de_plan(session, variant_ids: list) -> bool:  # type: ignore[no-untyped-def]
+    """True si alguna variante del pedido es un plan recurrente (billing_period)."""
+    if not variant_ids:
+        return False
+    row = (
+        await session.execute(
+            select(ProductVariant.id).where(
+                ProductVariant.tenant_id == get_current_tenant_id(),
+                ProductVariant.id.in_(variant_ids),
+                ProductVariant.billing_period.is_not(None),
+            ).limit(1)
+        )
+    ).first()
+    return row is not None
+
+
 def _money(value: Any, symbol: str = "$") -> str:
     return f"{symbol}{_float(value):,.0f}"
 
@@ -1179,8 +1207,9 @@ class OrderSkill(BaseSkill):
             if not items:
                 return {"error": "La cotización no tiene productos."}
 
-            threshold = getattr(config, "monto_alto_threshold", 1_000_000) or 1_000_000
-            if _float(quote.total) > threshold:
+            es_plan = await _es_pedido_de_plan(session, [i.variant_id for i in items])
+            threshold = _monto_alto_threshold(config, es_plan)
+            if threshold is not None and _float(quote.total) > threshold:
                 return {
                     "error": "El total supera el monto máximo permitido y requiere aprobación humana.",
                     "escalate": True,
@@ -1379,8 +1408,9 @@ class OrderSkill(BaseSkill):
 
             new_total = _float(order.total) + add_total
             config = await _plugin_config()
-            threshold = getattr(config, "monto_alto_threshold", 1_000_000) or 1_000_000
-            if new_total > threshold:
+            es_plan = await _es_pedido_de_plan(session, [v.id for v, _q, _p in additions])
+            threshold = _monto_alto_threshold(config, es_plan)
+            if threshold is not None and new_total > threshold:
                 return {
                     "error": "El total supera el monto máximo permitido y requiere aprobación humana.",
                     "escalate": True,
