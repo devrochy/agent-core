@@ -421,7 +421,9 @@ class Pago(TenantMixin, Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     cliente_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
-    prestamo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    # Nullable: un pago puede venir de una cuota de SUSCRIPCIÓN (sin préstamo,
+    # ADR-0082 / HU-SUB-02).
+    prestamo_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
     cuota_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
     valor: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     metodo_pago: Mapped[str] = mapped_column(Text, default="efectivo")
