@@ -152,7 +152,7 @@ class Settings(BaseSettings):
     # --- Comportamiento ---
     debounce_mode: DebounceMode = Field(default="natural", alias="DEBOUNCE_MODE")
     max_agent_iterations: int = Field(default=6, alias="MAX_AGENT_ITERATIONS")
-    message_split_style: SplitStyle = Field(default="pocos_cortos", alias="MESSAGE_SPLIT_STYLE")
+    message_split_style: SplitStyle = Field(default="un_mensaje", alias="MESSAGE_SPLIT_STYLE")
 
     # --- Modo demo (SOLO desarrollo) ---
     # Activa un LLM fake determinístico y un envío de canal no-op para probar el
