@@ -6,7 +6,8 @@ Runtime y contratos en **Python** (ver ADR-0011).
 ## Invariantes (no negociables)
 
 1. **Multi-tenant siempre.** Toda tabla de negocio lleva `tenant_id uuid not null`, RLS
-   habilitado con policy de aislamiento, e índice compuesto que empieza por `tenant_id`.
+   habilitado **y forzado** (`FORCE ROW LEVEL SECURITY`) con policy de aislamiento, e índice
+   compuesto que empieza por `tenant_id`.
    No existen tablas "globales" de negocio.
 2. **Nunca se hace fork por cliente.** La personalización se resuelve en este orden:
    configuración → pack → plugin del tenant → topología de despliegue. Mismo binario siempre.
@@ -91,11 +92,13 @@ Este repo se trabaja con dos asistentes: OpenCode (`.opencode/`) y Claude Code
   cambiar las instrucciones de uno, replicar el cambio a mano en su par.
   `.opencode/agents/migrador.md` (migración histórica CULTO/FORMOTO) no
   tiene par en `.claude/` — es intencional, trabajo puntual ya cerrado.
-- **Guardas de comandos peligrosos**: `.opencode/plugins/guards.ts` (plugin
-  TypeScript) y `.claude/hooks/guards.py` (hook Python) implementan la misma
-  lógica en dos lenguajes — no se puede compartir código entre ambos; si
-  cambian los patrones bloqueados o las reglas de migraciones, replicar el
-  cambio a mano en los dos archivos.
+- **Guardas de comandos peligrosos**: la lógica vive solo en
+  `.claude/hooks/guards.py` (hook PreToolUse). `.opencode/plugins/guards.ts`
+  ejecuta ese script y aplica su decisión, así que las reglas se cambian en
+  un solo archivo (con sus tests en `tests/test_guards_hook.py`). Bloquea las
+  migraciones (Alembic `.py` del core y de los packs) que crean tablas sin
+  `tenant_id` + RLS forzada + policy, y pide confirmación ante comandos sobre
+  los recursos de producción de Coolify.
 - **Permisos**: `opencode.json` y `.claude/settings.json` — mismo criterio,
   replicar los cambios de allowlist/denylist a mano en ambos.
 
