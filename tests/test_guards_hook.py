@@ -66,6 +66,12 @@ def decide(tool_name: str, tool_input: dict, cwd: Path | None = None) -> str:
         ("curl -X POST https://app.solvershub.site/api/v1/admin/tenants -d '{}'", "ask"),
         ("curl -s https://app.solvershub.site/healthz", "allow"),
         ("uv run pytest -q", "allow"),
+        # H3: leer `.env*` por Bash queda bloqueado; `.env.example` pasa.
+        ("cat .env", "deny"),
+        ("grep -i key .env.local", "deny"),
+        ("head -5 .env.production", "deny"),
+        ("cat .env.example", "allow"),
+        ("python -c 'import os; print(os.environ)'", "allow"),
     ],
 )
 def test_bash(command: str, expected: str) -> None:

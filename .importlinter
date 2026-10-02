@@ -1,0 +1,53 @@
+[importlinter]
+# El core y los packs del repo. Se declaran todos porque los packs viven en
+# paquetes separados (`packages/pack-*/pack_*`): grimp debe escanearlos para
+# poder verificar que ninguno importa de otro.
+root_packages =
+    core
+    pack_calendar
+    pack_cobranza
+    pack_commerce
+    pack_payments
+    pack_subscriptions
+    agentcore_contracts
+# Incluye lo que esté instalado (por ejemplo, para `forbidden` con `cli`).
+include_external_packages = True
+
+# Invariante 5: ningún pack importa de otro pack. Los packs solo dependen del core
+# y se coordinan por registros del core (payment_registry, subscription_registry)
+# o por eventos.
+[importlinter:contract:pack-independencia]
+name = Ningún pack importa de otro pack
+type = independence
+modules =
+    pack_calendar
+    pack_cobranza
+    pack_commerce
+    pack_payments
+    pack_subscriptions
+
+[importlinter:contract:packs-sin-cli]
+name = Los packs no importan la CLI
+type = forbidden
+source_modules =
+    pack_calendar
+    pack_cobranza
+    pack_commerce
+    pack_payments
+    pack_subscriptions
+forbidden_modules =
+    cli
+
+[importlinter:contract:contracts-sin-dependencias]
+name = agentcore_contracts no importa del runtime
+type = forbidden
+source_modules =
+    agentcore_contracts
+forbidden_modules =
+    core
+    cli
+    pack_calendar
+    pack_cobranza
+    pack_commerce
+    pack_payments
+    pack_subscriptions
