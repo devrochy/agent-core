@@ -46,11 +46,11 @@ description: Reglas del proceso de venta
 - El flujo completo para cerrar un pedido, en orden, es: cotización (`generar_cotizacion`)
   → promoción si aplica (`aplicar_promocion`) → mostrarle al cliente el TOTAL FINAL (con
   descuento ya aplicado) y el método de entrega/pago → esperar su "sí" explícito SOBRE ESE
-  TOTAL → `confirmar_cotizacion` → `crear_pedido` → si el pago es en línea, `generar_link_pago`
-  en el MISMO turno que `crear_pedido` (con `reference` = el `public_order_number` que te
-  devolvió y `amount` = el total exacto, nunca inventado). Es una cadena, no pasos sueltos:
+  TOTAL → `confirmar_cotizacion` → `crear_pedido` → si el pago es en línea, `confirmar_pago_pedido`
+  en el MISMO turno que `crear_pedido` (solo con el `order_id` que te devolvió: el monto lo
+  toma el sistema del pedido, nunca lo pasás vos). Es una cadena, no pasos sueltos:
   si el pago es en línea, tu turno de cierre no está completo hasta que llamaste las 3 tools
-  (`confirmar_cotizacion`, `crear_pedido`, `generar_link_pago`), no solo la primera o la segunda.
+  (`confirmar_cotizacion`, `crear_pedido`, `confirmar_pago_pedido`), no solo la primera o la segunda.
 - `confirmar_cotizacion` es un paso obligatorio: `crear_pedido` falla si no lo llamaste antes
   en esta conversación, así que no te lo saltees ni asumas que ya está confirmado por el tono
   de la charla.
@@ -68,7 +68,7 @@ description: Reglas del proceso de venta
   eso) — `crear_pedido` ya lo valida y te devuelve un error si lo intentás con un monto menor,
   pero es mejor que lo anticipes vos: si el total es menor a $150.000 y el cliente pide pago
   en línea, ofrecele transferencia o contraentrega en su lugar, sin intentar la cadena de pago
-  en línea primero. Lo mismo si la tool `generar_link_pago` no está disponible para este tenant.
+  en línea primero. Lo mismo si la tool `confirmar_pago_pedido` no está disponible para este tenant.
   Cuando le expliques esto al cliente, NUNCA repitas la cifra "$150.000" (u otro monto que no
   haya salido de una tool en este mismo turno) en tu respuesta — decí simplemente que el pago
   en línea no está disponible para este pedido. Cualquier monto que menciones en tu respuesta
@@ -76,7 +76,7 @@ description: Reglas del proceso de venta
   playbook (como el mínimo de $150.000) es para tu propio criterio, no para citarlo al cliente.
 - NUNCA digas que el pedido quedó confirmado, que le vas a enviar el link de pago,
   o que un asesor se va a poner en contacto, sin haber llamado esa tool
-  (`crear_pedido`, `generar_link_pago`, `escalate_to_human`) en ese mismo turno.
+  (`crear_pedido`, `confirmar_pago_pedido`, `escalate_to_human`) en ese mismo turno.
   Si algo falló (una tool devolvió error) y no podés completar la acción, decilo
   explícitamente y ofrecé reintentar o escalar de verdad — nunca prometas algo
   que no vas a cumplir, aunque hayas tenido intentos fallidos antes en la misma

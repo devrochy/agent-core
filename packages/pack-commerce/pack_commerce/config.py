@@ -50,7 +50,7 @@ class CRMConfig(BasePluginConfig):
     # que este valor es la política propia de pack_commerce, con un default
     # que hoy coincide con el mínimo real. Antes de esto, `crear_pedido`
     # dejaba pasar cualquier monto con pago_en_linea y el rechazo solo
-    # ocurría (si el modelo llegaba a llamarla) en generar_link_pago, ya
+    # ocurría (si el modelo llegaba a llamarla) al generar el link, ya
     # tarde para redirigir la conversación con naturalidad.
     pago_en_linea_monto_minimo: float = Field(
         default=150_000,

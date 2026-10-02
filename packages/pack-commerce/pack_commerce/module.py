@@ -77,7 +77,7 @@ _TOOL_NAME_KEY = "_tool_name"
 # vivo (tenant yopoldo, 2026-09-11): tras 2 intentos fallidos de generar_cotizacion
 # (variant_id inventado), el modelo terminó diciendo "cerré tu pedido, en un
 # momentico el asesor te pasa el link" sin haber llamado crear_pedido NI
-# generar_link_pago NI escalado de verdad -- el cliente quedaba esperando algo
+# al generar el link NI escalado de verdad -- el cliente quedaba esperando algo
 # que nunca iba a pasar. Mismo principio que _amount_guardrail, pero para
 # acciones en vez de montos.
 #
@@ -95,7 +95,7 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
             r"pedido\b(?:\W+\w+){0,3}\W+(?:confirmad\w*|cerrad\w*|cread\w*|generad\w*)",
             re.IGNORECASE,
         ),
-        {"crear_pedido", "consultar_estado_pedido"},
+        {"crear_pedido", "consultar_estado_pedido", "confirmar_pago_pedido"},
     ),
     "link_de_pago": (
         # Cualquier mención de "link de/para pago(ar)" en el texto LIBRE del
@@ -103,7 +103,7 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
         # guardrails) implica que se está anunciando -- si no llamó la tool,
         # es una promesa vacía sin importar el verbo que haya usado.
         re.compile(r"link\s+(?:de\s+pago|para\s+pagar)", re.IGNORECASE),
-        {"generar_link_pago"},
+        {"confirmar_pago_pedido"},
     ),
     "asesor_humano": (
         re.compile(
@@ -1149,19 +1149,26 @@ class CRMModule(BaseModule):
     async def _on_payment_confirmed(
         self, reference: str, provider: str, provider_reference: str, amount: float
     ) -> None:
-        await self._update_order_payment_status(reference, "pagado")
+        await self._update_order_payment_status(reference, "pagado", amount)
 
     async def _on_payment_rejected(
         self, reference: str, provider: str, provider_reference: str, amount: float
     ) -> None:
-        await self._update_order_payment_status(reference, "rechazado")
+        await self._update_order_payment_status(reference, "rechazado", amount)
 
-    async def _update_order_payment_status(self, reference: str, payment_status: str) -> None:
+    async def _update_order_payment_status(
+        self, reference: str, payment_status: str, amount: float | None = None
+    ) -> None:
         """Reacciona a eventos de `pack-payments` (ADR-0023) sin importarlo: por
-        convención, `reference` es el `public_order_number` que `crear_pedido`
-        le pasó a `generar_link_pago`. Si no matchea ninguna Order, se loggea y
-        se ignora -- pack-payments no sabe qué es una Order, la correlación es
-        responsabilidad de este lado.
+        convención, `reference` es el `public_order_number` (o su versión `-rN`)
+        que `confirmar_pago_pedido` le pasó al link. Si no matchea ninguna Order,
+        se loggea y se ignora.
+
+        Validaciones de HU-COM-01:
+        - **monto**: un `paid` con monto distinto al total NO marca el pedido
+          pagado (se alerta al negocio).
+        - **rechazo tardío**: un `rejected` sobre un pedido ya pagado no cambia
+          su estado.
         """
         tenant_id = get_current_tenant_id()
         if tenant_id is None:
@@ -1172,18 +1179,41 @@ class CRMModule(BaseModule):
         if self.id not in enabled_packs(spec):
             return
 
+        # La referencia puede venir versionada (`OC-0001-r2`): se normaliza a la
+        # base para localizar el pedido.
+        base_reference = reference.split("-r", 1)[0] if "-r" in reference else reference
+
         async with get_session() as session:
             order = (
                 await session.execute(
                     select(Order).where(
                         Order.tenant_id == tenant_id,
-                        Order.public_order_number == reference,
+                        Order.public_order_number == base_reference,
                     )
                 )
             ).scalar_one_or_none()
             if order is None:
                 log.warning("payment_event_no_matching_order", reference=reference, payment_status=payment_status)
                 return
+            # Rechazo tardío: un pedido ya pagado no vuelve atrás.
+            if payment_status == "rechazado" and order.payment_status == "pagado":
+                log.info("order_payment_rejected_after_paid", order_id=str(order.id))
+                return
+            # Monto: solo se marca pagado si coincide con el total del servidor.
+            if payment_status == "pagado" and amount is not None:
+                expected = round(float(order.total), 2)
+                received = round(float(amount), 2)
+                if abs(expected - received) > 0.01:
+                    log.warning(
+                        "order_payment_amount_mismatch",
+                        order_id=str(order.id),
+                        expected=expected,
+                        received=received,
+                    )
+                    order.status_reason = (
+                        f"pago con monto distinto al total ({received} != {expected})"
+                    )
+                    return
             order.payment_status = payment_status
             order.status_changed_at = datetime.now(UTC)
             log.info("order_payment_status_updated", order_id=str(order.id), payment_status=payment_status)
