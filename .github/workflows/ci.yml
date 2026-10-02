@@ -67,7 +67,11 @@ jobs:
 
       - name: Capas (import-linter)
         # Invariante 5: ningún pack importa de otro pack; y contratos congelados.
-        run: lint-imports
+        # `packages/pack-*/` pone cada paquete fuente (packages/pack-X/pack_x) en
+        # el path para que grimp los escanee además de `core`.
+        run: |
+          export PYTHONPATH="$(printf '%s:' packages/pack-*/ packages/contracts)"
+          lint-imports
 
       - name: Postgres del CI con PostGIS (lo exige pack-cobranza, ADR-0058)
         # El servicio arranca de `pgvector/pgvector:pg16` (sin PostGIS). El pack
