@@ -82,9 +82,12 @@ LLM_PROVIDER={llm_provider}
 LLM_API_KEY={llm_api_key}
 LLM_MODEL={llm_model}
 LLM_MODEL_REASONING={llm_model_reasoning}
+LLM_MODEL_FALLBACK={llm_model_fallback}
 LLM_BASE_URL={llm_base_url}
 LLM_MAX_TOKENS=4096
 DIFFICULTY_ROUTING=true
+LLM_THINKING_DEFAULT=false
+LLM_THINKING_REASONING=true
 
 EMBEDDING_PROVIDER={embedding_provider}
 EMBEDDING_MODEL=all-MiniLM-L6-v2
@@ -271,6 +274,7 @@ def init_command(
             llm_api_key=answers["llm_api_key"],
             llm_model=answers["llm_model"],
             llm_model_reasoning=llm_conf["reasoning_model"],
+            llm_model_fallback=llm_conf.get("fallback_model", "gpt-4o-mini"),
             llm_base_url=llm_conf["base_url"],
             embedding_provider=answers["embedding_provider"],
             verify_token=secrets.token_urlsafe(24),

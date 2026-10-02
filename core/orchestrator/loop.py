@@ -2,7 +2,7 @@
 
 Por turno (hasta MAX_AGENT_ITERATIONS vueltas):
   1. Recall de memoria (3 capas) + selección de skills + system blocks.
-  2. Difficulty routing (deepseek-chat vs deepseek-reasoner).
+  2. Difficulty routing (deepseek-flash con thinking off vs on).
   3. Llamada al LLM. Registro de tokens/costo/latencia en usage_ledger (ADR-0008).
   4. tool_use  -> ejecutar tools vía MCPHost (PluginError => auto-disable, el loop sigue).
   5. end_turn  -> guardrails -> ok? SafeExtras + respuesta final.
@@ -321,7 +321,9 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         turnos_sin_resolver_threshold=difficulty_turnos_sin_resolver_threshold,
         score_threshold=difficulty_score_threshold,
     )
-    provider = _resolved_provider(app_settings, routing.model)
+    provider = _resolved_provider(
+        app_settings, routing.model, thinking=routing.reason == "complex_signals"
+    )
     tool_schemas = to_llm_schemas(active_tools) if routing.allow_tools else None
     # v2.0.0 (ADR-0050): temperatura del tenant (clampeada -- el raw_json de
     # /admin/spec puede traer cualquier float).
@@ -936,15 +938,21 @@ def _resolved_model(app_settings: AppSettings | None, spec, env_model: str) -> s
     return env_model
 
 
-def _resolved_provider(app_settings: AppSettings | None, model: str):  # type: ignore[no-untyped-def]
-    """BYOK: la config de BD (panel) tiene prioridad sobre el .env."""
+def _resolved_provider(  # type: ignore[no-untyped-def]
+    app_settings: AppSettings | None, model: str, thinking: bool | None = None
+):
+    """BYOK: la config de BD (panel) tiene prioridad sobre el .env.
+
+    `thinking`: en DeepSeek V4, `True` para turnos de razonamiento; `False` para
+    el turno normal (el ID explícito lo encendería solo). `None` no lo envía.
+    """
     provider_key = None
     api_key = None
     if app_settings and app_settings.llm_provider:
         provider_key = app_settings.llm_provider
         if app_settings.llm_api_key_encrypted:
             api_key = get_secret_box().decrypt(app_settings.llm_api_key_encrypted)
-    return resolve_provider(provider_key=provider_key, api_key=api_key, model=model)
+    return resolve_provider(provider_key=provider_key, api_key=api_key, model=model, thinking=thinking)
 
 
 def _resolved_provider_fallback(app_settings: AppSettings | None, model: str):  # type: ignore[no-untyped-def]

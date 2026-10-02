@@ -98,7 +98,7 @@ flowchart TB
    a. Memoria: L1 historial + L2 perfil + L3 recall semántico
    b. SkillRouter: solo las skills relevantes al turno entran al prompt
    c. SystemPromptBuilder: [base, tono, voz de marca, contexto dinámico]
-   d. DifficultyRouter: deepseek-chat (default) | deepseek-reasoner (complejo sin tools)
+   d. DifficultyRouter: deepseek-flash thinking off (default) | thinking on (complejo sin tools)
    e. LLM → tool_use? → MCPHost.execute_tool() [llamada Python in-process]
       → PluginError? → auto-disable del plugin, el turno continúa
       → resultado al historial → repetir (máx 6)

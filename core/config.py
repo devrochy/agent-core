@@ -86,9 +86,17 @@ class Settings(BaseSettings):
         default="deepseek", alias="LLM_PROVIDER"
     )
     llm_api_key: str = Field(default="", alias="LLM_API_KEY")
-    llm_model: str = Field(default="deepseek-chat", alias="LLM_MODEL")
-    llm_model_reasoning: str = Field(default="deepseek-reasoner", alias="LLM_MODEL_REASONING")
+    # Modelos vigentes de DeepSeek (V4). `deepseek-chat` y `deepseek-reasoner` se
+    # discontinuaron el 2026-07-24: no usarlos, ni como respaldo (P-05/D-22).
+    llm_model: str = Field(default="deepseek-flash", alias="LLM_MODEL")
+    llm_model_reasoning: str = Field(default="deepseek-flash", alias="LLM_MODEL_REASONING")
+    # Modelo de respaldo ante error del proveedor o fallas de tools > 5 %/h.
+    llm_model_fallback: str = Field(default="gpt-4o-mini", alias="LLM_MODEL_FALLBACK")
     llm_base_url: str = Field(default="https://api.deepseek.com", alias="LLM_BASE_URL")
+    # Modo de razonamiento para modelos V4: los IDs explícitos lo activan por
+    # defecto, así que el chat normal debe apagarlo explícitamente.
+    llm_thinking_default: bool = Field(default=False, alias="LLM_THINKING_DEFAULT")
+    llm_thinking_reasoning: bool = Field(default=True, alias="LLM_THINKING_REASONING")
     llm_max_tokens: int = Field(default=4096, alias="LLM_MAX_TOKENS")
     difficulty_routing: bool = Field(default=True, alias="DIFFICULTY_ROUTING")
 

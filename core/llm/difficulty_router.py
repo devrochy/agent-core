@@ -1,12 +1,15 @@
-"""Difficulty routing: elige el modelo según la dificultad del turno.
+"""Difficulty routing: elige el modo del modelo según la dificultad del turno.
 
-Adaptación del ADR-023 de agent-sale para DeepSeek:
-- deepseek-chat     -> default. Soporta function calling. Cubre el 95% de los turnos.
-- deepseek-reasoner -> razonamiento profundo. NO soporta function calling, por lo
-  que SOLO se usa cuando el turno no requiere tools (análisis, explicaciones largas).
+Adaptación del ADR-023 de agent-sale a DeepSeek V4:
+- `deepseek-flash` (thinking desactivado) -> default. Soporta function calling.
+  Cubre el 95% de los turnos.
+- `deepseek-flash` (thinking activado) -> razonamiento profundo. Se usa cuando el
+  turno no requiere tools (análisis, explicaciones largas) para no pagar tokens
+  de razonamiento en cada respuesta.
+- `deepseek-chat`/`deepseek-reasoner` se discontinuaron el 2026-07-24 (P-05).
 
 Heurística asimétrica ("error hacia caro, no hacia barato"):
-- Se sube a reasoner ante señales REALES de dificultad.
+- Se sube a razonamiento ante señales REALES de dificultad.
 - Nunca se degrada por debajo del default.
 - Sin llamada extra a un LLM clasificador (costo cero de routing).
 """
@@ -47,8 +50,8 @@ def route_model(
 ) -> RoutingDecision:
     """Decide el modelo del turno.
 
-    `requires_tools=True` fuerza el modelo default: deepseek-reasoner no soporta
-    function calling y el agentic loop necesita tools disponibles.
+    `requires_tools=True` fuerza el modo default (sin thinking): el razonamiento
+    V4 no se usa junto con el agentic loop de tools.
 
     Los 3 umbrales son parametrizables por tenant (pedido explícito del
     usuario, ROADMAP): `AppSettings.behavior_config` en `loop.py` resuelve

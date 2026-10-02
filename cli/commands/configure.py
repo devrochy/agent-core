@@ -49,7 +49,7 @@ def tone(tenant: str = typer.Argument(..., help="Tenant (slug o UUID)")) -> None
 def llm(tenant: str = typer.Argument(..., help="Tenant (slug o UUID)")) -> None:
     """Cambia el proveedor/modelo LLM de un tenant (BYOK, se guarda cifrado en BD)."""
     provider = questionary.select("Proveedor:", choices=["deepseek", "openai", "anthropic"]).ask()
-    defaults = {"deepseek": "deepseek-chat", "openai": "gpt-4o-mini", "anthropic": "claude-haiku-4-5"}
+    defaults = {"deepseek": "deepseek-flash", "openai": "gpt-4o-mini", "anthropic": "claude-haiku-4-5"}
     model = questionary.text("Modelo:", default=defaults[provider]).ask()
     api_key = questionary.password("API Key (Enter = conservar la actual):").ask() or ""
 

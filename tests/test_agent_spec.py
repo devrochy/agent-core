@@ -32,7 +32,7 @@ def make_spec(playbooks: list[dict[str, str]] | None = None) -> AgentSpec:
             "maxLength": 500,
             "forbiddenPhrases": [],
         },
-        model={"primary": "deepseek-chat", "temperature": 0.3},
+        model={"primary": "deepseek-flash", "temperature": 0.3},
         memory={"shortTermTurns": 30},
         playbooks=playbooks if playbooks is not None else DEFAULT_PLAYBOOKS,
         tools=[],

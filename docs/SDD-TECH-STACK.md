@@ -16,8 +16,8 @@ pieza, actualiza la fila y el porqué.
 | Cache/colas | Redis 7 | RabbitMQ, Kafka, SQS | Ya se necesita para working memory; Streams + ZSet + SET NX cubren cola, debounce e idempotencia. Kafka es sobredimensionado (ADR-002 de agent-sale) |
 | Cola de mensajes | Redis Stream + consumer group | Celery para todo | El path del mensaje es latencia-crítico: Stream con XREADGROUP da control fino (re-delivery, DLQ) sin serialización Celery |
 | Cron/jobs | Celery + Beat | node-cron (agent-sale), APScheduler, Arq | Beat schedule dinámico (los plugins registran con @register_cron), workers separados del proceso web, acks_late |
-| LLM default | DeepSeek (deepseek-chat) | Claude, GPT-4o | $0.27/$1.10 por MTok con function calling nativo. Claude queda a un `.env` de distancia (BaseLLMProvider) |
-| LLM razonamiento | deepseek-reasoner | o1, Claude thinking | Mismo proveedor, misma API key. El difficulty router lo usa solo en turnos complejos sin tools (R1 no soporta function calling) |
+| LLM default | DeepSeek (deepseek-flash) | Claude, GPT-4o | $0.14/$0.28 por MTok con function calling nativo (ADR-0086). Claude queda a un `.env` de distancia (BaseLLMProvider) |
+| LLM razonamiento | deepseek-flash + thinking on | o1, Claude thinking | Mismo modelo con `thinking` explícito (ADR-0086); el router lo usa solo en turnos complejos sin tools |
 | Embeddings | sentence-transformers (local) / OpenAI (opción) | Cohere, Voyage | DeepSeek NO tiene API de embeddings (gap que dejó a agent-sale sin memoria vectorial). Local = $0 y sin API key; OpenAI para escala |
 | Panel admin | Jinja2 + Bootstrap 5 (SSR) | React SPA (agent-dashboard), HTMX | Cero build step, cero API JSON paralela. El FormGenerator emite HTML directo desde Pydantic. Un dev de plugins no escribe UI |
 | Cifrado | cryptography (Fernet) | AES-GCM manual (agent-sale), Vault | Fernet = AES-128-CBC + HMAC con API a prueba de errores. Vault es sobredimensionado para single-tenant |

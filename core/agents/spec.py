@@ -64,7 +64,7 @@ DEFAULT_SPEC: dict[str, Any] = {
         "maxLength": 500,
         "forbiddenPhrases": [],
     },
-    "model": {"primary": "deepseek-chat", "temperature": 0.3},
+    "model": {"primary": "deepseek-flash", "temperature": 0.3},
     "memory": {"shortTermTurns": 30},
     "playbooks": [
         {"name": "identidad", "description": "Identidad del asistente"},

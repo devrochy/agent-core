@@ -213,7 +213,7 @@ graph TB
   Y --> B[Plan]
 
   S --> S1["persona: asistente · tono cercano · emojis sparse · máx 500"]
-  S --> S2["model: deepseek-chat · temperature 0.3"]
+  S --> S2["model: deepseek-flash · temperature 0.3"]
   S --> S3["memory: shortTermTurns 30 (+ rag/summarize en BD)"]
   S --> S4["policies: maxToolCallsPerTurn 10 · budget 0.5 USD"]
   S --> S5["packs: [pack_commerce]"]
@@ -243,8 +243,8 @@ graph TB
 ```mermaid
 flowchart LR
   MSG[Mensaje] --> ROUTER{Difficulty router<br/>umbrales por tenant}
-  ROUTER -->|simple| CHAT[chat model<br/>deepseek-chat]
-  ROUTER -->|complejo| REASON[reasoner<br/>deepseek-reasoner]
+  ROUTER -->|simple| CHAT[chat model<br/>deepseek-flash thinking off]
+  ROUTER -->|complejo| REASON[reasoning<br/>deepseek-flash thinking on]
   CHAT --> COST[usage_ledger<br/>tokens + costo]
   REASON --> COST
   COST --> CAP{¿supera budget<br/>de la conversación?}
