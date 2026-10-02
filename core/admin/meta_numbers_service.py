@@ -88,11 +88,25 @@ async def list_numbers(
             "phone_number_id": n.phone_number_id,
             "display_phone_number": n.display_phone_number,
             "verified_name": n.verified_name,
-            "status": n.status,
+            # `PhoneNumber` no tiene columna `status` (N-18): se deriva de los
+            # campos reales que sí existen, para el API JSON del panel.
+            "status": _number_status(n),
         }
         for n in rows
     ]
     return numbers, sync_error
+
+
+def _number_status(n) -> str:  # type: ignore[no-untyped-def]
+    """Estado visible del número a partir de las columnas reales.
+
+    Prioridad: verificado > conectado > estado del nombre > 'PENDING'.
+    """
+    if (n.code_verification_status or "").upper() == "VERIFIED":
+        return "VERIFIED"
+    if n.registered:
+        return "CONNECTED"
+    return n.name_status or "PENDING"
 
 
 async def add_number(

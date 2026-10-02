@@ -159,18 +159,38 @@ async def start_or_resume_wizard(
             connection_id = connected.id
             current_step = "launch_oauth"
         else:
-            connection = MetaConnection(
-                tenant_id=tenant_id,
-                channel=channel,
-                environment=environment,
-                meta_app_id=settings.meta_app_id,
-                meta_config_id=settings.meta_config_id,
-                graph_api_version=settings.graph_api_version,
-                status="draft",
-            )
-            session.add(connection)
-            await session.flush()
-            connection_id = connection.id
+            # Reutiliza cualquier MetaConnection viva (draft/pending/degraded)
+            # del mismo tenant+canal+entorno: el índice único parcial
+            # `uq_meta_connections_tenant_app` no admite una segunda fila no
+            # borrada para la misma app. Sin esto, reiniciar un wizard vencido
+            # revienta con IntegrityError (HU-CONN-02).
+            reutilizable = (
+                await session.execute(
+                    select(MetaConnection)
+                    .where(
+                        MetaConnection.tenant_id == tenant_id,
+                        MetaConnection.channel == channel,
+                        MetaConnection.environment == environment,
+                        MetaConnection.deleted_at.is_(None),
+                    )
+                    .order_by(MetaConnection.created_at.desc())
+                )
+            ).scalars().first()
+            if reutilizable is not None:
+                connection_id = reutilizable.id
+            else:
+                connection = MetaConnection(
+                    tenant_id=tenant_id,
+                    channel=channel,
+                    environment=environment,
+                    meta_app_id=settings.meta_app_id,
+                    meta_config_id=settings.meta_config_id,
+                    graph_api_version=settings.graph_api_version,
+                    status="draft",
+                )
+                session.add(connection)
+                await session.flush()
+                connection_id = connection.id
             current_step = "select_channel"
 
         wizard = ConnectionWizard(

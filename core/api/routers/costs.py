@@ -195,9 +195,15 @@ class MetaCreditsResponse(BaseModel):
 
 
 def _credit_connections(rows) -> list[MetaCreditConnection]:
+    # `MetaConnection` no tiene columna `label` (N-18): se usa `meta_app_id`
+    # (o el business id) como nombre visible, manteniendo el campo `label` del
+    # contrato JSON que ya consume el panel.
     return [
         MetaCreditConnection(
-            id=c.id, label=c.label, channel=c.channel, business_id=c.business_id
+            id=c.id,
+            label=c.meta_app_id or c.business_id,
+            channel=c.channel,
+            business_id=c.business_id,
         )
         for c in rows
     ]
