@@ -50,3 +50,19 @@ def test_varios_cortos_divide_tambien_por_oracion() -> None:
 
 def test_estilo_desconocido_cae_al_maximo_por_defecto() -> None:
     assert len(split_for_bubbles(CINCO, "estilo_inventado")) == 3
+
+
+def test_un_mensaje_parte_solo_por_limite_tecnico() -> None:
+    """HU-ARCH-11: `un_mensaje` respeta el límite de la Cloud API (4096)."""
+    from core.gateway.message_splitter import WA_MAX_TEXT_LENGTH
+
+    largo = ("palabra " * 1000).strip()  # ~8000 chars
+    burbujas = split_for_bubbles(largo, "un_mensaje")
+    assert len(burbujas) > 1
+    assert all(len(b) <= WA_MAX_TEXT_LENGTH for b in burbujas)
+    assert " ".join(burbujas).replace("  ", " ") == largo.replace("  ", " ")
+
+
+def test_default_del_splitter_es_un_mensaje() -> None:
+    """El default del splitter es una sola burbuja (Meta cobra cada mensaje)."""
+    assert split_for_bubbles(TRES) == ["Uno.\n\nDos.\n\nTres."]

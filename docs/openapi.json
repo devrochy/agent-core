@@ -12843,6 +12843,11 @@
             "type": "string",
             "title": "Debounce Mode"
           },
+          "split_style": {
+            "type": "string",
+            "title": "Split Style",
+            "default": "un_mensaje"
+          },
           "guardrail_max_retries": {
             "type": "integer",
             "title": "Guardrail Max Retries"
@@ -12980,6 +12985,11 @@
             "type": "string",
             "title": "Debounce Mode",
             "default": "natural"
+          },
+          "split_style": {
+            "type": "string",
+            "title": "Split Style",
+            "default": "un_mensaje"
           },
           "guardrail_max_retries": {
             "type": "integer",

@@ -48,6 +48,7 @@ class IdentitySettings(BaseModel):
     brand_voice_warning: bool = False  # True si quedó vacía (#158): el asistente no tiene voz de marca
     tono: str
     debounce_mode: str
+    split_style: str = "un_mensaje"
     guardrail_max_retries: int
     disabled_guardrails: list[str]
     available_guardrails: list[str]
@@ -73,6 +74,7 @@ class IdentityUpdate(BaseModel):
     brand_voice: str = ""
     tono: str = "calido"
     debounce_mode: str = "natural"
+    split_style: str = "un_mensaje"
     guardrail_max_retries: int = 1
     disabled_guardrails: list[str] = []
     difficulty_long_message_threshold: int = LONG_MESSAGE_THRESHOLD
@@ -155,6 +157,7 @@ def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) 
         brand_voice_warning=not bool(((app_settings.brand_voice if app_settings else "") or "").strip()),
         tono=behavior.get("tono", "calido"),
         debounce_mode=behavior.get("debounce_mode", "natural"),
+        split_style=behavior.get("split_style", "un_mensaje"),
         guardrail_max_retries=int(behavior.get("guardrail_max_retries", 1) or 0),
         disabled_guardrails=list(behavior.get("disabled_guardrails", []) or []),
         available_guardrails=available,
@@ -239,6 +242,9 @@ async def save_identity(
         behavior.update(
             tono=payload.tono,
             debounce_mode=payload.debounce_mode,
+            split_style=payload.split_style
+            if payload.split_style in ("un_mensaje", "pocos_cortos", "varios_cortos")
+            else "un_mensaje",
             guardrail_max_retries=max(0, payload.guardrail_max_retries),
             disabled_guardrails=sorted(set(available) & set(payload.disabled_guardrails)),
             difficulty_long_message_threshold=max(
