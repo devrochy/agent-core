@@ -14,12 +14,19 @@ su decisión. Recibe el input del hook como JSON por stdin y responde por stdout
 Solo deniega o pregunta por la tool call puntual, nunca corta el turno. Ante un
 input que no puede interpretar, deja pasar (fail-open): la guardia no debe
 romper la sesión.
+
+Modo archivos (lo usa pre-commit): `guards.py --migraciones <rutas…>` aplica la
+misma regla de migraciones sobre archivos en disco, comparando contra su versión
+en HEAD, y sale con 1 si alguno no cumple.
 """
 
 from __future__ import annotations
 
+import difflib
 import json
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -77,6 +84,13 @@ REQUIRED = (
     ),
 )
 
+REMEDY = (
+    "Toda tabla de negocio lleva tenant_id + RLS habilitada y FORZADA + policy "
+    "tenant_isolation con nullif en USING y WITH CHECK (skill db-migration).\n"
+    "Si es una tabla de sistema sin RLS, decláralo en la docstring "
+    '("Tabla de SISTEMA (sin RLS): <motivo>, ADR-00NN") y otorga grants mínimos a app_runtime.'
+)
+
 
 def _decide(decision: str, message: str) -> None:
     output = {
@@ -113,7 +127,11 @@ def check_bash(tool_input: dict) -> None:
                 "Las operaciones sobre producción se ejecutan a mano, nunca desde una sesión."
             )
 
-    if ENV_FILE_RE.search(command) and not ENV_EXAMPLE_RE.search(command) and ENV_READ_RE.search(command):
+    if (
+        ENV_FILE_RE.search(command)
+        and not ENV_EXAMPLE_RE.search(command)
+        and ENV_READ_RE.search(command)
+    ):
         deny(
             "BLOQUEADO: el comando lee un archivo `.env*` (secretos).\n"
             "Usa `.env.example` para los nombres de las variables; los valores reales no "
@@ -210,14 +228,68 @@ def check_migration_write(tool_name: str, tool_input: dict, cwd: str | None) -> 
     deny(
         f"BLOQUEADO: la migración {file_path} crea tablas y le falta: "
         + "; ".join(missing)
-        + ".\nToda tabla de negocio lleva tenant_id + RLS habilitada y FORZADA + policy "
-        "tenant_isolation con nullif en USING y WITH CHECK (skill db-migration).\n"
-        "Si es una tabla de sistema sin RLS, decláralo en la docstring "
-        '("Tabla de SISTEMA (sin RLS): <motivo>, ADR-00NN") y otorga grants mínimos a app_runtime.'
+        + ".\n"
+        + REMEDY
     )
 
 
+# ---------------------------------------------------------------- modo archivos
+
+
+def _committed(path: str) -> str:
+    """Contenido del archivo en HEAD ("" si es nuevo o no hay git)."""
+    rel = os.path.relpath(path)
+    try:
+        result = subprocess.run(
+            ["git", "show", f"HEAD:./{rel}"], capture_output=True, text=True, check=False
+        )
+    except OSError:
+        return ""
+    return result.stdout if result.returncode == 0 else ""
+
+
+def _added_lines(before: str, after: str) -> str:
+    diff = difflib.unified_diff(before.splitlines(), after.splitlines(), lineterm="", n=0)
+    return "\n".join(
+        line[1:] for line in diff if line.startswith("+") and not line.startswith("+++")
+    )
+
+
+def migration_file_problems(path: str) -> list[str]:
+    """Lo que le falta a una migración en disco, con el mismo criterio que los Edit.
+
+    Un archivo nuevo debe cumplir. Uno que ya estaba en HEAD sin cumplir solo falla
+    si el cambio agrega una tabla o pierde algo que el archivo sí tenía.
+    """
+    after = _read(path, None)
+    missing = missing_isolation(after)
+    if not missing:
+        return []
+    before = _committed(path)
+    if before and not CREATES_TABLE_RE.search(_added_lines(before, after)):
+        if not set(missing) - set(missing_isolation(before)):
+            return []
+    return missing
+
+
+def check_files(paths: list[str]) -> int:
+    failures = 0
+    for path in paths:
+        if not _is_migration(path):
+            continue
+        missing = migration_file_problems(path)
+        if missing:
+            failures += 1
+            print(f"{path}: crea tablas y le falta: {'; '.join(missing)}.", file=sys.stderr)
+    if failures:
+        print(REMEDY, file=sys.stderr)
+    return 1 if failures else 0
+
+
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "--migraciones":
+        sys.exit(check_files(sys.argv[2:]))
+
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):

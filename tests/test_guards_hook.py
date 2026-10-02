@@ -1,12 +1,14 @@
 """Hook `.claude/hooks/guards.py`: guardas de producción y de migraciones sin RLS.
 
 Se ejecuta como lo hace Claude Code (y el plugin de OpenCode): JSON por stdin,
-decisión por stdout. Sin salida = la tool call pasa.
+decisión por stdout. Sin salida = la tool call pasa. El modo `--migraciones` es el
+que usa pre-commit sobre los archivos en stage.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -147,3 +149,55 @@ def test_fail_open(raw: str) -> None:
         [sys.executable, str(HOOK)], input=raw, capture_output=True, text=True, check=True
     )
     assert proc.stdout.strip() == ""
+
+
+def _git(cwd: Path, *args: str) -> None:
+    identity = {
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "test@example.com",
+    }
+    subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, env={**os.environ, **identity}
+    )
+
+
+def check_files(cwd: Path, *paths: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(HOOK), "--migraciones", *paths],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_files_mode_compares_against_head(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q")
+    versions = tmp_path / "alembic" / "versions"
+    versions.mkdir(parents=True)
+    legacy = versions / "0003_legado.py"
+    legacy.write_text(MIGRATION_OK.replace(FORCE_LINE, ""))  # ya no cumplía
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "legado")
+    rel = "alembic/versions/0003_legado.py"
+
+    # Una migración vieja sin cambios, o con un retoque menor, pasa.
+    assert check_files(tmp_path, rel).returncode == 0
+    legacy.write_text(legacy.read_text().replace("def downgrade():", "def downgrade():  # x"))
+    assert check_files(tmp_path, rel).returncode == 0
+    # Agregarle una tabla, no.
+    legacy.write_text(legacy.read_text().replace("def downgrade():", TABLE + "def downgrade():"))
+    result = check_files(tmp_path, rel)
+    assert result.returncode == 1
+    assert "force row level security" in result.stderr
+
+    # Un archivo nuevo tiene que cumplir completo.
+    (versions / "0004_ok.py").write_text(MIGRATION_OK)
+    assert check_files(tmp_path, "alembic/versions/0004_ok.py").returncode == 0
+    (versions / "0005_sin_force.py").write_text(MIGRATION_OK.replace(FORCE_LINE, ""))
+    assert check_files(tmp_path, "alembic/versions/0005_sin_force.py").returncode == 1
+
+    # Lo que no es una migración se ignora.
+    (tmp_path / "modulo.py").write_text(TABLE)
+    assert check_files(tmp_path, "modulo.py").returncode == 0
