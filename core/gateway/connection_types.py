@@ -83,6 +83,9 @@ _META_SCHEMA: dict[str, Any] = {
             "writeOnly": True,
         },
     },
+    # HU-ARCH-05: sin `app_secret` el webhook no puede verificar la firma y el
+    # alta se rechaza (fail-closed). Vienen del wizard de Embedded Signup.
+    "required": ["phone_number_id", "app_secret"],
 }
 
 _EMAIL_SCHEMA: dict[str, Any] = {

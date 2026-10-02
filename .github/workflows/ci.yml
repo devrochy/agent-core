@@ -42,6 +42,8 @@ jobs:
       TOKEN_MASTER_KEYS: '{"k1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}'
       TOKEN_ACTIVE_KEY_ID: k1
       APP_SECRET_KEY: ci-only-not-a-secret-app-key
+      # App Secret de Meta de prueba (HMAC del webhook). No es un secreto real.
+      WHATSAPP_APP_SECRET: ci-meta-app-secret-not-real
       APP_ENV: development
     steps:
       - uses: actions/checkout@v4
