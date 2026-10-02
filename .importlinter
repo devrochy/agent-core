@@ -1,5 +1,8 @@
 [importlinter]
 root_package = core
+# Los packs viven en paquetes separados (instalados con `pip install -e`); sin esto
+# grimp no los resuelve y solo miraría el árbol de `core`.
+include_external_packages = True
 
 # Invariante 5: ningún pack importa de otro pack. Los packs solo dependen del core
 # y se coordinan por registros del core (payment_registry, subscription_registry)
