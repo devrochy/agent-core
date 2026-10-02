@@ -113,6 +113,10 @@ class Settings(BaseSettings):
     # --- WhatsApp (Meta Cloud API) ---
     whatsapp_verify_token: str = Field(default="", alias="WHATSAPP_VERIFY_TOKEN")
     whatsapp_app_secret: str = Field(default="", alias="WHATSAPP_APP_SECRET")
+    # Webhook fail-closed (HU-ARCH-05): sin `app_secret` resoluble, un POST se
+    # rechaza con 401. En test se puede permitir explícitamente sin firma, con
+    # aviso en el log. Nunca activarlo en producción.
+    webhook_allow_unsigned: bool = Field(default=False, alias="WEBHOOK_ALLOW_UNSIGNED")
     whatsapp_access_token: str = Field(default="", alias="WHATSAPP_ACCESS_TOKEN")
     whatsapp_phone_number_id: str = Field(default="", alias="WHATSAPP_PHONE_NUMBER_ID")
 

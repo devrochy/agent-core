@@ -164,7 +164,13 @@ async def receive_whatsapp(request: Request) -> Response:
     # La firma puede venir con la app del framework (`.env`) o con la del negocio
     # (BYOK / conexión manual): se prueban los secretos aplicables.
     tenant_id, secretos = await _tenant_y_secretos(payload)
-    if secretos:
+    if not secretos:
+        # Sin ningún secreto resoluble, fail-closed (HU-ARCH-05): no se procesa
+        # un mensaje sin firma verificable salvo el escape de test.
+        rechazo = await _fail_closed_sin_secreto(tenant_id=tenant_id)
+        if rechazo is not None:
+            return rechazo
+    else:
         from core.gateway.webhook_verify import verify_signature
 
         firma = headers.get("x-hub-signature-256", "")
@@ -195,6 +201,32 @@ async def _alert_on_invalid_signature(meta_app_id: str) -> None:
         )
 
 
+def _unsigned_allowed() -> bool:
+    """`WEBHOOK_ALLOW_UNSIGNED=true` (solo entornos de prueba) permite procesar
+    sin firma, con aviso. En producción nunca se permite (fail-closed)."""
+    settings = get_settings()
+    if settings.webhook_allow_unsigned:
+        if settings.app_env == "production":
+            log.error("webhook_allow_unsigned_en_produccion")
+            return False
+        log.warning("webhook_sin_firma_permitido_por_flag")
+        return True
+    return False
+
+
+async def _fail_closed_sin_secreto(*, tenant_id: uuid.UUID | None) -> Response | None:
+    """Sin `app_secret` resoluble, fail-closed: 401, no se encola y se alerta.
+
+    Devuelve la respuesta 401 si hay que rechazar; `None` si se puede seguir
+    (existe secreto, o el escape de test está activo).
+    """
+    if _unsigned_allowed():
+        return None
+    log.error("webhook_sin_secreto_fail_closed", tenant_id=str(tenant_id) if tenant_id else None)
+    await _alert_on_invalid_signature(get_settings().meta_app_id or "default")
+    return Response(status_code=401)
+
+
 @router.post("/whatsapp/{slug}")
 async def receive_whatsapp_tenant(request: Request, slug: str) -> Response:
     """Webhook por tenant: `/webhooks/whatsapp/<slug>`. El slug identifica al
@@ -220,7 +252,12 @@ async def receive_whatsapp_tenant(request: Request, slug: str) -> Response:
         from core.gateway.connections import resolve_effective_app_secret
 
         app_secret = await resolve_effective_app_secret(tenant_id)
-        if app_secret:
+        if not app_secret:
+            # Sin secreto para este tenant, fail-closed (HU-ARCH-05).
+            rechazo = await _fail_closed_sin_secreto(tenant_id=tenant_id)
+            if rechazo is not None:
+                return rechazo
+        else:
             from core.gateway.webhook_verify import verify_signature
 
             if not verify_signature(raw_body, headers.get("x-hub-signature-256", ""), app_secret):
