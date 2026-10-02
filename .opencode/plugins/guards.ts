@@ -1,48 +1,62 @@
 import type { Plugin } from "@opencode-ai/plugin"
+import { spawnSync } from "node:child_process"
+import { join } from "node:path"
 
-const PROD_PATTERNS = ["PROD_DATABASE_URL", "prod.supabase.co", "--force", "drop database", "truncate "]
+// Las reglas viven en UN solo lugar: `.claude/hooks/guards.py` (hook PreToolUse de
+// Claude Code). Este plugin traduce el evento de OpenCode al formato de ese hook,
+// ejecuta el script y aplica su decisión. Para cambiar una regla, se cambia allá.
 
-const isMigrationSql = (p: string) => /\.sql$/i.test(p) && /migrations/i.test(p)
+const TOOL_NAMES: Record<string, string> = { bash: "Bash", write: "Write", edit: "Edit" }
 
-const block = (message: string): never => {
-  throw new Error(message)
+type HookOutput = {
+  hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string }
 }
 
-export const GuardsPlugin: Plugin = async () => {
+export const GuardsPlugin: Plugin = async ({ directory }) => {
+  const root = directory ?? process.cwd()
+  const script = join(root, ".claude", "hooks", "guards.py")
+
   return {
     "tool.execute.before": async (input, output) => {
-      if (input.tool === "bash") {
-        const cmd = String(output.args?.command ?? "")
-        for (const pattern of PROD_PATTERNS) {
-          if (cmd.toLowerCase().includes(pattern.toLowerCase())) {
-            block(
-              `BLOQUEADO: el comando contiene '${pattern}'.\n` +
-                "Las operaciones sobre producción se ejecutan a mano, nunca desde una sesión.",
-            )
-          }
-        }
+      const toolName = TOOL_NAMES[input.tool]
+      if (!toolName) return
+
+      const args = output.args ?? {}
+      const toolInput =
+        toolName === "Bash"
+          ? { command: args.command }
+          : {
+              file_path: args.filePath,
+              content: args.content,
+              old_string: args.oldString,
+              new_string: args.newString,
+              replace_all: args.replaceAll,
+            }
+
+      const result = spawnSync("python3", [script], {
+        input: JSON.stringify({ tool_name: toolName, tool_input: toolInput, cwd: root }),
+        encoding: "utf8",
+        timeout: 10_000,
+      })
+      // Fail-open, igual que el hook: si el script no responde, no se bloquea.
+      if (result.error || !result.stdout?.trim()) return
+
+      let decision: HookOutput
+      try {
+        decision = JSON.parse(result.stdout) as HookOutput
+      } catch {
         return
       }
-
-      if (input.tool === "write" || input.tool === "edit") {
-        const filePath = String(output.args?.filePath ?? "")
-        if (!isMigrationSql(filePath)) return
-        if (/\.down\.sql$/i.test(filePath)) return
-
-        const content = JSON.stringify(output.args ?? {})
-        if (!content.toLowerCase().includes("enable row level security")) {
-          block(
-            `BLOQUEADO: la migración ${filePath} no habilita RLS.\n` +
-              "Toda tabla de negocio requiere: alter table <t> enable row level security;\n" +
-              "más una policy de aislamiento por tenant_id. Ver .opencode/skills/db-migration.",
-          )
-        }
-        if (!content.toLowerCase().includes("tenant_id")) {
-          block(
-            `BLOQUEADO: la migración ${filePath} no menciona tenant_id.\n` +
-              "Si es intencional (tabla de sistema), documéntalo en un ADR y usa .down.sql.",
-          )
-        }
+      const verdict = decision.hookSpecificOutput
+      if (verdict?.permissionDecision === "deny") {
+        throw new Error(verdict.permissionDecisionReason ?? "BLOQUEADO por .claude/hooks/guards.py")
+      }
+      if (verdict?.permissionDecision === "ask") {
+        // Un plugin de OpenCode no puede pedir confirmación: se bloquea y lo corre el humano.
+        throw new Error(
+          `${verdict.permissionDecisionReason ?? "Requiere confirmación humana."}\n` +
+            "En OpenCode esta guarda no puede preguntar: si corresponde, ejecútalo a mano.",
+        )
       }
     },
   }
