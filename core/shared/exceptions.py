@@ -21,6 +21,48 @@ class PluginError(AgentCoreError):
         super().__init__(f"[{plugin_id}] {message}")
 
 
+class BusinessError(AgentCoreError):
+    """Rechazo de NEGOCIO de una tool (monto inválido, dato faltante, mínimo del
+    proveedor): es un resultado controlado, NO una falla del pack.
+
+    El host la convierte en `{"error": <mensaje>}` y el pack SIGUE habilitado
+    (HU-ARCH-18, D-SPEC-02-1). Solo las fallas reales (una excepción que no sea
+    `BusinessError`) disparan el auto-deshabilitado (ADR-0024).
+
+    Subclases nombradas por dominio para que el host pueda decidir y para que el
+    mensaje sea accionable. Acepta `escalate=True` para pedir relevo humano.
+    """
+
+    def __init__(self, message: str, *, escalate: bool = False, plugin_id: str | None = None,
+                 code: str | None = None) -> None:
+        self.message = message
+        self.escalate = escalate
+        self.plugin_id = plugin_id
+        self.code = code
+        super().__init__(message)
+
+    def as_result(self) -> dict:
+        """Resultado controlado que ve el LLM (nunca la excepción cruda)."""
+        out: dict = {"error": self.message}
+        if self.code:
+            out["status"] = self.code
+        if self.escalate:
+            out["escalate"] = True
+        return out
+
+
+class ValidationError(BusinessError):
+    """Datos de entrada inválidos o incompletos (no es una falla del sistema)."""
+
+
+class PaymentCapabilityError(BusinessError):
+    """Rechazo de NEGOCIO de una capacidad de pago (monto mínimo, config faltante)."""
+
+
+class SubscriptionError(BusinessError):
+    """Rechazo de NEGOCIO del dominio de suscripciones."""
+
+
 class PluginConfigError(PluginError):
     """La configuración del plugin es inválida o está incompleta."""
 

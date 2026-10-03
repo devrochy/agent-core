@@ -95,3 +95,4 @@ Se crean con `/adr`.
 | [0085](0085-persistencia-artefactos-tenant.md) | Persistencia de los artefactos de tenant en despliegue | aceptado |
 | [0086](0086-modelos-deepseek-vigentes.md) | Modelos DeepSeek vigentes (V4): `deepseek-flash` con thinking explícito (supersede parcial de ADR-003) | aceptado |
 | [0087](0087-camino-del-dinero-en-comercio.md) | Camino del dinero en comercio: total del servidor, link versionado y webhook validado (HU-COM-01) | aceptado |
+| [0088](0088-error-de-negocio-no-apaga-packs.md) | Un error de negocio no cuenta como falla de salud (enmienda ADR-0024, HU-ARCH-18) | aceptado |

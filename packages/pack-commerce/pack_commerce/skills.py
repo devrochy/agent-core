@@ -93,6 +93,19 @@ def _money(value: Any, symbol: str = "$") -> str:
     return f"{symbol}{_float(value):,.0f}"
 
 
+def _safe_format(template: str, default: str, **kwargs: Any) -> str:
+    """`template.format(**kwargs)`: si la plantilla del negocio tiene una
+    variable inexistente, devuelve `default` y avisa, sin que la tool falle
+    (HU-ARCH-18: una plantilla mal editada no apaga el comercio)."""
+    if not template:
+        return default
+    try:
+        return template.format(**kwargs)
+    except (KeyError, IndexError, ValueError):
+        log.warning("plantilla_mensaje_invalida", template=template[:80])
+        return default
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -1337,8 +1350,15 @@ class OrderSkill(BaseSkill):
             transfer_block = await _transfer_safe_append()
             template = getattr(config, "order_confirmed_transfer_message", "") or ""
             if transfer_block:
-                message = template.format(
-                    public_order_number=public_order_number, transfer_block=transfer_block
+                default = (
+                    f"Tu pedido {public_order_number} quedó confirmado por transferencia.\n\n"
+                    f"{transfer_block}"
+                )
+                message = _safe_format(
+                    template,
+                    default,
+                    public_order_number=public_order_number,
+                    transfer_block=transfer_block,
                 )
             else:
                 message = (
@@ -1349,7 +1369,12 @@ class OrderSkill(BaseSkill):
         else:
             symbol = getattr(config, "currency_symbol", "$") or "$"
             template = getattr(config, "order_confirmed_message", "") or ""
-            result["_safe_append"] = template.format(
+            default = (
+                f"Tu pedido {public_order_number} quedó confirmado por {_money(quote.total, symbol)}."
+            )
+            result["_safe_append"] = _safe_format(
+                template,
+                default,
                 public_order_number=public_order_number,
                 total=_money(quote.total, symbol),
             )

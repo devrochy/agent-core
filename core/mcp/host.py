@@ -27,7 +27,7 @@ from core.mcp.types import (
     ToolContext,
 )
 from core.shared.events import ON_TOOL_EXECUTED, EventHandler, event_bus
-from core.shared.exceptions import PluginError
+from core.shared.exceptions import BusinessError, PluginError
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
@@ -146,6 +146,10 @@ class MCPHost:
 
         try:
             result = await tool.handler(arguments, context)
+        except BusinessError as exc:
+            # Rechazo de negocio (HU-ARCH-18): resultado controlado, el pack
+            # SIGUE habilitado. Nunca se convierte en PluginError.
+            result = exc.as_result()
         except PluginError:
             raise
         except Exception as exc:
