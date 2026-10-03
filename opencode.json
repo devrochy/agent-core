@@ -1,5 +1,11 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "references": {
+    "docs": {
+      "path": "~/Proyectos/solvershub/solvershub-docs",
+      "description": "Plan SDD de SolversHub: HU, specs, decisiones y bitácora. Úsalo al trabajar una HU con la skill ejecutar-hu."
+    }
+  },
   "permission": {
     "read": {
       "*": "allow",
