@@ -101,10 +101,18 @@ jobs:
         run: pytest tests/integration -q
 
       - name: Gate de evals (subconjunto crítico)
+        # Los runs de Dependabot no reciben los secretos de Actions, así que ahí no
+        # hay LLM_API_KEY: los evals se saltan y se avisa (paso siguiente). Corren
+        # igual en el push a `develop` después del merge y en el nightly.
+        if: github.actor != 'dependabot[bot]'
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         # Camino feliz + manipulación + escalamiento: las regresiones que importan.
         run: python evals/runner.py "06,07,08,21,22,23,24,25,26"
+
+      - name: Gate de evals no ejecutado (Dependabot)
+        if: github.actor == 'dependabot[bot]'
+        run: echo "::notice title=Evals no ejecutados::Dependabot no tiene LLM_API_KEY. Corren en el push a develop después del merge y en el nightly."
 
   # Escaneo de secretos sobre la historia (falla si aparece una credencial real).
   # Las claves de prueba del repo están allowlisteadas en `.gitleaks.toml`.
