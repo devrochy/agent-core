@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from sqlalchemy import select
 
@@ -116,6 +116,12 @@ class SubscriptionsModule(BaseModule):
     name = "Suscripciones"
     version = "0.1.0"
     description = "Suscripción de cliente final activada por pago de un plan (ADR-0083)"
+    display_name = "Suscripciones"
+    category = "Cobros"
+    min_plan = "basic"
+    required_connections: ClassVar[list[str]] = ["pack_payments"]
+    action_summary: ClassVar[list[str]] = ["Cobrar el período", "Enviar link", "Gestionar estado"]
+    setup_guide = "Define tus planes con periodicidad y activa los cobros recurrentes."
     requires_config = True
     config_schema = SubscriptionConfig
     declared_skills: list[type] = [SubscriptionsSkill]  # noqa: RUF012

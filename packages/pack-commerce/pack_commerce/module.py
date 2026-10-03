@@ -15,7 +15,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -1048,6 +1048,11 @@ class CRMModule(BaseModule):
     name = "CRM"
     version = "2.0.0"
     description = "Leads, catálogo (menú), promociones y pedidos para el negocio"
+    display_name = "Comercio"
+    category = "Ventas"
+    min_plan = "basic"
+    action_summary: ClassVar[list[str]] = ["Cotizar", "Tomar pedidos", "Aplicar promociones", "Gestionar leads"]
+    setup_guide = "Carga tu catálogo (CSV o a mano) y define cómo cierras pedidos y cobras."
     requires_config = True
     config_schema = CRMConfig
     admin_menu: list[dict[str, str]] = [  # noqa: RUF012

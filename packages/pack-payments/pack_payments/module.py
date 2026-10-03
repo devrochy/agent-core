@@ -10,7 +10,7 @@ pago sin importarlo.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from fastapi import APIRouter, Request
 from sqlalchemy import select
@@ -117,6 +117,11 @@ class PaymentsModule(BaseModule):
     name = "Pagos (Wompi)"
     version = "0.1.0"
     description = "Links de pago en línea con confirmación automática por webhook"
+    display_name = "Pagos en línea"
+    category = "Cobros"
+    min_plan = "basic"
+    action_summary: ClassVar[list[str]] = ["Generar links de pago", "Confirmar pagos por webhook"]
+    setup_guide = "Configura tus llaves de Wompi (sandbox o producción)."
     requires_config = True
     config_schema = PaymentsConfig
     admin_router = admin_router

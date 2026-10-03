@@ -15281,6 +15281,47 @@
               }
             ],
             "title": "Tenant Health Error"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name",
+            "default": ""
+          },
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "default": ""
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          },
+          "required_connections": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Required Connections",
+            "default": []
+          },
+          "min_plan": {
+            "type": "string",
+            "title": "Min Plan",
+            "default": "free"
+          },
+          "action_summary": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Action Summary",
+            "default": []
+          },
+          "setup_guide": {
+            "type": "string",
+            "title": "Setup Guide",
+            "default": ""
           }
         },
         "type": "object",

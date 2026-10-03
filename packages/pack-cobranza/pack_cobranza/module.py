@@ -9,7 +9,7 @@ Préstamo. Aislamiento multi-tenant (ADR-0059): 1 tenant = 1 propietario.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 # Importar `jobs` a nivel de módulo registra los `@register_cron` en Celery
 # (worker y beat) apenas se escanea el pack -- no dentro de `on_activate()`.
@@ -41,6 +41,11 @@ class CobranzaModule(BaseModule):
     name = "Cobranza"
     version = "0.3.0"
     description = "Carteras, clientes, préstamos y negociación de cobranza por WhatsApp"
+    display_name = "Cobranza"
+    category = "Cobros"
+    min_plan = "premium"
+    action_summary: ClassVar[list[str]] = ["Consultar saldo y mora", "Registrar pagos y promesas", "Cobrar en campo"]
+    setup_guide = "Crea tus carteras y clientes; los gestores usan la app de campo."
     requires_config = True
     config_schema = CobranzaConfig
     # Navegación por secciones (ADR-0061). El propietario ES el tenant (ADR-0062),

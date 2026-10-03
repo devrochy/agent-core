@@ -43,6 +43,14 @@ class PluginSummary(BaseModel):
     has_config: bool
     enabled_for_tenant: bool
     tenant_health_error: str | None
+    # Catálogo de habilidades (HU-FWK-04).
+    display_name: str = ""
+    category: str = ""
+    description: str = ""
+    required_connections: list[str] = []
+    min_plan: str = "free"
+    action_summary: list[str] = []
+    setup_guide: str = ""
 
 
 class PluginConfigResponse(BaseModel):
@@ -122,6 +130,13 @@ async def list_plugins(
                 has_config=module.config_schema is not None,
                 enabled_for_tenant=module.id in enabled,
                 tenant_health_error=state.error_message if state else None,
+                display_name=module.display_name or module.name or module.id,
+                category=module.category,
+                description=module.description,
+                required_connections=list(module.required_connections),
+                min_plan=module.min_plan,
+                action_summary=list(module.action_summary),
+                setup_guide=module.setup_guide,
             )
         )
     return result

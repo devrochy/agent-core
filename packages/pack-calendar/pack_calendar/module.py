@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from fastapi import APIRouter
 
@@ -113,6 +113,12 @@ class GoogleCalendarModule(BaseModule):
     name = "Calendario y citas"
     version = "2.1.0"
     description = "Agendamiento con agenda interna (sin Google) o Google Calendar (ADR-0084)"
+    display_name = "Agenda"
+    category = "Agenda"
+    min_plan = "free"
+    required_connections: ClassVar[list[str]] = ["google_calendar"]
+    action_summary: ClassVar[list[str]] = ["Consultar disponibilidad", "Agendar citas", "Recordatorios"]
+    setup_guide = "Define tu horario de atención y los tipos de cita (o conecta Google Calendar)."
     requires_config = True
     config_schema = CalendarConfig
     # Submenú al habilitar el pack (ADR-0061/0063).

@@ -23,7 +23,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel
 
@@ -208,6 +208,24 @@ class BaseModule(ABC):
     description: str = ""
     requires_config: bool = True  # False = se activa sin formulario (ej. plugins internos)
     config_schema: type[BasePluginConfig] | None = None
+
+    # --- Catálogo de habilidades (HU-FWK-04, SPEC-16) ---
+    # Nombre visible al cliente (glosario: "habilidad", no "plugin"/"pack"). Si
+    # falta, el catálogo cae a `name`.
+    display_name: str = ""
+    # Categoría del catálogo (p. ej. "Ventas", "Cobranza", "Agenda").
+    category: str = ""
+    # Conexiones/tipos que la habilidad necesita para funcionar (ADR-0072), ej.
+    # ["whatsapp_meta", "google_calendar"]. Se muestran como requisitos.
+    required_connections: ClassVar[list[str]] = []
+    # Plan mínimo en el que está disponible (código de `core/billing/plans.py`),
+    # ej. "free" | "basic" | "premium" | "empresarial".
+    min_plan: str = "free"
+    # Resumen de lo que hace, en una frase por acción (para la tarjeta del catálogo).
+    action_summary: ClassVar[list[str]] = []
+    # Guía de configuración breve (markdown corto). La guía extensa vive en
+    # `TENANTS_ROOT`/playbooks (HU-UX-05).
+    setup_guide: str = ""
 
     # Rutas del panel admin que el plugin aporta (aparecen en el menú lateral al
     # activarse). Claves opcionales (ADR-0061):
