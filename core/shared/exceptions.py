@@ -66,6 +66,11 @@ class SubscriptionError(BusinessError):
 class PluginConfigError(PluginError):
     """La configuración del plugin es inválida o está incompleta."""
 
+    def __init__(self, plugin_id: str, message: str, fields: dict[str, str] | None = None) -> None:
+        super().__init__(plugin_id, message)
+        # Errores por campo (HU-FWK-08): el API los muestra junto a cada control.
+        self.fields = fields or {}
+
 
 class LLMProviderError(AgentCoreError):
     """Fallo de comunicación o respuesta inválida del proveedor LLM."""
