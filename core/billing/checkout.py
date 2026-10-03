@@ -65,7 +65,9 @@ async def start_subscription(plan_id: str) -> str | None:
     # El link se crea ANTES de persistir el pago: si la red falla no queda una
     # fila "pendiente" huérfana; si el link existe, el webhook siempre encontrará
     # la fila por `provider_reference` (evita cobro sin activación).
-    link = await provider.create_payment_link(reference=reference, amount_cop=plan.price_cop)
+    link = await provider.create_payment_link(
+        reference=reference, amount_cop=plan.price_cop, plan_name=plan.name
+    )
 
     async with tenant_scope(tenant_id):
         async with get_session() as session:

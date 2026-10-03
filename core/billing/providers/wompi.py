@@ -65,7 +65,8 @@ class WompiBillingProvider(BaseBillingProvider):
         self.base_url = SANDBOX_BASE_URL if sandbox else PRODUCTION_BASE_URL
 
     async def create_payment_link(
-        self, *, reference: str, amount_cop: float, expires_in_hours: int = 24
+        self, *, reference: str, amount_cop: float, expires_in_hours: int = 24,
+        plan_name: str = "",
     ) -> PaymentLink:
         if amount_cop < MIN_AMOUNT_COP:
             # Chequeo ANTES de la red: Wompi va a rechazar esto. Mensaje
@@ -76,9 +77,12 @@ class WompiBillingProvider(BaseBillingProvider):
             )
         amount_in_cents = round(amount_cop * 100)
         expires_at = (datetime.now(UTC) + timedelta(hours=expires_in_hours)).isoformat()
+        # Nombre visible al cliente: el plan y "SolversHub", NUNCA un nombre
+        # técnico (HU-REP-04).
+        visible_plan = plan_name.strip() or "plan"
         body = {
-            "name": f"Suscripción {reference}",
-            "description": f"Plan agent-core ({reference})",
+            "name": f"{visible_plan} · SolversHub",
+            "description": f"Suscripción a SolversHub — plan {visible_plan}",
             "single_use": True,
             "collect_shipping": False,  # Wompi lo exige (422 real si falta)
             "currency": "COP",
