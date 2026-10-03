@@ -1,6 +1,17 @@
 # agent-core
 
-Framework **multi-tenant de agentes IA**: un solo código base sirve a todos tus
+> **Un tema, un dueño.** Este repo es el **motor multi-tenant** (runtime, API
+> `/api/v1`, packs). La planificación vigente vive en
+> [`solvershub-docs`](https://github.com/devrochy/solvershub-docs).
+
+| Tema | Dueño |
+|---|---|
+| Planificación, backlog, decisiones | `solvershub-docs` |
+| Motor multi-tenant, API, packs | **este repo** (GitHub `agent-core`) |
+| Panel de administración | `solvershub-panel` |
+| App de campo (cobranza) | `solvershub-apk` |
+| Sitio público y formularios | `solvershub-landing` |
+| Legal, comercial, runbooks | `solvershub-comercial` |Framework **multi-tenant de agentes IA**: un solo código base sirve a todos tus
 clientes. Cada cliente es un **tenant** con su propio asistente (`AgentSpec`),
 aislado por `tenant_id` + RLS (ADR-0001). Cero forks, cero código por cliente,
 cero prompts en código.
