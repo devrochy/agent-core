@@ -120,6 +120,12 @@ class AppSettings(Base):
     escalation_config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     # {"keywords": ["reclamo", "asesor"], "max_turnos_sin_resolver": 3}
 
+    # Chat web embebible (HU-CHAN-02). JSONB con:
+    # {"enabled": bool, "key": "<clave pública>", "allowed_origins": [...],
+    #  "turnstile_secret": "<opcional>"}. La `key` es pública (va en el
+    # fragmento del widget); el `turnstile_secret` NUNCA se expone al cliente.
+    web_chat_config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 

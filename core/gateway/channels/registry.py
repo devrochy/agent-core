@@ -63,11 +63,11 @@ def scan() -> None:
             outbound = None
             if callable(getattr(obj, "inbound", None)):
                 inbound = obj.inbound()
-            elif hasattr(obj, "InboundAdapter"):
+            elif getattr(obj, "InboundAdapter", None) is not None:
                 inbound = obj.InboundAdapter()
             if callable(getattr(obj, "outbound", None)):
                 outbound = obj.outbound()
-            elif hasattr(obj, "OutboundAdapter"):
+            elif getattr(obj, "OutboundAdapter", None) is not None:
                 outbound = obj.OutboundAdapter()
             if not provider and inbound is not None:
                 provider = getattr(inbound, "provider", None)
