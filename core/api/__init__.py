@@ -31,6 +31,7 @@ from core.api.routers import (
     plugins,
     settings,
     tenants,
+    web_chat,
 )
 
 api_router = APIRouter(prefix="/api/v1", tags=["api"])
@@ -53,5 +54,6 @@ api_router.include_router(costs.router)
 api_router.include_router(plan.router)
 api_router.include_router(platform.router)
 api_router.include_router(settings.router)
+api_router.include_router(web_chat.router)
 
 __all__ = ["api_router"]
