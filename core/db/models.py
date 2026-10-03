@@ -43,6 +43,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from core.config import get_settings
+
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
@@ -743,7 +745,9 @@ class MemoryVector(Base):
     customer_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("customers.id"))
     conversation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("conversations.id"))
     content: Mapped[str] = mapped_column(Text)
-    embedding: Mapped[Any] = mapped_column(Vector(384))  # dim = EMBEDDING_DIMENSIONS
+    # Dimensión tomada de la config (EMBEDDING_DIMENSIONS). Cambiarla exige una
+    # migración que re-ajuste la columna; ver `alembic/versions/0046_*`.
+    embedding: Mapped[Any] = mapped_column(Vector(get_settings().embedding_dimensions))
     meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
