@@ -49,6 +49,8 @@ class IdentitySettings(BaseModel):
     tono: str
     debounce_mode: str
     split_style: str = "un_mensaje"
+    # Moneda del negocio (HU-UI-01): COP por defecto.
+    currency: str = "COP"
     guardrail_max_retries: int
     disabled_guardrails: list[str]
     available_guardrails: list[str]
@@ -75,6 +77,7 @@ class IdentityUpdate(BaseModel):
     tono: str = "calido"
     debounce_mode: str = "natural"
     split_style: str = "un_mensaje"
+    currency: str = "COP"
     guardrail_max_retries: int = 1
     disabled_guardrails: list[str] = []
     difficulty_long_message_threshold: int = LONG_MESSAGE_THRESHOLD
@@ -158,6 +161,7 @@ def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) 
         tono=behavior.get("tono", "calido"),
         debounce_mode=behavior.get("debounce_mode", "natural"),
         split_style=behavior.get("split_style", "un_mensaje"),
+        currency=(app_settings.currency if app_settings and app_settings.currency else "COP"),
         guardrail_max_retries=int(behavior.get("guardrail_max_retries", 1) or 0),
         disabled_guardrails=list(behavior.get("disabled_guardrails", []) or []),
         available_guardrails=available,
@@ -238,6 +242,8 @@ async def save_identity(
         app_settings.assistant_name = payload.assistant_name
         app_settings.business_description = payload.business_description
         app_settings.brand_voice = payload.brand_voice
+        # Moneda del negocio (HU-UI-01): ISO-4217 en mayúsculas, default COP.
+        app_settings.currency = (payload.currency or "COP").strip().upper()[:3] or "COP"
         behavior = dict(app_settings.behavior_config)
         behavior.update(
             tono=payload.tono,
