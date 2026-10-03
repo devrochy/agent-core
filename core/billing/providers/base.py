@@ -45,9 +45,14 @@ class BaseBillingProvider(ABC):
 
     @abstractmethod
     async def create_payment_link(
-        self, *, reference: str, amount_cop: float, expires_in_hours: int = 24
+        self, *, reference: str, amount_cop: float, expires_in_hours: int = 24,
+        plan_name: str = "",
     ) -> PaymentLink:
-        """Crea un link de pago de un solo uso, correlacionado con `reference`."""
+        """Crea un link de pago de un solo uso, correlacionado con `reference`.
+
+        `plan_name` se usa en la descripción visible al cliente (nunca un nombre
+        técnico como "agent-core", HU-REP-04).
+        """
 
     @abstractmethod
     def verify_webhook_signature(self, payload: dict[str, Any]) -> bool:

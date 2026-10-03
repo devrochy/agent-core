@@ -141,3 +141,40 @@ async def test_create_payment_link_ok(monkeypatch):
     assert captured["json"]["collect_shipping"] is False
     assert captured["json"]["amount_in_cents"] == 20_000_000
     assert captured["json"]["currency"] == "COP"
+
+
+@pytest.mark.asyncio
+async def test_link_visible_al_cliente_sin_marca_tecnica(monkeypatch):
+    """HU-REP-04: el nombre/descripción del link usan el plan y SolversHub."""
+    provider = _provider()
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"data": {"id": "link-abc"}}
+
+    captured: dict = {}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json, headers):
+            captured["json"] = json
+            return _Resp()
+
+    monkeypatch.setattr("core.billing.providers.wompi.httpx.AsyncClient", _Client)
+
+    await provider.create_payment_link(reference="r", amount_cop=200_000, plan_name="Premium")
+    body = captured["json"]
+    blob = f"{body['name']} {body['description']}"
+    assert "agent-core" not in blob.lower()
+    assert "SolversHub" in blob
+    assert "Premium" in blob

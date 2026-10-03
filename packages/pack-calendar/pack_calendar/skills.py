@@ -138,6 +138,30 @@ class CalendarSkill(BaseSkill):
             raise PluginError(PLUGIN_ID, "Agenda no configurada para este tenant")
         return config
 
+    async def _business_name(self) -> str:
+        """Nombre visible del negocio (nunca un nombre técnico, HU-REP-04)."""
+        tenant_id = get_current_tenant_id()
+        name = ""
+        if tenant_id is not None:
+            try:
+                from sqlalchemy import select
+
+                from core.db.models import AppSettings
+                from core.db.session import get_session
+
+                async with get_session() as session:
+                    row = (
+                        await session.execute(
+                            select(AppSettings.assistant_name).where(
+                                AppSettings.tenant_id == tenant_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    name = (row or "").strip()
+            except Exception:
+                name = ""
+        return name or "SolversHub"
+
     async def _source(self) -> str:
         tenant_id = get_current_tenant_id()
         now = time.monotonic()
@@ -382,10 +406,11 @@ class CalendarSkill(BaseSkill):
         link = ""
         if source == "google":
             token = await self._google_token(config)
+            business = await self._business_name()
             body: dict[str, Any] = {
                 "summary": title,
                 "description": str(arguments.get("description", ""))
-                + f"\n[agent-core conversación {context.conversation_id}]",
+                + f"\nCita agendada con {business}",
                 "start": {"dateTime": start.isoformat(), "timeZone": config.timezone},
                 "end": {"dateTime": end.isoformat(), "timeZone": config.timezone},
             }

@@ -52,7 +52,7 @@ class _FakeProvider:
             public_key="pub", private_key="prv", events_secret="wh-secret", sandbox=True
         )
 
-    async def create_payment_link(self, *, reference, amount_cop, expires_in_hours=24):
+    async def create_payment_link(self, *, reference, amount_cop, expires_in_hours=24, plan_name=""):
         from core.billing.providers.base import PaymentLink
 
         self.created.append({"reference": reference, "amount_cop": amount_cop})
