@@ -41,7 +41,7 @@ jobs:
       APP_SECRET_KEY: ci-only-not-a-secret-app-key
       APP_ENV: development
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Entorno Python (self-hosted)
         # Mismo motivo que el gate: el runner es Linux Mint y setup-python no
         # tiene builds para esa distro → venv con el Python del runner.
