@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # URL del panel nuevo: a donde vuelve el navegador tras el OAuth de Google.
     # En producción suele coincidir con el origen público; en dev apunta al :3200.
     panel_base_url: str = Field(default="", alias="PANEL_BASE_URL")
+    # Landing pública: de donde se sirve el widget embebible del chat web
+    # (/widget.js) y el formulario alojado. Se usa para armar el fragmento
+    # que el negocio pega en su sitio (HU-CHAN-02).
+    landing_base_url: str = Field(default="https://www.solvershub.site", alias="LANDING_BASE_URL")
     # Prefijo de ruta bajo el que se sirve la app detrás de un proxy inverso
     # (p. ej. "/agent-core" en Coolify/Tailscale). Vacío = servida en la raíz.
     # El proxy QUITA el prefijo al reenviar; para las URLs que genera la app

@@ -11,6 +11,7 @@ Habilidades y Avanzado del panel SSR quedan pendientes.
 
 from __future__ import annotations
 
+import secrets
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -28,6 +29,7 @@ from core.admin.settings_service import (
 from core.agents.spec import enabled_packs, load_active_spec, save_spec_if_changed
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
+from core.config import get_settings
 from core.db.models import AppSettings
 from core.db.session import get_session
 from core.llm.difficulty_router import (
@@ -124,6 +126,24 @@ class SkillsUpdate(BaseModel):
     tools: list[SkillBinding]
 
 
+class WebChatSettings(BaseModel):
+    """Configuración del chat web embebible (HU-CHAN-02). El secreto de Turnstile
+    NUNCA se devuelve; solo si está configurado (`turnstile_configured`)."""
+
+    enabled: bool = False
+    key: str = ""  # clave pública que va en el fragmento del widget
+    allowed_origins: list[str] = []
+    turnstile_configured: bool = False
+    snippet: str = ""  # fragmento <script> listo para pegar
+
+
+class WebChatUpdate(BaseModel):
+    enabled: bool = False
+    allowed_origins: list[str] = []
+    turnstile_secret: str | None = None  # None = no tocar; "" = borrar
+    rotate_key: bool = False
+
+
 class SettingsResponse(BaseModel):
     identity: IdentitySettings
     brain: BrainSettings
@@ -147,6 +167,42 @@ async def _load_app_settings(tenant_id) -> AppSettings | None:
 def _available_guardrails(spec) -> list[str]:
     enabled = enabled_packs(spec)
     return sorted(g.name for g in mcp_host.get_guardrails() if g.plugin_id in enabled)
+
+
+def _normalize_origins(origins: list[str]) -> list[str]:
+    """Normaliza dominios permitidos: esquema+host, sin barra final, únicos.
+    Solo se aceptan orígenes `http(s)://host[:puerto]`."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in origins:
+        value = (raw or "").strip().rstrip("/")
+        if not value:
+            continue
+        if not (value.startswith("http://") or value.startswith("https://")):
+            continue
+        if value.lower() in seen:
+            continue
+        seen.add(value.lower())
+        out.append(value)
+    return out
+
+
+def _web_chat_out(app_settings: AppSettings | None) -> WebChatSettings:
+    config = dict((app_settings.web_chat_config if app_settings else {}) or {})
+    key = str(config.get("key", "") or "")
+    landing = get_settings().landing_base_url.rstrip("/")
+    snippet = (
+        f'<script src="{landing}/widget.js" data-key="{key}" async></script>'
+        if key
+        else ""
+    )
+    return WebChatSettings(
+        enabled=bool(config.get("enabled")),
+        key=key,
+        allowed_origins=list(config.get("allowed_origins", []) or []),
+        turnstile_configured=bool(str(config.get("turnstile_secret", "") or "").strip()),
+        snippet=snippet,
+    )
 
 
 def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) -> IdentitySettings:
@@ -309,6 +365,51 @@ async def save_brain(
 
     updated = await load_active_spec()
     return _brain_out(updated)
+
+
+@router.get("/web-chat", response_model=WebChatSettings)
+async def get_web_chat_settings(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> WebChatSettings:
+    """Config del chat web embebible (HU-CHAN-02). Nunca devuelve el secreto."""
+    app_settings = await _load_app_settings(principal.tenant_id)
+    return _web_chat_out(app_settings)
+
+
+@router.put("/web-chat", response_model=WebChatSettings)
+async def save_web_chat_settings(
+    payload: WebChatUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> WebChatSettings:
+    """Habilita/deshabilita el chat web, edita dominios permitidos, rota la clave
+    o cambia el secreto de Turnstile. Todo se guarda en
+    `app_settings.web_chat_config` (JSONB, migración 0047)."""
+    async with get_session() as session:
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == principal.tenant_id,
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if app_settings is None:
+            app_settings = AppSettings(tenant_id=principal.tenant_id)
+            session.add(app_settings)
+
+        config = dict(app_settings.web_chat_config or {})
+        if not config.get("key"):
+            config["key"] = secrets.token_urlsafe(24)
+        elif payload.rotate_key:
+            config["key"] = secrets.token_urlsafe(24)
+        config["enabled"] = bool(payload.enabled)
+        config["allowed_origins"] = _normalize_origins(payload.allowed_origins)
+        if payload.turnstile_secret is not None:
+            config["turnstile_secret"] = payload.turnstile_secret.strip()
+        app_settings.web_chat_config = config
+
+    refreshed = await _load_app_settings(principal.tenant_id)
+    return _web_chat_out(refreshed)
 
 
 @router.put("/memory", response_model=MemorySettings)
