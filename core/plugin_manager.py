@@ -135,7 +135,11 @@ class PluginManager:
             try:
                 module.config_schema.model_validate(raw_values)
             except ValidationError as exc:
-                raise PluginConfigError(plugin_id, f"Configuración inválida: {exc}") from exc
+                # Errores por campo (HU-FWK-08): `{campo: mensaje}` para el formulario.
+                fields = {
+                    ".".join(str(p) for p in err["loc"]): err["msg"] for err in exc.errors()
+                }
+                raise PluginConfigError(plugin_id, f"Configuración inválida: {exc}", fields) from exc
 
         encrypted = get_secret_box().encrypt_json(raw_values)
         tenant_id = get_current_tenant_id()

@@ -228,6 +228,6 @@ async def save_plugin_config(
             f"Tu plan no permite habilitar más habilidades ({exc.used}/{exc.limit})."
         ) from exc
     except PluginConfigError as exc:
-        raise ApiError.bad_request(str(exc), "invalid_config") from exc
+        raise ApiError.bad_request(str(exc), "invalid_config", fields=exc.fields or None) from exc
 
     return await get_plugin_config(plugin_id, principal)
