@@ -16,12 +16,15 @@ import io
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from core.shared.exceptions import BusinessError
 
-class PaymentCapabilityError(Exception):
+
+class PaymentCapabilityError(BusinessError):
     """Rechazo de NEGOCIO de una capacidad (monto mínimo, config faltante).
 
-    El consumidor (p. ej. cobranza) lo muestra como mensaje accionable; NO es una
-    falla del sistema.
+    Subclase de `BusinessError` (HU-ARCH-18): el host la convierte en resultado
+    controlado y el pack de pagos NO se auto-deshabilita. El consumidor (p. ej.
+    cobranza) la muestra como mensaje accionable.
     """
 
 

@@ -211,7 +211,7 @@ class SubscriptionsSkill(BaseSkill):
                 await session.flush()
 
         from core.agents.spec import enabled_packs, load_active_spec
-        from core.payments import payment_registry
+        from core.payments import PaymentCapabilityError, payment_registry
 
         spec = await load_active_spec()
         cap = payment_registry.capability_for(enabled_packs(spec))
@@ -223,9 +223,20 @@ class SubscriptionsSkill(BaseSkill):
                 "mensaje": "El pago en línea no está configurado; coordinemos el pago por otro medio.",
             }
         reference = f"sub-{cargo.id}"
-        link = await cap.create_link(
-            reference=reference, amount=float(cargo.monto or 0), description=f"Suscripción {sub.concepto}"
-        )
+        try:
+            link = await cap.create_link(
+                reference=reference, amount=float(cargo.monto or 0), description=f"Suscripción {sub.concepto}"
+            )
+        except PaymentCapabilityError:
+            # Rechazo de NEGOCIO (p. ej. monto bajo el mínimo de la pasarela):
+            # resultado controlado, el pack SIGUE habilitado (HU-ARCH-18). El
+            # asistente ofrece una alternativa.
+            return {
+                "encontrado": True,
+                "status": "monto_bajo_minimo",
+                "monto": float(cargo.monto or 0),
+                "mensaje": "El pago en línea no está disponible para este monto; coordinemos el pago por otro medio.",
+            }
         async with get_session() as session:
             # `cargo` quedó detachado de la sesión anterior: re-buscar por id para
             # persistir la referencia del link (escribir sobre el objeto detached

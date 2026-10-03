@@ -54,7 +54,7 @@ from core.orchestrator.safe_renderer import (
 from core.orchestrator.skill_router import select_relevant_skills
 from core.shared.audit import record_audit
 from core.shared.crypto import get_secret_box
-from core.shared.exceptions import LLMProviderError, PluginError
+from core.shared.exceptions import BusinessError, LLMProviderError, PluginError
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from core.tools.core_skill import conversation_spent
@@ -679,6 +679,11 @@ async def _execute_tool_safely(
             result = await declarative[tool_call.name].handler(tool_call.arguments, context)
         else:
             result = await mcp_host.execute_tool(tool_call.name, tool_call.arguments, context)
+    except BusinessError as exc:
+        # Rechazo de negocio (HU-ARCH-18): resultado controlado, el pack SIGUE
+        # habilitado. Cubre tools declarativas que no pasan por el host.
+        log.info("tool_business_error", tool=tool_call.name, error=exc.message)
+        result = exc.as_result()
     except PluginError as exc:
         # Las tools del CORE ("core") no se auto-desactivan: el core no se apaga a sí mismo.
         if exc.plugin_id != "core":

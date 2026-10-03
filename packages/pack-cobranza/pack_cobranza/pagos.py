@@ -182,7 +182,17 @@ async def crear_link_para_cuota(
         return datos_informativos(cfg, monto)
 
     reference = f"cob-{cuota.id}"
-    link = await cap.create_link(reference=reference, amount=monto, description=f"Cuota {cuota.numero_cuota}")
+    try:
+        link = await cap.create_link(reference=reference, amount=monto, description=f"Cuota {cuota.numero_cuota}")
+    except PaymentCapabilityError:
+        # Rechazo de NEGOCIO (p. ej. monto bajo el mínimo): resultado controlado,
+        # el pack SIGUE habilitado (HU-ARCH-18). Se cae a la cuenta informativa.
+        log.warning("cobranza_link_rechazado", cuota_id=str(cuota.id), monto=monto)
+        return {
+            "modo": "monto_bajo_minimo",
+            "monto": monto,
+            "mensaje": "El pago en línea no está disponible para este monto; usá otro medio.",
+        }
     async with get_session() as session:
         existente = (await session.execute(select(LinkPago).where(LinkPago.tenant_id == tid, LinkPago.referencia == link.reference))).scalar_one_or_none()
         if existente is None:
