@@ -12848,6 +12848,11 @@
             "title": "Split Style",
             "default": "un_mensaje"
           },
+          "currency": {
+            "type": "string",
+            "title": "Currency",
+            "default": "COP"
+          },
           "guardrail_max_retries": {
             "type": "integer",
             "title": "Guardrail Max Retries"
@@ -12990,6 +12995,11 @@
             "type": "string",
             "title": "Split Style",
             "default": "un_mensaje"
+          },
+          "currency": {
+            "type": "string",
+            "title": "Currency",
+            "default": "COP"
           },
           "guardrail_max_retries": {
             "type": "integer",

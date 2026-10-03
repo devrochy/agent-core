@@ -70,3 +70,34 @@ async def test_identity_guarda_y_devuelve_split_style(app_client) -> None:
     )
     assert r4.status_code == 200, r4.text
     assert r4.json()["split_style"] == "un_mensaje"
+
+
+async def test_identity_guarda_y_devuelve_currency(app_client) -> None:
+    """HU-UI-01: la moneda del negocio se guarda y se devuelve (default COP)."""
+    from core.onboarding import onboard_tenant
+
+    slug = f"curr-{os.urandom(3).hex()}"
+    tid, _ = await onboard_tenant(
+        name=f"Curr {slug}", slug=slug, business_description="Test.",
+        persona={"tone": "cercano"}, admin_email="admin@local",
+    )
+    r = await app_client.post("/admin/login", data={"email": "admin@local", "password": "admin123"})
+    assert r.status_code == 303, r.text
+    session = r.headers["set-cookie"].split(";")[0]
+    r2 = await app_client.post(
+        "/admin/switch-tenant", headers={"Cookie": session}, data={"tenant_id": str(tid)}
+    )
+    tenant_cookie = next(c.split(";")[0] for c in r2.headers.get_list("set-cookie") if "ac_tenant" in c)
+    cookie = f"{session}; {tenant_cookie}"
+
+    current = (
+        await app_client.get("/api/v1/admin/settings", headers={"Cookie": cookie})
+    ).json()["identity"]
+    assert current["currency"] == "COP"
+
+    current["currency"] = "usd"
+    r3 = await app_client.put(
+        "/api/v1/admin/settings/identity", headers={"Cookie": cookie}, json=current
+    )
+    assert r3.status_code == 200, r3.text
+    assert r3.json()["currency"] == "USD"  # normalizada a mayúsculas

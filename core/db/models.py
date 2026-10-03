@@ -101,6 +101,9 @@ class AppSettings(Base):
     assistant_name: Mapped[str] = mapped_column(Text, default="Asistente")
     business_description: Mapped[str] = mapped_column(Text, default="")
     language: Mapped[str] = mapped_column(Text, default="es")
+    # Moneda del negocio para mostrar montos (comercio, cobranza, plan). Los
+    # costos de proveedor siguen en USD (HU-UI-01).
+    currency: Mapped[str] = mapped_column(Text, default="COP")
     bot_paused: Mapped[bool] = mapped_column(Boolean, default=False)  # kill-switch por tenant
 
     # LLM configurable en runtime (BYOK). Si es NULL se usa el .env.
