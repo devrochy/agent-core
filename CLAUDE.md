@@ -81,15 +81,19 @@ o `/admin/tenants/nuevo`), nunca código por cliente.
 ## Herramientas de asistentes IA (OpenCode + Claude Code)
 
 Este repo se trabaja con dos asistentes: OpenCode (`.opencode/`) y Claude Code
-(`.claude/`). Para no mantener el mismo contenido dos veces:
+(`.claude/`). OpenCode se abre dentro de este repo, no desde la carpeta padre: solo así
+carga `opencode.json`, los plugins y las skills de aquí. El plan de HU está como
+referencia `docs`. Para no mantener el mismo contenido dos veces:
 
-- **Skills** (`skills/*/SKILL.md`): `.opencode/skills/` son symlinks hacia
-  `.claude/skills/` — `.claude/` es la fuente de verdad, editar siempre ahí.
+- **Skills** (`skills/*/SKILL.md`): `.claude/` es la fuente de verdad, editar siempre ahí.
+  OpenCode 1.18+ lee `.claude/skills/` directamente, así que una skill nueva no necesita
+  symlink. Los de `.opencode/skills/` quedan de antes y apuntan a los mismos archivos.
 - **Sub-agentes** (`agents/*.md`): NO se symlinkean — el frontmatter difiere
   entre herramientas (`mode`/`permission` en OpenCode vs `tools`/`model` en
   Claude Code). Existen en ambos lados: `auditor-multitenant`, `arquitecto`,
   `eval-runner`, `customizer`, `optimizer`, `plugin-dev`, `migrator`. Al
-  cambiar las instrucciones de uno, replicar el cambio a mano en su par.
+  cambiar las instrucciones de uno, replicar el cambio a mano en su par:
+  `tests/test_agentes_opencode.py` falla si los cuerpos difieren.
   `.opencode/agents/migrador.md` (migración histórica CULTO/FORMOTO) no
   tiene par en `.claude/` — es intencional, trabajo puntual ya cerrado.
 - **Guardas de comandos peligrosos**: la lógica vive solo en
@@ -99,6 +103,9 @@ Este repo se trabaja con dos asistentes: OpenCode (`.opencode/`) y Claude Code
   migraciones (Alembic `.py` del core y de los packs) que crean tablas sin
   `tenant_id` + RLS forzada + policy, y pide confirmación ante comandos sobre
   los recursos de producción de Coolify.
+- **ruff tras editar**: `.claude/hooks/ruff_on_edit.sh` (hook PostToolUse) devuelve
+  los errores de `ruff check` del `.py` editado. En OpenCode lo corre
+  `.opencode/plugins/ruff-on-edit.ts` con el mismo script.
 - **Permisos**: `opencode.json` y `.claude/settings.json` — mismo criterio,
   replicar los cambios de allowlist/denylist a mano en ambos.
 
