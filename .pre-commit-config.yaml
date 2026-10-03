@@ -1,23 +1,28 @@
 # Red local para commits fuera de Claude Code (terminal, OpenCode, web de GitHub).
 # El CI es la red final (ruff en packages, import-linter, gate de RLS y de evals).
+# Instalación (una vez por clon): `uv tool install pre-commit && pre-commit install`.
 repos:
+  # Misma versión de ruff que fija uv.lock: si no, pre-commit y el CI discrepan.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
+    rev: v0.16.6
     hooks:
       - id: ruff
         args: [--fix]
 
+  # Misma versión que el paso "Gitleaks" del CI.
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.24.3
     hooks:
       - id: gitleaks
 
-  # Reutiliza la misma guarda de migraciones que el hook de Claude Code.
+  # La misma guarda de migraciones que el hook de Claude Code, en su modo archivos:
+  # una migración nueva debe traer tenant_id + RLS forzada + policy; una vieja solo
+  # falla si el cambio agrega una tabla o le quita algo que tenía.
   - repo: local
     hooks:
       - id: migraciones-rls
         name: migraciones con tenant_id + RLS forzada
-        entry: python3 .claude/hooks/guards.py
+        entry: python3 .claude/hooks/guards.py --migraciones
         language: system
-        pass_filenames: false
-        files: 'alembic/versions/.*\.py$'
+        pass_filenames: true
+        files: '(^|/)alembic/versions/[^/]+\.py$'
