@@ -67,6 +67,13 @@ jobs:
       - name: Lint
         run: ruff check core cli scripts alembic evals tests packages
 
+      - name: Chequeo de tipos (basedpyright, módulos estrictos)
+        # HU-ARCH-24: verifica tipos y FALLA el build ante un error. Se usa
+        # basedpyright (no mypy) porque mypy requiere sqlite en el metastore y
+        # el Python del runner no trae `_sqlite3`. Alcance acotado por
+        # `pyrightconfig.json` a módulos puros; el resto es deuda gradual.
+        run: basedpyright
+
       - name: Capas (import-linter)
         # Invariante 5: ningún pack importa de otro pack; y contratos congelados.
         # `packages/pack-*/` pone cada paquete fuente (packages/pack-X/pack_x) en

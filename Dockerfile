@@ -7,6 +7,10 @@ WORKDIR /app
 # detectar tipos de archivo y procesar media.
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev curl libmagic1 ffmpeg && rm -rf /var/lib/apt/lists/*
 
+# HU-ARCH-24: la imagen corre como usuario SIN privilegios. Se crea antes de
+# copiar el código y se le dan permisos sobre /app.
+RUN groupadd --system app && useradd --system --gid app --home-dir /app --shell /usr/sbin/nologin app
+
 COPY pyproject.toml README.md ./
 COPY packages ./packages
 COPY core ./core
@@ -27,6 +31,11 @@ RUN pip install --no-cache-dir -e packages/contracts \
 
 COPY scripts ./scripts
 RUN chmod +x scripts/entrypoint.sh scripts/entrypoint-worker.sh scripts/entrypoint-beat.sh || true
+
+# El usuario `app` necesita escribir artefactos de tenant (TENANTS_ROOT) y
+# temporales. Se le da la propiedad de /app tras copiar todo.
+RUN chown -R app:app /app
+USER app
 
 EXPOSE 8000
 

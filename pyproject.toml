@@ -58,7 +58,11 @@ waweb = ["neonize>=0.5"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
-    "mypy>=1.11",
+    # La serie 2.x de mypy (2.3/2.4) crashea con INTERNAL ERROR en este repo
+    # (metastore/sqlite y plugin pydantic). Se fija a 1.x estable. El gate de
+    # tipos en CI usa basedpyright (no depende de sqlite del intérprete).
+    "mypy>=1.11,<2",
+    "basedpyright>=1.30",
     "ruff>=0.6",
     "import-linter>=2.0",
 ]
