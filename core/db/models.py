@@ -720,6 +720,10 @@ class ProcessedEvent(Base):
 
     Índice único parcial (tenant_id, external_message_id) WHERE deleted_at IS NULL:
     el reintento manual del DLQ hace soft-delete del claim y re-inserta uno fresco.
+
+    `completed_at` (HU-ARCH-06, ADR-0090) distingue un evento TERMINADO de uno
+    EN VUELO: NULL = el turno empezó pero no terminó (proceso vivo o abandonado).
+    El reclamo de pendientes revoca los claims incompletos viejos para reprocesar.
     """
 
     __tablename__ = "processed_events"
@@ -738,6 +742,7 @@ class ProcessedEvent(Base):
     provider: Mapped[str] = mapped_column(Text)
     external_message_id: Mapped[str] = mapped_column(Text)
     handled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

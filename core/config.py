@@ -169,6 +169,16 @@ class Settings(BaseSettings):
     max_concurrent_turns: int = Field(default=8, alias="MAX_CONCURRENT_TURNS")
     max_turns_per_tenant: int = Field(default=2, alias="MAX_TURNS_PER_TENANT")
 
+    # --- Reclamo de pendientes del consumer (HU-ARCH-06, ADR-0090) ---
+    # Un mensaje que quedó `pending` (crash, deploy, turno colgado) se reclama con
+    # XAUTOCLAIM tras este idle. Un claim de idempotencia incompleto más viejo que
+    # `claim_stale_seconds` se considera abandonado y se revoca para reprocesar.
+    # `claim_stale_seconds` DEBE ser mayor que `inbound_reclaim_idle_ms`: así un
+    # turno legítimamente largo no se reprocesa en paralelo (HU-ARCH-27 acotará la
+    # duración máxima del turno).
+    inbound_reclaim_idle_ms: int = Field(default=300_000, alias="INBOUND_RECLAIM_IDLE_MS")
+    claim_stale_seconds: int = Field(default=600, alias="CLAIM_STALE_SECONDS")
+
     # --- Costos de Meta ---
     # Franquicia de 1000 mensajes de servicio gratis/mes por número: cifra
     # de FUENTE SECUNDARIA, la página oficial de Meta no la menciona. Se
