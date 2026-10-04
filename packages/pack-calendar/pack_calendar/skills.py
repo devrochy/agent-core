@@ -115,6 +115,49 @@ def _free_slots(
     return out
 
 
+def _slot_conflict(
+    window: str,
+    intervals: list[tuple[datetime, datetime]],
+    tz: ZoneInfo,
+    start: datetime,
+    end: datetime,
+    *,
+    buffer_minutes: int,
+) -> str | None:
+    """Validación DURA de un horario concreto (HU-CAL-02). Devuelve el motivo del
+    rechazo o None si el horario es válido.
+
+    - `in_past`: el inicio ya pasó.
+    - `outside_hours`: fuera de la ventana de atención del día (o día cerrado).
+    - `occupied`: se solapa con una cita/bloqueo (el margen se aplica a los ocupados).
+
+    Puro y determinista (testeable sin BD). Al reagendar, el llamador debe pasar
+    `intervals` SIN la propia cita (para que no choque consigo misma).
+    """
+    if start <= datetime.now(tz):
+        return "in_past"
+    if not window or "-" not in window:
+        return "outside_hours"
+    date = start.astimezone(tz).strftime("%Y-%m-%d")
+    start_s, _, end_s = window.partition("-")
+    try:
+        open_dt = datetime.fromisoformat(f"{date}T{start_s.strip()}:00").replace(tzinfo=tz)
+        close_dt = datetime.fromisoformat(f"{date}T{end_s.strip()}:00").replace(tzinfo=tz)
+    except ValueError:
+        return "outside_hours"
+    local_start = start.astimezone(tz)
+    local_end = end.astimezone(tz)
+    if local_start < open_dt or local_end > close_dt:
+        return "outside_hours"
+    buffer = timedelta(minutes=max(int(buffer_minutes), 0))
+    cand_start = start - buffer
+    cand_end = end + buffer
+    for b_start, b_end in intervals:
+        if cand_start < b_end and b_start < cand_end:
+            return "occupied"
+    return None
+
+
 class CalendarSkill(BaseSkill):
     name = "calendar_skill"
     description = "Agendamiento de citas (agenda interna o Google Calendar)"
@@ -137,6 +180,17 @@ class CalendarSkill(BaseSkill):
         if config is None:
             raise PluginError(PLUGIN_ID, "Agenda no configurada para este tenant")
         return config
+
+    async def _timezone_name(self) -> str:
+        """Zona horaria del negocio para grabarla en la cita (HU-CAL-02).
+
+        Fail-open a `America/Bogota` si el pack no está configurado: la cita debe
+        poder guardarse aunque la config no cargue.
+        """
+        try:
+            return (await self._tenant_config()).timezone or "America/Bogota"
+        except Exception:
+            return "America/Bogota"
 
     async def _business_name(self) -> str:
         """Nombre visible del negocio (nunca un nombre técnico, HU-REP-04)."""
@@ -402,6 +456,23 @@ class CalendarSkill(BaseSkill):
         end = start + timedelta(minutes=duration)
         title = str(arguments.get("title") or (getattr(appt_type, "name", "") or "Cita"))
 
+        # Validación DURA en el servidor (HU-CAL-02): no confiar en que el LLM
+        # haya llamado antes a check_availability. Solo agenda interna; en modo
+        # google manda la disponibilidad de Google.
+        if source != "google":
+            conflict = await self._validate_internal_slot(config, start, end)
+            if conflict is not None:
+                return {
+                    "status": "rejected",
+                    "reason": conflict,
+                    "message": {
+                        "occupied": "Ese horario ya está ocupado. Ofrecé otro de free_slots.",
+                        "outside_hours": "Ese horario está fuera del horario de atención.",
+                        "in_past": "Esa fecha/hora ya pasó.",
+                        "invalid_range": "El fin debe ser posterior al inicio.",
+                    }.get(conflict, "Horario inválido."),
+                }
+
         google_event_id: str | None = None
         link = ""
         if source == "google":
@@ -444,10 +515,21 @@ class CalendarSkill(BaseSkill):
             conversation_id=context.conversation_id,
             new_start=start,
         )
+        email_sent, email_reason = await self._notify_appointment_email(
+            "confirmed",
+            title=title,
+            start=start,
+            attendee_email=(
+                str(arguments["attendee_email"]) if arguments.get("attendee_email") else None
+            ),
+            config=config,
+        )
         return {
             "event_id": google_event_id or (str(appt_id) if appt_id else None),
             "status": "created",
             "start": start.isoformat(),
+            "email_sent": email_sent,
+            "email_reason": email_reason,
             # SafeRenderer: el link exacto lo adjunta el core; no se expone `link`
             # como clave para que el modelo no lo copie a mano (lo duplicaría).
             "_safe_append": f"📅 Tu cita quedó agendada: {link}" if link else "📅 Tu cita quedó agendada.",
@@ -494,6 +576,8 @@ class CalendarSkill(BaseSkill):
                     start_at=start,
                     end_at=end,
                     status="scheduled",
+                    created_by="assistant",
+                    timezone=await self._timezone_name(),
                 )
                 session.add(row)
                 await session.flush()
@@ -639,6 +723,70 @@ class CalendarSkill(BaseSkill):
         except Exception:
             return False
 
+    async def _notify_appointment_email(
+        self,
+        action: str,
+        *,
+        title: str,
+        start: datetime | None,
+        attendee_email: str | None,
+        config: CalendarConfig,
+    ) -> tuple[bool, str]:
+        """Correo determinista de agendamiento (HU-CAL-02).
+
+        Envía por el canal SMTP al cliente (`attendee_email`) y a los colaboradores
+        con el permiso `pack_calendar:notificaciones`. Reemplaza los placeholders
+        del asunto/cuerpo configurados. Devuelve `(enviado, motivo)`: si no hay
+        conexión/email o falla, `enviado=False` y el motivo (el llamador lo registra
+        y sigue; nunca rompe el flujo).
+        """
+        from core.admin.permissions import notification_recipients
+        from core.gateway.outbound_email import EmailOutboxError, queue_outbound_email
+
+        templates = {
+            "confirmed": (config.email_subject_confirmed, config.email_body_confirmed),
+            "moved": (config.email_subject_moved, config.email_body_moved),
+            "cancelled": (config.email_subject_cancelled, config.email_body_cancelled),
+        }
+        subject_t, body_t = templates.get(action, templates["confirmed"])
+        tz = ZoneInfo(config.timezone)
+        local = start.astimezone(tz) if start else None
+        values = {
+            "cliente": (attendee_email or "cliente"),
+            "titulo": title or "tu cita",
+            "fecha": local.strftime("%d/%m/%Y") if local else "",
+            "hora": local.strftime("%H:%M") if local else "",
+            "negocio": await self._business_name() or "el negocio",
+        }
+        subject = subject_t.format(**values)
+        body = body_t.format(**values)
+
+        tenant_id = get_current_tenant_id()
+        recipients: list[str] = []
+        if attendee_email:
+            recipients.append(attendee_email)
+        try:
+            for email in await notification_recipients("pack_calendar:notificaciones", tenant_id):
+                if email not in recipients:
+                    recipients.append(email)
+        except Exception:
+            pass
+
+        if not recipients:
+            return False, "sin_destinatarios"
+
+        sent_any = False
+        last_reason = ""
+        for to in recipients:
+            try:
+                await queue_outbound_email(to, subject, body)
+                sent_any = True
+            except EmailOutboxError as exc:
+                last_reason = exc.reason
+            except Exception:
+                last_reason = "error_envio"
+        return sent_any, "" if sent_any else (last_reason or "error_envio")
+
     async def update_event(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         """Reagenda una cita existente (agenda interna o Google)."""
         from pack_calendar.config import DEFAULT_MOVED_MESSAGE
@@ -658,6 +806,24 @@ class CalendarSkill(BaseSkill):
         if duration <= 0:
             duration = max(1, int((appt.end_at - appt.start_at).total_seconds() // 60))
         end = start + timedelta(minutes=duration)
+
+        # Validación DURA al reagendar (HU-CAL-02): el nuevo horario no puede
+        # chocar con otra cita/bloqueo. Se excluye la propia cita.
+        if source != "google":
+            conflict = await self._validate_internal_slot(
+                config, start, end, exclude_appt_id=appt.id
+            )
+            if conflict is not None:
+                return {
+                    "status": "rejected",
+                    "reason": conflict,
+                    "message": {
+                        "occupied": "Ese horario ya está ocupado. Ofrecé otro de free_slots.",
+                        "outside_hours": "Ese horario está fuera del horario de atención.",
+                        "in_past": "Esa fecha/hora ya pasó.",
+                        "invalid_range": "El fin debe ser posterior al inicio.",
+                    }.get(conflict, "Horario inválido."),
+                }
 
         link = ""
         if source == "google" and appt.google_event_id:
@@ -699,11 +865,20 @@ class CalendarSkill(BaseSkill):
             hora=hora,
             titulo=appt.title or "tu cita",
         )
+        email_sent, email_reason = await self._notify_appointment_email(
+            "moved",
+            title=appt.title or "tu cita",
+            start=start,
+            attendee_email=appt.attendee_email,
+            config=config,
+        )
         return {
             "status": "updated",
             "event_id": appt.google_event_id or str(appt.id),
             "start": start.isoformat(),
             "notified": notified,
+            "email_sent": email_sent,
+            "email_reason": email_reason,
             "_safe_append": (
                 f"📅 Tu cita quedó reagendada para el {fecha} a las {hora}: {link}"
                 if link
@@ -774,24 +949,43 @@ class CalendarSkill(BaseSkill):
                 hora=hora,
                 titulo=rows[0].title or "tu cita",
             )
+            email_sent, email_reason = await self._notify_appointment_email(
+                "cancelled",
+                title=rows[0].title or "tu cita",
+                start=rows[0].start_at,
+                attendee_email=rows[0].attendee_email,
+                config=config,
+            )
         else:
             notified = await self._send_client_notice(
                 rows[0].conversation_id,
                 getattr(config, "appointments_cancelled_summary", "") or DEFAULT_CANCELLED_SUMMARY,
                 cantidad=str(len(rows)),
             )
+            email_sent, email_reason = await self._notify_appointment_email(
+                "cancelled",
+                title=rows[0].title or "tu cita",
+                start=rows[0].start_at,
+                attendee_email=rows[0].attendee_email,
+                config=config,
+            )
 
         return {
             "status": "cancelled",
             "cancelled": cancelled_ids,
             "notified": notified,
+            "email_sent": email_sent,
+            "email_reason": email_reason,
             "event_id": cancelled_ids[0] if cancelled_ids else None,
         }
 
     async def _local_busy(
-        self, date: str, tz: ZoneInfo
+        self, date: str, tz: ZoneInfo, exclude_appt_id: uuid.UUID | None = None
     ) -> tuple[list[dict[str, str]], list[tuple[datetime, datetime]]]:
-        """Ocupados de la agenda interna del día: citas agendadas + bloqueos."""
+        """Ocupados de la agenda interna del día: citas agendadas + bloqueos.
+
+        `exclude_appt_id` omite una cita (al reagendar, no debe chocar consigo misma).
+        """
         from sqlalchemy import select
 
         from core.db.session import get_session
@@ -825,6 +1019,8 @@ class CalendarSkill(BaseSkill):
                 )
             ).scalars().all()
         for a in appts:
+            if exclude_appt_id is not None and a.id == exclude_appt_id:
+                continue
             out.append(
                 {
                     "start": a.start_at.astimezone(tz).isoformat(),
@@ -843,6 +1039,34 @@ class CalendarSkill(BaseSkill):
             )
             intervals.append((b.start_at, b.end_at))
         return out, intervals
+
+    async def _validate_internal_slot(
+        self,
+        config: CalendarConfig,
+        start: datetime,
+        end: datetime,
+        *,
+        exclude_appt_id: uuid.UUID | None = None,
+    ) -> str | None:
+        """Validación DURA del horario en modo interno (HU-CAL-02).
+
+        Recalcula los ocupados reales del día y rechaza solapamiento, fuera de
+        horario o fecha pasada. Devuelve el motivo o None. No aplica a `google`
+        (allí manda la disponibilidad de Google Calendar).
+        """
+        tz = ZoneInfo(config.timezone)
+        if end <= start:
+            return "invalid_range"
+        date = start.astimezone(tz).strftime("%Y-%m-%d")
+        _busy, intervals = await self._local_busy(date, tz, exclude_appt_id=exclude_appt_id)
+        return _slot_conflict(
+            _open_window(config, date),
+            intervals,
+            tz,
+            start,
+            end,
+            buffer_minutes=config.buffer_minutes,
+        )
 
     async def check_availability(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         source = await self._source()

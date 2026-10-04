@@ -14,7 +14,7 @@ from typing import Any
 from sqlalchemy import delete, func, select
 
 from core.admin.auth import hash_password
-from core.admin.permissions import OWNER_GRANTABLE_SECTIONS, catalog
+from core.admin.permissions import OWNER_GRANTABLE_SECTIONS, catalog, pack_section_keys
 from core.db.models import Admin, AdminPermission, Tenant, TenantUser
 from core.db.session import get_session
 from core.plugin_manager import plugin_manager
@@ -205,7 +205,10 @@ async def reset_password(*, actor: Admin, admin_id: uuid.UUID, password: str) ->
 
 
 def _valid_sections() -> dict[str, str]:
-    return catalog(plugin_manager.active_ids())
+    # Incluye las sub-secciones que aportan los packs (ADR-0063), p. ej.
+    # `pack_calendar:notificaciones`, no solo el id del plugin.
+    sections = set(plugin_manager.active_ids()) | pack_section_keys(plugin_manager.list_modules())
+    return catalog(sections)
 
 
 async def grant_permission(

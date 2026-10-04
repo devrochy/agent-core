@@ -19,13 +19,12 @@ from sqlalchemy import func, select
 
 from core.agents.playbooks import load_playbook
 from core.agents.spec import load_active_spec
-from core.db.models import Conversation, Customer, Message, UsageLedger
+from core.db.models import Conversation, UsageLedger
 from core.db.session import get_session
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
 from core.memory import vector as vector_memory
 from core.orchestrator.escalation import escalate
-from core.shared.tenant import get_current_tenant_id
 
 
 async def conversation_spent(conversation_id: uuid.UUID) -> float:
@@ -124,94 +123,25 @@ class CoreSkill(BaseSkill):
     async def _send_email(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         """Encola un correo saliente por el canal de correo del negocio (ADR-0071).
 
-        Reutiliza la cola/reintentos de `outbound_send`: crea el `Customer` y la
-        `Conversation` del canal email si no existen, persiste el `Message` y lo
+        Delega en `queue_outbound_email` (mismo camino que la confirmación de citas
+        de HU-CAL-02): resuelve Customer/Conversation, persiste el `Message` y lo
         encola. La tool solo llega al modelo si hay una conexión email activa
         (`requires_connection_types`).
         """
+        from core.gateway.outbound_email import EmailOutboxError, queue_outbound_email
+
         to = str(args.get("to", "")).strip()
-        from core.gateway.channels.email import single_recipient
-
-        recipient = single_recipient(to)
-        if recipient is None:
-            return {"error": "email destino inválido"}
-        to = recipient
         body = str(args.get("body", "")).strip()
-        if not body:
-            return {"error": "body vacío"}
         subject = str(args.get("subject", "") or "").strip()
-        if any(c in subject for c in "\r\n"):
-            return {"error": "asunto inválido"}
-
-        tenant_id = get_current_tenant_id()
-        if tenant_id is None:
-            return {"error": "sin contexto de tenant"}
-
-        from core.gateway.connections import get_active_connection
-
-        connection = await get_active_connection("email_smtp")
-        if connection is None:
-            return {"error": "No hay una conexión de correo configurada para este negocio."}
-
-        async with get_session() as session:
-            customer = (
-                await session.execute(
-                    select(Customer).where(
-                        Customer.tenant_id == tenant_id,
-                        Customer.channel == "email",
-                        Customer.external_id == to,
-                        Customer.deleted_at.is_(None),
-                    )
-                )
-            ).scalar_one_or_none()
-            if customer is None:
-                customer = Customer(tenant_id=tenant_id, channel="email", external_id=to)
-                session.add(customer)
-                await session.flush()
-
-            conversation = (
-                await session.execute(
-                    select(Conversation)
-                    .where(
-                        Conversation.tenant_id == tenant_id,
-                        Conversation.customer_id == customer.id,
-                        Conversation.connection_id == connection.id,
-                        Conversation.status == "open",
-                        Conversation.deleted_at.is_(None),
-                    )
-                    .order_by(Conversation.started_at.desc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            if conversation is None:
-                conversation = Conversation(
-                    tenant_id=tenant_id,
-                    customer_id=customer.id,
-                    channel="email",
-                    connection_id=connection.id,
-                    status="open",
-                )
-                session.add(conversation)
-                await session.flush()
-
-            content = f"Subject: {subject or '(sin asunto)'}\n\n{body}"
-            message = Message(
-                tenant_id=tenant_id,
-                conversation_id=conversation.id,
-                direction="outbound",
-                sender_type="agent",
-                content=content,
-                status="queued",
-                client_message_id=str(uuid.uuid4()),
-            )
-            session.add(message)
-            await session.flush()
-            message_id = message.id
-
-        from core.tasks.outbound_send import outbound_send_task
-
-        outbound_send_task.delay(str(message_id), str(tenant_id))
-        return {"status": "queued", "to": to, "message_id": str(message_id)}
+        try:
+            message_id = await queue_outbound_email(to, subject, body)
+        except EmailOutboxError as exc:
+            return {
+                "no_connection": "No hay una conexión de correo configurada para este negocio.",
+                "invalid_recipient": "email destino inválido",
+                "empty_body": "body vacío",
+            }.get(exc.reason, f"No se pudo enviar el correo ({exc.reason}).")
+        return {"status": "queued", "to": to, "message_id": message_id}
 
     # ------------------------------------------------------------ definición
     def get_tools(self) -> list[MCPTool]:

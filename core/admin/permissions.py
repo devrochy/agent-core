@@ -70,7 +70,11 @@ def catalog(sections: Iterable[str] | None = None) -> dict[str, str]:
 
 
 def pack_section_keys(modules: Iterable[object]) -> set[str]:
-    """Sub-secciones que aportan los packs (ADR-0063): `section_key` o el `plugin_id`."""
+    """Sub-secciones que aportan los packs (ADR-0063): `section_key` o el `plugin_id`.
+
+    Incluye las sub-secciones de permiso declaradas en `section_keys` (sin item de
+    menú), p. ej. `pack_calendar:notificaciones`.
+    """
     keys: set[str] = set()
     for module in modules:
         plugin_id = getattr(module, "id", None)
@@ -78,6 +82,8 @@ def pack_section_keys(modules: Iterable[object]) -> set[str]:
             continue
         for item in getattr(module, "admin_menu", None) or []:
             keys.add(item.get("section_key") or plugin_id)
+        for key in getattr(module, "section_keys", None) or []:
+            keys.add(key)
     return keys
 
 
@@ -283,3 +289,42 @@ def required_section(
                 return section, write
         return "dashboard", write
     return None
+
+
+async def notification_recipients(section: str, tenant_id: uuid.UUID | None) -> list[str]:
+    """Emails de los admins con acceso efectivo a `section` en el tenant (HU-CAL-02).
+
+    Usado para copiar los correos de agendamiento a los colaboradores que deben
+    enterarse (p. ej. sección `pack_calendar:notificaciones`). Incluye al `owner`
+    del tenant (su rol hereda `write`) y a los masters con permiso explícito.
+    Tabla de sistema (sin RLS): se consulta con `tenant_id` explícito.
+    """
+    if tenant_id is None:
+        return []
+    async with get_session() as session:
+        admins = (await session.execute(select(Admin).where(Admin.active.is_(True)))).scalars().all()
+        # Rol por tenant (owner hereda write) y permisos explícitos de la sección.
+        roles = dict(
+            (
+                await session.execute(
+                    select(TenantUser.admin_id, TenantUser.role).where(
+                        TenantUser.tenant_id == tenant_id
+                    )
+                )
+            ).all()
+        )
+        explicit = (
+            await session.execute(
+                select(AdminPermission.admin_id, AdminPermission.access).where(
+                    AdminPermission.section == section,
+                    AdminPermission.tenant_id.is_(None) | (AdminPermission.tenant_id == tenant_id),
+                )
+            )
+        ).all()
+    granted = {admin_id for admin_id, _ in explicit}
+    out: list[str] = []
+    for admin in admins:
+        effective = admin.role == "master" or admin.id in granted or roles.get(admin.id) == "owner"
+        if effective and admin.email:
+            out.append(admin.email)
+    return out
