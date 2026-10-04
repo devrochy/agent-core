@@ -27,6 +27,24 @@ que el core (ver docs/MONOLITH-MODEL.md). Aporta:
 - **Suscripciones a eventos** del core (opcional)
 - **Rutas y menú del panel admin** (opcional)
 
+### 1.1 Pack vs. plugin del tenant (ADR-0089)
+
+El orden de personalización es **configuración → pack → plugin del tenant →
+topología**. La diferencia entre los dos paquetes:
+
+| | **Pack** (multi-tenant) | **Plugin del tenant** |
+|---|---|---|
+| Sirve a | varios negocios | **un solo negocio** |
+| Activación | por AgentSpec de cada tenant | solo el negocio dueño |
+| Uso típico | vertical reutilizable (comercio, cobranza) | caso particular con datos/tareas propias |
+| Scaffold | `agent-core plugin scaffold <nombre>` | `agent-core plugin scaffold <nombre> --tenant` |
+
+Ambos son paquetes instalables con las **mismas garantías** (RLS, migraciones
+propias, cron con `@register_cron`) y las mismas reglas de este contrato. Un
+plugin del tenant **pasa revisión del master** antes de desplegarse: es código de
+negocio con RLS. El scaffold `--tenant` ya genera `models.py`, `jobs.py`,
+`alembic/` y un test que verifica `tenant_id` + RLS en la migración.
+
 ## 2. Ciclo de vida
 
 ```
