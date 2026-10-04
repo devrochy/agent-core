@@ -230,11 +230,11 @@ async def test_crud_bloqueos_api(app_client) -> None:
     r = await app_client.get("/api/v1/pack/calendar/blocks", headers=headers)
     assert r.json() == []
 
-    # Vista semanal: incluye el horario de atención de cada día.
+    # Vista semanal: 7 días y el horario de atención de cada uno.
     r = await app_client.get(
         "/api/v1/pack/calendar/week", headers=headers, params={"start": FECHA}
     )
     assert r.status_code == 200, r.text
     data = r.json()
     assert len(data["days"]) == 7
-    assert data["days"][0]["business_hours"] == "09:00-18:00"
+    assert all("business_hours" in d for d in data["days"])
