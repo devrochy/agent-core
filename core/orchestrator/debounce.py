@@ -50,7 +50,7 @@ from collections.abc import Awaitable
 from typing import Any
 
 from core.memory.working import get_redis
-from core.orchestrator.turn_gate import run_turn
+from core.orchestrator.turn_gate import TurnQueueTimeout, run_turn
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, tenant_scope
 
@@ -120,6 +120,7 @@ async def poll_debounce_once() -> None:
     now = int(time.time() * 1000)
     due = await r.zrangebyscore(PENDING_KEY, "-inf", now)
     fires: list[Awaitable[Any]] = []
+    scheduled: list[tuple[str, dict[str, Any]]] = []
     for conversation_id_str in due:
         # Claim atómico: solo quien logra el ZREM dispara
         removed = await r.zrem(PENDING_KEY, conversation_id_str)
@@ -137,8 +138,15 @@ async def poll_debounce_once() -> None:
         tenant_id = payload.get("tenant_id")
         # Gate de turnos (global + por tenant) y disparo concurrente.
         fires.append(run_turn(tenant_id, _fire_conversation(conversation_id, payload)))
+        scheduled.append((conversation_id_str, payload))
     if fires:
-        await asyncio.gather(*fires)
+        results = await asyncio.gather(*fires, return_exceptions=True)
+        for (conversation_id_str, payload), result in zip(scheduled, results, strict=False):
+            if isinstance(result, TurnQueueTimeout):
+                # Cupo del tenant saturado (HU-ARCH-27): se reprograma el turno
+                # (delay 0) en vez de perderlo. Nada se procesó todavía.
+                log.warning("debounce_requeued_queue_timeout", conversation_id=conversation_id_str)
+                await schedule_debounce(uuid.UUID(conversation_id_str), 0, dict(payload))
 
 
 async def _fire_conversation(conversation_id: uuid.UUID, payload: dict[str, Any]) -> None:
