@@ -36,8 +36,8 @@ class FakeRedis:
     async def get(self, key: str) -> str | None:
         return self.kv.get(key)
 
-    async def delete(self, key: str) -> None:
-        self.kv.pop(key, None)
+    async def delete(self, key: str) -> int:
+        return 1 if self.kv.pop(key, None) is not None else 0
 
 
 @pytest.mark.asyncio
@@ -73,6 +73,19 @@ async def test_request_send_sin_conexion_falla_rapido(monkeypatch: pytest.Monkey
     monkeypatch.setattr(handoff, "_redis", lambda: fake)
     with pytest.raises(handoff.WaWebError, match="no está conectado"):
         await handoff.request_send(tenant_id="t1", connection_id=None, to="57300", text="x")
+
+
+@pytest.mark.asyncio
+async def test_reset_signal_se_publica_y_se_consume(monkeypatch: pytest.MonkeyPatch) -> None:
+    """El reset del panel debe poder consumirse una sola vez (dispara QR nuevo)."""
+    fake = FakeRedis()
+    monkeypatch.setattr(handoff, "_redis", lambda: fake)
+
+    assert await handoff.consume_reset("t1") is False  # nada pendiente
+    await handoff.request_reset("t1")
+    assert fake.kv["waweb:reset:t1"] == "1"
+    assert await handoff.consume_reset("t1") is True   # se consume
+    assert await handoff.consume_reset("t1") is False  # ya no está
 
 
 @pytest.mark.asyncio

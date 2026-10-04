@@ -32,13 +32,16 @@ async def get_active_connection(tenant_id: uuid.UUID) -> ChannelConnection | Non
     async with get_session() as session:
         return (
             await session.execute(
-                select(ChannelConnection).where(
+                select(ChannelConnection)
+                .where(
                     ChannelConnection.tenant_id == tenant_id,
                     ChannelConnection.provider == WAWEB_PROVIDER,
                     ChannelConnection.deleted_at.is_(None),
                 )
+                .order_by(ChannelConnection.created_at)
+                .limit(1)
             )
-        ).scalar_one_or_none()
+        ).scalars().first()
 
 
 async def get_or_create_connection(tenant_id: uuid.UUID) -> ChannelConnection:
@@ -47,19 +50,38 @@ async def get_or_create_connection(tenant_id: uuid.UUID) -> ChannelConnection:
     `credentials_encrypted` guarda `{connection_id}` (no hay secreto de red
     todavía): es lo que permite que `resolve_credentials` devuelva el provider
     `waweb` y el adaptador sepa qué sesión usar.
+
+    Unicidad: el `external_id` es `waweb:<tenant_id>` (estable). Si existe una
+    fila —viva o borrada lógicamente— se REUSA (reactivándola), nunca se crea
+    otra: dos conexiones con el mismo `external_id` confunden al connector y
+    dejan el QR sin mostrarse (incidente 2026-10-04).
     """
-    existing = await get_active_connection(tenant_id)
-    if existing is not None:
-        if not existing.active:
-            # Reactivar en vez de crear otra (evita choque con el índice único
-            # (tenant_id, provider, external_id)).
-            async with get_session() as session:
-                row = await session.get(ChannelConnection, existing.id)
-                if row is not None:
-                    row.active = True
-                    await session.flush()
-                    return row
-        return existing
+    external_id = f"waweb:{tenant_id}"
+    async with get_session() as session:
+        existing = (
+            await session.execute(
+                select(ChannelConnection)
+                .where(
+                    ChannelConnection.tenant_id == tenant_id,
+                    ChannelConnection.provider == WAWEB_PROVIDER,
+                    ChannelConnection.external_id == external_id,
+                )
+                .order_by(ChannelConnection.deleted_at.is_(None).desc())
+                .limit(1)
+            )
+        ).scalars().first()
+        if existing is not None:
+            changed = False
+            if existing.deleted_at is not None:
+                existing.deleted_at = None
+                changed = True
+            if not existing.active:
+                existing.active = True
+                changed = True
+            if changed:
+                await session.flush()
+            return existing
+
     async with get_session() as session:
         connection = ChannelConnection(
             tenant_id=tenant_id,
@@ -124,9 +146,16 @@ async def accept_risk(tenant_id: uuid.UUID, admin_id: uuid.UUID | None) -> WaWeb
 
 
 async def reset_session(tenant_id: uuid.UUID) -> WaWebSession:
-    """Borra la sesión vinculada y vuelve a `pending_qr` (para re-vincular)."""
+    """Borra la sesión vinculada y vuelve a `pending_qr` (para re-vincular).
+
+    Además de limpiar la fila y el QR, pide al connector que recicle el socket
+    (`request_reset`): con el socket viejo vivo, el manager no relee el estado y
+    el QR no se emitiría hasta el próximo backoff.
+    """
     _conn, wa_session = await get_or_create_session(tenant_id)
     await handoff.clear_qr(str(tenant_id))
+    await handoff.clear_ready(str(tenant_id))
+    await handoff.request_reset(str(tenant_id))
     async with get_session() as session:
         row = await session.get(WaWebSession, wa_session.id)
         if row is None or row.tenant_id != tenant_id:

@@ -176,6 +176,17 @@ class WaWebConnector:
             )
             if not processed:
                 idle += 1
+                # El panel pidió reciclar la sesión (re-vincular): se cierra el
+                # socket para que `run_session` vuelva a arrancar en `pending_qr`
+                # y emita un QR nuevo. Sin esto, el QR no aparece hasta que el
+                # pairing-watchdog recicle por su cuenta.
+                if await handoff.consume_reset(str(ctx.tenant_id)):
+                    log.warning("waweb_reset_solicitado", tenant_id=str(ctx.tenant_id))
+                    self._connected.discard(ctx.tenant_id)
+                    self._qr_cycles.discard(ctx.tenant_id)
+                    self._pairing_trips.pop(ctx.tenant_id, None)
+                    sock.closed.set()
+                    break
                 # Persistencia periódica: Neonize actualiza su estado en el
                 # directorio efímero mientras la sesión vive; sin este guardado
                 # un reinicio perdería la sesión y pediría QR de nuevo.
