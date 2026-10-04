@@ -91,9 +91,30 @@ class DbEncryptedSessionStore:
         await self._write_blob(tenant_id, None)
 
     # --- acceso a BD (aislado para testear el resto sin Postgres) ---
-    async def _read_blob(self, tenant_id: uuid.UUID) -> str | None:
+    def _session_query(self):  # type: ignore[no-untyped-def]
+        """Sesión viva de la conexión `waweb` VIVA (una sola).
+
+        Se une con `channel_connections` para no tomar una sesión vieja de una
+        conexión borrada: con dos sesiones por tenant (incidente 2026-10-04),
+        `.first()` por tenant materializaba credenciales ajenas y el connector
+        reautenticaba sin emitir QR.
+        """
         from sqlalchemy import select
 
+        from core.db.models import ChannelConnection, WaWebSession
+
+        return (
+            select(WaWebSession)
+            .join(ChannelConnection, ChannelConnection.id == WaWebSession.connection_id)
+            .where(
+                WaWebSession.deleted_at.is_(None),
+                ChannelConnection.deleted_at.is_(None),
+            )
+            .order_by(WaWebSession.created_at)
+            .limit(1)
+        )
+
+    async def _read_blob(self, tenant_id: uuid.UUID) -> str | None:
         from core.db.models import WaWebSession
         from core.db.session import get_session
         from core.shared.tenant import tenant_scope
@@ -104,10 +125,7 @@ class DbEncryptedSessionStore:
             async with get_session() as session:
                 row = (
                     await session.execute(
-                        select(WaWebSession).where(
-                            WaWebSession.tenant_id == tenant_id,
-                            WaWebSession.deleted_at.is_(None),
-                        )
+                        self._session_query().where(WaWebSession.tenant_id == tenant_id)
                     )
                 ).scalars().first()
                 if row is None or not row.creds_encrypted:
@@ -120,8 +138,6 @@ class DbEncryptedSessionStore:
                     return None
 
     async def _write_blob(self, tenant_id: uuid.UUID, value: str | None) -> None:
-        from sqlalchemy import select
-
         from core.db.models import WaWebSession
         from core.db.session import get_session
         from core.shared.crypto import get_secret_box
@@ -132,10 +148,7 @@ class DbEncryptedSessionStore:
             async with get_session() as session:
                 row = (
                     await session.execute(
-                        select(WaWebSession).where(
-                            WaWebSession.tenant_id == tenant_id,
-                            WaWebSession.deleted_at.is_(None),
-                        )
+                        self._session_query().where(WaWebSession.tenant_id == tenant_id)
                     )
                 ).scalars().first()
                 if row is not None:

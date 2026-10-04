@@ -29,6 +29,7 @@ _OUTBOX_PREFIX = "waweb:outbox:"
 _REPLY_PREFIX = "waweb:reply:"
 _QR_PREFIX = "waweb:qr:"
 _READY_PREFIX = "waweb:ready:"
+_RESET_PREFIX = "waweb:reset:"
 READY_TTL_S = 120
 
 
@@ -50,6 +51,10 @@ def qr_key(tenant_id: str) -> str:
 
 def ready_key(tenant_id: str) -> str:
     return f"{_READY_PREFIX}{tenant_id}"
+
+
+def reset_key(tenant_id: str) -> str:
+    return f"{_RESET_PREFIX}{tenant_id}"
 
 
 def _redis():  # type: ignore[no-untyped-def]
@@ -131,3 +136,19 @@ async def clear_ready(tenant_id: str) -> None:
 
 async def is_ready(tenant_id: str) -> bool:
     return bool(await _redis().get(ready_key(tenant_id)))
+
+
+async def request_reset(tenant_id: str, ttl_s: int = 300) -> None:
+    """Pide al connector que recicle la sesión (para re-emitir QR).
+
+    La escribe el panel (`reset_session`); el manager la consume y cierra el
+    socket, de modo que `run_session` vuelve a arrancar en `pending_qr`, limpia
+    credenciales y publica un QR nuevo. Sin esta señal, un reset con el socket
+    vivo no surte efecto (incidente 2026-10-04: el panel no mostraba QR).
+    """
+    await _redis().set(reset_key(tenant_id), "1", ex=ttl_s)
+
+
+async def consume_reset(tenant_id: str) -> bool:
+    """True (y borra la señal) si el panel pidió reciclar esta sesión."""
+    return bool(await _redis().delete(reset_key(tenant_id)))
