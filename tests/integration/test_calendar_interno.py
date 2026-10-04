@@ -26,6 +26,8 @@ FECHA = "2027-03-15"  # fecha fija futura (con todos los días abiertos es indif
 
 
 async def _tenant_calendario() -> uuid.UUID:
+    from _api_helpers import ADMIN_EMAIL
+
     from core.onboarding import onboard_tenant
 
     slug = uniq("cal-int")
@@ -35,6 +37,7 @@ async def _tenant_calendario() -> uuid.UUID:
         business_description="Agenda interna de prueba.",
         persona={"tone": "cercano"},
         packs=["pack_calendar"],
+        admin_email=ADMIN_EMAIL,
     )
     return tenant_id
 
@@ -145,3 +148,93 @@ async def test_bloqueo_de_agenda_ocupa_slot() -> None:
         avail = await skill.check_availability({"date": FECHA}, _contexto())
         assert "12:00" not in avail["free_slots"]
         assert any("Almuerzo" in b.get("summary", "") for b in avail["busy_slots"])
+
+
+async def test_dia_completamente_bloqueado_no_ofrece_slots() -> None:
+    """HU-CAL-01: un bloqueo que cubre todo el horario deja el día sin horarios libres."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from pack_calendar.models import CalendarBlock
+    from pack_calendar.skills import CalendarSkill
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tenant_id = await _tenant_calendario()
+    await _configurar(tenant_id)
+    tz = ZoneInfo("America/Bogota")
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            session.add(
+                CalendarBlock(
+                    tenant_id=tenant_id,
+                    start_at=datetime.fromisoformat(f"{FECHA}T00:00:00").replace(tzinfo=tz),
+                    end_at=datetime.fromisoformat(f"{FECHA}T23:59:00").replace(tzinfo=tz),
+                    reason="Feriado",
+                )
+            )
+
+        avail = await CalendarSkill().check_availability({"date": FECHA}, _contexto())
+        assert avail["free_slots"] == []
+
+
+async def test_crud_bloqueos_api(app_client) -> None:
+    """HU-CAL-01: crear, listar y eliminar bloqueos por la API admin, con aislamiento por tenant."""
+    from _api_helpers import api_headers
+
+    tid = await _tenant_calendario()
+    headers = await api_headers(app_client, tid)
+
+    # Vacío al inicio.
+    r = await app_client.get("/api/v1/pack/calendar/blocks", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json() == []
+
+    # Crear.
+    payload = {
+        "start_at": f"{FECHA}T12:00:00-05:00",
+        "end_at": f"{FECHA}T13:00:00-05:00",
+        "reason": "Almuerzo",
+    }
+    r = await app_client.post("/api/v1/pack/calendar/blocks", headers=headers, json=payload)
+    assert r.status_code == 201, r.text
+    block = r.json()
+    assert block["reason"] == "Almuerzo"
+    block_id = block["id"]
+
+    # Rango inválido.
+    r = await app_client.post(
+        "/api/v1/pack/calendar/blocks",
+        headers=headers,
+        json={"start_at": f"{FECHA}T13:00:00-05:00", "end_at": f"{FECHA}T12:00:00-05:00"},
+    )
+    assert r.status_code == 400
+
+    # Listar.
+    r = await app_client.get("/api/v1/pack/calendar/blocks", headers=headers)
+    assert r.status_code == 200
+    assert len(r.json()) == 1
+
+    # Otro tenant no lo ve (aislamiento / RLS).
+    otro = await _tenant_calendario()
+    otros_headers = await api_headers(app_client, otro)
+    r = await app_client.get("/api/v1/pack/calendar/blocks", headers=otros_headers)
+    assert r.status_code == 200
+    assert r.json() == []
+
+    # Eliminar.
+    r = await app_client.delete(f"/api/v1/pack/calendar/blocks/{block_id}", headers=headers)
+    assert r.status_code == 204
+    r = await app_client.get("/api/v1/pack/calendar/blocks", headers=headers)
+    assert r.json() == []
+
+    # Vista semanal: incluye el horario de atención de cada día.
+    r = await app_client.get(
+        "/api/v1/pack/calendar/week", headers=headers, params={"start": FECHA}
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert len(data["days"]) == 7
+    assert data["days"][0]["business_hours"] == "09:00-18:00"
