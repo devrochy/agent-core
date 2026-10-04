@@ -25,9 +25,9 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import select, text
 
-from core.db.models import AppSettings, Conversation, Customer, Message
+from core.db.models import Conversation, Customer, Message
 from core.db.session import get_session
 from core.gateway.webhooks import INBOUND_STREAM
 from core.memory.working import get_redis
@@ -83,16 +83,18 @@ async def _verify_turnstile(token: str, secret: str, ip: str | None) -> bool:
 
 
 async def _resolve_by_key(key: str) -> tuple[uuid.UUID, dict[str, Any]] | None:
-    """Resuelve (tenant_id, web_chat_config) por la clave pública del widget."""
+    """Resuelve (tenant_id, web_chat_config) por la clave pública del widget.
+
+    `app_settings` tiene RLS forzada: la ruta pública no tiene tenant fijado, así
+    que se usa la función `SECURITY DEFINER` `web_chat_resolve(text)` (migración
+    0048), que devuelve solo esta fila y no permite enumerar.
+    """
     if not key or len(key) > 128:
         return None
     async with get_session() as session:
         row = (
             await session.execute(
-                select(AppSettings.tenant_id, AppSettings.web_chat_config).where(
-                    AppSettings.web_chat_config["key"].astext == key,
-                    AppSettings.deleted_at.is_(None),
-                )
+                text("select tenant_id, config from web_chat_resolve(:k)"), {"k": key}
             )
         ).first()
     if row is None:
