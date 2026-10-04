@@ -5029,6 +5029,116 @@
         }
       }
     },
+    "/api/v1/admin/settings/web-chat": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Get Web Chat Settings",
+        "description": "Config del chat web embebible (HU-CHAN-02). Nunca devuelve el secreto.",
+        "operationId": "get_web_chat_settings_api_v1_admin_settings_web_chat_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebChatSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Save Web Chat Settings",
+        "description": "Habilita/deshabilita el chat web, edita dominios permitidos, rota la clave\no cambia el secreto de Turnstile. Todo se guarda en\n`app_settings.web_chat_config` (JSONB, migración 0047).",
+        "operationId": "save_web_chat_settings_api_v1_admin_settings_web_chat_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebChatUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebChatSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/settings/memory": {
       "put": {
         "tags": [
@@ -5482,6 +5592,145 @@
                 "schema": {
                   "$ref": "#/components/schemas/SpecPayload"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/web-chat/{key}/config": {
+      "get": {
+        "tags": [
+          "api",
+          "public · web-chat"
+        ],
+        "summary": "Web Chat Config",
+        "description": "Config no sensible para el widget. Nunca expone el secreto de Turnstile.",
+        "operationId": "web_chat_config_api_v1_public_web_chat__key__config_get",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/web-chat/{key}/messages": {
+      "post": {
+        "tags": [
+          "api",
+          "public · web-chat"
+        ],
+        "summary": "Post Message",
+        "operationId": "post_message_api_v1_public_web_chat__key__messages_post",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "api",
+          "public · web-chat"
+        ],
+        "summary": "Get Messages",
+        "description": "Devuelve los mensajes de la conversación del visitante posteriores a\n`after` (ISO-8601 de `created_at` del último recibido). El widget hace\npolling con este cursor.",
+        "operationId": "get_messages_api_v1_public_web_chat__key__messages_get",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -17629,6 +17878,76 @@
           "risk_ok"
         ],
         "title": "WawebState"
+      },
+      "WebChatSettings": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": false
+          },
+          "key": {
+            "type": "string",
+            "title": "Key",
+            "default": ""
+          },
+          "allowed_origins": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Origins",
+            "default": []
+          },
+          "turnstile_configured": {
+            "type": "boolean",
+            "title": "Turnstile Configured",
+            "default": false
+          },
+          "snippet": {
+            "type": "string",
+            "title": "Snippet",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "WebChatSettings",
+        "description": "Configuración del chat web embebible (HU-CHAN-02). El secreto de Turnstile\nNUNCA se devuelve; solo si está configurado (`turnstile_configured`)."
+      },
+      "WebChatUpdate": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": false
+          },
+          "allowed_origins": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Origins",
+            "default": []
+          },
+          "turnstile_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turnstile Secret"
+          },
+          "rotate_key": {
+            "type": "boolean",
+            "title": "Rotate Key",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "WebChatUpdate"
       },
       "WebhooksResponse": {
         "properties": {
