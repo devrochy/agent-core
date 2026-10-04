@@ -348,12 +348,16 @@ async def _resolve_conversation(
 
         connection = (
             await session.execute(
-                select(ChannelConnection).where(
+                select(ChannelConnection)
+                .where(
                     ChannelConnection.tenant_id == tenant_id,
                     ChannelConnection.external_id == connection_external_id,
+                    ChannelConnection.deleted_at.is_(None),
                 )
+                .order_by(ChannelConnection.created_at)
+                .limit(1)
             )
-        ).scalar_one_or_none()
+        ).scalars().first()
 
         # Puente para conexiones del wizard de Embedded Signup (ADR-0030):
         # no tienen fila en channel_connections, pero sí una en phone_numbers.
@@ -364,12 +368,15 @@ async def _resolve_conversation(
         # garantía real, no depender solo de eso).
         meta_phone = (
             await session.execute(
-                select(PhoneNumber).where(
+                select(PhoneNumber)
+                .where(
                     PhoneNumber.phone_number_id == connection_external_id,
                     PhoneNumber.tenant_id == tenant_id,
                 )
+                .order_by(PhoneNumber.created_at)
+                .limit(1)
             )
-        ).scalar_one_or_none()
+        ).scalars().first()
         meta_connection_id = meta_phone.connection_id if meta_phone else None
 
         conversation = (
