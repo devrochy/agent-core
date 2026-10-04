@@ -50,7 +50,7 @@ from core.orchestrator.escalation import (
     within_business_hours,
 )
 from core.orchestrator.loop import process_conversation
-from core.orchestrator.turn_gate import run_turn
+from core.orchestrator.turn_gate import TurnQueueTimeout, run_turn
 from core.shared.events import ON_CONVERSATION_STARTED, ON_MESSAGE_RECEIVED, event_bus
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, tenant_scope
@@ -184,6 +184,11 @@ async def _handle_entry(entry_id: str, fields: dict[str, str], *, reclaimed: boo
             return
         await r.xack(INBOUND_STREAM, GROUP, entry_id)
         await r.delete(retry_key)
+    except TurnQueueTimeout:
+        # El cupo del tenant está saturado (HU-ARCH-27): el turno no llegó a
+        # correr. No se ackea ni cuenta como fallo; el reclamo lo reintenta.
+        log.warning("inbound_queue_timeout_skip", entry_id=entry_id, reclaimed=reclaimed)
+        return
     except Exception as exc:
         log.exception("inbound_handling_failed", entry_id=entry_id)
         retries = await r.incr(retry_key)

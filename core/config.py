@@ -173,11 +173,20 @@ class Settings(BaseSettings):
     # Un mensaje que quedó `pending` (crash, deploy, turno colgado) se reclama con
     # XAUTOCLAIM tras este idle. Un claim de idempotencia incompleto más viejo que
     # `claim_stale_seconds` se considera abandonado y se revoca para reprocesar.
-    # `claim_stale_seconds` DEBE ser mayor que `inbound_reclaim_idle_ms`: así un
-    # turno legítimamente largo no se reprocesa en paralelo (HU-ARCH-27 acotará la
-    # duración máxima del turno).
+    # Invariante: turn_timeout_s < inbound_reclaim_idle_ms < claim_stale_seconds,
+    # así un turno acotado nunca se confunde con un abandono.
     inbound_reclaim_idle_ms: int = Field(default=300_000, alias="INBOUND_RECLAIM_IDLE_MS")
     claim_stale_seconds: int = Field(default=600, alias="CLAIM_STALE_SECONDS")
+
+    # --- Presupuesto de un turno (HU-ARCH-27) ---
+    # `turn_timeout_s` es el presupuesto TOTAL del turno (todas las llamadas al
+    # LLM y tools): al agotarse se corta y el mensaje no queda colgado. La espera
+    # por el cupo del tenant tiene tope (`turn_queue_timeout_s`); si se agota, el
+    # turno se reprograma/reclama en vez de esperar para siempre. `turn_slow_warn_s`
+    # registra los turnos lentos para ver el problema antes de que sea incidente.
+    turn_timeout_s: int = Field(default=180, alias="TURN_TIMEOUT_S")
+    turn_queue_timeout_s: int = Field(default=30, alias="TURN_QUEUE_TIMEOUT_S")
+    turn_slow_warn_s: int = Field(default=30, alias="TURN_SLOW_WARN_S")
 
     # --- Costos de Meta ---
     # Franquicia de 1000 mensajes de servicio gratis/mes por número: cifra

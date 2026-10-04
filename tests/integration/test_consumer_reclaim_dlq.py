@@ -187,3 +187,51 @@ async def test_dlq_con_error_y_claim_revocado(monkeypatch) -> None:
                 )
             ).scalar_one_or_none()
     assert row is not None and row.deleted_at is not None
+
+
+async def test_queue_timeout_no_ackea_ni_reintenta(monkeypatch) -> None:
+    """HU-ARCH-27: si el cupo del tenant está saturado, el turno no corre y el
+    mensaje queda pendiente (sin ACK ni reintento): el reclamo lo reintenta."""
+    from core.gateway.webhooks import INBOUND_STREAM
+    from core.memory.working import get_redis
+    from core.orchestrator import consumer as mod
+    from core.orchestrator.turn_gate import TurnQueueTimeout
+
+    r = get_redis()
+    await mod.ensure_group()
+    mid = f"wamid.QUEUE.{uuid.uuid4().hex[:8]}"
+    fields = _fields(mid)
+    entry_id = await r.xadd(INBOUND_STREAM, fields)
+    await r.xreadgroup(mod.GROUP, mod.CONSUMER, {INBOUND_STREAM: ">"}, count=10)
+
+    async def saturado(*_a, **_k):
+        raise TurnQueueTimeout("cupo saturado")
+
+    monkeypatch.setattr(mod, "run_turn", saturado)
+    await mod._handle_entry(entry_id, fields)
+
+    # Sigue pendiente (sin ACK) y sin contar un reintento.
+    pend = await r.xpending_range(INBOUND_STREAM, mod.GROUP, min=entry_id, max=entry_id, count=1)
+    assert pend, "no debe ackearse cuando el turno no llegó a correr"
+    assert await r.get(f"inbound:retries:{entry_id}") is None
+
+
+async def test_debounce_reprograma_si_cupo_saturado(monkeypatch) -> None:
+    """HU-ARCH-27: el turno diferido no se pierde si el cupo está saturado: se
+    reprograma (delay 0) en vez de descartarse."""
+    from core.memory.working import get_redis
+    from core.orchestrator import debounce as mod
+    from core.orchestrator.turn_gate import TurnQueueTimeout
+
+    r = get_redis()
+    cid = uuid.uuid4()
+    await mod.schedule_debounce(cid, 0, {"latest_message": "hola", "tenant_id": str(TEST_ALPHA_ID)})
+
+    async def saturado(*_a, **_k):
+        raise TurnQueueTimeout("cupo saturado")
+
+    monkeypatch.setattr(mod, "run_turn", saturado)
+    await mod.poll_debounce_once()
+
+    # Volvió a quedar programado (no se perdió).
+    assert await r.zscore(mod.PENDING_KEY, str(cid)) is not None
