@@ -235,6 +235,11 @@ class BaseModule(ABC):
     admin_menu: list[dict[str, Any]] = []
     # [{"label": "Leads", "path": "/crm/leads", "section": "General"}]
 
+    # Sub-secciones de permiso que el pack aporta SIN item de menú (p. ej.
+    # `pack_calendar:notificaciones`): se pueden otorgar a colaboradores como
+    # cualquier sección pero no renderizan una pantalla. Formato: ["<key>", ...].
+    section_keys: ClassVar[list[str]] = []
+
     # Roles de colaborador que el pack aporta al alta de cuentas del panel
     # (ADR-0066). Se ofrecen en `/admin/colaboradores` solo si el pack está
     # activo. El pack recibe el aviso vía `on_collaborator_role` para crear su

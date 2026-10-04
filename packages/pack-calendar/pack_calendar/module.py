@@ -129,6 +129,9 @@ class GoogleCalendarModule(BaseModule):
         {"label": "Bloqueos", "path": "/calendar/bloqueos", "section": "Configuración", "section_key": "pack_calendar:bloqueos"},
         {"label": "Citas", "path": "/calendar/citas", "section": "Operación", "section_key": "pack_calendar:citas"},
     ]
+    # Sub-sección de permiso sin pantalla: quien la tenga recibe copia de los
+    # correos de agendamiento/reagenda/cancelación (HU-CAL-02).
+    section_keys: ClassVar[list[str]] = ["pack_calendar:notificaciones"]
     admin_router = calendar_admin_router
 
     def admin_api_routes(self) -> list[object]:

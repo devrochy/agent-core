@@ -10605,6 +10605,74 @@
             }
           }
         }
+      },
+      "patch": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Patch Block",
+        "description": "Edita un bloqueo de agenda (arrastrar/redimensionar en la grilla, HU-CAL-03).",
+        "operationId": "patch_block_api_v1_pack_calendar_blocks__block_id__patch",
+        "parameters": [
+          {
+            "name": "block_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Block Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/pack/calendar/week": {
@@ -10656,6 +10724,224 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WeekOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/events": {
+      "get": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Calendar Events",
+        "description": "Citas + bloqueos en formato FullCalendar para la grilla del panel (HU-CAL-03).\n\n`start`/`end` ISO (o YYYY-MM-DD). Sin parámetros, cubre el mes en curso.",
+        "operationId": "calendar_events_api_v1_pack_calendar_events_get",
+        "parameters": [
+          {
+            "name": "start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Calendar Events Api V1 Pack Calendar Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/appointments/{appointment_id}": {
+      "patch": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Patch Appointment",
+        "description": "Edita campos/horario de una cita y, si se mueve y `notify`, avisa al cliente\ny a los colaboradores (HU-CAL-02). Valida solapamiento en el servidor.",
+        "operationId": "patch_appointment_api_v1_pack_calendar_appointments__appointment_id__patch",
+        "parameters": [
+          {
+            "name": "appointment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Appointment Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppointmentPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppointmentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/appointments/{appointment_id}/activities": {
+      "get": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Appointment Activities",
+        "description": "Historial de una cita (programada/reprogramada/cancelada) (HU-CAL-03).",
+        "operationId": "appointment_activities_api_v1_pack_calendar_appointments__appointment_id__activities_get",
+        "parameters": [
+          {
+            "name": "appointment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Appointment Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ActivityOut"
+                  },
+                  "title": "Response Appointment Activities Api V1 Pack Calendar Appointments  Appointment Id  Activities Get"
                 }
               }
             }
@@ -10823,6 +11109,61 @@
           "critico"
         ],
         "title": "AccessAttempt"
+      },
+      "ActivityOut": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "old_start_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Old Start At"
+          },
+          "new_start_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Start At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "action",
+          "title",
+          "actor",
+          "old_start_at",
+          "new_start_at",
+          "created_at"
+        ],
+        "title": "ActivityOut"
       },
       "AddNumberRequest": {
         "properties": {
@@ -11025,6 +11366,14 @@
               }
             ],
             "title": "Appointment Type Id"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone"
           }
         },
         "type": "object",
@@ -11037,9 +11386,91 @@
           "status",
           "notes",
           "google_event_id",
-          "appointment_type_id"
+          "appointment_type_id",
+          "created_by",
+          "timezone"
         ],
         "title": "AppointmentOut"
+      },
+      "AppointmentPatch": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "attendee_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attendee Email"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "appointment_type_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Type Id"
+          },
+          "start_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start At"
+          },
+          "end_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End At"
+          },
+          "notify": {
+            "type": "boolean",
+            "title": "Notify",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "AppointmentPatch"
       },
       "AttemptRow": {
         "properties": {
@@ -11293,6 +11724,47 @@
           "reason"
         ],
         "title": "BlockOut"
+      },
+      "BlockPatch": {
+        "properties": {
+          "start_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start At"
+          },
+          "end_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End At"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "title": "BlockPatch"
       },
       "Body_import_products_csv_api_v1_pack_commerce_products_import_post": {
         "properties": {

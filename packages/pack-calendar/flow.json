@@ -14,7 +14,7 @@
       ]
     },
     {
-      "id": "gestion-citas",
+      "id": "gestion_citas",
       "label": "Gestión de citas",
       "purpose": "Reagendar, listar o cancelar citas YA existentes del cliente. Reagendar SIEMPRE con update_calendar_event (nunca crear una nueva).",
       "pack": "pack_calendar",

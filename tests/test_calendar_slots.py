@@ -10,7 +10,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from pack_calendar.config import CalendarConfig
-from pack_calendar.skills import _free_slots, _google_interval, _open_window
+from pack_calendar.skills import _free_slots, _google_interval, _open_window, _slot_conflict
 
 TZ = ZoneInfo("America/Bogota")
 
@@ -86,3 +86,46 @@ def test_intervalo_evento_google_allday() -> None:
     assert iv is not None
     start, end = iv
     assert start.hour == 0 and (end - start).days == 1
+
+
+# --------------------------------------------------- validación dura (HU-CAL-02)
+
+def _futuro(hhmm: str, date: str = "2027-03-15") -> datetime:
+    return datetime.fromisoformat(f"{date}T{hhmm}:00").replace(tzinfo=TZ)
+
+
+def test_slot_conflict_libre() -> None:
+    assert _slot_conflict(
+        "09:00-18:00", [], TZ, _futuro("10:00"), _futuro("11:00"), buffer_minutes=0
+    ) is None
+
+
+def test_slot_conflict_fuera_de_horario() -> None:
+    assert _slot_conflict(
+        "09:00-18:00", [], TZ, _futuro("08:00"), _futuro("09:00"), buffer_minutes=0
+    ) == "outside_hours"
+    assert _slot_conflict(
+        "", [], TZ, _futuro("10:00"), _futuro("11:00"), buffer_minutes=0
+    ) == "outside_hours"
+
+
+def test_slot_conflict_pasado() -> None:
+    pasado = datetime.fromisoformat("2020-01-01T10:00:00").replace(tzinfo=TZ)
+    assert _slot_conflict(
+        "09:00-18:00", [], TZ, pasado, pasado.replace(hour=11), buffer_minutes=0
+    ) == "in_past"
+
+
+def test_slot_conflict_ocupado() -> None:
+    busy = [(_futuro("10:30"), _futuro("11:30"))]
+    assert _slot_conflict(
+        "09:00-18:00", busy, TZ, _futuro("10:00"), _futuro("11:00"), buffer_minutes=0
+    ) == "occupied"
+
+
+def test_slot_conflict_buffer_rechaza_pegado() -> None:
+    busy = [(_futuro("10:00"), _futuro("11:00"))]
+    # Con 15 min de margen, una cita a las 11:00 choca con el ocupado 10:00-11:00.
+    assert _slot_conflict(
+        "09:00-18:00", busy, TZ, _futuro("11:00"), _futuro("11:30"), buffer_minutes=15
+    ) == "occupied"

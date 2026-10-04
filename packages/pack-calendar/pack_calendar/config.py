@@ -32,6 +32,31 @@ DEFAULT_CANCELLED_SUMMARY = (
     "Se cancelaron {cantidad} citas. Si querés reagendarlas, avisanos. 💬"
 )
 
+# --- Correo determinista de agendamiento (HU-CAL-02) -------------------------
+# Se envían por el canal SMTP del negocio al cliente y a los colaboradores con
+# el permiso `pack_calendar:notificaciones`. Placeholders: {cliente}, {titulo},
+# {fecha}, {hora}, {negocio}.
+DEFAULT_EMAIL_SUBJECT_CONFIRMED = "Tu cita quedó agendada — {negocio}"
+DEFAULT_EMAIL_BODY_CONFIRMED = (
+    "Hola {cliente},\n\n"
+    "Tu cita \"{titulo}\" quedó agendada para el {fecha} a las {hora}.\n\n"
+    "Si necesitás cambiarla, respondé a este correo.\n\n"
+    "— {negocio}"
+)
+DEFAULT_EMAIL_SUBJECT_MOVED = "Tu cita fue reagendada — {negocio}"
+DEFAULT_EMAIL_BODY_MOVED = (
+    "Hola {cliente},\n\n"
+    "Tu cita \"{titulo}\" fue reagendada para el {fecha} a las {hora}.\n\n"
+    "— {negocio}"
+)
+DEFAULT_EMAIL_SUBJECT_CANCELLED = "Tu cita fue cancelada — {negocio}"
+DEFAULT_EMAIL_BODY_CANCELLED = (
+    "Hola {cliente},\n\n"
+    "Tu cita \"{titulo}\" del {fecha} a las {hora} quedó cancelada.\n"
+    "Si querés reagendarla, avisanos.\n\n"
+    "— {negocio}"
+)
+
 
 class CalendarConfig(BasePluginConfig):
     source: str = Field(
@@ -84,6 +109,40 @@ class CalendarConfig(BasePluginConfig):
             "Mensaje resumen que recibe el cliente por WhatsApp cuando se cancelan "
             "VARIAS citas a la vez. Placeholder: {cantidad}"
         ),
+        json_schema_extra={"format": "textarea"},
+    )
+    # -------------------------------------------------- correo de agendamiento (HU-CAL-02)
+    email_subject_confirmed: str = Field(
+        default=DEFAULT_EMAIL_SUBJECT_CONFIRMED,
+        description=(
+            "Asunto del correo de confirmación de cita. Placeholders: {cliente}, "
+            "{titulo}, {fecha}, {hora}, {negocio}"
+        ),
+    )
+    email_body_confirmed: str = Field(
+        default=DEFAULT_EMAIL_BODY_CONFIRMED,
+        description=(
+            "Cuerpo del correo de confirmación. Placeholders: {cliente}, {titulo}, "
+            "{fecha}, {hora}, {negocio}"
+        ),
+        json_schema_extra={"format": "textarea"},
+    )
+    email_subject_moved: str = Field(
+        default=DEFAULT_EMAIL_SUBJECT_MOVED,
+        description="Asunto del correo de reagenda. Mismos placeholders.",
+    )
+    email_body_moved: str = Field(
+        default=DEFAULT_EMAIL_BODY_MOVED,
+        description="Cuerpo del correo de reagenda. Mismos placeholders.",
+        json_schema_extra={"format": "textarea"},
+    )
+    email_subject_cancelled: str = Field(
+        default=DEFAULT_EMAIL_SUBJECT_CANCELLED,
+        description="Asunto del correo de cancelación. Mismos placeholders.",
+    )
+    email_body_cancelled: str = Field(
+        default=DEFAULT_EMAIL_BODY_CANCELLED,
+        description="Cuerpo del correo de cancelación. Mismos placeholders.",
         json_schema_extra={"format": "textarea"},
     )
     # ---------------------------------------------------------- completion_claims (ADR-0025/#157)

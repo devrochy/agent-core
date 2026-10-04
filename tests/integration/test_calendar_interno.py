@@ -238,3 +238,144 @@ async def test_crud_bloqueos_api(app_client) -> None:
     data = r.json()
     assert len(data["days"]) == 7
     assert all("business_hours" in d for d in data["days"])
+
+
+async def test_create_event_rechaza_solapamiento_y_pasado() -> None:
+    """HU-CAL-02: validación DURA en el servidor — no doble reserva y no fechas pasadas."""
+    from pack_calendar.skills import CalendarSkill
+
+    from core.shared.tenant import tenant_scope
+
+    tenant_id = await _tenant_calendario()
+    await _configurar(tenant_id)
+    skill = CalendarSkill()
+    ctx = _contexto()
+
+    async with tenant_scope(tenant_id):
+        first = await skill.create_event(
+            {"title": "Demo 1", "start_datetime": f"{FECHA}T10:00:00"}, ctx
+        )
+        assert first["status"] == "created"
+
+        choque = await skill.create_event(
+            {"title": "Demo 2", "start_datetime": f"{FECHA}T10:00:00"}, ctx
+        )
+        assert choque["status"] == "rejected"
+        assert choque["reason"] == "occupied"
+        assert (await skill.list_appointments({}, ctx))["total"] == 1
+
+        fuera = await skill.create_event(
+            {"title": "Demo 3", "start_datetime": f"{FECHA}T22:00:00"}, ctx
+        )
+        assert fuera["reason"] in ("outside_hours", "in_past")
+
+        pasado = await skill.create_event(
+            {"title": "Demo 4", "start_datetime": "2020-01-01T10:00:00"}, ctx
+        )
+        assert pasado["reason"] == "in_past"
+
+
+async def test_email_fallback_sin_conexion() -> None:
+    """HU-CAL-02: sin conexión SMTP, agendar igual funciona; el correo queda no enviado."""
+    from pack_calendar.skills import CalendarSkill
+
+    from core.shared.tenant import tenant_scope
+
+    tenant_id = await _tenant_calendario()
+    await _configurar(tenant_id)
+
+    async with tenant_scope(tenant_id):
+        res = await CalendarSkill().create_event(
+            {
+                "title": "Demo con correo",
+                "start_datetime": f"{FECHA}T09:00:00",
+                "attendee_email": "cliente@ejemplo.com",
+            },
+            _contexto(),
+        )
+        assert res["status"] == "created"
+        assert res["email_sent"] is False
+        assert res["email_reason"] in ("no_connection", "sin_destinatarios", "error_envio")
+
+
+async def test_events_activities_y_patch_api(app_client) -> None:
+    """HU-CAL-02/03: /events, historial y PATCH de cita con validación de choque."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from _api_helpers import api_headers
+
+    tid = await _tenant_calendario()
+    headers = await api_headers(app_client, tid)
+    tz = ZoneInfo("America/Bogota")
+    base = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=3)
+    fecha = base.strftime("%Y-%m-%d")
+    fin = (base + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    r = await app_client.post("/api/v1/pack/calendar/appointments", headers=headers, json={
+        "title": "Demo API",
+        "start_at": f"{fecha}T10:00:00-05:00",
+        "end_at": f"{fecha}T11:00:00-05:00",
+        "attendee_email": "cliente@ejemplo.com",
+    })
+    assert r.status_code == 201, r.text
+    appt = r.json()
+    assert appt["created_by"] == "panel"
+    appt_id = appt["id"]
+
+    r = await app_client.get(
+        "/api/v1/pack/calendar/events", headers=headers, params={"start": fecha, "end": fin}
+    )
+    assert r.status_code == 200, r.text
+    events = r.json()["events"]
+    assert any(e["kind"] == "appointment" and e["id"] == f"appt-{appt_id}" for e in events)
+
+    r = await app_client.patch(
+        f"/api/v1/pack/calendar/appointments/{appt_id}", headers=headers,
+        json={"start_at": f"{fecha}T11:00:00-05:00", "end_at": f"{fecha}T12:00:00-05:00", "notify": False},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["start_at"].startswith(f"{fecha}T11:00")
+
+    r2 = await app_client.post("/api/v1/pack/calendar/appointments", headers=headers, json={
+        "title": "Otra", "start_at": f"{fecha}T15:00:00-05:00", "end_at": f"{fecha}T16:00:00-05:00",
+    })
+    assert r2.status_code == 201
+    r = await app_client.patch(
+        f"/api/v1/pack/calendar/appointments/{appt_id}", headers=headers,
+        json={"start_at": f"{fecha}T15:00:00-05:00", "end_at": f"{fecha}T16:00:00-05:00"},
+    )
+    assert r.status_code == 400
+
+    r = await app_client.get(
+        f"/api/v1/pack/calendar/appointments/{appt_id}/activities", headers=headers
+    )
+    assert r.status_code == 200, r.text
+    assert "reprogramada" in [a["action"] for a in r.json()]
+
+
+async def test_block_patch_api(app_client) -> None:
+    """HU-CAL-02: PATCH de bloqueo (arrastrar/redimensionar)."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from _api_helpers import api_headers
+
+    tid = await _tenant_calendario()
+    headers = await api_headers(app_client, tid)
+    tz = ZoneInfo("America/Bogota")
+    fecha = (
+        datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=5)
+    ).strftime("%Y-%m-%d")
+
+    r = await app_client.post("/api/v1/pack/calendar/blocks", headers=headers, json={
+        "start_at": f"{fecha}T12:00:00-05:00", "end_at": f"{fecha}T13:00:00-05:00", "reason": "Almuerzo",
+    })
+    assert r.status_code == 201, r.text
+    bid = r.json()["id"]
+
+    r = await app_client.patch(f"/api/v1/pack/calendar/blocks/{bid}", headers=headers, json={
+        "end_at": f"{fecha}T14:00:00-05:00", "reason": "Almuerzo largo",
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["reason"] == "Almuerzo largo"
