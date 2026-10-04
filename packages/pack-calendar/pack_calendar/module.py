@@ -126,6 +126,7 @@ class GoogleCalendarModule(BaseModule):
         {"label": "Conexión", "path": "/calendar/", "section": "Configuración", "section_key": "pack_calendar:conexion"},
         {"label": "Horarios y calendario", "path": "/calendar/configuracion", "section": "Configuración", "section_key": "pack_calendar:configuracion"},
         {"label": "Tipos de cita", "path": "/calendar/tipos", "section": "Configuración", "section_key": "pack_calendar:tipos"},
+        {"label": "Bloqueos", "path": "/calendar/bloqueos", "section": "Configuración", "section_key": "pack_calendar:bloqueos"},
         {"label": "Citas", "path": "/calendar/citas", "section": "Operación", "section_key": "pack_calendar:citas"},
     ]
     admin_router = calendar_admin_router
