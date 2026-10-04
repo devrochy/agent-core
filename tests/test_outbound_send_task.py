@@ -105,7 +105,9 @@ def _send_one_fixture(monkeypatch, *, earliest=True, claim=True, adapter=None):
         conversation_id=uuid.uuid4(), created_at=datetime.now(UTC),
         media_type=None, media_url=None, content="hola",
     )
-    conv = SimpleNamespace(connection_id=None, meta_connection_id=None, customer_id=uuid.uuid4())
+    conv = SimpleNamespace(
+        connection_id=None, meta_connection_id=None, customer_id=uuid.uuid4(), channel="whatsapp"
+    )
     cust = SimpleNamespace(external_id="whatsapp:+573001234567")
 
     class FakeSession:

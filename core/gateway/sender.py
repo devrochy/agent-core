@@ -227,9 +227,16 @@ async def send_to_conversation(
             )
         return False
 
+    # Canal `web` (HU-CHAN-02): no hay proveedor externo ni credenciales. La
+    # respuesta se persiste y el widget la recoge por polling; se salta la
+    # maquinaria de Meta (ventana de 24h, pausas por uso, phone_number_id).
+    is_web = conversation.channel == "web"
+
     _provider, credentials = await resolve_credentials(
         conversation.connection_id, conversation.meta_connection_id, expected_tenant_id=conversation.tenant_id
     )
+    if is_web:
+        _provider, credentials = "web", {}
 
     from core.gateway.meta_usage import connection_id_for_phone_number, is_paused
 
@@ -237,7 +244,7 @@ async def send_to_conversation(
     meta_connection_id = await connection_id_for_phone_number(
         credentials.get("phone_number_id", ""), current_tenant_id
     )
-    if await is_paused(current_tenant_id, meta_connection_id):
+    if not is_web and await is_paused(current_tenant_id, meta_connection_id):
         log.error(
             "envio_pausado_por_uso_de_api",
             conversation_id=str(conversation_id),
