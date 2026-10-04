@@ -208,6 +208,10 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
         provider, credentials = await resolve_credentials(
             conversation.connection_id, conversation.meta_connection_id, expected_tenant_id=tenant_id
         )
+        # Canal `web` (HU-CHAN-02): sin proveedor externo; el adaptador solo
+        # marca el mensaje como enviado y el widget lo lee por polling.
+        if conversation.channel == "web":
+            provider, credentials = "web", {}
         adapter = outbound_adapter_for(provider)
 
         try:
