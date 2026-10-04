@@ -195,13 +195,24 @@ def remove(name: str = typer.Argument(...)) -> None:
 
 
 @app.command()
-def scaffold(name: str = typer.Argument(..., help="Nombre del nuevo pack, ej: fidelidad o pack-fidelidad")) -> None:
-    """Genera la estructura base de un pack nuevo en packages/pack-<nombre>/.
+def scaffold(
+    name: str = typer.Argument(..., help="Nombre del nuevo pack, ej: fidelidad o pack-fidelidad"),
+    tenant: bool = typer.Option(
+        False,
+        "--tenant",
+        help="Genera un plugin del tenant (ADR-0089): modelos, jobs, migraciones y tests con RLS.",
+    ),
+) -> None:
+    """Genera la estructura base de un plugin/pack nuevo en packages/pack-<nombre>/.
 
     Antes generaba en plugins/<nombre>/ (heredado del monolito pre-ADR-0020).
     El código nuevo va en packages/pack-* (CLAUDE.md) — este comando ya
     entrega la estructura ahí directamente, sin el paso manual de mover
     carpetas que documentaba plugin-dev.md.
+
+    Con `--tenant` (ADR-0089) añade `models.py`, `jobs.py`, un árbol Alembic
+    propio y tests, listos para un negocio particular: cada tabla nace con
+    `tenant_id` + RLS forzada.
     """
     raw = normalize(name)
     domain = raw
@@ -216,6 +227,32 @@ def scaffold(name: str = typer.Argument(..., help="Nombre del nuevo pack, ej: fi
         raise typer.Exit(1)
     package.mkdir(parents=True)
 
+    _write_common_files(base, package, plugin_id, domain, name)
+    if tenant:
+        _write_tenant_files(base, package, plugin_id, domain)
+
+    extra = (
+        f"\n\n[bold]Plugin del tenant (ADR-0089).[/bold] Incluye models.py, jobs.py,\n"
+        f"migraciones (alembic/) y tests. La tabla de ejemplo ya cumple tenant_id + RLS.\n"
+        f"Revisa {base / 'alembic/versions/'} antes de instalar."
+        if tenant
+        else ""
+    )
+    console.print(
+        Panel(
+            f"Plugin creado en [bold]{base}[/bold]\n\n"
+            f"1. Edita {package}/skills.py con tus tools\n"
+            f"2. Instala: pip install -e {base}\n"
+            f"3. Actívalo en http://localhost:8000/admin/plugins"
+            f"{extra}",
+            border_style="green",
+            title="✓ scaffold",
+        )
+    )
+
+
+def _write_common_files(base: Path, package: Path, plugin_id: str, domain: str, name: str) -> None:
+    """Archivos comunes a pack y plugin del tenant."""
     (base / "pyproject.toml").write_text(
         f'''[build-system]
 requires = ["setuptools>=69"]
@@ -256,7 +293,7 @@ class Config(BasePluginConfig):
     (package / "skills.py").write_text(
         f'''"""Skills del plugin: agrupaciones semánticas de tools."""
 
-from typing import Any
+from typing import Any, ClassVar
 
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 
@@ -264,7 +301,7 @@ from core.mcp.types import BaseSkill, MCPTool, ToolContext
 class MainSkill(BaseSkill):
     name = "{plugin_id}_skill"
     description = "Describe qué hace esta skill"
-    keywords = []  # vacío = siempre activa; con keywords, el router la activa por contexto
+    keywords: ClassVar[list[str]] = []  # vacío = siempre activa; con keywords, el router la activa por contexto
 
     def get_tools(self) -> list[MCPTool]:
         return [
@@ -307,16 +344,310 @@ class Module(BaseModule):
         host.register_skill(MainSkill())
 '''
     )
-    console.print(
-        Panel(
-            f"Plugin creado en [bold]{base}[/bold]\n\n"
-            f"1. Edita {package}/skills.py con tus tools\n"
-            f"2. Instala: pip install -e {base}\n"
-            f"3. Actívalo en http://localhost:8000/admin/plugins",
-            border_style="green",
-            title="✓ scaffold",
-        )
+
+
+def _write_tenant_files(base: Path, package: Path, plugin_id: str, domain: str) -> None:
+    """Archivos de un plugin del tenant (ADR-0089): datos, tareas, migración y tests.
+
+    Toda tabla nace con `tenant_id` + RLS habilitada y forzada, índice que
+    empieza por `tenant_id` y `deleted_at` (borrado lógico). La migración de
+    ejemplo pasa la guarda de invariantes del core.
+    """
+    class_name = "".join(part.capitalize() for part in domain.split("_")) or "Item"
+
+    (package / "models.py").write_text(
+        f'''"""Modelos de {plugin_id} — SQLAlchemy sobre su PROPIA Base.
+
+Plugin del tenant (ADR-0089): acotado a UN negocio. Toda tabla lleva
+`tenant_id` (invariante nº1) + RLS forzada + índice que empieza por `tenant_id`
+y `deleted_at` (borrado lógico, invariante nº8).
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+
+from sqlalchemy import DateTime, Index, Text, text
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from core.shared.tenant import get_current_tenant_id
+
+
+def utcnow() -> datetime:
+    from datetime import UTC
+
+    return datetime.now(UTC)
+
+
+def _tenant_or_raise() -> uuid.UUID:
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        raise RuntimeError("tenant_id requerido: usar dentro de tenant_scope()")
+    return tenant_id
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class TenantMixin:
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, default=_tenant_or_raise
     )
+
+
+class {class_name}(TenantMixin, Base):
+    """Tabla de ejemplo. Renómbrala y añade tus columnas."""
+
+    __tablename__ = "{plugin_id}_{domain}"
+    __table_args__ = (
+        Index("ix_{plugin_id}_{domain}_tenant_created", "id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    nombre: Mapped[str] = mapped_column(Text, default="")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=text("now()")
+    )
+'''
+    )
+
+    (package / "jobs.py").write_text(
+        f'''"""Cron jobs de {plugin_id} (plugin del tenant, ADR-0089).
+
+`@register_cron` salta automáticamente si el plugin está inactivo para el
+tenant. El filtro por tenant habilitado es explícito (`_tenant_ids`, ADR-0019).
+"""
+
+from __future__ import annotations
+
+import uuid
+
+from sqlalchemy import text
+
+from core.db.session import get_session
+from core.shared.logger import get_logger
+from core.tasks.decorators import register_cron
+
+log = get_logger(__name__)
+
+PACK_ID = "{plugin_id}"
+
+
+async def _tenant_ids() -> list[uuid.UUID]:
+    """Tenants cuyo AgentSpec incluye este plugin (ADR-0019)."""
+    from core.agents.spec import enabled_packs, load_active_spec
+
+    async with get_session() as session:
+        rows = (
+            await session.execute(text("select id from tenants where deleted_at is null")).scalars()
+        ).all()
+    out: list[uuid.UUID] = []
+    for tenant_id in rows:
+        spec = await load_active_spec(tenant_id)
+        if PACK_ID in enabled_packs(spec):
+            out.append(tenant_id)
+    return out
+
+
+@register_cron(PACK_ID, "0 3 * * *")
+async def tarea_diaria() -> None:
+    """Tarea diaria de ejemplo. Reemplázala por tu lógica."""
+    for tenant_id in await _tenant_ids():
+        log.info("tarea_diaria_tenant", plugin=PACK_ID, tenant_id=str(tenant_id))
+'''
+    )
+
+    # ---------------- Alembic propio
+    alembic_dir = base / "alembic"
+    (alembic_dir / "versions").mkdir(parents=True)
+    (base / "alembic.ini").write_text(
+        f"""[alembic]
+script_location = alembic
+prepend_sys_path = .
+sqlalchemy.url =
+version_table = alembic_version_{plugin_id}
+
+[loggers]
+keys = root
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARN
+handlers = console
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+"""
+    )
+    (alembic_dir / "env.py").write_text(
+        f'''"""Árbol Alembic PROPIO de {plugin_id} (plugin del tenant, ADR-0089).
+
+version_table separada (alembic_version_{plugin_id}) para no chocar con el core
+ni con otros plugins. El plugin_manager ejecuta esto al activar.
+"""
+
+from __future__ import annotations
+
+from {plugin_id}.models import Base
+from sqlalchemy import engine_from_config, pool
+
+from alembic import context
+
+config = context.config
+
+if not config.get_main_option("sqlalchemy.url"):
+    from core.config import get_settings
+
+    _url = get_settings().migrations_database_url or get_settings().database_url
+    config.set_main_option("sqlalchemy.url", _url.replace("+asyncpg", "+psycopg2"))
+
+target_metadata = Base.metadata
+VERSION_TABLE = config.get_main_option("version_table") or "alembic_version_{plugin_id}"
+
+
+def run_migrations_offline() -> None:
+    context.configure(
+        url=config.get_main_option("sqlalchemy.url"),
+        target_metadata=target_metadata,
+        literal_binds=True,
+        version_table=VERSION_TABLE,
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {{}}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection, target_metadata=target_metadata, version_table=VERSION_TABLE
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+'''
+    )
+    (alembic_dir / "versions" / f"0001_{domain}.py").write_text(
+        f'''"""{class_name}: tabla de ejemplo de {plugin_id} (ADR-0089).
+
+Toda tabla de un plugin del tenant lleva tenant_id + RLS habilitada y forzada +
+policy de aislamiento (invariante nº1) e índice que empieza por tenant_id.
+
+Revision ID: {plugin_id}_0001
+Revises:
+Create Date: (autogenerado por scaffold)
+"""
+
+from __future__ import annotations
+
+import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import UUID
+
+from alembic import op
+
+revision = "{plugin_id}_0001"
+down_revision = None
+branch_labels = None
+depends_on = None
+
+RLS = "nullif(current_setting('app.tenant_id', true), '')::uuid"
+_TS = sa.DateTime(timezone=True)
+_UUID = UUID(as_uuid=True)
+
+
+def upgrade() -> None:
+    op.create_table(
+        "{plugin_id}_{domain}",
+        sa.Column("id", _UUID, primary_key=True),
+        sa.Column("tenant_id", _UUID, nullable=False),
+        sa.Column("nombre", sa.Text(), nullable=False, server_default=""),
+        sa.Column("deleted_at", _TS, nullable=True),
+        sa.Column("created_at", _TS, nullable=False, server_default=sa.text("now()")),
+    )
+    op.create_index(
+        "ix_{plugin_id}_{domain}_tenant_created",
+        "{plugin_id}_{domain}",
+        ["tenant_id", "id", "created_at"],
+    )
+    op.execute("alter table {plugin_id}_{domain} enable row level security")
+    op.execute(
+        "create policy tenant_isolation on {plugin_id}_{domain} "
+        f"using (tenant_id = {{RLS}}) with check (tenant_id = {{RLS}})"
+    )
+    op.execute("alter table {plugin_id}_{domain} force row level security")
+    op.execute(
+        "grant select, insert, update, delete on {plugin_id}_{domain} to app_runtime"
+    )
+
+
+def downgrade() -> None:
+    op.execute("drop policy if exists tenant_isolation on {plugin_id}_{domain}")
+    op.execute("alter table {plugin_id}_{domain} no force row level security")
+    op.drop_index(
+        "ix_{plugin_id}_{domain}_tenant_created", table_name="{plugin_id}_{domain}"
+    )
+    op.drop_table("{plugin_id}_{domain}")
+'''
+    )
+
+    # ---------------- Test de invariantes (tenant_id + RLS)
+    tests_dir = base / "tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "__init__.py").write_text("")
+    (tests_dir / f"test_{domain}_migracion_rls.py").write_text(
+        f'''"""Invariante nº1: toda tabla de {plugin_id} nace con tenant_id + RLS forzada.
+
+Revisa la migración de ejemplo: si añades tablas, replica la misma forma. Este
+test es la puerta del master (ADR-0089) antes de desplegar el plugin.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+MIGRACIONES = Path(__file__).resolve().parent.parent / "alembic" / "versions"
+
+
+def _texto_migraciones() -> str:
+    return "\\n".join(p.read_text(encoding="utf-8") for p in MIGRACIONES.glob("*.py")).lower()
+
+
+def test_toda_tabla_declara_tenant_id_y_rls():
+    texto = _texto_migraciones()
+    assert "create_table" in texto
+    assert "tenant_id" in texto
+    assert "enable row level security" in texto
+    # `no force` del downgrade no cuenta.
+    assert re.search(r"(?<!no )force row level security", texto)
+    assert "create policy" in texto
+    assert "with check" in texto
+'''
+    )
+
 
 
 @app.command()
