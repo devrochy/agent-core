@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import socket
 import uuid
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from core.agents.responses import load_response
@@ -56,9 +58,27 @@ from core.shared.tenant import get_current_tenant_id, tenant_scope
 log = get_logger(__name__)
 
 GROUP = "orchestrator-group"
-CONSUMER = "orchestrator-1"
+
+
+def consumer_name() -> str:
+    """Nombre de consumer único por réplica (HU-ARCH-06).
+
+    Antes era `orchestrator-1` fijo: con dos réplicas, ambas compartían nombre y
+    el reclamo de pendientes (`XAUTOCLAIM`) no podía distinguir cuál seguía vivo.
+    """
+    return f"orchestrator-{socket.gethostname()}-{os.getpid()}"[:120]
+
+
+CONSUMER = consumer_name()
 MAX_DELIVERIES = 3
 DEAD_LETTER_STREAM = "agent_core:inbound:dlq"
+# Cada cuánto se intenta el reclamo de pendientes huérfanos (HU-ARCH-06).
+RECLAIM_EVERY_S = 30.0
+# Resultado del procesamiento de un inbound (HU-ARCH-06).
+TURN_PROCESSED = "processed"
+TURN_DUPLICATE = "duplicate"
+TURN_BUSY = "busy"
+TURN_SKIPPED = "skipped"
 
 
 async def ensure_group() -> None:
@@ -78,11 +98,16 @@ async def consume_loop() -> None:
     procesa de forma concurrente acotada por el gate (global + por tenant).
     Así el mensaje de un tenant B se programa aunque A tenga cientos por delante:
     el cupo de A (max_turns_per_tenant) deja slots globales libres para B.
+
+    HU-ARCH-06: además de los mensajes NUEVOS, cada `RECLAIM_EVERY_S` se reclaman
+    con `XAUTOCLAIM` los pendientes huérfanos (crash, deploy, turno colgado), para
+    que ningún mensaje quede sin procesar ni sin llegar a la DLQ.
     """
     await ensure_group()
     r = get_redis()
     pending: set[asyncio.Task[None]] = set()
     max_inflight = get_settings().max_concurrent_turns * 5
+    last_reclaim = 0.0
     while True:
         try:
             batches = await r.xreadgroup(GROUP, CONSUMER, {INBOUND_STREAM: ">"}, count=10, block=2000)
@@ -91,6 +116,10 @@ async def consume_loop() -> None:
                     task = asyncio.create_task(_handle_entry(entry_id, fields))
                     pending.add(task)
                     task.add_done_callback(pending.discard)
+            now = asyncio.get_running_loop().time()
+            if now - last_reclaim >= RECLAIM_EVERY_S:
+                last_reclaim = now
+                await _reclaim_pending(r, pending)
             if len(pending) >= max_inflight:
                 _, pending = await asyncio.wait(
                     pending, timeout=2, return_when=asyncio.FIRST_COMPLETED
@@ -108,36 +137,124 @@ async def consume_loop() -> None:
             await asyncio.sleep(2)
 
 
-async def _handle_entry(entry_id: str, fields: dict[str, str]) -> None:
+async def _reclaim_pending(r: Any, pending: set[asyncio.Task[None]]) -> None:
+    """Reclama pendientes con idle > `inbound_reclaim_idle_ms` (HU-ARCH-06).
+
+    El XAUTOCLAIM es una llamada corta; el procesamiento de cada entrada
+    reclamada se agenda como task concurrente, igual que el camino de mensajes
+    nuevos. Un pendiente que OTRO worker sigue procesando se salta en
+    `_claim_event` (claim reciente = "busy") sin ACK.
+    """
+    settings = get_settings()
+    try:
+        result = await r.xautoclaim(
+            INBOUND_STREAM,
+            GROUP,
+            CONSUMER,
+            min_idle_time=settings.inbound_reclaim_idle_ms,
+            start_id="0-0",
+            count=10,
+        )
+    except Exception:
+        log.exception("inbound_reclaim_failed")
+        return
+    # redis-py: [next_cursor, entries] (>=5.x) o [next_cursor, entries, deleted] (7.x).
+    entries = result[1] if isinstance(result, (list, tuple)) and len(result) >= 2 else []
+    for item in entries or []:
+        try:
+            entry_id, fields = item[0], item[1]
+        except (IndexError, TypeError):
+            continue
+        log.warning("inbound_reclaimed", entry_id=entry_id)
+        task = asyncio.create_task(_handle_entry(entry_id, dict(fields), reclaimed=True))
+        pending.add(task)
+        task.add_done_callback(pending.discard)
+
+
+async def _handle_entry(entry_id: str, fields: dict[str, str], *, reclaimed: bool = False) -> None:
     r = get_redis()
     retry_key = f"inbound:retries:{entry_id}"
     try:
         tenant_id = fields.get("tenant_id")
-        await run_turn(tenant_id, handle_inbound(fields))
+        outcome = await run_turn(tenant_id, handle_inbound(fields))
+        if outcome == TURN_BUSY:
+            # Otro worker lo está procesando: NO se ackea; el reclamo lo reintenta
+            # cuando el claim quede abandonado (HU-ARCH-06).
+            log.info("inbound_busy_skip", entry_id=entry_id, reclaimed=reclaimed)
+            return
         await r.xack(INBOUND_STREAM, GROUP, entry_id)
         await r.delete(retry_key)
-    except Exception:
+    except Exception as exc:
         log.exception("inbound_handling_failed", entry_id=entry_id)
         retries = await r.incr(retry_key)
         await r.expire(retry_key, 3600)
+        # El turno falló: se revoca el claim para que el reclamo lo reintente sin
+        # esperar al umbral de abandono (HU-ARCH-06). El contador gobierna los intentos.
+        await _revoke_claim(fields)
         if retries >= MAX_DELIVERIES:
-            await r.xadd(DEAD_LETTER_STREAM, fields)
-            await r.xack(INBOUND_STREAM, GROUP, entry_id)
+            await _dead_letter(r, entry_id, fields, retries, error=f"{type(exc).__name__}: {exc}")
             await r.delete(retry_key)
-            log.error("message_dead_lettered", entry_id=entry_id)
 
 
-async def handle_inbound(fields: dict[str, str]) -> bool:
-    """Procesa un inbound. Devuelve True si se procesó, False si era duplicado.
+async def _dead_letter(
+    r: Any, entry_id: str, fields: dict[str, str], deliveries: int, *, error: str
+) -> None:
+    """Manda el mensaje a la DLQ con el error y lo ackea (HU-ARCH-06).
 
-    ADR-0007: se inserta el claim en `processed_events` ANTES de procesar; si ya
-    existe (único por tenant y message_id), el evento es un duplicado y se descarta
-    (ACK arriba). ADR-0013: el claim es revocable para permitir el reintento del DLQ.
+    El reintento manual del panel (ADR-0013) revoca el claim y lo re-encola.
+    El claim incompleto se revoca aquí para no bloquear ese reintento.
+    """
+    payload = dict(fields)
+    payload["error"] = (error or "")[:500]
+    payload["deliveries"] = str(deliveries)
+    payload["failed_at"] = utcnow().isoformat()
+    await r.xadd(DEAD_LETTER_STREAM, payload)
+    await r.xack(INBOUND_STREAM, GROUP, entry_id)
+    await _revoke_claim(fields)
+    log.error("message_dead_lettered", entry_id=entry_id, deliveries=deliveries)
+
+
+async def _revoke_claim(fields: dict[str, str]) -> None:
+    """Soft-delete del claim de idempotencia (ADR-0013), best-effort.
+
+    Abre su propio `tenant_scope`: `processed_events` tiene RLS forzada y este
+    helper se llama fuera del scope del turno (HU-ARCH-06).
+    """
+    tenant_id = fields.get("tenant_id")
+    if not tenant_id:
+        return
+    try:
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                await session.execute(
+                    update(ProcessedEvent)
+                    .where(
+                        ProcessedEvent.tenant_id == uuid.UUID(tenant_id),
+                        ProcessedEvent.external_message_id == fields.get("external_message_id", ""),
+                        ProcessedEvent.deleted_at.is_(None),
+                    )
+                    .values(deleted_at=utcnow())
+                )
+    except Exception:
+        log.warning("claim_revoke_failed", exc_info=True)
+
+
+async def handle_inbound(fields: dict[str, str]) -> str:
+    """Procesa un inbound y devuelve el resultado del claim (HU-ARCH-06).
+
+    - `TURN_PROCESSED`: procesado (o manejado: cuota, pausa, escalado por keyword).
+    - `TURN_DUPLICATE`: ya estaba terminado; se descarta (ACK).
+    - `TURN_BUSY`: hay un claim incompleto reciente (otro worker en vuelo); NO se
+      ackea y el reclamo lo reintenta.
+    - `TURN_SKIPPED`: sin tenant o tenant no operativo; se descarta (ACK).
+
+    ADR-0007: el claim se inserta ANTES de procesar; ADR-0013: es revocable;
+    ADR-0090: lleva estado (`completed_at`) para distinguir en vuelo de terminado.
     """
     tenant_id = fields.get("tenant_id")
     if not tenant_id:
         log.warning("inbound_without_tenant", message_id=fields.get("external_message_id"))
-        return False
+        return TURN_SKIPPED
 
     async with tenant_scope(tenant_id):
         # Ciclo de vida + billing: mensajes de un tenant suspendido/eliminado o
@@ -150,36 +267,86 @@ async def handle_inbound(fields: dict[str, str]) -> bool:
                 tenant_id=tenant_id,
                 message_id=fields.get("external_message_id"),
             )
-            return False
-        if not await _claim_event(uuid.UUID(tenant_id), fields):
+            return TURN_SKIPPED
+        claim = await _claim_event(uuid.UUID(tenant_id), fields)
+        if claim == "busy":
+            return TURN_BUSY
+        if claim == "duplicate":
             log.info(
                 "event_already_processed",
                 message_id=fields.get("external_message_id"),
                 tenant_id=tenant_id,
             )
-            return False
+            return TURN_DUPLICATE
         await _handle_inbound_scoped(fields)
-        return True
+        await _mark_event_completed(uuid.UUID(tenant_id), fields.get("external_message_id", ""))
+        return TURN_PROCESSED
 
 
-async def _claim_event(tenant_id: uuid.UUID, fields: dict[str, str]) -> bool:
-    """INSERT del claim de idempotencia. False = ya procesado (duplicado)."""
+async def _claim_event(tenant_id: uuid.UUID, fields: dict[str, str]) -> str:
+    """Claim de idempotencia con estado (HU-ARCH-06).
+
+    - `claimed`: evento nuevo, o su claim incompleto quedó abandonado (más viejo
+      que `claim_stale_seconds`) y se revocó para reprocesar.
+    - `duplicate`: ya se procesó por completo.
+    - `busy`: hay un claim incompleto reciente (otro worker en vuelo).
+    """
+    settings = get_settings()
+    external_id = fields.get("external_message_id", "")
+    provider = fields.get("provider", "")
     async with get_session() as session:
+        existing = (
+            await session.execute(
+                select(ProcessedEvent).where(
+                    ProcessedEvent.tenant_id == tenant_id,
+                    ProcessedEvent.external_message_id == external_id,
+                    ProcessedEvent.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if existing.completed_at is not None:
+                return "duplicate"
+            stale_before = utcnow() - timedelta(seconds=settings.claim_stale_seconds)
+            if existing.handled_at is None or existing.handled_at < stale_before:
+                # Claim abandonado (proceso muerto a mitad): se revoca.
+                existing.deleted_at = utcnow()
+                await session.flush()
+            else:
+                return "busy"
         session.add(
             ProcessedEvent(
                 tenant_id=tenant_id,
-                provider=fields.get("provider", ""),
-                external_message_id=fields.get("external_message_id", ""),
+                provider=provider,
+                external_message_id=external_id,
             )
         )
         try:
             await session.flush()
         except IntegrityError:
-            # El UNIQUE ya cortó: el evento es un duplicado. La transacción quedó
-            # en rollback pendiente; se revierte aquí y el ACK del stream la cierra.
+            # Carrera con otra réplica: la otra ganó el claim.
             await session.rollback()
-            return False
-    return True
+            return "duplicate"
+    return "claimed"
+
+
+async def _mark_event_completed(tenant_id: uuid.UUID, external_id: str) -> None:
+    """Marca el claim como terminado (HU-ARCH-06). Best-effort."""
+    if not external_id:
+        return
+    try:
+        async with get_session() as session:
+            await session.execute(
+                update(ProcessedEvent)
+                .where(
+                    ProcessedEvent.tenant_id == tenant_id,
+                    ProcessedEvent.external_message_id == external_id,
+                    ProcessedEvent.deleted_at.is_(None),
+                )
+                .values(completed_at=utcnow())
+            )
+    except Exception:
+        log.warning("claim_complete_failed", exc_info=True)
 
 
 async def _handle_inbound_scoped(fields: dict[str, str]) -> None:

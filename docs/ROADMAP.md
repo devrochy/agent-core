@@ -50,7 +50,7 @@ en qué estamos.
 - [x] Dedupe por `external_message_id` (ADR-0007)
 - [x] Lock + debounce por conversación en Redis (ADR-0006)
 - [x] Colas con cuota de concurrencia por tenant
-- [x] DLQ con reintento manual desde el panel
+- [x] DLQ con reintento manual desde el panel — **alcanzable desde HU-ARCH-06 (2026-10-04): antes la DLQ nunca recibía nada porque los fallos quedaban `pending` para siempre (sin reclamo); ahora `XAUTOCLAIM` reclama huérfanos y tras 3 intentos el mensaje llega a la DLQ con su error**
 
 **Salida:** test que envía 5 webhooks duplicados en 3 s y produce exactamente 1 respuesta. ✅
 `make test-integration`: 4 tests de salida en verde contra el stack real.
