@@ -881,12 +881,24 @@ class CalendarSkill(BaseSkill):
 
         appt = await self._find_appointment(arguments, context)
         if appt is None and (arguments.get("event_id") or arguments.get("event_ids")):
-            # Fallback (bug post-prueba 2026-10-05): el `event_id` pudo ser
-            # inventado o viejo; se busca por conversación/título/email.
-            fallback = {k: v for k, v in arguments.items() if k not in ("event_id", "event_ids")}
-            appt = await self._find_appointment(fallback, context)
+            # El id pudo ser el NÚMERO de la lista o uno inventado/viejo: se
+            # resuelve por referencia (nunca "la más próxima" a ciegas).
+            refs = [
+                str(arguments.get("event_id") or "").strip(),
+                *[str(e).strip() for e in (arguments.get("event_ids") or [])],
+            ]
+            refs = [r for r in refs if r]
+            resolved = await self._resolve_by_reference(arguments, context, refs)
+            appt = resolved[0] if resolved else None
         if appt is None:
-            return {"status": "not_found", "message": "No encontré una cita agendada para reagendar."}
+            return {
+                "status": "not_found",
+                "message": (
+                    "No encontré una cita para reagendar con esos datos. Si el cliente tiene "
+                    "varias citas, mostrale la lista numerada (list_client_appointments) y "
+                    "pedile que elija; pasá el event_id REAL de la lista (no el número)."
+                ),
+            }
 
         duration = int(arguments.get("duration_minutes") or 0)
         if duration <= 0:
@@ -972,6 +984,31 @@ class CalendarSkill(BaseSkill):
             ),
         }
 
+    async def _resolve_by_reference(
+        self, arguments: dict[str, Any], context: ToolContext, references: list[str]
+    ) -> list[Any]:
+        """Resuelve referencias ambiguas a citas (corrección 2026-10-05: el modelo
+        pasó `event_id: "2"` —el número de la lista— y el fallback canceló LA CITA
+        EQUIVOCADA, la más próxima).
+
+        Reglas:
+        - Referencia numérica ("2"): la N-ésima cita FUTURA ordenada por fecha,
+          el mismo orden que `list_client_appointments` mostró al cliente.
+        - Referencia no reconocida: solo si queda **exactamente una** cita tras
+          aplicar los filtros (conversación/título/email). Con varias NO se elige
+          a ciegas: devuelve [] y el llamador pide aclaración.
+        """
+        fallback = {k: v for k, v in arguments.items() if k not in ("event_id", "event_ids")}
+        rows = await self._client_appointments(fallback, context, upcoming_only=True)
+        if len(references) == 1 and references[0].strip().isdigit():
+            index = int(references[0].strip())
+            if 1 <= index <= len(rows):
+                return [rows[index - 1]]
+            return []
+        if len(rows) == 1:
+            return rows
+        return []
+
     async def cancel_event(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         """Cancela UNA o VARIAS citas (o todas) y notifica por WhatsApp."""
         from pack_calendar.config import DEFAULT_CANCELLED_MESSAGE, DEFAULT_CANCELLED_SUMMARY
@@ -990,18 +1027,23 @@ class CalendarSkill(BaseSkill):
             wanted = set(event_ids) | ({single_id} if single_id else set())
             rows = [r for r in client_rows if (r.google_event_id in wanted) or (str(r.id) in wanted)]
             if not rows:
-                # Fallback (bug post-prueba 2026-10-05): el `event_id` pudo ser
-                # inventado o viejo (p. ej. arrastrado del historial). En vez de
-                # fallar, se busca la cita del cliente por conversación/título/email.
-                fallback = {k: v for k, v in arguments.items() if k not in ("event_id", "event_ids")}
-                appt = await self._find_appointment(fallback, context)
-                rows = [appt] if appt else []
+                # El id pudo ser el NÚMERO de la lista o uno inventado/viejo: se
+                # resuelve por referencia (nunca "la más próxima" a ciegas).
+                refs = event_ids or ([single_id] if single_id else [])
+                rows = await self._resolve_by_reference(arguments, context, refs)
         else:
             appt = await self._find_appointment(arguments, context)
             rows = [appt] if appt else []
 
         if not rows:
-            return {"status": "not_found", "message": "No encontré citas agendadas para cancelar."}
+            return {
+                "status": "not_found",
+                "message": (
+                    "No encontré una cita para cancelar con esos datos. Si el cliente tiene "
+                    "varias citas, mostrale la lista numerada (list_client_appointments) y "
+                    "pedile que elija; pasá el event_id REAL de la lista (no el número)."
+                ),
+            }
 
         from core.db.models import utcnow
         from core.db.session import get_owned, get_session

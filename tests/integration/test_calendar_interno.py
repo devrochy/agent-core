@@ -547,3 +547,66 @@ async def test_update_con_event_id_invalido_usa_fallback() -> None:
             ctx,
         )
         assert res["status"] == "updated", res
+
+
+async def test_cancel_por_numero_de_lista_cancela_la_correcta() -> None:
+    """Corrección 2026-10-05: `event_id: "2"` (el número de la lista) cancela la
+    SEGUNDA cita futura, no "la más próxima" (que canceló la equivocada)."""
+    from pack_calendar.skills import CalendarSkill
+
+    from core.shared.tenant import tenant_scope
+
+    tenant_id = await _tenant_calendario()
+    await _configurar(tenant_id)
+    skill = CalendarSkill()
+    ctx = _contexto()
+    await _seed_email(tenant_id, ctx.conversation_id, "n1@ejemplo.com", "n2@ejemplo.com")
+
+    async with tenant_scope(tenant_id):
+        primera = await skill.create_event(
+            {"title": "Demo 1", "start_datetime": f"{FECHA}T10:00:00", "attendee_email": "n1@ejemplo.com"},
+            ctx,
+        )
+        segunda = await skill.create_event(
+            {"title": "Demo 2", "start_datetime": f"{FECHA}T12:00:00", "attendee_email": "n2@ejemplo.com"},
+            ctx,
+        )
+        assert primera["status"] == "created" and segunda["status"] == "created"
+
+        # El modelo pasa el número de la lista, no el id real.
+        res = await skill.cancel_event({"event_id": "2"}, ctx)
+        assert res["status"] == "cancelled", res
+        assert segunda["event_id"] in res["cancelled"]
+
+        # Queda la primera (no se canceló la equivocada).
+        restantes = await skill.list_appointments({}, ctx)
+        assert restantes["total"] == 1
+        assert restantes["appointments"][0]["event_id"] == primera["event_id"]
+
+
+async def test_cancel_con_id_inventado_y_varias_citas_no_cancela_nada() -> None:
+    """Corrección 2026-10-05: con varias citas, un id inventado NO debe cancelar
+    una arbitraria: devuelve not_found para que el asistente pida aclaración."""
+    from pack_calendar.skills import CalendarSkill
+
+    from core.shared.tenant import tenant_scope
+
+    tenant_id = await _tenant_calendario()
+    await _configurar(tenant_id)
+    skill = CalendarSkill()
+    ctx = _contexto()
+    await _seed_email(tenant_id, ctx.conversation_id, "v1@ejemplo.com", "v2@ejemplo.com")
+
+    async with tenant_scope(tenant_id):
+        await skill.create_event(
+            {"title": "Demo A", "start_datetime": f"{FECHA}T10:00:00", "attendee_email": "v1@ejemplo.com"},
+            ctx,
+        )
+        await skill.create_event(
+            {"title": "Demo B", "start_datetime": f"{FECHA}T12:00:00", "attendee_email": "v2@ejemplo.com"},
+            ctx,
+        )
+        res = await skill.cancel_event({"event_id": "demo-inventado-2026"}, ctx)
+        assert res["status"] == "not_found", res
+        # Ninguna se canceló.
+        assert (await skill.list_appointments({}, ctx))["total"] == 2
