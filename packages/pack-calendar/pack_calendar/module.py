@@ -69,6 +69,18 @@ _COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
         ),
         {"list_client_appointments"},
     ),
+    # Afirmar que el cliente YA tiene una cita (sin crearla en este turno) exige
+    # verificarlo con list_client_appointments (corrección post-prueba 2026-10-05:
+    # el asistente afirmó "Tenés tu demo agendada..." sin listar y se contradijo).
+    "cita_existente": (
+        re.compile(
+            r"ten[ée]s\s+(?:una\s+|tu\s+)?(?:demo|cita)\s+agendad|"
+            r"ya\s+ten[ée]s\s+(?:una\s+|tu\s+)?(?:demo|cita)|"
+            r"figura\s+agendad|aparece\s+agendad",
+            re.IGNORECASE,
+        ),
+        {"list_client_appointments"},
+    ),
 }
 
 # Tope de líneas de claims custom (mismo criterio que pack-commerce: este
@@ -178,13 +190,24 @@ class GoogleCalendarModule(BaseModule):
 
         Si el LLM dice que agendó/reagendó/canceló una cita, envió el correo de
         confirmación, o enumera las citas del cliente, la tool que respalda esa
-        afirmación DEBE haber corrido en este turno; si no, se reintenta con la
-        instrucción correctiva (y si sigue fallando, el orchestrator escala) --
-        así el cliente nunca recibe una confirmación falsa. Los claims son los
-        incorporados + los configurados/desactivados por el tenant (ADR-0025/#157).
+        afirmación DEBE haber corrido en este turno **y con éxito**; si no, se
+        reintenta con la instrucción correctiva (y si sigue fallando, el
+        orchestrator escala) -- así el cliente nunca recibe una confirmación falsa.
+        Los claims son los incorporados + los configurados/desactivados por el
+        tenant (ADR-0025/#157).
+
+        Corrección post-prueba 2026-10-05: se cuentan solo resultados del turno
+        ACTUAL (`_current_turn`) y exitosos (`_ok`), mismo criterio que el
+        guardrail de commerce (HU-COM-02). Un `create_calendar_event` de un turno
+        anterior, o uno que devolvió `needs_data`/error, NO respalda "quedó
+        agendada".
         """
         called_tools = {
-            str(result.get("_tool_name") or "") for result in tool_results if isinstance(result, dict)
+            str(result.get("_tool_name") or "")
+            for result in tool_results
+            if isinstance(result, dict)
+            and result.get("_current_turn")
+            and result.get("_ok")
         }
         claims = await self._resolved_completion_claims()
         for label, (pattern, required_tools) in claims.items():

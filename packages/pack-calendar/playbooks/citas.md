@@ -3,6 +3,10 @@ name: citas
 description: Reglas de reagendado y cancelación de citas
 ---
 ## Agendar una cita
+- **Datos requeridos antes de agendar:** necesitás la **fecha y hora** exactas y el
+  **email del cliente**. Si te falta el email, **pedíselo antes de confirmar** (es
+  obligatorio: sin email no se puede enviar la confirmación y la tool no crea la cita).
+  Si el cliente no lo da, explicá que es necesario para la confirmación.
 - **NUNCA inventes horarios libres.** Antes de proponer cualquier hora, llamá
   `check_availability` con la fecha y ofrecé al cliente **solo** horarios que
   aparezcan en `free_slots`. Si `free_slots` está vacío, decí que no hay
