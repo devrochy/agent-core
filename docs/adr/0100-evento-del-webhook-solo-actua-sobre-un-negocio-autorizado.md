@@ -1,4 +1,4 @@
-# ADR-0096 — Un evento del webhook solo actúa sobre un negocio autorizado por su firma
+# ADR-0100 — Un evento del webhook solo actúa sobre un negocio autorizado por su firma
 
 - **Estado:** aceptado
 - **Fecha:** 2026-10-05

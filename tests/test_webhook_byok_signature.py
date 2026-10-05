@@ -1,10 +1,10 @@
-"""Quién firmó el webhook genérico y a qué negocios autoriza (ADR-0096).
+"""Quién firmó el webhook genérico y a qué negocios autoriza (ADR-0100).
 
 Dos bugs reales que estos tests cuidan:
 - 2026-09-29: la ruta `POST /webhooks/whatsapp` validaba solo con el App Secret del
   framework; con una conexión BYOK Meta firma con la app del negocio y todas las
   entregas terminaban en 401.
-- ADR-0096: el arreglo de arriba juntaba los secretos de todos los negocios del payload
+- ADR-0100: el arreglo de arriba juntaba los secretos de todos los negocios del payload
   y aceptaba la firma con cualquiera, así que un negocio BYOK podía firmar eventos con
   el número de otro. Ahora cada secreto autoriza solo a su dueño (la plataforma, a todos).
 """

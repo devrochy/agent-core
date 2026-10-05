@@ -222,7 +222,7 @@ async def resolve_effective_verify_token(tenant_id: uuid.UUID) -> str:
 
 def platform_app_secret() -> str:
     """App Secret de la app de la plataforma (`.env`): el único que puede autorizar
-    eventos de cualquier negocio en el webhook genérico (ADR-0096), porque ningún
+    eventos de cualquier negocio en el webhook genérico (ADR-0100), porque ningún
     negocio lo conoce. Única fuente de este criterio."""
     settings = get_settings()
     return settings.whatsapp_app_secret or settings.meta_app_secret or ""

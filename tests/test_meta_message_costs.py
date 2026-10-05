@@ -147,7 +147,7 @@ async def test_valor_desconocido_se_guarda_igual_y_loguea(monkeypatch, caplog):
 
 @pytest.mark.asyncio
 async def test_pricing_de_un_mensaje_de_otro_negocio_no_inserta_nada(monkeypatch):
-    """ADR-0096: B no puede sumarle costos a un mensaje de A."""
+    """ADR-0100: B no puede sumarle costos a un mensaje de A."""
     tenant_a = uuid.uuid4()
     # El mensaje es de A: dentro del scope de B no aparece.
     session_cm = _patch(monkeypatch, None, tenant_a)

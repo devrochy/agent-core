@@ -8,7 +8,7 @@ orden de llegada.
 
 El payload solo trae el `wamid` (`external_message_id`), no el tenant. El
 negocio es el de la entry del webhook (`expected_tenant_id`, ya autorizado por
-su firma, ADR-0096): el mensaje se busca dentro de su scope, y si no está ahí el
+su firma, ADR-0100): el mensaje se busca dentro de su scope, y si no está ahí el
 evento se descarta. `resolve_tenant_for_message` (SECURITY DEFINER, migración
 0027) ya no decide el negocio: hace `LIMIT 1` y el wamid solo es único por
 negocio, así que se usa únicamente para distinguir en el log "es de otro negocio"
@@ -65,7 +65,7 @@ async def _log_mensaje_ajeno_o_inexistente(
 ) -> None:
     """Solo para el log: el resolvedor no es autoritativo (`LIMIT 1`), así que nunca
     decide nada. Un mensaje de otro negocio es la señal de que alguien firmó un estado
-    ajeno (ADR-0096). Se compara como texto: asyncpg devuelve su propio tipo de UUID."""
+    ajeno (ADR-0100). Se compara como texto: asyncpg devuelve su propio tipo de UUID."""
     otro = await _resolve_tenant_for_message(external_message_id)
     if otro is not None and str(otro) != str(expected_tenant_id):
         log.warning(

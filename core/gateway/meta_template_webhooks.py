@@ -13,7 +13,7 @@ recién ahí se abre `tenant_scope` para leer/escribir la fila real.
 Cada handler recibe `expected_tenant_id`: el negocio de la entry del webhook, ya
 autorizado por su firma. Si la plantilla es de OTRO negocio, el evento se descarta:
 con una firma válida propia, un negocio podría cambiar el estado de una plantilla
-ajena (ADR-0096).
+ajena (ADR-0100).
 """
 
 from __future__ import annotations

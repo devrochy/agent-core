@@ -7,7 +7,7 @@ Flujo (patrón gateway -> queue -> consumer de agent-sale):
    App de Meta.
 2. Verificar la firma (HMAC-SHA256 con App Secret) y saber QUIÉN firmó: la
    plataforma autoriza a cualquier negocio; un negocio, solo a sí mismo. Un
-   grupo de otro negocio no se procesa (ADR-0096).
+   grupo de otro negocio no se procesa (ADR-0100).
 3. Registrar cada evento en `webhook_events` (auditoría + idempotencia por
    `(meta_app_id, external_id)`) -- si esto falla, 500 a propósito (Meta
    reintenta) y se alerta: es la única red de seguridad ante una BD caída.
@@ -105,7 +105,7 @@ class _Grupo:
 
 @dataclass(frozen=True)
 class Firmantes:
-    """Quién firmó el POST (ADR-0096). La app de la plataforma autoriza eventos de
+    """Quién firmó el POST (ADR-0100). La app de la plataforma autoriza eventos de
     cualquier negocio (ningún negocio conoce su secreto); el secreto propio de un
     negocio, solo los suyos. Con un secreto propio, un negocio podía firmar eventos
     con el número de otro e inyectarle mensajes."""
@@ -192,7 +192,7 @@ async def receive_whatsapp(request: Request) -> Response:
     """Endpoint genérico: puede recibir entries de VARIOS tenants en un solo POST
     (todos los que estén suscritos a la misma App de Meta). Se rutea cada grupo
     (entry, número) por separado, y cada uno se procesa solo si lo firmó la
-    plataforma o su propio negocio (ADR-0096)."""
+    plataforma o su propio negocio (ADR-0100)."""
     raw_body = await request.body()
     headers = {k.lower(): v for k, v in request.headers.items()}
 
@@ -221,7 +221,7 @@ async def receive_whatsapp(request: Request) -> Response:
         return Response(status_code=401)
     elif not firmantes.plataforma:
         # Una app propia apuntando al genérico (el wizard BYOK registra el slug): se mide
-        # para poder migrar esas suscripciones y retirar esta rama (ADR-0096).
+        # para poder migrar esas suscripciones y retirar esta rama (ADR-0100).
         log.info("webhook_generico_firmado_por_negocio", tenant_ids=sorted(str(t) for t in firmantes.negocios))
 
     return await _process_payload(
@@ -256,7 +256,7 @@ async def _alert_on_firma_ajena(firmantes: Firmantes, ajenos: list[uuid.UUID]) -
             "Un negocio firmó eventos de otro",
             f"Llegaron eventos de {ajenos_ids} firmados con el secreto de {firmantes_ids}: no se "
             "procesaron. Puede ser un intento de inyección o una WABA suscrita a la app de otro "
-            "negocio (ADR-0096).",
+            "negocio (ADR-0100).",
             severity="critical",
         )
     except Exception:
@@ -371,7 +371,7 @@ async def _process_payload(
 
     `firmantes` es obligatorio (falla cerrado por construcción): un grupo solo se
     procesa si su negocio está entre los que firmaron, o si firmó la plataforma
-    (ADR-0096). El endpoint por slug pasa su propio tenant. `grupos`: los ya
+    (ADR-0100). El endpoint por slug pasa su propio tenant. `grupos`: los ya
     ruteados por el llamador, para no rutear dos veces.
 
     `dev_fallback`: solo el endpoint GENÉRICO en APP_ENV=development cae al
@@ -458,7 +458,7 @@ async def _process_payload(
             continue
 
         if not firmantes.autoriza(tenant_id):
-            # Firmado por otro negocio (ADR-0096): no se procesa ni se le atribuye a
+            # Firmado por otro negocio (ADR-0100): no se procesa ni se le atribuye a
             # nadie. Va antes del chequeo de facturación, que registraría la fila a
             # nombre de este negocio (`tenant_not_operational`) aunque no la mandó.
             log.warning(
@@ -576,7 +576,7 @@ async def _mark_entry_processed(
 
     Filtra por el negocio del grupo: `meta_app_id` es el de la plataforma (el
     mismo para todos), y un `external_id` repetido no puede marcar como
-    procesada la fila de otro negocio (ADR-0096)."""
+    procesada la fila de otro negocio (ADR-0100)."""
     from datetime import UTC, datetime
 
     from sqlalchemy import update
@@ -667,7 +667,7 @@ async def _dispatch_template_events(tenant_id: uuid.UUID, entry_events: list[Fla
     (`core/gateway/meta_template_webhooks.py`), NUNCA toca `WebhookEvent`
     (ya se logueó en el loop de `_process_payload` antes de llegar acá,
     ADR-0028 intacto). `tenant_id` es el negocio del grupo, ya autorizado por
-    la firma: una plantilla de otro negocio no se toca (ADR-0096)."""
+    la firma: una plantilla de otro negocio no se toca (ADR-0100)."""
     from core.gateway.meta_template_webhooks import (
         handle_template_category_update,
         handle_template_quality_update,
@@ -695,7 +695,7 @@ async def _dispatch_status_events(tenant_id: uuid.UUID, entry_events: list[Flatt
     `value` COMPLETO del `change` (puede incluir varios `statuses`); se
     procesa solo el status cuyo `external_id` coincide con el de ESTE
     evento puntual, para no reaplicar el resto N veces. `tenant_id` es el
-    negocio del grupo: un mensaje de otro negocio no se toca (ADR-0096)."""
+    negocio del grupo: un mensaje de otro negocio no se toca (ADR-0100)."""
     from core.gateway.meta_message_status import apply_status_update
 
     for event in entry_events:
@@ -737,7 +737,7 @@ async def count_stalled_webhook_events(older_than_minutes: int = 5) -> int:
                     WebhookEvent.processed_at.is_(None),
                     WebhookEvent.received_at < cutoff,
                     # Los rechazados (sin negocio, conflicto, firma ajena...) nunca se
-                    # marcan procesados: no son un worker caído (ADR-0096).
+                    # marcan procesados: no son un worker caído (ADR-0100).
                     WebhookEvent.process_error.is_(None),
                 )
             )

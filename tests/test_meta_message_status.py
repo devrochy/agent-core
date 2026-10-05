@@ -126,7 +126,7 @@ async def test_status_desconocido_no_revienta(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_status_de_un_mensaje_de_otro_negocio_no_lo_toca(monkeypatch):
-    """ADR-0096: el webhook firmado por B trae el wamid de un mensaje de A. Se busca en
+    """ADR-0100: el webhook firmado por B trae el wamid de un mensaje de A. Se busca en
     el scope de B (no aparece) y el resolvedor solo sirve para el aviso."""
     _patch(monkeypatch, None, tenant_id="tenant-a")
     avisos = []

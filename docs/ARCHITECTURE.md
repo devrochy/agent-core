@@ -138,7 +138,7 @@ opcional y no rompe nada mientras tanto.
 
 En el webhook genérico, cada grupo de eventos (entry, número) se procesa solo si lo
 firmó la app de la plataforma o el propio negocio del grupo: el secreto de un negocio
-nunca autoriza eventos de otro (ADR-0096).
+nunca autoriza eventos de otro (ADR-0100).
 
 ## Memoria en 3 capas
 

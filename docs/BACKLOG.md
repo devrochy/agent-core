@@ -32,11 +32,11 @@ esto, pero nadie la llama. El panel `/admin/costos` subestima el gasto real.
 (`meta_health.decide_status`) pasa a `degraded` con cualquier check fallando y a `error` con `token_valid` o
 `app_subscription_active`. Desde ahí `resolve_own_app_secret` no da secreto: los webhooks firmados con la app
 del negocio dan 401 (por slug y por el genérico) y el `verify_token` cae al `.env`. Preexistente (`arquitecto`,
-2026-10-05, al revisar ADR-0096); ADR-0096 no lo empeora. Arreglo probable: que el secreto y el `verify_token` se
+2026-10-05, al revisar ADR-0100); ADR-0100 no lo empeora. Arreglo probable: que el secreto y el `verify_token` se
 lean también de conexiones `degraded`/`error` (siguen siendo del negocio), con test del cron.
 
-**Confirmar el secreto de la plataforma antes de desplegar ADR-0096**
-`connections.platform_app_secret` usa `WHATSAPP_APP_SECRET or META_APP_SECRET`, y desde ADR-0096 es la única llave
+**Confirmar el secreto de la plataforma antes de desplegar ADR-0100**
+`connections.platform_app_secret` usa `WHATSAPP_APP_SECRET or META_APP_SECRET`, y desde ADR-0100 es la única llave
 que autoriza eventos de cualquier negocio en el webhook genérico. Antes de desplegar, confirmar en el `.env` de
 producción que no es el de la app de un cliente concreto (heredado del monolito). Además, Embedded Signup firma con
 `META_APP_SECRET`: si los dos están definidos y son distintos, sus entregas al genérico dan 401. Decidir si la
@@ -160,7 +160,7 @@ repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev
   `meta_template_id` (`0026`) siguen con `LIMIT 1` sin desempate. Hoy no hay clientes de Messenger ni Instagram;
   aplicar la misma regla (conexión viva, NULL si hay más de un dueño) cuando los haya.
 
-**Pendientes tras ADR-0096 (firma por negocio en el webhook)**
+**Pendientes tras ADR-0100 (firma por negocio en el webhook)**
 - La respuesta del webhook dice si un número tiene dueño: un negocio que firma un grupo `(su WABA, número X)` recibe
   `"ignored"` si X es de otro (`tenant_conflict`, o `tenant_mismatch` por slug) y `"ok", "enqueued": 1` si X no
   tiene dueño (auditor-multitenant, 2026-10-05, preexistente). Responder con un cuerpo constante.

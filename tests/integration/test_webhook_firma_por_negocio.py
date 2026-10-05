@@ -1,4 +1,4 @@
-"""Un evento del webhook de Meta solo actúa sobre el negocio que lo firmó (ADR-0096).
+"""Un evento del webhook de Meta solo actúa sobre el negocio que lo firmó (ADR-0100).
 
 El endpoint genérico juntaba los secretos de todos los negocios del payload y aceptaba la
 firma con cualquiera: un negocio con app propia (BYOK) firmaba con su secreto un POST con

@@ -1,6 +1,6 @@
 # Changelog
 
-## Sin versión — Un evento del webhook solo actúa sobre un negocio autorizado por su firma (ADR-0096, 2026-10-05)
+## Sin versión — Un evento del webhook solo actúa sobre un negocio autorizado por su firma (ADR-0100, 2026-10-05)
 
 - **Seguridad (alto, preexistente):** el webhook genérico aceptaba la firma con el secreto de cualquier negocio del
   payload y procesaba todas las entries: un negocio BYOK podía inyectarle mensajes a otro. Ahora cada grupo

@@ -202,7 +202,7 @@ async def _noop_set(*a, **k):
     return True
 
 
-# ------------------------------------------------------------------ plantilla de otro negocio (ADR-0096)
+# ------------------------------------------------------------------ plantilla de otro negocio (ADR-0100)
 @pytest.mark.asyncio
 async def test_status_update_de_una_plantilla_de_otro_negocio_no_la_toca(monkeypatch):
     """El webhook firmado por B trae el `message_template_id` de una plantilla de A."""
