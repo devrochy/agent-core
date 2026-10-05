@@ -53,7 +53,10 @@ async def test_acquire_sync_lock_bloquea_segunda_llamada_misma_hora(monkeypatch)
 
     fake = FakeRedis()
     monkeypatch.setattr(sync_mod, "get_redis", lambda: fake)
+    tenant_a, tenant_b = uuid.uuid4(), uuid.uuid4()
 
-    assert await acquire_sync_lock("waba-1") is True
-    assert await acquire_sync_lock("waba-1") is False
-    assert await acquire_sync_lock("waba-2") is True
+    assert await acquire_sync_lock(tenant_a, "waba-1") is True
+    assert await acquire_sync_lock(tenant_a, "waba-1") is False
+    assert await acquire_sync_lock(tenant_a, "waba-2") is True
+    # `waba_id` no es único entre negocios: el turno de A no bloquea a B.
+    assert await acquire_sync_lock(tenant_b, "waba-1") is True

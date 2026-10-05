@@ -77,14 +77,14 @@ async def test_lista_muestra_conexion_manual_y_meta_con_su_origen(app_client, mo
     async with tenant_scope(tid):
         async with get_session() as session:
             byok = MetaConnection(
-                tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id="app-propia-del-tenant",
+                tenant_id=tid, channel="whatsapp", environment="sandbox", origin="byok", meta_app_id="app-propia-del-tenant",
                 status="connected",
             )
             session.add(byok)
             await session.flush()
 
             embedded = MetaConnection(
-                tenant_id=tid, channel="whatsapp", environment="production", meta_app_id="app-del-framework",
+                tenant_id=tid, channel="whatsapp", environment="production", origin="embedded_signup", meta_app_id="app-del-framework",
                 status="connected",
             )
             session.add(embedded)
@@ -108,7 +108,7 @@ async def test_activar_desactivar_y_eliminar_conexion_meta(app_client):
     async with tenant_scope(tid):
         async with get_session() as session:
             connection = MetaConnection(
-                tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id="app-gestionable",
+                tenant_id=tid, channel="whatsapp", environment="sandbox", origin="byok", meta_app_id="app-gestionable",
                 status="connected",
             )
             session.add(connection)
@@ -157,7 +157,7 @@ async def test_no_se_puede_gestionar_conexion_meta_de_otro_tenant(app_client):
     async with tenant_scope(tenant_a):
         async with get_session() as session:
             connection = MetaConnection(
-                tenant_id=tenant_a, channel="whatsapp", environment="sandbox", meta_app_id="app-de-otro",
+                tenant_id=tenant_a, channel="whatsapp", environment="sandbox", origin="byok", meta_app_id="app-de-otro",
                 status="connected",
             )
             session.add(connection)

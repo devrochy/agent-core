@@ -190,7 +190,7 @@ async def test_meta_schema_nuevo_aislado_por_tenant(moto_setup) -> None:
     async with tenant_scope(t1):
         async with get_session() as session:
             connection = MetaConnection(
-                tenant_id=t1, channel="whatsapp", environment="production", meta_app_id=f"app-{suffix}"
+                tenant_id=t1, channel="whatsapp", environment="production", origin="byok", meta_app_id=f"app-{suffix}"
             )
             session.add(connection)
             await session.flush()

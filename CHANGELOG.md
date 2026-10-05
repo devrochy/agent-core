@@ -2,19 +2,30 @@
 
 ## Sin versión — Credenciales de Meta por conexión (HU-CONN-01, 2026-10-05)
 
-- **`meta_connections.origin`** (`byok` | `embedded_signup` | `manual`, migración `0051`): se guarda al
-  crear la conexión y deja de inferirse por los tokens que existen. Backfill por tenant (fija
-  `app.tenant_id`) con la evidencia de cada alta; sin evidencia → `manual`. ADR-0094.
-- **Resolver único** `core/gateway/meta_credentials.py` (`MetaCredentials`, `credentials_for`): BYOK usa el
-  token y el App Secret de la conexión; Embedded Signup y manual, el token de la conexión y el secreto de la
-  plataforma. Sin credenciales → `CredentialsUnavailable(reason)`.
+- **`meta_connections.origin`** (`byok` | `embedded_signup` | `manual`, `NOT NULL` sin default, migración
+  `0051`): el modo de credenciales vigente de la conexión. Lo fija cada alta (y cambia si el wizard de ES toma
+  una conexión BYOK); deja de inferirse por los tokens que existen. Backfill por tenant (fija `app.tenant_id`)
+  con la evidencia de cada alta; con tokens de los dos orígenes queda `byok` (el que usaba el sender) y se
+  listan en el log; sin evidencia → `manual`. ADR-0094.
+- **Una sola regla de qué token usa cada origen**, `core/gateway/meta_credentials.py`: `access_token_refs`,
+  `access_token_for`, `access_token_expires_at` y `credentials_for` (`MetaCredentials`). BYOK usa el token y el
+  App Secret de la conexión; Embedded Signup y manual, el token de la conexión y la app de la plataforma. Sin
+  credenciales → `CredentialsUnavailable(reason)`; sin `tenant_scope` activo → `no_tenant_scope`.
 - Números, Plantillas (panel SSR y API), salud, costos/créditos, endpoints de token BYOK y los crons de
   plantillas y de precios usan las credenciales de **esa** conexión. Antes casi todo asumía Embedded Signup:
   fallaba con BYOK y los crons exigían `TOKEN_KIND` **y** `app_access`, así que no procesaban ninguna conexión.
+- **El sender y los avisos de vencimiento** (cron diario, resumen de salud, salud del panel SSR e `inspect`)
+  usan el token que dice `origin` en vez de "BYOK primero": una conexión BYOK tomada por ES ya no envía con el
+  token viejo ni dispara alertas críticas falsas por él (supersede parcial de ADR-0040 §3 y ADR-0041 §5).
+- La columna "Origen" de la lista de conexiones sale de `origin` ("BYOK (app propia)", "Embedded Signup",
+  "Carga manual"), no de comparar `meta_app_id` con la app de la plataforma.
+- `POST /api/v1/admin/meta/manual` valida el token con la app de la plataforma, la misma con la que se resuelve
+  (enmienda ADR-0034); sin ella configurada, 400 `platform_app_not_configured`.
 - Crons: el error se registra por conexión (`connection_id`, `tenant_id`, `reason`) y no corta a las demás; el de
-  plantillas pide las credenciales antes del lock horario. La sincronización manual de precios ahora informa
-  las conexiones sin credenciales (antes las omitía en silencio).
-- `POST /admin/meta/byok/token/extend` responde 400 `not_byok` para conexiones que no son BYOK.
+  plantillas pide las credenciales antes del lock horario, y el lock lleva el tenant en la llave. La
+  sincronización manual de precios ahora informa las conexiones sin credenciales (antes las omitía en silencio).
+- `POST /admin/meta/byok/token/extend` responde 400 `not_byok` para conexiones que no son BYOK (antes de
+  resolver credenciales).
 - Se elimina `resolve_waba_and_token` (y su copia en el panel SSR) a favor de `resolve_waba_and_credentials`.
 
 ## Sin versión — Conectar Google Calendar desde el panel (HU-CAL-07, 2026-10-05)

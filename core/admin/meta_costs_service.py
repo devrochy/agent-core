@@ -42,7 +42,11 @@ async def sync_meta_pricing(tenant_id: uuid.UUID) -> list[str]:
             await session.execute(
                 select(WabaAccount, MetaConnection)
                 .join(MetaConnection, MetaConnection.id == WabaAccount.connection_id)
-                .where(WabaAccount.tenant_id == tenant_id, MetaConnection.status == "connected")
+                .where(
+                    WabaAccount.tenant_id == tenant_id,
+                    MetaConnection.tenant_id == tenant_id,
+                    MetaConnection.status == "connected",
+                )
             )
         ).all()
 
@@ -58,7 +62,7 @@ async def sync_meta_pricing(tenant_id: uuid.UUID) -> list[str]:
             await sync_pricing_daily(
                 waba.waba_id,
                 waba.id,
-                tenant_id,
+                creds.tenant_id,
                 start_unix,
                 end_unix,
                 creds.access_token,

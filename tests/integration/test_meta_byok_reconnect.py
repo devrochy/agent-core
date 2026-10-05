@@ -43,7 +43,7 @@ async def test_byok_reconecta_tras_soft_delete_crea_conexion_nueva(app_client, m
     async with tenant_scope(tid):
         async with get_session() as session:
             old = MetaConnection(
-                tenant_id=tid, channel="whatsapp", environment=environment, meta_app_id=app_id,
+                tenant_id=tid, channel="whatsapp", environment=environment, origin="byok", meta_app_id=app_id,
                 status="revoked", deleted_at=utcnow(),
             )
             session.add(old)

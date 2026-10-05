@@ -56,8 +56,7 @@ async def _resolve_meta_connection_credentials(
     2026-09-22: `phone_numbers.phone_number_id` es único global, no
     compuesto con `tenant_id`; si esa garantía de esquema se relajara algún
     día, esta aserción evita enviar con el token de OTRO tenant)."""
-    from core.gateway import meta_token_store
-    from core.gateway.meta_onboarding import TOKEN_KIND
+    from core.gateway.meta_credentials import access_token_for
 
     async with get_session() as session:
         connection = await session.get(MetaConnection, meta_connection_id)
@@ -84,25 +83,11 @@ async def _resolve_meta_connection_credentials(
             expected_tenant_id=str(expected_tenant_id),
         )
         return None
-    # El token vive bajo distinto `kind`/`subject` según el flujo que creó la
-    # conexión: BYOK (`save_byok_connection`) usa `cloud_api_access_token` con
-    # `subject=meta_app_id`; Embedded Signup usa `TOKEN_KIND`
-    # (`business_integration_system_user`) con `subject=business_id` (o el id de
-    # la conexión). Se prueban ambos: con el kind/subject equivocado, un envío
-    # BYOK no encontraba su token y caía al fallback del `.env`
-    # (otro número/credenciales).
-    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
-
-    token = await meta_token_store.get_token(
-        meta_connection_id, CLOUD_API_ACCESS_TOKEN_KIND, connection.meta_app_id, tenant_id=connection.tenant_id
-    )
-    if not token:
-        token = await meta_token_store.get_token(
-            meta_connection_id,
-            TOKEN_KIND,
-            connection.business_id or str(meta_connection_id),
-            tenant_id=connection.tenant_id,
-        )
+    # El token que se usa lo decide `origin` (HU-CONN-01, ADR-0094): una conexión
+    # BYOK que el wizard de Embedded Signup tomó conserva su token BYOK viejo, y
+    # probar "el que exista, BYOK primero" enviaba con ese token mientras la salud
+    # validaba el de ES (supersede ADR-0040 §3).
+    token = await access_token_for(connection)
     if not token:
         return None
     return {"phone_number_id": phone.phone_number_id, "access_token": token}

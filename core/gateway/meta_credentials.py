@@ -1,10 +1,12 @@
 """Resolver único de credenciales de Meta por conexión (HU-CONN-01, ADR-0094).
 
 Toda llamada a Graph API que actúa sobre UNA conexión (números, plantillas, salud,
-precios, créditos, descarga de media...) recibe un `MetaCredentials` en vez de
-buscar "el" token del negocio o caer al App Secret de la plataforma. De dónde salen
-las credenciales lo decide `MetaConnection.origin`, que se guarda al crear la
-conexión (nunca se adivina mirando qué tokens existen):
+precios, créditos, envío, descarga de media...) usa las credenciales que decide este
+módulo en vez de buscar "el" token del negocio o caer al App Secret de la plataforma.
+Las decide `MetaConnection.origin`: el **modo de credenciales vigente** de la conexión.
+Lo fija cada alta y cambia solo cuando otra alta guarda sus credenciales sobre la misma
+conexión (el wizard de Embedded Signup que reutiliza una conexión BYOK, o BYOK que
+reconecta la misma app). Nunca se adivina mirando qué tokens existen:
 
 | origin            | access token                                | App ID / App Secret            |
 |-------------------|---------------------------------------------|--------------------------------|
@@ -13,15 +15,17 @@ conexión (nunca se adivina mirando qué tokens existen):
 | `manual`          | de la conexión (`business_integration_...`) | los de la plataforma (config)  |
 
 El `appsecret_proof` de cada llamada se calcula con el secreto de ESA conexión. El
-token y el secreto se leen de `meta_token_store` (única vía a `meta_private`), con
-el `tenant_id` de la propia conexión: el AAD de AES-GCM ata cada fila a su tenant, así
-que un token de otro negocio nunca se descifra, y RLS ya no lo devuelve.
+token y el secreto se leen de `meta_token_store` (única vía a `meta_private`), con el
+`tenant_id` de la propia conexión (el AAD de AES-GCM, ADR-0027, ata cada fila a
+`tenant:conexión:kind`). `credentials_for` además exige un `tenant_scope` activo y que sea
+el de la conexión.
 """
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Final, Literal
 
 from sqlalchemy import select
@@ -39,6 +43,11 @@ log = get_logger(__name__)
 
 Origin = Literal["byok", "embedded_signup", "manual"]
 ORIGINS: Final[tuple[str, ...]] = ("byok", "embedded_signup", "manual")
+ORIGIN_LABELS: Final[dict[str, str]] = {
+    "byok": "BYOK (app propia)",
+    "embedded_signup": "Embedded Signup",
+    "manual": "Carga manual",
+}
 
 
 class CredentialsUnavailable(Exception):
@@ -93,24 +102,59 @@ async def _waba_id_of(connection: MetaConnection) -> str | None:
         ).scalar_one_or_none()
 
 
-async def _system_user_token(connection: MetaConnection) -> str | None:
-    """Token del system user de la plataforma (Embedded Signup y carga manual).
+def origin_label(origin: str) -> str:
+    """Texto del origen para el panel (columna "Origen" de la lista de conexiones)."""
+    return ORIGIN_LABELS.get(origin, origin)
 
-    Se guarda con `subject_id = business_id` si ya se conocía, o con el id de la
-    conexión si el `business_id` llegó después; se prueban los dos."""
-    subjects = [s for s in (connection.business_id, str(connection.id)) if s]
-    for subject in dict.fromkeys(subjects):
-        token = await meta_token_store.get_token(
-            connection.id, TOKEN_KIND, subject, tenant_id=connection.tenant_id
-        )
+
+def access_token_refs(connection: MetaConnection) -> list[tuple[str, str]]:
+    """`(kind, subject_id)` del token de acceso que usa la conexión, según su `origin`.
+
+    Es la ÚNICA regla de qué token usa una conexión: la usan el resolver, el sender y
+    los avisos de vencimiento, y ninguno debe deducir el `kind` por su cuenta (una
+    conexión que pasó de BYOK a Embedded Signup conserva los dos tokens).
+
+    - `byok`: `cloud_api_access_token` con `subject_id = meta_app_id`.
+    - `embedded_signup` y `manual`: el token del system user, con `subject_id =
+      business_id` si ya se conocía, o con el id de la conexión si el `business_id`
+      llegó después del canje; se prueban los dos, en ese orden.
+    """
+    if connection.origin == "byok":
+        return [(CLOUD_API_ACCESS_TOKEN_KIND, connection.meta_app_id)]
+    if connection.origin in ("embedded_signup", "manual"):
+        subjects = [s for s in (connection.business_id, str(connection.id)) if s]
+        return [(TOKEN_KIND, subject) for subject in dict.fromkeys(subjects)]
+    return []
+
+
+async def access_token_for(connection: MetaConnection) -> str | None:
+    """Solo el token de acceso, sin App Secret ni app de la plataforma.
+
+    Para el sender, que no firma con `appsecret_proof`: exigirle el secreto rompería
+    envíos que no lo necesitan."""
+    for kind, subject in access_token_refs(connection):
+        token = await meta_token_store.get_token(connection.id, kind, subject, tenant_id=connection.tenant_id)
         if token:
             return token
+    return None
+
+
+async def access_token_expires_at(connection: MetaConnection) -> datetime | None:
+    """Vencimiento del token que la conexión usa de verdad (sin descifrarlo)."""
+    for kind, subject in access_token_refs(connection):
+        expires_at = await meta_token_store.get_token_expires_at(
+            connection.id, kind, subject, tenant_id=connection.tenant_id
+        )
+        if expires_at is not None:
+            return expires_at
     return None
 
 
 async def credentials_for(connection: MetaConnection, *, waba_id: str | None = None) -> MetaCredentials:
     """Credenciales de `connection` según su `origin`, o `CredentialsUnavailable`.
 
+    Exige un `tenant_scope` activo y que sea el de la conexión: sin él falla cerrado,
+    en vez de confiar solo en RLS y en el AAD del token store.
     `waba_id` es opcional: si el llamador ya lo tiene, se evita la consulta.
     """
     if connection.deleted_at is not None:
@@ -118,23 +162,17 @@ async def credentials_for(connection: MetaConnection, *, waba_id: str | None = N
         raise _unavailable(connection, "connection_deleted", "La conexión fue eliminada")
 
     current = get_current_tenant_id()
-    if current is not None and current != connection.tenant_id:
-        # Defensa en profundidad además de RLS y del AAD del token store.
+    if current is None:
+        raise _unavailable(connection, "no_tenant_scope", "No hay un negocio activo para resolver las credenciales")
+    if current != connection.tenant_id:
         raise _unavailable(connection, "tenant_mismatch", "La conexión no pertenece al negocio actual")
 
     origin = connection.origin
     if origin == "byok":
         app_id = connection.meta_app_id
-        token = await meta_token_store.get_token(
-            connection.id, CLOUD_API_ACCESS_TOKEN_KIND, connection.meta_app_id, tenant_id=connection.tenant_id
-        )
         app_secret = await meta_token_store.get_token(
             connection.id, APP_SECRET_KIND, connection.meta_app_id, tenant_id=connection.tenant_id
         )
-        if not token:
-            raise _unavailable(connection, "missing_access_token", "No hay token de acceso guardado para esta conexión")
-        if not app_secret:
-            raise _unavailable(connection, "missing_app_secret", "No hay App Secret guardado para esta conexión")
     elif origin in ("embedded_signup", "manual"):
         settings = get_settings()
         if not settings.meta_app_id or not settings.meta_app_secret:
@@ -142,11 +180,14 @@ async def credentials_for(connection: MetaConnection, *, waba_id: str | None = N
                 connection, "platform_app_not_configured", "La app de Meta de la plataforma no está configurada"
             )
         app_id, app_secret = settings.meta_app_id, settings.meta_app_secret
-        token = await _system_user_token(connection)
-        if not token:
-            raise _unavailable(connection, "missing_access_token", "No hay token de acceso guardado para esta conexión")
     else:
         raise _unavailable(connection, "origin_invalid", "El origen de la conexión no es válido")
+
+    token = await access_token_for(connection)
+    if not token:
+        raise _unavailable(connection, "missing_access_token", "No hay token de acceso guardado para esta conexión")
+    if not app_secret:
+        raise _unavailable(connection, "missing_app_secret", "No hay App Secret guardado para esta conexión")
 
     return MetaCredentials(
         connection_id=connection.id,

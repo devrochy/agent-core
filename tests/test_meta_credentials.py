@@ -8,6 +8,7 @@ y que nunca se mezclen las de una conexión con las de la plataforma o las de ot
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -15,7 +16,15 @@ import pytest
 import core.gateway.meta_credentials as mc
 from core.db.models import MetaConnection
 from core.gateway.meta_byok import APP_SECRET_KIND, CLOUD_API_ACCESS_TOKEN_KIND
-from core.gateway.meta_credentials import CredentialsUnavailable, MetaCredentials, credentials_for
+from core.gateway.meta_credentials import (
+    CredentialsUnavailable,
+    MetaCredentials,
+    access_token_expires_at,
+    access_token_for,
+    access_token_refs,
+    credentials_for,
+    origin_label,
+)
 from core.gateway.meta_onboarding import TOKEN_KIND
 from core.shared.tenant import tenant_scope
 
@@ -40,6 +49,13 @@ def _connection(origin: str, *, business_id: str | None = "biz-1", **overrides) 
     return MetaConnection(**values)
 
 
+async def _resolve(connection: MetaConnection, **kwargs) -> MetaCredentials:
+    """`credentials_for` bajo el `tenant_scope` del negocio de la conexión, como lo llama
+    el runtime (API, panel y crons siempre fijan el tenant)."""
+    async with tenant_scope(connection.tenant_id):
+        return await credentials_for(connection, **kwargs)
+
+
 @pytest.fixture
 def store(monkeypatch):
     """Token store en memoria: `{(kind, subject_id): token}`; registra cada lectura."""
@@ -50,24 +66,71 @@ def store(monkeypatch):
         reads.append((kind, subject_id))
         return data.get((kind, subject_id))
 
+    expiry: dict[tuple[str, str], datetime] = {}
+
+    async def fake_get_token_expires_at(connection_id, kind, subject_id, *, tenant_id=None):
+        return expiry.get((kind, subject_id))
+
     async def fake_waba(_connection):
         return "waba-1"
 
     monkeypatch.setattr(mc.meta_token_store, "get_token", fake_get_token)
+    monkeypatch.setattr(mc.meta_token_store, "get_token_expires_at", fake_get_token_expires_at)
     monkeypatch.setattr(mc, "_waba_id_of", fake_waba)
     monkeypatch.setattr(
         mc, "get_settings",
         lambda: SimpleNamespace(meta_app_id=PLATFORM_APP_ID, meta_app_secret=PLATFORM_SECRET),
     )
-    store_ns = SimpleNamespace(data=data, reads=reads)
+    store_ns = SimpleNamespace(data=data, reads=reads, expiry=expiry)
     return store_ns
+
+
+# ------------------------------------------------------------ qué token usa cada origen
+@pytest.mark.parametrize(
+    ("origin", "token_esperado"),
+    [("embedded_signup", "tok-es"), ("manual", "tok-es"), ("byok", "tok-byok-viejo")],
+)
+async def test_con_los_dos_tokens_el_origen_decide_cual_se_usa(store, origin, token_esperado) -> None:
+    """Una conexión BYOK que el wizard de ES tomó conserva su token BYOK: el sender y el
+    resolver deben usar el que dice `origin`, no "el que exista, BYOK primero"."""
+    tomada = _connection(origin, meta_app_id="tenant-app")
+    store.data[(CLOUD_API_ACCESS_TOKEN_KIND, "tenant-app")] = "tok-byok-viejo"
+    store.data[(TOKEN_KIND, "biz-1")] = "tok-es"
+
+    assert await access_token_for(tomada) == token_esperado
+
+
+async def test_el_vencimiento_es_el_del_token_que_se_usa(store) -> None:
+    """El aviso de vencimiento no mira el token viejo de otro origen (alertas falsas)."""
+    vencido, vigente = datetime(2026, 1, 1, tzinfo=UTC), datetime(2027, 1, 1, tzinfo=UTC)
+    store.expiry[(CLOUD_API_ACCESS_TOKEN_KIND, "tenant-app")] = vencido
+    store.expiry[(TOKEN_KIND, "biz-1")] = vigente
+
+    assert await access_token_expires_at(_connection("embedded_signup", meta_app_id="tenant-app")) == vigente
+    assert await access_token_expires_at(_connection("byok")) == vencido
+
+
+def test_refs_por_origen() -> None:
+    connection = _connection("embedded_signup")
+    assert access_token_refs(_connection("byok")) == [(CLOUD_API_ACCESS_TOKEN_KIND, "tenant-app")]
+    assert access_token_refs(connection) == [(TOKEN_KIND, "biz-1"), (TOKEN_KIND, str(connection.id))]
+    sin_business = _connection("manual", business_id=None)
+    assert access_token_refs(sin_business) == [(TOKEN_KIND, str(sin_business.id))]
+    assert access_token_refs(_connection("otro-origen")) == []
+
+
+def test_etiquetas_de_origen() -> None:
+    assert origin_label("byok") == "BYOK (app propia)"
+    assert origin_label("embedded_signup") == "Embedded Signup"
+    assert origin_label("manual") == "Carga manual"
+    assert origin_label("raro") == "raro"
 
 
 async def test_byok_usa_token_y_secreto_propios_nunca_los_de_la_plataforma(store) -> None:
     store.data[(CLOUD_API_ACCESS_TOKEN_KIND, "tenant-app")] = "tok-del-negocio"
     store.data[(APP_SECRET_KIND, "tenant-app")] = "secreto-del-negocio"
 
-    creds = await credentials_for(_connection("byok"))
+    creds = await _resolve(_connection("byok"))
 
     assert creds.origin == "byok"
     assert creds.access_token == "tok-del-negocio"
@@ -81,7 +144,7 @@ async def test_byok_usa_token_y_secreto_propios_nunca_los_de_la_plataforma(store
 async def test_embedded_signup_usa_token_de_la_conexion_y_secreto_de_la_plataforma(store) -> None:
     store.data[(TOKEN_KIND, "biz-1")] = "tok-system-user"
 
-    creds = await credentials_for(_connection("embedded_signup"))
+    creds = await _resolve(_connection("embedded_signup"))
 
     assert creds.origin == "embedded_signup"
     assert creds.access_token == "tok-system-user"
@@ -93,7 +156,7 @@ async def test_embedded_signup_usa_token_de_la_conexion_y_secreto_de_la_platafor
 async def test_manual_resuelve_igual_que_embedded_signup(store) -> None:
     store.data[(TOKEN_KIND, "biz-1")] = "tok-manual"
 
-    creds = await credentials_for(_connection("manual"))
+    creds = await _resolve(_connection("manual"))
 
     assert (creds.origin, creds.access_token, creds.app_secret) == ("manual", "tok-manual", PLATFORM_SECRET)
 
@@ -102,13 +165,13 @@ async def test_un_origen_no_lee_los_tokens_del_otro(store) -> None:
     """BYOK nunca mira el token del system user, ni ES el App Secret guardado del negocio."""
     store.data[(TOKEN_KIND, "biz-1")] = "tok-system-user"
     store.data[(APP_SECRET_KIND, PLATFORM_APP_ID)] = "secreto-que-no-es-de-es"
-    await credentials_for(_connection("embedded_signup"))
+    await _resolve(_connection("embedded_signup"))
     assert all(kind != APP_SECRET_KIND for kind, _ in store.reads)
 
     store.reads.clear()
     store.data[(CLOUD_API_ACCESS_TOKEN_KIND, "tenant-app")] = "tok-byok"
     store.data[(APP_SECRET_KIND, "tenant-app")] = "sec-byok"
-    await credentials_for(_connection("byok"))
+    await _resolve(_connection("byok"))
     assert all(kind != TOKEN_KIND for kind, _ in store.reads)
 
 
@@ -117,7 +180,7 @@ async def test_embedded_signup_encuentra_el_token_guardado_antes_de_conocer_el_b
     connection = _connection("embedded_signup")
     store.data[(TOKEN_KIND, str(connection.id))] = "tok-guardado-con-el-id"
 
-    creds = await credentials_for(connection)
+    creds = await _resolve(connection)
 
     assert creds.access_token == "tok-guardado-con-el-id"
 
@@ -134,14 +197,14 @@ async def test_byok_incompleto_falla_con_motivo(store, tokens, reason) -> None:
     store.data.update(tokens)
 
     with pytest.raises(CredentialsUnavailable) as exc:
-        await credentials_for(_connection("byok"))
+        await _resolve(_connection("byok"))
 
     assert exc.value.reason == reason
 
 
 async def test_embedded_signup_sin_token_falla(store) -> None:
     with pytest.raises(CredentialsUnavailable) as exc:
-        await credentials_for(_connection("embedded_signup"))
+        await _resolve(_connection("embedded_signup"))
     assert exc.value.reason == "missing_access_token"
 
 
@@ -151,18 +214,16 @@ async def test_plataforma_sin_app_configurada_falla_para_es_y_manual(store, monk
 
     for origin in ("embedded_signup", "manual"):
         with pytest.raises(CredentialsUnavailable) as exc:
-            await credentials_for(_connection(origin))
+            await _resolve(_connection(origin))
         assert exc.value.reason == "platform_app_not_configured"
 
 
 async def test_conexion_eliminada_no_presta_credenciales(store) -> None:
-    from datetime import UTC, datetime
-
     store.data[(CLOUD_API_ACCESS_TOKEN_KIND, "tenant-app")] = "tok"
     store.data[(APP_SECRET_KIND, "tenant-app")] = "sec"
 
     with pytest.raises(CredentialsUnavailable) as exc:
-        await credentials_for(_connection("byok", deleted_at=datetime.now(UTC)))
+        await _resolve(_connection("byok", deleted_at=datetime.now(UTC)))
 
     assert exc.value.reason == "connection_deleted"
     assert store.reads == []  # ni siquiera se tocó el token store
@@ -181,6 +242,19 @@ async def test_conexion_de_otro_negocio_se_rechaza_antes_de_leer_nada(store) -> 
     assert store.reads == []
 
 
+async def test_sin_negocio_activo_falla_cerrado_sin_leer_nada(store) -> None:
+    """Sin `tenant_scope` no se confía solo en RLS ni en el AAD: falla antes de leer."""
+    store.data[(CLOUD_API_ACCESS_TOKEN_KIND, "tenant-app")] = "tok"
+    store.data[(APP_SECRET_KIND, "tenant-app")] = "sec"
+
+    async with tenant_scope(None):
+        with pytest.raises(CredentialsUnavailable) as exc:
+            await credentials_for(_connection("byok"))
+
+    assert exc.value.reason == "no_tenant_scope"
+    assert store.reads == []
+
+
 async def test_el_tenant_de_la_conexion_es_el_que_se_pasa_al_token_store(monkeypatch, store) -> None:
     """El AAD del token ata la fila al tenant de la conexión: se pasa explícito, no el ambiente."""
     seen: list[uuid.UUID | None] = []
@@ -191,14 +265,14 @@ async def test_el_tenant_de_la_conexion_es_el_que_se_pasa_al_token_store(monkeyp
 
     monkeypatch.setattr(mc.meta_token_store, "get_token", spy)
 
-    await credentials_for(_connection("byok"))
+    await _resolve(_connection("byok"))
 
     assert seen and all(t == TENANT for t in seen)
 
 
 async def test_origen_invalido_falla(store) -> None:
     with pytest.raises(CredentialsUnavailable) as exc:
-        await credentials_for(_connection("otro-origen"))
+        await _resolve(_connection("otro-origen"))
     assert exc.value.reason == "origin_invalid"
 
 
@@ -209,7 +283,7 @@ async def test_waba_id_recibido_evita_la_consulta(monkeypatch, store) -> None:
     monkeypatch.setattr(mc, "_waba_id_of", no_deberia_llamarse)
     store.data[(TOKEN_KIND, "biz-1")] = "tok"
 
-    creds = await credentials_for(_connection("manual"), waba_id="waba-dada")
+    creds = await _resolve(_connection("manual"), waba_id="waba-dada")
 
     assert creds.waba_id == "waba-dada"
 

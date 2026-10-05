@@ -32,7 +32,7 @@ async def _seed(slug: str):
         async with get_session() as session:
             connection = MetaConnection(
                 tenant_id=tid, channel="whatsapp", environment="sandbox",
-                meta_app_id=f"app-{slug}", status="connected",
+                origin="byok", meta_app_id=f"app-{slug}", status="connected",
             )
             session.add(connection)
             await session.flush()
@@ -93,7 +93,7 @@ async def test_admin_meta_connection_ids_excluye_soft_deleted() -> None:
         async with get_session() as session:
             connection = MetaConnection(
                 tenant_id=tid, channel="whatsapp", environment="sandbox",
-                meta_app_id=f"app-{slug}", status="connected", deleted_at=utcnow(),
+                origin="byok", meta_app_id=f"app-{slug}", status="connected", deleted_at=utcnow(),
             )
             session.add(connection)
             await session.flush()

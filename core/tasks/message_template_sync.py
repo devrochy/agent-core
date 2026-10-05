@@ -30,10 +30,16 @@ async def _connected_wabas() -> list[tuple[WabaAccount, MetaConnection]]:
         async with tenant_scope(tenant_id):
             async with get_session() as session:
                 waba = await session.get(WabaAccount, waba_id)
-                if waba is None:
+                if waba is None or waba.tenant_id != tenant_id:
                     continue
                 connection = await session.get(MetaConnection, waba.connection_id)
-                if connection is not None and connection.status == "connected":
+                # Los tres tenants deben coincidir: el del enumerador, el de la WABA y el
+                # de la conexión (defensa en profundidad, igual que `meta_health_check`).
+                if (
+                    connection is not None
+                    and connection.tenant_id == tenant_id
+                    and connection.status == "connected"
+                ):
                     out.append((waba, connection))
     return out
 
@@ -52,7 +58,7 @@ async def _sync_one(waba: WabaAccount, connection: MetaConnection) -> None:
             )
             return
 
-        if not await acquire_sync_lock(waba.waba_id):
+        if not await acquire_sync_lock(connection.tenant_id, waba.waba_id):
             return  # ya sincronizada esta hora (cron o botón manual del panel)
 
         try:

@@ -803,10 +803,11 @@ class MetaConnection(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     channel: Mapped[str] = mapped_column(Text)
     environment: Mapped[str] = mapped_column(Text, default="production")
-    # Cómo se creó la conexión (HU-CONN-01, ADR-0094). Decide de dónde salen sus
-    # credenciales (`core/gateway/meta_credentials.py`). Lo fijan las altas guiadas
-    # (BYOK, Embedded Signup y la carga manual); `manual` es también el valor por defecto.
-    origin: Mapped[str] = mapped_column(Text, default="manual", server_default=text("'manual'"))
+    # Modo de credenciales vigente (`byok` | `embedded_signup` | `manual`, HU-CONN-01,
+    # ADR-0094): decide qué token y qué App Secret usa la conexión
+    # (`core/gateway/meta_credentials.py`). Lo fija cada alta; SIN valor por defecto, para
+    # que un alta que lo olvide falle en vez de usar en silencio la app de la plataforma.
+    origin: Mapped[str] = mapped_column(Text)
     meta_app_id: Mapped[str] = mapped_column(Text)
     meta_config_id: Mapped[str | None] = mapped_column(Text)  # Embedded Signup Login Configuration
     business_id: Mapped[str | None] = mapped_column(Text)

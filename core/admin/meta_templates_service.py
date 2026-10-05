@@ -33,7 +33,7 @@ async def list_templates(
         return [], "Conexión no encontrada", False
 
     sync_error = None
-    if waba is not None and creds is not None and await acquire_sync_lock(waba.waba_id):
+    if waba is not None and creds is not None and await acquire_sync_lock(tenant_id, waba.waba_id):
         try:
             await sync_templates(
                 waba.waba_id,
@@ -96,7 +96,7 @@ async def sync_templates_now(tenant_id: uuid.UUID, connection_id: str) -> str | 
     connection, waba, creds = await resolve_waba_and_credentials(cid, tenant_id)
     if connection is None or waba is None or creds is None:
         return "No hay conexión/WABA lista todavía"
-    if not await acquire_sync_lock(waba.waba_id):
+    if not await acquire_sync_lock(tenant_id, waba.waba_id):
         return "Ya se sincronizó en la última hora"
 
     try:

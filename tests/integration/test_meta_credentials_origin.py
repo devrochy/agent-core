@@ -164,11 +164,12 @@ async def test_un_negocio_nunca_resuelve_las_credenciales_de_otro(platform_app) 
             await credentials_for(connection_b)
     assert exc.value.reason == "tenant_mismatch"
 
-    # 2. Sin contexto de tenant no hay RLS que abra la fila: falla cerrado, no devuelve las de B.
+    # 2. Sin contexto de tenant falla cerrado ANTES de leer el token store: no se confía
+    #    solo en RLS (en `meta_tokens` no está forzada) ni en el AAD.
     async with tenant_scope(None):
         with pytest.raises(CredentialsUnavailable) as exc:
             await credentials_for(connection_b)
-    assert exc.value.reason == "missing_access_token"
+    assert exc.value.reason == "no_tenant_scope"
 
     # 3. Conexión "forjada": el id y la app de B pero con el tenant de A. Aunque pase el
     #    chequeo de tenant, RLS no deja ver la fila de B bajo el contexto de A.
@@ -308,7 +309,101 @@ async def test_alta_manual_guarda_origen_y_resuelve_con_la_plataforma(app_client
             ).scalar_one()
         creds = await credentials_for(connection)
     assert connection.origin == "manual"
+    # Se valida y se resuelve con la MISMA app (la de la plataforma).
+    assert connection.meta_app_id == PLATFORM_APP_ID
     assert (creds.access_token, creds.app_secret) == ("tok-manual-api", PLATFORM_SECRET)
+
+
+async def test_alta_manual_sin_app_de_plataforma_responde_claro(app_client, monkeypatch) -> None:
+    from core.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "meta_app_id", "")
+    monkeypatch.setattr(settings, "meta_app_secret", "")
+    tid = await _new_tenant("manual-sin-app")
+    headers = await api_headers(app_client, tid)
+
+    r = await app_client.post(
+        "/api/v1/admin/meta/manual", headers=headers,
+        json={"waba_id": uniq("waba"), "phone_number_id": uniq("phone"), "token": "tok"},
+    )
+
+    assert r.status_code == 400
+    assert "platform_app_not_configured" in r.text
+
+
+async def test_extender_token_de_una_conexion_no_byok_responde_not_byok(app_client, platform_app) -> None:
+    """Se valida el origen antes de resolver credenciales: `not_byok`, no `missing_credentials`."""
+    tid = await _new_tenant("extend-es")
+    es_id, _ = await _seed_connection(tid, origin="embedded_signup", app_id=PLATFORM_APP_ID, tokens={})
+    headers = await api_headers(app_client, tid)
+
+    r = await app_client.post(
+        "/api/v1/admin/meta/byok/token/extend", headers=headers, json={"connection_id": str(es_id)}
+    )
+
+    assert r.status_code == 400
+    assert "not_byok" in r.text
+
+
+# ------------------------------------------------------------------ una sola regla: el origen
+async def _taken_over_connection(platform_app) -> tuple[uuid.UUID, uuid.UUID]:
+    """Conexión BYOK que el wizard de ES tomó: tiene los DOS tokens y `origin` = ES."""
+    from datetime import UTC, datetime, timedelta
+
+    from core.db.models import PhoneNumber
+    from core.db.session import get_session
+    from core.gateway import meta_token_store
+    from core.gateway.meta_byok import APP_SECRET_KIND, CLOUD_API_ACCESS_TOKEN_KIND
+    from core.gateway.meta_onboarding import TOKEN_KIND
+    from core.shared.tenant import tenant_scope
+
+    tid = await _new_tenant("tomada")
+    app = uniq("app-byok-vieja")
+    conn_id, _ = await _seed_connection(
+        tid, origin="embedded_signup", app_id=app, business_id="biz-tomada",
+        tokens={(TOKEN_KIND, "biz-tomada"): "TOK-ES-VIGENTE", (APP_SECRET_KIND, app): "SEC-BYOK-VIEJO"},
+    )
+    async with tenant_scope(tid):
+        # El token BYOK viejo, temporal y ya vencido.
+        await meta_token_store.put_token(
+            conn_id, CLOUD_API_ACCESS_TOKEN_KIND, app, "TOK-BYOK-VENCIDO", tenant_id=tid,
+            expires_at=datetime.now(UTC) - timedelta(days=2),
+        )
+        async with get_session() as session:
+            session.add(PhoneNumber(tenant_id=tid, connection_id=conn_id, phone_number_id=uniq("phone-tomada")))
+    return tid, conn_id
+
+
+async def test_el_sender_envia_con_el_token_que_dice_el_origen(platform_app) -> None:
+    """Antes probaba "BYOK primero": salud en verde (token de ES) y envíos con el vencido."""
+    from core.gateway.sender import _resolve_meta_connection_credentials
+    from core.shared.tenant import tenant_scope
+
+    tid, conn_id = await _taken_over_connection(platform_app)
+
+    async with tenant_scope(tid):
+        outbound = await _resolve_meta_connection_credentials(conn_id, tid)
+
+    assert outbound is not None and outbound["access_token"] == "TOK-ES-VIGENTE"
+
+
+async def test_el_cron_de_vencimiento_no_alerta_por_un_token_que_no_se_usa(monkeypatch, platform_app) -> None:
+    import core.shared.alerts as alerts_mod
+    from core.tasks.meta_token_expiry_check import check_tokens_expiry
+
+    _tid, conn_id = await _taken_over_connection(platform_app)
+    alertas: list[str] = []
+
+    async def fake_alert(title, message, severity="warning"):
+        alertas.append(message)
+
+    monkeypatch.setattr(alerts_mod, "send_alert", fake_alert)
+
+    await check_tokens_expiry()
+
+    # El token BYOK vencido ya no se usa: ninguna alerta debe nombrar esta conexión.
+    assert not [a for a in alertas if str(conn_id) in a]
 
 
 # ------------------------------------------------------------------ crons por conexión
@@ -346,7 +441,7 @@ async def test_cron_de_plantillas_usa_las_credenciales_de_cada_conexion(monkeypa
     from core.gateway.meta_errors import GraphError
     from core.gateway.meta_template_sync import acquire_sync_lock
 
-    wabas, _ = await _three_connections(platform_app)
+    wabas, roto = await _three_connections(platform_app)
     llamadas: dict[str, tuple[str, str]] = {}
 
     async def fake_sync(waba_id, token, app_secret, version, connection_id, tenant_id):
@@ -363,7 +458,7 @@ async def test_cron_de_plantillas_usa_las_credenciales_de_cada_conexion(monkeypa
     assert llamadas[wabas["es"]] == ("TOK-ES", PLATFORM_SECRET)
     # La conexión sin credenciales utilizables se omite sin gastar el lock horario.
     assert wabas["roto"] not in llamadas
-    assert await acquire_sync_lock(wabas["roto"]) is True
+    assert await acquire_sync_lock(roto["roto"][0], wabas["roto"]) is True
 
 
 async def test_cron_de_precios_usa_las_credenciales_de_cada_conexion(monkeypatch, platform_app) -> None:
@@ -420,14 +515,17 @@ def _migration_0051():
 
 async def test_backfill_de_la_migracion_etiqueta_cada_conexion_segun_su_evidencia() -> None:
     """Corre el SQL REAL del backfill sobre conexiones sembradas con la evidencia de cada
-    alta. Todo dentro de una transacción que se revierte: no deja nada en la base."""
+    alta, como `app_runtime` (rol sin bypass, sujeto a RLS): así prueba lo que justifica
+    recorrer tenant por tenant. Todo dentro de una transacción que se revierte."""
     import sqlalchemy as sa
 
     from core.config import get_settings
 
     settings = get_settings()
-    url = (settings.migrations_database_url or settings.database_url).replace("+asyncpg", "+psycopg2")
-    engine = sa.create_engine(url)
+    if not settings.migrations_database_url:
+        pytest.skip("requiere MIGRATIONS_DATABASE_URL (rol dueño de las tablas) para sembrar y alterar la columna")
+    engine = sa.create_engine(settings.migrations_database_url.replace("+asyncpg", "+psycopg2"))
+    migracion = _migration_0051()
     tenant = uuid.uuid4()
     blob = {"c": b"\x00", "i": b"\x00", "a": b"\x00"}
 
@@ -442,50 +540,72 @@ async def test_backfill_de_la_migracion_etiqueta_cada_conexion_segun_su_evidenci
         "sin_evidencia": ([], False, "manual"),
     }
 
-    with engine.connect() as conn:
-        trans = conn.begin()
-        try:
-            conn.execute(sa.text("alter table meta_connections alter column origin drop not null"))
-            conn.execute(sa.text("select set_config('app.tenant_id', :t, true)"), {"t": str(tenant)})
-            ids: dict[str, uuid.UUID] = {}
-            for i, (nombre, (kinds, wizard, _)) in enumerate(casos.items()):
-                cid = ids[nombre] = uuid.uuid4()
-                conn.execute(
-                    sa.text(
-                        "insert into meta_connections (id, tenant_id, channel, environment, meta_app_id, status, origin) "
-                        "values (:id, :t, 'whatsapp', 'production', :app, 'connected', null)"
-                    ),
-                    {"id": cid, "t": tenant, "app": f"app-backfill-{i}"},
-                )
-                for j, kind in enumerate(kinds):
+    try:
+        with engine.connect() as conn:
+            trans = conn.begin()
+            try:
+                puede = conn.execute(sa.text(
+                    "select pg_has_role(current_user, 'app_runtime', 'MEMBER') "
+                    "or (select rolsuper from pg_roles where rolname = current_user)"
+                )).scalar_one()
+                if not puede:
+                    pytest.skip("el rol dueño no puede asumir app_runtime en este entorno")
+
+                # Como dueño: abrir la columna y sembrar.
+                conn.execute(sa.text("alter table meta_connections alter column origin drop not null"))
+                conn.execute(sa.text("select set_config('app.tenant_id', :t, true)"), {"t": str(tenant)})
+                ids: dict[str, uuid.UUID] = {}
+                for i, (nombre, (kinds, wizard, _)) in enumerate(casos.items()):
+                    cid = ids[nombre] = uuid.uuid4()
                     conn.execute(
                         sa.text(
-                            "insert into meta_private.meta_tokens "
-                            "(id, tenant_id, connection_id, kind, subject_id, ciphertext, iv, auth_tag, key_id, token_hash) "
-                            "values (gen_random_uuid(), :t, :c, :k, :s, :ct, :iv, :tag, 'k1', 'h')"
+                            "insert into meta_connections (id, tenant_id, channel, environment, meta_app_id, status, origin) "
+                            "values (:id, :t, 'whatsapp', 'production', :app, 'connected', null)"
                         ),
-                        {"t": tenant, "c": cid, "k": kind, "s": f"s{j}", "ct": blob["c"], "iv": blob["i"], "tag": blob["a"]},
+                        {"id": cid, "t": tenant, "app": f"app-backfill-{i}"},
                     )
-                if wizard:
-                    conn.execute(
-                        sa.text(
-                            "insert into connection_wizards (id, tenant_id, connection_id, channel) "
-                            "values (gen_random_uuid(), :t, :c, 'whatsapp')"
-                        ),
-                        {"t": tenant, "c": cid},
-                    )
+                    for j, kind in enumerate(kinds):
+                        conn.execute(
+                            sa.text(
+                                "insert into meta_private.meta_tokens "
+                                "(id, tenant_id, connection_id, kind, subject_id, ciphertext, iv, auth_tag, key_id, token_hash) "
+                                "values (gen_random_uuid(), :t, :c, :k, :s, :ct, :iv, :tag, 'k1', 'h')"
+                            ),
+                            {"t": tenant, "c": cid, "k": kind, "s": f"s{j}", "ct": blob["c"], "iv": blob["i"], "tag": blob["a"]},
+                        )
+                    if wizard:
+                        conn.execute(
+                            sa.text(
+                                "insert into connection_wizards (id, tenant_id, connection_id, channel) "
+                                "values (gen_random_uuid(), :t, :c, 'whatsapp')"
+                            ),
+                            {"t": tenant, "c": cid},
+                        )
 
-            # Es el SQL de la migración, no una copia: si cambia, este test lo ejercita.
-            conn.execute(sa.text(_migration_0051()._BACKFILL))
+                # Como un rol SIN bypass: es el caso que el bucle por tenant protege.
+                conn.execute(sa.text("set local role app_runtime"))
 
-            resultado = {
-                nombre: conn.execute(sa.text("select origin from meta_connections where id = :id"), {"id": cid}).scalar_one()
-                for nombre, cid in ids.items()
-            }
-            pendientes = conn.execute(sa.text("select count(*) from meta_connections where origin is null")).scalar_one()
-        finally:
-            trans.rollback()
-    engine.dispose()
+                # Sin el GUC, el mismo UPDATE no falla: no ve filas y deja todo sin origen.
+                conn.execute(sa.text("select set_config('app.tenant_id', '', true)"))
+                sin_guc = conn.execute(sa.text(migracion._BACKFILL)).rowcount
 
-    assert pendientes == 0
+                # Con el GUC del tenant (lo que hace la migración), etiqueta cada conexión.
+                conn.execute(sa.text("select set_config('app.tenant_id', :t, true)"), {"t": str(tenant)})
+                ambas = {row[0] for row in conn.execute(sa.text(migracion._BOTH_FAMILIES))}
+                con_guc = conn.execute(sa.text(migracion._BACKFILL)).rowcount
+                resultado = {
+                    nombre: conn.execute(
+                        sa.text("select origin from meta_connections where id = :id"), {"id": cid}
+                    ).scalar_one()
+                    for nombre, cid in ids.items()
+                }
+            finally:
+                trans.rollback()
+    finally:
+        engine.dispose()
+
+    assert sin_guc == 0
+    assert con_guc == len(casos)
     assert resultado == {nombre: esperado for nombre, (_, _, esperado) in casos.items()}
+    # Las que tienen tokens de los dos orígenes se listan para revisarlas a mano.
+    assert ambas == {ids["cloud_pesa_mas_que_system_user"]}

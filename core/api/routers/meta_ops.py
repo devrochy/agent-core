@@ -430,10 +430,14 @@ async def create_connection_template(
         )
     except ValueError as exc:
         raise ApiError.bad_request("Conexión inválida.", "invalid_connection") from exc
-    except Exception as exc:  # conexión inexistente / sin WABA / sin token
-        raise ApiError.bad_request(
-            f"No hay conexión/WABA lista todavía: {str(exc)[:120]}", "connection_not_ready"
-        ) from exc
+    except Exception as exc:
+        # La falta de credenciales ya la absorbe el resolver (`creds is None` abajo): lo que
+        # llega acá es un error interno (SQL, descifrado). Se registra y se responde un
+        # mensaje fijo, sin el texto de la excepción.
+        from core.shared.logger import get_logger
+
+        get_logger(__name__).exception("create_template_resolucion_fallida", connection_id=connection_id)
+        raise ApiError.bad_request("No hay conexión/WABA lista todavía.", "connection_not_ready") from exc
     if connection is None or waba is None or creds is None:
         raise ApiError.bad_request(
             "No hay conexión/WABA lista todavía.", "connection_not_ready"
@@ -500,14 +504,15 @@ class TokenExtend(BaseModel):
 
 
 async def _resolve_connection_credentials(
-    principal: Principal, connection_id: str
+    principal: Principal, connection_id: str, *, require_byok: bool = False
 ) -> tuple[Any, MetaCredentials]:
     """(conexión, credenciales) de ESA conexión según su origen, o error claro.
 
     El token y el secret viven bajo RLS de tenant (custodia del token store):
     todo se resuelve dentro de `tenant_scope` (mismo bug real que el webhook).
     Antes el secreto salía de "el" secreto efectivo del tenant, que con varias
-    conexiones podía no ser el de esta (HU-CONN-01).
+    conexiones podía no ser el de esta (HU-CONN-01). Con `require_byok`, una conexión
+    de otro origen responde 400 `not_byok` antes de tocar el token store.
     """
     from core.db.models import MetaConnection
     from core.gateway.meta_credentials import CredentialsUnavailable, credentials_for
@@ -527,6 +532,10 @@ async def _resolve_connection_credentials(
             or connection.deleted_at is not None
         ):
             raise ApiError.not_found("La conexión no existe.")
+        if require_byok and connection.origin != "byok":
+            raise ApiError.bad_request(
+                "Solo el token de una conexión BYOK se puede extender desde aquí.", "not_byok"
+            )
         try:
             creds = await credentials_for(connection)
         except CredentialsUnavailable as exc:
@@ -543,9 +552,8 @@ async def inspect_byok_token(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> TokenInspect:
     """Debug del token guardado: validez, tipo, vencimiento real y scopes."""
-    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
+    from core.gateway.meta_credentials import access_token_expires_at
     from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_token_store import get_token_expires_at
     from core.gateway.meta_token_tools import inspect_token
 
     connection, creds = await _resolve_connection_credentials(principal, payload.connection_id)
@@ -558,10 +566,8 @@ async def inspect_byok_token(
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(principal.tenant_id):
-        guardado = await get_token_expires_at(
-            connection.id, CLOUD_API_ACCESS_TOKEN_KIND, connection.meta_app_id,
-            tenant_id=principal.tenant_id,
-        )
+        # El vencimiento guardado del MISMO token que se acaba de inspeccionar.
+        guardado = await access_token_expires_at(connection)
     return TokenInspect(
         is_valid=info["is_valid"],
         type=info.get("type"),
@@ -593,13 +599,13 @@ async def extend_byok_token(
     from core.gateway.meta_token_tools import extend_token
     from core.shared.tenant import tenant_scope
 
-    connection, creds = await _resolve_connection_credentials(principal, payload.connection_id)
-    if creds.origin != "byok":
-        # El token nuevo se guarda como el de una conexión BYOK; el de las demás es
-        # un token de system user de la plataforma que no se canjea desde acá.
-        raise ApiError.bad_request(
-            "Solo el token de una conexión BYOK se puede extender desde aquí.", "not_byok"
-        )
+    # El token nuevo se guarda como el de una conexión BYOK; el de las demás es un token
+    # de system user de la plataforma que no se canjea desde acá. Se valida el origen
+    # antes de resolver credenciales: una conexión ES responde `not_byok`, no
+    # `missing_credentials`.
+    connection, creds = await _resolve_connection_credentials(
+        principal, payload.connection_id, require_byok=True
+    )
     try:
         info = await extend_token(
             creds.app_id, creds.app_secret, creds.access_token, version=creds.graph_api_version

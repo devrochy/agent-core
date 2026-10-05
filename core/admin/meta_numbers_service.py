@@ -30,7 +30,9 @@ async def resolve_waba_and_credentials(connection_id: uuid.UUID, tenant_id: uuid
             return None, None, None
         waba = (
             await session.execute(
-                select(WabaAccount).where(WabaAccount.connection_id == connection_id)
+                select(WabaAccount)
+                .where(WabaAccount.connection_id == connection_id, WabaAccount.tenant_id == connection.tenant_id)
+                .order_by(WabaAccount.created_at)
             )
         ).scalars().first()
     try:

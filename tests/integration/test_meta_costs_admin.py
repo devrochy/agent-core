@@ -68,7 +68,7 @@ async def _setup_connected_tenant():
     async with tenant_scope(tid):
         async with get_session() as session:
             connection = MetaConnection(
-                tenant_id=tid, channel="whatsapp", meta_app_id="app-embedded-signup",
+                tenant_id=tid, channel="whatsapp", origin="embedded_signup", meta_app_id="app-embedded-signup",
                 status="connected", business_id="biz-costos",
             )
             session.add(connection)

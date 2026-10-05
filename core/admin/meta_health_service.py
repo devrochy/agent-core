@@ -20,9 +20,7 @@ from core.db.session import get_owned, get_session
 
 
 async def health_overview(tenant_id: uuid.UUID) -> list[dict[str, Any]]:
-    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
-    from core.gateway.meta_onboarding import TOKEN_KIND
-    from core.gateway.meta_token_store import get_token_expires_at
+    from core.gateway.meta_credentials import access_token_expires_at
 
     async with get_session() as session:
         rows = (
@@ -36,13 +34,7 @@ async def health_overview(tenant_id: uuid.UUID) -> list[dict[str, Any]]:
         )
     out: list[dict[str, Any]] = []
     for c in rows:
-        exp = await get_token_expires_at(
-            c.id, CLOUD_API_ACCESS_TOKEN_KIND, c.meta_app_id, tenant_id=tenant_id
-        )
-        if exp is None:
-            exp = await get_token_expires_at(
-                c.id, TOKEN_KIND, c.business_id or str(c.id), tenant_id=tenant_id
-            )
+        exp = await access_token_expires_at(c)
         out.append(
             {
                 "id": c.id,

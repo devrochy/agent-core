@@ -18,7 +18,6 @@ from sqlalchemy import select
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.forms import coerce_schema_values, redact_secrets
-from core.config import get_settings
 from core.db.models import PhoneNumber, utcnow
 from core.db.session import get_owned, get_session
 from core.gateway.connection_types import setup_url
@@ -70,7 +69,6 @@ async def list_connections_endpoint(
         for c in connections
     ]
 
-    settings = get_settings()
     if tenant_id is not None:
         from core.db.models import MetaConnection
 
@@ -106,12 +104,12 @@ async def list_connections_endpoint(
                         p.connection_id, p.display_phone_number or p.phone_number_id
                     )
 
+        from core.gateway.meta_credentials import origin_label
+
         for mc in meta_connections:
-            origin = (
-                "Embedded Signup"
-                if mc.meta_app_id == settings.meta_app_id
-                else "BYOK (app propia)"
-            )
+            # Del origen guardado (ADR-0094), no de comparar `meta_app_id` con la app de
+            # la plataforma: una conexión manual o una BYOK que pasó a ES se rotulaban mal.
+            origin = origin_label(mc.origin)
             rows.append(
                 ConnectionItem(
                     id=mc.id,

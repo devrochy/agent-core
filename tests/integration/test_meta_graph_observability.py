@@ -26,7 +26,7 @@ async def _make_connection(tenant_id, suffix: str):
 
     async with get_session() as session:
         connection = MetaConnection(
-            tenant_id=tenant_id, channel="whatsapp", environment="production", meta_app_id=f"app-{suffix}"
+            tenant_id=tenant_id, channel="whatsapp", environment="production", origin="byok", meta_app_id=f"app-{suffix}"
         )
         session.add(connection)
         await session.flush()
@@ -110,7 +110,7 @@ async def test_freno_al_90_por_ciento_bloquea_send_to_conversation(monkeypatch, 
     async with tenant_scope(t1):
         async with get_session() as session:
             meta_connection = MetaConnection(
-                tenant_id=t1, channel="whatsapp", environment="production", meta_app_id=f"app-{suffix}"
+                tenant_id=t1, channel="whatsapp", environment="production", origin="byok", meta_app_id=f"app-{suffix}"
             )
             session.add(meta_connection)
             await session.flush()

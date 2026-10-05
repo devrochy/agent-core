@@ -1752,7 +1752,6 @@ async def connections_page(request: Request):
         for c in connections
     ]
 
-    settings = get_settings()
     if tid is not None:
         async with get_session() as session:
             meta_connections = (
@@ -1775,8 +1774,10 @@ async def connections_page(request: Request):
                 for p in phone_rows:
                     phones_by_connection.setdefault(p.connection_id, p.display_phone_number or p.phone_number_id)
 
+        from core.gateway.meta_credentials import origin_label
+
         for mc in meta_connections:
-            origen = "Embedded Signup" if mc.meta_app_id == settings.meta_app_id else "BYOK (app propia)"
+            origen = origin_label(mc.origin)  # del origen guardado (ADR-0094)
             rows.append({
                 "id": mc.id,
                 "tipo": "meta_connection",
@@ -2335,21 +2336,13 @@ async def meta_health_page(request: Request):
             )
         ).scalars().all()
 
-    # Expiración del access token por conexión (badge de aviso antes de que venza).
-    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
-    from core.gateway.meta_onboarding import TOKEN_KIND
-    from core.gateway.meta_token_store import get_token_expires_at
+    # Expiración del access token por conexión (badge de aviso antes de que venza): la
+    # del token que la conexión usa según su `origin` (ADR-0094).
+    from core.gateway.meta_credentials import access_token_expires_at
 
     token_expiry: dict = {}
     for connection in connections:
-        exp = await get_token_expires_at(
-            connection.id, CLOUD_API_ACCESS_TOKEN_KIND, connection.meta_app_id, tenant_id=tid
-        )
-        if exp is None:
-            exp = await get_token_expires_at(
-                connection.id, TOKEN_KIND, connection.business_id or str(connection.id), tenant_id=tid
-            )
-        token_expiry[connection.id] = exp
+        token_expiry[connection.id] = await access_token_expires_at(connection)
 
     ctx.update(connections=connections, token_expiry=token_expiry, now=datetime.now(UTC))
     return _render("meta_salud.html", ctx)

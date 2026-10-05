@@ -43,7 +43,7 @@ async def _setup_connected_tenant():
             connection = MetaConnection(
                 tenant_id=tid,
                 channel="whatsapp",
-                meta_app_id="app-embedded-signup",
+                origin="embedded_signup", meta_app_id="app-embedded-signup",
                 status="connected",
                 business_id="biz-plantillas",
             )
