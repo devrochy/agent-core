@@ -192,6 +192,50 @@ class CalendarSkill(BaseSkill):
         except Exception:
             return "America/Bogota"
 
+    async def _email_provided_by_client(self, email: str, context: ToolContext) -> bool:
+        """True si el email lo dio el CLIENTE (mensaje inbound) o está en su perfil.
+
+        Corrección post-prueba 2026-10-05: el modelo inventó `rob@example.com`
+        para satisfacer el requisito de email y la cita se creó con un correo
+        falso. El email solo se acepta si aparece en los mensajes del cliente o
+        en `Customer.attributes`. Sin conversación (p. ej. playground sin
+        historial) no se puede verificar: se acepta el email ya validado.
+        """
+        conv_id = _as_uuid(getattr(context, "conversation_id", None))
+        if conv_id is None:
+            return True
+        from sqlalchemy import Text, cast, select
+
+        from core.db.models import Customer, Message
+        from core.db.session import get_session
+
+        tenant_id = get_current_tenant_id()
+        pattern = f"%{email}%"
+        async with get_session() as session:
+            hit = (
+                await session.execute(
+                    select(Message.id)
+                    .where(
+                        Message.tenant_id == tenant_id,
+                        Message.conversation_id == conv_id,
+                        Message.direction == "inbound",
+                        Message.deleted_at.is_(None),
+                        Message.content.ilike(pattern),
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if hit is not None:
+                return True
+            cust_id = _as_uuid(getattr(context, "customer_id", None))
+            q = select(Customer.id).where(
+                Customer.tenant_id == tenant_id,
+                cast(Customer.attributes, Text).ilike(pattern),
+            )
+            if cust_id is not None:
+                q = q.where(Customer.id == cust_id)
+            return (await session.execute(q.limit(1))).scalar_one_or_none() is not None
+
     async def _business_name(self) -> str:
         """Nombre visible del negocio (nunca un nombre técnico, HU-REP-04)."""
         tenant_id = get_current_tenant_id()
@@ -269,8 +313,10 @@ class CalendarSkill(BaseSkill):
                 description=(
                     "Crea una cita en la agenda del negocio. Úsala SOLO cuando el cliente "
                     "haya confirmado fecha y hora exactas. Fechas en formato ISO: 2026-08-20T15:00:00. "
-                    "El email del cliente es OBLIGATORIO: si no lo tenés, pedíselo antes de llamar "
-                    "esta tool (sin email la tool devuelve needs_data y no crea nada). "
+                    "El email del cliente es OBLIGATORIO y debe ser uno que el cliente haya dado "
+                    "en la conversación (o que ya esté en su perfil): NUNCA lo inventes. Si no lo "
+                    "tenés, pedíselo antes de llamar esta tool (sin email la tool devuelve "
+                    "needs_data y no crea nada). "
                     "Si sabés el tipo de cita (ej. una demo), pasá appointment_type_id; si no, "
                     "pasá duration_minutes."
                 ),
@@ -476,6 +522,17 @@ class CalendarSkill(BaseSkill):
         if single_recipient(email) is None:
             return {
                 "error": "El email del cliente no es válido: pedíselo de nuevo.",
+                "status": "needs_data",
+                "missing": ["attendee_email"],
+            }
+        if not await self._email_provided_by_client(email, context):
+            # El modelo inventó el email (probado 2026-10-05): solo se acepta el
+            # que el cliente escribió o el que está en su perfil.
+            return {
+                "error": (
+                    "Ese email no me lo dio el cliente: pedíselo antes de agendar "
+                    "y NO inventes emails."
+                ),
                 "status": "needs_data",
                 "missing": ["attendee_email"],
             }
