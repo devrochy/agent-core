@@ -512,6 +512,42 @@ class PushToken(Base):
     )
 
 
+class MobileAuditEvent(Base):
+    """Auditoría de acciones críticas de la app oficial (ADR-0097, HU-APP-15).
+
+    Tabla de NEGOCIO: tenant_id + RLS forzada. Idempotente por
+    (tenant_id, event_id): la app reenvía eventos offline sin duplicar.
+    """
+
+    __tablename__ = "mobile_audit_events"
+    __table_args__ = (
+        Index(
+            "uq_mobile_audit_events_tenant_event",
+            "tenant_id",
+            "event_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index("ix_mobile_audit_events_admin", "tenant_id", "admin_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    admin_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    event_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    accion: Mapped[str] = mapped_column(Text, nullable=False)
+    entidad: Mapped[str] = mapped_column(Text, nullable=False)
+    entidad_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    device_id: Mapped[str | None] = mapped_column(Text)
+    ocurrido_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class AdminPermission(Base):
     """Permiso de sección de un admin (RBAC configurable, ADR-0047).
 
