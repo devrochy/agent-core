@@ -71,6 +71,50 @@ def _contexto() -> object:
     )
 
 
+async def _seed_email(tenant_id: uuid.UUID, conversation_id: uuid.UUID, *emails: str) -> None:
+    """Siembra el email como mensaje INBOUND del cliente (procedencia del email).
+
+    `create_calendar_event` solo acepta emails que el cliente haya escrito (o
+    estén en su perfil): sin esto, la tool responde needs_data. Crea el
+    `Customer`/`Conversation` mínimos (el mensaje tiene FK a conversations).
+    """
+    from core.db.models import Conversation, Customer, Message
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            customer = Customer(
+                tenant_id=tenant_id,
+                channel="whatsapp",
+                external_id=f"wa-seed-{conversation_id.hex[:8]}",
+                name="Test seed",
+            )
+            session.add(customer)
+            await session.flush()
+            session.add(
+                Conversation(
+                    id=conversation_id,
+                    tenant_id=tenant_id,
+                    customer_id=customer.id,
+                    channel="whatsapp",
+                    status="open",
+                )
+            )
+            await session.flush()
+            session.add(
+                Message(
+                    tenant_id=tenant_id,
+                    conversation_id=conversation_id,
+                    direction="inbound",
+                    sender_type="customer",
+                    content="mis correos: " + ", ".join(emails),
+                    status="sent",
+                    client_message_id=str(uuid.uuid4()),
+                )
+            )
+
+
 async def test_flujo_calendario_interno() -> None:
     from pack_calendar.skills import CalendarSkill
 
@@ -80,6 +124,7 @@ async def test_flujo_calendario_interno() -> None:
     await _configurar(tenant_id)
     skill = CalendarSkill()
     ctx = _contexto()
+    await _seed_email(tenant_id, ctx.conversation_id, "laura@ejemplo.com")
 
     async with tenant_scope(tenant_id):
         # Disponibilidad sin citas: hay slots libres y no requiere Google.
@@ -255,6 +300,10 @@ async def test_create_event_rechaza_solapamiento_y_pasado() -> None:
     await _configurar(tenant_id)
     skill = CalendarSkill()
     ctx = _contexto()
+    await _seed_email(
+        tenant_id, ctx.conversation_id, "d1@ejemplo.com", "d2@ejemplo.com",
+        "d3@ejemplo.com", "d4@ejemplo.com",
+    )
 
     async with tenant_scope(tenant_id):
         first = await skill.create_event(
@@ -292,6 +341,8 @@ async def test_email_fallback_sin_conexion() -> None:
 
     tenant_id = await _tenant_calendario()
     await _configurar(tenant_id)
+    ctx = _contexto()
+    await _seed_email(tenant_id, ctx.conversation_id, "cliente@ejemplo.com")
 
     async with tenant_scope(tenant_id):
         res = await CalendarSkill().create_event(
@@ -300,7 +351,7 @@ async def test_email_fallback_sin_conexion() -> None:
                 "start_datetime": f"{FECHA}T09:00:00",
                 "attendee_email": "cliente@ejemplo.com",
             },
-            _contexto(),
+            ctx,
         )
         assert res["status"] == "created"
         assert res["email_sent"] is False
@@ -400,6 +451,7 @@ async def test_create_sin_email_pide_datos_y_no_crea() -> None:
     await _configurar(tenant_id)
     skill = CalendarSkill()
     ctx = _contexto()
+    await _seed_email(tenant_id, ctx.conversation_id, "ok@ejemplo.com")
 
     async with tenant_scope(tenant_id):
         res = await skill.create_event(
@@ -418,7 +470,14 @@ async def test_create_sin_email_pide_datos_y_no_crea() -> None:
         )
         assert malo["status"] == "needs_data"
 
-        # Con email válido sí crea.
+        # Email válido pero INVENTADO (no lo dio el cliente) → needs_data.
+        inventado = await skill.create_event(
+            {"title": "Demo email inventado", "start_datetime": f"{FECHA}T10:00:00", "attendee_email": "rob@example.com"},
+            ctx,
+        )
+        assert inventado["status"] == "needs_data"
+
+        # Con email válido y dado por el cliente sí crea.
         ok = await skill.create_event(
             {"title": "Demo con email", "start_datetime": f"{FECHA}T10:00:00", "attendee_email": "ok@ejemplo.com"},
             ctx,
@@ -437,6 +496,7 @@ async def test_cancel_con_event_id_invalido_usa_fallback() -> None:
     await _configurar(tenant_id)
     skill = CalendarSkill()
     ctx = _contexto()
+    await _seed_email(tenant_id, ctx.conversation_id, "cancel@ejemplo.com")
 
     async with tenant_scope(tenant_id):
         created = await skill.create_event(
@@ -466,6 +526,7 @@ async def test_update_con_event_id_invalido_usa_fallback() -> None:
     await _configurar(tenant_id)
     skill = CalendarSkill()
     ctx = _contexto()
+    await _seed_email(tenant_id, ctx.conversation_id, "mover@ejemplo.com")
 
     async with tenant_scope(tenant_id):
         created = await skill.create_event(
