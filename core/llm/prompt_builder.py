@@ -17,7 +17,7 @@ se ensambla:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from agentcore_contracts import AgentSpec
@@ -28,6 +28,8 @@ log = get_logger(__name__)
 
 DEFAULT_TIMEZONE = "America/Bogota"
 
+_NEXT_DAYS = {"es": "Próximos días", "en": "Next days", "pt": "Próximos dias"}
+_TOMORROW = {"es": "mañana", "en": "tomorrow", "pt": "amanhã"}
 # Nombres de día (lunes=0) y mes (enero=1) por idioma: datos, no instrucciones.
 _WEEKDAYS = {
     "es": ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"),
@@ -104,7 +106,22 @@ def _current_datetime_part(ctx: PromptContext) -> str:
         line = f"Hoje é {weekday}, {local.day} de {month} de {local.year} — {hour} ({tz_name})."
     else:
         line = f"Hoy es {weekday}, {local.day} de {month} de {local.year} — {hour} ({tz_name})."
-    return f"## Fecha y hora actual\n{line}"
+    return f"## Fecha y hora actual\n{line}\n{_next_days_line(local.date(), lang)}"
+
+
+def _next_days_line(today: date, lang: str) -> str:
+    """Los 7 días siguientes con su fecha (E2E HU-CAL-06: "el próximo miércoles"
+    se resolvía a la semana equivocada; con la lista el modelo no hace cuentas)."""
+    days = []
+    for offset in range(1, 8):
+        day = today + timedelta(days=offset)
+        weekday = _WEEKDAYS[lang][day.weekday()]
+        month = _MONTHS[lang][day.month - 1]
+        label = f"{weekday}, {month} {day.day}" if lang == "en" else (
+            f"{weekday}, {day.day} de {month}" if lang == "pt" else f"{weekday} {day.day} de {month}"
+        )
+        days.append(f"{_TOMORROW[lang]} {label}" if offset == 1 else label)
+    return f"{_NEXT_DAYS[lang]}: " + " · ".join(days) + "."
 
 
 async def _render_playbook(

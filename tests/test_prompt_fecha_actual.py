@@ -18,6 +18,11 @@ from core.llm.prompt_builder import PromptContext, build_system_blocks
 # 2026-10-06 15:00 UTC = martes 10:00 en Bogotá (UTC-5).
 MARTES_10_BOGOTA = datetime(2026, 10, 6, 15, 0, tzinfo=UTC)
 
+# Hoy martes 6: el "próximo miércoles" es el 7 y va primero en la lista.
+PROXIMOS_DIAS = (
+    "Próximos días: mañana miércoles 7 de octubre · jueves 8 de octubre · viernes 9 de octubre · sábado 10 de octubre · domingo 11 de octubre · lunes 12 de octubre · martes 13 de octubre."
+)
+
 PLAYBOOKS = [
     {"name": "identidad", "description": "Identidad del asistente"},
     {"name": "tono", "description": "Voz y tono del asistente"},
@@ -63,7 +68,8 @@ async def test_la_fecha_actual_es_la_ultima_parte_del_prompt() -> None:
     blocks = await build_system_blocks(_spec(), _ctx())
 
     assert blocks[-1] == (
-        "## Fecha y hora actual\nHoy es martes, 6 de octubre de 2026 — 10:00 (America/Bogota)."
+        "## Fecha y hora actual\nHoy es martes, 6 de octubre de 2026 — 10:00 (America/Bogota).\n"
+        "Próximos días: mañana miércoles 7 de octubre · jueves 8 de octubre · viernes 9 de octubre · sábado 10 de octubre · domingo 11 de octubre · lunes 12 de octubre · martes 13 de octubre."
     )
 
 
@@ -74,7 +80,8 @@ async def test_la_fecha_va_despues_del_resto_del_contexto_dinamico() -> None:
 
     assert "## Lo que sabes de este cliente" in blocks[-1]
     assert blocks[-1].endswith(
-        "## Fecha y hora actual\nHoy es martes, 6 de octubre de 2026 — 10:00 (America/Bogota)."
+        "## Fecha y hora actual\nHoy es martes, 6 de octubre de 2026 — 10:00 (America/Bogota).\n"
+        + PROXIMOS_DIAS
     )
 
 
@@ -85,20 +92,21 @@ async def test_la_hora_no_cambia_los_bloques_estables() -> None:
 
     assert a[:-1] == b[:-1]
     assert a[-1] != b[-1]
-    assert b[-1].endswith("16:37 (America/Bogota).")
+    assert "16:37 (America/Bogota)." in b[-1]
 
 
 async def test_usa_la_zona_horaria_del_negocio() -> None:
     blocks = await build_system_blocks(_spec(), _ctx(timezone="Asia/Tokyo"))
 
     # 15:00 UTC = 00:00 del miércoles en Tokio.
-    assert blocks[-1].endswith("Hoy es miércoles, 7 de octubre de 2026 — 00:00 (Asia/Tokyo).")
+    assert "Hoy es miércoles, 7 de octubre de 2026 — 00:00 (Asia/Tokyo)." in blocks[-1]
+    assert "Próximos días: mañana jueves 8 de octubre ·" in blocks[-1]
 
 
 async def test_zona_invalida_cae_a_bogota() -> None:
     blocks = await build_system_blocks(_spec(), _ctx(timezone="Marte/Olimpo"))
 
-    assert blocks[-1].endswith("Hoy es martes, 6 de octubre de 2026 — 10:00 (America/Bogota).")
+    assert "Hoy es martes, 6 de octubre de 2026 — 10:00 (America/Bogota)." in blocks[-1]
 
 
 @pytest.mark.parametrize(
@@ -112,7 +120,7 @@ async def test_zona_invalida_cae_a_bogota() -> None:
 async def test_dia_y_mes_segun_el_idioma(language: str, expected: str) -> None:
     blocks = await build_system_blocks(_spec(), _ctx(language=language))
 
-    assert blocks[-1].endswith(expected)
+    assert expected in blocks[-1]
 
 
 async def test_reglas_de_operacion_explican_la_fecha_y_prohiben_filtrar_instrucciones() -> None:
@@ -131,3 +139,25 @@ async def test_respuesta_verifying_coincide_con_la_constante() -> None:
     from core.orchestrator.escalation import VERIFYING_REPLY
 
     assert await load_response(_spec(), "verifying") == VERIFYING_REPLY
+
+
+@pytest.mark.parametrize(
+    ("language", "expected"),
+    [
+        ("en", "Next days: tomorrow Wednesday, October 7 · Thursday, October 8 ·"),
+        ("pt", "Próximos dias: amanhã quarta-feira, 7 de outubro · quinta-feira, 8 de outubro ·"),
+    ],
+)
+async def test_proximos_dias_segun_el_idioma(language: str, expected: str) -> None:
+    """E2E HU-CAL-06: "el próximo miércoles" se resolvió al 14 en vez del 7. La
+    lista de los próximos días con su fecha evita que el modelo haga cuentas."""
+    blocks = await build_system_blocks(_spec(), _ctx(language=language))
+
+    assert expected in blocks[-1]
+
+
+async def test_reglas_remiten_a_la_lista_de_proximos_dias() -> None:
+    blocks = await build_system_blocks(_spec(), _ctx())
+    reglas = next(b for b in blocks if "## Reglas de operación" in b)
+
+    assert "Próximos días" in reglas

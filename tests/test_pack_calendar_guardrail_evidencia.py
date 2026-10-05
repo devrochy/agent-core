@@ -262,3 +262,62 @@ async def test_describir_la_cita_recien_creada_pasa():
 async def test_preguntar_si_revisa_las_citas_pasa():
     verdict = await _check("¿Querés que revise tus citas agendadas?")
     assert verdict.passed, verdict.reason
+
+
+# ---------------------------------------------------------------- disponibilidad
+# E2E HU-CAL-06: "A las 3:00 pm está libre" sin consultar la disponibilidad.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "El próximo miércoles es el 14 de octubre. A las 3:00 pm está libre.",
+        "Tengo estos horarios libres el miércoles: 14:00 y 15:00.",
+        "Mañana hay disponibilidad a las 10.",
+    ],
+)
+async def test_afirmar_disponibilidad_sin_consultar_bloquea(texto: str):
+    verdict = await _check(texto)
+    assert not verdict.passed, texto
+    assert "disponibilidad" in verdict.reason
+    assert "check_availability" in verdict.retry_instruction
+
+
+@pytest.mark.asyncio
+async def test_disponibilidad_respaldada_por_check_o_find():
+    for result in (
+        _r("check_availability", status="ok", free_slots=["15:00"]),
+        _r("find_next_available", status="ok", days=[{"date": "2026-10-07"}]),
+    ):
+        verdict = await _check("Tengo estos horarios libres el miércoles: 15:00.", result)
+        assert verdict.passed, verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_horario_ocupado_respaldado_por_el_rechazo_del_create():
+    verdict = await _check(
+        "Ese horario ya está ocupado. ¿Te sirve a las 4 pm?",
+        _r("create_calendar_event", status="rejected", reason="occupied", message="Ocupado."),
+    )
+    assert verdict.passed, verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_preguntar_por_disponibilidad_pasa():
+    verdict = await _check("¿Qué horario te queda libre el miércoles?")
+    assert verdict.passed, verdict.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "El plan Basic está disponible desde hoy.",
+        "Tenemos disponibles los planes Basic y Pro.",
+        "Quedo disponible para lo que necesites.",
+    ],
+)
+async def test_disponibilidad_de_productos_no_es_agenda(texto: str):
+    verdict = await _check(texto)
+    assert verdict.passed, verdict.reason
