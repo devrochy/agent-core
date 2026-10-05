@@ -30,6 +30,7 @@ from core.api.routers import (
     playground,
     plugins,
     push,
+    search,
     settings,
     tenants,
     web_chat,
@@ -39,6 +40,7 @@ api_router = APIRouter(prefix="/api/v1", tags=["api"])
 api_router.include_router(auth.router)
 api_router.include_router(me.router)
 api_router.include_router(push.router)
+api_router.include_router(search.router)
 api_router.include_router(tenants.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(dlq.router)

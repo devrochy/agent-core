@@ -28,6 +28,8 @@ from core.db.models import Admin, Conversation, Escalation, TenantUser
 from core.db.session import get_owned, get_session
 from pack_cobranza.permisos import GESTOR_PERMISOS
 
+# Registra los providers de búsqueda global del pack (ADR-0096).
+from . import search as _search  # noqa: F401
 from .models import (
     Abono,
     AuditoriaCartera,
