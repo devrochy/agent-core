@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 
 from core.admin.settings_service import (
@@ -37,9 +38,13 @@ from core.llm.difficulty_router import (
     LONG_MESSAGE_THRESHOLD,
     TURNOS_SIN_RESOLVER_THRESHOLD,
 )
+from core.llm.prompt_builder import DEFAULT_TIMEZONE
 from core.mcp.host import mcp_host
 
 router = APIRouter(prefix="/admin/settings", tags=["admin · configuración"])
+
+# Qué hace el loop al agotar los reintentos del guardrail (ADR-0092).
+GuardrailFailAction = Literal["escalate", "neutral"]
 
 
 # ------------------------------------------------------------------ modelos
@@ -53,7 +58,10 @@ class IdentitySettings(BaseModel):
     split_style: str = "un_mensaje"
     # Moneda del negocio (HU-UI-01): COP por defecto.
     currency: str = "COP"
+    # Zona horaria del negocio (HU-CAL-04, ADR-0091).
+    timezone: str = DEFAULT_TIMEZONE
     guardrail_max_retries: int
+    guardrail_fail_action: GuardrailFailAction = "escalate"
     disabled_guardrails: list[str]
     available_guardrails: list[str]
     difficulty_long_message_threshold: int
@@ -80,7 +88,10 @@ class IdentityUpdate(BaseModel):
     debounce_mode: str = "natural"
     split_style: str = "un_mensaje"
     currency: str = "COP"
+    # `None` = no cambiar: un cliente que todavía no conoce el campo no lo pisa.
+    timezone: str | None = None
     guardrail_max_retries: int = 1
+    guardrail_fail_action: GuardrailFailAction | None = None
     disabled_guardrails: list[str] = []
     difficulty_long_message_threshold: int = LONG_MESSAGE_THRESHOLD
     difficulty_turnos_sin_resolver_threshold: int = TURNOS_SIN_RESOLVER_THRESHOLD
@@ -96,6 +107,18 @@ class IdentityUpdate(BaseModel):
     bot_paused: bool = False
     business_tz: str = ""
     business_ranges: list[dict[str, Any]] = []
+
+    @field_validator("timezone")
+    @classmethod
+    def _zona_horaria_valida(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        value = value.strip()
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"zona horaria desconocida: {value}") from exc
+        return value
 
 
 class BrainSettings(BaseModel):
@@ -218,7 +241,9 @@ def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) 
         debounce_mode=behavior.get("debounce_mode", "natural"),
         split_style=behavior.get("split_style", "un_mensaje"),
         currency=(app_settings.currency if app_settings and app_settings.currency else "COP"),
+        timezone=(app_settings.timezone if app_settings and app_settings.timezone else DEFAULT_TIMEZONE),
         guardrail_max_retries=int(behavior.get("guardrail_max_retries", 1) or 0),
+        guardrail_fail_action="neutral" if behavior.get("guardrail_fail_action") == "neutral" else "escalate",
         disabled_guardrails=list(behavior.get("disabled_guardrails", []) or []),
         available_guardrails=available,
         difficulty_long_message_threshold=int(
@@ -300,6 +325,8 @@ async def save_identity(
         app_settings.brand_voice = payload.brand_voice
         # Moneda del negocio (HU-UI-01): ISO-4217 en mayúsculas, default COP.
         app_settings.currency = (payload.currency or "COP").strip().upper()[:3] or "COP"
+        if payload.timezone is not None:
+            app_settings.timezone = payload.timezone
         behavior = dict(app_settings.behavior_config)
         behavior.update(
             tono=payload.tono,
@@ -307,7 +334,8 @@ async def save_identity(
             split_style=payload.split_style
             if payload.split_style in ("un_mensaje", "pocos_cortos", "varios_cortos")
             else "un_mensaje",
-            guardrail_max_retries=max(0, payload.guardrail_max_retries),
+            # Mismo rango que aplica el loop (`core/orchestrator/loop.py`).
+            guardrail_max_retries=max(0, min(5, payload.guardrail_max_retries)),
             disabled_guardrails=sorted(set(available) & set(payload.disabled_guardrails)),
             difficulty_long_message_threshold=max(
                 50, min(5000, payload.difficulty_long_message_threshold)
@@ -317,11 +345,13 @@ async def save_identity(
             ),
             difficulty_score_threshold=max(1, min(10, payload.difficulty_score_threshold)),
         )
+        if payload.guardrail_fail_action is not None:
+            behavior["guardrail_fail_action"] = payload.guardrail_fail_action
         app_settings.behavior_config = behavior
         ranges = validate_business_ranges(payload.business_ranges)
-        business_hours = (
-            {"tz": payload.business_tz.strip() or "UTC", "ranges": ranges} if ranges else None
-        )
+        # Sin zona propia, el horario de atención usa la del negocio (ADR-0091).
+        business_tz = payload.business_tz.strip() or app_settings.timezone or DEFAULT_TIMEZONE
+        business_hours = {"tz": business_tz, "ranges": ranges} if ranges else None
         app_settings.escalation_config = {
             **dict(app_settings.escalation_config or {}),
             "keywords": [k.strip() for k in payload.escalation_keywords if k.strip()],

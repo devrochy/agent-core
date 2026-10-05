@@ -32,6 +32,10 @@ ESCALATION_REPLY = (
     "En un momento te contactan por este mismo chat."
 )
 
+# Respuesta neutral al agotar el guardrail con `guardrail_fail_action=neutral`
+# (ADR-0092). Respaldo determinista de la sección `verifying` de `respuestas.md`.
+VERIFYING_REPLY = "Dejame verificar eso y te confirmo en un momento, por favor."
+
 
 async def escalate(conversation_id: uuid.UUID, reason: str, summary: str = "") -> None:
     async with get_session() as session:

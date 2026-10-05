@@ -9,18 +9,39 @@ se ensambla:
      {language}).
   2. Bloques dinámicos del turno (voz de marca, skills activas, perfil y memorias)
      que cambian por turno — van al final para no invalidar el cache de los bloques
-     estables (docs/PROMPT-CACHING-GUIDE.md).
+     estables (docs/PROMPT-CACHING-GUIDE.md). La fecha y hora actual del negocio es
+     la última parte y solo trae el dato; cómo usarla lo dice el playbook
+     `reglas-operacion` (ADR-0091).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from agentcore_contracts import AgentSpec
 
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
+
+DEFAULT_TIMEZONE = "America/Bogota"
+
+# Nombres de día (lunes=0) y mes (enero=1) por idioma: datos, no instrucciones.
+_WEEKDAYS = {
+    "es": ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"),
+    "en": ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"),
+    "pt": ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"),
+}
+_MONTHS = {
+    "es": ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+           "septiembre", "octubre", "noviembre", "diciembre"),
+    "en": ("January", "February", "March", "April", "May", "June", "July", "August",
+           "September", "October", "November", "December"),
+    "pt": ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
+           "setembro", "outubro", "novembro", "dezembro"),
+}
 
 
 @dataclass
@@ -37,6 +58,8 @@ class PromptContext:
     active_skills_summary: str = ""   # descripción de las skills activas del turno
     recalled_memories: list[str] = field(default_factory=list)  # Capa 3 (RAG)
     entity_profile: str = ""          # Capa 2 (perfil del cliente)
+    timezone: str = DEFAULT_TIMEZONE  # zona del negocio (ADR-0091)
+    now: datetime | None = None       # None = ahora; inyectable en tests
 
     @property
     def template_vars(self) -> dict[str, str]:
@@ -57,6 +80,31 @@ class PromptContext:
             "emojis": emoji_names.get(self.emojis, self.emojis),
             "max_length": str(self.max_length),
         }
+
+
+def _current_datetime_part(ctx: PromptContext) -> str:
+    """Fecha y hora actual en la zona del negocio, como dato (ADR-0091)."""
+    try:
+        tz = ZoneInfo(ctx.timezone or DEFAULT_TIMEZONE)
+        tz_name = ctx.timezone or DEFAULT_TIMEZONE
+    except (ZoneInfoNotFoundError, ValueError):
+        log.warning("prompt_timezone_invalid", timezone=ctx.timezone)
+        tz, tz_name = ZoneInfo(DEFAULT_TIMEZONE), DEFAULT_TIMEZONE
+    now = ctx.now or datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    local = now.astimezone(tz)
+    lang = ctx.language if ctx.language in _WEEKDAYS else "es"
+    weekday = _WEEKDAYS[lang][local.weekday()]
+    month = _MONTHS[lang][local.month - 1]
+    hour = local.strftime("%H:%M")
+    if lang == "en":
+        line = f"Today is {weekday}, {month} {local.day}, {local.year} — {hour} ({tz_name})."
+    elif lang == "pt":
+        line = f"Hoje é {weekday}, {local.day} de {month} de {local.year} — {hour} ({tz_name})."
+    else:
+        line = f"Hoy es {weekday}, {local.day} de {month} de {local.year} — {hour} ({tz_name})."
+    return f"## Fecha y hora actual\n{line}"
 
 
 async def _render_playbook(
@@ -131,7 +179,8 @@ async def build_system_blocks(spec: AgentSpec, ctx: PromptContext) -> list[str]:
     if ctx.recalled_memories:
         recalled = "\n".join(f"- {m}" for m in ctx.recalled_memories)
         dynamic_parts.append(f"## Hechos relevantes de interacciones pasadas\n{recalled}")
-    if dynamic_parts:
-        blocks.append("\n\n".join(dynamic_parts))
+    # Siempre la última parte: cambia cada minuto y no debe tocar el prefijo cacheado.
+    dynamic_parts.append(_current_datetime_part(ctx))
+    blocks.append("\n\n".join(dynamic_parts))
 
     return blocks

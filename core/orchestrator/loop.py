@@ -34,7 +34,7 @@ from core.llm.difficulty_router import (
     TURNOS_SIN_RESOLVER_THRESHOLD,
     route_model,
 )
-from core.llm.prompt_builder import PromptContext, build_system_blocks
+from core.llm.prompt_builder import DEFAULT_TIMEZONE, PromptContext, build_system_blocks
 from core.llm.types import LLMMessage, LLMToolCall
 from core.mcp.host import mcp_host, new_tool_context
 from core.mcp.translator import skills_summary, to_llm_schemas
@@ -43,7 +43,7 @@ from core.memory import entity as entity_memory
 from core.memory import vector as vector_memory
 from core.memory import working as working_memory
 from core.observability.tracing import get_tracer, span_attributes
-from core.orchestrator.escalation import ESCALATION_REPLY, escalate
+from core.orchestrator.escalation import ESCALATION_REPLY, VERIFYING_REPLY, escalate
 from core.orchestrator.guardrails import MAX_GUARDRAIL_RETRIES, run_guardrails
 from core.orchestrator.safe_renderer import (
     TOOL_NAME_KEY,
@@ -278,6 +278,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         active_skills_summary=skills_summary(active_tools),
         recalled_memories=recalled,
         entity_profile=entity_memory.profile_to_prompt(profile),
+        # Zona del negocio para la fecha y hora actual del prompt (ADR-0091).
+        timezone=(getattr(app_settings, "timezone", None) if app_settings else None) or DEFAULT_TIMEZONE,
     )
     system_blocks = await build_system_blocks(spec, prompt_ctx)
 
@@ -338,6 +340,9 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # un `None` explícito en `behavior_config` para esta key tumbaría el
     # turno con `TypeError` sin este mismo cuidado.
     guardrail_max_retries = _clamped_int("guardrail_max_retries", MAX_GUARDRAIL_RETRIES, 0, 5)
+    # Qué hacer al agotar los reintentos (ADR-0092): solo "neutral" cambia el
+    # comportamiento; cualquier otro valor (o ninguno) escala como siempre.
+    guardrail_fail_action = "neutral" if behavior.get("guardrail_fail_action") == "neutral" else "escalate"
     # Guardrail individual on/off por tenant (mismo patrón, ver `AppSettings.
     # behavior_config`): apagar un guardrail puntual (ej. `crm_amount_check`)
     # sin apagar el pack entero.
@@ -507,6 +512,30 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             # (montos, datos del cliente): se persiste solo el identificador del
             # guardrail, no el texto completo (evita PII en `escalations.summary`).
             guardrail_id = verdict.reason.split(":", 1)[0][:120]
+            if guardrail_fail_action == "neutral":
+                # ADR-0092: no escala ni pausa el bot. Responde que va a
+                # verificar (más lo que el servidor ya confirmó en el turno),
+                # deja rastro y cuenta el turno como NO resuelto: el
+                # autoescalado por turnos sin resolver sigue siendo la red.
+                await record_audit(
+                    actor="core:guardrail",
+                    action="guardrail_neutral",
+                    conversation_id=conversation_id,
+                    input_data={"guardrail": guardrail_id},
+                )
+                extras = extract_safe_extras(all_tool_results)
+                verifying = await load_response(spec, "verifying") or VERIFYING_REPLY
+                return await _close_turn(
+                    conversation_id,
+                    spec,
+                    app_settings,
+                    usage,
+                    turn_span,
+                    latest_message,
+                    apply_safe_extras(verifying, extras),
+                    resolved=False,
+                    image_url=extras.image_url,
+                )
             await escalate(conversation_id, reason="guardrail", summary=guardrail_id)
             usage.escalated = True
             await _write_usage_ledger(conversation_id, spec, usage, turn_span)
@@ -516,28 +545,17 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # ---- respuesta final
         extras = extract_safe_extras(all_tool_results)
         final_text = apply_safe_extras(strip_markdown(response.content), extras)
-        unresolved = await _finish_turn(
+        return await _close_turn(
             conversation_id,
-            final_text,
+            spec,
+            app_settings,
+            usage,
+            turn_span,
             latest_message,
+            final_text,
             resolved=bool(all_tool_results),
-            short_term_turns=spec.memory.shortTermTurns,
+            image_url=extras.image_url,
         )
-        await _write_usage_ledger(conversation_id, spec, usage, turn_span)
-        # Autoescalado por turnos sin resolver (ADR-0051, operativo en AppSettings).
-        auto_after = (app_settings.escalation_config or {}).get("auto_escalate_after_turns") if app_settings else None
-        try:
-            threshold = min(20, int(auto_after)) if auto_after else 0
-        except (TypeError, ValueError):
-            threshold = 0
-        if threshold > 0 and unresolved >= threshold:
-            await escalate(
-                conversation_id, reason="turns_unresolved", summary=f"{unresolved} turnos sin resolver"
-            )
-            usage.escalated = True
-            escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
-            return TurnResult(text=final_text + "\n\n" + escalation_text, escalated=True, image_url=extras.image_url)
-        return TurnResult(text=final_text, image_url=extras.image_url)
 
     # Se agotaron las iteraciones
     await escalate(conversation_id, reason="max_iterations", summary="Loop sin resolución")
@@ -895,6 +913,45 @@ async def _load_history(conversation_id: uuid.UUID) -> list[LLMMessage]:
         if row.content:
             history.append(LLMMessage(role=role, content=row.content))
     return history
+
+
+async def _close_turn(
+    conversation_id: uuid.UUID,
+    spec,  # type: ignore[no-untyped-def]
+    app_settings: AppSettings | None,
+    usage: _TurnUsage,
+    turn_span,  # type: ignore[no-untyped-def]
+    latest_message: str,
+    final_text: str,
+    *,
+    resolved: bool,
+    image_url: str | None,
+) -> TurnResult:
+    """Cierra un turno que respondió: memoria, ledger y autoescalado por turnos
+    sin resolver (ADR-0051). Lo comparten la respuesta normal y la neutral del
+    guardrail (ADR-0092)."""
+    unresolved = await _finish_turn(
+        conversation_id,
+        final_text,
+        latest_message,
+        resolved=resolved,
+        short_term_turns=spec.memory.shortTermTurns,
+    )
+    await _write_usage_ledger(conversation_id, spec, usage, turn_span)
+    # Autoescalado por turnos sin resolver (ADR-0051, operativo en AppSettings).
+    auto_after = (app_settings.escalation_config or {}).get("auto_escalate_after_turns") if app_settings else None
+    try:
+        threshold = min(20, int(auto_after)) if auto_after else 0
+    except (TypeError, ValueError):
+        threshold = 0
+    if threshold > 0 and unresolved >= threshold:
+        await escalate(
+            conversation_id, reason="turns_unresolved", summary=f"{unresolved} turnos sin resolver"
+        )
+        usage.escalated = True
+        escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
+        return TurnResult(text=final_text + "\n\n" + escalation_text, escalated=True, image_url=image_url)
+    return TurnResult(text=final_text, image_url=image_url)
 
 
 async def _finish_turn(

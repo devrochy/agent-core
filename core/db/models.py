@@ -106,6 +106,11 @@ class AppSettings(Base):
     # Moneda del negocio para mostrar montos (comercio, cobranza, plan). Los
     # costos de proveedor siguen en USD (HU-UI-01).
     currency: Mapped[str] = mapped_column(Text, default="COP")
+    # Zona horaria del negocio (HU-CAL-04, ADR-0091): fecha y hora actual del
+    # prompt y horario de atención sin zona propia.
+    timezone: Mapped[str] = mapped_column(
+        Text, nullable=False, default="America/Bogota", server_default="America/Bogota"
+    )
     bot_paused: Mapped[bool] = mapped_column(Boolean, default=False)  # kill-switch por tenant
 
     # LLM configurable en runtime (BYOK). Si es NULL se usa el .env.

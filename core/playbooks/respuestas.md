@@ -12,3 +12,5 @@ La herramienta no está disponible en este momento. Discúlpate y ofrece escalar
 Disculpa, estoy teniendo un inconveniente técnico. Ya avisé a nuestro equipo para que te atienda una persona.
 ## escalation
 Entiendo, ya mismo te comunico con una persona de nuestro equipo. En un momento te contactan por este mismo chat.
+## verifying
+Dejame verificar eso y te confirmo en un momento, por favor.
