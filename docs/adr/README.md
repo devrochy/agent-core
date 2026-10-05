@@ -97,3 +97,6 @@ Se crean con `/adr`.
 | [0087](0087-camino-del-dinero-en-comercio.md) | Camino del dinero en comercio: total del servidor, link versionado y webhook validado (HU-COM-01) | aceptado |
 | [0088](0088-error-de-negocio-no-apaga-packs.md) | Un error de negocio no cuenta como falla de salud (enmienda ADR-0024, HU-ARCH-18) | aceptado |
 | [0089](0089-plugin-del-tenant.md) | Plugin del tenant: nivel 3 de personalización, acotado a un negocio (HU-FWK-13) | aceptado |
+| [0090](0090-reclamo-pendientes-claim-con-estado.md) | Reclamo automático de pendientes y claim de idempotencia con estado (HU-ARCH-06) | aceptado |
+| [0091](0091-fecha-actual-y-zona-horaria-del-negocio.md) | Fecha actual en el prompt y zona horaria del negocio (HU-CAL-04) | aceptado |
+| [0092](0092-fallo-de-guardrail-neutral-configurable.md) | Fallo de guardrail con respuesta neutral configurable (HU-CAL-04) | aceptado |
