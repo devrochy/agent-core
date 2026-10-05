@@ -179,6 +179,9 @@ class Cartera(TenantMixin, Base):
     custom: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
 
 class CarteraConfig(TenantMixin, Base):
@@ -331,6 +334,9 @@ class Cliente(TenantMixin, Base):
     custom: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
 
 class Prestamo(TenantMixin, Base):
@@ -490,6 +496,9 @@ class Promesa(TenantMixin, Base):
     creado_por: Mapped[str] = mapped_column(Text, default="ia")  # ia|gestor|propietario|agente
     idempotency_key: Mapped[str | None] = mapped_column(Text, default=None)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

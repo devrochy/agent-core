@@ -30,6 +30,7 @@ from pack_cobranza.permisos import GESTOR_PERMISOS
 
 # Registra los providers de búsqueda global del pack (ADR-0096).
 from . import search as _search  # noqa: F401
+from . import sync as _sync  # noqa: F401
 from .models import (
     Abono,
     AuditoriaCartera,

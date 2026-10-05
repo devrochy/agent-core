@@ -87,6 +87,9 @@ class Category(TenantMixin, Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -163,6 +166,9 @@ class Promotion(TenantMixin, Base):
     variant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
     eligible_segments: Mapped[list[str] | None] = mapped_column(ARRAY(Text), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
 
 class PromotionRedemption(TenantMixin, Base):

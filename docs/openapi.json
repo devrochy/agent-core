@@ -393,6 +393,153 @@
         }
       }
     },
+    "/api/v1/sync/{entidad}": {
+      "get": {
+        "tags": [
+          "api",
+          "sync"
+        ],
+        "summary": "Sync Entidad",
+        "operationId": "sync_entidad_api_v1_sync__entidad__get",
+        "parameters": [
+          {
+            "name": "entidad",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Entidad"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 200,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/audit/mobile-events": {
+      "post": {
+        "tags": [
+          "api",
+          "auditoría"
+        ],
+        "summary": "Registrar Eventos Moviles",
+        "operationId": "registrar_eventos_moviles_api_v1_audit_mobile_events_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MobileEventsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MobileEventsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/tenants": {
       "get": {
         "tags": [
@@ -15674,6 +15821,139 @@
         ],
         "title": "MetaSyncResult"
       },
+      "MobileEvent": {
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Eventid"
+          },
+          "accion": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 2,
+            "title": "Accion"
+          },
+          "entidad": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 2,
+            "title": "Entidad"
+          },
+          "entidadId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entidadid"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "deviceId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deviceid"
+          },
+          "ocurridoEn": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ocurridoen"
+          }
+        },
+        "type": "object",
+        "required": [
+          "eventId",
+          "accion",
+          "entidad"
+        ],
+        "title": "MobileEvent"
+      },
+      "MobileEventAck": {
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Eventid"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "eventId",
+          "estado"
+        ],
+        "title": "MobileEventAck"
+      },
+      "MobileEventsRequest": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/MobileEvent"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Events"
+          }
+        },
+        "type": "object",
+        "required": [
+          "events"
+        ],
+        "title": "MobileEventsRequest"
+      },
+      "MobileEventsResponse": {
+        "properties": {
+          "eventos": {
+            "items": {
+              "$ref": "#/components/schemas/MobileEventAck"
+            },
+            "type": "array",
+            "title": "Eventos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "eventos"
+        ],
+        "title": "MobileEventsResponse"
+      },
       "ModelCost": {
         "properties": {
           "model": {
@@ -18487,6 +18767,41 @@
           "estado"
         ],
         "title": "SuscripcionOut"
+      },
+      "SyncResponse": {
+        "properties": {
+          "entidad": {
+            "type": "string",
+            "title": "Entidad"
+          },
+          "items": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "nextCursor": {
+            "type": "string",
+            "title": "Nextcursor"
+          },
+          "deletedIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Deletedids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entidad",
+          "items",
+          "nextCursor",
+          "deletedIds"
+        ],
+        "title": "SyncResponse"
       },
       "SyncRow": {
         "properties": {

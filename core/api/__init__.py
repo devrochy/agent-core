@@ -12,6 +12,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from core.api.routers import (
+    audit,
     auth,
     collaborators,
     connections,
@@ -32,6 +33,7 @@ from core.api.routers import (
     push,
     search,
     settings,
+    sync,
     tenants,
     web_chat,
 )
@@ -41,6 +43,8 @@ api_router.include_router(auth.router)
 api_router.include_router(me.router)
 api_router.include_router(push.router)
 api_router.include_router(search.router)
+api_router.include_router(sync.router)
+api_router.include_router(audit.router)
 api_router.include_router(tenants.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(dlq.router)
