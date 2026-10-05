@@ -1,5 +1,22 @@
 # Changelog
 
+## Sin versión — Pack de agendamiento definitivo (HU-CAL-05, 2026-10-05)
+
+- `check_availability`: fecha pasada → `status: in_past` (con `today`); para hoy no
+  ofrece horas que ya empezaron; agrega `status`/`today` a la respuesta.
+- Tool nueva **`find_next_available`** (`days` 1-14): próximos días con horarios
+  libres, sin días cerrados ni sin cupo, máximo 5.
+- **Link "agregar a mi calendario"** (plantilla de Google Calendar) en create/update
+  del modo interno y en el correo (`{link}`, con línea de respaldo si la plantilla no
+  lo trae). Plantillas de correo/WhatsApp con formato seguro.
+- **Guardrail con evidencia real** (`status` del turno, D-SPEC-24-8): `rejected`/
+  `not_found` ya no respaldan confirmaciones; "moví tu demo" cubierto; las preguntas
+  no disparan el guardrail; el correo se respalda con `email_sent` y el reintento
+  nunca pide `send_email`.
+- **Panel**: mover o cancelar con `notify` avisa por correo y WhatsApp y devuelve
+  `notification`; cancelar registra `cancelada`, es idempotente y responde 200.
+- `citas.md` y propósitos de `flow.json` definitivos.
+
 ## Sin versión — Fecha actual en el prompt y anti-escalamiento (HU-CAL-04, 2026-10-04)
 
 - **Zona horaria del negocio** `app_settings.timezone` (migración `0050`, default

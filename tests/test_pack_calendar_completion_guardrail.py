@@ -43,7 +43,7 @@ async def test_agendada_con_create_calendar_event_pasa():
     module = GoogleCalendarModule()
     verdict = await module._completion_guardrail(
         "¡Listo! Tu demo quedó agendada para el 28 de septiembre a las 4:00 pm.",
-        [_tool_result("create_calendar_event", event_id="g-1")],
+        [_tool_result("create_calendar_event", event_id="g-1", status="created")],
     )
     assert verdict.passed, verdict.reason
 
@@ -63,7 +63,7 @@ async def test_reagendada_con_update_calendar_event_pasa():
     module = GoogleCalendarModule()
     verdict = await module._completion_guardrail(
         "Tu cita quedó reagendada para el 29 de septiembre a las 10:00 am.",
-        [_tool_result("update_calendar_event", event_id="g-1")],
+        [_tool_result("update_calendar_event", event_id="g-1", status="updated")],
     )
     assert verdict.passed, verdict.reason
 
@@ -81,7 +81,7 @@ async def test_cancelada_con_cancel_calendar_event_pasa():
     module = GoogleCalendarModule()
     verdict = await module._completion_guardrail(
         "Tu cita quedó cancelada. ✅",
-        [_tool_result("cancel_calendar_event", cancelled=["g-1"])],
+        [_tool_result("cancel_calendar_event", cancelled=["g-1"], status="cancelled")],
     )
     assert verdict.passed, verdict.reason
 
@@ -140,7 +140,7 @@ async def test_agendada_con_create_de_turno_anterior_bloquea():
     module = GoogleCalendarModule()
     verdict = await module._completion_guardrail(
         "¡Listo! Tu demo quedó agendada para el 28 de septiembre a las 4:00 pm.",
-        [_tool_result_historial("create_calendar_event", event_id="g-1")],
+        [_tool_result_historial("create_calendar_event", event_id="g-1", status="created")],
     )
     assert not verdict.passed
 

@@ -610,3 +610,273 @@ async def test_cancel_con_id_inventado_y_varias_citas_no_cancela_nada() -> None:
         assert res["status"] == "not_found", res
         # Ninguna se canceló.
         assert (await skill.list_appointments({}, ctx))["total"] == 2
+
+
+# --------------------------------------------------------------------------
+# HU-CAL-05: fechas futuras, próximos días libres, link de la cita y avisos
+# desde el panel (D-SPEC-24-8/9/10).
+
+# Domingo cerrado: `find_next_available` debe saltarlo.
+HORAS_SIN_DOMINGO = '{"mon": "09:00-18:00", "tue": "09:00-18:00", "wed": "09:00-18:00", "thu": "09:00-18:00", "fri": "09:00-18:00", "sat": "09:00-18:00", "sun": ""}'
+
+
+async def _configurar_con(tenant_id: uuid.UUID, **overrides) -> None:
+    from core.plugin_manager import plugin_manager
+    from core.shared.tenant import tenant_scope
+
+    config = {
+        "source": "interno",
+        "business_hours": HORAS,
+        "timezone": "America/Bogota",
+        "slot_minutes": 60,
+        "buffer_minutes": 0,
+        "event_duration_minutes": 60,
+    }
+    config.update(overrides)
+    async with tenant_scope(tenant_id):
+        await plugin_manager.save_config("pack_calendar", config)
+
+
+def _hoy_bogota():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(ZoneInfo("America/Bogota"))
+
+
+async def test_check_availability_fecha_pasada_devuelve_in_past() -> None:
+    from datetime import timedelta
+
+    from pack_calendar.skills import CalendarSkill
+
+    from core.shared.tenant import tenant_scope
+
+    tenant_id = await _tenant_calendario()
+    await _configurar(tenant_id)
+    hoy = _hoy_bogota()
+    ayer = (hoy - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    async with tenant_scope(tenant_id):
+        res = await CalendarSkill().check_availability({"date": ayer}, _contexto())
+        assert res["status"] == "in_past"
+        assert res["today"] == hoy.strftime("%Y-%m-%d")
+        assert "free_slots" not in res
+
+        futura = await CalendarSkill().check_availability({"date": FECHA}, _contexto())
+        assert futura["status"] == "ok"
+        assert futura["today"] == hoy.strftime("%Y-%m-%d")
+
+
+async def test_check_availability_hoy_no_ofrece_horas_pasadas() -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from pack_calendar.skills import CalendarSkill
+
+    from core.shared.tenant import tenant_scope
+
+    tenant_id = await _tenant_calendario()
+    await _configurar_con(
+        tenant_id,
+        business_hours=HORAS.replace("09:00-18:00", "00:00-23:59"),
+    )
+    tz = ZoneInfo("America/Bogota")
+    hoy = _hoy_bogota()
+
+    async with tenant_scope(tenant_id):
+        res = await CalendarSkill().check_availability({"date": hoy.strftime("%Y-%m-%d")}, _contexto())
+    for slot in res["free_slots"]:
+        inicio = datetime.fromisoformat(f"{hoy:%Y-%m-%d}T{slot}:00").replace(tzinfo=tz)
+        assert inicio > hoy, f"ofreció {slot}, que ya pasó"
+
+
+async def test_find_next_available_ofrece_los_proximos_dias_con_cupo() -> None:
+    from datetime import date, datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from pack_calendar.models import CalendarBlock
+    from pack_calendar.skills import CalendarSkill
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tenant_id = await _tenant_calendario()
+    await _configurar_con(tenant_id, business_hours=HORAS_SIN_DOMINGO)
+    tz = ZoneInfo("America/Bogota")
+    hoy = _hoy_bogota().date()
+    manana = hoy + timedelta(days=1)
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            session.add(
+                CalendarBlock(
+                    tenant_id=tenant_id,
+                    start_at=datetime.combine(manana, datetime.min.time()).replace(tzinfo=tz),
+                    end_at=datetime.combine(manana, datetime.max.time()).replace(tzinfo=tz),
+                    reason="Feriado",
+                )
+            )
+        res = await CalendarSkill().find_next_available({"days": 14}, _contexto())
+
+    assert res["status"] == "ok"
+    assert res["today"] == hoy.isoformat()
+    fechas = [date.fromisoformat(d["date"]) for d in res["days"]]
+    assert fechas == sorted(fechas)
+    assert 1 <= len(fechas) <= 5
+    assert res["total_days"] == len(fechas)
+    assert all(f >= hoy for f in fechas)
+    assert manana not in fechas, "el día bloqueado no se ofrece"
+    assert all(f.weekday() != 6 for f in fechas), "el domingo está cerrado"
+    assert all(d["free_slots"] and d["weekday"] for d in res["days"])
+
+
+async def test_find_next_available_valida_el_rango_sin_romper() -> None:
+    from pack_calendar.skills import CalendarSkill
+
+    from core.shared.tenant import tenant_scope
+
+    tenant_id = await _tenant_calendario()
+    await _configurar(tenant_id)
+    async with tenant_scope(tenant_id):
+        res = await CalendarSkill().find_next_available({"days": 40}, _contexto())
+    assert "error" in res
+
+
+async def test_create_y_update_internos_traen_link_de_calendario(monkeypatch) -> None:
+    from pack_calendar.skills import CalendarSkill
+
+    from core.shared.tenant import tenant_scope
+
+    enviados: list[tuple[str, str, str]] = []
+
+    async def _fake_queue(to: str, subject: str, body: str, *args, **kwargs):
+        enviados.append((to, subject, body))
+        return None
+
+    monkeypatch.setattr("core.gateway.outbound_email.queue_outbound_email", _fake_queue)
+
+    tenant_id = await _tenant_calendario()
+    await _configurar(tenant_id)
+    ctx = _contexto()
+    await _seed_email(tenant_id, ctx.conversation_id, "laura@ejemplo.com")
+
+    async with tenant_scope(tenant_id):
+        skill = CalendarSkill()
+        created = await skill.create_event(
+            {
+                "title": "Demo con Laura",
+                "start_datetime": f"{FECHA}T10:00:00",
+                "attendee_email": "laura@ejemplo.com",
+            },
+            ctx,
+        )
+        assert created["status"] == "created"
+        assert "calendar.google.com/calendar/render?action=TEMPLATE" in created["_safe_append"]
+        assert "dates=20270315T100000%2F20270315T110000" in created["_safe_append"]
+        assert "ctz=America%2FBogota" in created["_safe_append"]
+        assert created["email_sent"] is True
+
+        updated = await skill.update_event(
+            {"event_id": created["event_id"], "start_datetime": f"{FECHA}T14:00:00"}, ctx
+        )
+        assert updated["status"] == "updated"
+        assert "dates=20270315T140000%2F20270315T150000" in updated["_safe_append"]
+
+    cuerpos_cliente = [body for to, _s, body in enviados if to == "laura@ejemplo.com"]
+    assert len(cuerpos_cliente) == 2
+    assert all("calendar.google.com/calendar/render?action=TEMPLATE" in b for b in cuerpos_cliente)
+
+
+async def test_panel_mueve_y_cancela_con_aviso_por_correo_y_whatsapp(app_client, monkeypatch) -> None:
+    from _api_helpers import api_headers
+    from pack_calendar.skills import CalendarSkill
+
+    from core.shared.tenant import tenant_scope
+
+    correos: list[tuple[str, str]] = []
+    whatsapps: list[tuple[uuid.UUID, str]] = []
+
+    async def _fake_queue(to: str, subject: str, body: str, *args, **kwargs):
+        correos.append((to, subject))
+        return None
+
+    async def _fake_send(conversation_id, text, *args, **kwargs):
+        whatsapps.append((conversation_id, text))
+        return None
+
+    monkeypatch.setattr("core.gateway.outbound_email.queue_outbound_email", _fake_queue)
+    monkeypatch.setattr("core.gateway.sender.send_to_conversation", _fake_send)
+
+    tenant_id = await _tenant_calendario()
+    await _configurar(tenant_id)
+    ctx = _contexto()
+    await _seed_email(tenant_id, ctx.conversation_id, "rob@ejemplo.com")
+    async with tenant_scope(tenant_id):
+        created = await CalendarSkill().create_event(
+            {"title": "Demo Rob", "start_datetime": f"{FECHA}T10:00:00", "attendee_email": "rob@ejemplo.com"},
+            ctx,
+        )
+    appt_id = created["event_id"]
+    correos.clear()
+    headers = await api_headers(app_client, tenant_id)
+
+    # Mover desde el panel con aviso: correo + WhatsApp, y la respuesta lo dice.
+    r = await app_client.patch(
+        f"/api/v1/pack/calendar/appointments/{appt_id}", headers=headers,
+        json={"start_at": f"{FECHA}T15:00:00-05:00", "end_at": f"{FECHA}T16:00:00-05:00", "notify": True},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["notification"] == {"email_sent": True, "email_reason": "", "whatsapp_sent": True}
+    assert any(to == "rob@ejemplo.com" for to, _subject in correos)
+    assert whatsapps[-1][0] == ctx.conversation_id
+    assert "15:00" in whatsapps[-1][1]
+
+    # Mover sin aviso: no manda nada.
+    enviados_antes = (len(correos), len(whatsapps))
+    r = await app_client.patch(
+        f"/api/v1/pack/calendar/appointments/{appt_id}", headers=headers,
+        json={"start_at": f"{FECHA}T16:00:00-05:00", "end_at": f"{FECHA}T17:00:00-05:00", "notify": False},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["notification"] is None
+    assert (len(correos), len(whatsapps)) == enviados_antes
+
+    # Cancelar desde el panel (sin body = notify true): correo + WhatsApp + actividad.
+    r = await app_client.post(f"/api/v1/pack/calendar/appointments/{appt_id}/cancel", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "cancelled"
+    assert r.json()["notification"]["email_sent"] is True
+    assert r.json()["notification"]["whatsapp_sent"] is True
+    r = await app_client.get(f"/api/v1/pack/calendar/appointments/{appt_id}/activities", headers=headers)
+    assert "cancelada" in [a["action"] for a in r.json()]
+
+    # Cancelar de nuevo es idempotente: no vuelve a avisar.
+    enviados_antes = (len(correos), len(whatsapps))
+    r = await app_client.post(f"/api/v1/pack/calendar/appointments/{appt_id}/cancel", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["notification"] is None
+    assert (len(correos), len(whatsapps)) == enviados_antes
+
+
+async def test_disponibilidad_no_ve_citas_de_otro_negocio() -> None:
+    from pack_calendar.skills import CalendarSkill
+
+    from core.shared.tenant import tenant_scope
+
+    tenant_a = await _tenant_calendario()
+    tenant_b = await _tenant_calendario()
+    await _configurar(tenant_a)
+    await _configurar(tenant_b)
+    ctx = _contexto()
+    await _seed_email(tenant_a, ctx.conversation_id, "a@ejemplo.com")
+
+    async with tenant_scope(tenant_a):
+        created = await CalendarSkill().create_event(
+            {"title": "Cita A", "start_datetime": f"{FECHA}T10:00:00", "attendee_email": "a@ejemplo.com"},
+            ctx,
+        )
+        assert created["status"] == "created"
+        assert "10:00" not in (await CalendarSkill().check_availability({"date": FECHA}, ctx))["free_slots"]
+
+    async with tenant_scope(tenant_b):
+        assert "10:00" in (await CalendarSkill().check_availability({"date": FECHA}, _contexto()))["free_slots"]

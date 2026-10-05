@@ -129,3 +129,42 @@ def test_slot_conflict_buffer_rechaza_pegado() -> None:
     assert _slot_conflict(
         "09:00-18:00", busy, TZ, _futuro("11:00"), _futuro("11:30"), buffer_minutes=15
     ) == "occupied"
+
+
+# --- HU-CAL-05: nunca horas pasadas, link de la cita y plantillas seguras -----
+
+
+def test_slots_libres_desde_ahora_omite_horas_pasadas() -> None:
+    """`not_before`: hoy a las 10:20 ya no se ofrecen 09:00 ni 10:00."""
+    out = _free_slots(
+        "09:00-13:00", [], TZ, "2026-09-30",
+        slot_minutes=60, duration_minutes=60, buffer_minutes=0, not_before=_dt("10:20"),
+    )
+    assert out == ["11:00", "12:00"]
+
+
+def test_link_de_calendario_con_hora_local_y_zona() -> None:
+    from urllib.parse import parse_qs, urlparse
+
+    from pack_calendar.skills import _calendar_link
+
+    start = datetime(2027, 3, 15, 15, 0, tzinfo=ZoneInfo("UTC"))  # 10:00 en Bogotá
+    end = datetime(2027, 3, 15, 16, 0, tzinfo=ZoneInfo("UTC"))
+    link = _calendar_link(start, end, "Demo con Laura & Co", "Cita con SolversHub", "America/Bogota")
+
+    parsed = urlparse(link)
+    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == "https://calendar.google.com/calendar/render"
+    query = parse_qs(parsed.query)
+    assert query["action"] == ["TEMPLATE"]
+    assert query["text"] == ["Demo con Laura & Co"]
+    assert query["dates"] == ["20270315T100000/20270315T110000"]
+    assert query["ctz"] == ["America/Bogota"]
+    assert query["details"] == ["Cita con SolversHub"]
+
+
+def test_plantilla_con_placeholder_desconocido_no_rompe() -> None:
+    from pack_calendar.skills import _render_template
+
+    assert _render_template("Hola {cliente}: {link}", cliente="Laura", link="https://x") == "Hola Laura: https://x"
+    # Un placeholder que el negocio escribió mal queda literal en vez de tumbar el aviso.
+    assert _render_template("Tu cita {titulo} {fechaa}", titulo="Demo") == "Tu cita Demo {fechaa}"

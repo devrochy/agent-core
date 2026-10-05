@@ -35,11 +35,12 @@ DEFAULT_CANCELLED_SUMMARY = (
 # --- Correo determinista de agendamiento (HU-CAL-02) -------------------------
 # Se envían por el canal SMTP del negocio al cliente y a los colaboradores con
 # el permiso `pack_calendar:notificaciones`. Placeholders: {cliente}, {titulo},
-# {fecha}, {hora}, {negocio}.
+# {fecha}, {hora}, {negocio}, {link} ("agregar a mi calendario", HU-CAL-05).
 DEFAULT_EMAIL_SUBJECT_CONFIRMED = "Tu cita quedó agendada — {negocio}"
 DEFAULT_EMAIL_BODY_CONFIRMED = (
     "Hola {cliente},\n\n"
     "Tu cita \"{titulo}\" quedó agendada para el {fecha} a las {hora}.\n\n"
+    "Agregá la cita a tu calendario: {link}\n\n"
     "Si necesitás cambiarla, respondé a este correo.\n\n"
     "— {negocio}"
 )
@@ -47,6 +48,7 @@ DEFAULT_EMAIL_SUBJECT_MOVED = "Tu cita fue reagendada — {negocio}"
 DEFAULT_EMAIL_BODY_MOVED = (
     "Hola {cliente},\n\n"
     "Tu cita \"{titulo}\" fue reagendada para el {fecha} a las {hora}.\n\n"
+    "Agregá la cita a tu calendario: {link}\n\n"
     "— {negocio}"
 )
 DEFAULT_EMAIL_SUBJECT_CANCELLED = "Tu cita fue cancelada — {negocio}"
@@ -91,7 +93,7 @@ class CalendarConfig(BasePluginConfig):
         default=DEFAULT_MOVED_MESSAGE,
         description=(
             "Mensaje que recibe el cliente por WhatsApp cuando se mueve su cita. "
-            "Placeholders: {fecha}, {hora}, {titulo}"
+            "Placeholders: {fecha}, {hora}, {titulo}, {link}"
         ),
         json_schema_extra={"format": "textarea"},
     )
@@ -116,14 +118,15 @@ class CalendarConfig(BasePluginConfig):
         default=DEFAULT_EMAIL_SUBJECT_CONFIRMED,
         description=(
             "Asunto del correo de confirmación de cita. Placeholders: {cliente}, "
-            "{titulo}, {fecha}, {hora}, {negocio}"
+            "{titulo}, {fecha}, {hora}, {negocio}, {link}"
         ),
     )
     email_body_confirmed: str = Field(
         default=DEFAULT_EMAIL_BODY_CONFIRMED,
         description=(
             "Cuerpo del correo de confirmación. Placeholders: {cliente}, {titulo}, "
-            "{fecha}, {hora}, {negocio}"
+            "{fecha}, {hora}, {negocio}, {link} (link para agregar la cita al calendario; "
+            "si no lo ponés, se agrega al final)"
         ),
         json_schema_extra={"format": "textarea"},
     )
@@ -150,7 +153,7 @@ class CalendarConfig(BasePluginConfig):
         default="",
         description=(
             "Nombres de claims incorporados a desactivar, separados por coma "
-            "(agendada, reagendada, cancelada, correo_enviado, listado). "
+            "(agendada, reagendada, cancelada, correo_enviado, listado, cita_existente). "
             "Vacío = todos activos."
         ),
     )

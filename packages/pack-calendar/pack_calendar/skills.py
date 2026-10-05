@@ -7,7 +7,9 @@ Modo (ADR-0084, `CalendarConfig.source`):
 - `google`: crea/mueve/borra el evento en Google Calendar y lo espeja local.
 
 En ambos modos `check_availability` devuelve `free_slots` calculados (no solo los
-ocupados), para que el asistente no invente horarios.
+ocupados), para que el asistente no invente horarios. Nunca ofrece fechas ni horas
+pasadas (HU-CAL-05): una fecha anterior a hoy devuelve `in_past` y
+`find_next_available` propone los próximos días con cupo.
 """
 
 from __future__ import annotations
@@ -15,8 +17,9 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -31,6 +34,60 @@ CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 PLUGIN_ID = "pack_calendar"
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 _SOURCE_TTL_SECONDS = 60.0
+# Nombres para los datos que devuelven las tools (no son instrucciones al modelo).
+_WEEKDAY_NAMES = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+_MONTH_NAMES = (
+    "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+    "septiembre", "octubre", "noviembre", "diciembre",
+)
+# `find_next_available`: rango de búsqueda y tope de días con cupo devueltos.
+_NEXT_AVAILABLE_MAX_DAYS = 14
+_NEXT_AVAILABLE_MAX_RESULTS = 5
+
+
+def _long_date(value: date) -> str:
+    """"miércoles 7 de octubre de 2026" (dato legible para la respuesta de la tool)."""
+    return f"{_WEEKDAY_NAMES[value.weekday()]} {value.day} de {_MONTH_NAMES[value.month - 1]} de {value.year}"
+
+
+class _KeepUnknown(dict):
+    """Deja literal un placeholder que no existe en vez de lanzar KeyError."""
+
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _render_template(template: str, **values: str) -> str:
+    """Rellena una plantilla configurada por el negocio (correo o WhatsApp).
+
+    Un placeholder mal escrito (`{fechaa}`) queda literal y llaves mal
+    balanceadas devuelven la plantilla tal cual: un error de configuración
+    nunca debe tumbar el aviso al cliente (HU-CAL-05).
+    """
+    try:
+        return template.format_map(_KeepUnknown(values))
+    except (ValueError, IndexError):
+        return template
+
+
+def _calendar_link(start: datetime, end: datetime, title: str, details: str, tz_name: str) -> str:
+    """Link "agregar a mi calendario" (plantilla de Google Calendar, D-SPEC-24-9).
+
+    Las fechas van en hora local de la zona del negocio y `ctz` le dice a Google
+    cómo interpretarlas. Sirve en WhatsApp y en el correo sin infraestructura extra.
+    """
+    tz = ZoneInfo(tz_name)
+    fmt = "%Y%m%dT%H%M%S"
+    query = urlencode(
+        {
+            "action": "TEMPLATE",
+            "text": title,
+            "dates": f"{start.astimezone(tz).strftime(fmt)}/{end.astimezone(tz).strftime(fmt)}",
+            "ctz": tz_name,
+            "details": details,
+        }
+    )
+    return f"https://calendar.google.com/calendar/render?{query}"
 
 
 def _as_uuid(value: Any) -> uuid.UUID | None:
@@ -86,10 +143,12 @@ def _free_slots(
     duration_minutes: int,
     buffer_minutes: int,
     limit: int = 12,
+    not_before: datetime | None = None,
 ) -> list[str]:
     """Horarios libres ("HH:MM") del día: ventana − ocupados − margen.
 
     Determinista y puro (testeable): evita que el LLM razone los huecos.
+    `not_before` (ahora, si el día es hoy) descarta los horarios que ya empezaron.
     """
     if not window or "-" not in window:
         return []
@@ -105,6 +164,9 @@ def _free_slots(
     out: list[str] = []
     cursor = open_dt
     while cursor + duration <= close_dt:
+        if not_before is not None and cursor <= not_before:
+            cursor += slot
+            continue
         cand_start = cursor - buffer
         cand_end = cursor + duration + buffer
         if not any(cand_start < b_end and b_start < cand_end for (b_start, b_end) in intervals):
@@ -354,6 +416,32 @@ class CalendarSkill(BaseSkill):
                 connection_predicate=self._connections_ok,
             ),
             MCPTool(
+                name="find_next_available",
+                description=(
+                    "Próximos días con horarios libres desde hoy. Usala cuando el cliente no da "
+                    "fecha o pide lo más pronto posible. No la uses si el cliente ya dijo un día: "
+                    "para eso usá check_availability."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "days": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": _NEXT_AVAILABLE_MAX_DAYS,
+                            "description": "Cuántos días hacia adelante buscar (1-14, por defecto 7)",
+                        },
+                        "duration_minutes": {
+                            "type": "integer",
+                            "description": "Duración deseada en minutos (opcional)",
+                        },
+                    },
+                    "required": [],
+                },
+                handler=self.find_next_available,
+                connection_predicate=self._connections_ok,
+            ),
+            MCPTool(
                 name="update_calendar_event",
                 description=(
                     "Reagenda/reprograma una cita YA EXISTENTE a una nueva fecha/hora (la MUEVE, "
@@ -555,10 +643,13 @@ class CalendarSkill(BaseSkill):
                 }
 
         google_event_id: str | None = None
-        link = ""
+        business = await self._business_name()
+        # Link "agregar a mi calendario" (D-SPEC-24-9): en modo interno es el que
+        # ve el cliente; en ambos modos es el que va en el correo.
+        calendar_link = _calendar_link(start, end, title, f"Cita agendada con {business}", config.timezone)
+        link = calendar_link
         if source == "google":
             token = await self._google_token(config)
-            business = await self._business_name()
             body: dict[str, Any] = {
                 "summary": title,
                 "description": str(arguments.get("description", ""))
@@ -578,7 +669,7 @@ class CalendarSkill(BaseSkill):
                 raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}")
             event = response.json()
             google_event_id = event.get("id")
-            link = event.get("htmlLink", "")
+            link = event.get("htmlLink", "") or calendar_link
 
         appt_id = await self._mirror_appointment(
             arguments,
@@ -604,6 +695,7 @@ class CalendarSkill(BaseSkill):
                 str(arguments["attendee_email"]) if arguments.get("attendee_email") else None
             ),
             config=config,
+            link=calendar_link,
         )
         return {
             "event_id": google_event_id or (str(appt_id) if appt_id else None),
@@ -795,7 +887,7 @@ class CalendarSkill(BaseSkill):
             conv = await get_owned(session, Conversation, conversation_id, tenant_id)
         if conv is None or conv.bot_paused or conv.status == "closed":
             return False
-        message = template.format(**values)
+        message = _render_template(template, **values)
         if not message:
             return False
         try:
@@ -812,6 +904,7 @@ class CalendarSkill(BaseSkill):
         start: datetime | None,
         attendee_email: str | None,
         config: CalendarConfig,
+        link: str = "",
     ) -> tuple[bool, str]:
         """Correo determinista de agendamiento (HU-CAL-02).
 
@@ -820,6 +913,9 @@ class CalendarSkill(BaseSkill):
         del asunto/cuerpo configurados. Devuelve `(enviado, motivo)`: si no hay
         conexión/email o falla, `enviado=False` y el motivo (el llamador lo registra
         y sigue; nunca rompe el flujo).
+
+        `link` (HU-CAL-05): "agregar a mi calendario". Si la plantilla del negocio
+        no trae `{link}`, se agrega una línea al final (salvo al cancelar).
         """
         from core.admin.permissions import notification_recipients
         from core.gateway.outbound_email import EmailOutboxError, queue_outbound_email
@@ -838,9 +934,12 @@ class CalendarSkill(BaseSkill):
             "fecha": local.strftime("%d/%m/%Y") if local else "",
             "hora": local.strftime("%H:%M") if local else "",
             "negocio": await self._business_name() or "el negocio",
+            "link": link,
         }
-        subject = subject_t.format(**values)
-        body = body_t.format(**values)
+        if link and action != "cancelled" and "{link}" not in body_t:
+            body_t = body_t.rstrip() + "\n\nAgregá la cita a tu calendario: {link}"
+        subject = _render_template(subject_t, **values)
+        body = _render_template(body_t, **values)
 
         tenant_id = get_current_tenant_id()
         recipients: list[str] = []
@@ -923,7 +1022,10 @@ class CalendarSkill(BaseSkill):
                     }.get(conflict, "Horario inválido."),
                 }
 
-        link = ""
+        calendar_link = _calendar_link(
+            start, end, appt.title or "Cita", f"Cita agendada con {await self._business_name()}", config.timezone
+        )
+        link = calendar_link
         if source == "google" and appt.google_event_id:
             token = await self._google_token(config)
             body: dict[str, Any] = {
@@ -931,7 +1033,7 @@ class CalendarSkill(BaseSkill):
                 "end": {"dateTime": end.isoformat(), "timeZone": config.timezone},
             }
             event = await _google_patch_event(config, token, appt.google_event_id, body)
-            link = event.get("htmlLink", "")
+            link = event.get("htmlLink", "") or calendar_link
 
         from core.db.models import utcnow
         from core.db.session import get_owned, get_session
@@ -962,6 +1064,7 @@ class CalendarSkill(BaseSkill):
             fecha=fecha,
             hora=hora,
             titulo=appt.title or "tu cita",
+            link=calendar_link,
         )
         email_sent, email_reason = await self._notify_appointment_email(
             "moved",
@@ -969,6 +1072,7 @@ class CalendarSkill(BaseSkill):
             start=start,
             attendee_email=appt.attendee_email,
             config=config,
+            link=calendar_link,
         )
         return {
             "status": "updated",
@@ -1203,44 +1307,65 @@ class CalendarSkill(BaseSkill):
             buffer_minutes=config.buffer_minutes,
         )
 
+    async def _busy_for_day(
+        self, config: CalendarConfig, source: str, day: str, tz: ZoneInfo
+    ) -> tuple[list[dict[str, str]], list[tuple[datetime, datetime]]]:
+        """Ocupados del día (Google o agenda interna) como lista legible + intervalos."""
+        if source != "google":
+            return await self._local_busy(day, tz)
+        token = await self._google_token(config)
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.get(
+                f"{CALENDAR_API}/calendars/{config.calendar_id}/events",
+                params={
+                    "timeMin": f"{day}T00:00:00Z",
+                    "timeMax": f"{day}T23:59:59Z",
+                    "singleEvents": "true",
+                    "orderBy": "startTime",
+                },
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        if response.status_code >= 400:
+            raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}: {response.text[:200]}")
+        events = response.json().get("items", [])
+        busy = [
+            {
+                "start": e.get("start", {}).get("dateTime", e.get("start", {}).get("date")),
+                "end": e.get("end", {}).get("dateTime", e.get("end", {}).get("date")),
+                "summary": e.get("summary", "(ocupado)"),
+            }
+            for e in events
+        ]
+        intervals = [iv for iv in (_google_interval(e, tz) for e in events) if iv is not None]
+        return busy, intervals
+
     async def check_availability(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         source = await self._source()
         config = await self._tenant_config()
         tz = ZoneInfo(config.timezone)
-        date = str(arguments["date"])
+        day_s = str(arguments.get("date") or "").strip()
+        try:
+            day = date.fromisoformat(day_s)
+        except ValueError:
+            return {"error": "Fecha inválida: usá el formato YYYY-MM-DD.", "status": "invalid_date"}
         duration = int(arguments.get("duration_minutes") or 0) or config.event_duration_minutes
 
-        if source == "google":
-            token = await self._google_token(config)
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.get(
-                    f"{CALENDAR_API}/calendars/{config.calendar_id}/events",
-                    params={
-                        "timeMin": f"{date}T00:00:00Z",
-                        "timeMax": f"{date}T23:59:59Z",
-                        "singleEvents": "true",
-                        "orderBy": "startTime",
-                    },
-                    headers={"Authorization": f"Bearer {token}"},
-                )
-            if response.status_code >= 400:
-                raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}: {response.text[:200]}")
-            events = response.json().get("items", [])
-            busy = [
-                {
-                    "start": e.get("start", {}).get("dateTime", e.get("start", {}).get("date")),
-                    "end": e.get("end", {}).get("dateTime", e.get("end", {}).get("date")),
-                    "summary": e.get("summary", "(ocupado)"),
-                }
-                for e in events
-            ]
-            intervals = [iv for iv in (_google_interval(e, tz) for e in events) if iv is not None]
-        else:
-            busy, intervals = await self._local_busy(date, tz)
+        # Nunca fechas pasadas (HU-CAL-05): el modelo llegó a consultar meses atrás.
+        now = datetime.now(tz)
+        today = now.date()
+        if day < today:
+            return {
+                "status": "in_past",
+                "today": today.isoformat(),
+                "message": f"Esa fecha ya pasó; hoy es {_long_date(today)}.",
+            }
 
-        window = _open_window(config, date)
+        busy, intervals = await self._busy_for_day(config, source, day_s, tz)
+        window = _open_window(config, day_s)
         return {
-            "date": date,
+            "status": "ok",
+            "today": today.isoformat(),
+            "date": day_s,
             "source": source,
             "business_hours": window,
             "slot_minutes": config.slot_minutes,
@@ -1251,14 +1376,73 @@ class CalendarSkill(BaseSkill):
                 window,
                 intervals,
                 tz,
-                date,
+                day_s,
                 slot_minutes=config.slot_minutes,
                 duration_minutes=duration,
                 buffer_minutes=config.buffer_minutes,
+                not_before=now if day == today else None,
             ),
             "total_events": len(busy),
         }
 
+    async def find_next_available(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Próximos días (desde hoy) con horarios libres, para cuando el cliente no
+        da fecha o pide "lo más pronto" (HU-CAL-05). Salta días cerrados y días sin
+        cupo; devuelve como máximo `_NEXT_AVAILABLE_MAX_RESULTS` días."""
+        try:
+            days = int(arguments.get("days") or 7)
+            duration = int(arguments.get("duration_minutes") or 0)
+        except (TypeError, ValueError):
+            days, duration = 0, 0
+        if not 1 <= days <= _NEXT_AVAILABLE_MAX_DAYS:
+            return {
+                "error": f"days debe estar entre 1 y {_NEXT_AVAILABLE_MAX_DAYS}.",
+                "status": "invalid_range",
+            }
+        source = await self._source()
+        config = await self._tenant_config()
+        tz = ZoneInfo(config.timezone)
+        duration = duration if duration > 0 else config.event_duration_minutes
+        now = datetime.now(tz)
+        today = now.date()
+
+        found: list[dict[str, Any]] = []
+        for offset in range(days):
+            day = today + timedelta(days=offset)
+            day_s = day.isoformat()
+            window = _open_window(config, day_s)
+            if not window:
+                continue
+            _busy, intervals = await self._busy_for_day(config, source, day_s, tz)
+            free = _free_slots(
+                window,
+                intervals,
+                tz,
+                day_s,
+                slot_minutes=config.slot_minutes,
+                duration_minutes=duration,
+                buffer_minutes=config.buffer_minutes,
+                not_before=now if day == today else None,
+            )
+            if not free:
+                continue
+            found.append({"date": day_s, "weekday": _WEEKDAY_NAMES[day.weekday()], "free_slots": free})
+            if len(found) >= _NEXT_AVAILABLE_MAX_RESULTS:
+                break
+
+        if not found:
+            return {
+                "status": "no_availability",
+                "today": today.isoformat(),
+                "message": f"No hay horarios libres en los próximos {days} días.",
+            }
+        return {
+            "status": "ok",
+            "today": today.isoformat(),
+            "duration_minutes": duration,
+            "days": found,
+            "total_days": len(found),
+        }
 
 def _google_interval(event: dict[str, Any], tz: ZoneInfo) -> tuple[datetime, datetime] | None:
     """Intervalo (start, end) tz-aware de un evento de Google; None si no parsea."""

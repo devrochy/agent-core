@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -143,6 +143,73 @@ async def delete_type(
 
 
 # ------------------------------------------------------------------ citas
+class NotificationOut(BaseModel):
+    """Resultado real del aviso al cliente (HU-CAL-05)."""
+
+    email_sent: bool
+    email_reason: str
+    whatsapp_sent: bool
+
+
+async def _notify_client(
+    action: str,
+    *,
+    title: str,
+    start: datetime,
+    end: datetime,
+    attendee_email: str | None,
+    conversation_id: uuid.UUID | None,
+) -> NotificationOut:
+    """Avisa al cliente por correo y WhatsApp cuando el negocio mueve (`moved`) o
+    cancela (`cancelled`) una cita desde el panel (D-SPEC-24-10, paridad con el
+    panel legado). Best-effort: un fallo de envío se informa, nunca se lanza."""
+    from zoneinfo import ZoneInfo
+
+    from core.plugin_manager import plugin_manager
+    from core.shared.logger import get_logger
+    from pack_calendar.config import (
+        DEFAULT_CANCELLED_MESSAGE,
+        DEFAULT_MOVED_MESSAGE,
+        CalendarConfig,
+    )
+    from pack_calendar.skills import CalendarSkill, _calendar_link
+
+    try:
+        config = await plugin_manager.load_config(PLUGIN_ID)
+    except Exception:
+        config = None
+    if not isinstance(config, CalendarConfig):
+        return NotificationOut(email_sent=False, email_reason="sin_configuracion", whatsapp_sent=False)
+
+    skill = CalendarSkill()
+    title = title or "tu cita"
+    link = ""
+    if action != "cancelled":
+        business = await skill._business_name()
+        link = _calendar_link(start, end, title, f"Cita agendada con {business}", config.timezone)
+    local = start.astimezone(ZoneInfo(config.timezone))
+    if action == "cancelled":
+        template = config.appointment_cancelled_message or DEFAULT_CANCELLED_MESSAGE
+    else:
+        template = config.appointment_moved_message or DEFAULT_MOVED_MESSAGE
+    try:
+        whatsapp_sent = await skill._send_client_notice(
+            conversation_id,
+            template,
+            fecha=local.strftime("%d/%m/%Y"),
+            hora=local.strftime("%H:%M"),
+            titulo=title,
+            link=link,
+        )
+    except Exception:
+        get_logger(__name__).warning("calendar_panel_whatsapp_failed", exc_info=True)
+        whatsapp_sent = False
+    email_sent, email_reason = await skill._notify_appointment_email(
+        action, title=title, start=start, attendee_email=attendee_email, config=config, link=link
+    )
+    return NotificationOut(email_sent=email_sent, email_reason=email_reason, whatsapp_sent=whatsapp_sent)
+
+
 class AppointmentOut(BaseModel):
     id: uuid.UUID
     title: str
@@ -155,6 +222,8 @@ class AppointmentOut(BaseModel):
     appointment_type_id: uuid.UUID | None
     created_by: str
     timezone: str
+    # Resultado del aviso al cliente al mover desde el panel; None si no se avisó.
+    notification: NotificationOut | None = None
 
 
 @router.get("/appointments", response_model=list[AppointmentOut])
@@ -203,18 +272,35 @@ async def list_appointments(
     ]
 
 
-@router.post("/appointments/{appointment_id}/cancel", status_code=204)
+class AppointmentCancel(BaseModel):
+    notify: bool = True
+
+
+class AppointmentCancelOut(BaseModel):
+    status: str
+    # Resultado del aviso al cliente; None si no se avisó (o ya estaba cancelada).
+    notification: NotificationOut | None = None
+
+
+@router.post("/appointments/{appointment_id}/cancel", response_model=AppointmentCancelOut)
 async def cancel_appointment(
     appointment_id: uuid.UUID,
     principal: Annotated[Principal, Depends(require("pack_calendar:citas", write=True))],
-) -> Response:
-    """Cancela la cita: borra el evento en Google (best-effort) y marca el espejo."""
+    payload: Annotated[AppointmentCancel | None, Body()] = None,
+) -> AppointmentCancelOut:
+    """Cancela la cita: borra el evento en Google (best-effort), marca el espejo,
+    registra la actividad y, con `notify` (default), avisa al cliente por correo
+    y WhatsApp (HU-CAL-05). Idempotente: cancelar una cita ya cancelada no
+    vuelve a avisar."""
     from core.db.models import utcnow
+    from pack_calendar.skills import CalendarSkill
 
     async with get_session() as session:
         row = await get_owned(session, Appointment, appointment_id, principal.tenant_id)
     if row is None:
         raise ApiError.not_found("Cita no encontrada.")
+    if row.status == "cancelled":
+        return AppointmentCancelOut(status="cancelled")
 
     if row.google_event_id:
         try:
@@ -245,7 +331,26 @@ async def cancel_appointment(
         if row_db is not None:
             row_db.status = "cancelled"
             row_db.updated_at = utcnow()
-    return Response(status_code=204)
+
+    await CalendarSkill()._record_event(
+        action="cancelada",
+        title=row.title or "",
+        appointment_id=row.id,
+        conversation_id=row.conversation_id,
+        old_start=row.start_at,
+        actor="panel",
+    )
+    notification = None
+    if payload is None or payload.notify:
+        notification = await _notify_client(
+            "cancelled",
+            title=row.title,
+            start=row.start_at,
+            end=row.end_at,
+            attendee_email=row.attendee_email,
+            conversation_id=row.conversation_id,
+        )
+    return AppointmentCancelOut(status="cancelled", notification=notification)
 
 
 class AppointmentIn(BaseModel):
@@ -666,7 +771,8 @@ async def patch_appointment(
     principal: Annotated[Principal, Depends(require("pack_calendar:citas", write=True))],
 ) -> AppointmentOut:
     """Edita campos/horario de una cita y, si se mueve y `notify`, avisa al cliente
-    y a los colaboradores (HU-CAL-02). Valida solapamiento en el servidor."""
+    por correo y WhatsApp y a los colaboradores (HU-CAL-02/05). Valida
+    solapamiento en el servidor."""
     from core.db.models import utcnow
     from pack_calendar.models import Appointment
     from pack_calendar.skills import CalendarSkill
@@ -717,6 +823,7 @@ async def patch_appointment(
         row.start_at = new_start
         row.end_at = new_end
         row.updated_at = utcnow()
+        conversation_id = row.conversation_id
         out = AppointmentOut(
             id=row.id, title=row.title, attendee_email=row.attendee_email,
             start_at=row.start_at, end_at=row.end_at, status=row.status, notes=row.notes,
@@ -736,10 +843,14 @@ async def patch_appointment(
             new_start=new_start,
             actor="panel",
         )
-        if payload.notify and isinstance(config, CalendarConfig):
-            await skill._notify_appointment_email(
-                "moved", title=out.title, start=new_start,
-                attendee_email=out.attendee_email, config=config,
+        if payload.notify:
+            out.notification = await _notify_client(
+                "moved",
+                title=out.title,
+                start=new_start,
+                end=new_end,
+                attendee_email=out.attendee_email,
+                conversation_id=conversation_id,
             )
     return out
 
