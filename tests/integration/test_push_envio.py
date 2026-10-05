@@ -1,4 +1,4 @@
-"""Envío de push (ADR-0095): transporte Expo, bajas automáticas y disparadores.
+"""Envío de push (ADR-0099): transporte Expo, bajas automáticas y disparadores.
 
 El transporte HTTP se mockea; se prueba la resolución de tokens con RLS, el
 lote, la baja de `DeviceNotRegistered`, el disparo tras `escalate()` y el gate

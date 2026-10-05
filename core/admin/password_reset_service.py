@@ -1,4 +1,4 @@
-"""Recuperación de contraseña self-service con código de un solo uso (ADR-0094).
+"""Recuperación de contraseña self-service con código de un solo uso (ADR-0098).
 
 - `solicitar_reset`: respuesta siempre genérica; si el admin existe y está
   activo, invalida tokens previos sin usar, genera un código de 8 caracteres de

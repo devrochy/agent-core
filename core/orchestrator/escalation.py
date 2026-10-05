@@ -67,7 +67,7 @@ async def escalate(conversation_id: uuid.UUID, reason: str, summary: str = "") -
     )
     await event_bus.emit(ON_ESCALATION_TRIGGERED, conversation_id=conversation_id, reason=reason)
 
-    # Push a los dueños del negocio (ADR-0095): fire-and-forget por Celery.
+    # Push a los dueños del negocio (ADR-0099): fire-and-forget por Celery.
     try:
         from core.tasks.push_tasks import TITULO_ESCALACION, notify_owners_push
 

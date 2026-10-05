@@ -97,7 +97,7 @@
           "auth"
         ],
         "summary": "Post Forgot Password",
-        "description": "Siempre 202 con el mismo cuerpo: no filtra si la cuenta existe (ADR-0094).\n\nEl trabajo pesado (hash + correo) va en background para emparejar el tiempo\nde respuesta de cuentas existentes e inexistentes.",
+        "description": "Siempre 202 con el mismo cuerpo: no filtra si la cuenta existe (ADR-0098).\n\nEl trabajo pesado (hash + correo) va en background para emparejar el tiempo\nde respuesta de cuentas existentes e inexistentes.",
         "operationId": "post_forgot_password_api_v1_auth_forgot_password_post",
         "requestBody": {
           "content": {
@@ -10437,7 +10437,7 @@
           "pack · cobranza"
         ],
         "summary": "Gestor Token",
-        "description": "Sesión admin → par de tokens de campo del negocio activo (HU-APP-02, ADR-0094).\n\nReusa la lógica del login unificado de la API de campo (ADR-0081): resuelve\nla membresía de campo del admin en el negocio activo (`X-Tenant-Id`) y emite\naccess/refresh con el enforcement de vinculación de dispositivo. El core no\nconoce a los usuarios de campo; este endpoint vive en el pack.",
+        "description": "Sesión admin → par de tokens de campo del negocio activo (HU-APP-02, ADR-0098).\n\nReusa la lógica del login unificado de la API de campo (ADR-0081): resuelve\nla membresía de campo del admin en el negocio activo (`X-Tenant-Id`) y emite\naccess/refresh con el enforcement de vinculación de dispositivo. El core no\nconoce a los usuarios de campo; este endpoint vive en el pack.",
         "operationId": "gestor_token_api_v1_pack_cobranza_gestor_token_post",
         "parameters": [
           {

@@ -5,8 +5,8 @@ Idempotente por (tenant_id, event_id): la app reenvía eventos offline sin
 duplicar. `payload` guarda el detalle de la acción; `device_id` el equipo que la
 ejecutó.
 
-Revision ID: 0053
-Revises: 0052
+Revision ID: 0055
+Revises: 0054
 Create Date: 2026-10-05
 """
 from __future__ import annotations
@@ -16,8 +16,8 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from alembic import op
 
-revision = "0053"
-down_revision = "0052"
+revision = "0055"
+down_revision = "0054"
 branch_labels = None
 depends_on = None
 

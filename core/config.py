@@ -218,7 +218,7 @@ class Settings(BaseSettings):
     otel_exporter_endpoint: str = Field(default="", alias="OTEL_EXPORTER_OTLP_ENDPOINT")
     otel_service_name: str = Field(default="agent-core", alias="OTEL_SERVICE_NAME")
 
-    # --- Correo de sistema (recuperación de contraseña, ADR-0094) ---
+    # --- Correo de sistema (recuperación de contraseña, ADR-0098) ---
     # SMTP de la plataforma, distinto del canal SMTP por tenant (que exige
     # contexto de negocio). Sin host configurado, el envío es log-only
     # (mismo criterio que las alertas de Slack).
@@ -228,7 +228,7 @@ class Settings(BaseSettings):
     system_smtp_password: str = Field(default="", alias="SYSTEM_SMTP_PASSWORD")
     system_smtp_from: str = Field(default="", alias="SYSTEM_SMTP_FROM")
 
-    # --- Notificaciones push de la app oficial (ADR-0095) ---
+    # --- Notificaciones push de la app oficial (ADR-0099) ---
     # Expo Push Service con el projectId de EAS existente. Sin
     # EXPO_PUSH_ENABLED, el envío es log-only (mismo criterio que el correo de
     # sistema): un canal sin configurar no rompe el flujo.

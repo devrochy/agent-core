@@ -2,7 +2,7 @@
 
 Cualquier admin autenticado registra el token de SU dispositivo en el negocio
 activo (sin gate de sección: no es un dato del panel, es del teléfono). Alta
-idempotente (reactiva un token dado de baja) y baja por soft delete (ADR-0095).
+idempotente (reactiva un token dado de baja) y baja por soft delete (ADR-0099).
 """
 
 from __future__ import annotations

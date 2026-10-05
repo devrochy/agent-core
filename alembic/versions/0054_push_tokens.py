@@ -1,11 +1,11 @@
-"""`push_tokens`: dispositivos de push de la app oficial (ADR-0095, HU-APP-05).
+"""`push_tokens`: dispositivos de push de la app oficial (ADR-0099, HU-APP-05).
 
 Tabla de NEGOCIO: tenant_id + RLS habilitada y forzada + policy de aislamiento
 (invariante 1). Un token es del negocio donde el admin lo registró; la baja es
 soft (deleted_at) y la unicidad activa es parcial (tenant_id, token).
 
-Revision ID: 0052
-Revises: 0051
+Revision ID: 0054
+Revises: 0053
 Create Date: 2026-10-05
 """
 from __future__ import annotations
@@ -15,8 +15,8 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from alembic import op
 
-revision = "0052"
-down_revision = "0051"
+revision = "0054"
+down_revision = "0053"
 branch_labels = None
 depends_on = None
 

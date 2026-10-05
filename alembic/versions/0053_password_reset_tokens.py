@@ -1,12 +1,12 @@
-"""`password_reset_tokens`: recuperación de contraseña self-service (HU-APP-02, ADR-0094).
+"""`password_reset_tokens`: recuperación de contraseña self-service (HU-APP-02, ADR-0098).
 
 Tabla de SISTEMA (sin RLS): infraestructura de identidad como `admin_sessions`,
 se consulta fuera del contexto de un negocio (el admin pide recuperar su
 contraseña sin haber elegido tenant). Sin datos de negocio; grants mínimos a
-app_runtime (ADR-0094).
+app_runtime (ADR-0098).
 
-Revision ID: 0051
-Revises: 0050
+Revision ID: 0053
+Revises: 0052
 Create Date: 2026-10-05
 """
 from __future__ import annotations
@@ -16,8 +16,8 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from alembic import op
 
-revision = "0051"
-down_revision = "0050"
+revision = "0053"
+down_revision = "0052"
 branch_labels = None
 depends_on = None
 

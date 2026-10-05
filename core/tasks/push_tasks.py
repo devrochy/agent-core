@@ -1,4 +1,4 @@
-"""Tareas Celery de notificaciones push (ADR-0095).
+"""Tareas Celery de notificaciones push (ADR-0099).
 
 El envío nunca ocurre en el request: los disparadores (escalación, sync de
 campo) encolan estas tareas y el worker resuelve tokens y habla con Expo.
