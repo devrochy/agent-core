@@ -228,6 +228,16 @@ class Settings(BaseSettings):
     system_smtp_password: str = Field(default="", alias="SYSTEM_SMTP_PASSWORD")
     system_smtp_from: str = Field(default="", alias="SYSTEM_SMTP_FROM")
 
+    # --- Notificaciones push de la app oficial (ADR-0095) ---
+    # Expo Push Service con el projectId de EAS existente. Sin
+    # EXPO_PUSH_ENABLED, el envío es log-only (mismo criterio que el correo de
+    # sistema): un canal sin configurar no rompe el flujo.
+    expo_push_enabled: bool = Field(default=False, alias="EXPO_PUSH_ENABLED")
+    expo_push_url: str = Field(
+        default="https://exp.host/--/api/v2/push/send", alias="EXPO_PUSH_URL"
+    )
+    expo_push_access_token: str = Field(default="", alias="EXPO_PUSH_ACCESS_TOKEN")
+
     # --- Alertas (salud de conexiones Meta) ---
     # Sin webhook configurado, send_alert() solo loguea (nunca fue un canal
     # real hasta este ticket -- antes todo esto era log.error a secas).

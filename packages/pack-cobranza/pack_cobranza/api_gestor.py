@@ -1779,6 +1779,29 @@ def _ack(evento_id: str, estado: str, error: str | None = None) -> dict[str, Any
     return out
 
 
+def _notificar_actividad_campo(tenant_id: uuid.UUID, payload: dict[str, Any], tipos_aplicados: list[str]) -> None:
+    """Push al dueño cuando un GESTOR sincroniza eventos de campo (ADR-0095).
+
+    Solo si el autor es un gestor (un dueño operando su propia app no se
+    auto-avisa) y se aplicó al menos un evento. Fire-and-forget por Celery; un
+    fallo del push nunca afecta el ack del sync.
+    """
+    if not tipos_aplicados or str(payload.get("rol") or "") != "gestor":
+        return
+    try:
+        from core.tasks.push_tasks import TITULO_CAMPO, notify_owners_push
+
+        resumen = ", ".join(sorted(set(tipos_aplicados)))
+        notify_owners_push.delay(
+            str(tenant_id),
+            TITULO_CAMPO,
+            f"Tu gestor sincronizó actividad del día: {resumen}.",
+            {"type": "cobranza.sync", "tipos": sorted(set(tipos_aplicados))},
+        )
+    except Exception:
+        log.warning("push_campo_fallo", tenant_id=str(tenant_id), exc_info=True)
+
+
 async def _cartera_de_evento(session, tenant_id: uuid.UUID, payload: dict[str, Any], data: dict[str, Any]) -> uuid.UUID | None:
     """Resuelve la cartera del evento: payload → cliente → única cartera visible."""
     if data.get("carteraId"):
@@ -1848,6 +1871,7 @@ async def sync_offline(request: Request, authorization: str | None = Header(defa
     body = await request.json()
     eventos = body.get("eventos") or []
     acks: list[dict[str, Any]] = []
+    tipos_aplicados: list[str] = []
     async with tenant_scope(tenant_id):
         async with get_session() as session:
             for ev in eventos:
@@ -1866,10 +1890,12 @@ async def sync_offline(request: Request, authorization: str | None = Header(defa
                         await _aplicar_evento_offline(session, tenant_id, payload, tipo, data)
                     session.add(SyncEvento(tenant_id=tenant_id, evento_id_cliente=eid, tipo=tipo, payload=data))
                     acks.append(_ack(eid, "sincronizado"))
+                    tipos_aplicados.append(tipo)
                 except Exception as exc:  # evento inválido: no tumba el lote
                     session.add(SyncEvento(tenant_id=tenant_id, evento_id_cliente=eid, tipo=tipo, payload=data, estado="error"))
                     log.warning("sync_offline_error", tipo=tipo, error=type(exc).__name__)
                     acks.append(_ack(eid, "error", str(exc)))
+    _notificar_actividad_campo(tenant_id, payload, tipos_aplicados)
     return JSONResponse(acks)
 
 
