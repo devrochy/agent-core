@@ -1,6 +1,6 @@
 # Changelog
 
-## Sin versión — Un evento del webhook solo actúa sobre el negocio que lo firmó (ADR-0096, 2026-10-05)
+## Sin versión — Un evento del webhook solo actúa sobre un negocio autorizado por su firma (ADR-0096, 2026-10-05)
 
 - **Seguridad (alto, preexistente):** el webhook genérico aceptaba la firma con el secreto de cualquier negocio del
   payload y procesaba todas las entries: un negocio BYOK podía inyectarle mensajes a otro. Ahora cada grupo
@@ -9,9 +9,12 @@
   vez (`_rutear_grupos`), con la misma resolución que el despacho.
 - Los eventos de plantillas y de estado de mensajes reciben el negocio de su grupo (`expected_tenant_id`) y se
   descartan si la plantilla o el mensaje es de otro: con su propia firma, un negocio ya no puede cambiar una
-  plantilla ajena ni el estado o los costos de los mensajes de otro (genérico y por slug).
+  plantilla ajena ni el estado o los costos de los mensajes de otro (genérico y por slug). El estado se busca
+  dentro del negocio de la entry; `resolve_tenant_for_message` (`LIMIT 1`) queda solo para el log.
 - `connections.platform_app_secret` y `resolve_own_app_secret`; `resolve_effective_app_secret` no cambia.
 - El cron de salud ya no cuenta los eventos rechazados como "worker caído" (alertaba cada hora para siempre).
+- La alerta "Un negocio firmó eventos de otro" sale una vez cada 24 h por par; marcar un evento como procesado
+  filtra por su negocio; un payload que no es un objeto JSON se ignora con 200.
 
 ## Sin versión — Un número o una WABA de Meta pertenecen a un solo negocio (ADR-0095, 2026-10-05)
 

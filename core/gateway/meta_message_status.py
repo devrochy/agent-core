@@ -6,12 +6,13 @@ queued < sent < delivered < read < failed, o si el timestamp del evento es
 posterior al de la última actualización -- nunca se sobrescribe por mero
 orden de llegada.
 
-El payload solo trae el `wamid` (`external_message_id`), no el tenant --
-mismo problema chicken-and-egg ya resuelto para plantillas (ADR-0031):
-`resolve_tenant_for_message` (SECURITY DEFINER, migración 0027) resuelve el
-tenant antes de abrir `tenant_scope`. Ese tenant tiene que ser el de la entry
-del webhook (`expected_tenant_id`, ya autorizado por su firma): si el mensaje es
-de otro negocio, el evento se descarta (ADR-0096).
+El payload solo trae el `wamid` (`external_message_id`), no el tenant. El
+negocio es el de la entry del webhook (`expected_tenant_id`, ya autorizado por
+su firma, ADR-0096): el mensaje se busca dentro de su scope, y si no está ahí el
+evento se descarta. `resolve_tenant_for_message` (SECURITY DEFINER, migración
+0027) ya no decide el negocio: hace `LIMIT 1` y el wamid solo es único por
+negocio, así que se usa únicamente para distinguir en el log "es de otro negocio"
+de "no existe".
 
 Además, si el status trae `pricing` (objeto de facturación de Meta), se
 persiste en `message_costs` -- ESE OBJETO NUNCA TRAE UN MONTO EN DÓLARES,
@@ -59,6 +60,25 @@ async def _resolve_tenant_for_message(external_message_id: str) -> Any:
         ).scalar_one_or_none()
 
 
+async def _log_mensaje_ajeno_o_inexistente(
+    external_message_id: str, new_status: str, expected_tenant_id: uuid.UUID
+) -> None:
+    """Solo para el log: el resolvedor no es autoritativo (`LIMIT 1`), así que nunca
+    decide nada. Un mensaje de otro negocio es la señal de que alguien firmó un estado
+    ajeno (ADR-0096). Se compara como texto: asyncpg devuelve su propio tipo de UUID."""
+    otro = await _resolve_tenant_for_message(external_message_id)
+    if otro is not None and str(otro) != str(expected_tenant_id):
+        log.warning(
+            "status_update_de_otro_negocio",
+            external_message_id=external_message_id,
+            status=new_status,
+            tenant_id=str(expected_tenant_id),
+            message_tenant_id=str(otro),
+        )
+    else:
+        log.info("status_update_sin_fila_local", external_message_id=external_message_id, status=new_status)
+
+
 async def apply_status_update(
     status: dict[str, Any], *, expected_tenant_id: uuid.UUID, phone_number_id: str | None = None
 ) -> None:
@@ -77,24 +97,7 @@ async def apply_status_update(
         except (TypeError, ValueError):
             event_ts = None
 
-    tenant_id = await _resolve_tenant_for_message(external_message_id)
-    if tenant_id is None:
-        log.info("status_update_sin_fila_local", external_message_id=external_message_id, status=new_status)
-        return
-    if str(tenant_id) != str(expected_tenant_id):
-        # Con una firma válida propia, un negocio podría marcar mensajes de otro como
-        # leídos o fallidos, o sumarle costos (ADR-0096). Se compara como texto:
-        # asyncpg devuelve su propio tipo de UUID.
-        log.warning(
-            "status_update_de_otro_negocio",
-            external_message_id=external_message_id,
-            status=new_status,
-            tenant_id=str(expected_tenant_id),
-            message_tenant_id=str(tenant_id),
-        )
-        return
     tenant_id = expected_tenant_id
-
     async with tenant_scope(tenant_id):
         message_id: Any = None
         async with get_session() as session:
@@ -127,6 +130,11 @@ async def apply_status_update(
                         db_message.error_subcode = first.get("error_subcode") or first.get("error_data", {}).get("subcode")
                         db_message.error_reason = first.get("message") or first.get("title")
                         db_message.error_fbtrace_id = first.get("fbtrace_id")
+
+        if message_id is None:
+            # No es un mensaje de este negocio: no se toca nada, tampoco los costos.
+            await _log_mensaje_ajeno_o_inexistente(external_message_id, new_status, expected_tenant_id)
+            return
 
         if status.get("pricing") is not None:
             await _persist_message_cost(

@@ -27,10 +27,20 @@ modelos de Claude no están, así que su costo cae a cero. Existe
 `BaseLLMProvider.estimate_cost_usd()` (`core/llm/base.py:37-41`) precisamente para
 esto, pero nadie la llama. El panel `/admin/costos` subestima el gasto real.
 
-**La firma del webhook es opcional en la práctica**
-`core/gateway/webhooks.py:65` solo verifica el HMAC `X-Hub-Signature-256` si hay
-`app_secret` configurado. Sin él, cualquiera que conozca la URL puede inyectar
-mensajes. Debería fallar cerrado, o al menos gritar en los logs.
+**Un negocio BYOK con la conexión `degraded` o `error` pierde su App Secret y todo su inbound da 401**
+`meta_byok._resolve_byok_token` solo lee conexiones `connected`/`pending`, pero el cron de salud
+(`meta_health.decide_status`) pasa a `degraded` con cualquier check fallando y a `error` con `token_valid` o
+`app_subscription_active`. Desde ahí `resolve_own_app_secret` no da secreto: los webhooks firmados con la app
+del negocio dan 401 (por slug y por el genérico) y el `verify_token` cae al `.env`. Preexistente (`arquitecto`,
+2026-10-05, al revisar ADR-0096); ADR-0096 no lo empeora. Arreglo probable: que el secreto y el `verify_token` se
+lean también de conexiones `degraded`/`error` (siguen siendo del negocio), con test del cron.
+
+**Confirmar el secreto de la plataforma antes de desplegar ADR-0096**
+`connections.platform_app_secret` usa `WHATSAPP_APP_SECRET or META_APP_SECRET`, y desde ADR-0096 es la única llave
+que autoriza eventos de cualquier negocio en el webhook genérico. Antes de desplegar, confirmar en el `.env` de
+producción que no es el de la app de un cliente concreto (heredado del monolito). Además, Embedded Signup firma con
+`META_APP_SECRET`: si los dos están definidos y son distintos, sus entregas al genérico dan 401. Decidir si la
+plataforma es solo `META_APP_SECRET` (ADR-0094) y `WHATSAPP_APP_SECRET` queda como respaldo del endpoint por slug.
 
 **El pedido de monto alto nunca escala**
 `plugins/pack_commerce/pack_commerce/skills.py:989` devuelve `{"escalate": True}`
@@ -154,20 +164,15 @@ repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev
 - La respuesta del webhook dice si un número tiene dueño: un negocio que firma un grupo `(su WABA, número X)` recibe
   `"ignored"` si X es de otro (`tenant_conflict`, o `tenant_mismatch` por slug) y `"ok", "enqueued": 1` si X no
   tiene dueño (auditor-multitenant, 2026-10-05, preexistente). Responder con un cuerpo constante.
-- `resolve_tenant_for_message` (migración `0027`) hace `LIMIT 1` sin orden, y `messages.external_message_id` solo es
-  único por negocio: si dos negocios tuvieran el mismo wamid, el estado legítimo de uno se descartaría como "de otro
-  negocio". Hoy no pasa (el wamid sale de la respuesta de Meta). Arreglo: buscar el mensaje dentro del scope del
-  negocio esperado y usar el resolvedor solo para el log.
 - `APP_ENV` vale `development` por defecto (`core/config.py`): un despliegue que olvide la variable deja activo el
   fallback que manda los eventos sin negocio (firmados por la plataforma) al primer negocio activo. Que su falta sea
   un error, o que el valor por defecto sea `production`.
 - El wizard BYOK no impide que dos negocios carguen la misma app (`app_id`): con el mismo App Secret se autorizan
   entre sí en el webhook (se registra `webhook_secreto_compartido`). Rechazarlo en el alta, como el reclamo de
   ADR-0095.
-- Hay dos secretos de plataforma en el `.env` y se usa uno (`WHATSAPP_APP_SECRET or META_APP_SECRET`,
-  `connections.platform_app_secret`). Embedded Signup firma con `META_APP_SECRET`: si los dos están definidos y son
-  distintos, sus entregas al genérico dan 401. Además, quien conozca ese secreto firma "como plataforma" para
-  cualquier negocio: confirmar que no es el de la app de un cliente concreto (heredado del monolito).
+- Retirar la rama de negocios del webhook genérico: re-registrar al endpoint por slug las suscripciones BYOK
+  anteriores al wizard actual (`meta_subscriptions.upsert_app_subscription`) y, cuando el log
+  `webhook_generico_firmado_por_negocio` llegue a cero, que el genérico solo acepte la firma de la plataforma.
 
 **Código muerto**
 `MCPHost.register_resource()` y `MCPResource` (registrados, nunca leídos);

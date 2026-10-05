@@ -201,6 +201,9 @@ async def receive_whatsapp(request: Request) -> Response:
     except json.JSONDecodeError:
         log.warning("webhook_payload_no_json")
         return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
+    if not isinstance(payload, dict):
+        log.warning("webhook_payload_no_es_objeto")
+        return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
 
     grupos = await _rutear_grupos(payload)
     firmantes = await _firmantes_del_post(raw_body, headers.get("x-hub-signature-256", ""), grupos)
@@ -216,27 +219,38 @@ async def receive_whatsapp(request: Request) -> Response:
         log.warning("webhook_signature_invalid", grupos=len(grupos))
         await _alert_on_invalid_signature(get_settings().meta_app_id)
         return Response(status_code=401)
+    elif not firmantes.plataforma:
+        # Una app propia apuntando al genérico (el wizard BYOK registra el slug): se mide
+        # para poder migrar esas suscripciones y retirar esta rama (ADR-0096).
+        log.info("webhook_generico_firmado_por_negocio", tenant_ids=sorted(str(t) for t in firmantes.negocios))
 
     return await _process_payload(
         payload, known_tenant_id=None, dev_fallback=True, firmantes=firmantes, grupos=grupos
     )
 
 
+_FIRMA_AJENA_VENTANA_S = 24 * 60 * 60
+
+
 async def _alert_on_firma_ajena(firmantes: Firmantes, ajenos: list[uuid.UUID]) -> None:
     """Un negocio firmó eventos de otro: intento de inyección, o la WABA de un negocio
-    suscrita a la app de otro. Alerta la primera vez en la ventana del contador de
-    firmas (nunca corta el webhook: un fallo acá se loguea y se sigue)."""
-    from core.gateway.webhook_verify import record_invalid_signature
+    suscrita a la app de otro. Alerta una vez al día por par firmante-afectados: una
+    configuración rota alertaría cada pocos minutos y terminaría silenciando el canal.
+    Nunca corta el webhook: un fallo acá se loguea y se sigue."""
     from core.shared.alerts import send_alert
 
     firmantes_ids = ",".join(sorted(str(t) for t in firmantes.negocios))
+    ajenos_ids = ",".join(sorted({str(t) for t in ajenos}))
     try:
-        if await record_invalid_signature(f"firma_ajena:{firmantes_ids}") == 1:
+        primera_vez = await get_redis().set(
+            f"webhook_firma_ajena:{firmantes_ids}:{ajenos_ids}", "1", nx=True, ex=_FIRMA_AJENA_VENTANA_S
+        )
+        if primera_vez:
             await send_alert(
                 "Un negocio firmó eventos de otro",
-                f"Llegaron eventos de {', '.join(sorted({str(t) for t in ajenos}))} firmados con el secreto "
-                f"de {firmantes_ids}: no se procesaron. Puede ser un intento de inyección o una WABA "
-                "suscrita a la app de otro negocio (ADR-0096).",
+                f"Llegaron eventos de {ajenos_ids} firmados con el secreto de {firmantes_ids}: no se "
+                "procesaron. Puede ser un intento de inyección o una WABA suscrita a la app de otro "
+                "negocio (ADR-0096).",
                 severity="critical",
             )
     except Exception:
@@ -439,8 +453,8 @@ async def _process_payload(
 
         if not firmantes.autoriza(tenant_id):
             # Firmado por otro negocio (ADR-0096): no se procesa ni se le atribuye a
-            # nadie. Va antes del chequeo de facturación para no revelar el estado
-            # de este negocio a quien firmó.
+            # nadie. Va antes del chequeo de facturación, que registraría la fila a
+            # nombre de este negocio (`tenant_not_operational`) aunque no la mandó.
             log.warning(
                 "webhook_firma_no_es_del_negocio",
                 tenant_id=str(tenant_id),

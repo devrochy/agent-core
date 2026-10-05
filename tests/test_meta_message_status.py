@@ -112,6 +112,7 @@ async def test_sin_fila_local_no_revienta(monkeypatch):
         return None
 
     monkeypatch.setattr(status_mod, "_resolve_tenant_for_message", _fake_resolve)
+    monkeypatch.setattr(status_mod, "get_session", FakeSessionCM(None))
     await apply_status_update({"id": "wamid-inexistente", "status": "sent", "timestamp": "2000000000"}, expected_tenant_id="tenant-1")
 
 
@@ -125,14 +126,17 @@ async def test_status_desconocido_no_revienta(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_status_de_un_mensaje_de_otro_negocio_no_lo_toca(monkeypatch):
-    """ADR-0096: el webhook firmado por B trae el wamid de un mensaje de A."""
-    row = _message(status="sent")
-    _patch(monkeypatch, row, tenant_id="tenant-a")
+    """ADR-0096: el webhook firmado por B trae el wamid de un mensaje de A. Se busca en
+    el scope de B (no aparece) y el resolvedor solo sirve para el aviso."""
+    _patch(monkeypatch, None, tenant_id="tenant-a")
+    avisos = []
+    monkeypatch.setattr(
+        status_mod, "log", SimpleNamespace(warning=lambda e, **k: avisos.append(e), info=lambda *a, **k: None)
+    )
 
     await apply_status_update(
         {"id": "wamid-1", "status": "failed", "timestamp": "2000000000", "errors": [{"code": 1}]},
         expected_tenant_id="tenant-b",
     )
 
-    assert row.status == "sent"
-    assert row.error_code is None
+    assert avisos == ["status_update_de_otro_negocio"]

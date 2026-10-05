@@ -127,7 +127,6 @@ async def test_un_error_al_resolver_el_secreto_no_autoriza(monkeypatch, secretos
     assert firmantes == webhooks.Firmantes(plataforma=False)
 
 
-
 async def test_sin_secreto_de_plataforma_una_firma_incorrecta_es_401_no_el_escape(monkeypatch, secretos) -> None:
     """Basta un negocio con secreto propio para exigir firma: `Firmantes` vacío (401), nunca
     `None` (que habilita el escape sin firma de los entornos de prueba)."""
@@ -157,6 +156,7 @@ async def test_sin_secreto_de_plataforma_un_error_al_leer_tampoco_habilita_el_es
     firmantes = await webhooks._firmantes_del_post(BODY, _firma("x"), [_grupo(uuid.uuid4())])
 
     assert firmantes == webhooks.Firmantes(plataforma=False)
+
 
 async def test_dos_negocios_con_la_misma_app_se_autorizan_entre_si(secretos) -> None:
     """No se puede distinguir con criptografía: se autoriza a los dos y se avisa."""
@@ -235,3 +235,51 @@ async def test_la_firma_se_mira_antes_que_la_facturacion(puerta) -> None:
     assert puerta["registrados"] == [
         {"sub_id": "phone-a", "tenant_id": None, "error": "signature_tenant_mismatch", "firma_ok": False}
     ]
+
+
+# ------------------------------------------------------------------ alerta y payloads raros
+async def test_la_alerta_de_firma_ajena_sale_una_vez_por_ventana(monkeypatch) -> None:
+    """Una configuración rota manda el mismo POST cada pocos minutos: una alerta por día
+    y por par firmante-afectados, no una por POST."""
+    claves: dict[str, int] = {}
+    alertas: list[str] = []
+
+    class FakeRedis:
+        async def set(self, key, _value, *, nx, ex):
+            assert nx and ex == webhooks._FIRMA_AJENA_VENTANA_S
+            if key in claves:
+                return None
+            claves[key] = ex
+            return True
+
+    async def fake_alert(title, _body, *, severity):
+        alertas.append(title)
+
+    monkeypatch.setattr(webhooks, "get_redis", lambda: FakeRedis())
+    monkeypatch.setattr("core.shared.alerts.send_alert", fake_alert)
+    a, b, c = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+
+    await webhooks._alert_on_firma_ajena(webhooks.Firmantes.de_negocio(b), [a])
+    await webhooks._alert_on_firma_ajena(webhooks.Firmantes.de_negocio(b), [a, a])
+    assert len(alertas) == 1
+
+    await webhooks._alert_on_firma_ajena(webhooks.Firmantes.de_negocio(b), [c])
+    assert len(alertas) == 2
+
+
+async def test_un_payload_que_no_es_objeto_se_ignora(monkeypatch) -> None:
+    """Un JSON válido que no es un objeto (una lista, un número) no debe reventar el
+    ruteo con un 500, que Meta reintentaría durante 36 h."""
+
+    async def no_rutear(_payload):
+        raise AssertionError("no se rutea un payload que no es objeto")
+
+    monkeypatch.setattr(webhooks, "_rutear_grupos", no_rutear)
+
+    async def body() -> bytes:
+        return b"[1, 2]"
+
+    request = SimpleNamespace(headers={"x-hub-signature-256": _firma("x", b"[1, 2]")}, body=body)
+    r = await webhooks.receive_whatsapp(request)  # type: ignore[arg-type]
+
+    assert r.status_code == 200 and b"ignored" in r.body
