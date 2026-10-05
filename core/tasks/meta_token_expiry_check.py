@@ -25,9 +25,7 @@ async def check_tokens_expiry() -> None:
     from core.db.admin_enum import admin_meta_connection_ids
     from core.db.models import MetaConnection
     from core.db.session import get_session
-    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
-    from core.gateway.meta_onboarding import TOKEN_KIND
-    from core.gateway.meta_token_store import get_token_expires_at
+    from core.gateway.meta_credentials import access_token_expires_at
     from core.shared.alerts import send_alert
     from core.shared.tenant import tenant_scope
 
@@ -39,17 +37,11 @@ async def check_tokens_expiry() -> None:
             async with tenant_scope(tenant_id):
                 async with get_session() as session:
                     connection = await session.get(MetaConnection, connection_id)
-                    if connection is None:
+                    if connection is None or connection.tenant_id != tenant_id:
                         continue
-                    subject_byok = connection.meta_app_id
-                    subject_es = connection.business_id or str(connection.id)
-                expires_at = await get_token_expires_at(
-                    connection_id, CLOUD_API_ACCESS_TOKEN_KIND, subject_byok, tenant_id=tenant_id
-                )
-                if expires_at is None:
-                    expires_at = await get_token_expires_at(
-                        connection_id, TOKEN_KIND, subject_es, tenant_id=tenant_id
-                    )
+                # Solo el token que la conexión usa según su `origin` (ADR-0094): uno
+                # viejo de otro origen no debe disparar alertas críticas falsas.
+                expires_at = await access_token_expires_at(connection)
             if expires_at is None or expires_at > soon:
                 continue  # token permanente, sin dato, o con margen
             expired = expires_at <= now

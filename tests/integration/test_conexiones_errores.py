@@ -46,7 +46,7 @@ async def _make_meta_connection(tid, *, status: str = "connected"):
     async with tenant_scope(tid):
         async with get_session() as session:
             conn = MetaConnection(
-                tenant_id=tid, channel="whatsapp", meta_app_id=_uniq("app"),
+                tenant_id=tid, channel="whatsapp", origin="byok", meta_app_id=_uniq("app"),
                 status=status, business_id=_uniq("biz"),
             )
             session.add(conn)

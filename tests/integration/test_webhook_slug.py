@@ -180,7 +180,7 @@ async def test_handshake_por_slug_usa_verify_token_byok_sin_channel_connection(a
     async with tenant_scope(tid):
         async with get_session() as session:
             connection = MetaConnection(
-                tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id="app-byok-slug",
+                tenant_id=tid, channel="whatsapp", environment="sandbox", origin="byok", meta_app_id="app-byok-slug",
                 status="connected",
             )
             session.add(connection)
@@ -226,7 +226,7 @@ async def test_handshake_por_slug_prioriza_byok_sobre_token_global(app_client, m
     async with tenant_scope(tid):
         async with get_session() as session:
             connection = MetaConnection(
-                tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id="app-byok-global",
+                tenant_id=tid, channel="whatsapp", environment="sandbox", origin="byok", meta_app_id="app-byok-global",
                 # "pending" es el estado real durante el self-check del wizard BYOK.
                 status="pending",
             )
@@ -271,7 +271,7 @@ async def test_handshake_por_slug_rechaza_token_de_otro_tenant(app_client) -> No
         async with tenant_scope(tid):
             async with get_session() as session:
                 connection = MetaConnection(
-                    tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id=app_id,
+                    tenant_id=tid, channel="whatsapp", environment="sandbox", origin="byok", meta_app_id=app_id,
                     status="connected",
                 )
                 session.add(connection)
@@ -320,7 +320,7 @@ async def test_handshake_por_slug_precedencia_manual_sobre_byok(app_client) -> N
         # Y ADEMÁS una conexión BYOK con otro token.
         async with get_session() as session:
             connection = MetaConnection(
-                tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id="app-prec",
+                tenant_id=tid, channel="whatsapp", environment="sandbox", origin="byok", meta_app_id="app-prec",
                 status="connected",
             )
             session.add(connection)
@@ -375,7 +375,7 @@ async def test_post_por_slug_valida_firma_con_app_secret_byok(app_client) -> Non
     async with tenant_scope(tid):
         async with get_session() as session:
             connection = MetaConnection(
-                tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id="app-sig",
+                tenant_id=tid, channel="whatsapp", environment="sandbox", origin="byok", meta_app_id="app-sig",
                 status="connected",
             )
             session.add(connection)
@@ -426,7 +426,7 @@ async def test_post_por_slug_precedencia_app_secret_manual_sobre_byok(app_client
         )
         async with get_session() as session:
             connection = MetaConnection(
-                tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id="app-sigp",
+                tenant_id=tid, channel="whatsapp", environment="sandbox", origin="byok", meta_app_id="app-sigp",
                 status="connected",
             )
             session.add(connection)
@@ -470,7 +470,7 @@ async def test_post_por_slug_rechaza_firma_de_otro_tenant(app_client) -> None:
         async with tenant_scope(tid):
             async with get_session() as session:
                 connection = MetaConnection(
-                    tenant_id=tid, channel="whatsapp", environment="sandbox", meta_app_id=app_id,
+                    tenant_id=tid, channel="whatsapp", environment="sandbox", origin="byok", meta_app_id=app_id,
                     status="connected",
                 )
                 session.add(connection)

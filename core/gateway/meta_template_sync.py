@@ -42,13 +42,16 @@ async def list_templates(waba_id: str, token: str, app_secret: str, version: str
     return items
 
 
-async def acquire_sync_lock(waba_id: str) -> bool:
+async def acquire_sync_lock(tenant_id: uuid.UUID, waba_id: str) -> bool:
     """Traduce el `jobId` de BullMQ (`tpl:{wabaId}:{yyyy-MM-dd-HH}`) pedido
     en el ticket a un lock de Redis: cron y botón manual comparten esta
-    llave, así una sync manual no repite lo que el cron ya hizo esa hora."""
+    llave, así una sync manual no repite lo que el cron ya hizo esa hora.
+
+    La llave lleva el tenant: `waba_id` no es único entre negocios, y sin él un
+    negocio podía gastar el turno horario de otro (auditor-multitenant, HU-CONN-01)."""
     redis = get_redis()
     hour_key = datetime.now(UTC).strftime("%Y-%m-%d-%H")
-    key = f"tpl_sync_lock:{waba_id}:{hour_key}"
+    key = f"tpl_sync_lock:{tenant_id}:{waba_id}:{hour_key}"
     return bool(await redis.set(key, "1", ex=3600, nx=True))
 
 

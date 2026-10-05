@@ -9,6 +9,19 @@ Cuando arregles uno, bórralo de aquí y menciónalo en el commit.
 
 ## Alta
 
+**Un negocio puede registrar la WABA de otro y recibir sus mensajes** (auditor-multitenant, 2026-10-05, preexistente)
+`POST /api/v1/admin/meta/manual` (`core/api/routers/meta_wizard.py`) guarda cualquier `waba_id` validando solo
+el token (`debug_token`), no que el token vea esa WABA ni que el número sea de ella; en BYOK
+(`meta_byok.save_byok_connection`) el `WabaAccount` queda escrito antes de que la suscripción pueda fallar.
+`waba_accounts` solo es único por `(waba_id, connection_id)`, `resolve_tenant_for_waba` (migración `0021`) hace
+`LIMIT 1` sin `ORDER BY` ni filtrar conexiones borradas, y `webhook_route_tenant.resolve_tenant_for_event`
+enruta por WABA **antes** que por `phone_number_id` (que sí es único). Resultado: los mensajes de los clientes
+de A pueden encolarse bajo el tenant B (`webhooks.py`, `consumer.py` crea Customer/Conversation). Arreglo
+propuesto: verificar contra Graph que el token ve la WABA y el número antes de persistir; rechazar un `waba_id`
+que ya tenga otro tenant (índice único parcial o función SECURITY DEFINER); que `resolve_tenant_for_waba`
+devuelva NULL si hay más de un tenant e ignore conexiones borradas; y enrutar primero por
+`metadata.phone_number_id`.
+
 **No hay dominio público estable para el webhook de Meta**
 La app `agent-core-test` de Coolify solo tiene el dominio *default*
 `http://<app-id>.186.82.102.11.sslip.io` (**HTTP, sin TLS**), y los puertos **80/443 del
@@ -112,6 +125,26 @@ repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev
   cerrado).
 - `ix_meta_tokens_tenant` no es índice compuesto (preexistente).
 - `save_byok_connection` tiene un branch de "tenant mismatch" inalcanzable (RLS lo filtra antes).
+
+**Pendientes tras HU-CONN-01 (credenciales por conexión, ADR-0094)**
+- Suscripciones y webhook (`meta_subscriptions*.py`, `meta_preflight.resolve_app_credentials`,
+  `connections.resolve_effective_app_secret`) siguen eligiendo "la" conexión del tenant en vez de usar
+  `credentials_for`: es HU-CONN-05 (webhook y secreto por conexión).
+- Tras una toma por el wizard de ES, `meta_connections.meta_app_id` sigue siendo el de la app BYOK anterior
+  (ningún consumidor deduce el origen de él desde ADR-0094); alinearlo, y su índice único
+  `uq_meta_connections_tenant_app`, va con HU-CONN-05.
+- Descarga de media entrante: el core no la hace (`inbound.py` deja `url: ""`); HU-MEDIA-02 debe usar
+  `credentials_for` para el `GET /{media_id}`.
+- `meta_private.meta_tokens` tiene RLS habilitada pero **no forzada** (`relforcerowsecurity = f`): la migración
+  `0029` solo recorrió el schema `public`. Hoy no hay fuga: el runtime (`app_runtime`) no es dueño, así que RLS
+  le aplica, y `credentials_for` exige el `tenant_scope` de la conexión. Pero el AAD **no** frena una lectura
+  sin scope de una conexión real (se arma con el `tenant_id` de la propia conexión), y el rol dueño lee la tabla
+  sin política: incumple la invariante 1.
+- Las migraciones asumen un rol con `BYPASSRLS` o superusuario: `0034` falla con un dueño sin bypass
+  ("new row violates row-level security policy for table tenant_subscriptions"). La `0051` sí es segura con
+  cualquier rol (fija `app.tenant_id` por tenant).
+- `tests/test_meta_byok.py` (7) y `tests/integration/test_api_meta_wizard.py::test_byok_*` /
+  `test_meta_byok_reconnect.py` no stubbean `_token_expiry` → hacen una llamada real a Graph y fallan sin red.
 
 **Código muerto**
 `MCPHost.register_resource()` y `MCPResource` (registrados, nunca leídos);

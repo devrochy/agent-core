@@ -18,9 +18,8 @@ from datetime import UTC, datetime, timedelta
 
 from core.db.models import MetaConnection, WabaAccount
 from core.db.session import get_session
-from core.gateway import meta_token_store
+from core.gateway.meta_credentials import CredentialsUnavailable, credentials_for
 from core.gateway.meta_errors import GraphError
-from core.gateway.meta_onboarding import TOKEN_KIND
 from core.gateway.meta_pricing_analytics import sync_pricing_daily
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
@@ -41,10 +40,16 @@ async def _connected_wabas() -> list[tuple[WabaAccount, MetaConnection]]:
         async with tenant_scope(tenant_id):
             async with get_session() as session:
                 waba = await session.get(WabaAccount, waba_id)
-                if waba is None:
+                if waba is None or waba.tenant_id != tenant_id:
                     continue
                 connection = await session.get(MetaConnection, waba.connection_id)
-                if connection is not None and connection.status == "connected":
+                # Los tres tenants deben coincidir: el del enumerador, el de la WABA y el
+                # de la conexión (defensa en profundidad, igual que `meta_health_check`).
+                if (
+                    connection is not None
+                    and connection.tenant_id == tenant_id
+                    and connection.status == "connected"
+                ):
                     out.append((waba, connection))
     return out
 
@@ -55,21 +60,28 @@ async def _sync_one(waba: WabaAccount, connection: MetaConnection) -> None:
     end_unix = int(now.timestamp())
 
     async with tenant_scope(connection.tenant_id):
-        token = await meta_token_store.get_token(
-            connection.id, TOKEN_KIND, connection.business_id or str(connection.id), tenant_id=connection.tenant_id
-        )
-        app_secret = await meta_token_store.get_token(
-            connection.id, "app_access", connection.meta_app_id, tenant_id=connection.tenant_id
-        )
-        if not token or not app_secret:
+        # Credenciales de ESTA conexión según su origen (HU-CONN-01): BYOK usa las
+        # suyas y Embedded Signup/manual las de la plataforma.
+        try:
+            creds = await credentials_for(connection, waba_id=waba.waba_id)
+        except CredentialsUnavailable as exc:
+            log.warning(
+                "meta_pricing_sync_sin_credenciales",
+                waba_id=waba.waba_id, connection_id=str(connection.id),
+                tenant_id=str(connection.tenant_id), reason=exc.reason,
+            )
             return
         try:
             await sync_pricing_daily(
                 waba.waba_id, waba.id, connection.tenant_id, start_unix, end_unix,
-                token, app_secret, connection.graph_api_version, connection.id,
+                creds.access_token, creds.app_secret, creds.graph_api_version, connection.id,
             )
         except GraphError as exc:
-            log.error("meta_pricing_sync_fallo", waba_id=waba.waba_id, detail=exc.message)
+            log.error(
+                "meta_pricing_sync_fallo",
+                waba_id=waba.waba_id, connection_id=str(connection.id),
+                tenant_id=str(connection.tenant_id), detail=exc.message,
+            )
 
 
 async def sync_all_waba_pricing() -> None:

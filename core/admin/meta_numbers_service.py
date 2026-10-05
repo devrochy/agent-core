@@ -15,10 +15,14 @@ from core.db.models import MetaConnection, PhoneNumber, WabaAccount
 from core.db.session import get_owned, get_session
 
 
-async def resolve_waba_and_token(connection_id: uuid.UUID, tenant_id: uuid.UUID | None):
-    """(connection, waba, token) del tenant; cualquiera puede ser None."""
-    from core.gateway import meta_token_store
-    from core.gateway.meta_onboarding import TOKEN_KIND
+async def resolve_waba_and_credentials(connection_id: uuid.UUID, tenant_id: uuid.UUID | None):
+    """(connection, waba, credenciales) del tenant; cualquiera puede ser None.
+
+    Las credenciales son `MetaCredentials` (HU-CONN-01): token y App Secret de ESA
+    conexión según su `origin`. Son `None` si la conexión no tiene credenciales
+    utilizables; el llamador responde con su mensaje de "no hay conexión lista".
+    """
+    from core.gateway.meta_credentials import CredentialsUnavailable, credentials_for
 
     async with get_session() as session:
         connection = await get_owned(session, MetaConnection, connection_id, tenant_id)
@@ -26,22 +30,22 @@ async def resolve_waba_and_token(connection_id: uuid.UUID, tenant_id: uuid.UUID 
             return None, None, None
         waba = (
             await session.execute(
-                select(WabaAccount).where(WabaAccount.connection_id == connection_id)
+                select(WabaAccount)
+                .where(WabaAccount.connection_id == connection_id, WabaAccount.tenant_id == connection.tenant_id)
+                .order_by(WabaAccount.created_at)
             )
         ).scalars().first()
-    if waba is None:
-        return connection, None, None
-    token = await meta_token_store.get_token(
-        connection_id, TOKEN_KIND, connection.business_id or str(connection_id), tenant_id=tenant_id
-    )
-    return connection, waba, token
+    try:
+        creds = await credentials_for(connection, waba_id=waba.waba_id if waba is not None else None)
+    except CredentialsUnavailable:
+        creds = None
+    return connection, waba, creds
 
 
 async def list_numbers(
     tenant_id: uuid.UUID, connection_id: str
 ) -> tuple[list[dict], str | None]:
     """Sincroniza con Meta y devuelve los números del tenant. (números, error)."""
-    from core.config import get_settings
     from core.gateway.meta_errors import GraphError
     from core.gateway.meta_phone_numbers import sync_phone_numbers
 
@@ -50,18 +54,18 @@ async def list_numbers(
     except ValueError:
         return [], "Conexión inválida"
 
-    connection, waba, token = await resolve_waba_and_token(cid, tenant_id)
+    connection, waba, creds = await resolve_waba_and_credentials(cid, tenant_id)
     if connection is None:
         return [], "Conexión no encontrada"
 
     sync_error = None
-    if waba is not None and token:
+    if waba is not None and creds is not None:
         try:
             await sync_phone_numbers(
                 waba.waba_id,
-                token,
-                get_settings().meta_app_secret,
-                connection.graph_api_version,
+                creds.access_token,
+                creds.app_secret,
+                creds.graph_api_version,
                 connection.id,
                 tenant_id,
             )
@@ -117,7 +121,6 @@ async def add_number(
     phone_number: str,
     verified_name: str,
 ) -> str | None:
-    from core.config import get_settings
     from core.gateway.meta_errors import GraphError
     from core.gateway.meta_phone_numbers import add_phone_number
 
@@ -126,16 +129,16 @@ async def add_number(
     except ValueError:
         return "Conexión inválida"
 
-    connection, waba, token = await resolve_waba_and_token(cid, tenant_id)
-    if connection is None or waba is None or not token:
+    connection, waba, creds = await resolve_waba_and_credentials(cid, tenant_id)
+    if connection is None or waba is None or creds is None:
         return "No hay conexión/WABA lista todavía"
 
     try:
         await add_phone_number(
             waba.waba_id,
-            token,
-            get_settings().meta_app_secret,
-            connection.graph_api_version,
+            creds.access_token,
+            creds.app_secret,
+            creds.graph_api_version,
             connection.id,
             tenant_id,
             cc=cc,
@@ -155,7 +158,6 @@ async def request_code(
     code_method: str,
     language: str = "es",
 ) -> str | None:
-    from core.config import get_settings
     from core.gateway.meta_errors import GraphError
     from core.gateway.meta_phone_numbers import request_verification_code
     from core.memory.working import get_redis
@@ -165,8 +167,8 @@ async def request_code(
     except ValueError:
         return "Conexión inválida"
 
-    connection, _waba, token = await resolve_waba_and_token(cid, tenant_id)
-    if connection is None or not token:
+    connection, _waba, creds = await resolve_waba_and_credentials(cid, tenant_id)
+    if connection is None or creds is None:
         return "No hay conexión lista todavía"
 
     redis = get_redis()
@@ -179,9 +181,9 @@ async def request_code(
     try:
         await request_verification_code(
             phone_number_id,
-            token,
-            get_settings().meta_app_secret,
-            connection.graph_api_version,
+            creds.access_token,
+            creds.app_secret,
+            creds.graph_api_version,
             connection.id,
             code_method=code_method,
             language=language,
@@ -197,7 +199,6 @@ async def verify_number(
     tenant_id: uuid.UUID, connection_id: str, phone_number_id: str, *, code: str
 ) -> tuple[bool, str | None]:
     """(verificado, error)."""
-    from core.config import get_settings
     from core.gateway.meta_errors import GraphError
     from core.gateway.meta_phone_numbers import verify_code
 
@@ -206,16 +207,16 @@ async def verify_number(
     except ValueError:
         return False, "Conexión inválida"
 
-    connection, _waba, token = await resolve_waba_and_token(cid, tenant_id)
-    if connection is None or not token:
+    connection, _waba, creds = await resolve_waba_and_credentials(cid, tenant_id)
+    if connection is None or creds is None:
         return False, "No hay conexión lista todavía"
 
     try:
         ok = await verify_code(
             phone_number_id,
-            token,
-            get_settings().meta_app_secret,
-            connection.graph_api_version,
+            creds.access_token,
+            creds.app_secret,
+            creds.graph_api_version,
             connection.id,
             tenant_id,
             code=code,

@@ -44,7 +44,7 @@ async def _setup_connected_tenant() -> tuple[uuid.UUID, uuid.UUID, str]:
     async with tenant_scope(tid):
         async with get_session() as session:
             connection = MetaConnection(
-                tenant_id=tid, channel="whatsapp", meta_app_id=app_id, status="connected"
+                tenant_id=tid, channel="whatsapp", meta_app_id=app_id, status="connected", origin="byok"
             )
             session.add(connection)
             await session.flush()

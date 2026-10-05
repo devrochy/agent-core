@@ -214,7 +214,6 @@ async def manual_connection(
     from core.gateway import meta_token_store
     from core.gateway.meta_health import check_token_valid
     from core.gateway.meta_onboarding import TOKEN_KIND
-    from core.gateway.meta_preflight import resolve_app_credentials
 
     waba_id = payload.waba_id.strip()
     numero = payload.phone_number_id.strip()
@@ -222,12 +221,18 @@ async def manual_connection(
     if not (waba_id and numero and token):
         raise ApiError.bad_request("waba_id, phone_number_id y token son obligatorios.", "missing_fields")
 
+    # Una conexión `manual` se resuelve SIEMPRE con la app de la plataforma (ADR-0094,
+    # enmienda la corrección de ADR-0034): se valida con esa misma app, para que un token
+    # que pasa la validación no falle después por `appsecret_proof`. Un negocio con su
+    # propia app de Meta conecta por el wizard BYOK.
     settings = get_settings()
-    creds = await resolve_app_credentials(principal.tenant_id, "whatsapp")
-    app_id = creds.app_id if creds else settings.meta_app_id
-    app_secret = creds.app_secret if creds else settings.meta_app_secret
+    if not settings.meta_app_id or not settings.meta_app_secret:
+        raise ApiError.bad_request(
+            "La app de Meta de la plataforma no está configurada.", "platform_app_not_configured"
+        )
+    app_id = settings.meta_app_id
 
-    check = await check_token_valid(token, app_id, app_secret, settings.graph_api_version)
+    check = await check_token_valid(token, app_id, settings.meta_app_secret, settings.graph_api_version)
     if check.ok is False:
         raise ApiError.bad_request(check.detail[:200], "invalid_token")
 
@@ -235,6 +240,7 @@ async def manual_connection(
         connection = MetaConnection(
             tenant_id=principal.tenant_id,
             channel="whatsapp",
+            origin="manual",
             meta_app_id=app_id,
             business_id=payload.business_id.strip() or None,
             status="connected",

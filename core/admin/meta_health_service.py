@@ -20,9 +20,7 @@ from core.db.session import get_owned, get_session
 
 
 async def health_overview(tenant_id: uuid.UUID) -> list[dict[str, Any]]:
-    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
-    from core.gateway.meta_onboarding import TOKEN_KIND
-    from core.gateway.meta_token_store import get_token_expires_at
+    from core.gateway.meta_credentials import access_token_expires_at
 
     async with get_session() as session:
         rows = (
@@ -36,13 +34,7 @@ async def health_overview(tenant_id: uuid.UUID) -> list[dict[str, Any]]:
         )
     out: list[dict[str, Any]] = []
     for c in rows:
-        exp = await get_token_expires_at(
-            c.id, CLOUD_API_ACCESS_TOKEN_KIND, c.meta_app_id, tenant_id=tenant_id
-        )
-        if exp is None:
-            exp = await get_token_expires_at(
-                c.id, TOKEN_KIND, c.business_id or str(c.id), tenant_id=tenant_id
-            )
+        exp = await access_token_expires_at(c)
         out.append(
             {
                 "id": c.id,
@@ -87,16 +79,9 @@ async def diagnose_connection(tenant_id: uuid.UUID, connection_id: str) -> str |
     return None
 
 
-async def _resolve_waba_and_token(connection_id: uuid.UUID, tenant_id: uuid.UUID | None):
-    """Delegación a `meta_numbers_service.resolve_waba_and_token` (fuente única)."""
-    from core.admin.meta_numbers_service import resolve_waba_and_token
-
-    return await resolve_waba_and_token(connection_id, tenant_id)
-
-
 async def resubscribe_waba(tenant_id: uuid.UUID, connection_id: str) -> str | None:
     """Reparación inline del check `webhook_subscribed` (solo la WABA)."""
-    from core.config import get_settings
+    from core.admin.meta_numbers_service import resolve_waba_and_credentials
     from core.gateway.meta_errors import GraphError
     from core.gateway.meta_onboarding import _subscribe_waba_to_app
 
@@ -105,17 +90,17 @@ async def resubscribe_waba(tenant_id: uuid.UUID, connection_id: str) -> str | No
     except ValueError:
         return "Conexión inválida"
 
-    connection, waba, token = await _resolve_waba_and_token(cid, tenant_id)
-    if connection is None or waba is None or not token:
+    connection, waba, creds = await resolve_waba_and_credentials(cid, tenant_id)
+    if connection is None or waba is None or creds is None:
         return "No hay conexión/WABA lista todavía"
 
     try:
         await _subscribe_waba_to_app(
-            token,
+            creds.access_token,
             waba.waba_id,
-            connection.graph_api_version,
+            creds.graph_api_version,
             connection.id,
-            get_settings().meta_app_secret,
+            creds.app_secret,
             tenant_id,
         )
     except GraphError as exc:

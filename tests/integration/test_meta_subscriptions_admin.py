@@ -40,7 +40,7 @@ async def _make_tenant_with_connection(channel: str = "whatsapp") -> uuid.UUID:
                 MetaConnection(
                     tenant_id=tid,
                     channel=channel,
-                    meta_app_id=f"app-{slug}",
+                    origin="byok", meta_app_id=f"app-{slug}",
                     status="connected",
                 )
             )

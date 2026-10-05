@@ -58,7 +58,7 @@ async def test_numero_ya_de_otro_tenant_da_byok_error_limpio(monkeypatch) -> Non
         async with get_session() as session:
             conn_a = MetaConnection(
                 tenant_id=tid_a, channel="whatsapp", environment="sandbox",
-                meta_app_id=_uniq("app-a"), status="connected",
+                origin="byok", meta_app_id=_uniq("app-a"), status="connected",
             )
             session.add(conn_a)
             await session.flush()
@@ -108,7 +108,7 @@ async def test_eliminar_conexion_libera_numero_y_waba(app_client) -> None:
         async with get_session() as session:
             conn = MetaConnection(
                 tenant_id=tid, channel="whatsapp", environment="sandbox",
-                meta_app_id=_uniq("app-free"), status="connected",
+                origin="byok", meta_app_id=_uniq("app-free"), status="connected",
             )
             session.add(conn)
             await session.flush()

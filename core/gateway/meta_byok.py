@@ -132,7 +132,7 @@ async def save_byok_connection(
         if connection is None:
             connection = MetaConnection(
                 tenant_id=tenant_id, channel="whatsapp", environment=environment, meta_app_id=app_id,
-                status="pending",
+                status="pending", origin="byok",
             )
             session.add(connection)
             await session.flush()
@@ -140,6 +140,7 @@ async def save_byok_connection(
             # Estado intermedio hasta confirmar que los dos tokens se
             # guardaron -- recién al final se marca "connected" (ver abajo).
             connection.status = "pending"
+            connection.origin = "byok"  # guarda token y App Secret propios: ya es BYOK
         connection.status_reason = None
         connection.connected_by = admin_id
         connection.connected_at = utcnow()
