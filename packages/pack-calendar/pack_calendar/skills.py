@@ -269,6 +269,8 @@ class CalendarSkill(BaseSkill):
                 description=(
                     "Crea una cita en la agenda del negocio. Úsala SOLO cuando el cliente "
                     "haya confirmado fecha y hora exactas. Fechas en formato ISO: 2026-08-20T15:00:00. "
+                    "El email del cliente es OBLIGATORIO: si no lo tenés, pedíselo antes de llamar "
+                    "esta tool (sin email la tool devuelve needs_data y no crea nada). "
                     "Si sabés el tipo de cita (ej. una demo), pasá appointment_type_id; si no, "
                     "pasá duration_minutes."
                 ),
@@ -278,7 +280,7 @@ class CalendarSkill(BaseSkill):
                         "title": {"type": "string", "description": "Título, ej: 'Demo con Carlos Ruiz'"},
                         "start_datetime": {"type": "string", "description": "Inicio ISO 8601 (hora local del negocio)"},
                         "description": {"type": "string", "description": "Detalle de la cita"},
-                        "attendee_email": {"type": "string", "description": "Email del cliente si lo dio"},
+                        "attendee_email": {"type": "string", "description": "Email del cliente (obligatorio; pedíselo si no lo tenés)"},
                         "appointment_type_id": {"type": "string", "description": "ID del tipo de cita (opcional)"},
                         "duration_minutes": {"type": "integer", "description": "Duración en minutos (opcional; si no, la del tipo o la configurada)"},
                     },
@@ -314,7 +316,8 @@ class CalendarSkill(BaseSkill):
                     "Úsala SOLO cuando el cliente haya confirmado la nueva fecha y hora exactas. "
                     "Pasá el event_id que devolvió create_calendar_event/list_client_appointments; "
                     "si no, el sistema busca la próxima cita del cliente por título o email. "
-                    "Fechas ISO 8601 en hora local del negocio."
+                    "NUNCA inventes un event_id: si no estás seguro, omitilo (el sistema busca por "
+                    "la conversación). Fechas ISO 8601 en hora local del negocio."
                 ),
                 parameters={
                     "type": "object",
@@ -371,7 +374,9 @@ class CalendarSkill(BaseSkill):
                     "usá SIEMPRE esta tool. Para cancelar VARIAS o TODAS, primero llamá "
                     "list_client_appointments y usá los event_ids que devuelve, o pasá cancel_all=true. "
                     "Úsala SOLO cuando el cliente pidió cancelar explícitamente y confirmó. Después, "
-                    "comunicá EXACTAMENTE lo que devolvió la tool (status 'cancelled' o 'not_found')."
+                    "comunicá EXACTAMENTE lo que devolvió la tool (status 'cancelled' o 'not_found'). "
+                    "NUNCA inventes un event_id: si no estás seguro, omitilo (el sistema busca por "
+                    "la conversación)."
                 ),
                 parameters={
                     "type": "object",
@@ -455,6 +460,25 @@ class CalendarSkill(BaseSkill):
             duration = int(getattr(appt_type, "duration_minutes", 0) or 0) or config.event_duration_minutes
         end = start + timedelta(minutes=duration)
         title = str(arguments.get("title") or (getattr(appt_type, "name", "") or "Cita"))
+
+        # Email OBLIGATORIO (corrección post-prueba 2026-10-05): sin email no hay
+        # confirmación posible. La tool NO crea y pide el dato; el `error` hace que
+        # el guardrail no cuente el intento como respaldo de "quedó agendada".
+        from core.gateway.channels.email import single_recipient
+
+        email = str(arguments.get("attendee_email") or "").strip()
+        if not email:
+            return {
+                "error": "Falta el email del cliente: pedíselo antes de agendar (es obligatorio).",
+                "status": "needs_data",
+                "missing": ["attendee_email"],
+            }
+        if single_recipient(email) is None:
+            return {
+                "error": "El email del cliente no es válido: pedíselo de nuevo.",
+                "status": "needs_data",
+                "missing": ["attendee_email"],
+            }
 
         # Validación DURA en el servidor (HU-CAL-02): no confiar en que el LLM
         # haya llamado antes a check_availability. Solo agenda interna; en modo
@@ -799,6 +823,11 @@ class CalendarSkill(BaseSkill):
             start = start.replace(tzinfo=tz)
 
         appt = await self._find_appointment(arguments, context)
+        if appt is None and (arguments.get("event_id") or arguments.get("event_ids")):
+            # Fallback (bug post-prueba 2026-10-05): el `event_id` pudo ser
+            # inventado o viejo; se busca por conversación/título/email.
+            fallback = {k: v for k, v in arguments.items() if k not in ("event_id", "event_ids")}
+            appt = await self._find_appointment(fallback, context)
         if appt is None:
             return {"status": "not_found", "message": "No encontré una cita agendada para reagendar."}
 
@@ -903,6 +932,13 @@ class CalendarSkill(BaseSkill):
             client_rows = await self._client_appointments(arguments, context, upcoming_only=True)
             wanted = set(event_ids) | ({single_id} if single_id else set())
             rows = [r for r in client_rows if (r.google_event_id in wanted) or (str(r.id) in wanted)]
+            if not rows:
+                # Fallback (bug post-prueba 2026-10-05): el `event_id` pudo ser
+                # inventado o viejo (p. ej. arrastrado del historial). En vez de
+                # fallar, se busca la cita del cliente por conversación/título/email.
+                fallback = {k: v for k, v in arguments.items() if k not in ("event_id", "event_ids")}
+                appt = await self._find_appointment(fallback, context)
+                rows = [appt] if appt else []
         else:
             appt = await self._find_appointment(arguments, context)
             rows = [appt] if appt else []

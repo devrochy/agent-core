@@ -4,7 +4,7 @@
     {
       "id": "agendamiento",
       "label": "Agendamiento de citas",
-      "purpose": "Consultar la disponibilidad real (free_slots) y crear la cita cuando el cliente confirme fecha y hora. Si el negocio ofrece varios servicios, elegir el tipo de cita. El correo de confirmación lo envía el servidor automáticamente: no hace falta mandarlo aparte.",
+      "purpose": "Consultar la disponibilidad real (free_slots) y crear la cita cuando el cliente confirme fecha y hora. Antes de crear, pedí el email del cliente si no lo tenés (es obligatorio para la confirmación). Si el negocio ofrece varios servicios, elegir el tipo de cita. El correo de confirmación lo envía el servidor automáticamente: no hace falta mandarlo aparte.",
       "pack": "pack_calendar",
       "tools": [
         "check_availability",

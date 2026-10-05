@@ -90,7 +90,12 @@ async def test_flujo_calendario_interno() -> None:
 
         # Crear una cita a las 10:00 (sin Google).
         created = await skill.create_event(
-            {"title": "Demo con Laura", "start_datetime": f"{FECHA}T10:00:00"}, ctx
+            {
+                "title": "Demo con Laura",
+                "start_datetime": f"{FECHA}T10:00:00",
+                "attendee_email": "laura@ejemplo.com",
+            },
+            ctx,
         )
         assert created["status"] == "created"
         assert created["event_id"]
@@ -253,24 +258,28 @@ async def test_create_event_rechaza_solapamiento_y_pasado() -> None:
 
     async with tenant_scope(tenant_id):
         first = await skill.create_event(
-            {"title": "Demo 1", "start_datetime": f"{FECHA}T10:00:00"}, ctx
+            {"title": "Demo 1", "start_datetime": f"{FECHA}T10:00:00", "attendee_email": "d1@ejemplo.com"},
+            ctx,
         )
         assert first["status"] == "created"
 
         choque = await skill.create_event(
-            {"title": "Demo 2", "start_datetime": f"{FECHA}T10:00:00"}, ctx
+            {"title": "Demo 2", "start_datetime": f"{FECHA}T10:00:00", "attendee_email": "d2@ejemplo.com"},
+            ctx,
         )
         assert choque["status"] == "rejected"
         assert choque["reason"] == "occupied"
         assert (await skill.list_appointments({}, ctx))["total"] == 1
 
         fuera = await skill.create_event(
-            {"title": "Demo 3", "start_datetime": f"{FECHA}T22:00:00"}, ctx
+            {"title": "Demo 3", "start_datetime": f"{FECHA}T22:00:00", "attendee_email": "d3@ejemplo.com"},
+            ctx,
         )
         assert fuera["reason"] in ("outside_hours", "in_past")
 
         pasado = await skill.create_event(
-            {"title": "Demo 4", "start_datetime": "2020-01-01T10:00:00"}, ctx
+            {"title": "Demo 4", "start_datetime": "2020-01-01T10:00:00", "attendee_email": "d4@ejemplo.com"},
+            ctx,
         )
         assert pasado["reason"] == "in_past"
 
@@ -379,3 +388,101 @@ async def test_block_patch_api(app_client) -> None:
     })
     assert r.status_code == 200, r.text
     assert r.json()["reason"] == "Almuerzo largo"
+
+
+async def test_create_sin_email_pide_datos_y_no_crea() -> None:
+    """Corrección post-prueba: sin email la tool NO crea y devuelve needs_data."""
+    from pack_calendar.skills import CalendarSkill
+
+    from core.shared.tenant import tenant_scope
+
+    tenant_id = await _tenant_calendario()
+    await _configurar(tenant_id)
+    skill = CalendarSkill()
+    ctx = _contexto()
+
+    async with tenant_scope(tenant_id):
+        res = await skill.create_event(
+            {"title": "Demo sin email", "start_datetime": f"{FECHA}T10:00:00"}, ctx
+        )
+        assert res["status"] == "needs_data"
+        assert "attendee_email" in res["missing"]
+        assert res.get("error")
+        # No se persistió nada.
+        assert (await skill.list_appointments({}, ctx))["total"] == 0
+
+        # Email inválido también pide el dato.
+        malo = await skill.create_event(
+            {"title": "Demo email malo", "start_datetime": f"{FECHA}T10:00:00", "attendee_email": "no-es-email"},
+            ctx,
+        )
+        assert malo["status"] == "needs_data"
+
+        # Con email válido sí crea.
+        ok = await skill.create_event(
+            {"title": "Demo con email", "start_datetime": f"{FECHA}T10:00:00", "attendee_email": "ok@ejemplo.com"},
+            ctx,
+        )
+        assert ok["status"] == "created"
+
+
+async def test_cancel_con_event_id_invalido_usa_fallback() -> None:
+    """Corrección post-prueba: un event_id inventado no impide cancelar; el
+    sistema busca la cita del cliente por la conversación."""
+    from pack_calendar.skills import CalendarSkill
+
+    from core.shared.tenant import tenant_scope
+
+    tenant_id = await _tenant_calendario()
+    await _configurar(tenant_id)
+    skill = CalendarSkill()
+    ctx = _contexto()
+
+    async with tenant_scope(tenant_id):
+        created = await skill.create_event(
+            {
+                "title": "Demo a cancelar",
+                "start_datetime": f"{FECHA}T11:00:00",
+                "attendee_email": "cancel@ejemplo.com",
+            },
+            ctx,
+        )
+        assert created["status"] == "created"
+
+        res = await skill.cancel_event(
+            {"event_id": "deadbeef-0000-0000-0000-000000000001"}, ctx
+        )
+        assert res["status"] == "cancelled", res
+        assert (await skill.list_appointments({}, ctx))["total"] == 0
+
+
+async def test_update_con_event_id_invalido_usa_fallback() -> None:
+    """Corrección post-prueba: un event_id inventado no impide reagendar."""
+    from pack_calendar.skills import CalendarSkill
+
+    from core.shared.tenant import tenant_scope
+
+    tenant_id = await _tenant_calendario()
+    await _configurar(tenant_id)
+    skill = CalendarSkill()
+    ctx = _contexto()
+
+    async with tenant_scope(tenant_id):
+        created = await skill.create_event(
+            {
+                "title": "Demo a mover",
+                "start_datetime": f"{FECHA}T12:00:00",
+                "attendee_email": "mover@ejemplo.com",
+            },
+            ctx,
+        )
+        assert created["status"] == "created"
+
+        res = await skill.update_event(
+            {
+                "start_datetime": f"{FECHA}T13:00:00",
+                "event_id": "deadbeef-0000-0000-0000-000000000002",
+            },
+            ctx,
+        )
+        assert res["status"] == "updated", res
