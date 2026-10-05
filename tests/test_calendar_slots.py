@@ -168,3 +168,16 @@ def test_plantilla_con_placeholder_desconocido_no_rompe() -> None:
     assert _render_template("Hola {cliente}: {link}", cliente="Laura", link="https://x") == "Hola Laura: https://x"
     # Un placeholder que el negocio escribió mal queda literal en vez de tumbar el aviso.
     assert _render_template("Tu cita {titulo} {fechaa}", titulo="Demo") == "Tu cita Demo {fechaa}"
+
+
+def test_cuando_local_de_una_cita_en_utc() -> None:
+    """E2E HU-CAL-06: la tool devolvía UTC y el modelo leyó mal el día. El dato
+    va en la zona del negocio y con la fecha escrita."""
+    from pack_calendar.skills import _local_when
+
+    when = _local_when(datetime(2026, 10, 8, 20, 0, tzinfo=ZoneInfo("UTC")), ZoneInfo("America/Bogota"))
+    assert when == {
+        "start": "2026-10-08T15:00:00-05:00",
+        "fecha": "jueves 8 de octubre de 2026",
+        "hora": "15:00",
+    }

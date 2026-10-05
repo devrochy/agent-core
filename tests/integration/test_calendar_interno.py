@@ -880,3 +880,31 @@ async def test_disponibilidad_no_ve_citas_de_otro_negocio() -> None:
 
     async with tenant_scope(tenant_b):
         assert "10:00" in (await CalendarSkill().check_availability({"date": FECHA}, _contexto()))["free_slots"]
+
+
+async def test_listado_devuelve_hora_local_y_fecha_escrita() -> None:
+    """E2E HU-CAL-06: `list_client_appointments` devolvía UTC y el asistente dijo
+    "7 de octubre" para una cita del jueves 8. Ahora la hora va en la zona del
+    negocio con la fecha escrita."""
+    from pack_calendar.skills import CalendarSkill
+
+    from core.shared.tenant import tenant_scope
+
+    tenant_id = await _tenant_calendario()
+    await _configurar(tenant_id)
+    ctx = _contexto()
+    await _seed_email(tenant_id, ctx.conversation_id, "rob@ejemplo.com")
+    async with tenant_scope(tenant_id):
+        skill = CalendarSkill()
+        created = await skill.create_event(
+            {"title": "Demo Rob", "start_datetime": f"{FECHA}T15:00:00", "attendee_email": "rob@ejemplo.com"},
+            ctx,
+        )
+        assert created["fecha"] == "lunes 15 de marzo de 2027"
+        assert created["hora"] == "15:00"
+        listed = await skill.list_appointments({}, ctx)
+
+    cita = listed["appointments"][0]
+    assert cita["start"] == f"{FECHA}T15:00:00-05:00"
+    assert cita["fecha"] == "lunes 15 de marzo de 2027"
+    assert cita["hora"] == "15:00"
