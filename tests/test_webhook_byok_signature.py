@@ -266,6 +266,29 @@ async def test_la_alerta_de_firma_ajena_sale_una_vez_por_ventana(monkeypatch) ->
     await webhooks._alert_on_firma_ajena(webhooks.Firmantes.de_negocio(b), [c])
     assert len(alertas) == 2
 
+    # Otro firmante sobre el mismo afectado es otro par: su alerta no queda silenciada.
+    await webhooks._alert_on_firma_ajena(webhooks.Firmantes.de_negocio(c), [a])
+    assert len(alertas) == 3
+
+
+async def test_si_redis_falla_la_alerta_de_firma_ajena_sale_igual(monkeypatch) -> None:
+    """El dedupe es para no inundar el canal; sin Redis se prefiere alertar de más."""
+    alertas: list[str] = []
+
+    class RedisCaido:
+        async def set(self, *_a, **_k):
+            raise ConnectionError("redis caído")
+
+    async def fake_alert(title, _body, *, severity):
+        alertas.append(title)
+
+    monkeypatch.setattr(webhooks, "get_redis", lambda: RedisCaido())
+    monkeypatch.setattr("core.shared.alerts.send_alert", fake_alert)
+
+    await webhooks._alert_on_firma_ajena(webhooks.Firmantes.de_negocio(uuid.uuid4()), [uuid.uuid4()])
+
+    assert alertas == ["Un negocio firmó eventos de otro"]
+
 
 async def test_un_payload_que_no_es_objeto_se_ignora(monkeypatch) -> None:
     """Un JSON válido que no es un objeto (una lista, un número) no debe reventar el

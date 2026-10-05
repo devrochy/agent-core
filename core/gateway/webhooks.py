@@ -245,14 +245,20 @@ async def _alert_on_firma_ajena(firmantes: Firmantes, ajenos: list[uuid.UUID]) -
         primera_vez = await get_redis().set(
             f"webhook_firma_ajena:{firmantes_ids}:{ajenos_ids}", "1", nx=True, ex=_FIRMA_AJENA_VENTANA_S
         )
-        if primera_vez:
-            await send_alert(
-                "Un negocio firmó eventos de otro",
-                f"Llegaron eventos de {ajenos_ids} firmados con el secreto de {firmantes_ids}: no se "
-                "procesaron. Puede ser un intento de inyección o una WABA suscrita a la app de otro "
-                "negocio (ADR-0096).",
-                severity="critical",
-            )
+    except Exception:
+        # Sin Redis no hay dedupe: mejor alertar de más que callar un intento de inyección.
+        log.exception("webhook_alerta_firma_ajena_sin_redis")
+        primera_vez = True
+    if not primera_vez:
+        return
+    try:
+        await send_alert(
+            "Un negocio firmó eventos de otro",
+            f"Llegaron eventos de {ajenos_ids} firmados con el secreto de {firmantes_ids}: no se "
+            "procesaron. Puede ser un intento de inyección o una WABA suscrita a la app de otro "
+            "negocio (ADR-0096).",
+            severity="critical",
+        )
     except Exception:
         log.exception("webhook_alerta_firma_ajena_fallo")
 

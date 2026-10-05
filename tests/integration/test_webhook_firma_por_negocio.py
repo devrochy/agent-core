@@ -276,12 +276,12 @@ async def test_un_negocio_no_puede_cambiar_una_plantilla_de_otro(app_client, por
     assert await _estado_plantilla(tenant_a, fila_a) == "APPROVED"
 
 
-async def _mensaje_enviado(tid: uuid.UUID) -> tuple[uuid.UUID, str]:
+async def _mensaje_enviado(tid: uuid.UUID, wamid: str | None = None) -> tuple[uuid.UUID, str]:
     from core.db.models import Conversation, Customer, Message
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
-    wamid = f"wamid.{uniq('enviado')}"
+    wamid = wamid or f"wamid.{uniq('enviado')}"
     async with tenant_scope(tid):
         async with get_session() as session:
             customer = Customer(tenant_id=tid, channel="whatsapp", external_id=uniq("wa"))
@@ -343,6 +343,32 @@ async def test_un_negocio_no_puede_cambiar_el_estado_de_un_mensaje_de_otro(app_c
     assert await _estado_y_costos(tenant_b, msg_b, wamid_b) == ("delivered", 1)
     assert await _estado_y_costos(tenant_a, msg_a, wamid_a) == ("sent", 0)
     assert (await _estado_y_costos(tenant_b, msg_b, wamid_a))[1] == 0
+
+
+async def test_el_mismo_wamid_en_dos_negocios_solo_avanza_el_del_negocio_de_la_entry(app_client) -> None:
+    """El wamid solo es único por negocio y `resolve_tenant_for_message` hace `LIMIT 1`:
+    si decidiera él, el estado legítimo de B podía caer en A o descartarse."""
+    waba_b, phone_b = uniq("waba-b"), uniq("phone-b")
+    tenant_a = await _negocio("dup-a", waba_id=uniq("waba-a"), phone=uniq("phone-a"))
+    tenant_b = await _negocio("dup-b", waba_id=waba_b, phone=phone_b, app_secret="secreto-dup-b")
+    wamid = f"wamid.{uniq('compartido')}"
+    msg_a, _ = await _mensaje_enviado(tenant_a, wamid)
+    msg_b, _ = await _mensaje_enviado(tenant_b, wamid)
+
+    estado = {
+        "field": "messages",
+        "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {"phone_number_id": phone_b},
+            "statuses": [{"id": wamid, "status": "read", "timestamp": "1900000000",
+                          "pricing": {"billable": True, "pricing_model": "CBP", "category": "utility"}}],
+        },
+    }
+    r = await _post(app_client, [{"id": waba_b, "changes": [estado]}], "secreto-dup-b")
+
+    assert r.status_code == 200, r.text
+    assert await _estado_y_costos(tenant_b, msg_b, wamid) == ("read", 1)
+    assert await _estado_y_costos(tenant_a, msg_a, wamid) == ("sent", 0)
 
 
 # ------------------------------------------------------------------ cron de "worker caído"

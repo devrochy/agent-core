@@ -140,3 +140,35 @@ async def test_status_de_un_mensaje_de_otro_negocio_no_lo_toca(monkeypatch):
     )
 
     assert avisos == ["status_update_de_otro_negocio"]
+
+
+@pytest.mark.asyncio
+async def test_el_negocio_lo_da_la_entry_no_el_resolvedor(monkeypatch):
+    """El mismo wamid puede existir en A y en B, y `resolve_tenant_for_message` hace
+    `LIMIT 1`: aunque diga A, el estado de la entry de B se busca y se aplica en B."""
+    import uuid
+
+    from core.shared.tenant import get_current_tenant_id
+
+    tenant_a, tenant_b = uuid.uuid4(), uuid.uuid4()
+    row = _message(status="sent", tenant_id=tenant_b)
+    consultas: list[tuple[object, str]] = []
+
+    class SesionQueAnota(FakeSession):
+        async def execute(self, stmt, *a, **k):
+            consultas.append((get_current_tenant_id(), str(stmt.whereclause)))
+            return FakeResult(self._row)
+
+    async def resolvedor_dice_a(_external_message_id):
+        return tenant_a
+
+    monkeypatch.setattr(status_mod, "_resolve_tenant_for_message", resolvedor_dice_a)
+    monkeypatch.setattr(status_mod, "get_session", lambda: SesionQueAnota(row))
+
+    await apply_status_update(
+        {"id": "wamid-1", "status": "delivered", "timestamp": "2000000000"}, expected_tenant_id=tenant_b
+    )
+
+    assert row.status == "delivered"
+    assert [scope for scope, _ in consultas] == [tenant_b]
+    assert "messages.tenant_id" in consultas[0][1]
