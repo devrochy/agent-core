@@ -10989,7 +10989,7 @@
           "pack · calendario"
         ],
         "summary": "Oauth Start",
-        "description": "Inicia el OAuth2 de Google (302 a accounts.google.com).",
+        "description": "Inicia el OAuth2 de Google (302 a accounts.google.com).\n\nDeja dos cookies httponly que el panel reenvía al navegador: `oauth_state`\n(anti-CSRF, D-SPEC-24-12) y `oauth_next` (a dónde volver). El retorno de Google\nentra por la ruta BFF del panel (D-SPEC-24-11, ADR-0093).",
         "operationId": "oauth_start_api_v1_pack_calendar_oauth_start_get",
         "parameters": [
           {
@@ -11047,7 +11047,7 @@
           "pack · calendario"
         ],
         "summary": "Oauth Callback",
-        "description": "Vuelve de Google: intercambia el código, guarda los tokens y regresa al panel.\n\nEl navegador llega desde Google (sin la cookie de sesión del panel), así que la\nautenticación se apoya en la cookie `oauth_next` que dejó `/oauth/start` (ya\nautenticado): sin ella no se procesa nada.",
+        "description": "Vuelve de Google (vía la ruta BFF del panel): valida el `state`, intercambia\nel código, guarda los tokens en la conexión del negocio y regresa al panel.\n\nExige sesión (el BFF reenvía la del usuario): así el negocio es el del\nprincipal y no se puede guardar una cuenta en otro (HU-CAL-07). Sin `state`\no con un `state` distinto al de la cookie, no se intercambia nada (CSRF).",
         "operationId": "oauth_callback_api_v1_pack_calendar_oauth_callback_get",
         "parameters": [
           {
@@ -11061,6 +11061,16 @@
             }
           },
           {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "State"
+            }
+          },
+          {
             "name": "error",
             "in": "query",
             "required": false,
@@ -11068,6 +11078,22 @@
               "type": "string",
               "default": "",
               "title": "Error"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
             }
           }
         ],

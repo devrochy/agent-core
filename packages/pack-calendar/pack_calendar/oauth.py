@@ -6,11 +6,13 @@ una ventana de compatibilidad se sigue escribiendo/leyendo también la copia vie
 en `plugin_configs` (clave `_oauth_tokens`), sin backfill: cada tenant reconcilia
 la próxima vez que se guarda.
 
-Flujo:
-1. Admin abre /admin/plugins/pack_calendar/oauth -> redirect a Google.
-2. Google redirige a /admin/plugins/pack_calendar/oauth/callback?code=...
-3. Se intercambia el code por access_token + refresh_token y se persisten
-   (conexión + copia en plugin_configs).
+Flujo (HU-CAL-07, ADR-0093):
+1. El panel llama a la API `/api/v1/pack/calendar/oauth/start` (autenticado), que
+   deja la cookie `oauth_state` y redirige a Google con `state` y el retorno del panel.
+2. Google redirige a `<panel>/api/calendar/oauth/callback?code=...&state=...`; la
+   ruta BFF del panel llama a la API `/oauth/callback` con la sesión y el negocio.
+3. La API valida el `state`, intercambia el code por access_token + refresh_token
+   y los persiste (conexión + copia en plugin_configs).
 4. get_access_token() lee de la conexión (con fallback a plugin_configs) y
    refresca automáticamente cuando expira.
 """
@@ -47,12 +49,19 @@ def redirect_uri() -> str:
     return f"{get_settings().public_base_url}/admin/plugins/{PLUGIN_ID}/oauth/callback"
 
 
-def api_redirect_uri() -> str:
-    """Callback servido por la API (`/api/v1`), que es la superficie vigente."""
-    return f"{get_settings().public_base_url}/api/v1/pack/{PLUGIN_ID}/oauth/callback"
+def panel_redirect_uri() -> str:
+    """Retorno de Google: la ruta BFF del panel (D-SPEC-24-11, ADR-0093).
+
+    En los entornos con túnel, todo `/api/v1/*` lo atiende el panel; el retorno
+    entra por el panel, que trae la sesión y el negocio del usuario y llama a la API.
+    Es la URI que cada negocio registra en su Google Cloud Console.
+    """
+    settings = get_settings()
+    base = (settings.panel_base_url or settings.public_base_url).rstrip("/")
+    return f"{base}/api/calendar/oauth/callback"
 
 
-def build_authorization_url(client_id: str, *, redirect: str | None = None) -> str:
+def build_authorization_url(client_id: str, *, redirect: str | None = None, state: str = "") -> str:
     params = {
         "client_id": client_id,
         "redirect_uri": redirect or redirect_uri(),
@@ -61,6 +70,8 @@ def build_authorization_url(client_id: str, *, redirect: str | None = None) -> s
         "access_type": "offline",   # imprescindible para recibir refresh_token
         "prompt": "consent",
     }
+    if state:
+        params["state"] = state  # anti-CSRF (D-SPEC-24-12)
     return f"{AUTH_URL}?{urlencode(params)}"
 
 

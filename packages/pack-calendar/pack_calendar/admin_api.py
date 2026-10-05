@@ -942,15 +942,28 @@ async def _timezone_name() -> str:
     return getattr(config, "timezone", None) or "America/Bogota"
 
 
+# Cookies del flujo OAuth (HU-CAL-07): el `state` anti-CSRF y el destino de vuelta.
+_OAUTH_STATE_COOKIE = "oauth_state"
+_OAUTH_NEXT_COOKIE = "oauth_next"
+_OAUTH_COOKIE_MAX_AGE = 600
+
+
 @router.get("/oauth/start", status_code=302)
 async def oauth_start(
     principal: Annotated[Principal, Depends(require("pack_calendar:conexion", write=True))],
     next: str = "/calendario",
 ) -> Response:
-    """Inicia el OAuth2 de Google (302 a accounts.google.com)."""
+    """Inicia el OAuth2 de Google (302 a accounts.google.com).
+
+    Deja dos cookies httponly que el panel reenvía al navegador: `oauth_state`
+    (anti-CSRF, D-SPEC-24-12) y `oauth_next` (a dónde volver). El retorno de Google
+    entra por la ruta BFF del panel (D-SPEC-24-11, ADR-0093).
+    """
+    import secrets
+
     from fastapi.responses import RedirectResponse
 
-    from pack_calendar.oauth import api_redirect_uri, build_authorization_url
+    from pack_calendar.oauth import build_authorization_url, panel_redirect_uri
 
     config = await _calendar_config()
     if config is None or not (getattr(config, "client_id", "") or "").strip():
@@ -958,54 +971,68 @@ async def oauth_start(
             "Configura las credenciales de Google del pack de Calendario antes de conectar.",
             "not_configured",
         )
-    destino = next if next.startswith("/") else "/calendario"
+    destino = next if next.startswith("/") and not next.startswith("//") else "/calendario"
+    state = secrets.token_urlsafe(32)
     respuesta = RedirectResponse(
-        build_authorization_url(config.client_id, redirect=api_redirect_uri()), status_code=302
+        build_authorization_url(config.client_id, redirect=panel_redirect_uri(), state=state),
+        status_code=302,
     )
-    respuesta.set_cookie("oauth_next", destino, max_age=600, httponly=True, samesite="lax", path="/")
+    for nombre, valor in ((_OAUTH_STATE_COOKIE, state), (_OAUTH_NEXT_COOKIE, destino)):
+        respuesta.set_cookie(
+            nombre, valor, max_age=_OAUTH_COOKIE_MAX_AGE, httponly=True, samesite="lax", path="/"
+        )
     return respuesta
 
 
 @router.get("/oauth/callback", status_code=302)
 async def oauth_callback(
     request: Request,
+    principal: Annotated[Principal, Depends(require("pack_calendar:conexion", write=True))],
     code: str = "",
+    state: str = "",
     error: str = "",
 ) -> Response:
-    """Vuelve de Google: intercambia el código, guarda los tokens y regresa al panel.
+    """Vuelve de Google (vía la ruta BFF del panel): valida el `state`, intercambia
+    el código, guarda los tokens en la conexión del negocio y regresa al panel.
 
-    El navegador llega desde Google (sin la cookie de sesión del panel), así que la
-    autenticación se apoya en la cookie `oauth_next` que dejó `/oauth/start` (ya
-    autenticado): sin ella no se procesa nada.
+    Exige sesión (el BFF reenvía la del usuario): así el negocio es el del
+    principal y no se puede guardar una cuenta en otro (HU-CAL-07). Sin `state`
+    o con un `state` distinto al de la cookie, no se intercambia nada (CSRF).
     """
+    import hmac
+
     from fastapi.responses import RedirectResponse
 
     from core.shared.logger import get_logger
-    from pack_calendar.oauth import api_redirect_uri, exchange_code, save_tokens
+    from pack_calendar import oauth
 
     log = get_logger(__name__)
-    marcador = request.cookies.get("oauth_next")
-    if not marcador:
-        # Nadie inició el flujo desde el panel: no se procesa el código.
-        return RedirectResponse(f"{_panel_base()}/calendario?google=error", status_code=302)
-    destino = marcador if marcador.startswith("/") else "/calendario"
+    marcador = request.cookies.get(_OAUTH_NEXT_COOKIE) or ""
+    destino = marcador if marcador.startswith("/") and not marcador.startswith("//") else "/calendario"
 
     def volver(estado: str) -> RedirectResponse:
-        return RedirectResponse(f"{_panel_base()}{destino}?google={estado}", status_code=302)
+        respuesta = RedirectResponse(f"{_panel_base()}{destino}?google={estado}", status_code=302)
+        for nombre in (_OAUTH_STATE_COOKIE, _OAUTH_NEXT_COOKIE):
+            respuesta.delete_cookie(nombre, path="/")
+        return respuesta
 
+    esperado = request.cookies.get(_OAUTH_STATE_COOKIE) or ""
+    if not esperado or not state or not hmac.compare_digest(esperado, state):
+        log.warning("calendar_oauth_state_invalido", tenant_id=str(principal.tenant_id))
+        return volver("error")
     if error or not code:
         return volver("cancelado")
     config = await _calendar_config()
     if config is None:
         return volver("error")
     try:
-        tokens = await exchange_code(
+        tokens = await oauth.exchange_code(
             config.client_id,
             config.client_secret.get_secret_value(),
             code,
-            redirect=api_redirect_uri(),
+            redirect=oauth.panel_redirect_uri(),
         )
-        await save_tokens(tokens)
+        await oauth.save_tokens(tokens)
     except Exception:
         log.exception("calendar_oauth_exchange_failed")
         return volver("error")

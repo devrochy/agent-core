@@ -12,6 +12,20 @@ HU-CAL-01/02/03.
   (`pack_calendar_appointments`, `pack_calendar_blocks`). No requiere Google.
 - **`google`**: crea/mueve/borra el evento en Google Calendar y lo espeja local.
 
+### Conectar Google (HU-CAL-07, ADR-0093)
+
+1. Calendario → Conexión: cargar `client_id` y `client_secret` del cliente OAuth de Google
+   (Google Cloud Console → APIs y servicios → Credenciales).
+2. En ese cliente OAuth, agregar en **URIs de redireccionamiento autorizados** la URI del panel del
+   entorno: `https://test.solvershub.site/api/calendar/oauth/callback` (test) o
+   `<PANEL_BASE_URL>/api/calendar/oauth/callback` (producción). Exacta, con `https` y sin barra final.
+3. Con el calendario todavía en `source = interno`, pulsar **Conectar con Google**, autorizar y volver
+   a Calendario (`?google=ok`). Recién entonces cambiar a `source = google`: en modo `google` sin
+   conexión activa, el asistente no tiene tools de agenda (ADR-0072).
+
+El retorno de Google entra por el panel, que llama a la API con la sesión y el negocio; la API valida
+un `state` anti-CSRF y guarda los tokens en la conexión del negocio (ADR-0070).
+
 En modo interno, la disponibilidad se calcula contra el **horario de atención**
 (`business_hours`) menos las citas agendadas y los bloqueos.
 

@@ -100,3 +100,4 @@ Se crean con `/adr`.
 | [0090](0090-reclamo-pendientes-claim-con-estado.md) | Reclamo automático de pendientes y claim de idempotencia con estado (HU-ARCH-06) | aceptado |
 | [0091](0091-fecha-actual-y-zona-horaria-del-negocio.md) | Fecha actual en el prompt y zona horaria del negocio (HU-CAL-04) | aceptado |
 | [0092](0092-fallo-de-guardrail-neutral-configurable.md) | Fallo de guardrail con respuesta neutral configurable (HU-CAL-04) | aceptado |
+| [0093](0093-callback-oauth-google-en-el-panel.md) | El retorno OAuth de Google Calendar entra por el panel (supersede parcial de ADR-0070, HU-CAL-07) | aceptado |
