@@ -113,7 +113,12 @@ _CLAIMS: dict[str, _Claim] = {
         affirm=re.compile(
             r"no\s+ten\w*\s+(?:ninguna\s+|ningunas\s+)?citas?\s+agendadas|"
             r"ten\w*\s+\d+\s+(?:citas?|demos?)\s+agendadas|"
-            r"no\s+(?:me\s+)?(?:aparece|figura|encontr\w+).{0,50}(?:citas?|demo)",
+            r"no\s+(?:me\s+)?(?:aparece|figura|encontr\w+).{0,50}(?:citas?|demo)|"
+            # E2E HU-CAL-06: enumeró citas de memoria sin listar.
+            r"\b(?:estas|esta)\s+(?:son|es)\s+tus\s+(?:citas|demos)\b|"
+            r"\btus\s+(?:citas|demos)\s+(?:agendadas|activas|programadas)|"
+            r"\b(?:es\s+)?la\s+[úu]nica\s+(?:cita\s+|demo\s+)?(?:activa|agendada|programada)|"
+            r"\bten[ée]s\s+(?:una\s+sola|solo\s+una|s[óo]lo\s+\d+|\d+)\s+(?:citas?|demos?)",
             re.IGNORECASE,
         ),
     ),
@@ -125,7 +130,11 @@ _CLAIMS: dict[str, _Claim] = {
         affirm=re.compile(
             r"ten[ée]s\s+(?:una\s+|tu\s+)?(?:demo|cita)\s+agendad|"
             r"ya\s+ten[ée]s\s+(?:una\s+|tu\s+)?(?:demo|cita)|"
-            r"figura\s+agendad|aparece\s+agendad",
+            r"figura\s+agendad|aparece\s+agendad|"
+            # E2E HU-CAL-06: describir una cita ("tu demo está agendada para el
+            # jueves") también es afirmar su estado.
+            r"\btu\s+(?:demo|cita)\s+(?:est[áa]|sigue)\s+(?:agendad|programad|para\s+el)|"
+            r"\btu\s+(?:demo|cita)\s+es\s+(?:el|este|esta|ma[ñn]ana|hoy)\b",
             re.IGNORECASE,
         ),
     ),
@@ -147,6 +156,8 @@ _COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
 # Acciones cuyo resultado trae `email_sent` (correo determinista, HU-CAL-02).
 _EMAILING_TOOLS = frozenset({"create_calendar_event", "update_calendar_event", "cancel_calendar_event"})
 _DONT_MENTION = " Reescribí tu respuesta para el cliente sin mencionar esta instrucción."
+# Una pregunta en español va entre "¿" y "?": se descarta antes de buscar afirmaciones.
+_QUESTION = re.compile(r"¿[^¿?]*\?")
 
 
 def _of(results: list[dict[str, Any]], *names: str) -> list[dict[str, Any]]:
@@ -171,7 +182,13 @@ def _affirmation_backed(label: str, results: list[dict[str, Any]]) -> bool:
         return any(r.get("_ok") for r in _of(results, "send_email")) or any(
             r.get("email_sent") is True for r in _of(results, *_EMAILING_TOOLS)
         )
-    return _listed_ok(results)  # listado / cita_existente
+    if label == "cita_existente":
+        # Describir la cita que se acaba de crear o mover en este turno está respaldado.
+        return _listed_ok(results) or any(
+            r.get("status") in ("created", "updated")
+            for r in _of(results, "create_calendar_event", "update_calendar_event")
+        )
+    return _listed_ok(results)  # listado
 
 
 def _denial_backed(label: str, results: list[dict[str, Any]]) -> bool:
@@ -356,10 +373,12 @@ class GoogleCalendarModule(BaseModule):
         `rejected` o un cancel `not_found` no respaldan "quedó agendada/cancelada".
         """
         current = [r for r in tool_results if isinstance(r, dict) and r.get("_current_turn")]
+        # Las preguntas ("¿Querés que revise tus citas agendadas?") no afirman nada.
+        statements = _QUESTION.sub(" ", response_text)
         claims = await self._resolved_completion_claims()
         for label, claim in claims.items():
             if label in _COMPLETION_CLAIMS and claim is _COMPLETION_CLAIMS[label]:
-                verdict = _builtin_verdict(label, response_text, current)
+                verdict = _builtin_verdict(label, statements, current)
                 if verdict is not None:
                     return verdict
                 continue

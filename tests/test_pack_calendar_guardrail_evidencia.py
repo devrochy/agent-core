@@ -216,3 +216,49 @@ async def test_todo_reintento_pide_no_mencionar_la_instruccion():
     ):
         assert not verdict.passed
         assert "sin mencionar esta instrucción" in verdict.retry_instruction
+
+
+# ---------------------------------------------------------------- E2E HU-CAL-06
+# Frases reales del E2E en test (2026-10-05): el asistente enumeró citas de
+# memoria ("Estas son tus citas agendadas… 7 de octubre") sin llamar la tool.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Estas son tus citas agendadas, Robinson:\n1. Demo con Rob — 7 de octubre, 3:00 pm",
+        "Es la única activa por ahora. ¿Necesitás algo más?",
+        "Revisé tu agenda y tenés una sola cita agendada: el 7 de octubre.",
+        "Tu demo está agendada para el jueves 8 a las 3 pm.",
+        "Tu cita sigue programada para el jueves 8.",
+    ],
+)
+async def test_enumerar_o_describir_citas_sin_listar_bloquea(texto: str):
+    verdict = await _check(texto)
+    assert not verdict.passed, texto
+
+
+@pytest.mark.asyncio
+async def test_enumerar_citas_con_listado_pasa():
+    verdict = await _check(
+        "Estas son tus citas agendadas: 1. Demo con Rob — jueves 8 de octubre, 3:00 pm.",
+        _r("list_client_appointments", appointments=[{"index": 1}], total=1),
+    )
+    assert verdict.passed, verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_describir_la_cita_recien_creada_pasa():
+    """Tras crearla en el mismo turno, describirla no exige listar."""
+    verdict = await _check(
+        "¡Quedó agendada! Tu demo es el miércoles 7 de octubre a las 4:00 pm.",
+        _r("create_calendar_event", status="created", event_id="a-1", email_sent=True),
+    )
+    assert verdict.passed, verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_preguntar_si_revisa_las_citas_pasa():
+    verdict = await _check("¿Querés que revise tus citas agendadas?")
+    assert verdict.passed, verdict.reason

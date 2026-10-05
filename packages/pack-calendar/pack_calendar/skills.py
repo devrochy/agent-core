@@ -50,6 +50,20 @@ def _long_date(value: date) -> str:
     return f"{_WEEKDAY_NAMES[value.weekday()]} {value.day} de {_MONTH_NAMES[value.month - 1]} de {value.year}"
 
 
+def _local_when(value: datetime, tz: ZoneInfo) -> dict[str, str]:
+    """Cuándo es una cita, en la zona del negocio y con la fecha escrita.
+
+    E2E HU-CAL-06: la tool devolvía el inicio en UTC y el modelo dijo "7 de
+    octubre" para una cita del jueves 8; con el dato ya resuelto no hace cuentas.
+    """
+    local = value.astimezone(tz)
+    return {
+        "start": local.isoformat(),
+        "fecha": _long_date(local.date()),
+        "hora": local.strftime("%H:%M"),
+    }
+
+
 class _KeepUnknown(dict):
     """Deja literal un placeholder que no existe en vez de lanzar KeyError."""
 
@@ -700,7 +714,7 @@ class CalendarSkill(BaseSkill):
         return {
             "event_id": google_event_id or (str(appt_id) if appt_id else None),
             "status": "created",
-            "start": start.isoformat(),
+            **_local_when(start, tz),
             "email_sent": email_sent,
             "email_reason": email_reason,
             # SafeRenderer: el link exacto lo adjunta el core; no se expone `link`
@@ -859,15 +873,17 @@ class CalendarSkill(BaseSkill):
         return future[0] if future else rows[0]
 
     async def list_appointments(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        """Enumera las citas agendadas (futuras) del cliente, numeradas y con id."""
+        """Enumera las citas agendadas (futuras) del cliente, numeradas y con id,
+        con el inicio en la zona del negocio y la fecha escrita."""
         rows = await self._client_appointments(arguments, context, upcoming_only=True)
+        tz = ZoneInfo(await self._timezone_name())
         return {
             "appointments": [
                 {
                     "index": i + 1,
                     "event_id": r.google_event_id or str(r.id),
                     "title": r.title,
-                    "start": r.start_at.isoformat(),
+                    **_local_when(r.start_at, tz),
                 }
                 for i, r in enumerate(rows)
             ],
@@ -1077,7 +1093,7 @@ class CalendarSkill(BaseSkill):
         return {
             "status": "updated",
             "event_id": appt.google_event_id or str(appt.id),
-            "start": start.isoformat(),
+            **_local_when(start, tz),
             "notified": notified,
             "email_sent": email_sent,
             "email_reason": email_reason,
