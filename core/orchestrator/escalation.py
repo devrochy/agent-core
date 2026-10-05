@@ -66,6 +66,22 @@ async def escalate(conversation_id: uuid.UUID, reason: str, summary: str = "") -
         input_data={"reason": reason, "summary": summary},
     )
     await event_bus.emit(ON_ESCALATION_TRIGGERED, conversation_id=conversation_id, reason=reason)
+
+    # Push a los dueños del negocio (ADR-0099): fire-and-forget por Celery.
+    try:
+        from core.tasks.push_tasks import TITULO_ESCALACION, notify_owners_push
+
+        tenant = get_current_tenant_id()
+        if tenant is not None:
+            notify_owners_push.delay(
+                str(tenant),
+                TITULO_ESCALACION,
+                "Un cliente pidió atención humana y la conversación quedó escalada.",
+                {"type": "core.escalation", "conversationId": str(conversation_id), "reason": reason},
+            )
+    except Exception:
+        log.warning("push_escalacion_fallo", conversation_id=str(conversation_id), exc_info=True)
+
     log.info("conversation_escalated", conversation_id=str(conversation_id), reason=reason)
 
 

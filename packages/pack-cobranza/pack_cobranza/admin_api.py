@@ -16,17 +16,21 @@ from decimal import Decimal
 from math import asin, cos, radians, sin, sqrt
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 
 from core.admin.auth import hash_password
-from core.api.deps import Principal, require
+from core.api.deps import Principal, get_principal, require
 from core.api.errors import ApiError
 from core.db.models import Admin, Conversation, Escalation, TenantUser
 from core.db.session import get_owned, get_session
 from pack_cobranza.permisos import GESTOR_PERMISOS
 
+# Registra los providers de búsqueda global del pack (ADR-0096).
+from . import search as _search  # noqa: F401
+from . import sync as _sync  # noqa: F401
 from .models import (
     Abono,
     AuditoriaCartera,
@@ -3649,3 +3653,39 @@ async def decide_client_change(
             motivo=cambio.motivo_rechazo,
         )
         return _as_change(cambio)
+
+
+class GestorTokenRequest(BaseModel):
+    """Credenciales de dispositivo opcionales para el enforcement (ADR-0068)."""
+
+    imei: str | None = None
+    whatsapp: str | None = None
+
+
+@router.post("/gestor-token")
+async def gestor_token(
+    payload: GestorTokenRequest,
+    request: Request,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> JSONResponse:
+    """Sesión admin → par de tokens de campo del negocio activo (HU-APP-02, ADR-0098).
+
+    Reusa la lógica del login unificado de la API de campo (ADR-0081): resuelve
+    la membresía de campo del admin en el negocio activo (`X-Tenant-Id`) y emite
+    access/refresh con el enforcement de vinculación de dispositivo. El core no
+    conoce a los usuarios de campo; este endpoint vive en el pack.
+    """
+    from .api_gestor import _membresias_de_campo, _sesion_de_membresia
+
+    if principal.tenant_id is None:
+        raise ApiError(400, "sin_negocio", "Selecciona un negocio (X-Tenant-Id).")
+    membresias = await _membresias_de_campo(principal.admin, solo=principal.tenant_id)
+    if not membresias:
+        raise ApiError(403, "sin_acceso_campo", "Sin acceso de campo en este negocio.")
+    return await _sesion_de_membresia(
+        request,
+        principal.admin,
+        membresias[0],
+        payload.imei or "",
+        payload.whatsapp or "",
+    )

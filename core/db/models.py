@@ -457,6 +457,97 @@ class AdminSession(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class PasswordResetToken(Base):
+    """Código de recuperación de contraseña de un solo uso (ADR-0098).
+
+    Tabla de SISTEMA (sin RLS): infraestructura de identidad, se consulta sin
+    contexto de tenant (el admin pide recuperar su contraseña antes de elegir
+    negocio). Guarda solo el hash SHA-256 del código, nunca el código.
+    """
+
+    __tablename__ = "password_reset_tokens"
+    __table_args__ = (
+        Index("ix_password_reset_tokens_admin", "admin_id"),
+        Index("ix_password_reset_tokens_token_hash", "token_hash"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("admins.id"))
+    token_hash: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PushToken(Base):
+    """Token de push (Expo) de un dispositivo de la app oficial (ADR-0099).
+
+    Tabla de NEGOCIO: tenant_id + RLS forzada (invariante 1). La unicidad activa
+    es parcial: (tenant_id, token) WHERE deleted_at IS NULL; un re-registro
+    reactiva el mismo token en lugar de duplicarlo.
+    """
+
+    __tablename__ = "push_tokens"
+    __table_args__ = (
+        Index(
+            "uq_push_tokens_tenant_token",
+            "tenant_id",
+            "token",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index("ix_push_tokens_admin", "tenant_id", "admin_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    admin_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    provider: Mapped[str] = mapped_column(Text, default="expo")
+    token: Mapped[str] = mapped_column(Text)
+    platform: Mapped[str] = mapped_column(Text, default="android")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class MobileAuditEvent(Base):
+    """Auditoría de acciones críticas de la app oficial (ADR-0097, HU-APP-15).
+
+    Tabla de NEGOCIO: tenant_id + RLS forzada. Idempotente por
+    (tenant_id, event_id): la app reenvía eventos offline sin duplicar.
+    """
+
+    __tablename__ = "mobile_audit_events"
+    __table_args__ = (
+        Index(
+            "uq_mobile_audit_events_tenant_event",
+            "tenant_id",
+            "event_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index("ix_mobile_audit_events_admin", "tenant_id", "admin_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    admin_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    event_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    accion: Mapped[str] = mapped_column(Text, nullable=False)
+    entidad: Mapped[str] = mapped_column(Text, nullable=False)
+    entidad_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    device_id: Mapped[str | None] = mapped_column(Text)
+    ocurrido_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class AdminPermission(Base):
     """Permiso de sección de un admin (RBAC configurable, ADR-0047).
 

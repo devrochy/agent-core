@@ -19,6 +19,9 @@ from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.db.session import get_owned, get_session
 
+# Registra los providers de búsqueda global del pack (ADR-0096).
+from . import search as _search  # noqa: F401
+from . import sync as _sync  # noqa: F401
 from .models import Appointment, AppointmentType
 
 PLUGIN_ID = "pack_calendar"

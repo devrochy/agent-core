@@ -16,6 +16,16 @@
 - La alerta "Un negocio firmó eventos de otro" sale una vez cada 24 h por par; marcar un evento como procesado
   filtra por su negocio; un payload que no es un objeto JSON se ignora con 200.
 
+## Sin versión — Renumeración de migraciones y ADRs de la app (2026-10-05)
+
+- **CI de `develop` en rojo:** los PRs de la app (HU-APP-02/05/14/15) se mergearon con las migraciones `0051` y
+  `0052` que ya usaban HU-CONN-01 y ADR-0095, y `alembic upgrade head` fallaba por varias cabezas. Las de la app
+  pasan a ir después de las de Meta: `0053_password_reset_tokens`, `0054_push_tokens` y
+  `0055_mobile_audit_events`. Solo cambian los números y el orden: el esquema final es el mismo.
+- Los ADRs de la app que repetían número pasan al final: recuperación de contraseña y token de gestor a ADR-0098
+  (era 0094) y notificaciones push a ADR-0099 (era 0095). Búsqueda global (0096) y sync (0097) no cambian; los
+  cuatro entran al índice de `docs/adr/`.
+
 ## Sin versión — Un número o una WABA de Meta pertenecen a un solo negocio (ADR-0095, 2026-10-05)
 
 - **Seguridad (alto, preexistente):** un negocio podía registrar la WABA o el número de otro y recibir sus
