@@ -374,3 +374,30 @@ async def test_los_eventos_rechazados_no_cuentan_como_worker_caido() -> None:
         )
 
     assert await count_stalled_webhook_events() == antes
+
+
+async def test_marcar_procesado_no_toca_la_fila_de_otro_negocio() -> None:
+    """`meta_app_id` es el de la plataforma (el mismo para todos): un `external_id`
+    repetido por B no puede marcar como procesada la fila de A."""
+    from core.db.models import WebhookEvent
+    from core.db.session import get_session
+    from core.gateway.webhook_flatten import FlattenedEvent
+    from core.gateway.webhooks import _log_webhook_event, _mark_entry_processed
+
+    tenant_a = await _negocio("marca-a", waba_id=uniq("waba-a"), phone=uniq("phone-a"))
+    tenant_b = await _negocio("marca-b", waba_id=uniq("waba-b"), phone=uniq("phone-b"))
+    evento = FlattenedEvent(
+        object_type="whatsapp_business_account", field="messages", external_id=f"wamid.{uniq('de-a')}",
+        entry_id="waba", sub_id="phone", value={},
+    )
+    assert await _log_webhook_event("app-test", evento, tenant_id=tenant_a, process_error=None)
+
+    await _mark_entry_processed("app-test", tenant_b, [evento])
+    async with get_session() as session:
+        fila = (await session.execute(select(WebhookEvent).where(WebhookEvent.external_id == evento.external_id))).scalar_one()
+    assert fila.processed_at is None
+
+    await _mark_entry_processed("app-test", tenant_a, [evento])
+    async with get_session() as session:
+        fila = (await session.execute(select(WebhookEvent).where(WebhookEvent.external_id == evento.external_id))).scalar_one()
+    assert fila.processed_at is not None

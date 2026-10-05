@@ -33,7 +33,8 @@ escribe en un negocio distinto del de su grupo.
      manual → BYOK, sin caer al `.env`): autoriza solo a ese negocio. Un grupo en conflicto no aporta candidato.
 
    Sin plataforma ni negocio que verifique: 401, como hasta ahora. Sin ningún secreto contra el que verificar:
-   fail-closed (HU-ARCH-05), con el escape de test intacto.
+   fail-closed (HU-ARCH-05), con el escape de test intacto; un error al leer el secreto de un negocio cuenta como
+   "tiene secreto", así nunca habilita ese escape.
 2. **La puerta por grupo** (`_process_payload`, ahora con `firmantes` obligatorio). Tras resolver el negocio (conflicto
    → mismatch del slug → sin resolver), un grupo de un negocio que no firmó queda en `webhook_events` con
    `process_error="signature_tenant_mismatch"`, `signature_ok=False` y sin negocio, se loguea y se alerta (una vez por
@@ -45,7 +46,9 @@ escribe en un negocio distinto del de su grupo.
    evento se descarta con un aviso; si no, el scope y las consultas usan el negocio esperado. No se escribe la fila,
    ni un `MessageCost`, ni se manda la alerta de "plantilla rechazada" de otro negocio.
 4. **El cron de "worker caído"** (`count_stalled_webhook_events`) deja de contar las filas rechazadas
-   (`process_error` no nulo): nunca se marcan procesadas, y un negocio podía provocar el rechazo a voluntad.
+   (`process_error` no nulo): nunca se marcan procesadas, y un negocio podía provocar el rechazo a voluntad. Y
+   marcar un evento como procesado filtra por el negocio del grupo: un `external_id` repetido por B no marca la fila
+   de A.
 
 ## Alternativas consideradas
 
@@ -77,7 +80,7 @@ una sola vez por POST. El cron de salud deja de alertar en falso por eventos rec
 - Una fila rechazada puede ocupar de antemano el `external_id` de un evento legítimo en `webhook_events`
   (`ON CONFLICT DO NOTHING`; en plantillas es un hash del `value`). Solo se pierde la fila de auditoría, no el
   procesamiento; ya pasaba con los otros motivos de rechazo.
-- Messenger e Instagram solo los autoriza la plataforma (`resolve_own_app_secret` es de WhatsApp). Hoy no hay clientes.
+- Messenger e Instagram usan la misma regla con el secreto propio de WhatsApp del negocio (`resolve_own_app_secret`): autoriza solo sus propios grupos, nunca los de otro. Hoy no hay clientes.
 
 **Qué haría que revisáramos esto:** HU-CONN-05 (un secreto por conexión), filas `signature_tenant_mismatch` en
 producción que vengan de configuraciones legítimas, o que Meta empiece a mandar en el POST qué app lo firmó.

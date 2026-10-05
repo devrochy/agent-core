@@ -133,11 +133,11 @@ async def _rutear_grupos(payload: dict[str, Any]) -> list[_Grupo]:
     ]
 
 
-async def _secretos_propios(tenant_id: uuid.UUID) -> tuple[str, ...]:
+async def _secretos_propios(tenant_id: uuid.UUID) -> tuple[str, ...] | None:
     """Secretos propios del negocio (conexión manual o BYOK), sin el de la plataforma.
     El BYOK vive bajo RLS de tenant (custodia `meta_token_store`): se resuelve dentro de
     `tenant_scope` o la lectura no lo ve (bug real, 2026-09-29). Una tupla: con
-    HU-CONN-05 un negocio podrá tener un secreto por conexión."""
+    HU-CONN-05 un negocio podrá tener un secreto por conexión. `None` si no se pudo leer."""
     from core.gateway.connections import resolve_own_app_secret
 
     try:
@@ -145,7 +145,7 @@ async def _secretos_propios(tenant_id: uuid.UUID) -> tuple[str, ...]:
             propio = await resolve_own_app_secret(tenant_id)
     except Exception:
         log.exception("webhook_tenant_secret_failed", tenant_id=str(tenant_id))
-        return ()
+        return None
     return (propio,) if propio else ()
 
 
@@ -169,7 +169,12 @@ async def _firmantes_del_post(raw_body: bytes, firma: str, grupos: list[_Grupo])
     hay_secreto = bool(plataforma)
     negocios: set[uuid.UUID] = set()
     for tenant_id in candidatos:
-        for secreto in await _secretos_propios(tenant_id):
+        secretos = await _secretos_propios(tenant_id)
+        if secretos is None:
+            # No se pudo leer: puede que tenga secreto. Nunca habilita el escape sin firma.
+            hay_secreto = True
+            continue
+        for secreto in secretos:
             hay_secreto = True
             if verify_signature(raw_body, firma, secreto):
                 negocios.add(tenant_id)
@@ -482,7 +487,7 @@ async def _process_payload(
             # sin excepción -- es la señal que usa el check de "worker
             # caído" del cron de salud (`count_stalled_webhook_events`).
             # Antes de este ticket, `processed_at` no lo escribía nadie.
-            await _mark_entry_processed(meta_app_id, entry_events)
+            await _mark_entry_processed(meta_app_id, tenant_id, entry_events)
 
     if ajenos:
         await _alert_on_firma_ajena(firmantes, ajenos)
@@ -540,12 +545,18 @@ async def _log_webhook_event(
         return False
 
 
-async def _mark_entry_processed(meta_app_id: str, entry_events: list[FlattenedEvent]) -> None:
+async def _mark_entry_processed(
+    meta_app_id: str, tenant_id: uuid.UUID, entry_events: list[FlattenedEvent]
+) -> None:
     """Best-effort: si esto falla, el evento queda `processed_at is null`
     para siempre -- aceptable (el check de "worker caído" lo detectaría
     igual, y `_log_webhook_event` ya es la única red de seguridad real de
     ADR-0028), nunca se re-lanza para no tumbar la respuesta 200 al
-    webhook por un fallo puramente de esta marca secundaria."""
+    webhook por un fallo puramente de esta marca secundaria.
+
+    Filtra por el negocio del grupo: `meta_app_id` es el de la plataforma (el
+    mismo para todos), y un `external_id` repetido no puede marcar como
+    procesada la fila de otro negocio (ADR-0096)."""
     from datetime import UTC, datetime
 
     from sqlalchemy import update
@@ -559,6 +570,7 @@ async def _mark_entry_processed(meta_app_id: str, entry_events: list[FlattenedEv
                 update(WebhookEvent)
                 .where(
                     WebhookEvent.meta_app_id == meta_app_id,
+                    WebhookEvent.tenant_id == tenant_id,
                     WebhookEvent.external_id.in_([event.external_id for event in entry_events]),
                 )
                 .values(processed_at=datetime.now(UTC))

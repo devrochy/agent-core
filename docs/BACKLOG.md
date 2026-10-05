@@ -151,6 +151,16 @@ repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev
   aplicar la misma regla (conexión viva, NULL si hay más de un dueño) cuando los haya.
 
 **Pendientes tras ADR-0096 (firma por negocio en el webhook)**
+- La respuesta del webhook dice si un número tiene dueño: un negocio que firma un grupo `(su WABA, número X)` recibe
+  `"ignored"` si X es de otro (`tenant_conflict`, o `tenant_mismatch` por slug) y `"ok", "enqueued": 1` si X no
+  tiene dueño (auditor-multitenant, 2026-10-05, preexistente). Responder con un cuerpo constante.
+- `resolve_tenant_for_message` (migración `0027`) hace `LIMIT 1` sin orden, y `messages.external_message_id` solo es
+  único por negocio: si dos negocios tuvieran el mismo wamid, el estado legítimo de uno se descartaría como "de otro
+  negocio". Hoy no pasa (el wamid sale de la respuesta de Meta). Arreglo: buscar el mensaje dentro del scope del
+  negocio esperado y usar el resolvedor solo para el log.
+- `APP_ENV` vale `development` por defecto (`core/config.py`): un despliegue que olvide la variable deja activo el
+  fallback que manda los eventos sin negocio (firmados por la plataforma) al primer negocio activo. Que su falta sea
+  un error, o que el valor por defecto sea `production`.
 - El wizard BYOK no impide que dos negocios carguen la misma app (`app_id`): con el mismo App Secret se autorizan
   entre sí en el webhook (se registra `webhook_secreto_compartido`). Rechazarlo en el alta, como el reclamo de
   ADR-0095.

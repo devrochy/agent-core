@@ -127,6 +127,37 @@ async def test_un_error_al_resolver_el_secreto_no_autoriza(monkeypatch, secretos
     assert firmantes == webhooks.Firmantes(plataforma=False)
 
 
+
+async def test_sin_secreto_de_plataforma_una_firma_incorrecta_es_401_no_el_escape(monkeypatch, secretos) -> None:
+    """Basta un negocio con secreto propio para exigir firma: `Firmantes` vacío (401), nunca
+    `None` (que habilita el escape sin firma de los entornos de prueba)."""
+    propios, _ = secretos
+    monkeypatch.setattr(
+        "core.gateway.connections.get_settings",
+        lambda: SimpleNamespace(whatsapp_app_secret="", meta_app_secret=""),
+    )
+    a = uuid.uuid4()
+    propios[a] = "secreto-de-a"
+
+    assert await webhooks._firmantes_del_post(BODY, _firma("otra-cosa"), [_grupo(a)]) == webhooks.Firmantes(
+        plataforma=False
+    )
+
+
+async def test_sin_secreto_de_plataforma_un_error_al_leer_tampoco_habilita_el_escape(monkeypatch, secretos) -> None:
+    async def falla(_tenant_id):
+        raise RuntimeError("bd caída")
+
+    monkeypatch.setattr("core.gateway.connections.resolve_own_app_secret", falla, raising=True)
+    monkeypatch.setattr(
+        "core.gateway.connections.get_settings",
+        lambda: SimpleNamespace(whatsapp_app_secret="", meta_app_secret=""),
+    )
+
+    firmantes = await webhooks._firmantes_del_post(BODY, _firma("x"), [_grupo(uuid.uuid4())])
+
+    assert firmantes == webhooks.Firmantes(plataforma=False)
+
 async def test_dos_negocios_con_la_misma_app_se_autorizan_entre_si(secretos) -> None:
     """No se puede distinguir con criptografía: se autoriza a los dos y se avisa."""
     propios, _ = secretos
@@ -139,30 +170,30 @@ async def test_dos_negocios_con_la_misma_app_se_autorizan_entre_si(secretos) -> 
 
 
 # ------------------------------------------------------------------ la puerta en _process_payload
-async def test_un_grupo_de_otro_negocio_no_se_procesa(monkeypatch) -> None:
-    a, b = uuid.uuid4(), uuid.uuid4()
-    registrados: list[dict] = []
-    despachados: list[uuid.UUID] = []
-    alertas: list[list[uuid.UUID]] = []
+@pytest.fixture
+def puerta(monkeypatch):
+    """`_process_payload` con el despacho y el registro falsos. `operativos`: los negocios
+    que pasan el chequeo de facturación (por defecto, todos)."""
+    estado: dict = {"registrados": [], "despachados": [], "alertas": [], "operativos": None}
 
     async def fake_log(_app, event, *, tenant_id, process_error, signature_ok=True):
-        registrados.append(
+        estado["registrados"].append(
             {"sub_id": event.sub_id, "tenant_id": tenant_id, "error": process_error, "firma_ok": signature_ok}
         )
         return True
 
     async def fake_dispatch(tenant_id, _entry_id, _events):
-        despachados.append(tenant_id)
+        estado["despachados"].append(tenant_id)
         return 1, 0
 
     async def nada(*_a, **_k):
         return None
 
-    async def operativo(_tid):
-        return True
+    async def operativo(tid):
+        return estado["operativos"] is None or tid in estado["operativos"]
 
     async def fake_alerta(_firmantes, ajenos):
-        alertas.append(ajenos)
+        estado["alertas"].append(ajenos)
 
     monkeypatch.setattr(webhooks, "_log_webhook_event", fake_log)
     monkeypatch.setattr(webhooks, "_dispatch_entry_messages", fake_dispatch)
@@ -172,6 +203,11 @@ async def test_un_grupo_de_otro_negocio_no_se_procesa(monkeypatch) -> None:
     monkeypatch.setattr(webhooks, "_alert_on_firma_ajena", fake_alerta)
     monkeypatch.setattr("core.billing.enforcement.is_tenant_operational", operativo)
     monkeypatch.setattr(webhooks, "get_settings", lambda: SimpleNamespace(meta_app_id="app", app_env="production"))
+    return estado
+
+
+async def test_un_grupo_de_otro_negocio_no_se_procesa(puerta) -> None:
+    a, b = uuid.uuid4(), uuid.uuid4()
 
     r = await webhooks._process_payload(
         {}, known_tenant_id=None, firmantes=webhooks.Firmantes.de_negocio(b),
@@ -179,7 +215,23 @@ async def test_un_grupo_de_otro_negocio_no_se_procesa(monkeypatch) -> None:
     )
 
     assert r.status_code == 200
-    assert despachados == [b]
-    rechazo = next(x for x in registrados if x["sub_id"] == "phone-a")
+    assert puerta["despachados"] == [b]
+    rechazo = next(x for x in puerta["registrados"] if x["sub_id"] == "phone-a")
     assert rechazo == {"sub_id": "phone-a", "tenant_id": None, "error": "signature_tenant_mismatch", "firma_ok": False}
-    assert alertas == [[a]]
+    assert puerta["alertas"] == [[a]]
+
+
+async def test_la_firma_se_mira_antes_que_la_facturacion(puerta) -> None:
+    """Si la facturación fuera primero, el evento falsificado quedaría registrado a nombre
+    de A como `tenant_not_operational`, y quien firmó sabría que A no está operativo."""
+    a, b = uuid.uuid4(), uuid.uuid4()
+    puerta["operativos"] = {b}
+
+    await webhooks._process_payload(
+        {}, known_tenant_id=None, firmantes=webhooks.Firmantes.de_negocio(b),
+        grupos=[_grupo(a, sub_id="phone-a")],
+    )
+
+    assert puerta["registrados"] == [
+        {"sub_id": "phone-a", "tenant_id": None, "error": "signature_tenant_mismatch", "firma_ok": False}
+    ]

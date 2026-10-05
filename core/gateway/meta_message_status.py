@@ -65,7 +65,8 @@ async def apply_status_update(
     external_message_id = str(status.get("id") or "")
     new_status = str(status.get("status") or "")
     if not external_message_id or new_status not in _STATUS_RANK:
-        log.warning("status_update_payload_invalido", status=status)
+        # Solo id y estado: el `status` completo trae `recipient_id`, el teléfono del cliente.
+        log.warning("status_update_payload_invalido", external_message_id=external_message_id, status=new_status)
         return
 
     event_ts: datetime | None = None
