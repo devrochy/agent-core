@@ -44,8 +44,15 @@ conexión o email, la acción se completa igual y queda registrada con
 
 - **Agendar**: consulta disponibilidad (`check_availability`) y crea la cita
   (`create_calendar_event`) tras confirmar datos y horario.
+  - **El email del cliente es obligatorio** y debe ser uno que el cliente haya
+    escrito en la conversación (o que ya esté en su perfil): si falta, la tool
+    devuelve `needs_data` y **no crea**; el asistente lo pide. **Nunca se acepta
+    un email inventado por el modelo.**
 - **Reagendar**: `update_calendar_event` (mueve, no duplica).
-- **Cancelar**: `cancel_calendar_event`.
+- **Cancelar**: `cancel_calendar_event`. Acepta el `event_id` real de la lista,
+  el **número de la lista** (`event_id: "2"` = 2ª cita futura) o `cancel_all`.
+  Un id no reconocido con varias citas **no cancela a ciegas**: devuelve
+  `not_found` y el asistente pide aclaración.
 - **Validación dura**: el servidor rechaza solapamientos (`occupied`), horarios
   fuera de atención (`outside_hours`) y fechas pasadas (`in_past`): no hay doble
   reserva.
