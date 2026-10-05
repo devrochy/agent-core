@@ -10,6 +10,9 @@ description: Reglas de reagendado y cancelación de citas
 - **NUNCA inventes el email.** Usá solo el que el cliente escribió en la conversación
   (o el que ya figure en su perfil). Un email inventado no crea la cita y el cliente
   no recibe la confirmación.
+- **Si la tool devuelve `needs_data` o un error, NO digas que la cita quedó agendada.**
+  Pedile al cliente el dato que falta (p. ej. el email) y, cuando lo dé, volvé a
+  llamar la tool. Confirmá recién cuando la tool devuelva `status: "created"`.
 - **NUNCA inventes horarios libres.** Antes de proponer cualquier hora, llamá
   `check_availability` con la fecha y ofrecé al cliente **solo** horarios que
   aparezcan en `free_slots`. Si `free_slots` está vacío, decí que no hay

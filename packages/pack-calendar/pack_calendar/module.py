@@ -212,15 +212,36 @@ class GoogleCalendarModule(BaseModule):
         claims = await self._resolved_completion_claims()
         for label, (pattern, required_tools) in claims.items():
             if pattern.search(response_text) and not (called_tools & required_tools):
-                return GuardrailResult(
-                    passed=False,
-                    reason=f"Afirmación de '{label}' sin la tool correspondiente en este turno",
-                    retry_instruction=(
+                # ¿La tool se intentó en este turno pero devolvió error/needs_data?
+                # Entonces el reintento debe guiar a seguir esa instrucción (p. ej.
+                # pedir el email que falta), no a repetir la afirmación ni escalar.
+                attempted = [
+                    result
+                    for result in tool_results
+                    if isinstance(result, dict)
+                    and result.get("_current_turn")
+                    and str(result.get("_tool_name") or "") in required_tools
+                ]
+                if attempted:
+                    detail = str(
+                        attempted[-1].get("error") or attempted[-1].get("message") or ""
+                    ).strip()
+                    retry = (
+                        f"La herramienta no completó '{label}': devolvió \"{detail[:200]}\". "
+                        "NO afirmes que se completó: seguí esa instrucción (por ejemplo, "
+                        "pedirle al cliente el dato que falta) y recién después confirmá."
+                    )
+                else:
+                    retry = (
                         f"Dijiste que se completó '{label}' pero no llamaste la herramienta "
                         f"correspondiente ({', '.join(sorted(required_tools))}) en este turno. "
                         "Llamala ahora mismo, o si no podés completarla de verdad, decilo "
                         "explícitamente en vez de prometer algo que no vas a cumplir."
-                    ),
+                    )
+                return GuardrailResult(
+                    passed=False,
+                    reason=f"Afirmación de '{label}' sin la tool correspondiente en este turno",
+                    retry_instruction=retry,
                 )
         return GuardrailResult(passed=True)
 

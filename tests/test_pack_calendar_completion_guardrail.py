@@ -175,3 +175,23 @@ async def test_cita_existente_con_listar_pasa():
         [_tool_result("list_client_appointments", total=1)],
     )
     assert verdict.passed, verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_reintento_guia_a_pedir_el_dato_faltante():
+    """Si la tool se intentó y devolvió needs_data, el reintento debe guiar a
+    pedir el dato (no a repetir la afirmación ni escalar)."""
+    module = GoogleCalendarModule()
+    verdict = await module._completion_guardrail(
+        "¡Listo! Tu demo quedó agendada.",
+        [
+            _tool_result_fallido(
+                "create_calendar_event",
+                status="needs_data",
+                error="Falta el email del cliente: pedíselo antes de agendar.",
+            )
+        ],
+    )
+    assert not verdict.passed
+    assert "Falta el email del cliente" in verdict.retry_instruction
+    assert "NO afirmes que se completó" in verdict.retry_instruction
