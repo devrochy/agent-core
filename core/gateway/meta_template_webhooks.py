@@ -9,10 +9,16 @@ chicken-and-egg que `resolve_tenant_for_phone`/`_waba`/`_page`/`_ig_user`,
 ADR-0012/migración 0021): se resuelve el tenant primero vía la función
 SECURITY DEFINER `resolve_tenant_for_message_template` (migración 0026), y
 recién ahí se abre `tenant_scope` para leer/escribir la fila real.
+
+Cada handler recibe `expected_tenant_id`: el negocio de la entry del webhook, ya
+autorizado por su firma. Si la plantilla es de OTRO negocio, el evento se descarta:
+con una firma válida propia, un negocio podría cambiar el estado de una plantilla
+ajena (ADR-0096).
 """
 
 from __future__ import annotations
 
+import uuid
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -80,7 +86,24 @@ async def _resolve_tenant_for_template(meta_template_id: str) -> Any:
         ).scalar_one_or_none()
 
 
-async def handle_template_status_update(payload: dict[str, Any]) -> None:
+def _es_de_otro_negocio(
+    template_tenant_id: Any, expected_tenant_id: uuid.UUID, *, meta_template_id: Any, event: str
+) -> bool:
+    """¿La plantilla es de otro negocio que el de la entry? Se compara como texto:
+    asyncpg devuelve su propio tipo de UUID."""
+    if str(template_tenant_id) == str(expected_tenant_id):
+        return False
+    log.warning(
+        "template_webhook_de_otro_negocio",
+        meta_template_id=str(meta_template_id),
+        webhook_field=event,
+        tenant_id=str(expected_tenant_id),
+        template_tenant_id=str(template_tenant_id),
+    )
+    return True
+
+
+async def handle_template_status_update(payload: dict[str, Any], *, expected_tenant_id: uuid.UUID) -> None:
     parsed = TemplateStatusUpdatePayload.model_validate(payload)
     if parsed.event not in _ALL_STATUS_EVENTS:
         raise AssertionError(f"evento de message_template_status_update no manejado: {parsed.event!r}")
@@ -93,6 +116,11 @@ async def handle_template_status_update(payload: dict[str, Any]) -> None:
             status_event=parsed.event,
         )
         return
+    if _es_de_otro_negocio(
+        tenant_id, expected_tenant_id, meta_template_id=parsed.message_template_id, event=parsed.event
+    ):
+        return
+    tenant_id = expected_tenant_id
 
     async with tenant_scope(tenant_id):
         async with get_session() as session:
@@ -126,21 +154,27 @@ async def handle_template_status_update(payload: dict[str, Any]) -> None:
             db_row.updated_at = utcnow()
 
 
-async def handle_template_category_update(payload: dict[str, Any]) -> None:
+async def handle_template_category_update(payload: dict[str, Any], *, expected_tenant_id: uuid.UUID) -> None:
     """Payload NO verificado contra doc primaria de 2026 -- parseo
-    defensivo, se loguea crudo la primera vez."""
-    await _log_raw_payload_once("template_category_update", payload)
+    defensivo, se loguea crudo la primera vez (de una plantilla del negocio de la
+    entry: uno ajeno no gasta ese aviso)."""
     parsed = _PassthroughPayload.model_validate(payload)
     if parsed.message_template_id is None:
         return
 
+    tenant_id = await _resolve_tenant_for_template(str(parsed.message_template_id))
+    if tenant_id is None:
+        return
+    if _es_de_otro_negocio(
+        tenant_id, expected_tenant_id, meta_template_id=parsed.message_template_id, event="template_category_update"
+    ):
+        return
+    tenant_id = expected_tenant_id
+    await _log_raw_payload_once("template_category_update", payload)
+
     new_category = payload.get("new_category") or payload.get("category")
     if not new_category:
         log.warning("template_category_update_sin_new_category", payload=payload)
-        return
-
-    tenant_id = await _resolve_tenant_for_template(str(parsed.message_template_id))
-    if tenant_id is None:
         return
 
     async with tenant_scope(tenant_id):
@@ -160,11 +194,10 @@ async def handle_template_category_update(payload: dict[str, Any]) -> None:
             db_row.category_changed_at = utcnow()
 
 
-async def handle_template_quality_update(payload: dict[str, Any]) -> None:
+async def handle_template_quality_update(payload: dict[str, Any], *, expected_tenant_id: uuid.UUID) -> None:
     """Payload NO verificado -- se espera `previous_quality_score`/
     `new_quality_score` (GREEN|YELLOW|RED|UNKNOWN), pero no se asumen esos
     nombres de campo exactos, se usa `.get()` defensivo."""
-    await _log_raw_payload_once("message_template_quality_update", payload)
     parsed = _PassthroughPayload.model_validate(payload)
     if parsed.message_template_id is None:
         return
@@ -172,6 +205,13 @@ async def handle_template_quality_update(payload: dict[str, Any]) -> None:
     tenant_id = await _resolve_tenant_for_template(str(parsed.message_template_id))
     if tenant_id is None:
         return
+    if _es_de_otro_negocio(
+        tenant_id, expected_tenant_id, meta_template_id=parsed.message_template_id,
+        event="message_template_quality_update",
+    ):
+        return
+    tenant_id = expected_tenant_id
+    await _log_raw_payload_once("message_template_quality_update", payload)
 
     new_quality = payload.get("new_quality_score")
     previous_quality = payload.get("previous_quality_score")

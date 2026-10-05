@@ -220,6 +220,26 @@ async def resolve_effective_verify_token(tenant_id: uuid.UUID) -> str:
     return manual or byok or get_settings().whatsapp_verify_token or ""
 
 
+def platform_app_secret() -> str:
+    """App Secret de la app de la plataforma (`.env`): el único que puede autorizar
+    eventos de cualquier negocio en el webhook genérico (ADR-0096), porque ningún
+    negocio lo conoce. Única fuente de este criterio."""
+    settings = get_settings()
+    return settings.whatsapp_app_secret or settings.meta_app_secret or ""
+
+
+async def resolve_own_app_secret(tenant_id: uuid.UUID) -> str:
+    """App Secret propio del negocio: `ChannelConnection` (conexión manual) -> BYOK
+    (`MetaConnection`, app secret cargado en el wizard). **Sin** caer al `.env`:
+    vacío si el negocio usa la app de la plataforma. Necesita `tenant_scope` (el
+    secreto BYOK vive bajo RLS)."""
+    from core.gateway.meta_byok import resolve_byok_app_secret
+
+    manual = (await resolve_primary_credentials(tenant_id) or {}).get("app_secret")
+    byok = await resolve_byok_app_secret(tenant_id)
+    return manual or byok or ""
+
+
 async def resolve_effective_app_secret(tenant_id: uuid.UUID) -> str:
     """App Secret con el que se valida la firma HMAC de los webhooks del tenant.
 
@@ -228,12 +248,7 @@ async def resolve_effective_app_secret(tenant_id: uuid.UUID) -> str:
     wizard) -> `.env`. No usar `effective_credentials()` a secas: su fallback a
     `env_credentials()` enmascara el secreto de la app dedicada del tenant y
     hace que toda firma de Meta se rechace con 401 (bug real)."""
-    from core.gateway.meta_byok import resolve_byok_app_secret
-
-    manual = (await resolve_primary_credentials(tenant_id) or {}).get("app_secret")
-    byok = await resolve_byok_app_secret(tenant_id)
-    settings = get_settings()
-    return manual or byok or settings.whatsapp_app_secret or settings.meta_app_secret or ""
+    return await resolve_own_app_secret(tenant_id) or platform_app_secret()
 
 
 async def save_connection(

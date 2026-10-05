@@ -9,15 +9,6 @@ Cuando arregles uno, bórralo de aquí y menciónalo en el commit.
 
 ## Alta
 
-**Un negocio BYOK puede inyectar eventos en otro por el webhook genérico** (arquitecto, 2026-10-05, preexistente)
-`POST /webhooks/whatsapp` resuelve el tenant de cada entry y junta en una sola lista los App Secrets de todos
-(`core/gateway/webhooks.py::_tenant_y_secretos`); la firma se acepta si coincide con **cualquiera**
-(`receive_whatsapp`, `any(verify_signature(...))`) y después se procesan **todas** las entries
-(`_process_payload`). Un tenant BYOK que conoce su propio App Secret puede firmar un payload con una entry suya y
-otra con el número de A, y meter mensajes falsos en A, que el agente de A responde con las credenciales de A.
-Arreglo propuesto: validar la firma por entry contra el secreto de **su** tenant (o el del framework) y descartar
-las entries cuyo tenant no firmó.
-
 **No hay dominio público estable para el webhook de Meta**
 La app `agent-core-test` de Coolify solo tiene el dominio *default*
 `http://<app-id>.186.82.102.11.sslip.io` (**HTTP, sin TLS**), y los puertos **80/443 del
@@ -147,13 +138,6 @@ repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev
 - Antes de desplegar la `0052` en producción: confirmar que `agent_core_migrations` (el `MIGRATIONS_DATABASE_URL`
   de producción en `docs/despliegue-coolify.md`) es superusuario o tiene `BYPASSRLS`; si no, la migración aborta el
   arranque a propósito. El mismo documento dice en sus notas que las migraciones corren como superusuario: alinear.
-- Los eventos de plantillas (`core/gateway/meta_template_webhooks.py::handle_template_status_update` y sus
-  hermanos, llamados desde `webhooks.py::_dispatch_template_events`) resuelven el negocio por
-  `message_template_id` y abren su propio `tenant_scope`, sin compararlo con el negocio de la entry. Un negocio BYOK
-  que firma con su propio secreto en `/webhooks/whatsapp/<slug>`, con su propia WABA (sin `tenant_mismatch`),
-  puede cambiar el estado de una plantilla de otro: es una escritura entre tenants (auditor-multitenant,
-  2026-10-05, preexistente). Arreglo propuesto: descartar el evento si el negocio de la plantilla no es el de la
-  entry.
 - `save_connection` para `whatsapp_meta` (panel clásico `/admin/conexiones/guardar`, alta de tenant, CLI) verifica
   el número contra Graph pero no a qué WABA pertenece. Con la regla de conflicto de ADR-0095 ya no entrega mensajes
   ajenos, pero es la vía de alta más débil: pedir la WABA y usar `verify_waba_and_phone`, o retirarla a favor de
@@ -165,6 +149,15 @@ repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev
 - `resolve_tenant_for_page`, `resolve_tenant_for_ig_user` (migración `0021`) y la resolución de plantillas por
   `meta_template_id` (`0026`) siguen con `LIMIT 1` sin desempate. Hoy no hay clientes de Messenger ni Instagram;
   aplicar la misma regla (conexión viva, NULL si hay más de un dueño) cuando los haya.
+
+**Pendientes tras ADR-0096 (firma por negocio en el webhook)**
+- El wizard BYOK no impide que dos negocios carguen la misma app (`app_id`): con el mismo App Secret se autorizan
+  entre sí en el webhook (se registra `webhook_secreto_compartido`). Rechazarlo en el alta, como el reclamo de
+  ADR-0095.
+- Hay dos secretos de plataforma en el `.env` y se usa uno (`WHATSAPP_APP_SECRET or META_APP_SECRET`,
+  `connections.platform_app_secret`). Embedded Signup firma con `META_APP_SECRET`: si los dos están definidos y son
+  distintos, sus entregas al genérico dan 401. Además, quien conozca ese secreto firma "como plataforma" para
+  cualquier negocio: confirmar que no es el de la app de un cliente concreto (heredado del monolito).
 
 **Código muerto**
 `MCPHost.register_resource()` y `MCPResource` (registrados, nunca leídos);

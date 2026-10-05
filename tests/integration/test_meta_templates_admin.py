@@ -165,7 +165,8 @@ async def test_crear_sincronizar_webhook_y_borrar(app_client, monkeypatch):
                 "reason": "SCAM",
                 "recommendation": "Revisá el contenido del mensaje",
             },
-        }
+        },
+        expected_tenant_id=tid,
     )
 
     async with tenant_scope(tid):

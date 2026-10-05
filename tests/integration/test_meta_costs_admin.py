@@ -143,6 +143,7 @@ async def test_webhook_pricing_y_sync_de_pricing_analytics(app_client, monkeypat
                 "pricing": {"billable": True, "pricing_model": "CBP", "category": "utility"},
                 "conversation": {"id": "conv-meta-1", "origin": {"type": "business_initiated"}},
             },
+            expected_tenant_id=tid,
             phone_number_id=phone_number_id,
         )
 
@@ -208,7 +209,8 @@ async def test_recategorizacion_de_plantilla_se_refleja_sin_corregir_retroactivo
             template_id = template.id
 
         await handle_template_category_update(
-            {"message_template_id": template.meta_template_id, "new_category": "UTILITY"}
+            {"message_template_id": template.meta_template_id, "new_category": "UTILITY"},
+            expected_tenant_id=tid,
         )
 
         async with get_session() as session:

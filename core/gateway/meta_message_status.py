@@ -9,7 +9,9 @@ orden de llegada.
 El payload solo trae el `wamid` (`external_message_id`), no el tenant --
 mismo problema chicken-and-egg ya resuelto para plantillas (ADR-0031):
 `resolve_tenant_for_message` (SECURITY DEFINER, migración 0027) resuelve el
-tenant antes de abrir `tenant_scope`.
+tenant antes de abrir `tenant_scope`. Ese tenant tiene que ser el de la entry
+del webhook (`expected_tenant_id`, ya autorizado por su firma): si el mensaje es
+de otro negocio, el evento se descarta (ADR-0096).
 
 Además, si el status trae `pricing` (objeto de facturación de Meta), se
 persiste en `message_costs` -- ESE OBJETO NUNCA TRAE UN MONTO EN DÓLARES,
@@ -22,6 +24,7 @@ propia.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -56,7 +59,9 @@ async def _resolve_tenant_for_message(external_message_id: str) -> Any:
         ).scalar_one_or_none()
 
 
-async def apply_status_update(status: dict[str, Any], *, phone_number_id: str | None = None) -> None:
+async def apply_status_update(
+    status: dict[str, Any], *, expected_tenant_id: uuid.UUID, phone_number_id: str | None = None
+) -> None:
     external_message_id = str(status.get("id") or "")
     new_status = str(status.get("status") or "")
     if not external_message_id or new_status not in _STATUS_RANK:
@@ -75,6 +80,19 @@ async def apply_status_update(status: dict[str, Any], *, phone_number_id: str | 
     if tenant_id is None:
         log.info("status_update_sin_fila_local", external_message_id=external_message_id, status=new_status)
         return
+    if str(tenant_id) != str(expected_tenant_id):
+        # Con una firma válida propia, un negocio podría marcar mensajes de otro como
+        # leídos o fallidos, o sumarle costos (ADR-0096). Se compara como texto:
+        # asyncpg devuelve su propio tipo de UUID.
+        log.warning(
+            "status_update_de_otro_negocio",
+            external_message_id=external_message_id,
+            status=new_status,
+            tenant_id=str(expected_tenant_id),
+            message_tenant_id=str(tenant_id),
+        )
+        return
+    tenant_id = expected_tenant_id
 
     async with tenant_scope(tenant_id):
         message_id: Any = None
