@@ -1,5 +1,20 @@
 # Changelog
 
+## Sin versión — Fecha actual en el prompt y anti-escalamiento (HU-CAL-04, 2026-10-04)
+
+- **Zona horaria del negocio** `app_settings.timezone` (migración `0050`, default
+  `America/Bogota`), editable en Configuración → Identidad; zona inválida → 422 y un
+  PUT sin el campo no la pisa. El horario de atención la usa si no trae zona propia
+  (antes caía a `UTC`). ADR-0091.
+- **Fecha y hora actual en el prompt**: última parte del bloque dinámico, solo el dato
+  ("Hoy es martes, 6 de octubre de 2026 — 10:00 (America/Bogota)."); la instrucción de
+  cómo usarla y la regla de no filtrar los `[SISTEMA]` viven en `reglas-operacion.md`.
+- **Respuesta neutral al agotar el guardrail** (`behavior_config.guardrail_fail_action`
+  = `escalate` | `neutral`, default `escalate`): con `neutral` responde la sección
+  `verifying` de `respuestas.md`, no escala, registra `audit_log` `guardrail_neutral` y
+  cuenta el turno como no resuelto (el autoescalado por turnos sigue de red). ADR-0092.
+- `guardrail_max_retries` se valida 0-5 en el API, igual que en el loop.
+
 ## Sin versión — Playground "Probar asistente" + F0 del canal waweb (2026-09-27)
 
 ### Playground (ADR-0075)

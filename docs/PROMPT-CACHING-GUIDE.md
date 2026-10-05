@@ -11,7 +11,7 @@ cuánto pagas por tokens de entrada.
 | 1 | Base (identidad + reglas de operación) | Byte-idéntico entre turnos | ✅ |
 | 2 | Tono (3 variantes fijas: calido/formal/divertido) | Fijo por variante | ✅ (compartible entre asistentes con el mismo tono) |
 | 3 | Voz de marca | Estable por negocio | ✅ |
-| 4 | Contexto dinámico (skills del turno + perfil + recall RAG) | CAMBIA cada turno | ❌ (por eso va al FINAL) |
+| 4 | Contexto dinámico (skills del turno + perfil + recall RAG + fecha y hora actual del negocio, siempre la última parte, ADR-0091) | CAMBIA cada turno | ❌ (por eso va al FINAL) |
 
 ## La regla de oro
 

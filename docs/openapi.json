@@ -13881,9 +13881,23 @@
             "title": "Currency",
             "default": "COP"
           },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone",
+            "default": "America/Bogota"
+          },
           "guardrail_max_retries": {
             "type": "integer",
             "title": "Guardrail Max Retries"
+          },
+          "guardrail_fail_action": {
+            "type": "string",
+            "enum": [
+              "escalate",
+              "neutral"
+            ],
+            "title": "Guardrail Fail Action",
+            "default": "escalate"
           },
           "disabled_guardrails": {
             "items": {
@@ -14029,10 +14043,36 @@
             "title": "Currency",
             "default": "COP"
           },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          },
           "guardrail_max_retries": {
             "type": "integer",
             "title": "Guardrail Max Retries",
             "default": 1
+          },
+          "guardrail_fail_action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "escalate",
+                  "neutral"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guardrail Fail Action"
           },
           "disabled_guardrails": {
             "items": {
