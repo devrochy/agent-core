@@ -479,6 +479,39 @@ class PasswordResetToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class PushToken(Base):
+    """Token de push (Expo) de un dispositivo de la app oficial (ADR-0095).
+
+    Tabla de NEGOCIO: tenant_id + RLS forzada (invariante 1). La unicidad activa
+    es parcial: (tenant_id, token) WHERE deleted_at IS NULL; un re-registro
+    reactiva el mismo token en lugar de duplicarlo.
+    """
+
+    __tablename__ = "push_tokens"
+    __table_args__ = (
+        Index(
+            "uq_push_tokens_tenant_token",
+            "tenant_id",
+            "token",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index("ix_push_tokens_admin", "tenant_id", "admin_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    admin_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    provider: Mapped[str] = mapped_column(Text, default="expo")
+    token: Mapped[str] = mapped_column(Text)
+    platform: Mapped[str] = mapped_column(Text, default="android")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class AdminPermission(Base):
     """Permiso de sección de un admin (RBAC configurable, ADR-0047).
 

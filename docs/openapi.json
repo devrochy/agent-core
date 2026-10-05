@@ -97,7 +97,7 @@
           "auth"
         ],
         "summary": "Post Forgot Password",
-        "description": "Siempre 202 con el mismo cuerpo: no filtra si la cuenta existe (ADR-0094).",
+        "description": "Siempre 202 con el mismo cuerpo: no filtra si la cuenta existe (ADR-0094).\n\nEl trabajo pesado (hash + correo) va en background para emparejar el tiempo\nde respuesta de cuentas existentes e inexistentes.",
         "operationId": "post_forgot_password_api_v1_auth_forgot_password_post",
         "requestBody": {
           "content": {
@@ -202,6 +202,110 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/push-token": {
+      "post": {
+        "tags": [
+          "api",
+          "me · push"
+        ],
+        "summary": "Register Push Token",
+        "operationId": "register_push_token_api_v1_me_push_token_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "api",
+          "me · push"
+        ],
+        "summary": "Remove Push Token",
+        "operationId": "remove_push_token_api_v1_me_push_token_delete",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -17486,6 +17590,30 @@
           "confirm_phrase"
         ],
         "title": "PurgeRequest"
+      },
+      "PushTokenRequest": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 10,
+            "title": "Token"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ],
+            "title": "Platform",
+            "default": "android"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "PushTokenRequest"
       },
       "RecentConversation": {
         "properties": {
