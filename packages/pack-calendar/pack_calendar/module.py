@@ -108,6 +108,22 @@ _CLAIMS: dict[str, _Claim] = {
             re.IGNORECASE,
         ),
     ),
+    # E2E HU-CAL-06: "A las 3:00 pm está libre" sin consultar. Afirmar que un
+    # horario está libre u ocupado exige la consulta (o el intento de agendar/mover,
+    # que valida el horario en el servidor).
+    "disponibilidad": _Claim(
+        tools=frozenset({"check_availability", "find_next_available"}),
+        # Acotado a horarios: "el plan Basic está disponible" es venta, no agenda.
+        affirm=re.compile(
+            r"\b(?:est[áa]|queda|quedan)\s+libres?\b|"
+            r"\bhorarios?\s+(?:libres?|disponibles?)\b|"
+            r"\bhay\s+(?:disponibilidad|cupos?|espacio)\b|"
+            r"\b(?:tengo|tenemos)\s+(?:disponibilidad|cupos?|espacio)\b|"
+            r"\b(?:ese|este|el)\s+horario\s+(?:ya\s+)?(?:est[áa]|queda)\s+"
+            r"(?:ocupad|tomad|disponible|libre)\w*",
+            re.IGNORECASE,
+        ),
+    ),
     "listado": _Claim(
         tools=frozenset({"list_client_appointments"}),
         affirm=re.compile(
@@ -182,6 +198,10 @@ def _affirmation_backed(label: str, results: list[dict[str, Any]]) -> bool:
         return any(r.get("_ok") for r in _of(results, "send_email")) or any(
             r.get("email_sent") is True for r in _of(results, *_EMAILING_TOOLS)
         )
+    if label == "disponibilidad":
+        return any(r.get("_ok") for r in _of(results, "check_availability", "find_next_available")) or bool(
+            _of(results, "create_calendar_event", "update_calendar_event")
+        )
     if label == "cita_existente":
         # Describir la cita que se acaba de crear o mover en este turno está respaldado.
         return _listed_ok(results) or any(
@@ -238,6 +258,12 @@ def _builtin_verdict(label: str, text: str, results: list[dict[str, Any]]) -> Gu
             f"La herramienta no completó '{label}': devolvió \"{detail[:200]}\". "
             "NO afirmes que se completó: seguí esa instrucción (por ejemplo, "
             "pedirle al cliente el dato que falta) y recién después confirmá."
+        )
+    elif label == "disponibilidad":
+        retry = (
+            "Tu respuesta afirma qué horarios están libres u ocupados pero no consultaste la "
+            "disponibilidad en este turno. Llamá check_availability con la fecha (o "
+            "find_next_available si no hay fecha) y ofrecé solo los horarios que devuelva."
         )
     else:
         retry = (

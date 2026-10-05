@@ -153,7 +153,7 @@ class CalendarConfig(BasePluginConfig):
         default="",
         description=(
             "Nombres de claims incorporados a desactivar, separados por coma "
-            "(agendada, reagendada, cancelada, correo_enviado, listado, cita_existente). "
+            "(agendada, reagendada, cancelada, correo_enviado, disponibilidad, listado, cita_existente). "
             "Vacío = todos activos."
         ),
     )
