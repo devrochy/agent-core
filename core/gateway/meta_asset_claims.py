@@ -102,24 +102,22 @@ async def claim_assets(
         raise MetaAssetError(CLAIMED_MESSAGE, code="asset_claimed")
 
 
-async def warn_if_claimed(
+async def claimed_elsewhere(
     session: Any,
     tenant_id: uuid.UUID,
     *,
-    waba_id: str | None,
-    phone_number_id: str | None,
+    phone_number_id: str,
     source: str,
 ) -> bool:
-    """Como `claim_assets`, pero sin bloquear: para números que Graph lista dentro de una
-    WABA que este negocio ya tiene (sincronizar o agregar números). Esos están
-    verificados por construcción; si otro negocio tiene el mismo número es una fila
-    heredada sin verificar. Se avisa y se guarda igual: el número queda ambiguo (deja de
-    rutear por número) y decide la WABA, que es de este negocio."""
-    claimed = await _lock_and_check(session, tenant_id, waba_id=waba_id, phone_number_id=phone_number_id)
+    """Como `claim_assets`, pero devuelve el resultado en vez de lanzar: para números que
+    Graph lista dentro de una WABA que este negocio ya tiene (sincronizar o agregar
+    números). Si otro negocio tiene el mismo número, el llamador no lo guarda y se avisa:
+    guardarlo dejaría el número con dos dueños, y un número así no rutea a nadie."""
+    claimed = await _lock_and_check(session, tenant_id, waba_id=None, phone_number_id=phone_number_id)
     if claimed:
         log.warning(
-            "meta_asset_tambien_de_otro_negocio",
-            source=source, tenant_id=str(tenant_id), waba_id=waba_id, phone_number_id=phone_number_id,
+            "meta_numero_de_otro_negocio_no_se_guarda",
+            source=source, tenant_id=str(tenant_id), phone_number_id=phone_number_id,
         )
     return claimed
 

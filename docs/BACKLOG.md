@@ -144,6 +144,9 @@ repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev
   `test_meta_byok_reconnect.py` no stubbean `_token_expiry` → hacen una llamada real a Graph y fallan sin red.
 
 **Pendientes tras ADR-0095 (un número o una WABA de un solo negocio)**
+- Antes de desplegar la `0052` en producción: confirmar que `agent_core_migrations` (el `MIGRATIONS_DATABASE_URL`
+  de producción en `docs/despliegue-coolify.md`) es superusuario o tiene `BYPASSRLS`; si no, la migración aborta el
+  arranque a propósito. El mismo documento dice en sus notas que las migraciones corren como superusuario: alinear.
 - Los eventos de plantillas (`core/gateway/meta_template_webhooks.py::handle_template_status_update` y sus
   hermanos, llamados desde `webhooks.py::_dispatch_template_events`) resuelven el negocio por
   `message_template_id` y abren su propio `tenant_scope`, sin compararlo con el negocio de la entry. Un negocio BYOK

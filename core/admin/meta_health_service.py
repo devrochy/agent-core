@@ -222,6 +222,10 @@ async def set_connection_status(
         connection = await get_owned(session, _Meta, cid, tenant_id)
         if connection is None:
             return "Conexión no encontrada"
+        if active and connection.status == "draft":
+            # Un alta de Embedded Signup que nunca canjeó su `code`: no tiene token y
+            # sus filas, si quedaron de antes, no están verificadas (ADR-0095).
+            return "La conexión no terminó el alta: complétala con el asistente de WhatsApp"
         if active:
             connection.status = "connected"
             connection.status_reason = None

@@ -170,7 +170,45 @@ async def test_el_numero_de_a_con_la_waba_registrada_por_b_no_va_a_b(app_client,
 
     row = await _evento_registrado(msg_id)
     assert row.tenant_id is None
-    assert row.process_error == "unresolved_tenant"
+    assert row.process_error == "tenant_conflict"
+
+
+async def test_un_numero_con_dos_duenos_no_cae_a_la_waba(app_client, monkeypatch) -> None:
+    """X tiene el número en `channel_connections`; Z lo tiene en `phone_numbers` y además
+    la WABA. Si un número ambiguo cayera a la WABA, Z se quedaría con los mensajes de X."""
+    waba_id, phone = uniq("waba-de-z"), uniq("phone-doble")
+    await _new_tenant("doble-x", phone_in_channel_connections=phone)
+    tenant_z = await _new_tenant("doble-z")
+    await _seed_meta_assets(tenant_z, waba_id=waba_id, phone_number_id=phone)
+    assert await _resolve("resolve_tenant_for_phone", phone) is None
+    assert await _resolve("resolve_tenant_for_waba", waba_id) == tenant_z
+
+    msg_id = f"wamid.{uniq('d')}"
+    await _post_webhook(app_client, monkeypatch, waba_id, [_cambio(phone, "wa-cliente-x", msg_id)])
+
+    row = await _evento_registrado(msg_id)
+    assert (row.tenant_id, row.process_error) == (None, "tenant_conflict")
+
+
+async def test_un_conflicto_no_va_al_negocio_del_endpoint_por_slug() -> None:
+    """En el endpoint por slug, un evento sin negocio resuelto va al de la URL. Un
+    conflicto no es "sin negocio": no puede caer ahí."""
+    from core.gateway.webhooks import _process_payload
+
+    waba_id, phone_x = uniq("waba-de-z"), uniq("phone-de-x")
+    await _new_tenant("slug-x", phone_in_channel_connections=phone_x)
+    tenant_z = await _new_tenant("slug-z")
+    await _seed_meta_assets(tenant_z, waba_id=waba_id)
+    tenant_slug = await _new_tenant("slug-s")
+
+    msg_id = f"wamid.{uniq('s')}"
+    payload = {"object": "whatsapp_business_account", "entry": [
+        {"id": waba_id, "changes": [_cambio(phone_x, "wa-cliente-x", msg_id)]},
+    ]}
+    await _process_payload(payload, known_tenant_id=tenant_slug, dev_fallback=False)
+
+    row = await _evento_registrado(msg_id)
+    assert (row.tenant_id, row.process_error) == (None, "tenant_conflict")
 
 
 async def test_numero_y_waba_del_mismo_negocio_rutean_a_el(app_client, monkeypatch) -> None:
@@ -346,6 +384,176 @@ async def test_dos_altas_simultaneas_de_la_misma_waba_solo_una_gana() -> None:
     assert len(errores) == 1, resultados
     assert isinstance(errores[0], MetaAssetError) and errores[0].code == "asset_claimed"
     assert await _resolve("resolve_tenant_for_waba", waba_id) in tenants
+
+
+async def test_las_funciones_no_las_ejecuta_public() -> None:
+    from sqlalchemy import text
+
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        for firma in (
+            "resolve_tenant_for_phone(text)",
+            "resolve_tenant_for_waba(text)",
+            "meta_asset_claimed_by_other_tenant(text, text, uuid)",
+        ):
+            puede = (
+                await session.execute(
+                    text("select has_function_privilege('public', :f, 'execute')"), {"f": firma}
+                )
+            ).scalar_one()
+            assert puede is False, firma
+
+
+async def test_activar_una_conexion_en_draft_se_rechaza() -> None:
+    """Activarla sacaría de `draft` filas que nadie verificó (ADR-0095)."""
+    from core.admin.meta_health_service import set_connection_status
+    from core.db.models import MetaConnection
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid = await _new_tenant("activar-draft")
+    connection_id = await _seed_meta_assets(tid, waba_id=uniq("waba-draft"))
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            await session.execute(
+                update(MetaConnection).where(MetaConnection.id == connection_id).values(status="draft")
+            )
+        error = await set_connection_status(tid, str(connection_id), active=True)
+        async with get_session() as session:
+            status = (await session.get(MetaConnection, connection_id)).status
+
+    assert error is not None and "no terminó el alta" in error
+    assert status == "draft"
+
+
+async def test_la_migracion_retira_las_conexiones_en_draft_con_filas() -> None:
+    """El SQL de 0052, corrido como `app_runtime` dentro del scope del negocio (en la
+    migración corre con el dueño, sin RLS): retira el `draft` con filas y cierra su wizard;
+    no toca un `draft` sin filas ni una conexión canjeada."""
+    import importlib.util
+    from pathlib import Path
+
+    from sqlalchemy import text
+
+    from core.db.models import ConnectionWizard, MetaConnection
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    spec = importlib.util.spec_from_file_location(
+        "m0052", Path(__file__).resolve().parents[2] / "alembic/versions/0052_reclamo_de_numero_y_waba.py"
+    )
+    assert spec and spec.loader
+    m0052 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m0052)
+
+    tid = await _new_tenant("retiro")
+    con_filas = await _seed_meta_assets(tid, waba_id=uniq("waba-r"), phone_number_id=uniq("phone-r"))
+    sin_filas = await _seed_meta_assets(tid)
+    canjeada = await _seed_meta_assets(tid, waba_id=uniq("waba-ok"))
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            await session.execute(
+                update(MetaConnection).where(MetaConnection.id.in_([con_filas, sin_filas])).values(status="draft")
+            )
+            wizard = ConnectionWizard(
+                tenant_id=tid, connection_id=con_filas, channel="whatsapp", environment="production",
+                current_step="exchange_code",
+            )
+            session.add(wizard)
+            await session.flush()
+            wizard_id = wizard.id
+
+        async with get_session() as session:
+            await session.execute(text(m0052._RETIRAR_DRAFT_CON_FILAS), {"marca": m0052._MARCA_RETIRO})
+            await session.execute(text(m0052._CERRAR_SUS_WIZARDS), {"marca": m0052._MARCA_RETIRO})
+
+        async with get_session() as session:
+            filas = {
+                c.id: c for c in (await session.execute(select(MetaConnection).where(
+                    MetaConnection.id.in_([con_filas, sin_filas, canjeada])
+                ))).scalars()
+            }
+            wizard_row = await session.get(ConnectionWizard, wizard_id)
+
+    assert filas[con_filas].deleted_at is not None and filas[con_filas].status == "revoked"
+    assert filas[con_filas].status_reason == m0052._MARCA_RETIRO
+    assert filas[sin_filas].deleted_at is None and filas[sin_filas].status == "draft"
+    assert filas[canjeada].deleted_at is None and filas[canjeada].status == "connected"
+    assert wizard_row.current_step == "done"
+
+
+async def test_sincronizar_numeros_no_guarda_los_de_otro_negocio(monkeypatch) -> None:
+    """Graph lista tres números en la WABA del negocio; uno lo tiene otro negocio en
+    `channel_connections` y otro en `phone_numbers`. Se guarda solo el libre, sin
+    `IntegrityError` por el único global de `phone_number_id`."""
+    import core.gateway.meta_phone_numbers as phones_mod
+    from core.db.models import PhoneNumber
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    libre, en_cc, en_pn = uniq("phone-libre"), uniq("phone-cc"), uniq("phone-pn")
+    await _new_tenant("sync-otro-cc", phone_in_channel_connections=en_cc)
+    await _seed_meta_assets(await _new_tenant("sync-otro-pn"), phone_number_id=en_pn)
+    tid = await _new_tenant("sync")
+    waba_id = uniq("waba-sync")
+    connection_id = await _seed_meta_assets(tid, waba_id=waba_id)
+
+    async def numeros_de_la_waba(*_a):
+        return [{"id": libre}, {"id": en_cc}, {"id": en_pn}]
+
+    monkeypatch.setattr(phones_mod, "list_phone_numbers", numeros_de_la_waba)
+    async with tenant_scope(tid):
+        await phones_mod.sync_phone_numbers(waba_id, "tok", "sec", "v21.0", connection_id, tid)
+        async with get_session() as session:
+            guardados = {
+                p.phone_number_id
+                for p in (await session.execute(
+                    select(PhoneNumber).where(PhoneNumber.connection_id == connection_id)
+                )).scalars()
+            }
+
+    assert guardados == {libre}
+
+
+async def test_dos_embedded_signup_simultaneos_de_la_misma_waba_solo_uno_gana(monkeypatch, platform_app) -> None:
+    """Las dos conexiones parten en `draft`. Si el alta guardara las filas sin sacar la
+    conexión de `draft` en la misma transacción, la segunda no vería las de la primera
+    (no cuentan) y las dos se quedarían con la WABA."""
+    import asyncio
+
+    import core.gateway.meta_onboarding as onboarding
+    from core.db.models import MetaConnection
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    stub_meta_pair_ok(monkeypatch)
+    waba_id = uniq("waba-es-carrera")
+    tenants = [await _new_tenant("es-carrera-a"), await _new_tenant("es-carrera-b")]
+    wizards = []
+    for tid in tenants:
+        async with tenant_scope(tid):
+            wizards.append(await onboarding.start_or_resume_wizard(tid))
+
+    async def alta(tid: uuid.UUID, wizard) -> None:
+        async with tenant_scope(tid):
+            await onboarding._attach_finish_assets(
+                wizard.id, tid, wizard.connection_id, "tok", waba_id=waba_id, phone_number_id=None
+            )
+
+    resultados = await asyncio.gather(
+        *(alta(tid, w) for tid, w in zip(tenants, wizards, strict=True)), return_exceptions=True
+    )
+
+    errores = [r for r in resultados if isinstance(r, BaseException)]
+    assert len(errores) == 1, resultados
+    assert isinstance(errores[0], onboarding.WizardError)
+    ganador = tenants[resultados.index(None)]
+    assert await _resolve("resolve_tenant_for_waba", waba_id) == ganador
+    async with tenant_scope(ganador):
+        async with get_session() as session:
+            conexion = await session.get(MetaConnection, wizards[resultados.index(None)].connection_id)
+    assert conexion.status == "pending"
 
 
 # ------------------------------------------------------------------ altas

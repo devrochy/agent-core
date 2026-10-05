@@ -18,8 +18,8 @@ from core.gateway.meta_asset_claims import (
     CLAIMED_MESSAGE,
     MetaAssetError,
     claim_assets,
+    claimed_elsewhere,
     verify_waba_and_phone,
-    warn_if_claimed,
 )
 from core.gateway.meta_errors import GraphError
 from core.gateway.webhook_flatten import FlattenedEvent
@@ -131,13 +131,13 @@ async def test_claim_de_un_activo_ajeno_falla_sin_decir_de_quien_es():
 
 
 @pytest.mark.asyncio
-async def test_warn_if_claimed_toma_el_candado_avisa_y_no_bloquea():
+async def test_claimed_elsewhere_toma_el_candado_y_responde_sin_lanzar():
     """Sincronizar números que Graph lista en una WABA propia: si otro negocio tiene el
-    número (fila heredada), se avisa pero no se bloquea al dueño verificado."""
+    número, el llamador no lo guarda (sigue con los demás) en vez de cortar la sincronización."""
     session = _Session(claimed=True)
 
-    assert await warn_if_claimed(
-        session, uuid.uuid4(), waba_id=None, phone_number_id="phone-1", source="sync_phone_numbers"
+    assert await claimed_elsewhere(
+        session, uuid.uuid4(), phone_number_id="phone-1", source="sync_phone_numbers"
     ) is True
     assert [p.get("k") for _, p in session.sql if "k" in p] == ["meta_asset:phone:phone-1"]
 
@@ -152,7 +152,8 @@ def _evento(entry_id: str, sub_id: str | None) -> FlattenedEvent:
 
 @pytest.fixture
 def ruteo(monkeypatch):
-    """Dueños por número y por WABA; los IDs que no están en el mapa no resuelven."""
+    """Dueños por número y por WABA; `*-doble` los reclaman dos negocios (el resolvedor da
+    NULL, pero tienen dueño). Los demás IDs no tienen dueño."""
     tenant_a, tenant_b = uuid.uuid4(), uuid.uuid4()
     numeros = {"phone-de-a": tenant_a, "phone-de-b": tenant_b}
     wabas = {"waba-de-a": tenant_a, "waba-de-b": tenant_b}
@@ -163,32 +164,53 @@ def ruteo(monkeypatch):
     async def por_waba(waba_id):
         return wabas.get(waba_id)
 
+    async def tiene_dueno(*, waba_id=None, phone_number_id=None):
+        activo = waba_id or phone_number_id
+        return activo in numeros or activo in wabas or activo.endswith("-doble")
+
     monkeypatch.setattr(route_mod, "resolve_tenant_for_phone", por_numero)
     monkeypatch.setattr(route_mod, "_resolve_tenant_for_waba", por_waba)
+    monkeypatch.setattr(route_mod, "_has_owner", tiene_dueno)
     return tenant_a, tenant_b
+
+
+async def _ruta(entry_id: str, sub_id: str | None) -> tuple[uuid.UUID | None, bool]:
+    route = await route_mod.route_event(_evento(entry_id, sub_id))
+    return route.tenant_id, route.conflict
 
 
 @pytest.mark.asyncio
 async def test_el_numero_decide_si_la_waba_no_es_de_otro(ruteo):
     tenant_a, _tenant_b = ruteo
 
-    assert await route_mod.resolve_tenant_for_event(_evento("waba-sin-dueno", "phone-de-a")) == tenant_a
+    assert await _ruta("waba-sin-dueno", "phone-de-a") == (tenant_a, False)
+    assert await _ruta("waba-de-a", "phone-de-a") == (tenant_a, False)
     assert await route_mod.resolve_tenant_for_event(_evento("waba-de-a", "phone-de-a")) == tenant_a
 
 
 @pytest.mark.asyncio
-async def test_numero_y_waba_de_negocios_distintos_no_rutean_a_ninguno(ruteo):
+async def test_numero_y_waba_de_negocios_distintos_es_conflicto(ruteo):
     """El caso del hallazgo y su espejo: si el número es de A y la WABA de B, una de las
     dos filas es ajena. Ni la WABA (el hallazgo original) ni el número (una fila heredada
     sin verificar) deciden solos."""
+    assert await _ruta("waba-de-b", "phone-de-a") == (None, True)
+    assert await _ruta("waba-de-a", "phone-de-b") == (None, True)
     assert await route_mod.resolve_tenant_for_event(_evento("waba-de-b", "phone-de-a")) is None
-    assert await route_mod.resolve_tenant_for_event(_evento("waba-de-a", "phone-de-b")) is None
 
 
 @pytest.mark.asyncio
-async def test_sin_numero_o_sin_dueno_del_numero_decide_la_waba(ruteo):
+async def test_un_numero_con_dos_duenos_no_deja_decidir_a_la_waba(ruteo):
+    """Si un número ambiguo cayera a la WABA, quien la tiene podría provocar la ambigüedad
+    (registrando el número) para quedarse con los mensajes."""
+    assert await _ruta("waba-de-b", "phone-doble") == (None, True)
+
+
+@pytest.mark.asyncio
+async def test_sin_numero_o_numero_sin_dueno_decide_la_waba(ruteo):
     _tenant_a, tenant_b = ruteo
 
-    assert await route_mod.resolve_tenant_for_event(_evento("waba-de-b", None)) == tenant_b
-    assert await route_mod.resolve_tenant_for_event(_evento("waba-de-b", "phone-sin-dueno")) == tenant_b
-    assert await route_mod.resolve_tenant_for_event(_evento("waba-sin-dueno", "phone-sin-dueno")) is None
+    assert await _ruta("waba-de-b", None) == (tenant_b, False)
+    assert await _ruta("waba-de-b", "phone-sin-dueno") == (tenant_b, False)
+    assert await _ruta("waba-sin-dueno", "phone-sin-dueno") == (None, False)
+    assert await _ruta("waba-doble", None) == (None, True)
+    assert await _ruta("waba-doble", "phone-sin-dueno") == (None, True)

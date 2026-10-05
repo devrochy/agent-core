@@ -31,7 +31,7 @@ from core.gateway.channels.registry import inbound_adapter_for
 from core.gateway.connections import effective_credentials
 from core.gateway.idempotency import claim_message_once
 from core.gateway.webhook_flatten import FlattenedEvent, flatten_payload
-from core.gateway.webhook_route_tenant import resolve_tenant_for_event
+from core.gateway.webhook_route_tenant import route_event
 from core.gateway.webhook_verify import constant_time_equal
 from core.memory.working import get_redis
 from core.shared.logger import get_logger
@@ -308,8 +308,26 @@ async def _process_payload(
     total_duplicates = 0
     any_entry_processed = False
 
-    for (entry_id, _sub_id), entry_events in events_by_entry.items():
-        resolved_tenant_id = await resolve_tenant_for_event(entry_events[0])
+    for (entry_id, sub_id), entry_events in events_by_entry.items():
+        route = await route_event(entry_events[0])
+        resolved_tenant_id = route.tenant_id
+
+        if route.conflict:
+            # Los activos del evento apuntan a más de un negocio (ADR-0095): no va
+            # a ninguno, ni al del slug ni al `default_tenant()` de desarrollo.
+            log.warning(
+                "webhook_tenant_conflict",
+                slug_tenant_id=str(known_tenant_id) if known_tenant_id else None,
+                entry_id=entry_id,
+                phone_number_id=sub_id,
+            )
+            for event in entry_events:
+                ok = await _log_webhook_event(
+                    meta_app_id, event, tenant_id=None, process_error="tenant_conflict"
+                )
+                if not ok:
+                    return _webhook_events_failure_response()
+            continue
 
         if known_tenant_id is not None and resolved_tenant_id is not None and resolved_tenant_id != known_tenant_id:
             # Defensa en profundidad (hallazgo auditor-multitenant, 2026-09-20):
@@ -325,6 +343,7 @@ async def _process_payload(
                 slug_tenant_id=str(known_tenant_id),
                 resolved_tenant_id=str(resolved_tenant_id),
                 entry_id=entry_id,
+                phone_number_id=sub_id,
             )
             for event in entry_events:
                 ok = await _log_webhook_event(
@@ -348,7 +367,12 @@ async def _process_payload(
                 )
                 if not ok:
                     return _webhook_events_failure_response()
-            log.warning("webhook_unresolved_tenant", object_type=entry_events[0].object_type, entry_id=entry_id)
+            log.warning(
+                "webhook_unresolved_tenant",
+                object_type=entry_events[0].object_type,
+                entry_id=entry_id,
+                phone_number_id=sub_id,
+            )
             continue
 
         if not await is_tenant_operational(tenant_id):
