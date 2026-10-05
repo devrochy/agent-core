@@ -218,6 +218,16 @@ class Settings(BaseSettings):
     otel_exporter_endpoint: str = Field(default="", alias="OTEL_EXPORTER_OTLP_ENDPOINT")
     otel_service_name: str = Field(default="agent-core", alias="OTEL_SERVICE_NAME")
 
+    # --- Correo de sistema (recuperación de contraseña, ADR-0094) ---
+    # SMTP de la plataforma, distinto del canal SMTP por tenant (que exige
+    # contexto de negocio). Sin host configurado, el envío es log-only
+    # (mismo criterio que las alertas de Slack).
+    system_smtp_host: str = Field(default="", alias="SYSTEM_SMTP_HOST")
+    system_smtp_port: int = Field(default=587, alias="SYSTEM_SMTP_PORT")
+    system_smtp_username: str = Field(default="", alias="SYSTEM_SMTP_USERNAME")
+    system_smtp_password: str = Field(default="", alias="SYSTEM_SMTP_PASSWORD")
+    system_smtp_from: str = Field(default="", alias="SYSTEM_SMTP_FROM")
+
     # --- Alertas (salud de conexiones Meta) ---
     # Sin webhook configurado, send_alert() solo loguea (nunca fue un canal
     # real hasta este ticket -- antes todo esto era log.error a secas).

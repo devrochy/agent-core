@@ -457,6 +457,28 @@ class AdminSession(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class PasswordResetToken(Base):
+    """Código de recuperación de contraseña de un solo uso (ADR-0094).
+
+    Tabla de SISTEMA (sin RLS): infraestructura de identidad, se consulta sin
+    contexto de tenant (el admin pide recuperar su contraseña antes de elegir
+    negocio). Guarda solo el hash SHA-256 del código, nunca el código.
+    """
+
+    __tablename__ = "password_reset_tokens"
+    __table_args__ = (
+        Index("ix_password_reset_tokens_admin", "admin_id"),
+        Index("ix_password_reset_tokens_token_hash", "token_hash"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("admins.id"))
+    token_hash: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class AdminPermission(Base):
     """Permiso de sección de un admin (RBAC configurable, ADR-0047).
 
