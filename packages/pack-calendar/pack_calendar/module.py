@@ -40,17 +40,28 @@ _COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
     "agendada": (
         re.compile(
             r"qued\w*\s+(?:tu\s+)?(?:demo|cita\w*)?\s*agendad\w*|"
-            r"(?:ya\s+)?te\s+agend\w+\s+(?:la\s+)?(?:demo|cita)",
+            r"(?:ya\s+)?te\s+agend\w+\s+(?:la\s+)?(?:demo|cita)|"
+            r"no\s+pud\w*\s+agend\w*",
             re.IGNORECASE,
         ),
         {"create_calendar_event"},
     ),
     "reagendada": (
-        re.compile(r"qued\w*\s+(?:re)agendad\w*|reprogramad\w*|mov\w+\s+(?:la\s+)?cita", re.IGNORECASE),
+        re.compile(
+            r"qued\w*\s+(?:re)agendad\w*|reprogramad\w*|mov\w+\s+(?:la\s+)?cita|"
+            r"no\s+pud\w*\s+(?:reagend\w*|mover|movi\w*)|"
+            r"no\s+(?:la\s+)?(?:encontr|hall)\w+.{0,60}(?:reagend\w*|mover|movi\w*)",
+            re.IGNORECASE,
+        ),
         {"update_calendar_event"},
     ),
     "cancelada": (
-        re.compile(r"qued\w*\s+cancelad\w*|cancel\w+\s+(?:la\s+)?cita|qued\w*\s+anulad\w*", re.IGNORECASE),
+        re.compile(
+            r"qued\w*\s+cancelad\w*|cancel\w+\s+(?:la\s+)?cita|qued\w*\s+anulad\w*|"
+            r"no\s+pud\w*\s+cancel\w*|"
+            r"no\s+(?:la\s+)?(?:encontr|hall|figur|aparec)\w+.{0,60}cancel\w*",
+            re.IGNORECASE,
+        ),
         {"cancel_calendar_event"},
     ),
     "correo_enviado": (
@@ -64,7 +75,8 @@ _COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
     "listado": (
         re.compile(
             r"no\s+ten\w*\s+(?:ninguna\s+|ningunas\s+)?citas?\s+agendadas|"
-            r"ten\w*\s+\d+\s+(?:citas?|demos?)\s+agendadas",
+            r"ten\w*\s+\d+\s+(?:citas?|demos?)\s+agendadas|"
+            r"no\s+(?:me\s+)?(?:aparece|figura|encontr\w+).{0,50}(?:citas?|demo)",
             re.IGNORECASE,
         ),
         {"list_client_appointments"},
@@ -233,10 +245,11 @@ class GoogleCalendarModule(BaseModule):
                     )
                 else:
                     retry = (
-                        f"Dijiste que se completó '{label}' pero no llamaste la herramienta "
-                        f"correspondiente ({', '.join(sorted(required_tools))}) en este turno. "
-                        "Llamala ahora mismo, o si no podés completarla de verdad, decilo "
-                        "explícitamente en vez de prometer algo que no vas a cumplir."
+                        f"Tu respuesta afirma el resultado de '{label}' pero no llamaste la "
+                        f"herramienta correspondiente ({', '.join(sorted(required_tools))}) "
+                        "en este turno. Llamala ahora mismo y contá lo que devuelva, o si no "
+                        "podés completarla de verdad, decilo sin prometer ni dar por fallido "
+                        "algo que no intentaste."
                     )
                 return GuardrailResult(
                     passed=False,

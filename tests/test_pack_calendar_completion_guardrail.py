@@ -195,3 +195,35 @@ async def test_reintento_guia_a_pedir_el_dato_faltante():
     assert not verdict.passed
     assert "Falta el email del cliente" in verdict.retry_instruction
     assert "NO afirmes que se completó" in verdict.retry_instruction
+
+
+@pytest.mark.asyncio
+async def test_fallo_de_cancelacion_sin_tool_bloquea():
+    """Decir "no pude cancelarla" sin llamar la tool también es una afirmación
+    de resultado (no se puede saber el fallo sin intentarlo)."""
+    module = GoogleCalendarModule()
+    verdict = await module._completion_guardrail(
+        "No pude cancelarla, Robinson: el sistema no encontró la cita del martes "
+        "13 de octubre para cancelar.",
+        [],
+    )
+    assert not verdict.passed
+    assert "cancelada" in verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_fallo_de_reagenda_sin_tool_bloquea():
+    module = GoogleCalendarModule()
+    verdict = await module._completion_guardrail(
+        "No pude reagendarla: no encontré la cita para mover.", []
+    )
+    assert not verdict.passed
+
+
+@pytest.mark.asyncio
+async def test_no_aparece_cita_sin_listar_bloquea():
+    module = GoogleCalendarModule()
+    verdict = await module._completion_guardrail(
+        "Mmm, revisé tu agenda y no me aparece ninguna cita registrada.", []
+    )
+    assert not verdict.passed
