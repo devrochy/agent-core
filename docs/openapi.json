@@ -320,6 +320,79 @@
         }
       }
     },
+    "/api/v1/search": {
+      "get": {
+        "tags": [
+          "api",
+          "búsqueda"
+        ],
+        "summary": "Busqueda Global",
+        "operationId": "busqueda_global_api_v1_search_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 100,
+              "title": "Q"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "default": 5,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/tenants": {
       "get": {
         "tags": [
@@ -14736,6 +14809,39 @@
         ],
         "title": "InvitationItem"
       },
+      "ItemBusqueda": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "tipo": {
+            "type": "string",
+            "title": "Tipo"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "subtitulo": {
+            "type": "string",
+            "title": "Subtitulo"
+          },
+          "extra": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Extra"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tipo",
+          "titulo",
+          "subtitulo"
+        ],
+        "title": "ItemBusqueda"
+      },
       "LeadColumn": {
         "properties": {
           "key": {
@@ -17865,6 +17971,32 @@
         ],
         "title": "ResetPasswordRequest"
       },
+      "ResultadoSeccion": {
+        "properties": {
+          "seccion": {
+            "type": "string",
+            "title": "Seccion"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ItemBusqueda"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seccion",
+          "label",
+          "items"
+        ],
+        "title": "ResultadoSeccion"
+      },
       "RevokeRequest": {
         "properties": {
           "section": {
@@ -18058,6 +18190,22 @@
         },
         "type": "object",
         "title": "RulesUpdate"
+      },
+      "SearchResponse": {
+        "properties": {
+          "resultados": {
+            "items": {
+              "$ref": "#/components/schemas/ResultadoSeccion"
+            },
+            "type": "array",
+            "title": "Resultados"
+          }
+        },
+        "type": "object",
+        "required": [
+          "resultados"
+        ],
+        "title": "SearchResponse"
       },
       "SettingsResponse": {
         "properties": {
