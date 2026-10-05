@@ -106,8 +106,12 @@ async def _enqueue_next(
     Solo hay una tarea viva por conversación en vuelo: al terminar un mensaje
     se encola el siguiente más antiguo, así la cadena avanza en orden y nunca
     se corta (aunque una burbuja falle de forma permanente, la siguiente sale).
+
+    Abre su propio `tenant_scope`: tras un fallo permanente se llama fuera del
+    scope del envío y, con RLS forzada en `messages`, sin él la consulta no veía
+    filas y la cola de la conversación quedaba cortada (incidente 2026-10-05).
     """
-    async with get_session() as session:
+    async with tenant_scope(tenant_id), get_session() as session:
         nxt = await session.execute(
             select(Message.id)
             .where(
