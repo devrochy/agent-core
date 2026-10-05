@@ -1,5 +1,22 @@
 # Changelog
 
+## Sin versión — Credenciales de Meta por conexión (HU-CONN-01, 2026-10-05)
+
+- **`meta_connections.origin`** (`byok` | `embedded_signup` | `manual`, migración `0051`): se guarda al
+  crear la conexión y deja de inferirse por los tokens que existen. Backfill por tenant (fija
+  `app.tenant_id`) con la evidencia de cada alta; sin evidencia → `manual`. ADR-0094.
+- **Resolver único** `core/gateway/meta_credentials.py` (`MetaCredentials`, `credentials_for`): BYOK usa el
+  token y el App Secret de la conexión; Embedded Signup y manual, el token de la conexión y el secreto de la
+  plataforma. Sin credenciales → `CredentialsUnavailable(reason)`.
+- Números, Plantillas (panel SSR y API), salud, costos/créditos, endpoints de token BYOK y los crons de
+  plantillas y de precios usan las credenciales de **esa** conexión. Antes casi todo asumía Embedded Signup:
+  fallaba con BYOK y los crons exigían `TOKEN_KIND` **y** `app_access`, así que no procesaban ninguna conexión.
+- Crons: el error se registra por conexión (`connection_id`, `tenant_id`, `reason`) y no corta a las demás; el de
+  plantillas pide las credenciales antes del lock horario. La sincronización manual de precios ahora informa
+  las conexiones sin credenciales (antes las omitía en silencio).
+- `POST /admin/meta/byok/token/extend` responde 400 `not_byok` para conexiones que no son BYOK.
+- Se elimina `resolve_waba_and_token` (y su copia en el panel SSR) a favor de `resolve_waba_and_credentials`.
+
 ## Sin versión — Conectar Google Calendar desde el panel (HU-CAL-07, 2026-10-05)
 
 - El retorno OAuth de Google entra por el panel: `redirect_uri` = `<PANEL>/api/calendar/oauth/callback`

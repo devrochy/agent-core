@@ -113,6 +113,24 @@ repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev
 - `ix_meta_tokens_tenant` no es índice compuesto (preexistente).
 - `save_byok_connection` tiene un branch de "tenant mismatch" inalcanzable (RLS lo filtra antes).
 
+**Pendientes tras HU-CONN-01 (credenciales por conexión, ADR-0094)**
+- Suscripciones y webhook (`meta_subscriptions*.py`, `meta_preflight.resolve_app_credentials`,
+  `connections.resolve_effective_app_secret`) siguen eligiendo "la" conexión del tenant en vez de usar
+  `credentials_for`: es HU-CONN-05 (webhook y secreto por conexión).
+- Descarga de media entrante: el core no la hace (`inbound.py` deja `url: ""`); HU-MEDIA-02 debe usar
+  `credentials_for` para el `GET /{media_id}`.
+- `POST /admin/meta/manual` valida el token con las credenciales del tenant (o la plataforma) pero la conexión
+  `manual` se resuelve siempre con la app de la plataforma: un token de la app BYOK del negocio pasaría la
+  validación y fallaría después por `appsecret_proof`.
+- `meta_private.meta_tokens` tiene RLS habilitada pero **no forzada** (`relforcerowsecurity = f`): la migración
+  `0029` solo recorrió el schema `public`. Hoy no hay fuga (el runtime no es dueño y el AAD falla cerrado),
+  pero incumple la invariante 1.
+- Las migraciones asumen un rol con `BYPASSRLS` o superusuario: `0034` falla con un dueño sin bypass
+  ("new row violates row-level security policy for table tenant_subscriptions"). La `0051` sí es segura con
+  cualquier rol (fija `app.tenant_id` por tenant).
+- `tests/test_meta_byok.py` (7) y `tests/integration/test_api_meta_wizard.py::test_byok_*` /
+  `test_meta_byok_reconnect.py` no stubbean `_token_expiry` → hacen una llamada real a Graph y fallan sin red.
+
 **Código muerto**
 `MCPHost.register_resource()` y `MCPResource` (registrados, nunca leídos);
 `BaseLLMProvider.stream()` (implementado en ambos providers, el orchestrator nunca lo

@@ -68,7 +68,7 @@ from core.admin.meta_numbers_service import (
     add_number,
     list_numbers,
     request_code,
-    resolve_waba_and_token,
+    resolve_waba_and_credentials,
     verify_number,
 )
 from core.admin.meta_templates_service import (
@@ -121,7 +121,6 @@ from core.db.models import (
     Tenant,
     TenantUser,
     UsageLedger,
-    WabaAccount,
     utcnow,
 )
 from core.db.session import get_owned, get_session
@@ -2093,26 +2092,6 @@ async def connection_delete(request: Request, connection_id: uuid.UUID):
 # ------------------------------------------------------------------ números adicionales de una WABA
 # Prefijo "meta/" para no chocar con /conexiones/{connection_id}/... de
 # arriba, que son rutas de ChannelConnection (modelo viejo/distinto).
-async def _resolve_waba_and_token(connection_id: uuid.UUID, tenant_id: uuid.UUID | None):
-    from core.db.models import MetaConnection
-    from core.gateway import meta_token_store
-    from core.gateway.meta_onboarding import TOKEN_KIND
-
-    async with get_session() as session:
-        connection = await get_owned(session, MetaConnection, connection_id, tenant_id)
-        if connection is None:
-            return None, None, None
-        waba = (
-            await session.execute(select(WabaAccount).where(WabaAccount.connection_id == connection_id))
-        ).scalars().first()
-    if waba is None:
-        return connection, None, None
-    token = await meta_token_store.get_token(
-        connection_id, TOKEN_KIND, connection.business_id or str(connection_id), tenant_id=tenant_id
-    )
-    return connection, waba, token
-
-
 @router.get("/conexiones/meta/{connection_id}/numeros", response_class=HTMLResponse)
 async def meta_connection_numeros_page(request: Request, connection_id: str):
     ctx = await _base_context(request, "connections")
@@ -2120,7 +2099,7 @@ async def meta_connection_numeros_page(request: Request, connection_id: str):
         return _login_redirect()
 
     tid = get_current_tenant_id()
-    connection, waba, _token = await resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    connection, waba, _creds = await resolve_waba_and_credentials(uuid.UUID(connection_id), tid)
     if connection is None:
         return RedirectResponse(
             "/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303
@@ -2187,7 +2166,7 @@ async def meta_connection_plantillas_page(request: Request, connection_id: str):
         return _login_redirect()
 
     tid = get_current_tenant_id()
-    connection, waba, _token = await resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    connection, waba, _creds = await resolve_waba_and_credentials(uuid.UUID(connection_id), tid)
     if connection is None:
         return RedirectResponse(
             "/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303
@@ -2260,9 +2239,9 @@ async def meta_connection_plantilla_editar(request: Request, connection_id: str,
         return _login_redirect()
 
     tid = get_current_tenant_id()
-    connection, _waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    connection, _waba, creds = await resolve_waba_and_credentials(uuid.UUID(connection_id), tid)
     url = f"/admin/conexiones/meta/{connection_id}/plantillas"
-    if connection is None or not token:
+    if connection is None or creds is None:
         return RedirectResponse(f"{url}?flash=No hay conexión lista todavía&flash_type=danger", status_code=303)
 
     async with get_session() as session:
@@ -2272,7 +2251,7 @@ async def meta_connection_plantilla_editar(request: Request, connection_id: str,
 
     try:
         await update_template(
-            row.meta_template_id, token, get_settings().meta_app_secret, connection.graph_api_version,
+            row.meta_template_id, creds.access_token, creds.app_secret, creds.graph_api_version,
             connection.id, tid, category=category or None,
         )
     except TemplateValidationError as exc:
@@ -2306,9 +2285,9 @@ async def meta_connection_plantilla_eliminar_traduccion(request: Request, connec
         return _login_redirect()
 
     tid = get_current_tenant_id()
-    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    connection, waba, creds = await resolve_waba_and_credentials(uuid.UUID(connection_id), tid)
     url = f"/admin/conexiones/meta/{connection_id}/plantillas"
-    if connection is None or waba is None or not token:
+    if connection is None or waba is None or creds is None:
         return RedirectResponse(f"{url}?flash=No hay conexión/WABA lista todavía&flash_type=danger", status_code=303)
 
     async with get_session() as session:
@@ -2318,8 +2297,8 @@ async def meta_connection_plantilla_eliminar_traduccion(request: Request, connec
 
     try:
         await delete_template_one_language(
-            waba.waba_id, row.name, row.meta_template_id, token, get_settings().meta_app_secret,
-            connection.graph_api_version, connection.id, tid,
+            waba.waba_id, row.name, row.meta_template_id, creds.access_token, creds.app_secret,
+            creds.graph_api_version, connection.id, tid,
         )
     except GraphError as exc:
         return RedirectResponse(f"{url}?flash={exc.message[:200]}&flash_type=danger", status_code=303)

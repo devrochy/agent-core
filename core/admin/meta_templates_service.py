@@ -11,7 +11,7 @@ import uuid
 
 from sqlalchemy import select
 
-from core.admin.meta_numbers_service import resolve_waba_and_token
+from core.admin.meta_numbers_service import resolve_waba_and_credentials
 from core.db.models import MessageTemplate
 from core.db.session import get_owned, get_session
 
@@ -20,7 +20,6 @@ async def list_templates(
     tenant_id: uuid.UUID, connection_id: str
 ) -> tuple[list[dict], str | None, bool]:
     """(plantillas, error de sync, en_límite)."""
-    from core.config import get_settings
     from core.gateway.meta_errors import GraphError
     from core.gateway.meta_template_sync import acquire_sync_lock, sync_templates
 
@@ -29,18 +28,18 @@ async def list_templates(
     except ValueError:
         return [], "Conexión inválida", False
 
-    connection, waba, token = await resolve_waba_and_token(cid, tenant_id)
+    connection, waba, creds = await resolve_waba_and_credentials(cid, tenant_id)
     if connection is None:
         return [], "Conexión no encontrada", False
 
     sync_error = None
-    if waba is not None and token and await acquire_sync_lock(waba.waba_id):
+    if waba is not None and creds is not None and await acquire_sync_lock(waba.waba_id):
         try:
             await sync_templates(
                 waba.waba_id,
-                token,
-                get_settings().meta_app_secret,
-                connection.graph_api_version,
+                creds.access_token,
+                creds.app_secret,
+                creds.graph_api_version,
                 connection.id,
                 tenant_id,
             )
@@ -86,7 +85,6 @@ async def list_templates(
 
 
 async def sync_templates_now(tenant_id: uuid.UUID, connection_id: str) -> str | None:
-    from core.config import get_settings
     from core.gateway.meta_errors import GraphError
     from core.gateway.meta_template_sync import acquire_sync_lock, sync_templates
 
@@ -95,8 +93,8 @@ async def sync_templates_now(tenant_id: uuid.UUID, connection_id: str) -> str | 
     except ValueError:
         return "Conexión inválida"
 
-    connection, waba, token = await resolve_waba_and_token(cid, tenant_id)
-    if connection is None or waba is None or not token:
+    connection, waba, creds = await resolve_waba_and_credentials(cid, tenant_id)
+    if connection is None or waba is None or creds is None:
         return "No hay conexión/WABA lista todavía"
     if not await acquire_sync_lock(waba.waba_id):
         return "Ya se sincronizó en la última hora"
@@ -104,9 +102,9 @@ async def sync_templates_now(tenant_id: uuid.UUID, connection_id: str) -> str | 
     try:
         await sync_templates(
             waba.waba_id,
-            token,
-            get_settings().meta_app_secret,
-            connection.graph_api_version,
+            creds.access_token,
+            creds.app_secret,
+            creds.graph_api_version,
             connection.id,
             tenant_id,
         )
@@ -119,7 +117,6 @@ async def delete_template(
     tenant_id: uuid.UUID, connection_id: str, template_id: str
 ) -> str | None:
     """Borra todas las versiones de idioma de una plantilla."""
-    from core.config import get_settings
     from core.gateway.meta_errors import GraphError
     from core.gateway.meta_templates import delete_template_all_languages
 
@@ -129,8 +126,8 @@ async def delete_template(
     except ValueError:
         return "Plantilla inválida"
 
-    connection, waba, token = await resolve_waba_and_token(cid, tenant_id)
-    if connection is None or waba is None or not token:
+    connection, waba, creds = await resolve_waba_and_credentials(cid, tenant_id)
+    if connection is None or waba is None or creds is None:
         return "No hay conexión/WABA lista todavía"
 
     async with get_session() as session:
@@ -142,9 +139,9 @@ async def delete_template(
         await delete_template_all_languages(
             waba.waba_id,
             row.name,
-            token,
-            get_settings().meta_app_secret,
-            connection.graph_api_version,
+            creds.access_token,
+            creds.app_secret,
+            creds.graph_api_version,
             connection.id,
             tenant_id,
         )

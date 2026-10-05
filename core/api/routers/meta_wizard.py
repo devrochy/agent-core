@@ -235,6 +235,7 @@ async def manual_connection(
         connection = MetaConnection(
             tenant_id=principal.tenant_id,
             channel="whatsapp",
+            origin="manual",
             meta_app_id=app_id,
             business_id=payload.business_id.strip() or None,
             status="connected",

@@ -101,3 +101,4 @@ Se crean con `/adr`.
 | [0091](0091-fecha-actual-y-zona-horaria-del-negocio.md) | Fecha actual en el prompt y zona horaria del negocio (HU-CAL-04) | aceptado |
 | [0092](0092-fallo-de-guardrail-neutral-configurable.md) | Fallo de guardrail con respuesta neutral configurable (HU-CAL-04) | aceptado |
 | [0093](0093-callback-oauth-google-en-el-panel.md) | El retorno OAuth de Google Calendar entra por el panel (supersede parcial de ADR-0070, HU-CAL-07) | aceptado |
+| [0094](0094-credenciales-de-meta-por-conexion.md) | Credenciales de Meta por conexión, con el origen guardado (`byok` / `embedded_signup` / `manual`, HU-CONN-01) | aceptado |

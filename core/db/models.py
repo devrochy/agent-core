@@ -793,12 +793,20 @@ class MetaConnection(Base):
             "status in ('draft','pending','connected','degraded','revoked','error')",
             name="ck_meta_connections_status",
         ),
+        CheckConstraint(
+            "origin in ('byok','embedded_signup','manual')",
+            name="ck_meta_connections_origin",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     channel: Mapped[str] = mapped_column(Text)
     environment: Mapped[str] = mapped_column(Text, default="production")
+    # Cómo se creó la conexión (HU-CONN-01, ADR-0094). Decide de dónde salen sus
+    # credenciales (`core/gateway/meta_credentials.py`). Lo fijan las altas guiadas
+    # (BYOK, Embedded Signup y la carga manual); `manual` es también el valor por defecto.
+    origin: Mapped[str] = mapped_column(Text, default="manual", server_default=text("'manual'"))
     meta_app_id: Mapped[str] = mapped_column(Text)
     meta_config_id: Mapped[str | None] = mapped_column(Text)  # Embedded Signup Login Configuration
     business_id: Mapped[str | None] = mapped_column(Text)

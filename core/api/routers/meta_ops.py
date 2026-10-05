@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
@@ -51,6 +51,9 @@ from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.config import get_settings
 from core.db.session import get_session
+
+if TYPE_CHECKING:
+    from core.gateway.meta_credentials import MetaCredentials
 
 router = APIRouter(prefix="/admin/meta", tags=["admin · meta"])
 
@@ -404,7 +407,8 @@ async def create_connection_template(
     """Crea una plantilla en la WABA de la conexión (pendiente de revisión de Meta)."""
     import uuid as uuid_mod
 
-    from core.admin.views import _build_template_components, _resolve_waba_and_token
+    from core.admin.meta_numbers_service import resolve_waba_and_credentials
+    from core.admin.views import _build_template_components
     from core.gateway.meta_errors import GraphError
     from core.gateway.meta_template_upload import TemplateUploadError
     from core.gateway.meta_templates import (
@@ -421,7 +425,7 @@ async def create_connection_template(
     if not payload.name.strip() or not payload.body_text.strip():
         raise ApiError.bad_request("Nombre y cuerpo son obligatorios.", "missing_fields")
     try:
-        connection, waba, token = await _resolve_waba_and_token(
+        connection, waba, creds = await resolve_waba_and_credentials(
             uuid_mod.UUID(connection_id), principal.tenant_id
         )
     except ValueError as exc:
@@ -430,7 +434,7 @@ async def create_connection_template(
         raise ApiError.bad_request(
             f"No hay conexión/WABA lista todavía: {str(exc)[:120]}", "connection_not_ready"
         ) from exc
-    if connection is None or waba is None or not token:
+    if connection is None or waba is None or creds is None:
         raise ApiError.bad_request(
             "No hay conexión/WABA lista todavía.", "connection_not_ready"
         )
@@ -454,9 +458,9 @@ async def create_connection_template(
     try:
         await create_template(
             waba.waba_id,
-            token,
-            get_settings().meta_app_secret,
-            connection.graph_api_version,
+            creds.access_token,
+            creds.app_secret,
+            creds.graph_api_version,
             connection.id,
             principal.tenant_id,
             waba.id,
@@ -495,18 +499,18 @@ class TokenExtend(BaseModel):
     expires_in: int | None = None
 
 
-async def _resolve_connection_token_secret(
+async def _resolve_connection_credentials(
     principal: Principal, connection_id: str
-) -> tuple[Any, str, str]:
-    """(conexión, app_secret, access_token) guardados del negocio, o error claro.
+) -> tuple[Any, MetaCredentials]:
+    """(conexión, credenciales) de ESA conexión según su origen, o error claro.
 
     El token y el secret viven bajo RLS de tenant (custodia del token store):
     todo se resuelve dentro de `tenant_scope` (mismo bug real que el webhook).
+    Antes el secreto salía de "el" secreto efectivo del tenant, que con varias
+    conexiones podía no ser el de esta (HU-CONN-01).
     """
     from core.db.models import MetaConnection
-    from core.gateway import meta_token_store
-    from core.gateway.connections import resolve_effective_app_secret
-    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
+    from core.gateway.meta_credentials import CredentialsUnavailable, credentials_for
     from core.shared.tenant import tenant_scope
 
     try:
@@ -517,25 +521,20 @@ async def _resolve_connection_token_secret(
     async with tenant_scope(principal.tenant_id):
         async with get_session() as session:
             connection = await session.get(MetaConnection, conn_uuid)
-            if (
-                connection is None
-                or connection.tenant_id != principal.tenant_id
-                or connection.deleted_at is not None
-            ):
-                raise ApiError.not_found("La conexión no existe.")
-            secret = await resolve_effective_app_secret(principal.tenant_id)
-            token = await meta_token_store.get_token(
-                connection.id,
-                CLOUD_API_ACCESS_TOKEN_KIND,
-                connection.meta_app_id,
-                tenant_id=principal.tenant_id,
-            )
-    if not secret or not token:
-        raise ApiError.bad_request(
-            "La conexión no tiene app secret o access token guardados.",
-            "missing_credentials",
-        )
-    return connection, secret, token
+        if (
+            connection is None
+            or connection.tenant_id != principal.tenant_id
+            or connection.deleted_at is not None
+        ):
+            raise ApiError.not_found("La conexión no existe.")
+        try:
+            creds = await credentials_for(connection)
+        except CredentialsUnavailable as exc:
+            raise ApiError.bad_request(
+                "La conexión no tiene app secret o access token guardados.",
+                "missing_credentials",
+            ) from exc
+    return connection, creds
 
 
 @router.post("/byok/token/inspect", response_model=TokenInspect)
@@ -549,12 +548,10 @@ async def inspect_byok_token(
     from core.gateway.meta_token_store import get_token_expires_at
     from core.gateway.meta_token_tools import inspect_token
 
-    connection, secret, token = await _resolve_connection_token_secret(
-        principal, payload.connection_id
-    )
+    connection, creds = await _resolve_connection_credentials(principal, payload.connection_id)
     try:
         info = await inspect_token(
-            connection.meta_app_id, secret, token, version=connection.graph_api_version
+            creds.app_id, creds.app_secret, creds.access_token, version=creds.graph_api_version
         )
     except GraphError as exc:
         raise ApiError.bad_request(str(getattr(exc, "message", exc))[:200], "graph_error") from exc
@@ -596,12 +593,16 @@ async def extend_byok_token(
     from core.gateway.meta_token_tools import extend_token
     from core.shared.tenant import tenant_scope
 
-    connection, secret, token = await _resolve_connection_token_secret(
-        principal, payload.connection_id
-    )
+    connection, creds = await _resolve_connection_credentials(principal, payload.connection_id)
+    if creds.origin != "byok":
+        # El token nuevo se guarda como el de una conexión BYOK; el de las demás es
+        # un token de system user de la plataforma que no se canjea desde acá.
+        raise ApiError.bad_request(
+            "Solo el token de una conexión BYOK se puede extender desde aquí.", "not_byok"
+        )
     try:
         info = await extend_token(
-            connection.meta_app_id, secret, token, version=connection.graph_api_version
+            creds.app_id, creds.app_secret, creds.access_token, version=creds.graph_api_version
         )
     except GraphError as exc:
         raise ApiError.bad_request(str(getattr(exc, "message", exc))[:200], "graph_error") from exc

@@ -27,7 +27,6 @@ from core.db.models import (
 from core.db.session import get_session
 from core.gateway.meta_errors import GraphError, classify_and_build_error
 from core.gateway.meta_graph import GRAPH_BASE, graph_fetch
-from core.gateway.meta_onboarding import TOKEN_KIND
 from core.gateway.meta_phone_numbers import _PHONE_FIELDS
 from core.gateway.meta_preflight import PreflightCheck
 from core.shared.logger import get_logger
@@ -285,8 +284,7 @@ def check_billing(connection: MetaConnection) -> PreflightCheck:
 async def run_health_checks(connection: MetaConnection, tenant_id: uuid.UUID) -> dict[str, dict[str, Any]]:
     """Resuelve WABA/números/token UNA sola vez, corre los checks que
     aplican, devuelve el dict listo para `MetaConnection.health`."""
-    from core.gateway import meta_token_store
-    from core.gateway.meta_preflight import resolve_app_credentials
+    from core.gateway.meta_credentials import CredentialsUnavailable, credentials_for
 
     checks: dict[str, PreflightCheck] = {}
 
@@ -302,34 +300,36 @@ async def run_health_checks(connection: MetaConnection, tenant_id: uuid.UUID) ->
             )
         ).scalars().all()
 
-    token = await meta_token_store.get_token(
-        connection.id, TOKEN_KIND, connection.business_id or str(connection.id), tenant_id=tenant_id
-    )
-    app_creds = await resolve_app_credentials(tenant_id, connection.channel)
+    # Credenciales de ESTA conexión según su origen (HU-CONN-01): antes el secreto
+    # salía de "la" conexión del tenant, que con varias podía ser otra.
+    try:
+        creds = await credentials_for(connection, waba_id=waba.waba_id if waba is not None else None)
+    except CredentialsUnavailable:
+        creds = None
 
     checks["app_subscription_active"] = await check_app_subscription(connection)
     checks["billing"] = check_billing(connection)
 
-    if not token or app_creds is None:
+    if creds is None:
         return {key: check.model_dump(mode="json") for key, check in checks.items()}
 
     checks["token_valid"] = await check_token_valid(
-        token, app_creds.app_id, app_creds.app_secret, connection.graph_api_version
+        creds.access_token, creds.app_id, creds.app_secret, creds.graph_api_version
     )
 
     if waba is not None:
         checks["webhook_subscribed"] = await check_webhook_subscribed(
-            waba.waba_id, token, app_creds.app_secret, connection.graph_api_version, connection.id
+            waba.waba_id, creds.access_token, creds.app_secret, creds.graph_api_version, connection.id
         )
         checks["templates"] = await check_templates(waba.id, tenant_id)
 
     for phone in phone_numbers:
         suffix = f":{phone.phone_number_id}" if len(phone_numbers) > 1 else ""
         number_check = await check_number_registered(
-            phone.phone_number_id, token, app_creds.app_secret, connection.graph_api_version, connection.id
+            phone.phone_number_id, creds.access_token, creds.app_secret, creds.graph_api_version, connection.id
         )
         override_check = await check_webhook_override(
-            phone.phone_number_id, token, app_creds.app_secret, connection.graph_api_version, connection.id
+            phone.phone_number_id, creds.access_token, creds.app_secret, creds.graph_api_version, connection.id
         )
         checks[f"number_registered{suffix}"] = number_check
         checks[f"webhook_override{suffix}"] = override_check

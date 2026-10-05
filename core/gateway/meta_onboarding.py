@@ -183,6 +183,7 @@ async def start_or_resume_wizard(
                     tenant_id=tenant_id,
                     channel=channel,
                     environment=environment,
+                    origin="embedded_signup",
                     meta_app_id=settings.meta_app_id,
                     meta_config_id=settings.meta_config_id,
                     graph_api_version=settings.graph_api_version,
@@ -331,6 +332,9 @@ async def exchange_code(wizard_id: uuid.UUID, code: str) -> ConnectionWizardView
         connection = await session.get(MetaConnection, wizard.connection_id)
         if connection is not None:
             connection.status = "pending"
+            # El wizard puede reutilizar una conexión viva de otro origen; desde que
+            # guarda el token del system user la conexión es de Embedded Signup.
+            connection.origin = "embedded_signup"
         _advance_to(wizard, "discover_assets")
         await session.flush()
         return _to_view(wizard)
