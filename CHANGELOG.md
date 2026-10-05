@@ -1,5 +1,13 @@
 # Changelog
 
+## Sin versión — Conectar Google Calendar desde el panel (HU-CAL-07, 2026-10-05)
+
+- El retorno OAuth de Google entra por el panel: `redirect_uri` = `<PANEL>/api/calendar/oauth/callback`
+  (antes una ruta inexistente de la API → `redirect_uri_mismatch`/404). ADR-0093.
+- `/oauth/start` genera un `state` anti-CSRF (cookie httponly `oauth_state`); `/oauth/callback` exige
+  sesión (`pack_calendar:conexion`), valida el `state`, guarda los tokens en la conexión del negocio
+  del principal y borra las cookies del flujo.
+
 ## Sin versión — Pack de agendamiento definitivo (HU-CAL-05, 2026-10-05)
 
 - `check_availability`: fecha pasada → `status: in_past` (con `today`); para hoy no
