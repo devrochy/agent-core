@@ -11,7 +11,7 @@ import os
 import uuid
 
 import pytest
-from _api_helpers import ADMIN_EMAIL, api_headers, uniq
+from _api_helpers import ADMIN_EMAIL, api_headers, stub_meta_pair_ok, uniq
 from sqlalchemy import select
 
 pytestmark = [
@@ -140,6 +140,7 @@ async def test_byok_valido_crea_conexion_numero_y_waba(app_client, monkeypatch) 
     headers = await api_headers(app_client, tid)
 
     monkeypatch.setattr(byok_mod, "verify_meta_credentials", _fake_verify_ok)
+    stub_meta_pair_ok(monkeypatch)
     monkeypatch.setattr(byok_mod, "graph_fetch", _fake_graph_ok)
     llamadas: list = []
     monkeypatch.setattr(subs_mod, "upsert_app_subscription", _fake_upsert_factory(llamadas))
@@ -194,6 +195,7 @@ async def test_byok_sin_suscripcion_confirmada_queda_en_error(app_client, monkey
     headers = await api_headers(app_client, tid)
 
     monkeypatch.setattr(byok_mod, "verify_meta_credentials", _fake_verify_ok)
+    stub_meta_pair_ok(monkeypatch)
     monkeypatch.setattr(byok_mod, "graph_fetch", _fake_graph_sin_confirmar)
 
     payload = _payload(uniq("app-byok-sinsub"))

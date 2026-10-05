@@ -235,12 +235,12 @@ async def persist_finish_payload(
     wizard_id: uuid.UUID,
     event_type: str,
     *,
-    waba_id: str | None = None,
-    phone_number_id: str | None = None,
     business_id: str | None = None,
 ) -> ConnectionWizardView:
-    """Persiste lo que el popup YA dio, sin esperar al canje del `code` --
-    si el canje falla o el navegador se cierra, estos IDs no se pierden."""
+    """Persiste del popup solo lo que el canje necesita: el `business_id` (sujeto del
+    token) y la marca de coexistence. La WABA y el número NO se guardan aquí: se
+    guardan en `exchange_code`, después de verificarlos con el token (ADR-0095). Un
+    `code` inventado ya no deja filas que ocupen la WABA o el número de otro negocio."""
     tenant_id = get_current_tenant_id()
     async with get_session() as session:
         wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
@@ -253,33 +253,6 @@ async def persist_finish_payload(
         if connection is not None and event_type == _EVENT_COEXISTENCE:
             connection.health = {**(connection.health or {}), "coexistence": True}
 
-        if waba_id:
-            existing_waba = (
-                await session.execute(
-                    select(WabaAccount).where(WabaAccount.waba_id == waba_id, WabaAccount.connection_id == wizard.connection_id)
-                )
-            ).scalar_one_or_none()
-            if existing_waba is None:
-                session.add(WabaAccount(tenant_id=tenant_id, connection_id=wizard.connection_id, waba_id=waba_id))
-
-        if phone_number_id:
-            # tenant_id explícito, no solo la unicidad global de
-            # phone_number_id (defensa en profundidad -- hallazgo
-            # auditor-multitenant, 2026-09-22).
-            existing_phone = (
-                await session.execute(
-                    select(PhoneNumber).where(
-                        PhoneNumber.phone_number_id == phone_number_id, PhoneNumber.tenant_id == tenant_id
-                    )
-                )
-            ).scalar_one_or_none()
-            if existing_phone is None:
-                session.add(
-                    PhoneNumber(
-                        tenant_id=tenant_id, connection_id=wizard.connection_id, phone_number_id=phone_number_id
-                    )
-                )
-
         if event_type == _EVENT_COEXISTENCE:
             _mark_done(wizard, "register_number")
 
@@ -287,11 +260,94 @@ async def persist_finish_payload(
         return _to_view(wizard)
 
 
-async def exchange_code(wizard_id: uuid.UUID, code: str) -> ConnectionWizardView:
+async def _attach_finish_assets(
+    wizard_id: uuid.UUID,
+    tenant_id: uuid.UUID | None,
+    connection_id: uuid.UUID,
+    token: str,
+    *,
+    waba_id: str | None,
+    phone_number_id: str | None,
+) -> None:
+    """Guarda la WABA y el número que dio el popup, solo si el token recién canjeado los
+    ve en Meta y ningún otro negocio los tiene (ADR-0095). Los IDs del popup los manda el
+    navegador: sin esta verificación, cualquiera podría ocupar la WABA de otro."""
+    from core.gateway.meta_asset_claims import MetaAssetError, claim_assets, verify_waba_and_phone
+
+    if not waba_id:
+        if phone_number_id:
+            raise WizardError("Meta no devolvió la cuenta de WhatsApp Business del número.")
+        return
+
+    settings = get_settings()
+    async with get_session() as session:
+        connection = await session.get(MetaConnection, connection_id)
+        version = (connection.graph_api_version if connection else None) or settings.graph_api_version
+
+    try:
+        await verify_waba_and_phone(
+            waba_id=waba_id, phone_number_id=phone_number_id, token=token,
+            app_secret=settings.meta_app_secret, version=version, connection_id=connection_id,
+        )
+        async with get_session() as session:
+            await claim_assets(session, tenant_id, waba_id=waba_id, phone_number_id=phone_number_id)
+            # Las filas de una conexión en `draft` no cuentan para el ruteo ni el reclamo
+            # (migración 0052): sale de `draft` en la misma transacción que las inserta, o
+            # un alta simultánea de la misma WABA no las vería.
+            connection = await session.get(MetaConnection, connection_id)
+            if connection is not None and connection.status == "draft":
+                connection.status = "pending"
+            waba = (
+                await session.execute(
+                    select(WabaAccount).where(WabaAccount.waba_id == waba_id, WabaAccount.connection_id == connection_id)
+                )
+            ).scalar_one_or_none()
+            if waba is None:
+                waba = WabaAccount(tenant_id=tenant_id, connection_id=connection_id, waba_id=waba_id)
+                session.add(waba)
+                await session.flush()
+
+            if phone_number_id:
+                # tenant_id explícito, no solo la unicidad global de
+                # phone_number_id (defensa en profundidad -- hallazgo
+                # auditor-multitenant, 2026-09-22).
+                existing_phone = (
+                    await session.execute(
+                        select(PhoneNumber).where(
+                            PhoneNumber.phone_number_id == phone_number_id, PhoneNumber.tenant_id == tenant_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                if existing_phone is None:
+                    session.add(
+                        PhoneNumber(
+                            tenant_id=tenant_id, connection_id=connection_id,
+                            waba_account_id=waba.id, phone_number_id=phone_number_id,
+                        )
+                    )
+    except MetaAssetError as exc:
+        async with get_session() as session:
+            wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)
+            if wizard is not None:
+                wizard.last_error = {"code": exc.code, "message": exc.message, "at_step": "exchange_code"}
+        raise WizardError(exc.message) from exc
+
+
+async def exchange_code(
+    wizard_id: uuid.UUID,
+    code: str,
+    *,
+    waba_id: str | None = None,
+    phone_number_id: str | None = None,
+) -> ConnectionWizardView:
     """Time-critical: el `code` de Meta tiene TTL de 30s. Sin `redirect_uri`
     primero (no confirmado contra doc primaria de Meta al momento de
     escribir esto -- la doc devolvió 429). Si Meta responde OAuthException
-    mencionando `redirect_uri`, se reintenta UNA vez agregándolo."""
+    mencionando `redirect_uri`, se reintenta UNA vez agregándolo.
+
+    `waba_id`/`phone_number_id` son los que dio el popup: se guardan recién
+    después del canje, verificados con el token nuevo (`_attach_finish_assets`).
+    Si la verificación falla, la conexión no cambia de origen ni avanza el wizard."""
     tenant_id = get_current_tenant_id()
     settings = get_settings()
     started_at = time.monotonic()
@@ -326,6 +382,10 @@ async def exchange_code(wizard_id: uuid.UUID, code: str) -> ConnectionWizardView
         subject_id = business_id or str(wizard.connection_id)
 
     await meta_token_store.put_token(wizard.connection_id, TOKEN_KIND, subject_id, token, tenant_id=tenant_id)
+
+    await _attach_finish_assets(
+        wizard_id, tenant_id, wizard.connection_id, token, waba_id=waba_id, phone_number_id=phone_number_id
+    )
 
     async with get_session() as session:
         wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)

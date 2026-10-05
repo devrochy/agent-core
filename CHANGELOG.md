@@ -1,5 +1,27 @@
 # Changelog
 
+## Sin versión — Un número o una WABA de Meta pertenecen a un solo negocio (ADR-0095, 2026-10-05)
+
+- **Seguridad (alto, preexistente):** un negocio podía registrar la WABA o el número de otro y recibir sus
+  mensajes. El webhook ahora rutea **primero por el número** y después por la WABA; si el número es de un negocio
+  y la WABA de otro, el evento no va a ninguno (`unresolved_tenant` y aviso
+  `webhook_numero_y_waba_de_negocios_distintos`). Cada grupo `(entry, número)` se rutea por separado.
+- `resolve_tenant_for_phone` y `resolve_tenant_for_waba` (migración `0052`) solo cuentan conexiones vivas (no
+  borradas y fuera de `draft`; `resolve_tenant_for_phone` también mira `phone_numbers`, y en `channel_connections`
+  solo WhatsApp por Meta) y devuelven NULL si el activo lo reclaman dos negocios. Dejan de ser ejecutables por
+  PUBLIC y fijan `search_path = public, pg_temp`. La migración aborta si el rol no puede saltar RLS y lista en el
+  log los activos con dos dueños, las filas de conexiones en `draft` y los activos de altas manuales a revisar.
+- Función nueva `meta_asset_claimed_by_other_tenant` (`SECURITY DEFINER`, solo `app_runtime`): responde si otro
+  negocio ya tiene la WABA o el número, sin decir cuál. Sincronizar o agregar números solo avisa
+  (`meta_asset_tambien_de_otro_negocio`): Graph ya los lista en una WABA del negocio.
+- **Altas verificadas** (`core/gateway/meta_asset_claims.py`): la manual, BYOK y Embedded Signup comprueban en
+  Graph que el token ve la WABA y que el número es de ella, y rechazan (`asset_claimed`) un activo de otro
+  negocio, con un candado por activo en la misma transacción del insert. También `onboard_tenant` y
+  `save_connection` (tipo `whatsapp_meta`).
+- **Embedded Signup:** `POST /api/v1/admin/meta/wizard/exchange` ya no guarda la WABA ni el número antes del canje
+  (un `code` inventado los dejaba escritos); se guardan después, verificados con el token nuevo. Un `code`
+  inválido responde 400 `meta_error` en vez de 500.
+
 ## Sin versión — Credenciales de Meta por conexión (HU-CONN-01, 2026-10-05)
 
 - **`meta_connections.origin`** (`byok` | `embedded_signup` | `manual`, `NOT NULL` sin default, migración

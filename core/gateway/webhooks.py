@@ -297,15 +297,18 @@ async def _process_payload(
     settings = get_settings()
     meta_app_id = settings.meta_app_id or "unknown"
 
-    events_by_entry: dict[str, list[FlattenedEvent]] = {}
+    # Se rutea por (entry, número), no por entry: con el ruteo por número primero
+    # (ADR-0095), dos números de una misma entry pueden resolver a negocios
+    # distintos, y cada grupo va (o no va) al suyo.
+    events_by_entry: dict[tuple[str, str | None], list[FlattenedEvent]] = {}
     for event in events:
-        events_by_entry.setdefault(event.entry_id, []).append(event)
+        events_by_entry.setdefault((event.entry_id, event.sub_id), []).append(event)
 
     total_enqueued = 0
     total_duplicates = 0
     any_entry_processed = False
 
-    for entry_id, entry_events in events_by_entry.items():
+    for (entry_id, _sub_id), entry_events in events_by_entry.items():
         resolved_tenant_id = await resolve_tenant_for_event(entry_events[0])
 
         if known_tenant_id is not None and resolved_tenant_id is not None and resolved_tenant_id != known_tenant_id:

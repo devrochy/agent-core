@@ -37,6 +37,7 @@ from core.db.models import MetaConnection, PhoneNumber, Tenant, WabaAccount, utc
 from core.db.session import get_session
 from core.gateway import meta_token_store
 from core.gateway.connections import verify_meta_credentials
+from core.gateway.meta_asset_claims import MetaAssetError, claim_assets, verify_waba_and_phone
 from core.gateway.meta_errors import GraphError
 from core.gateway.meta_graph import graph_fetch
 from core.shared.exceptions import AgentCoreError
@@ -109,8 +110,23 @@ async def save_byok_connection(
     ok, message, info = await verify_meta_credentials(phone_number_id, access_token, app_secret)
     if not ok:
         raise ByokError(message)
+    # El número existe para este token; falta que sea de ESA WABA y que el token la vea
+    # (ADR-0095): el webhook rutea por la WABA cuando el evento no trae número.
+    try:
+        await verify_waba_and_phone(
+            waba_id=waba_id, phone_number_id=phone_number_id, token=access_token,
+            app_secret=app_secret, version=get_settings().graph_api_version, connection_id=None,
+        )
+    except MetaAssetError as exc:
+        raise ByokError(exc.message) from exc
 
     async with get_session() as session:
+        # Candado por activo + "¿lo tiene otro negocio?", en la misma transacción que
+        # guarda las filas (ADR-0095).
+        try:
+            await claim_assets(session, tenant_id, waba_id=waba_id, phone_number_id=phone_number_id)
+        except MetaAssetError as exc:
+            raise ByokError(exc.message) from exc
         connection = (
             await session.execute(
                 select(MetaConnection).where(

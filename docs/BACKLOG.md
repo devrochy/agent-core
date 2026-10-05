@@ -9,18 +9,14 @@ Cuando arregles uno, bórralo de aquí y menciónalo en el commit.
 
 ## Alta
 
-**Un negocio puede registrar la WABA de otro y recibir sus mensajes** (auditor-multitenant, 2026-10-05, preexistente)
-`POST /api/v1/admin/meta/manual` (`core/api/routers/meta_wizard.py`) guarda cualquier `waba_id` validando solo
-el token (`debug_token`), no que el token vea esa WABA ni que el número sea de ella; en BYOK
-(`meta_byok.save_byok_connection`) el `WabaAccount` queda escrito antes de que la suscripción pueda fallar.
-`waba_accounts` solo es único por `(waba_id, connection_id)`, `resolve_tenant_for_waba` (migración `0021`) hace
-`LIMIT 1` sin `ORDER BY` ni filtrar conexiones borradas, y `webhook_route_tenant.resolve_tenant_for_event`
-enruta por WABA **antes** que por `phone_number_id` (que sí es único). Resultado: los mensajes de los clientes
-de A pueden encolarse bajo el tenant B (`webhooks.py`, `consumer.py` crea Customer/Conversation). Arreglo
-propuesto: verificar contra Graph que el token ve la WABA y el número antes de persistir; rechazar un `waba_id`
-que ya tenga otro tenant (índice único parcial o función SECURITY DEFINER); que `resolve_tenant_for_waba`
-devuelva NULL si hay más de un tenant e ignore conexiones borradas; y enrutar primero por
-`metadata.phone_number_id`.
+**Un negocio BYOK puede inyectar eventos en otro por el webhook genérico** (arquitecto, 2026-10-05, preexistente)
+`POST /webhooks/whatsapp` resuelve el tenant de cada entry y junta en una sola lista los App Secrets de todos
+(`core/gateway/webhooks.py::_tenant_y_secretos`); la firma se acepta si coincide con **cualquiera**
+(`receive_whatsapp`, `any(verify_signature(...))`) y después se procesan **todas** las entries
+(`_process_payload`). Un tenant BYOK que conoce su propio App Secret puede firmar un payload con una entry suya y
+otra con el número de A, y meter mensajes falsos en A, que el agente de A responde con las credenciales de A.
+Arreglo propuesto: validar la firma por entry contra el secreto de **su** tenant (o el del framework) y descartar
+las entries cuyo tenant no firmó.
 
 **No hay dominio público estable para el webhook de Meta**
 La app `agent-core-test` de Coolify solo tiene el dominio *default*
@@ -142,9 +138,30 @@ repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev
   sin política: incumple la invariante 1.
 - Las migraciones asumen un rol con `BYPASSRLS` o superusuario: `0034` falla con un dueño sin bypass
   ("new row violates row-level security policy for table tenant_subscriptions"). La `0051` sí es segura con
-  cualquier rol (fija `app.tenant_id` por tenant).
+  cualquier rol (fija `app.tenant_id` por tenant); la `0052` aborta con un mensaje claro si el rol no puede
+  saltar RLS (sus funciones `SECURITY DEFINER` lo necesitan, ADR-0095).
 - `tests/test_meta_byok.py` (7) y `tests/integration/test_api_meta_wizard.py::test_byok_*` /
   `test_meta_byok_reconnect.py` no stubbean `_token_expiry` → hacen una llamada real a Graph y fallan sin red.
+
+**Pendientes tras ADR-0095 (un número o una WABA de un solo negocio)**
+- Los eventos de plantillas (`core/gateway/meta_template_webhooks.py::handle_template_status_update` y sus
+  hermanos, llamados desde `webhooks.py::_dispatch_template_events`) resuelven el negocio por
+  `message_template_id` y abren su propio `tenant_scope`, sin compararlo con el negocio de la entry. Un negocio BYOK
+  que firma con su propio secreto en `/webhooks/whatsapp/<slug>`, con su propia WABA (sin `tenant_mismatch`),
+  puede cambiar el estado de una plantilla de otro: es una escritura entre tenants (auditor-multitenant,
+  2026-10-05, preexistente). Arreglo propuesto: descartar el evento si el negocio de la plantilla no es el de la
+  entry.
+- `save_connection` para `whatsapp_meta` (panel clásico `/admin/conexiones/guardar`, alta de tenant, CLI) verifica
+  el número contra Graph pero no a qué WABA pertenece. Con la regla de conflicto de ADR-0095 ya no entrega mensajes
+  ajenos, pero es la vía de alta más débil: pedir la WABA y usar `verify_waba_and_phone`, o retirarla a favor de
+  `POST /api/v1/admin/meta/manual`.
+- `soft_delete_connection` (`core/admin/meta_health_service.py`) borra **físicamente** `phone_numbers` y
+  `waba_accounts` de la conexión (y en cascada `message_templates`), contra la invariante 8. Lo cubre
+  `tests/integration/test_meta_byok_numero_ocupado.py::test_eliminar_conexion_libera_numero_y_waba`. Las funciones
+  de ruteo y de reclamo ya ignoran conexiones borradas, así que pasarlo a borrado lógico no rompe el ruteo.
+- `resolve_tenant_for_page`, `resolve_tenant_for_ig_user` (migración `0021`) y la resolución de plantillas por
+  `meta_template_id` (`0026`) siguen con `LIMIT 1` sin desempate. Hoy no hay clientes de Messenger ni Instagram;
+  aplicar la misma regla (conexión viva, NULL si hay más de un dueño) cuando los haya.
 
 **Código muerto**
 `MCPHost.register_resource()` y `MCPResource` (registrados, nunca leídos);

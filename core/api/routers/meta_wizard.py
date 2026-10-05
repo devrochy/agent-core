@@ -102,7 +102,11 @@ async def wizard_exchange(
     payload: WizardExchangeIn,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> dict[str, Any]:
-    """Canjea el código del Embedded Signup (el popup ya pudo dar waba/phone)."""
+    """Canjea el código del Embedded Signup (el popup ya pudo dar waba/phone).
+
+    La WABA y el número del popup se guardan recién después del canje, verificados con
+    el token nuevo y sin dueño en otro negocio (ADR-0095)."""
+    from core.gateway.meta_errors import GraphError
     from core.gateway.meta_onboarding import WizardError, exchange_code, persist_finish_payload
 
     codigo = payload.code.strip()
@@ -112,13 +116,19 @@ async def wizard_exchange(
         view = await persist_finish_payload(
             payload.wizard_id,
             payload.event_type,
-            waba_id=payload.waba_id.strip() or None,
-            phone_number_id=payload.phone_number_id.strip() or None,
             business_id=payload.business_id.strip() or None,
         )
-        view = await exchange_code(view.id, codigo)
+        view = await exchange_code(
+            view.id,
+            codigo,
+            waba_id=payload.waba_id.strip() or None,
+            phone_number_id=payload.phone_number_id.strip() or None,
+        )
     except WizardError as exc:
         raise ApiError.bad_request(str(exc)[:200], "wizard_error") from exc
+    except GraphError as exc:
+        # Meta rechazó el canje (code inválido o vencido): hay que repetir el popup.
+        raise ApiError.bad_request(exc.message[:200], "meta_error") from exc
     return {
         "connectionId": str(view.connection_id) if view.connection_id else None,
         "nextStep": view.current_step,
@@ -210,8 +220,8 @@ async def manual_connection(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> dict[str, Any]:
     """Carga manual de respaldo: valida el token y crea conexión + WABA + número."""
-    from core.db.models import MetaConnection, PhoneNumber, WabaAccount, utcnow
     from core.gateway import meta_token_store
+    from core.gateway.meta_asset_claims import MetaAssetError, verify_waba_and_phone
     from core.gateway.meta_health import check_token_valid
     from core.gateway.meta_onboarding import TOKEN_KIND
 
@@ -236,7 +246,32 @@ async def manual_connection(
     if check.ok is False:
         raise ApiError.bad_request(check.detail[:200], "invalid_token")
 
+    # La WABA y el número se verifican con ese token antes de guardarlos, y no pueden ser
+    # de otro negocio (ADR-0095): el webhook rutea por ellos.
+    try:
+        await verify_waba_and_phone(
+            waba_id=waba_id, phone_number_id=numero, token=token,
+            app_secret=settings.meta_app_secret, version=settings.graph_api_version, connection_id=None,
+        )
+        connection_id = await _create_manual_connection(principal, payload, app_id, waba_id, numero)
+    except MetaAssetError as exc:
+        raise ApiError.bad_request(exc.message[:200], exc.code) from exc
+
+    await meta_token_store.put_token(
+        connection_id, TOKEN_KIND, payload.business_id.strip() or str(connection_id), token,
+        tenant_id=principal.tenant_id,
+    )
+    return {"connectionId": str(connection_id)}
+
+
+async def _create_manual_connection(
+    principal: Principal, payload: ManualConnectionIn, app_id: str, waba_id: str, numero: str
+) -> uuid.UUID:
+    from core.db.models import MetaConnection, PhoneNumber, WabaAccount, utcnow
+    from core.gateway.meta_asset_claims import claim_assets
+
     async with get_session() as session:
+        await claim_assets(session, principal.tenant_id, waba_id=waba_id, phone_number_id=numero)
         connection = MetaConnection(
             tenant_id=principal.tenant_id,
             channel="whatsapp",
@@ -262,10 +297,4 @@ async def manual_connection(
                 phone_number_id=numero,
             )
         )
-        connection_id = connection.id
-
-    await meta_token_store.put_token(
-        connection_id, TOKEN_KIND, payload.business_id.strip() or str(connection_id), token,
-        tenant_id=principal.tenant_id,
-    )
-    return {"connectionId": str(connection_id)}
+        return connection.id

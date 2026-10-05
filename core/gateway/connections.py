@@ -270,6 +270,15 @@ async def save_connection(
         external_id = external_id_for(ctype, clean)
         encrypted = box.encrypt_json(clean)
 
+        if type_id == WHATSAPP_META and external_id:
+            # El webhook rutea por este número: no puede ser de otro negocio (ADR-0095).
+            from core.gateway.meta_asset_claims import MetaAssetError, claim_assets
+
+            try:
+                await claim_assets(session, tid, waba_id=None, phone_number_id=external_id)
+            except MetaAssetError as exc:
+                raise ValueError(exc.message) from exc
+
         if connection is not None:
             connection.label = label
             connection.type_id = type_id

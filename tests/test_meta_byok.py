@@ -104,10 +104,20 @@ class FakeSessionCM:
 
 
 def _mock_verify_ok(monkeypatch, info=None):
+    """Meta acepta las credenciales, el número es de la WABA y nadie más los tiene."""
+
     async def _fake_verify(phone_number_id, access_token, app_secret):
         return True, "Credenciales verificadas con Meta", info or {"display_phone_number": "+1 555", "verified_name": "Mi Negocio"}
 
+    async def _fake_pair(**_kwargs):
+        return {}
+
+    async def _fake_claim(_session, _tenant_id, **_kwargs):
+        return None
+
     monkeypatch.setattr(byok_mod, "verify_meta_credentials", _fake_verify)
+    monkeypatch.setattr(byok_mod, "verify_waba_and_phone", _fake_pair)
+    monkeypatch.setattr(byok_mod, "claim_assets", _fake_claim)
 
 
 def _mock_verify_fail(monkeypatch, message="Meta rechazó las credenciales: token inválido"):
@@ -173,6 +183,61 @@ async def test_falta_waba_id_no_persiste_nada(monkeypatch):
     with pytest.raises(ByokError):
         await save_byok_connection(uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "")
 
+    assert added == []
+    assert put_calls == []
+
+
+@pytest.mark.asyncio
+async def test_numero_que_no_es_de_la_waba_no_persiste_nada(monkeypatch):
+    """ADR-0095: el token ve el número, pero el número no es de la WABA tipeada (o el
+    token no ve la WABA): no se guarda nada, porque el webhook rutea por la WABA."""
+    from core.gateway.meta_asset_claims import MetaAssetError
+
+    _mock_verify_ok(monkeypatch)
+
+    async def _pair_ajeno(**_kwargs):
+        raise MetaAssetError("El número phone-1 no pertenece a la WABA waba-ajena.", code="phone_not_in_waba")
+
+    reclamos: list = []
+
+    async def _claim(_session, _tenant_id, **kwargs):
+        reclamos.append(kwargs)
+
+    monkeypatch.setattr(byok_mod, "verify_waba_and_phone", _pair_ajeno)
+    monkeypatch.setattr(byok_mod, "claim_assets", _claim)
+    put_calls = _mock_token_store(monkeypatch)
+    added: list = []
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added))
+
+    with pytest.raises(ByokError, match="no pertenece a la WABA"):
+        await save_byok_connection(uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-ajena")
+
+    assert added == []
+    assert put_calls == []
+    # Sin verificación no se pregunta "¿lo tiene otro?": la respuesta no es un oráculo.
+    assert reclamos == []
+
+
+@pytest.mark.asyncio
+async def test_waba_o_numero_de_otro_negocio_no_persiste_nada(monkeypatch):
+    """ADR-0095: si otro negocio ya tiene la WABA o el número, el alta se rechaza antes
+    de crear filas o guardar tokens, y el mensaje no dice qué negocio lo tiene."""
+    from core.gateway.meta_asset_claims import CLAIMED_MESSAGE, MetaAssetError
+
+    _mock_verify_ok(monkeypatch)
+
+    async def _reclamado(_session, _tenant_id, **_kwargs):
+        raise MetaAssetError(CLAIMED_MESSAGE, code="asset_claimed")
+
+    monkeypatch.setattr(byok_mod, "claim_assets", _reclamado)
+    put_calls = _mock_token_store(monkeypatch)
+    added: list = []
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added))
+
+    with pytest.raises(ByokError) as exc:
+        await save_byok_connection(uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1")
+
+    assert str(exc.value) == CLAIMED_MESSAGE
     assert added == []
     assert put_calls == []
 
