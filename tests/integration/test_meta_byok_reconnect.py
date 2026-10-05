@@ -13,6 +13,7 @@ import os
 import uuid
 
 import pytest
+from _api_helpers import stub_meta_pair_ok
 
 pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
@@ -67,13 +68,14 @@ async def test_byok_reconecta_tras_soft_delete_crea_conexion_nueva(app_client, m
         return None
 
     monkeypatch.setattr(byok_mod, "verify_meta_credentials", _verify_ok)
+    stub_meta_pair_ok(monkeypatch)
     monkeypatch.setattr(byok_mod, "_subscribe_waba_to_app", _subscribe_ok)
     monkeypatch.setattr("core.gateway.meta_subscriptions.upsert_app_subscription", _upsert_ok)
 
     # 3) Reconectar la MISMA app/entorno y el MISMO número.
     async with tenant_scope(tid):
         conn = await byok_mod.save_byok_connection(
-            tid, None, app_id, "secret-nuevo", phone_id, "access-nuevo", "waba-nuevo",
+            tid, None, app_id, "secret-nuevo", phone_id, "access-nuevo", f"waba-{uuid.uuid4().hex[:8]}",
             environment=environment, verify_token="tok-nuevo",
         )
 

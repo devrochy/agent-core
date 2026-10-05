@@ -13,6 +13,7 @@ import os
 import uuid
 
 import pytest
+from _api_helpers import stub_meta_pair_ok
 
 pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
@@ -42,7 +43,10 @@ async def _switch_tenant(app_client, session_cookie: str, tenant_id: uuid.UUID) 
 
 
 async def test_numero_ya_de_otro_tenant_da_byok_error_limpio(monkeypatch) -> None:
-    """Tenant B intenta un número reclamado por A -> ByokError, no IntegrityError."""
+    """Tenant B intenta un número reclamado por A -> ByokError, no IntegrityError.
+
+    Desde ADR-0095 lo frena la comprobación de reclamo antes de tocar las tablas (el
+    unique global de `phone_number_id` queda como segunda barrera): B no crea nada."""
     import core.gateway.meta_byok as byok_mod
     from core.db.models import MetaConnection, PhoneNumber
     from core.db.session import get_session
@@ -77,14 +81,22 @@ async def test_numero_ya_de_otro_tenant_da_byok_error_limpio(monkeypatch) -> Non
         return True
 
     monkeypatch.setattr(byok_mod, "verify_meta_credentials", _verify_ok)
+    stub_meta_pair_ok(monkeypatch)
     monkeypatch.setattr(byok_mod, "_subscribe_waba_to_app", _subscribe_ok)
 
     with pytest.raises(byok_mod.ByokError) as exc:
         async with tenant_scope(tid_b):
             await byok_mod.save_byok_connection(
-                tid_b, None, _uniq("app-b"), "secret-b", phone_id, "access-b", "waba-b",
+                tid_b, None, _uniq("app-b"), "secret-b", phone_id, "access-b", _uniq("waba-b"),
             )
-    assert "ya está asociado a otra conexión" in str(exc.value)
+    from core.gateway.meta_asset_claims import CLAIMED_MESSAGE
+
+    assert str(exc.value) == CLAIMED_MESSAGE
+    from sqlalchemy import select
+
+    async with tenant_scope(tid_b):
+        async with get_session() as session:
+            assert (await session.execute(select(MetaConnection))).scalars().all() == []
 
 
 async def test_eliminar_conexion_libera_numero_y_waba(app_client) -> None:

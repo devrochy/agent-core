@@ -29,9 +29,11 @@ _PHONE_FIELDS = (
 
 
 async def list_phone_numbers(
-    waba_id: str, token: str, app_secret: str, version: str, connection_id: uuid.UUID
+    waba_id: str, token: str, app_secret: str, version: str, connection_id: uuid.UUID | None
 ) -> list[dict[str, Any]]:
-    """Pagina siguiendo `paging.cursors.after` hasta agotar páginas."""
+    """Pagina siguiendo `paging.cursors.after` hasta agotar páginas.
+
+    `connection_id=None`: la conexión aún no existe (verificación previa a un alta)."""
     items: list[dict[str, Any]] = []
     after: str | None = None
     while True:
@@ -77,6 +79,14 @@ async def sync_phone_numbers(
                 )
             ).scalar_one_or_none()
             if existing is None:
+                from core.gateway.meta_asset_claims import claimed_elsewhere
+
+                # Otro negocio ya lo tiene (fila heredada): no se guarda, o el número
+                # quedaría con dos dueños (ADR-0095). Los demás números siguen.
+                if await claimed_elsewhere(
+                    session, tenant_id, phone_number_id=phone_number_id, source="sync_phone_numbers"
+                ):
+                    continue
                 session.add(
                     PhoneNumber(
                         tenant_id=tenant_id, connection_id=connection_id, waba_account_id=waba_account_id,
@@ -128,6 +138,14 @@ async def add_phone_number(
         waba_row = (
             await session.execute(select(WabaAccount).where(WabaAccount.waba_id == waba_id, WabaAccount.connection_id == connection_id))
         ).scalar_one_or_none()
+        from core.gateway.meta_asset_claims import (
+            CLAIMED_MESSAGE,
+            MetaAssetError,
+            claimed_elsewhere,
+        )
+
+        if await claimed_elsewhere(session, tenant_id, phone_number_id=phone_number_id, source="add_phone_number"):
+            raise MetaAssetError(CLAIMED_MESSAGE, code="asset_claimed")
         row = PhoneNumber(
             tenant_id=tenant_id, connection_id=connection_id, waba_account_id=waba_row.id if waba_row else None,
             phone_number_id=phone_number_id, display_phone_number=f"+{cc}{phone_number}", verified_name=verified_name,

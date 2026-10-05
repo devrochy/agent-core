@@ -153,16 +153,16 @@ async def _resolve_admin(email: str | None) -> Admin | None:
         ).scalar_one_or_none()
 
 
-async def _phone_owner(phone_number_id: str) -> uuid.UUID | None:
-    """Tenant dueño de un phone_number_id (SECURITY DEFINER, exento de RLS).
+async def _phone_claimed_by_other(phone_number_id: str, tenant_id: uuid.UUID | None) -> bool:
+    """¿Otro tenant ya tiene este número? (SECURITY DEFINER, exento de RLS; ADR-0095).
 
-    Evita que dos tenants reclamen el mismo número: `resolve_tenant_for_phone`
-    (LIMIT 1 sin ORDER BY) devolvería un tenant arbitrario y el webhook se
-    procesaría bajo el tenant equivocado.
+    Evita que dos tenants reclamen el mismo número. No usa el resolvedor de ruteo:
+    ese devuelve NULL si el número ya es ambiguo, y un número ambiguo quedaría libre
+    para un tercero. `tenant_id=None` (tenant nuevo): cualquier dueño cuenta como otro.
     """
-    from core.shared.tenant import resolve_tenant_for_phone
+    from core.gateway.meta_asset_claims import asset_claimed_by_other_tenant
 
-    return await resolve_tenant_for_phone(phone_number_id)
+    return await asset_claimed_by_other_tenant(tenant_id, phone_number_id=phone_number_id)
 
 
 def _validate_slug(slug: str) -> None:
@@ -198,8 +198,7 @@ async def onboard_tenant(
     _validate_slug(slug)
 
     if whatsapp and whatsapp.get("phone_number_id"):
-        owner = await _phone_owner(whatsapp.get("phone_number_id", ""))
-        if owner is not None and owner != tenant_id:
+        if await _phone_claimed_by_other(whatsapp.get("phone_number_id", ""), tenant_id):
             raise ValueError(
                 f"phone_number_id {whatsapp.get('phone_number_id')} ya pertenece a otro tenant"
             )

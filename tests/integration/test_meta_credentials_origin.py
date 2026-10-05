@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 
 import pytest
-from _api_helpers import ADMIN_EMAIL, api_headers, uniq
+from _api_helpers import ADMIN_EMAIL, api_headers, stub_meta_pair_ok, uniq
 from sqlalchemy import select
 
 pytestmark = [
@@ -205,6 +205,7 @@ async def test_alta_byok_guarda_origen_y_el_resolver_lee_lo_recien_guardado(monk
         return object()
 
     monkeypatch.setattr(byok_mod, "verify_meta_credentials", verify_ok)
+    stub_meta_pair_ok(monkeypatch)
     monkeypatch.setattr(byok_mod, "graph_fetch", graph_ok)
     monkeypatch.setattr(byok_mod, "_token_expiry", sin_expiracion)  # sin llamada real a Graph
     monkeypatch.setattr(subs_mod, "upsert_app_subscription", upsert_ok)
@@ -289,6 +290,7 @@ async def test_alta_manual_guarda_origen_y_resuelve_con_la_plataforma(app_client
         return _Ok()
 
     monkeypatch.setattr(health_mod, "check_token_valid", fake_check)
+    stub_meta_pair_ok(monkeypatch)
 
     tid = await _new_tenant("alta-manual")
     headers = await api_headers(app_client, tid)

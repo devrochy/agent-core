@@ -3065,7 +3065,7 @@
           "admin · wizard whatsapp"
         ],
         "summary": "Wizard Exchange",
-        "description": "Canjea el código del Embedded Signup (el popup ya pudo dar waba/phone).",
+        "description": "Canjea el código del Embedded Signup (el popup ya pudo dar waba/phone).\n\nLa WABA y el número del popup se guardan recién después del canje, verificados con\nel token nuevo y sin dueño en otro negocio (ADR-0095).",
         "operationId": "wizard_exchange_api_v1_admin_meta_wizard_exchange_post",
         "parameters": [
           {

@@ -121,6 +121,7 @@ async def add_number(
     phone_number: str,
     verified_name: str,
 ) -> str | None:
+    from core.gateway.meta_asset_claims import MetaAssetError
     from core.gateway.meta_errors import GraphError
     from core.gateway.meta_phone_numbers import add_phone_number
 
@@ -145,7 +146,7 @@ async def add_number(
             phone_number=phone_number,
             verified_name=verified_name,
         )
-    except GraphError as exc:
+    except (GraphError, MetaAssetError) as exc:
         return exc.message[:140]
     return None
 

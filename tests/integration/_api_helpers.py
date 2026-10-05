@@ -36,3 +36,18 @@ async def api_headers(
         "Authorization": f"Bearer {r.json()['token']}",
         "X-Tenant-Id": str(tenant_id),
     }
+
+
+def stub_meta_pair_ok(monkeypatch) -> None:
+    """Graph confirma que el número es de la WABA y que el token la ve (ADR-0095).
+
+    Las altas (BYOK, manual, Embedded Signup) lo verifican antes de guardar; los tests
+    que ya falsean Graph para el resto del alta lo falsean también aquí."""
+    import core.gateway.meta_asset_claims as claims_mod
+    import core.gateway.meta_byok as byok_mod
+
+    async def _pair_ok(**_kwargs):
+        return {}
+
+    monkeypatch.setattr(claims_mod, "verify_waba_and_phone", _pair_ok)
+    monkeypatch.setattr(byok_mod, "verify_waba_and_phone", _pair_ok)
