@@ -10375,7 +10375,7 @@
           "pack · calendario"
         ],
         "summary": "Cancel Appointment",
-        "description": "Cancela la cita: borra el evento en Google (best-effort) y marca el espejo.",
+        "description": "Cancela la cita: borra el evento en Google (best-effort), marca el espejo,\nregistra la actividad y, con `notify` (default), avisa al cliente por correo\ny WhatsApp (HU-CAL-05). Idempotente: cancelar una cita ya cancelada no\nvuelve a avisar.",
         "operationId": "cancel_appointment_api_v1_pack_calendar_appointments__appointment_id__cancel_post",
         "parameters": [
           {
@@ -10405,9 +10405,33 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/AppointmentCancel"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
         "responses": {
-          "204": {
-            "description": "Successful Response"
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppointmentCancelOut"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -10831,7 +10855,7 @@
           "pack · calendario"
         ],
         "summary": "Patch Appointment",
-        "description": "Edita campos/horario de una cita y, si se mueve y `notify`, avisa al cliente\ny a los colaboradores (HU-CAL-02). Valida solapamiento en el servidor.",
+        "description": "Edita campos/horario de una cita y, si se mueve y `notify`, avisa al cliente\npor correo y WhatsApp y a los colaboradores (HU-CAL-02/05). Valida\nsolapamiento en el servidor.",
         "operationId": "patch_appointment_api_v1_pack_calendar_appointments__appointment_id__patch",
         "parameters": [
           {
@@ -11257,6 +11281,40 @@
         ],
         "title": "Alerts"
       },
+      "AppointmentCancel": {
+        "properties": {
+          "notify": {
+            "type": "boolean",
+            "title": "Notify",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "AppointmentCancel"
+      },
+      "AppointmentCancelOut": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "notification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NotificationOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "AppointmentCancelOut"
+      },
       "AppointmentIn": {
         "properties": {
           "title": {
@@ -11374,6 +11432,16 @@
           "timezone": {
             "type": "string",
             "title": "Timezone"
+          },
+          "notification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NotificationOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -15313,6 +15381,30 @@
           "autor"
         ],
         "title": "NoteRow"
+      },
+      "NotificationOut": {
+        "properties": {
+          "email_sent": {
+            "type": "boolean",
+            "title": "Email Sent"
+          },
+          "email_reason": {
+            "type": "string",
+            "title": "Email Reason"
+          },
+          "whatsapp_sent": {
+            "type": "boolean",
+            "title": "Whatsapp Sent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email_sent",
+          "email_reason",
+          "whatsapp_sent"
+        ],
+        "title": "NotificationOut",
+        "description": "Resultado real del aviso al cliente (HU-CAL-05)."
       },
       "NumbersResponse": {
         "properties": {

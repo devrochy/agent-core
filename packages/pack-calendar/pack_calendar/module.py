@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from fastapi import APIRouter
@@ -31,69 +32,209 @@ log = get_logger(__name__)
 # OAuth: conserva la URL vieja (ver docstring).
 
 
-# Afirmaciones del LLM sobre acciones de citas que SOLO son válidas si la tool
-# correspondiente corrió en el turno (anti-alucinación: el modelo a veces "dice"
-# que agendó/canceló/envió el correo sin llamar la tool). Mismo mecanismo que el
+# Afirmaciones del LLM sobre acciones de citas que SOLO son válidas con evidencia
+# real del turno (anti-alucinación: el modelo a veces "dice" que agendó/canceló/
+# envió el correo sin que haya pasado). Mismo mecanismo que el
 # `crm_completion_check` de pack-commerce.
+#
+# HU-CAL-05 (D-SPEC-24-8): cada claim separa la AFIRMACIÓN ("quedó agendada",
+# "moví tu demo") de la NEGACIÓN ("no pude agendarla"). Una afirmación exige el
+# `status` de éxito de la tool en este turno; una negación, que la acción se haya
+# intentado. Los verbos van en pasado o presente afirmativo: "¿te agendo la
+# demo?", "¿querés que cancele la cita?" o "quedaría agendada" son preguntas o
+# propuestas, no afirmaciones (en la prueba real disparaban reintentos y
+# escalamientos).
 # _TOOL_NAME_KEY: literal "_tool_name" (los packs no importan de core.orchestrator).
-_COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
-    "agendada": (
-        re.compile(
-            r"qued\w*\s+(?:tu\s+)?(?:demo|cita\w*)?\s*agendad\w*|"
-            r"(?:ya\s+)?te\s+agend\w+\s+(?:la\s+)?(?:demo|cita)|"
-            r"no\s+pud\w*\s+agend\w*",
+_QUEDO = r"qued(?:ó|o|a|an|aron)\b"
+
+
+@dataclass(frozen=True)
+class _Claim:
+    tools: frozenset[str]
+    affirm: re.Pattern[str]
+    deny: re.Pattern[str] | None = None
+
+
+_CLAIMS: dict[str, _Claim] = {
+    "agendada": _Claim(
+        tools=frozenset({"create_calendar_event"}),
+        affirm=re.compile(
+            rf"\b{_QUEDO}\s+(?:tu\s+|la\s+)?(?:demo|cita\w*)?\s*agendad\w*|"
+            r"\b(?:te\s+)?agendé\s+(?:la\s+|tu\s+)?(?:demo|cita)",
             re.IGNORECASE,
         ),
-        {"create_calendar_event"},
-    ),
-    "reagendada": (
-        re.compile(
-            r"qued\w*\s+(?:re)agendad\w*|reprogramad\w*|mov\w+\s+(?:la\s+)?cita|"
-            r"no\s+pud\w*\s+(?:reagend\w*|mover|movi\w*)|"
-            r"no\s+(?:la\s+)?(?:encontr|hall)\w+.{0,60}(?:reagend\w*|mover|movi\w*)",
+        deny=re.compile(
+            r"no\s+pud\w*\s+(?:agend\w*(?:la|lo)\b|agendar\s+(?:la|tu|esa)\s+(?:cita|demo))|"
+            rf"no\s+{_QUEDO}\s+(?:tu\s+|la\s+)?(?:demo|cita\w*)?\s*agendad\w*",
             re.IGNORECASE,
         ),
-        {"update_calendar_event"},
     ),
-    "cancelada": (
-        re.compile(
-            r"qued\w*\s+cancelad\w*|cancel\w+\s+(?:la\s+)?cita|qued\w*\s+anulad\w*|"
-            r"no\s+pud\w*\s+cancel\w*|"
-            r"no\s+(?:la\s+)?(?:encontr|hall|figur|aparec)\w+.{0,60}cancel\w*",
+    "reagendada": _Claim(
+        tools=frozenset({"update_calendar_event"}),
+        affirm=re.compile(
+            rf"\b{_QUEDO}\s+reagendad\w*|\b(?:{_QUEDO}|fue|fueron)\s+reprogramad\w*|"
+            r"\bmov[íi]\w*\s+(?:tu\s+|la\s+|esa\s+)?(?:demo|cita)|"
+            rf"\b{_QUEDO}\s+movid\w*|\b(?:ya\s+)?(?:te\s+)?la\s+mov[íi]\b",
             re.IGNORECASE,
         ),
-        {"cancel_calendar_event"},
-    ),
-    "correo_enviado": (
-        re.compile(
-            r"envi\w*\s+(?:la\s+)?(?:confirmaci[oó]n|el\s+correo|un\s+correo)|"
-            r"te\s+envi\w*\s+la\s+confirmaci[oó]n",
+        deny=re.compile(
+            r"no\s+pud\w*\s+(?:reagend\w*|reprogram\w*|mover\w*|mov[íi]\w*)|"
+            r"no\s+(?:la\s+)?(?:encontr|hall)\w+.{0,60}(?:reagend\w*|mover|mov[íi]\w*)|"
+            rf"no\s+{_QUEDO}\s+reagendad\w*",
             re.IGNORECASE,
         ),
-        {"send_email"},
     ),
-    "listado": (
-        re.compile(
+    "cancelada": _Claim(
+        tools=frozenset({"cancel_calendar_event"}),
+        affirm=re.compile(
+            rf"\b{_QUEDO}\s+(?:cancelad|anulad)\w*|\b(?:fue|fueron)\s+cancelad\w*|"
+            r"\bcancel(?:é|ó|amos)\s+(?:la\s+|tu\s+|esa\s+)?(?:cita|demo)",
+            re.IGNORECASE,
+        ),
+        deny=re.compile(
+            r"no\s+pud\w*\s+(?:cancel\w*(?:la|lo)\b|cancelar\s+(?:la|tu|esa)\s+(?:cita|demo))|"
+            r"no\s+(?:la\s+)?(?:encontr|hall|figur|aparec)\w+.{0,60}cancel\w*|"
+            rf"no\s+{_QUEDO}\s+cancelad\w*",
+            re.IGNORECASE,
+        ),
+    ),
+    "correo_enviado": _Claim(
+        tools=frozenset({"send_email"}),
+        affirm=re.compile(
+            r"\b(?:te\s+)?(?:envié|enviamos|envió|se\s+envió|mandé|mandamos)\s+"
+            r"(?:la\s+|el\s+|un\s+)?(?:confirmaci[oó]n|correo|email|mail)|"
+            r"\b(?:te\s+)?(?:va\s+a\s+llegar|llegar[áa]|lleg[óo])\s+"
+            r"(?:la\s+|el\s+|un\s+)?(?:confirmaci[oó]n|correo|email|mail)",
+            re.IGNORECASE,
+        ),
+    ),
+    "listado": _Claim(
+        tools=frozenset({"list_client_appointments"}),
+        affirm=re.compile(
             r"no\s+ten\w*\s+(?:ninguna\s+|ningunas\s+)?citas?\s+agendadas|"
             r"ten\w*\s+\d+\s+(?:citas?|demos?)\s+agendadas|"
             r"no\s+(?:me\s+)?(?:aparece|figura|encontr\w+).{0,50}(?:citas?|demo)",
             re.IGNORECASE,
         ),
-        {"list_client_appointments"},
     ),
     # Afirmar que el cliente YA tiene una cita (sin crearla en este turno) exige
     # verificarlo con list_client_appointments (corrección post-prueba 2026-10-05:
     # el asistente afirmó "Tenés tu demo agendada..." sin listar y se contradijo).
-    "cita_existente": (
-        re.compile(
+    "cita_existente": _Claim(
+        tools=frozenset({"list_client_appointments"}),
+        affirm=re.compile(
             r"ten[ée]s\s+(?:una\s+|tu\s+)?(?:demo|cita)\s+agendad|"
             r"ya\s+ten[ée]s\s+(?:una\s+|tu\s+)?(?:demo|cita)|"
             r"figura\s+agendad|aparece\s+agendad",
             re.IGNORECASE,
         ),
-        {"list_client_appointments"},
     ),
 }
+
+# Vista compatible (etiqueta → patrón que detecta el claim, tools): la usan la
+# config por tenant (deshabilitar/reemplazar) y el DSL de claims custom.
+_COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
+    label: (
+        re.compile(
+            "|".join(f"(?:{p.pattern})" for p in (claim.affirm, claim.deny) if p is not None),
+            re.IGNORECASE,
+        ),
+        set(claim.tools),
+    )
+    for label, claim in _CLAIMS.items()
+}
+
+# Acciones cuyo resultado trae `email_sent` (correo determinista, HU-CAL-02).
+_EMAILING_TOOLS = frozenset({"create_calendar_event", "update_calendar_event", "cancel_calendar_event"})
+_DONT_MENTION = " Reescribí tu respuesta para el cliente sin mencionar esta instrucción."
+
+
+def _of(results: list[dict[str, Any]], *names: str) -> list[dict[str, Any]]:
+    return [r for r in results if str(r.get("_tool_name") or "") in names]
+
+
+def _listed_ok(results: list[dict[str, Any]]) -> bool:
+    return any(r.get("_ok") for r in _of(results, "list_client_appointments"))
+
+
+def _affirmation_backed(label: str, results: list[dict[str, Any]]) -> bool:
+    """Evidencia REAL de una afirmación en los resultados del turno actual."""
+    if label == "agendada":
+        creates = _of(results, "create_calendar_event")
+        return any(r.get("status") == "created" for r in creates) or (not creates and _listed_ok(results))
+    if label == "reagendada":
+        updates = _of(results, "update_calendar_event")
+        return any(r.get("status") == "updated" for r in updates) or (not updates and _listed_ok(results))
+    if label == "cancelada":
+        return any(r.get("status") == "cancelled" for r in _of(results, "cancel_calendar_event"))
+    if label == "correo_enviado":
+        return any(r.get("_ok") for r in _of(results, "send_email")) or any(
+            r.get("email_sent") is True for r in _of(results, *_EMAILING_TOOLS)
+        )
+    return _listed_ok(results)  # listado / cita_existente
+
+
+def _denial_backed(label: str, results: list[dict[str, Any]]) -> bool:
+    """Decir "no pude…" exige haberlo intentado en el turno (o, para mover o
+    cancelar, haber verificado con el listado que la cita no está)."""
+    claim = _CLAIMS[label]
+    if _of(results, *claim.tools):
+        return True
+    return label in ("reagendada", "cancelada") and _listed_ok(results)
+
+
+def _builtin_verdict(label: str, text: str, results: list[dict[str, Any]]) -> GuardrailResult | None:
+    claim = _CLAIMS[label]
+    tools = ", ".join(sorted(claim.tools))
+    if claim.deny is not None and claim.deny.search(text) and not _denial_backed(label, results):
+        return GuardrailResult(
+            passed=False,
+            reason=f"Negación de '{label}' sin haberlo intentado en este turno",
+            retry_instruction=(
+                f"Tu respuesta dice que no se pudo completar '{label}', pero no lo intentaste en "
+                f"este turno. Llamá la herramienta correspondiente ({tools}) y contá lo que devuelva."
+                + _DONT_MENTION
+            ),
+        )
+    affirm_text = claim.deny.sub(" ", text) if claim.deny is not None else text
+    if not claim.affirm.search(affirm_text) or _affirmation_backed(label, results):
+        return None
+
+    if label == "correo_enviado":
+        unsent = [r for r in _of(results, *_EMAILING_TOOLS) if r.get("email_sent") is False]
+        if unsent:
+            reason = str(unsent[-1].get("email_reason") or "error_envio")
+            retry = (
+                f"El correo de confirmación no se pudo enviar (motivo: {reason}). NO digas que "
+                "lo enviaste: contá lo que sí se hizo y que el correo no salió."
+            )
+        else:
+            retry = (
+                "Tu respuesta dice que se envió un correo, pero en este turno no se envió ninguno. "
+                "No lo afirmes: el correo lo envía el sistema solo al agendar, reagendar o "
+                "cancelar una cita."
+            )
+    elif attempted := _of(results, *claim.tools):
+        last = attempted[-1]
+        detail = str(last.get("error") or last.get("message") or last.get("reason") or "").strip()
+        retry = (
+            f"La herramienta no completó '{label}': devolvió \"{detail[:200]}\". "
+            "NO afirmes que se completó: seguí esa instrucción (por ejemplo, "
+            "pedirle al cliente el dato que falta) y recién después confirmá."
+        )
+    else:
+        retry = (
+            f"Tu respuesta afirma el resultado de '{label}' pero no llamaste la "
+            f"herramienta correspondiente ({tools}) en este turno. Llamala ahora mismo y "
+            "contá lo que devuelva, o si no podés completarla de verdad, decilo sin "
+            "prometer ni dar por fallido algo que no intentaste."
+        )
+    return GuardrailResult(
+        passed=False,
+        reason=f"Afirmación de '{label}' sin evidencia de la tool en este turno",
+        retry_instruction=retry + _DONT_MENTION,
+    )
+
 
 # Tope de líneas de claims custom (mismo criterio que pack-commerce: este
 # guardrail corre en CADA turno, una config enorme degradaría la latencia).
@@ -204,57 +345,37 @@ class GoogleCalendarModule(BaseModule):
         confirmación, o enumera las citas del cliente, la tool que respalda esa
         afirmación DEBE haber corrido en este turno **y con éxito**; si no, se
         reintenta con la instrucción correctiva (y si sigue fallando, el
-        orchestrator escala) -- así el cliente nunca recibe una confirmación falsa.
+        orchestrator escala o responde neutral según `guardrail_fail_action`,
+        ADR-0092) -- así el cliente nunca recibe una confirmación falsa.
         Los claims son los incorporados + los configurados/desactivados por el
         tenant (ADR-0025/#157).
 
-        Corrección post-prueba 2026-10-05: se cuentan solo resultados del turno
-        ACTUAL (`_current_turn`) y exitosos (`_ok`), mismo criterio que el
-        guardrail de commerce (HU-COM-02). Un `create_calendar_event` de un turno
-        anterior, o uno que devolvió `needs_data`/error, NO respalda "quedó
-        agendada".
+        Solo cuentan los resultados del turno ACTUAL (`_current_turn`, HU-COM-02).
+        HU-CAL-05: la evidencia es el `status` real (`created`, `updated`,
+        `cancelled`, `email_sent`), no la mera ausencia de error: un create
+        `rejected` o un cancel `not_found` no respaldan "quedó agendada/cancelada".
         """
-        called_tools = {
-            str(result.get("_tool_name") or "")
-            for result in tool_results
-            if isinstance(result, dict)
-            and result.get("_current_turn")
-            and result.get("_ok")
-        }
+        current = [r for r in tool_results if isinstance(r, dict) and r.get("_current_turn")]
         claims = await self._resolved_completion_claims()
-        for label, (pattern, required_tools) in claims.items():
-            if pattern.search(response_text) and not (called_tools & required_tools):
-                # ¿La tool se intentó en este turno pero devolvió error/needs_data?
-                # Entonces el reintento debe guiar a seguir esa instrucción (p. ej.
-                # pedir el email que falta), no a repetir la afirmación ni escalar.
-                attempted = [
-                    result
-                    for result in tool_results
-                    if isinstance(result, dict)
-                    and result.get("_current_turn")
-                    and str(result.get("_tool_name") or "") in required_tools
-                ]
-                if attempted:
-                    detail = str(
-                        attempted[-1].get("error") or attempted[-1].get("message") or ""
-                    ).strip()
-                    retry = (
-                        f"La herramienta no completó '{label}': devolvió \"{detail[:200]}\". "
-                        "NO afirmes que se completó: seguí esa instrucción (por ejemplo, "
-                        "pedirle al cliente el dato que falta) y recién después confirmá."
-                    )
-                else:
-                    retry = (
-                        f"Tu respuesta afirma el resultado de '{label}' pero no llamaste la "
-                        f"herramienta correspondiente ({', '.join(sorted(required_tools))}) "
-                        "en este turno. Llamala ahora mismo y contá lo que devuelva, o si no "
-                        "podés completarla de verdad, decilo sin prometer ni dar por fallido "
-                        "algo que no intentaste."
-                    )
+        for label, claim in claims.items():
+            if label in _COMPLETION_CLAIMS and claim is _COMPLETION_CLAIMS[label]:
+                verdict = _builtin_verdict(label, response_text, current)
+                if verdict is not None:
+                    return verdict
+                continue
+            # Claim propio del tenant (DSL, ADR-0025/#157): basta con que la tool
+            # haya corrido con éxito en este turno.
+            pattern, required_tools = claim
+            called = {str(r.get("_tool_name") or "") for r in current if r.get("_ok")}
+            if pattern.search(response_text) and not (called & required_tools):
                 return GuardrailResult(
                     passed=False,
                     reason=f"Afirmación de '{label}' sin la tool correspondiente en este turno",
-                    retry_instruction=retry,
+                    retry_instruction=(
+                        f"Tu respuesta afirma el resultado de '{label}' pero no llamaste la "
+                        f"herramienta correspondiente ({', '.join(sorted(required_tools))}) en este "
+                        "turno. Llamala ahora mismo y contá lo que devuelva." + _DONT_MENTION
+                    ),
                 )
         return GuardrailResult(passed=True)
 
