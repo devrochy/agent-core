@@ -210,6 +210,10 @@ async def save_byok_connection(
         if waba is None:
             waba = WabaAccount(tenant_id=tenant_id, connection_id=connection_id, waba_id=waba_id)
             session.add(waba)
+        # Hasta que el `POST /subscribed_apps` de abajo salga bien: al reconectar se reusa la
+        # fila, y un `True` de antes haría pasar por suscrito un reintento que falló
+        # (`own_app_subscribed`, ADR-0102).
+        waba.subscribed = False
 
     try:
         await meta_token_store.put_token(connection_id, APP_SECRET_KIND, app_id, app_secret, tenant_id=tenant_id)

@@ -293,21 +293,18 @@ def test_merge_health_sin_previo_son_los_checks():
 
 
 class _Result:
-    def __init__(self, first=None):
-        self._first = first
+    def __init__(self, items):
+        self._items = items
 
     def scalars(self):
         return self
 
-    def first(self):
-        return self._first
-
     def all(self):
-        return []
+        return self._items
 
 
-def _fake_session_con_waba(waba):
-    """`run_health_checks` lee la WABA (`.first()`) y los números (`.all()`, vacío)."""
+def _fake_session_con_wabas(wabas):
+    """`run_health_checks` lee las WABAs de la conexión y después sus números (ninguno)."""
     from contextlib import asynccontextmanager
 
     class _Session:
@@ -316,7 +313,7 @@ def _fake_session_con_waba(waba):
 
         async def execute(self, *_a, **_k):
             self._llamadas += 1
-            return _Result(waba if self._llamadas == 1 else None)
+            return _Result(list(wabas) if self._llamadas == 1 else [])
 
     @asynccontextmanager
     async def _fake_session():
@@ -358,7 +355,7 @@ async def test_run_health_checks_sin_credenciales(monkeypatch, origin, reason, o
     async def _no_debe_llamarse(*_a, **_k):
         raise AssertionError("sin credenciales no se le pega a Meta")
 
-    monkeypatch.setattr(health_mod, "get_session", _fake_session_con_waba(None))
+    monkeypatch.setattr(health_mod, "get_session", _fake_session_con_wabas([]))
     monkeypatch.setattr(credentials_mod, "credentials_for", _sin_credenciales)
     monkeypatch.setattr(health_mod, "check_app_subscription", _app_sin_dato)
     monkeypatch.setattr(health_mod, "check_token_valid", _no_debe_llamarse)
@@ -376,16 +373,20 @@ async def test_run_health_checks_sin_credenciales(monkeypatch, origin, reason, o
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("origin", "subscribed", "esperado"),
+    ("origin", "suscritas", "esperado", "diagnostico"),
     [
-        ("byok", True, True),
-        ("byok", False, None),
-        ("embedded_signup", True, "falta"),  # solo BYOK lo necesita
+        ("byok", [True], True, "connected"),
+        ("byok", [False, True], True, "connected"),  # alguna de sus WABAs
+        # WABA sin suscribir a esta app (un reintento que falló al suscribir): `degraded`,
+        # que la deja detrás de la sana `connected` en el orden del secreto.
+        ("byok", [False], False, "degraded"),
+        # Sin WABA cargada (BYOK anteriores a ADR-0036): no degrada, pero no deja mejorar.
+        ("byok", [], None, "connected"),
+        ("embedded_signup", [False], "falta", "connected"),  # solo BYOK lo necesita
     ],
 )
-async def test_run_health_checks_own_app_subscribed(monkeypatch, origin, subscribed, esperado):
-    """¿La WABA quedó suscrita a la app de ESTA conexión? Sale de `WabaAccount.subscribed`;
-    nunca falla, solo impide que una BYOK mejore sin esa prueba."""
+async def test_run_health_checks_own_app_subscribed(monkeypatch, origin, suscritas, esperado, diagnostico):
+    """¿La WABA quedó suscrita a la app de ESTA conexión? Sale de `WabaAccount.subscribed`."""
     from types import SimpleNamespace
 
     import core.gateway.meta_credentials as credentials_mod
@@ -397,8 +398,8 @@ async def test_run_health_checks_own_app_subscribed(monkeypatch, origin, subscri
     async def _ok(*_a, **_k):
         return PreflightCheck(key="x", ok=True, detail="ok", checked_at=datetime.now(UTC))
 
-    waba = SimpleNamespace(id=uuid.uuid4(), waba_id="waba-1", subscribed=subscribed)
-    monkeypatch.setattr(health_mod, "get_session", _fake_session_con_waba(waba))
+    wabas = [SimpleNamespace(id=uuid.uuid4(), waba_id=f"waba-{i}", subscribed=sub) for i, sub in enumerate(suscritas)]
+    monkeypatch.setattr(health_mod, "get_session", _fake_session_con_wabas(wabas))
     monkeypatch.setattr(credentials_mod, "credentials_for", _creds)
     monkeypatch.setattr(health_mod, "check_app_subscription", _ok)
     monkeypatch.setattr(health_mod, "check_token_valid", _ok)
@@ -412,10 +413,10 @@ async def test_run_health_checks_own_app_subscribed(monkeypatch, origin, subscri
         assert "own_app_subscribed" not in checks
     else:
         assert checks["own_app_subscribed"]["ok"] is esperado
-    # Nunca degrada: con todo lo demás ok, el diagnóstico es `connected`.
-    assert decide_status(checks)[0] == "connected"
-    mejora = next_status("error", None, origin, checks)[0]
-    assert mejora == ("error" if esperado is None else "connected")
+    assert decide_status(checks)[0] == diagnostico
+    # Un reintento que ya estaba en `connected` baja; uno en `error` solo mejora con la prueba.
+    assert next_status("connected", None, origin, checks)[0] == diagnostico
+    assert next_status("error", None, origin, checks)[0] == (diagnostico if esperado in (True, "falta") else "error")
 
 
 # --- ADR-0102: las alertas de un cron horario salen una vez al día ------------------

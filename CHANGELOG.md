@@ -14,14 +14,17 @@
   negocio daba 401.
   - Ahora una conexión solo mejora de estado con el token verificado y, en BYOK, con su app suscrita: la suscripción
     de la app confirmada y la WABA suscrita a esa app.
-  - Una BYOK sin credenciales propias falla `token_valid`, así que las filas que ya estaban promovidas bajan a `error`
-    en la siguiente corrida.
-- El cron de suscripciones prueba con otra conexión de la app si la representativa falla. Así, un negocio que cargó el
-  `app_id` de otro no le traba la recuperación al dueño.
-- Las alertas de token (inválido, por vencer o vencido) y de calidad RED salen una vez al día por conexión, no en cada
-  corrida. El wizard manual ya no manda una alerta crítica por un token mal pegado.
-- El diagnóstico ya no borra `coexistence`, los datos del alta ni el estado de facturación que marca un admin. Se
-  descarta si el wizard reconectó la conexión mientras corría.
+  - Las filas que ya estaban promovidas bajan en la siguiente corrida: una BYOK sin credenciales propias falla
+    `token_valid` y pasa a `error`; una con la WABA sin suscribir a su app pasa a `degraded`.
+  - El alta BYOK marca la WABA como no suscrita hasta confirmar la suscripción, también al reconectar.
+- El cron de suscripciones prueba con otra conexión de la app si la representativa falla, así un negocio que cargó el
+  `app_id` de otro no le traba la recuperación al dueño. Ya no revisa la app de la plataforma, que una BYOK con su
+  `app_id` dejaba "sin dato" para todos los negocios de Embedded Signup.
+- El checklist de producción ignora las conexiones desactivadas o borradas.
+- Las alertas de token (inválido o vencido, por vencer) y de calidad RED salen una vez al día por conexión, no en cada
+  corrida ni una por cron. El wizard manual ya no manda una alerta crítica por un token mal pegado.
+- El diagnóstico ya no borra `coexistence`, los datos del alta ni el estado de facturación que marca un admin, y el
+  panel no los dibuja como checks. Se descarta si el wizard reconectó la conexión mientras corría.
 
 ## Sin versión — Una conexión BYOK degradada sigue recibiendo mensajes (ADR-0101, 2026-10-06)
 

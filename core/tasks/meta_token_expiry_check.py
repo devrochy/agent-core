@@ -49,11 +49,12 @@ async def check_tokens_expiry() -> None:
             if expires_at is None or expires_at > soon:
                 continue  # token permanente, sin dato, o con margen
             expired = expires_at <= now
-            # Mismas claves que las alertas del cron de salud: una vez al día por conexión.
-            # "Vencido" va aparte, para que un "por vencer" de ayer no lo calle.
+            # Mismas claves que las alertas del cron de salud, así cada condición avisa una vez
+            # al día por conexión aunque la vean los dos: un token vencido es el "inválido" de
+            # `debug_token`, y va aparte del "por vencer" para que uno de ayer no lo calle.
             await send_alert_once(
-                f"meta_token_{'vencido' if expired else 'por_vencer'}:{connection_id}",
-                "Access token de Meta por vencer",
+                f"meta_token_{'invalido' if expired else 'por_vencer'}:{connection_id}",
+                "Access token de Meta vencido" if expired else "Access token de Meta por vencer",
                 f"La conexión {connection_id} (tenant {tenant_id}) tiene el access token "
                 f"{'VENCIDO' if expired else 'por vencer'} ({expires_at.isoformat()}). "
                 "Reconectá la app en /admin/conexiones para no dejar de responder.",

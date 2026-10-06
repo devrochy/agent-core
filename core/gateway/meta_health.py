@@ -11,6 +11,7 @@ meta_token_store.py`) para diagnóstico de errores sin exponer el valor real.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -339,21 +340,34 @@ def _token_sin_credenciales(connection: MetaConnection, exc: Exception | None) -
 OWN_APP_SUBSCRIBED = "own_app_subscribed"
 
 
-def check_own_app_subscribed(waba: WabaAccount | None) -> PreflightCheck:
+def check_own_app_subscribed(wabas: Sequence[WabaAccount]) -> PreflightCheck:
     """¿La WABA quedó suscrita a la app de ESTA conexión? Solo BYOK (ADR-0102).
 
     `webhook_subscribed` solo pide que la WABA tenga alguna app suscrita: un reintento del
     wizard con otra app que falló al suscribir lo pasa, porque la vieja sigue suscrita. Lo
-    sabemos por `WabaAccount.subscribed`, que ponen en `True` el alta BYOK y "Resuscribir la
-    WABA" después de un `POST /subscribed_apps` correcto. Nunca falla (`None` en vez de
-    `False`): no degrada a nadie, solo impide que una BYOK mejore de estado sin esa prueba."""
+    sabemos por `WabaAccount.subscribed`: el alta BYOK lo pone en `False` al empezar y en
+    `True` después de un `POST /subscribed_apps` correcto, y "Resuscribir la WABA" lo
+    actualiza.
+
+    - Alguna WABA suscrita: `True`.
+    - WABAs, pero ninguna suscrita: `False`. No es de severidad alta, así que la conexión
+      queda `degraded`: un reintento fallido que ya estaba en `connected` baja un nivel y la
+      sana, `connected`, recupera el secreto. En `error` empataría con ella.
+    - Sin WABA cargada (las BYOK anteriores al post-mortem de ADR-0036): `None`. No degrada,
+      pero tampoco deja mejorar; se arregla repitiendo el wizard."""
     now = datetime.now(UTC)
-    if waba is not None and waba.subscribed:
+    if any(waba.subscribed for waba in wabas):
         return PreflightCheck(key=OWN_APP_SUBSCRIBED, ok=True, detail="La WABA está suscrita a esta app", checked_at=now)
+    if wabas:
+        return PreflightCheck(
+            key=OWN_APP_SUBSCRIBED, ok=False,
+            detail="La WABA no quedó suscrita a la app de esta conexión: resuscribila.",
+            checked_at=now, repair_action="subscribe_waba",
+        )
     return PreflightCheck(
         key=OWN_APP_SUBSCRIBED, ok=None,
-        detail="No consta que la WABA esté suscrita a esta app -- resuscribila desde el panel.",
-        checked_at=now, repair_action="subscribe_waba",
+        detail="La conexión no tiene la WABA cargada: repetí el wizard BYOK.",
+        checked_at=now, repair_action="reauthorize",
     )
 
 
@@ -365,11 +379,12 @@ async def run_health_checks(connection: MetaConnection, tenant_id: uuid.UUID) ->
     checks: dict[str, PreflightCheck] = {}
 
     async with get_session() as session:
-        waba = (
+        wabas = (
             await session.execute(
                 select(WabaAccount).where(WabaAccount.connection_id == connection.id, WabaAccount.tenant_id == tenant_id)
             )
-        ).scalars().first()
+        ).scalars().all()
+        waba = wabas[0] if wabas else None
         phone_numbers = (
             await session.execute(
                 select(PhoneNumber).where(PhoneNumber.connection_id == connection.id, PhoneNumber.tenant_id == tenant_id)
@@ -403,7 +418,7 @@ async def run_health_checks(connection: MetaConnection, tenant_id: uuid.UUID) ->
         )
         checks["templates"] = await check_templates(waba.id, tenant_id)
     if connection.origin == "byok":
-        checks[OWN_APP_SUBSCRIBED] = check_own_app_subscribed(waba)
+        checks[OWN_APP_SUBSCRIBED] = check_own_app_subscribed(wabas)
 
     for phone in phone_numbers:
         suffix = f":{phone.phone_number_id}" if len(phone_numbers) > 1 else ""

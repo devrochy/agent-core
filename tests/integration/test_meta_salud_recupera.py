@@ -50,8 +50,10 @@ async def _conexion(
     hace_dias: int = 0,
     status_reason: str | None = None,
     health: dict | None = None,
+    waba_suscrita: bool | None = None,
 ) -> tuple[uuid.UUID, str]:
-    from core.db.models import MetaConnection, PhoneNumber, utcnow
+    """`waba_suscrita`: `None` sin fila de WABA; si no, la WABA con ese `subscribed`."""
+    from core.db.models import MetaConnection, PhoneNumber, WabaAccount, utcnow
     from core.db.session import get_session
     from core.gateway import meta_byok
     from core.shared.tenant import tenant_scope
@@ -66,6 +68,13 @@ async def _conexion(
             )
             session.add(connection)
             await session.flush()
+            if waba_suscrita is not None:
+                session.add(
+                    WabaAccount(
+                        tenant_id=tid, connection_id=connection.id, waba_id=f"waba-rec-{uuid.uuid4().hex[:8]}",
+                        subscribed=waba_suscrita,
+                    )
+                )
             for _ in range(numeros):
                 session.add(
                     PhoneNumber(
@@ -234,6 +243,81 @@ async def test_un_reintento_con_otra_app_sin_suscribir_no_le_quita_el_secreto_a_
     assert await _secreto(tid) == "SEC-VIEJA"
 
 
+def _meta_responde_ok(monkeypatch) -> None:
+    """Todo lo que le pega a Meta, en verde; el resto de `run_health_checks` es real."""
+    from datetime import UTC, datetime
+
+    import core.gateway.meta_health as health_mod
+    from core.gateway.meta_preflight import PreflightCheck
+
+    def _ok(key):
+        async def fake(*_a, **_k):
+            return PreflightCheck(key=key, ok=True, detail="ok", checked_at=datetime.now(UTC))
+
+        return fake
+
+    for nombre, key in [
+        ("check_token_valid", "token_valid"),
+        ("check_webhook_subscribed", "webhook_subscribed"),
+        ("check_number_registered", "number_registered"),
+        ("check_webhook_override", "webhook_override"),
+        ("check_app_subscription", "app_subscription_active"),
+    ]:
+        monkeypatch.setattr(health_mod, nombre, _ok(key))
+
+
+async def test_un_reintento_en_connected_sin_la_waba_suscrita_baja_y_devuelve_el_secreto(monkeypatch) -> None:
+    """Un reintento con otra app guardó sus tokens, falló al suscribir la WABA y llegó a
+    `connected` (el "Diagnosticar" de antes, o "Activar"). Con las dos `connected` gana la
+    más nueva y la app vieja, que es la que firma, da 401. `own_app_subscribed` falla:
+    baja a `degraded` y la sana recupera el secreto. Con el `run_health_checks` real."""
+    from core.tasks.meta_health_check import _check_one
+
+    tid = await _tenant()
+    await _conexion(
+        tid, "connected", app_secret="SEC-SANA", access_token="tok-sana", hace_dias=30, waba_suscrita=True
+    )
+    reintento, _ = await _conexion(
+        tid, "connected", app_secret="SEC-REINTENTO", access_token="tok-r", waba_suscrita=False
+    )
+    assert await _secreto(tid) == "SEC-REINTENTO"
+    _meta_responde_ok(monkeypatch)
+
+    await _check_one(await _fila(tid, reintento))
+
+    fila = await _fila(tid, reintento)
+    assert fila.status == "degraded"
+    assert fila.health["own_app_subscribed"]["ok"] is False
+    assert await _secreto(tid) == "SEC-SANA"
+
+
+async def test_una_byok_con_la_waba_suscrita_se_recupera_con_el_diagnostico_real(monkeypatch) -> None:
+    from core.tasks.meta_health_check import _check_one
+
+    tid = await _tenant()
+    cid, _ = await _conexion(tid, "error", app_secret="SEC", access_token="tok", waba_suscrita=True)
+    _meta_responde_ok(monkeypatch)
+
+    await _check_one(await _fila(tid, cid))
+
+    assert (await _fila(tid, cid)).status == "connected"
+
+
+async def test_el_checklist_de_produccion_ignora_las_conexiones_desactivadas() -> None:
+    """Desde ADR-0102 una BYOK sin credenciales falla el token: una `revoked` no debe trabar
+    el paso a producción."""
+    from core.gateway.meta_production_readiness import check_connections_health_except_billing
+    from core.shared.tenant import tenant_scope
+
+    tid = await _tenant()
+    await _conexion(tid, "revoked")
+
+    async with tenant_scope(tid):
+        check = await check_connections_health_except_billing(tid)
+
+    assert check.ok is None, check.detail
+
+
 async def test_el_cron_parte_del_estado_de_la_fila_bloqueada(monkeypatch) -> None:
     """Se listó en `error` y el wizard la reconectó antes de que le tocara: un `error`
     viejo no le pisa el `connected`."""
@@ -359,3 +443,49 @@ async def test_el_cron_de_suscripciones_revisa_la_app_de_una_conexion_degradada(
 
     (estado,) = await list_app_subscriptions(app_id)
     assert estado.active is True
+
+
+async def test_un_reintento_que_falla_al_suscribir_deja_la_waba_sin_suscribir(monkeypatch) -> None:
+    """Al reconectar la misma app se reusa la fila de la WABA: un `subscribed=True` de antes
+    haría pasar por suscrito un reintento que falló (`own_app_subscribed`)."""
+    from _api_helpers import stub_meta_pair_ok
+    from sqlalchemy import select
+
+    import core.gateway.meta_byok as byok_mod
+    from core.db.models import WabaAccount
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid = await _tenant()
+    cid, app_id = await _conexion(tid, "error", numeros=0, waba_suscrita=True)
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            waba_id = (
+                await session.execute(select(WabaAccount.waba_id).where(WabaAccount.connection_id == cid))
+            ).scalar_one()
+
+    async def _verify_ok(*_a, **_k):
+        return True, "ok", {"display_phone_number": "+1 555", "verified_name": "Recupera"}
+
+    async def _sin_red(*_a, **_k):
+        return None
+
+    async def _no_confirma(*_a, **_k):
+        return False
+
+    monkeypatch.setattr(byok_mod, "verify_meta_credentials", _verify_ok)
+    monkeypatch.setattr(byok_mod, "_token_expiry", _sin_red)
+    monkeypatch.setattr(byok_mod, "_subscribe_waba_to_app", _no_confirma)
+    stub_meta_pair_ok(monkeypatch)
+
+    async with tenant_scope(tid):
+        with pytest.raises(byok_mod.ByokError):
+            await byok_mod.save_byok_connection(
+                tid, None, app_id, "secreto", f"ph-rec-{uuid.uuid4().hex[:10]}", "tok", waba_id,
+                environment="sandbox",
+            )
+        async with get_session() as session:
+            waba = (await session.execute(select(WabaAccount).where(WabaAccount.connection_id == cid))).scalar_one()
+
+    assert waba.subscribed is False
+    assert (await _fila(tid, cid)).status == "error"

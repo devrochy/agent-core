@@ -16,6 +16,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 
+from core.config import get_settings
 from core.db.models import MetaConnection
 from core.db.session import get_session
 from core.gateway import meta_token_store
@@ -23,6 +24,7 @@ from core.gateway.meta_errors import GraphError
 from core.gateway.meta_graph import graph_fetch
 from core.gateway.meta_subscriptions import (
     OBJECT_TO_CHANNEL,
+    SubscriptionError,
     fetch_app_access_token,
     humanize_subscription_error,
     persist_subscription_state,
@@ -58,15 +60,16 @@ def _normalize_fields(raw: object) -> list[str]:
 @dataclass
 class _AppGroup:
     meta_app_id: str
-    app_secret: str
+    app_secret: str = field(repr=False)
     graph_api_version: str
     representative_connection_id: uuid.UUID
     representative_tenant_id: uuid.UUID
     connections: list[MetaConnection]
-    # Otras conexiones de la app con un secreto DISTINTO, en orden: si la representativa
-    # falla (p. ej. un negocio cargó el `app_id` de otro con su propio secreto), se prueba
-    # con ellas antes de dar la app por caída (ADR-0102).
-    respaldos: list[tuple[uuid.UUID, uuid.UUID, str]] = field(default_factory=list)
+    # `(connection_id, tenant_id)` de otras conexiones de la app con un secreto DISTINTO, en
+    # orden: si la representativa falla (p. ej. un negocio cargó el `app_id` de otro con su
+    # propio secreto), se prueba con ellas antes de dar la app por caída (ADR-0102). Sin el
+    # secreto: se lee recién al usarlo, bajo el scope de su dueño.
+    respaldos: list[tuple[uuid.UUID, uuid.UUID]] = field(default_factory=list)
 
 
 # Estados cuyas apps se revisan (ADR-0102). No solo `connected`: este cron degrada las
@@ -106,14 +109,21 @@ async def _group_connected_apps() -> list[_AppGroup]:
     for row in all_connections:
         by_app.setdefault(row.meta_app_id, []).append(row)
 
+    platform_app_id = get_settings().meta_app_id
     groups: list[_AppGroup] = []
     for meta_app_id, connections in by_app.items():
+        if platform_app_id and meta_app_id == platform_app_id:
+            # La app de la plataforma no se revisa desde acá: sus conexiones (Embedded Signup,
+            # manual) no guardan su secreto, y uno que diga ser de ella es un alta BYOK con un
+            # `app_id` ajeno. Usarlo pisaría cada 15 min el estado que ven todos los negocios
+            # de Embedded Signup (auditor-multitenant, ADR-0102).
+            continue
         # Orden determinístico (la query no trae ORDER BY), estable entre corridas del
         # cron -- hallazgo auditor-multitenant, 2026-09-21 (severidad baja). Primero las
         # sanas: la representativa es la primera CON App Secret (ADR-0102). Antes era la
         # más antigua y, si no tenía secreto, se saltaba toda la app.
         connections = sorted(connections, key=lambda c: (_ORDEN_REPRESENTATIVA[c.status], c.created_at))
-        secrets = [await _app_secret_de(connection, meta_app_id) for connection in connections]
+        secrets = [await _app_secret_de(connection.id, connection.tenant_id, meta_app_id) for connection in connections]
         con_secreto = [(c, secret) for c, secret in zip(connections, secrets, strict=True) if secret]
         if not con_secreto:
             log.warning("meta_subscriptions_health_sin_app_secret", meta_app_id=meta_app_id)
@@ -137,12 +147,12 @@ async def _group_connected_apps() -> list[_AppGroup]:
                     representative_tenant_id=str(representative.tenant_id),
                     otro_tenant_id=str(other.tenant_id),
                 )
-        respaldos: list[tuple[uuid.UUID, uuid.UUID, str]] = []
+        respaldos: list[tuple[uuid.UUID, uuid.UUID]] = []
         probados = {app_secret}
         for other, other_secret in con_secreto[1:]:
             if other_secret not in probados:
                 probados.add(other_secret)
-                respaldos.append((other.id, other.tenant_id, other_secret))
+                respaldos.append((other.id, other.tenant_id))
         groups.append(
             _AppGroup(
                 meta_app_id=meta_app_id,
@@ -157,18 +167,17 @@ async def _group_connected_apps() -> list[_AppGroup]:
     return groups
 
 
-async def _app_secret_de(connection: MetaConnection, meta_app_id: str) -> str | None:
-    """App Secret de la conexión, bajo SU `tenant_scope`. Una fila que no se puede leer (un
-    secreto que no descifra) se loguea y cuenta como sin secreto: no tumba el cron de todos."""
+async def _app_secret_de(connection_id: uuid.UUID, tenant_id: uuid.UUID, meta_app_id: str) -> str | None:
+    """App Secret de la conexión, bajo el `tenant_scope` de SU negocio. Una fila que no se
+    puede leer (un secreto que no descifra) se loguea y cuenta como sin secreto: no tumba el
+    cron de todos."""
     try:
-        async with tenant_scope(connection.tenant_id):
-            return await meta_token_store.get_token(
-                connection.id, "app_access", meta_app_id, tenant_id=connection.tenant_id
-            )
+        async with tenant_scope(tenant_id):
+            return await meta_token_store.get_token(connection_id, "app_access", meta_app_id, tenant_id=tenant_id)
     except Exception:
         log.exception(
             "meta_subscriptions_health_secreto_ilegible",
-            meta_app_id=meta_app_id, connection_id=str(connection.id), tenant_id=str(connection.tenant_id),
+            meta_app_id=meta_app_id, connection_id=str(connection_id), tenant_id=str(tenant_id),
         )
         return None
 
@@ -191,13 +200,14 @@ async def _degrade_connections_for_object(connections: list[MetaConnection], obj
                 # volvería a prestar el secreto (ADR-0101).
                 db_connection = await session.get(MetaConnection, connection.id, with_for_update=True)
                 if (
-                    db_connection is not None
-                    and db_connection.tenant_id == connection.tenant_id
-                    and db_connection.status == "connected"
+                    db_connection is None
+                    or db_connection.tenant_id != connection.tenant_id
+                    or db_connection.status != "connected"
                 ):
-                    db_connection.status = "degraded"
-                    db_connection.status_reason = f"meta_subscription_inactive:{object_}"
-                    await session.commit()
+                    continue  # cambió mientras tanto: no se degradó nada
+                db_connection.status = "degraded"
+                db_connection.status_reason = f"meta_subscription_inactive:{object_}"
+                await session.commit()
         log.error(
             "meta_subscription_degraded",
             meta_app_id=connection.meta_app_id,
@@ -220,31 +230,38 @@ async def _fetch_subscriptions(group: _AppGroup, connection_id: uuid.UUID, tenan
 
 
 async def _check_group(group: _AppGroup) -> None:
-    candidatas = [
-        (group.representative_connection_id, group.representative_tenant_id, group.app_secret),
-        *group.respaldos,
-    ]
+    candidatas = [(group.representative_connection_id, group.representative_tenant_id), *group.respaldos]
     data = None
-    last_exc: GraphError | None = None
-    for connection_id, tenant_id, app_secret in candidatas:
+    primer_error: GraphError | SubscriptionError | None = None
+    for connection_id, tenant_id in candidatas:
+        if connection_id == group.representative_connection_id:
+            app_secret = group.app_secret
+        else:
+            app_secret = await _app_secret_de(connection_id, tenant_id, group.meta_app_id)
+            if not app_secret:
+                continue
         try:
             data = await _fetch_subscriptions(group, connection_id, tenant_id, app_secret)
             break
-        except GraphError as exc:
-            last_exc = exc
+        except (GraphError, SubscriptionError) as exc:
+            # Se guarda el error de la representativa: el de un respaldo con un secreto ajeno
+            # ("App Secret incorrecto") no describe a la app.
+            primer_error = primer_error or exc
             log.error(
                 "meta_subscriptions_health_check_fallo",
                 meta_app_id=group.meta_app_id,
                 connection_id=str(connection_id),
-                detail=humanize_subscription_error(exc),
+                detail=humanize_subscription_error(exc) if isinstance(exc, GraphError) else str(exc),
             )
     else:
-        # Fallaron todas: recién ahí la app queda "sin dato".
-        assert last_exc is not None
+        # Fallaron todas: recién ahí la app queda "sin dato". Un `SubscriptionError` (p. ej.
+        # un timeout al pedir el token de la app) sigue subiendo como antes, sin pisar el estado.
+        if isinstance(primer_error, SubscriptionError):
+            raise primer_error
+        detail = humanize_subscription_error(primer_error) if primer_error is not None else "Sin secreto"
         for object_ in OBJECT_TO_CHANNEL:
             await persist_subscription_state(
-                group.meta_app_id, object_, callback_url=None, active=None, fields=[],
-                last_error=humanize_subscription_error(last_exc),
+                group.meta_app_id, object_, callback_url=None, active=None, fields=[], last_error=detail,
             )
         return
 

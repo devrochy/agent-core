@@ -7,6 +7,8 @@
   - ADR-0101, decisión 5: el cron de vencimiento ya no exige que la conexión tenga números.
   - ADR-0029, actualización 2026-09-21: la conexión que representa a una app en el cron de suscripciones ya no es "la
     más antigua".
+  - ADR-0034: el estado ya no es directamente el semáforo de `decide_status` (pasa por `next_status`), se suma el check
+    `own_app_subscribed` y cambian las alertas.
 - **Contexto:** entrada Media del BACKLOG que dejó ADR-0101. La revisión del diseño encontró además la variante
   con tokens, y la del `arquitecto`, que el filtro por números y las filas ya promovidas dejaban el problema abierto.
 
@@ -58,9 +60,15 @@ Revisar más conexiones tenía trampas, porque `_resolve_byok_token` toma la pri
    la siguiente corrida y la sana recupera el secreto. Si es la única BYOK, sigue prestando lo que tenga (ADR-0101).
    Para el resto (Embedded Signup o manual sin la app de la plataforma configurada, un alta manual a medias),
    `token_valid` queda con `ok=None`: no empeora ni deja mejorar, y el panel muestra el motivo y "reautorizar".
-3. **`own_app_subscribed`, solo BYOK:** `True` si `WabaAccount.subscribed`, que ponen el alta BYOK y "Resuscribir la
-   WABA" después de un `POST /subscribed_apps` correcto; si no, `None`. Nunca falla, así que no degrada a nadie: solo
-   impide que un reintento con otra app que no llegó a suscribir la WABA pase a `connected`.
+3. **`own_app_subscribed`, solo BYOK: la WABA quedó suscrita a la app de esta conexión.** Sale de
+   `WabaAccount.subscribed`: el alta BYOK lo pone en `False` al empezar (también cuando reusa la fila al reconectar) y
+   en `True` después de un `POST /subscribed_apps` correcto; "Resuscribir la WABA" lo actualiza.
+   - Alguna WABA de la conexión suscrita: `True`.
+   - WABAs, pero ninguna suscrita: `False`. No es de severidad alta, así que la conexión queda `degraded`: un reintento
+     con otra app que no llegó a suscribir la WABA y ya estaba en `connected` (el "Diagnosticar" anterior, o "Activar")
+     baja un nivel, y la sana, `connected`, recupera el secreto. En `error` empataría con la sana y ganaría la más nueva.
+   - Sin WABA cargada (las BYOK anteriores al post-mortem de ADR-0036): `None`. No degrada, pero no deja mejorar; se
+     arregla repitiendo el wizard.
 4. **El cron de salud revisa todas las conexiones `connected`, `degraded` y `error`,** tengan o no números. Una
    conexión abandonada en `error` alerta como mucho una vez al día hasta que alguien la elimine, y esa alerta es la
    señal para hacerlo.
@@ -68,34 +76,43 @@ Revisar más conexiones tenía trampas, porque `_resolve_byok_token` toma la pri
    las `connected`, ahora con `FOR UPDATE`.
    - La representativa (la que presta el secreto para consultar a Meta) es la primera con App Secret, primero las
      sanas. Antes era la más antigua, y si no tenía secreto se saltaba toda la app.
-   - Si la consulta con la representativa falla, se prueba con las demás conexiones de la app que tengan un secreto
-     distinto, y solo si fallan todas la app queda "sin dato". Así, un negocio que cargó el `app_id` de otro con su
-     propio secreto no le traba la recuperación al dueño.
+   - Si la consulta con la representativa falla (un error de Graph o un timeout al pedir el token de la app), se prueba
+     con las demás conexiones de la app que tengan un secreto distinto, leyéndolo recién entonces, bajo el scope de su
+     negocio. Solo si fallan todas la app queda "sin dato", con el error de la representativa; si fue un timeout, el
+     estado no se toca, como antes. Así, un negocio que cargó el `app_id` de otro con su propio secreto no le traba la
+     recuperación al dueño.
+   - La app de la plataforma no se revisa desde este cron. Sus conexiones (Embedded Signup, manual) no guardan su
+     secreto, y uno que diga ser de ella es un alta BYOK con un `app_id` ajeno: usarlo pisaría cada 15 min el estado
+     que ven todos los negocios de Embedded Signup.
    - Un secreto que no se puede leer se loguea y cuenta como ausente: no tumba la corrida de todos.
 6. **El sync de plantillas incluye las conexiones `degraded`, y primero las `connected`**: el candado horario es por
    WABA, y una degradada no debe ganarle el turno a la sana. No incluye `error`: cuando el cron de salud la pasa a
    `degraded`, el sync vuelve.
 7. **Las alertas que un cron ve en cada corrida salen una vez al día** (`send_alert_once`, Redis `SET NX EX`; si Redis
    falla, alerta igual):
-   - token inválido, por vencer y vencido, por conexión y cada uno con su clave; el cron de vencimiento comparte las
-     claves con el de salud;
+   - token inválido o vencido (una sola clave) y por vencer, por conexión; los crons de salud y de vencimiento
+     comparten las claves, así cada condición avisa una vez aunque la vean los dos;
    - calidad RED, por conexión y número.
 
    Sin conexión (el wizard manual) no se alerta: el admin ve el error en pantalla.
 8. **El diagnóstico conserva lo que no es un check** (`merge_health`): `coexistence`, que evita registrar un número que
    comparte la app de WhatsApp Business; `token_scope_check` y `webhook_subscription_active`, del alta; y el estado de
-   facturación que marca un admin. Antes se borraban en cada corrida.
+   facturación que marca un admin. Antes se borraban en cada corrida. El panel de salud solo dibuja como checks las
+   entradas que lo son.
+9. **El checklist de producción ignora las conexiones `revoked`, `draft` y borradas:** con la decisión 2, una BYOK
+   desactivada sin credenciales lo trababa.
 
-**Tiempos.** El estado solo cambia en la corrida del cron de salud (a los :30) o con "Diagnosticar":
+**Tiempos.** El estado solo mejora en la corrida del cron de salud (a los :30) o con "Diagnosticar":
 - Una BYOK cuya suscripción Meta volvió a activar vuelve a `connected` en la siguiente corrida después de que el cron
-  de suscripciones lo vea: hasta una hora.
+  de suscripciones lo vea: hasta una hora después de eso, unos 75 min desde la reactivación.
 - Una conexión con el token renovado pasa de `error` a `connected` en hasta una hora si sus plantillas están al día. Si
   no, pasa por `degraded` hasta que el sync (a los :00) las ponga al día: hasta dos horas.
 
 **Fuera de alcance:** la causa raíz de las variantes con un reintento fallido. Un alta BYOK que crea una fila nueva y
 falla debería devolver el número a la conexión anterior y dejar de prestar secreto. Mientras no lo haga, si la sana
-también cae a `error`, las dos quedan en el mismo nivel de `_resolve_byok_token` y gana la más nueva. Va al BACKLOG
-(prioridad Alta) y se arregla en `meta_byok.py` (ADR-0101/0036), no en los crons.
+también cae a `error`, las dos quedan en el mismo nivel de `_resolve_byok_token` y gana la más nueva; y un reintento que
+sí suscribió la WABA pero falló al suscribir la app tiene `own_app_subscribed` en `True`. Va al BACKLOG (prioridad Alta)
+y se arregla en `meta_byok.py` (ADR-0101/0036), no en los crons.
 
 ## Alternativas consideradas
 
@@ -104,7 +121,7 @@ también cae a `error`, las dos quedan en el mismo nivel de `_resolve_byok_token
 | Sin credenciales, `decide_status` da `error` para todas (lo que sugería el BACKLOG) | En Embedded Signup y manual hay conexiones `connected` que funcionan sin credenciales en el token store: despliegues con solo `WHATSAPP_APP_SECRET`, filas `manual` del backfill 0051, la ventana de caída del alta manual. Pasarían todas a `error`. En BYOK sí se hace (decisión 2) |
 | Agregar `error` al cron sin la regla de mejora | Un alta fallida sin token, o un reintento con otra app sin suscribir, pasaría a `connected` cada hora y le quitaría el secreto a la conexión sana |
 | Revisar solo las conexiones `error` con números | La sana es la que pierde el número cuando un reintento falla: quedaba fuera de los tres crons |
-| Que `_resolve_byok_token` siga a la fila siguiente si a la primera le falta el token | No tener `verify_token` propio es legítimo, y la variante con tokens igual robaría el secreto. Es defensa en profundidad para HU-CONN-05 (un secreto por conexión dueña del número) |
+| Que `_resolve_byok_token` siga a la fila siguiente si a la primera le falta el token | Para el `verify_token` no sirve: no tener uno propio es legítimo. Para el App Secret no alcanza: la variante con tokens igual robaría el secreto. Es defensa en profundidad para HU-CONN-05 (un secreto por conexión dueña del número) |
 | Devolver el número a la conexión anterior cuando el alta falla | Es la causa raíz, pero vive en el alta BYOK, no en los crons. Fuera de alcance; en el BACKLOG |
 | Una función SQL nueva para el sync de plantillas | Hace falta una migración; `admin_meta_connection_ids` ya enumera por estado |
 | Incluir `error` en el sync de plantillas | Sin credenciales o con el token muerto, solo suma fallos al log; el paso por `degraded` alcanza |
@@ -114,17 +131,17 @@ también cae a `error`, las dos quedan en el mismo nivel de `_resolve_byok_token
 **Positivas:**
 - Un token renovado, una suscripción que Meta reactivó o una plantilla corregida devuelven la conexión a
   `connected` sin que nadie la toque.
-- Ni "Diagnosticar" ni el cron pueden convertir un alta fallida en la conexión que presta el secreto, y las que ya lo
-  hacían bajan a `error`.
+- Ni "Diagnosticar" ni el cron pueden convertir un alta fallida en la conexión que presta el secreto. Las que ya lo
+  hacían bajan en la siguiente corrida: a `error` si no tienen credenciales propias, a `degraded` si su WABA no está
+  suscrita a su app. Queda el caso angosto de la causa raíz (arriba).
 - Las alertas de un problema que sigue ahí llegan una vez al día, no cada hora.
 
 **Negativas / lo que aceptamos pagar:**
 - Una conexión de Embedded Signup o manual sin credenciales en el token store no mejora sola. Se arregla
   reautorizando, o con "Activar".
 - Un `ok=None` pasajero de Meta en `token_valid` atrasa una hora la recuperación.
-- Una BYOK cuya WABA no consta como suscrita a su app (`WabaAccount.subscribed` en falso, p. ej. una fila anterior a
-  ese campo) no mejora hasta que se la resuscribe. El panel de salud muestra el botón "Re-suscribir WABA" también para
-  ese check, que queda en `None` y no en `false`.
+- Una BYOK sin WABA cargada (anterior al post-mortem de ADR-0036) no mejora sola: hay que repetir el wizard. Una con
+  la WABA sin suscribir a su app queda `degraded` hasta que se la resuscribe desde el panel.
 - Una conexión abandonada en `error` alerta una vez al día hasta que se la elimine.
 - "Activar" (`set_connection_status`) sigue pasando a `connected` sin chequear: es a propósito y lo hace un admin. Queda
   anotado en el BACKLOG.
@@ -144,13 +161,15 @@ también cae a `error`, las dos quedan en el mismo nivel de `_resolve_byok_token
   `FOR UPDATE` al degradar.
 - `core/tasks/message_template_sync.py`: `_wabas_a_sincronizar`.
 - `core/tasks/meta_token_expiry_check.py`: sin el chequeo de números y con `send_alert_once`.
-- `core/admin/templates/meta_salud.html`: "Re-suscribir WABA" también para `own_app_subscribed`.
+- `core/gateway/meta_byok.py`: el alta pone `WabaAccount.subscribed` en `False` al empezar.
+- `core/gateway/meta_production_readiness.py`: el checklist ignora las conexiones que no están en uso.
+- `core/admin/templates/meta_salud.html`: solo dibuja checks; "Re-suscribir WABA" mientras el check no esté en verde.
 - Tests:
   - `tests/test_meta_health_checks.py`: tabla de `next_status`, `merge_health`, sin credenciales por origen,
     `own_app_subscribed` y alertas;
   - `tests/test_meta_subscriptions_health_cron.py`: grupos, representativa, respaldos y estado que cambia;
   - `tests/integration/test_meta_salud_recupera.py`: recuperación, las trampas de punta a punta, la sana sin
-    números, la fila ya promovida, la carrera, la reconexión durante el diagnóstico, `coexistence` y el cron de
-    suscripciones;
+    números, las filas ya promovidas (sin credenciales y sin la WABA suscrita), la carrera, la reconexión durante el
+    diagnóstico, `coexistence`, el cron de suscripciones, el alta que resetea la WABA y el checklist de producción;
   - `tests/integration/test_admin_enum.py`: el sync de plantillas;
   - `tests/integration/test_meta_credentials_origin.py`: el cron de vencimiento sin números y una vez al día.

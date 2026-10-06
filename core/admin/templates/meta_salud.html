@@ -61,7 +61,8 @@
   <div class="card-body">
     <table class="table table-sm align-middle mb-0">
       <tbody>
-        {% for key, check in (connection.health or {}).items() %}
+        {# Solo los checks: `health` guarda también datos del alta (`coexistence`, ...), ADR-0102. #}
+        {% for key, check in (connection.health or {}).items() if check is mapping and "ok" in check %}
         <tr>
           <td style="width: 2.5rem">
             {% if check.ok is true %}

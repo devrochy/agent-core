@@ -236,7 +236,25 @@ async def test_los_respaldos_son_las_demas_con_un_secreto_distinto(monkeypatch):
     (group,) = await health_mod._group_connected_apps()
 
     assert group.representative_connection_id == ajena.id
-    assert group.respaldos == [(duena.id, duena.tenant_id, "s-real")]
+    assert group.respaldos == [(duena.id, duena.tenant_id)]  # sin el secreto: se lee al usarlo
+    assert "s-ajeno" not in repr(group)
+
+
+@pytest.mark.asyncio
+async def test_la_app_de_la_plataforma_no_se_revisa_desde_aca(monkeypatch):
+    """Un alta BYOK con el `app_id` de la plataforma y un secreto propio sería la única
+    candidata con secreto: fallaría y pisaría cada 15 min el estado que ven todos los
+    negocios de Embedded Signup."""
+    from types import SimpleNamespace
+
+    falsa = _connection(meta_app_id="app-plataforma", status="error")
+    propia = _connection(meta_app_id="app-propia", status="connected")
+    _patch_enumeracion(monkeypatch, [falsa, propia], {falsa.id: "s-falso", propia.id: "s"})
+    monkeypatch.setattr(health_mod, "get_settings", lambda: SimpleNamespace(meta_app_id="app-plataforma"))
+
+    groups = await health_mod._group_connected_apps()
+
+    assert [g.meta_app_id for g in groups] == ["app-propia"]
 
 
 @pytest.mark.asyncio
@@ -279,13 +297,19 @@ async def test_app_sin_ningun_secreto_se_salta(monkeypatch):
     assert await health_mod._group_connected_apps() == []
 
 
-def _grupo_con_respaldo():
+def _grupo_con_respaldo(monkeypatch):
     ajena, duena = _connection(status="connected"), _connection(status="degraded")
     group = health_mod._AppGroup(
         meta_app_id="app-1", app_secret="s-ajeno", graph_api_version="v21.0",
         representative_connection_id=ajena.id, representative_tenant_id=ajena.tenant_id,
-        connections=[ajena, duena], respaldos=[(duena.id, duena.tenant_id, "s-real")],
+        connections=[ajena, duena], respaldos=[(duena.id, duena.tenant_id)],
     )
+
+    async def _fake_secreto(connection_id, tenant_id, meta_app_id):
+        assert (connection_id, tenant_id, meta_app_id) == (duena.id, duena.tenant_id, "app-1")
+        return "s-real"
+
+    monkeypatch.setattr(health_mod, "_app_secret_de", _fake_secreto)
     return group, duena
 
 
@@ -293,7 +317,7 @@ def _grupo_con_respaldo():
 async def test_si_la_representativa_falla_se_prueba_el_respaldo(monkeypatch):
     """Un negocio cargó el `app_id` de otro con su propio secreto y quedó de representativa:
     antes la app quedaba "sin dato" y la conexión del dueño no se recuperaba nunca."""
-    group, _duena = _grupo_con_respaldo()
+    group, _duena = _grupo_con_respaldo(monkeypatch)
     usados, persisted = [], []
 
     async def _fake_token(_app_id, app_secret, _version):
@@ -321,7 +345,7 @@ async def test_si_la_representativa_falla_se_prueba_el_respaldo(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_si_fallan_todas_la_app_queda_sin_dato(monkeypatch):
-    group, _duena = _grupo_con_respaldo()
+    group, _duena = _grupo_con_respaldo(monkeypatch)
     persisted = []
 
     async def _fake_token(*_a, **_k):
@@ -338,3 +362,73 @@ async def test_si_fallan_todas_la_app_queda_sin_dato(monkeypatch):
 
     assert {active for _obj, active in persisted} == {None}
     assert len(persisted) == len(health_mod.OBJECT_TO_CHANNEL)
+
+
+@pytest.mark.asyncio
+async def test_si_fallan_todas_se_guarda_el_error_de_la_representativa(monkeypatch):
+    group, _duena = _grupo_con_respaldo(monkeypatch)
+    errores = []
+
+    async def _fake_token(_app_id, app_secret, _version):
+        raise GraphError("rate limit" if app_secret == "s-ajeno" else "secreto incorrecto", category="TRANSIENT")
+
+    async def _fake_persist(meta_app_id, object_, **kwargs):
+        errores.append(kwargs["last_error"])
+
+    monkeypatch.setattr(health_mod, "fetch_app_access_token", _fake_token)
+    monkeypatch.setattr(health_mod, "persist_subscription_state", _fake_persist)
+    monkeypatch.setattr(health_mod, "humanize_subscription_error", lambda exc: exc.message)
+    monkeypatch.setattr(health_mod, "tenant_scope", lambda tid: _NoopCtx())
+
+    await health_mod._check_group(group)
+
+    assert set(errores) == {"rate limit"}
+
+
+@pytest.mark.asyncio
+async def test_un_timeout_de_la_representativa_tambien_prueba_el_respaldo(monkeypatch):
+    from core.gateway.meta_subscriptions import SubscriptionError
+
+    group, _duena = _grupo_con_respaldo(monkeypatch)
+    persisted = []
+
+    async def _fake_token(_app_id, app_secret, _version):
+        if app_secret == "s-ajeno":
+            raise SubscriptionError("timeout pidiendo el token de la app")
+        return "token"
+
+    async def _fake_graph_fetch(*_a, **_k):
+        return {"data": [{"object": "whatsapp_business_account", "active": True, "fields": []}]}
+
+    async def _fake_persist(meta_app_id, object_, **kwargs):
+        persisted.append(kwargs["active"])
+
+    monkeypatch.setattr(health_mod, "fetch_app_access_token", _fake_token)
+    monkeypatch.setattr(health_mod, "graph_fetch", _fake_graph_fetch)
+    monkeypatch.setattr(health_mod, "persist_subscription_state", _fake_persist)
+    monkeypatch.setattr(health_mod, "tenant_scope", lambda tid: _NoopCtx())
+
+    await health_mod._check_group(group)
+
+    assert persisted == [True]
+
+
+@pytest.mark.asyncio
+async def test_si_todas_dan_timeout_no_se_pisa_el_estado(monkeypatch):
+    """Como antes: un `SubscriptionError` sube (el cron lo loguea) y el estado no se toca."""
+    from core.gateway.meta_subscriptions import SubscriptionError
+
+    group, _duena = _grupo_con_respaldo(monkeypatch)
+
+    async def _fake_token(*_a, **_k):
+        raise SubscriptionError("timeout")
+
+    async def _no_debe_llamarse(*_a, **_k):
+        raise AssertionError("no se pisa el estado")
+
+    monkeypatch.setattr(health_mod, "fetch_app_access_token", _fake_token)
+    monkeypatch.setattr(health_mod, "persist_subscription_state", _no_debe_llamarse)
+    monkeypatch.setattr(health_mod, "tenant_scope", lambda tid: _NoopCtx())
+
+    with pytest.raises(SubscriptionError):
+        await health_mod._check_group(group)
