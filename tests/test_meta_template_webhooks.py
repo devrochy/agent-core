@@ -87,7 +87,8 @@ async def test_los_14_valores_actualizan_status_1a1(monkeypatch):
         _patch_for_row(monkeypatch, row)
 
         await handle_template_status_update(
-            {"message_template_id": "123", "message_template_name": "x", "event": event}
+            {"message_template_id": "123", "message_template_name": "x", "event": event},
+            expected_tenant_id=row.tenant_id,
         )
         assert row.status == event
 
@@ -98,7 +99,9 @@ async def test_evento_inventado_levanta(monkeypatch):
     _patch_for_row(monkeypatch, row)
 
     with pytest.raises(AssertionError, match="no manejado"):
-        await handle_template_status_update({"message_template_id": "123", "event": "NO_EXISTE"})
+        await handle_template_status_update(
+            {"message_template_id": "123", "event": "NO_EXISTE"}, expected_tenant_id=row.tenant_id
+        )
 
 
 @pytest.mark.asyncio
@@ -110,7 +113,8 @@ async def test_rejected_persiste_reason_y_recommendation(monkeypatch):
         {
             "message_template_id": "123", "event": "REJECTED",
             "rejection_info": {"reason": "SCAM", "recommendation": "Revisá el contenido"},
-        }
+        },
+        expected_tenant_id=row.tenant_id,
     )
     assert row.rejected_reason == "SCAM"
     assert row.rejection_recommendation == "Revisá el contenido"
@@ -122,7 +126,8 @@ async def test_disabled_persiste_disable_date(monkeypatch):
     _patch_for_row(monkeypatch, row)
 
     await handle_template_status_update(
-        {"message_template_id": "123", "event": "DISABLED", "disable_info": {"disable_date": "2026-10-01"}}
+        {"message_template_id": "123", "event": "DISABLED", "disable_info": {"disable_date": "2026-10-01"}},
+        expected_tenant_id=row.tenant_id,
     )
     assert row.disable_date == "2026-10-01"
 
@@ -130,7 +135,9 @@ async def test_disabled_persiste_disable_date(monkeypatch):
 @pytest.mark.asyncio
 async def test_sin_fila_local_no_revienta(monkeypatch):
     _patch_no_row(monkeypatch)
-    await handle_template_status_update({"message_template_id": "999", "event": "APPROVED"})
+    await handle_template_status_update(
+        {"message_template_id": "999", "event": "APPROVED"}, expected_tenant_id=uuid.uuid4()
+    )
 
 
 @pytest.mark.asyncio
@@ -142,7 +149,8 @@ async def test_category_update_payload_con_campos_extra_no_revienta(monkeypatch)
     monkeypatch.setattr(tpl_webhooks_mod, "get_redis", lambda: redis)
 
     await handle_template_category_update(
-        {"message_template_id": "123", "new_category": "MARKETING", "campo_no_documentado": "x"}
+        {"message_template_id": "123", "new_category": "MARKETING", "campo_no_documentado": "x"},
+        expected_tenant_id=row.tenant_id,
     )
     assert row.category == "MARKETING"
     assert row.previous_category == "UTILITY"
@@ -156,7 +164,9 @@ async def test_category_update_sin_new_category_no_revienta(monkeypatch):
     redis = SimpleNamespace(set=_noop_set)
     monkeypatch.setattr(tpl_webhooks_mod, "get_redis", lambda: redis)
 
-    await handle_template_category_update({"message_template_id": "123", "campo_desconocido": True})
+    await handle_template_category_update(
+        {"message_template_id": "123", "campo_desconocido": True}, expected_tenant_id=row.tenant_id
+    )
     assert row.category == "UTILITY"  # sin cambios
 
 
@@ -168,7 +178,8 @@ async def test_quality_update_payload_defensivo_no_revienta(monkeypatch):
     monkeypatch.setattr(tpl_webhooks_mod, "get_redis", lambda: redis)
 
     await handle_template_quality_update(
-        {"message_template_id": "123", "previous_quality_score": "GREEN", "new_quality_score": "RED", "extra": 1}
+        {"message_template_id": "123", "previous_quality_score": "GREEN", "new_quality_score": "RED", "extra": 1},
+        expected_tenant_id=row.tenant_id,
     )
     assert row.quality_score == "RED"
     assert row.previous_quality_score == "GREEN"
@@ -181,9 +192,59 @@ async def test_quality_update_payload_sin_campos_esperados_no_revienta(monkeypat
     redis = SimpleNamespace(set=_noop_set)
     monkeypatch.setattr(tpl_webhooks_mod, "get_redis", lambda: redis)
 
-    await handle_template_quality_update({"message_template_id": "123", "algo_totalmente_distinto": True})
+    await handle_template_quality_update(
+        {"message_template_id": "123", "algo_totalmente_distinto": True}, expected_tenant_id=row.tenant_id
+    )
     assert row.quality_score is None
 
 
 async def _noop_set(*a, **k):
     return True
+
+
+# ------------------------------------------------------------------ plantilla de otro negocio (ADR-0100)
+@pytest.mark.asyncio
+async def test_status_update_de_una_plantilla_de_otro_negocio_no_la_toca(monkeypatch):
+    """El webhook firmado por B trae el `message_template_id` de una plantilla de A."""
+    row = _row()
+    _patch_for_row(monkeypatch, row)
+    alertas = []
+
+    async def _fake_alert(*a, **k):
+        alertas.append(a)
+
+    monkeypatch.setattr("core.shared.alerts.send_alert", _fake_alert)
+
+    await handle_template_status_update(
+        {"message_template_id": "123", "event": "REJECTED", "rejection_info": {"reason": "SCAM"}},
+        expected_tenant_id=uuid.uuid4(),
+    )
+
+    assert row.status == "PENDING"
+    assert row.rejected_reason is None
+    assert alertas == []
+
+
+@pytest.mark.asyncio
+async def test_category_y_quality_de_una_plantilla_de_otro_negocio_no_la_tocan(monkeypatch):
+    row = _row(category="UTILITY")
+    _patch_for_row(monkeypatch, row)
+    vistos = []
+
+    async def _registra_set(*a, **k):
+        vistos.append(a)
+        return True
+
+    monkeypatch.setattr(tpl_webhooks_mod, "get_redis", lambda: SimpleNamespace(set=_registra_set))
+    otro = uuid.uuid4()
+
+    await handle_template_category_update(
+        {"message_template_id": "123", "new_category": "MARKETING"}, expected_tenant_id=otro
+    )
+    await handle_template_quality_update(
+        {"message_template_id": "123", "new_quality_score": "RED"}, expected_tenant_id=otro
+    )
+
+    assert row.category == "UTILITY" and row.previous_category is None
+    assert row.quality_score is None
+    assert vistos == []  # un negocio ajeno no gasta el aviso de "primera vez"

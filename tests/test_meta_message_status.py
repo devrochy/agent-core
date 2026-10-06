@@ -63,7 +63,7 @@ def _patch(monkeypatch, row, tenant_id="tenant-1"):
 async def test_sent_a_delivered_avanza(monkeypatch):
     row = _message(status="sent")
     _patch(monkeypatch, row)
-    await apply_status_update({"id": "wamid-1", "status": "delivered", "timestamp": "2000000000"})
+    await apply_status_update({"id": "wamid-1", "status": "delivered", "timestamp": "2000000000"}, expected_tenant_id="tenant-1")
     assert row.status == "delivered"
 
 
@@ -77,7 +77,7 @@ async def test_delivered_despues_de_read_no_degrada(monkeypatch):
     _patch(monkeypatch, row)
 
     delivered_ts_epoch = int((read_ts - timedelta(minutes=5)).timestamp())
-    await apply_status_update({"id": "wamid-1", "status": "delivered", "timestamp": str(delivered_ts_epoch)})
+    await apply_status_update({"id": "wamid-1", "status": "delivered", "timestamp": str(delivered_ts_epoch)}, expected_tenant_id="tenant-1")
     assert row.status == "read"
 
 
@@ -85,7 +85,7 @@ async def test_delivered_despues_de_read_no_degrada(monkeypatch):
 async def test_mismo_estado_no_reventa_es_idempotente(monkeypatch):
     row = _message(status="delivered", status_updated_at=datetime(2026, 1, 1, tzinfo=UTC))
     _patch(monkeypatch, row)
-    await apply_status_update({"id": "wamid-1", "status": "delivered", "timestamp": "1735689600"})
+    await apply_status_update({"id": "wamid-1", "status": "delivered", "timestamp": "1735689600"}, expected_tenant_id="tenant-1")
     assert row.status == "delivered"
 
 
@@ -97,7 +97,8 @@ async def test_failed_persiste_error_detail(monkeypatch):
         {
             "id": "wamid-1", "status": "failed", "timestamp": "2000000000",
             "errors": [{"code": 131047, "message": "Re-engagement", "fbtrace_id": "trace-1"}],
-        }
+        },
+        expected_tenant_id="tenant-1",
     )
     assert row.status == "failed"
     assert row.error_code == 131047
@@ -111,12 +112,63 @@ async def test_sin_fila_local_no_revienta(monkeypatch):
         return None
 
     monkeypatch.setattr(status_mod, "_resolve_tenant_for_message", _fake_resolve)
-    await apply_status_update({"id": "wamid-inexistente", "status": "sent", "timestamp": "2000000000"})
+    monkeypatch.setattr(status_mod, "get_session", FakeSessionCM(None))
+    await apply_status_update({"id": "wamid-inexistente", "status": "sent", "timestamp": "2000000000"}, expected_tenant_id="tenant-1")
 
 
 @pytest.mark.asyncio
 async def test_status_desconocido_no_revienta(monkeypatch):
     row = _message(status="sent")
     _patch(monkeypatch, row)
-    await apply_status_update({"id": "wamid-1", "status": "algo_nuevo_no_documentado", "timestamp": "2000000000"})
+    await apply_status_update({"id": "wamid-1", "status": "algo_nuevo_no_documentado", "timestamp": "2000000000"}, expected_tenant_id="tenant-1")
     assert row.status == "sent"  # sin cambios, se ignora sin romper
+
+
+@pytest.mark.asyncio
+async def test_status_de_un_mensaje_de_otro_negocio_no_lo_toca(monkeypatch):
+    """ADR-0100: el webhook firmado por B trae el wamid de un mensaje de A. Se busca en
+    el scope de B (no aparece) y el resolvedor solo sirve para el aviso."""
+    _patch(monkeypatch, None, tenant_id="tenant-a")
+    avisos = []
+    monkeypatch.setattr(
+        status_mod, "log", SimpleNamespace(warning=lambda e, **k: avisos.append(e), info=lambda *a, **k: None)
+    )
+
+    await apply_status_update(
+        {"id": "wamid-1", "status": "failed", "timestamp": "2000000000", "errors": [{"code": 1}]},
+        expected_tenant_id="tenant-b",
+    )
+
+    assert avisos == ["status_update_de_otro_negocio"]
+
+
+@pytest.mark.asyncio
+async def test_el_negocio_lo_da_la_entry_no_el_resolvedor(monkeypatch):
+    """El mismo wamid puede existir en A y en B, y `resolve_tenant_for_message` hace
+    `LIMIT 1`: aunque diga A, el estado de la entry de B se busca y se aplica en B."""
+    import uuid
+
+    from core.shared.tenant import get_current_tenant_id
+
+    tenant_a, tenant_b = uuid.uuid4(), uuid.uuid4()
+    row = _message(status="sent", tenant_id=tenant_b)
+    consultas: list[tuple[object, str]] = []
+
+    class SesionQueAnota(FakeSession):
+        async def execute(self, stmt, *a, **k):
+            consultas.append((get_current_tenant_id(), str(stmt.whereclause)))
+            return FakeResult(self._row)
+
+    async def resolvedor_dice_a(_external_message_id):
+        return tenant_a
+
+    monkeypatch.setattr(status_mod, "_resolve_tenant_for_message", resolvedor_dice_a)
+    monkeypatch.setattr(status_mod, "get_session", lambda: SesionQueAnota(row))
+
+    await apply_status_update(
+        {"id": "wamid-1", "status": "delivered", "timestamp": "2000000000"}, expected_tenant_id=tenant_b
+    )
+
+    assert row.status == "delivered"
+    assert [scope for scope, _ in consultas] == [tenant_b]
+    assert "messages.tenant_id" in consultas[0][1]
