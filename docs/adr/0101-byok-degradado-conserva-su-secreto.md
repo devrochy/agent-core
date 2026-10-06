@@ -4,8 +4,8 @@
 - **Fecha:** 2026-10-06
 - **Enmienda:**
   - ADR-0040, decisión 2, y ADR-0036, corrección 3 (donde nació el filtro): `_resolve_byok_token` filtraba
-    `status in (connected, pending)`. Ahora lee también `degraded` y `error`, como respaldo, y solo conexiones
-    `origin = 'byok'`.
+    `status in (connected, pending)`. Ahora lee también `degraded` y `error`, como respaldo, y prefiere las
+    conexiones `origin = 'byok'`.
   - ADR-0100, consecuencias: el "secreto efectivo" de un negocio en el genérico sale de la conexión BYOK que manda
     este orden, no de "la conexión viva más reciente" de cualquier origen.
 - **Contexto:** hallazgo Alta del BACKLOG; lo encontró el `arquitecto` al revisar ADR-0100.
@@ -34,21 +34,25 @@ app daban 401, por el endpoint por slug y por el genérico (ADR-0100), y Meta lo
    - El App Secret se valida contra Meta antes de guardarlo, así que el de una conexión en `error` es real.
    - Quedan fuera `revoked` (desactivada a mano con `set_connection_status` o borrada con `soft_delete_connection`),
      `draft` (sin credenciales) y las conexiones con `deleted_at`.
-2. **Solo conexiones `origin = 'byok'`.** Son las únicas que guardan secreto y verify token propios. Antes, una
-   conexión de Embedded Signup o manual más nueva podía ganar el orden y dejar al negocio sin el secreto de su app.
+2. **Primero las conexiones `origin = 'byok'`**, las que usan secreto propio como modo vigente (ADR-0094). Antes,
+   una conexión de Embedded Signup o manual más nueva, que no tiene secreto propio, podía ganar el orden y dejar al
+   negocio sin el secreto de su app.
+   - Se ordena, no se filtra. El wizard de Embedded Signup puede tomar una conexión BYOK: le cambia el `origin`, pero
+     no borra su secreto, y la app BYOK puede seguir suscrita a la WABA. Si esa es la única conexión, sus eventos
+     firmados por la app BYOK se siguen aceptando, como antes.
 3. **Orden en tres niveles:** primero `connected`/`pending`, después `degraded` y al final `error`; dentro de cada
    nivel, `connected_at` descendente como antes. `degraded` y `error` son solo un respaldo cuando no hay ninguna
-   conexión sana, así que nada de lo que hoy funciona cambia de conexión. `pending` va con `connected`, porque el
-   self-check del alta lo necesita (ADR-0036).
+   conexión sana del mismo tipo. `pending` va con `connected`, porque el self-check del alta lo necesita (ADR-0036).
 4. **Diagnosticar y el cron de salud ya no reactivan una conexión desactivada.**
    - "Diagnosticar" (`meta_health_service.diagnose_connection`) guarda el resultado, pero no cambia el estado de una
      conexión `revoked`, `draft` o borrada. Antes la pasaba a `degraded`/`error`, y con este ADR eso le devolvería el
      secreto.
    - El cron de salud vuelve a leer el estado antes de escribir y no pisa una conexión que desactivaron durante la
      corrida.
+   - Los dos leen la fila con `FOR UPDATE`, así una desactivación concurrente nunca queda pisada.
 5. **El cron de vencimiento de tokens** (`meta_token_expiry_check.py`) revisa también las conexiones en `error`. Es
    el camino más común a `error`, y el negocio sigue recibiendo mensajes: el aviso de vencimiento es lo que lo hace
-   visible.
+   visible. Solo las que todavía tienen números: un alta fallida o reemplazada avisaría todos los días.
 
 No cambian el filtro explícito por `tenant_id`, la lectura del token con `tenant_id` ni la precedencia
 manual → BYOK → `.env` de `connections.py`.
@@ -59,7 +63,8 @@ manual → BYOK → `.env` de `connections.py`.
 |---|---|
 | Aceptar `degraded`, pero no `error` | `error` es el caso más común (token por vencer) y seguiría dando 401 |
 | Poner `degraded` al mismo nivel que `connected` | Una conexión degradada más nueva le ganaría a una sana; sin el filtro por origen, una de Embedded Signup dejaría al negocio sin secreto |
-| `connected_at` con nulos al final en vez de filtrar por origen | Arregla una conexión de Embedded Signup abandonada en `pending`, pero no una más nueva y degradada. Además el filtro por origen sigue la regla de ADR-0094 |
+| Filtrar por `origin = 'byok'` en vez de ordenar | Una conexión BYOK que tomó Embedded Signup perdería su secreto, y los eventos que su app sigue firmando pasarían a dar 401 y a sumar en la alerta de firmas inválidas |
+| `connected_at` con nulos al final en vez de ordenar por origen | Arregla una conexión de Embedded Signup abandonada en `pending`, pero no una más nueva y sana |
 | Aceptar también `revoked` | Desactivar una conexión a mano tiene que cortar la firma BYOK; si no, no hay forma de apagarla |
 
 ## Consecuencias
@@ -89,7 +94,8 @@ conexión.
 - Tests:
   - `tests/test_meta_byok.py`: la consulta compilada.
   - `tests/integration/test_webhook_slug.py`: `degraded`/`error` aceptadas y `revoked` rechazada, también en el
-    handshake; la sana gana a la degradada y a la de `error`; Embedded Signup no le quita el secreto a la BYOK.
+    handshake; la sana gana a la degradada y a la de `error`; Embedded Signup no le quita el secreto a la BYOK; una
+    BYOK tomada por Embedded Signup lo conserva.
   - `tests/integration/test_webhook_firma_por_negocio.py`: el genérico.
   - `tests/integration/test_meta_salud_no_reactiva.py`: diagnosticar y el cron.
-  - `tests/integration/test_meta_credentials_origin.py`: el aviso de vencimiento en `error`.
+  - `tests/integration/test_meta_credentials_origin.py`: el aviso de vencimiento en `error`, con y sin números.

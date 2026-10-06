@@ -73,7 +73,15 @@ async def diagnose_connection(tenant_id: uuid.UUID, connection_id: str) -> str |
     new_status, reason = decide_status(checks)
 
     async with get_session() as session:
-        db_connection = await get_owned(session, MetaConnection, cid, tenant_id)
+        # FOR UPDATE: si alguien la desactiva mientras tanto, o esperamos su commit y vemos
+        # `revoked`, o su UPDATE espera al nuestro y gana. Nunca se pisa la desactivación.
+        db_connection = (
+            await session.execute(
+                select(MetaConnection)
+                .where(MetaConnection.id == cid, MetaConnection.tenant_id == tenant_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
         if db_connection is not None:
             db_connection.health = checks
             db_connection.last_health_check_at = utcnow()

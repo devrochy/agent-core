@@ -632,8 +632,8 @@ async def test_una_conexion_vieja_conectada_le_gana_a_una_nueva_degradada(app_cl
 
 
 async def test_una_conexion_de_embedded_signup_no_le_quita_el_secreto_a_la_byok(app_client) -> None:
-    """Una conexión de ES más nueva no guarda secreto propio: antes podía ganar el orden y dejar
-    al negocio sin el secreto de su app BYOK (todo su inbound daba 401)."""
+    """Una conexión de ES más nueva, sana y sin secreto propio no le gana a la BYOK: antes ganaba
+    el orden y dejaba al negocio sin el secreto de su app (todo su inbound daba 401)."""
     from datetime import UTC, datetime, timedelta
 
     ahora = datetime.now(UTC)
@@ -641,9 +641,31 @@ async def test_una_conexion_de_embedded_signup_no_le_quita_el_secreto_a_la_byok(
         "whes", status="connected", app_id="app-byok-es", app_secret="secreto-byok-es",
         connected_at=ahora - timedelta(days=30),
     )
-    await _agregar_byok(tid, status="degraded", app_id="app-es", origin="embedded_signup", connected_at=ahora)
+    await _agregar_byok(tid, status="connected", app_id="app-es", origin="embedded_signup", connected_at=ahora)
     body = _cuerpo("es")
 
     r = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-byok-es"))
+
+    assert r.status_code == 200, r.text
+
+
+async def test_una_conexion_byok_tomada_por_embedded_signup_conserva_su_secreto(app_client) -> None:
+    """El wizard de ES cambia el `origin` de una conexión BYOK pero no borra su secreto, y la app
+    BYOK puede seguir suscrita a la WABA: sus eventos se siguen aceptando, como antes de ADR-0101."""
+    tid, slug = await _tenant_con_byok("whtoma", status="connected", app_id="app-toma", app_secret="secreto-toma")
+    from sqlalchemy import update
+
+    from core.db.models import MetaConnection
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            await session.execute(
+                update(MetaConnection).where(MetaConnection.tenant_id == tid).values(origin="embedded_signup")
+            )
+    body = _cuerpo("toma")
+
+    r = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-toma"))
 
     assert r.status_code == 200, r.text

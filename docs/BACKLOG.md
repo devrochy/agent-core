@@ -51,15 +51,22 @@ La señal se pierde y el LLM solo ve un error genérico.
   así que las plantillas pasan de 25 h y la conexión queda `degraded` para siempre.
 - **Trampa:** con credenciales en `None`, `run_health_checks` devuelve solo `app_subscription_active` y `billing`, y
   `decide_status` da `connected`. Agregar `error` al cron sin más pasaría a `connected` una conexión con el alta rota.
+  "Diagnosticar" ya hace eso hoy con una conexión en `error`: si es más nueva y no tiene el token, sube al primer nivel
+  de `_resolve_byok_token` y deja sin secreto a la BYOK sana. Que `decide_status` no dé `connected` cuando falta
+  `token_valid`.
 
 **Otros que deciden por `status` sin seguir ADR-0101**
 - `core/api/routers/connections.py:121` y `core/admin/views.py:1788` muestran `active = status == "connected"`: una
   conexión `degraded`/`error` que recibe y responde aparece como inactiva.
 - `core/admin/meta_health_service.py:144`: las conexiones `degraded`/`error` desaparecen de la tabla de suscripciones,
   justo cuando la suscripción es el problema.
-- `core/gateway/meta_preflight.py::resolve_app_credentials` no filtra por estado ni por `deleted_at` y ordena por
-  `created_at`: puede devolver el `app_access` de una conexión `revoked` o borrada, y elegir otra conexión que
-  `_resolve_byok_token` (auditor-multitenant, 2026-10-06). Usar el mismo selector.
+- `core/gateway/meta_preflight.py::resolve_app_credentials` no filtra por estado ni por `deleted_at`, no prefiere
+  `origin = 'byok'` y ordena por `created_at`: puede devolver el `app_access` de una conexión `revoked` o borrada, y
+  elegir una conexión distinta de la que elige `_resolve_byok_token` (auditor-multitenant, 2026-10-06). Usar el mismo
+  selector.
+- Al tomar una conexión BYOK, el wizard de Embedded Signup (`meta_onboarding.exchange_code`) no revoca su
+  `app_access`/`webhook_verify_token` ni desuscribe la app BYOK de la WABA. Meta sigue mandando eventos firmados por
+  esa app; ADR-0101 los acepta, pero lo limpio es revocarlos y desuscribir.
 - `revoked` solo corta la firma BYOK: el ruteo por número y el sender no miran el estado, y `set_connection_status` no
   libera los números. Una conexión de Embedded Signup o manual desactivada sigue recibiendo y enviando.
 - Si el alta BYOK falla entre guardar `app_access` y `cloud_api_access_token`, la conexión presta secreto pero no tiene

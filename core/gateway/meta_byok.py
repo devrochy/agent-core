@@ -335,9 +335,11 @@ async def _resolve_byok_token(tenant_id: uuid.UUID, kind: str) -> str | None:
     negocio sin secreto y todo su inbound daba 401. Solo se usan como respaldo: primero
     `connected`/`pending`, después `degraded`, al final `error`.
 
-    Solo conexiones `origin="byok"`: son las únicas que guardan secreto y verify token
-    propios. Una de Embedded Signup o manual más nueva no tiene esos tokens, y antes podía
-    ganar el orden y dejar al negocio sin secreto (ADR-0101).
+    Primero las conexiones `origin="byok"`, cuyo modo vigente usa secreto propio
+    (ADR-0094): una de Embedded Signup o manual más nueva no tiene esos tokens, y antes
+    podía ganar el orden y dejar al negocio sin secreto. No se filtran: una conexión BYOK
+    que tomó el wizard de Embedded Signup conserva su secreto, y su app puede seguir
+    suscrita a la WABA (ADR-0101).
 
     Excluye `deleted_at` (invariante nº8): una conexión borrada no presta tokens.
     """
@@ -348,11 +350,11 @@ async def _resolve_byok_token(tenant_id: uuid.UUID, kind: str) -> str | None:
                 .where(
                     MetaConnection.tenant_id == tenant_id,
                     MetaConnection.channel == "whatsapp",
-                    MetaConnection.origin == "byok",
                     MetaConnection.status.in_(_ESTADOS_CON_CREDENCIAL),
                     MetaConnection.deleted_at.is_(None),
                 )
                 .order_by(
+                    case((MetaConnection.origin == "byok", 0), else_=1),
                     case((MetaConnection.status == "degraded", 1), (MetaConnection.status == "error", 2), else_=0),
                     MetaConnection.connected_at.desc(),
                 )
