@@ -43,7 +43,9 @@ def plataforma(monkeypatch):
 
 
 # ------------------------------------------------------------------ helpers
-async def _negocio(prefix: str, *, waba_id: str, phone: str, app_secret: str | None = None) -> uuid.UUID:
+async def _negocio(
+    prefix: str, *, waba_id: str, phone: str, app_secret: str | None = None, status: str = "connected"
+) -> uuid.UUID:
     """Negocio con una conexión de Meta viva, su WABA y su número. Con `app_secret`, es
     BYOK (secreto propio); sin él, usa la app de la plataforma."""
     from core.db.models import MetaConnection, PhoneNumber, WabaAccount
@@ -63,7 +65,7 @@ async def _negocio(prefix: str, *, waba_id: str, phone: str, app_secret: str | N
         async with get_session() as session:
             connection = MetaConnection(
                 tenant_id=tid, channel="whatsapp", origin="byok" if app_secret else "embedded_signup",
-                meta_app_id=app_id, status="connected",
+                meta_app_id=app_id, status=status,
             )
             session.add(connection)
             await session.flush()
@@ -369,6 +371,20 @@ async def test_el_mismo_wamid_en_dos_negocios_solo_avanza_el_del_negocio_de_la_e
     assert r.status_code == 200, r.text
     assert await _estado_y_costos(tenant_b, msg_b, wamid) == ("read", 1)
     assert await _estado_y_costos(tenant_a, msg_a, wamid) == ("sent", 0)
+
+
+@pytest.mark.parametrize("status", ["degraded", "error"])
+async def test_el_generico_acepta_la_firma_de_un_byok_degradado(app_client, status) -> None:
+    """ADR-0101 sobre ADR-0100: un negocio BYOK con un check de salud fallido sigue
+    autorizando sus propios grupos en el genérico; antes se quedaba sin secreto y daba 401."""
+    waba, phone = uniq("waba-deg"), uniq("phone-deg")
+    await _negocio("deg", waba_id=waba, phone=phone, app_secret="secreto-deg", status=status)
+    msg = f"wamid.{uniq('deg')}"
+
+    r = await _post(app_client, [{"id": waba, "changes": [_mensaje(phone, uniq("wa"), msg)]}], "secreto-deg")
+
+    assert r.status_code == 200, r.text
+    assert await _encolado(msg)
 
 
 # ------------------------------------------------------------------ cron de "worker caído"

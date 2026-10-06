@@ -408,6 +408,49 @@ async def test_el_cron_de_vencimiento_no_alerta_por_un_token_que_no_se_usa(monke
     assert not [a for a in alertas if str(conn_id) in a]
 
 
+async def test_el_cron_de_vencimiento_avisa_tambien_por_una_conexion_en_error(monkeypatch) -> None:
+    """Un token a menos de 7 días de vencer ya pone la conexión en `error`. Desde ADR-0101 sigue
+    recibiendo mensajes, así que el aviso de vencimiento no puede saltársela."""
+    from datetime import UTC, datetime, timedelta
+
+    import core.shared.alerts as alerts_mod
+    from core.db.models import MetaConnection, PhoneNumber
+    from core.db.session import get_session
+    from core.gateway import meta_token_store
+    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
+    from core.shared.tenant import tenant_scope
+    from core.tasks.meta_token_expiry_check import check_tokens_expiry
+
+    async def conexion_en_error(con_numero: bool) -> uuid.UUID:
+        tid = await _new_tenant("venc-error")
+        app = uniq("app-venc")
+        conn_id, _waba = await _seed_connection(tid, origin="byok", app_id=app, tokens={})
+        async with tenant_scope(tid):
+            await meta_token_store.put_token(
+                conn_id, CLOUD_API_ACCESS_TOKEN_KIND, app, "TOK-POR-VENCER", tenant_id=tid,
+                expires_at=datetime.now(UTC) + timedelta(days=2),
+            )
+            async with get_session() as session:
+                (await session.get(MetaConnection, conn_id)).status = "error"
+                if con_numero:
+                    session.add(PhoneNumber(tenant_id=tid, connection_id=conn_id, phone_number_id=uniq("phone")))
+        return conn_id
+
+    con_numero = await conexion_en_error(True)
+    abandonada = await conexion_en_error(False)  # alta fallida o reemplazada: no tiene números
+    alertas: list[str] = []
+
+    async def fake_alert(title, message, severity="warning"):
+        alertas.append(message)
+
+    monkeypatch.setattr(alerts_mod, "send_alert", fake_alert)
+
+    await check_tokens_expiry()
+
+    assert [a for a in alertas if str(con_numero) in a]
+    assert not [a for a in alertas if str(abandonada) in a]
+
+
 # ------------------------------------------------------------------ crons por conexión
 async def _three_connections(platform_app):
     """BYOK completa, ES completa y BYOK sin App Secret (no utilizable), en negocios distintos."""

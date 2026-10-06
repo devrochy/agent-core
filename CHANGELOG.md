@@ -1,5 +1,16 @@
 # Changelog
 
+## Sin versión — Una conexión BYOK degradada sigue recibiendo mensajes (ADR-0101, 2026-10-06)
+
+- **Bug (alto, preexistente):** cuando el cron de salud pasaba una conexión BYOK a `degraded` o `error`,
+  `_resolve_byok_token` dejaba de leer su App Secret y su `verify_token`. Todo el inbound del negocio daba 401
+  (por slug y por el genérico).
+  Ahora esos estados siguen prestando la credencial, solo como respaldo: primero `connected`/`pending`, después
+  `degraded`, al final `error`, y primero las conexiones `origin = 'byok'`. `revoked` (desactivada a mano o borrada) y
+  `draft` no prestan nada. El caso más común era un token a menos de 7 días de vencer, que ya pasa a `error`.
+- "Diagnosticar" y el cron de salud ya no reactivan una conexión desactivada.
+- El cron de vencimiento de tokens también avisa por las conexiones en `error` que todavía tienen números.
+
 ## Sin versión — Una ráfaga de mensajes no parte la conversación en dos (2026-10-06)
 
 - **Bug (preexistente):** el consumidor procesa cada mensaje del batch en su propia tarea, y

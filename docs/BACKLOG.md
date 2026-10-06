@@ -27,14 +27,6 @@ modelos de Claude no están, así que su costo cae a cero. Existe
 `BaseLLMProvider.estimate_cost_usd()` (`core/llm/base.py:37-41`) precisamente para
 esto, pero nadie la llama. El panel `/admin/costos` subestima el gasto real.
 
-**Un negocio BYOK con la conexión `degraded` o `error` pierde su App Secret y todo su inbound da 401**
-`meta_byok._resolve_byok_token` solo lee conexiones `connected`/`pending`, pero el cron de salud
-(`meta_health.decide_status`) pasa a `degraded` con cualquier check fallando y a `error` con `token_valid` o
-`app_subscription_active`. Desde ahí `resolve_own_app_secret` no da secreto: los webhooks firmados con la app
-del negocio dan 401 (por slug y por el genérico) y el `verify_token` cae al `.env`. Preexistente (`arquitecto`,
-2026-10-05, al revisar ADR-0100); ADR-0100 no lo empeora. Arreglo probable: que el secreto y el `verify_token` se
-lean también de conexiones `degraded`/`error` (siguen siendo del negocio), con test del cron.
-
 **Confirmar el secreto de la plataforma antes de desplegar ADR-0100**
 `connections.platform_app_secret` usa `WHATSAPP_APP_SECRET or META_APP_SECRET`, y desde ADR-0100 es la única llave
 que autoriza eventos de cualquier negocio en el webhook genérico. Antes de desplegar, confirmar en el `.env` de
@@ -49,6 +41,37 @@ cuando el monto supera `monto_alto_threshold`. Ningún punto de `core/` lee esa 
 La señal se pierde y el LLM solo ve un error genérico.
 
 ## Media
+
+**Una conexión de Meta en `error` o `degraded` no se recupera sola**
+- El cron de salud (`core/tasks/meta_health_check.py`, cada hora) solo revisa `connected`/`degraded`: una conexión en
+  `error` queda así hasta que alguien la reactive desde el panel. Desde ADR-0101 sigue recibiendo mensajes, pero el
+  panel la muestra con error.
+- Otras causas de que no se recupere: `meta_subscriptions_health.py:76` solo revisa `connected`, así que el
+  `active=False` queda viejo y la conexión pasa a `error`; y `message_template_sync.py:41` solo sincroniza `connected`,
+  así que las plantillas pasan de 25 h y la conexión queda `degraded` para siempre.
+- **Trampa:** con credenciales en `None`, `run_health_checks` devuelve solo `app_subscription_active` y `billing`, y
+  `decide_status` da `connected`. Agregar `error` al cron sin más pasaría a `connected` una conexión con el alta rota.
+  "Diagnosticar" ya hace eso hoy con una conexión en `error`: si es más nueva y no tiene el token, sube al primer nivel
+  de `_resolve_byok_token` y deja sin secreto a la BYOK sana. Que `decide_status` no dé `connected` cuando falta
+  `token_valid`.
+
+**Otros que deciden por `status` sin seguir ADR-0101**
+- `core/api/routers/connections.py:121` y `core/admin/views.py:1788` muestran `active = status == "connected"`: una
+  conexión `degraded`/`error` que recibe y responde aparece como inactiva.
+- `core/admin/meta_health_service.py:144`: las conexiones `degraded`/`error` desaparecen de la tabla de suscripciones,
+  justo cuando la suscripción es el problema.
+- `core/gateway/meta_preflight.py::resolve_app_credentials` no filtra por estado ni por `deleted_at`, no prefiere
+  `origin = 'byok'` y ordena por `created_at`: puede devolver el `app_access` de una conexión `revoked` o borrada, y
+  elegir una conexión distinta de la que elige `_resolve_byok_token` (auditor-multitenant, 2026-10-06). Usar el mismo
+  selector.
+- Al tomar una conexión BYOK, el wizard de Embedded Signup (`meta_onboarding.exchange_code`) no revoca su
+  `app_access`/`webhook_verify_token` ni desuscribe la app BYOK de la WABA. Meta sigue mandando eventos firmados por
+  esa app; ADR-0101 los acepta, pero lo limpio es revocarlos y desuscribir.
+- `revoked` solo corta la firma BYOK: el ruteo por número y el sender no miran el estado, y `set_connection_status` no
+  libera los números. Una conexión de Embedded Signup o manual desactivada sigue recibiendo y enviando.
+- Si el alta BYOK falla entre guardar `app_access` y `cloud_api_access_token`, la conexión presta secreto pero no tiene
+  token de acceso; el sender cae a la conexión primaria o al `.env` y respondería desde otro número. Que el sender
+  falle cerrado si recibe `meta_connection_id` y no hay token.
 
 **Otras dos altas de conversación con la misma carrera que tenía el consumidor**
 El consumidor ya serializa por cliente el get-or-create de la conversación (`pg_advisory_xact_lock`, 2026-10-06).

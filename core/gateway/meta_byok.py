@@ -29,7 +29,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.exc import IntegrityError
 
 from core.config import get_settings
@@ -308,6 +308,14 @@ async def save_byok_connection(
         return db_connection
 
 
+# Estados en los que la conexión sigue siendo la credencial del negocio (ADR-0101).
+# `degraded`/`error` los pone el cron de salud cuando falla un check (un token a menos de
+# 7 días de vencer ya es `error`), o el alta si falla al guardar; Meta sigue firmando con
+# el secreto de la app. Fuera quedan `revoked` (desactivada a mano o borrada: cortar es
+# intencional) y `draft` (sin credenciales).
+_ESTADOS_CON_CREDENCIAL = ("pending", "connected", "degraded", "error")
+
+
 async def _resolve_byok_token(tenant_id: uuid.UUID, kind: str) -> str | None:
     """Token (del `kind` pedido) de la `MetaConnection` de WhatsApp del tenant.
 
@@ -322,6 +330,17 @@ async def _resolve_byok_token(tenant_id: uuid.UUID, kind: str) -> str | None:
     `"connected"` no se encontraba a sí misma -- caía al `.env` global (vacío) y
     el self-check fallaba con 403.
 
+    Incluye también `degraded` y `error` (ADR-0101): sin ellos, un check de salud
+    fallido (un token por vencer, una plantilla rechazada, un sync atrasado) dejaba al
+    negocio sin secreto y todo su inbound daba 401. Solo se usan como respaldo: primero
+    `connected`/`pending`, después `degraded`, al final `error`.
+
+    Primero las conexiones `origin="byok"`, cuyo modo vigente usa secreto propio
+    (ADR-0094): una de Embedded Signup o manual más nueva no tiene esos tokens, y antes
+    podía ganar el orden y dejar al negocio sin secreto. No se filtran: una conexión BYOK
+    que tomó el wizard de Embedded Signup conserva su secreto, y su app puede seguir
+    suscrita a la WABA (ADR-0101).
+
     Excluye `deleted_at` (invariante nº8): una conexión borrada no presta tokens.
     """
     async with get_session() as session:
@@ -331,10 +350,14 @@ async def _resolve_byok_token(tenant_id: uuid.UUID, kind: str) -> str | None:
                 .where(
                     MetaConnection.tenant_id == tenant_id,
                     MetaConnection.channel == "whatsapp",
-                    MetaConnection.status.in_(("connected", "pending")),
+                    MetaConnection.status.in_(_ESTADOS_CON_CREDENCIAL),
                     MetaConnection.deleted_at.is_(None),
                 )
-                .order_by(MetaConnection.connected_at.desc())
+                .order_by(
+                    case((MetaConnection.origin == "byok", 0), else_=1),
+                    case((MetaConnection.status == "degraded", 1), (MetaConnection.status == "error", 2), else_=0),
+                    MetaConnection.connected_at.desc(),
+                )
             )
         ).scalars().first()
     if connection is None:

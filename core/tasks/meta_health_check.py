@@ -1,7 +1,7 @@
 """Cron de salud completa (horario): corre los 7 checks de
 `core/gateway/meta_health.py` por cada `MetaConnection` `connected`/
-`degraded` (no `draft`/`revoked`/`error` -- no tiene sentido diagnosticar
-algo que nunca se conectó o que ya se dio por perdido), persiste
+`degraded` (no `draft`/`revoked`/`error`; una en `error` sigue recibiendo
+mensajes desde ADR-0101, pero este cron no la vuelve a revisar: ver BACKLOG), persiste
 `health`/`status`/`last_health_check_at`.
 
 El check `app_subscription_active` (15 min) sigue siendo el cron YA
@@ -52,9 +52,14 @@ async def _check_one(connection: MetaConnection) -> None:
         new_status, reason = decide_status(checks)
 
         async with get_session() as session:
-            db_connection = await session.get(MetaConnection, connection.id)
+            # FOR UPDATE: una desactivación concurrente no queda pisada (ADR-0101).
+            db_connection = await session.get(MetaConnection, connection.id, with_for_update=True)
             if db_connection is None or db_connection.tenant_id != connection.tenant_id:
                 return  # defensa en profundidad -- no debería pasar nunca
+            if db_connection.status not in _CONNECTIONS_TO_CHECK or db_connection.deleted_at is not None:
+                # Cambió durante la corrida (la desactivaron o la borraron): no se pisa. Con
+                # `degraded`/`error` volvería a prestar su secreto (ADR-0101).
+                return
             db_connection.health = checks
             db_connection.status = new_status
             db_connection.status_reason = reason

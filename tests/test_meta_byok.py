@@ -555,3 +555,48 @@ async def test_reentrante_actualiza_conexion_existente_en_vez_de_duplicar(monkey
     # No se agregó una MetaConnection nueva -- solo PhoneNumber/WabaAccount.
     connection_rows = [obj for obj in added if obj is existing]
     assert connection_rows == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_byok_token_acepta_degradada_y_error_pero_no_revocada(monkeypatch):
+    """ADR-0101: un check de salud fallido (`degraded`/`error`) no le quita el secreto al
+    negocio; una conexión desactivada a mano (`revoked`) o sin alta (`draft`) sí lo pierde.
+    Primero las BYOK, con el tenant explícito, y las sanas antes que las degradadas."""
+    from sqlalchemy.dialects import postgresql
+
+    consultas: list[str] = []
+
+    class _SesionQueAnota(FakeSession):
+        def __init__(self):
+            super().__init__([], {}, [])
+
+        async def execute(self, stmt, *a, **k):
+            consultas.append(str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})))
+            return _ScalarResult(None)
+
+    class _CM:
+        def __call__(self):
+            return self
+
+        async def __aenter__(self):
+            return _SesionQueAnota()
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(byok_mod, "get_session", _CM())
+
+    assert await resolve_webhook_verify_token(uuid.uuid4()) is None
+
+    where, _, order_by = consultas[0].partition("ORDER BY")
+    assert "meta_connections.tenant_id =" in where
+    assert "meta_connections.deleted_at IS NULL" in where
+    for estado in ("pending", "connected", "degraded", "error"):
+        assert f"'{estado}'" in where
+    for estado in ("revoked", "draft"):
+        assert f"'{estado}'" not in where
+    # Primero las BYOK; después tres niveles: connected/pending, degraded (1), error (2).
+    assert "(meta_connections.origin = 'byok') THEN 0 ELSE 1" in order_by
+    assert "(meta_connections.status = 'degraded') THEN 1" in order_by
+    assert "(meta_connections.status = 'error') THEN 2" in order_by
+    assert order_by.index("origin") < order_by.index("'degraded'") < order_by.rindex("connected_at DESC")
