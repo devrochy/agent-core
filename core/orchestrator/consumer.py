@@ -21,7 +21,7 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from core.agents.responses import load_response
@@ -551,6 +551,14 @@ async def _resolve_conversation(
         ).scalars().first()
         meta_connection_id = meta_phone.connection_id if meta_phone else None
 
+        # Ráfaga del mismo cliente procesada en paralelo (una tarea por entrada del
+        # batch): sin candado, cada tarea que no ve conversación abierta crearía la suya
+        # y los mensajes quedarían en turnos distintos. Se serializa el get-or-create por
+        # cliente hasta el commit de esta sesión, como `meta_asset_claims` (ADR-0095).
+        await session.execute(
+            text("select pg_advisory_xact_lock(hashtext(:k))"),
+            {"k": f"conversation:{tenant_id}:{customer.id}"},
+        )
         conversation = (
             await session.execute(
                 select(Conversation)

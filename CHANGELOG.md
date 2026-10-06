@@ -1,5 +1,15 @@
 # Changelog
 
+## Sin versión — Una ráfaga de mensajes no parte la conversación en dos (2026-10-06)
+
+- **Bug (preexistente):** el consumidor procesa cada mensaje del batch en su propia tarea, y
+  `_resolve_conversation` buscaba la conversación abierta del cliente y, si no había, la creaba sin candado.
+  Varios mensajes seguidos de un cliente sin conversación abierta podían crear una conversación cada uno, y el
+  agente los atendía en turnos separados, sin el contexto de los otros. Ahora el get-or-create se serializa por
+  cliente con `pg_advisory_xact_lock` hasta el commit, como `meta_asset_claims` (ADR-0095). Sin migración.
+- Test: `tests/integration/test_consumer_conversacion_concurrente.py` (5 tareas a la vez sobre un cliente sin
+  conversación abierta: sin el candado salen 5 conversaciones).
+
 ## Sin versión — Renumeración de migraciones y ADRs de la app (2026-10-05)
 
 - **CI de `develop` en rojo:** los PRs de la app (HU-APP-02/05/14/15) se mergearon con las migraciones `0051` y
