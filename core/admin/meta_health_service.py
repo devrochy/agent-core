@@ -52,6 +52,9 @@ async def health_overview(tenant_id: uuid.UUID) -> list[dict[str, Any]]:
     return out
 
 
+_ESTADOS_SIN_DIAGNOSTICO = ("revoked", "draft")
+
+
 async def diagnose_connection(tenant_id: uuid.UUID, connection_id: str) -> str | None:
     """Corre los checks y persiste estado. Devuelve un error legible o None."""
     from core.gateway.meta_health import decide_status, run_health_checks
@@ -73,9 +76,13 @@ async def diagnose_connection(tenant_id: uuid.UUID, connection_id: str) -> str |
         db_connection = await get_owned(session, MetaConnection, cid, tenant_id)
         if db_connection is not None:
             db_connection.health = checks
-            db_connection.status = new_status
-            db_connection.status_reason = reason
             db_connection.last_health_check_at = utcnow()
+            # Diagnosticar no reactiva: una conexión desactivada (`revoked`), sin alta (`draft`)
+            # o borrada conserva su estado. Con `degraded`/`error` volvería a prestar su
+            # secreto (ADR-0101); solo se reactiva a propósito, desde `set_connection_status`.
+            if db_connection.status not in _ESTADOS_SIN_DIAGNOSTICO and db_connection.deleted_at is None:
+                db_connection.status = new_status
+                db_connection.status_reason = reason
     return None
 
 

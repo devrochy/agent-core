@@ -309,9 +309,10 @@ async def save_byok_connection(
 
 
 # Estados en los que la conexión sigue siendo la credencial del negocio (ADR-0101).
-# `degraded`/`error` los pone el cron de salud cuando falla un check, o el alta si falla
-# al guardar; Meta sigue firmando con el secreto de la app. Fuera quedan `revoked`
-# (desactivada a mano o borrada: cortar es intencional) y `draft` (sin credenciales).
+# `degraded`/`error` los pone el cron de salud cuando falla un check (un token a menos de
+# 7 días de vencer ya es `error`), o el alta si falla al guardar; Meta sigue firmando con
+# el secreto de la app. Fuera quedan `revoked` (desactivada a mano o borrada: cortar es
+# intencional) y `draft` (sin credenciales).
 _ESTADOS_CON_CREDENCIAL = ("pending", "connected", "degraded", "error")
 
 
@@ -330,9 +331,13 @@ async def _resolve_byok_token(tenant_id: uuid.UUID, kind: str) -> str | None:
     el self-check fallaba con 403.
 
     Incluye también `degraded` y `error` (ADR-0101): sin ellos, un check de salud
-    fallido dejaba al negocio sin secreto y todo su inbound daba 401, y el self-check
-    de la suscripción tampoco pasaba, así que la conexión no salía de ese estado. Las
-    sanas van primero: una conexión vieja en `error` no le gana a una nueva que anda.
+    fallido (un token por vencer, una plantilla rechazada, un sync atrasado) dejaba al
+    negocio sin secreto y todo su inbound daba 401. Solo se usan como respaldo: primero
+    `connected`/`pending`, después `degraded`, al final `error`.
+
+    Solo conexiones `origin="byok"`: son las únicas que guardan secreto y verify token
+    propios. Una de Embedded Signup o manual más nueva no tiene esos tokens, y antes podía
+    ganar el orden y dejar al negocio sin secreto (ADR-0101).
 
     Excluye `deleted_at` (invariante nº8): una conexión borrada no presta tokens.
     """
@@ -343,10 +348,14 @@ async def _resolve_byok_token(tenant_id: uuid.UUID, kind: str) -> str | None:
                 .where(
                     MetaConnection.tenant_id == tenant_id,
                     MetaConnection.channel == "whatsapp",
+                    MetaConnection.origin == "byok",
                     MetaConnection.status.in_(_ESTADOS_CON_CREDENCIAL),
                     MetaConnection.deleted_at.is_(None),
                 )
-                .order_by(case((MetaConnection.status == "error", 1), else_=0), MetaConnection.connected_at.desc())
+                .order_by(
+                    case((MetaConnection.status == "degraded", 1), (MetaConnection.status == "error", 2), else_=0),
+                    MetaConnection.connected_at.desc(),
+                )
             )
         ).scalars().first()
     if connection is None:

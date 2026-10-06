@@ -55,6 +55,10 @@ async def _check_one(connection: MetaConnection) -> None:
             db_connection = await session.get(MetaConnection, connection.id)
             if db_connection is None or db_connection.tenant_id != connection.tenant_id:
                 return  # defensa en profundidad -- no debería pasar nunca
+            if db_connection.status not in _CONNECTIONS_TO_CHECK or db_connection.deleted_at is not None:
+                # Cambió durante la corrida (la desactivaron o la borraron): no se pisa. Con
+                # `degraded`/`error` volvería a prestar su secreto (ADR-0101).
+                return
             db_connection.health = checks
             db_connection.status = new_status
             db_connection.status_reason = reason

@@ -516,7 +516,7 @@ async def _tenant_con_byok(
 
 async def _agregar_byok(
     tid: uuid.UUID, *, status: str, app_id: str, app_secret: str | None = None, verify_token: str | None = None,
-    connected_at=None,
+    connected_at=None, origin: str = "byok",
 ) -> None:
     from core.db.models import MetaConnection
     from core.db.session import get_session
@@ -526,7 +526,7 @@ async def _agregar_byok(
     async with tenant_scope(tid):
         async with get_session() as session:
             connection = MetaConnection(
-                tenant_id=tid, channel="whatsapp", environment="sandbox", origin="byok", meta_app_id=app_id,
+                tenant_id=tid, channel="whatsapp", environment="sandbox", origin=origin, meta_app_id=app_id,
                 status=status, connected_at=connected_at,
             )
             session.add(connection)
@@ -571,8 +571,8 @@ async def test_post_por_slug_no_acepta_la_firma_de_un_byok_revocado(app_client) 
 
 
 async def test_handshake_por_slug_con_byok_degradado(app_client) -> None:
-    """El self-check de la suscripción usa este handshake: si fallaba, la conexión no salía
-    de `degraded` aunque Meta se recuperara."""
+    """Meta re-verifica la suscripción con este handshake: con la conexión `degraded`, el
+    `verify_token` BYOK caía al del `.env` y la verificación fallaba."""
     _, slug = await _tenant_con_byok("whdegv", status="degraded", app_id="app-degv", verify_token="token-degv")
 
     r = await app_client.get(
@@ -600,3 +600,50 @@ async def test_una_conexion_vieja_sana_le_gana_a_una_nueva_en_error(app_client) 
 
     assert sana.status_code == 200, sana.text
     assert rota.status_code == 401
+
+
+async def test_handshake_por_slug_con_byok_revocado_da_403(app_client) -> None:
+    _, slug = await _tenant_con_byok("whrevv", status="revoked", app_id="app-revv", verify_token="token-revv")
+
+    r = await app_client.get(
+        "/webhooks/whatsapp/" + slug,
+        params={"hub.mode": "subscribe", "hub.verify_token": "token-revv", "hub.challenge": "CHAL-REV"},
+    )
+
+    assert r.status_code == 403
+
+
+async def test_una_conexion_vieja_conectada_le_gana_a_una_nueva_degradada(app_client) -> None:
+    """`degraded` es solo un respaldo: si hay una `connected`, se usa esa aunque sea más vieja."""
+    from datetime import UTC, datetime, timedelta
+
+    ahora = datetime.now(UTC)
+    tid, slug = await _tenant_con_byok(
+        "whdeg2", status="connected", app_id="app-ok", app_secret="secreto-ok", connected_at=ahora - timedelta(days=30),
+    )
+    await _agregar_byok(tid, status="degraded", app_id="app-degr", app_secret="secreto-degr", connected_at=ahora)
+    body = _cuerpo("deg2")
+
+    ok = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-ok"))
+    degr = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-degr"))
+
+    assert ok.status_code == 200, ok.text
+    assert degr.status_code == 401
+
+
+async def test_una_conexion_de_embedded_signup_no_le_quita_el_secreto_a_la_byok(app_client) -> None:
+    """Una conexión de ES más nueva no guarda secreto propio: antes podía ganar el orden y dejar
+    al negocio sin el secreto de su app BYOK (todo su inbound daba 401)."""
+    from datetime import UTC, datetime, timedelta
+
+    ahora = datetime.now(UTC)
+    tid, slug = await _tenant_con_byok(
+        "whes", status="connected", app_id="app-byok-es", app_secret="secreto-byok-es",
+        connected_at=ahora - timedelta(days=30),
+    )
+    await _agregar_byok(tid, status="degraded", app_id="app-es", origin="embedded_signup", connected_at=ahora)
+    body = _cuerpo("es")
+
+    r = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-byok-es"))
+
+    assert r.status_code == 200, r.text

@@ -2,70 +2,94 @@
 
 - **Estado:** aceptado
 - **Fecha:** 2026-10-06
-- **Enmienda:** ADR-0040, decisión 2: `_resolve_byok_token` filtraba `status in (connected, pending)`. Ahora también lee
-  `degraded` y `error`, y prefiere las sanas.
+- **Enmienda:**
+  - ADR-0040, decisión 2, y ADR-0036, corrección 3 (donde nació el filtro): `_resolve_byok_token` filtraba
+    `status in (connected, pending)`. Ahora lee también `degraded` y `error`, como respaldo, y solo conexiones
+    `origin = 'byok'`.
+  - ADR-0100, consecuencias: el "secreto efectivo" de un negocio en el genérico sale de la conexión BYOK que manda
+    este orden, no de "la conexión viva más reciente" de cualquier origen.
 - **Contexto:** hallazgo Alta del BACKLOG; lo encontró el `arquitecto` al revisar ADR-0100.
 
 ## Contexto
 
 `resolve_byok_app_secret` (el secreto HMAC del webhook) y `resolve_webhook_verify_token` (el handshake) comparten
-`core/gateway/meta_byok.py::_resolve_byok_token`, que solo leía conexiones `connected` o `pending`. Hay dos caminos
-que dejan una conexión fuera de esos estados:
+`core/gateway/meta_byok.py::_resolve_byok_token`, que solo leía conexiones `connected` o `pending`. Varias cosas
+normales sacan una conexión BYOK de esos estados:
 
-- el cron de salud (`core/tasks/meta_health_check.py`, `meta_health.decide_status`) la pasa a `degraded` si falla
-  cualquier check, y a `error` si fallan `token_valid` o `app_subscription_active`;
-- el alta BYOK la deja en `error` si falla al guardar las credenciales o la suscripción.
+- **Un token por vencer.** A menos de 7 días del vencimiento, `token_valid` da falso (`meta_health.py`) y la conexión
+  pasa a `error`. Toda conexión BYOK con un token temporal (24 h o 60 días) llegaba ahí con el token todavía vigente.
+- **Plantillas o sync.** Una plantilla `REJECTED` o un sync de plantillas con más de 25 h la pasa a `degraded`.
+- **Repetir el wizard.** El wizard BYOK sobre una conexión que andaba reusa la fila; si falla al guardar, la deja en
+  `error`.
 
-Desde ese momento el negocio se queda sin secreto propio y cae al `.env`:
-
-- los webhooks que Meta firma con la app del negocio dan 401, por el endpoint por slug y por el genérico (ADR-0100), y
-  Meta los reintenta en vano;
-- el `verify_token` también cae al `.env`, así que el self-check de la suscripción falla y la conexión no sale de
-  `degraded` aunque Meta se recupere.
-
-Un check menor fallido dejaba al negocio sin mensajes entrantes.
+En todos los casos el negocio se quedaba sin secreto propio y caía al del `.env`. Los webhooks que Meta firma con su
+app daban 401, por el endpoint por slug y por el genérico (ADR-0100), y Meta los reintentaba en vano. El
+`verify_token` también caía al `.env`. Un check menor dejaba al negocio sin mensajes entrantes.
 
 ## Decisión
 
-`_resolve_byok_token` acepta los estados en que la conexión sigue siendo la credencial del negocio:
-`pending`, `connected`, `degraded` y `error` (`_ESTADOS_CON_CREDENCIAL`). Meta firma con el secreto de la app aunque un
-check de salud falle, y el estado de la conexión sigue mostrando el problema en el panel.
+1. `_resolve_byok_token` acepta los estados en que la conexión sigue siendo la credencial del negocio: `pending`,
+   `connected`, `degraded` y `error` (`_ESTADOS_CON_CREDENCIAL`). Meta firma con el secreto de la app aunque un check
+   falle, y el estado sigue mostrando el problema en el panel.
+   - El App Secret se valida contra Meta antes de guardarlo, así que el de una conexión en `error` es real.
+   - Quedan fuera `revoked` (desactivada a mano con `set_connection_status` o borrada con `soft_delete_connection`),
+     `draft` (sin credenciales) y las conexiones con `deleted_at`.
+2. **Solo conexiones `origin = 'byok'`.** Son las únicas que guardan secreto y verify token propios. Antes, una
+   conexión de Embedded Signup o manual más nueva podía ganar el orden y dejar al negocio sin el secreto de su app.
+3. **Orden en tres niveles:** primero `connected`/`pending`, después `degraded` y al final `error`; dentro de cada
+   nivel, `connected_at` descendente como antes. `degraded` y `error` son solo un respaldo cuando no hay ninguna
+   conexión sana, así que nada de lo que hoy funciona cambia de conexión. `pending` va con `connected`, porque el
+   self-check del alta lo necesita (ADR-0036).
+4. **Diagnosticar y el cron de salud ya no reactivan una conexión desactivada.**
+   - "Diagnosticar" (`meta_health_service.diagnose_connection`) guarda el resultado, pero no cambia el estado de una
+     conexión `revoked`, `draft` o borrada. Antes la pasaba a `degraded`/`error`, y con este ADR eso le devolvería el
+     secreto.
+   - El cron de salud vuelve a leer el estado antes de escribir y no pisa una conexión que desactivaron durante la
+     corrida.
+5. **El cron de vencimiento de tokens** (`meta_token_expiry_check.py`) revisa también las conexiones en `error`. Es
+   el camino más común a `error`, y el negocio sigue recibiendo mensajes: el aviso de vencimiento es lo que lo hace
+   visible.
 
-- **Quedan fuera:**
-  - `revoked`: desactivada a mano o borrada (`meta_health_service.set_active` / `soft_delete_connection`); ahí cortar es
-    intencional;
-  - `draft`: Embedded Signup sin canje, no tiene credenciales;
-  - las conexiones con `deleted_at`, igual que antes.
-- **Orden:** primero las sanas (`connected`, `pending`, `degraded`), después las de `error`; dentro de cada grupo,
-  `connected_at` descendente como antes. Si el negocio tiene una conexión que anda, una vieja en `error` no le gana.
-- **No cambian:** el filtro explícito por `tenant_id`, la lectura del token con `tenant_id`, la precedencia
-  manual → BYOK → `.env` de `connections.py`, ni cómo el cron de salud asigna los estados.
+No cambian el filtro explícito por `tenant_id`, la lectura del token con `tenant_id` ni la precedencia
+manual → BYOK → `.env` de `connections.py`.
 
 ## Alternativas consideradas
 
 | Opción | Por qué no |
 |---|---|
-| Dejar `degraded`, pero no `error` | `error` es justo el caso grave (`app_subscription_active` cae y se intenta re-registrar con el self-check); seguiría dando 401 y la conexión no se recuperaría |
-| Que el cron no baje el estado de la conexión, sino solo un campo de salud | Cambia el contrato de estados que usan el panel y las alertas; el problema real era la resolución de la credencial |
-| Aceptar también `revoked` | Desactivar una conexión a mano tiene que cortar la entrada; si no, no hay forma de apagarla |
+| Aceptar `degraded`, pero no `error` | `error` es el caso más común (token por vencer) y seguiría dando 401 |
+| Poner `degraded` al mismo nivel que `connected` | Una conexión degradada más nueva le ganaría a una sana; sin el filtro por origen, una de Embedded Signup dejaría al negocio sin secreto |
+| `connected_at` con nulos al final en vez de filtrar por origen | Arregla una conexión de Embedded Signup abandonada en `pending`, pero no una más nueva y degradada. Además el filtro por origen sigue la regla de ADR-0094 |
+| Aceptar también `revoked` | Desactivar una conexión a mano tiene que cortar la firma BYOK; si no, no hay forma de apagarla |
 
 ## Consecuencias
 
-**Positivas:** un check de salud fallido ya no corta los mensajes entrantes del negocio, y el self-check de la
-suscripción puede volver a pasar, así que la conexión puede salir de `degraded`.
+**Positivas:** un token por vencer, una plantilla rechazada o un wizard repetido que falla ya no cortan los mensajes
+entrantes del negocio.
 
 **Negativas / lo que aceptamos pagar:**
-- Una conexión en `error` por `token_valid` recibe mensajes, pero sus respuestas fallan al enviarse hasta que se
-  renueve el token. Es mejor que perder el mensaje: queda guardado y la conversación se ve en el panel.
-- El cron de salud solo revisa `connected`/`degraded` (`meta_health_check.py`): una conexión en `error` no vuelve a
-  revisarse y queda en ese estado hasta que alguien la reactive. Queda en el BACKLOG.
+- Una conexión en `error` porque su token venció de verdad recibe mensajes, pero sus respuestas fallan al enviarse
+  hasta que se renueve el token. El cron de vencimiento avisa al operador y el mensaje queda guardado.
+- `revoked` solo corta la firma BYOK. El ruteo por número (`webhook_route_tenant`) y el sender no miran el estado: una
+  conexión de Embedded Signup o manual desactivada sigue recibiendo, firmada por la plataforma, y enviando. Era así
+  antes; queda en el BACKLOG.
+- Una conexión en `error` no vuelve a revisarse sola (el cron de salud solo mira `connected`/`degraded`). Queda en el
+  BACKLOG, con la trampa de agregarla sin más.
 
 **Qué haría que revisáramos esto:** HU-CONN-05 (un secreto por conexión dueña del número), o un estado nuevo de
 conexión.
 
 ## Impacto en el código
 
-- `core/gateway/meta_byok.py`: `_ESTADOS_CON_CREDENCIAL` y el filtro y el orden de `_resolve_byok_token`.
-- Tests: `tests/test_meta_byok.py` (la consulta compilada) y `tests/integration/test_webhook_slug.py`. Este cubre
-  `degraded`/`error`, `revoked`, el handshake y la conexión sana contra la de `error`.
-  `tests/integration/test_webhook_firma_por_negocio.py` cubre el genérico.
+- `core/gateway/meta_byok.py`: `_ESTADOS_CON_CREDENCIAL`, y el filtro (estado y `origin`) y el orden de
+  `_resolve_byok_token`.
+- `core/admin/meta_health_service.py::diagnose_connection` y `core/tasks/meta_health_check.py::_check_one`: no
+  reactivan conexiones desactivadas.
+- `core/tasks/meta_token_expiry_check.py`: incluye `error`.
+- Tests:
+  - `tests/test_meta_byok.py`: la consulta compilada.
+  - `tests/integration/test_webhook_slug.py`: `degraded`/`error` aceptadas y `revoked` rechazada, también en el
+    handshake; la sana gana a la degradada y a la de `error`; Embedded Signup no le quita el secreto a la BYOK.
+  - `tests/integration/test_webhook_firma_por_negocio.py`: el genérico.
+  - `tests/integration/test_meta_salud_no_reactiva.py`: diagnosticar y el cron.
+  - `tests/integration/test_meta_credentials_origin.py`: el aviso de vencimiento en `error`.

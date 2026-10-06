@@ -561,7 +561,7 @@ async def test_reentrante_actualiza_conexion_existente_en_vez_de_duplicar(monkey
 async def test_resolve_byok_token_acepta_degradada_y_error_pero_no_revocada(monkeypatch):
     """ADR-0101: un check de salud fallido (`degraded`/`error`) no le quita el secreto al
     negocio; una conexión desactivada a mano (`revoked`) o sin alta (`draft`) sí lo pierde.
-    Las sanas van antes que las de `error`."""
+    Solo conexiones BYOK, con el tenant explícito, y las sanas antes que las degradadas."""
     from sqlalchemy.dialects import postgresql
 
     consultas: list[str] = []
@@ -589,8 +589,13 @@ async def test_resolve_byok_token_acepta_degradada_y_error_pero_no_revocada(monk
     assert await resolve_webhook_verify_token(uuid.uuid4()) is None
 
     where, _, order_by = consultas[0].partition("ORDER BY")
+    assert "meta_connections.tenant_id =" in where
+    assert "meta_connections.origin = 'byok'" in where
+    assert "meta_connections.deleted_at IS NULL" in where
     for estado in ("pending", "connected", "degraded", "error"):
         assert f"'{estado}'" in where
     for estado in ("revoked", "draft"):
         assert f"'{estado}'" not in where
-    assert "CASE WHEN" in order_by and "'error'" in order_by
+    # Tres niveles: connected/pending, después degraded, al final error.
+    assert "CASE WHEN" in order_by
+    assert order_by.index("'degraded'") < order_by.index("'error'")

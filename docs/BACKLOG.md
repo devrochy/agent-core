@@ -42,11 +42,29 @@ La señal se pierde y el LLM solo ve un error genérico.
 
 ## Media
 
-**Una conexión de Meta en `error` no vuelve a revisarse sola**
-El cron de salud (`core/tasks/meta_health_check.py:27`) solo revisa `connected`/`degraded`. Una conexión que pasa a
-`error` queda así hasta que alguien la reactive desde el panel, aunque Meta se haya recuperado. Desde ADR-0101 sigue
-recibiendo mensajes, pero el panel la muestra con error y no se le vuelve a probar el token. Arreglo: incluir `error`
-en el cron (con alertas deduplicadas para no repetir el aviso cada 15 minutos).
+**Una conexión de Meta en `error` o `degraded` no se recupera sola**
+- El cron de salud (`core/tasks/meta_health_check.py`, cada hora) solo revisa `connected`/`degraded`: una conexión en
+  `error` queda así hasta que alguien la reactive desde el panel. Desde ADR-0101 sigue recibiendo mensajes, pero el
+  panel la muestra con error.
+- Otras causas de que no se recupere: `meta_subscriptions_health.py:76` solo revisa `connected`, así que el
+  `active=False` queda viejo y la conexión pasa a `error`; y `message_template_sync.py:41` solo sincroniza `connected`,
+  así que las plantillas pasan de 25 h y la conexión queda `degraded` para siempre.
+- **Trampa:** con credenciales en `None`, `run_health_checks` devuelve solo `app_subscription_active` y `billing`, y
+  `decide_status` da `connected`. Agregar `error` al cron sin más pasaría a `connected` una conexión con el alta rota.
+
+**Otros que deciden por `status` sin seguir ADR-0101**
+- `core/api/routers/connections.py:121` y `core/admin/views.py:1788` muestran `active = status == "connected"`: una
+  conexión `degraded`/`error` que recibe y responde aparece como inactiva.
+- `core/admin/meta_health_service.py:144`: las conexiones `degraded`/`error` desaparecen de la tabla de suscripciones,
+  justo cuando la suscripción es el problema.
+- `core/gateway/meta_preflight.py::resolve_app_credentials` no filtra por estado ni por `deleted_at` y ordena por
+  `created_at`: puede devolver el `app_access` de una conexión `revoked` o borrada, y elegir otra conexión que
+  `_resolve_byok_token` (auditor-multitenant, 2026-10-06). Usar el mismo selector.
+- `revoked` solo corta la firma BYOK: el ruteo por número y el sender no miran el estado, y `set_connection_status` no
+  libera los números. Una conexión de Embedded Signup o manual desactivada sigue recibiendo y enviando.
+- Si el alta BYOK falla entre guardar `app_access` y `cloud_api_access_token`, la conexión presta secreto pero no tiene
+  token de acceso; el sender cae a la conexión primaria o al `.env` y respondería desde otro número. Que el sender
+  falle cerrado si recibe `meta_connection_id` y no hay token.
 
 **Otras dos altas de conversación con la misma carrera que tenía el consumidor**
 El consumidor ya serializa por cliente el get-or-create de la conversación (`pg_advisory_xact_lock`, 2026-10-06).

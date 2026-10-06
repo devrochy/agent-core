@@ -32,7 +32,10 @@ async def check_tokens_expiry() -> None:
     now = datetime.now(UTC)
     soon = now + timedelta(days=_WARN_DAYS)
 
-    for connection_id, tenant_id in await admin_meta_connection_ids(["connected", "degraded"]):
+    # `error` también: un token a menos de 7 días de vencer ya pone la conexión en `error`
+    # (`meta_health.decide_status`), y desde ADR-0101 sigue recibiendo mensajes, así que el
+    # aviso de vencimiento es lo que lo hace visible.
+    for connection_id, tenant_id in await admin_meta_connection_ids(["connected", "degraded", "error"]):
         try:
             async with tenant_scope(tenant_id):
                 async with get_session() as session:
