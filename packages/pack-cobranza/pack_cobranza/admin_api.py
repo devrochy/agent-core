@@ -317,7 +317,7 @@ async def list_payments(
             .scalars()
             .all()
         )
-    name_by_id = {c.id: f"{c.nombres} {c.apellidos or ''}".strip() for c in clientes}
+    name_by_id = {c.id: f"{c.nombre} {c.apellido or ''}".strip() for c in clientes}
     return [
         Payment(
             id=p.id,
@@ -373,7 +373,7 @@ async def list_promises(
             .scalars()
             .all()
         )
-    name_by_id = {c.id: f"{c.nombres} {c.apellidos or ''}".strip() for c in clientes}
+    name_by_id = {c.id: f"{c.nombre} {c.apellido or ''}".strip() for c in clientes}
     return [
         Promise(
             id=p.id,
@@ -460,7 +460,7 @@ class Monitoring(BaseModel):
 
 
 def _name_by_id(rows: list[Cliente]) -> dict[uuid.UUID, str]:
-    return {c.id: f"{c.nombres} {c.apellidos or ''}".strip() for c in rows}
+    return {c.id: f"{c.nombre} {c.apellido or ''}".strip() for c in rows}
 
 
 def _as_promise(row: Promesa, cliente: str) -> Promise:
