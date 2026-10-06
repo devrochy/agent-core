@@ -50,10 +50,18 @@ nombre de contenedor cambia en cada deploy).
 
   ```
   test.solvershub.site  ^/api/pack/pack_cobranza(/|$) → localhost:3013   (API del pack / APK)
+  test.solvershub.site  ^/api/v1(/|$)                 → localhost:3013   (API JSON de la app oficial, SPEC-25)
   test.solvershub.site  ^/webhooks(/|$)               → localhost:3013
   test.solvershub.site  ^/healthz$                    → localhost:3013
   test.solvershub.site  (resto, incl. /api/* del BFF) → localhost:3014   (panel)
   ```
+
+  > La regla `^/api/v1` se agregó el 2026-10-06 para la app oficial (login admin,
+  > search, sync, push-token, audit). ⚠️ **Pendiente**: `/api/v1/*` sigue detrás de
+  > Cloudflare Access (302 a cloudflareaccess.com), así que la app móvil (sin sesión
+  > de Access) NO puede consumirlo por el dominio; hoy se prueba por LAN
+  > (`http://192.168.40.15:3013`). Hay que añadir `/api/v1/*` al bypass de Access en
+  > test y producción (igual que `/api/pack/*` y `/webhooks`).
 
   El conector corre con `~/.cloudflared/run-solvershub-test.sh` (crontab `@reboot`).
 
