@@ -1,4 +1,4 @@
-"""Recuperación de contraseña self-service (ADR-0094, HU-APP-02).
+"""Recuperación de contraseña self-service (ADR-0098, HU-APP-02).
 
 Cubre: respuesta genérica sin fuga de cuentas, flujo completo (solicitar →
 código por correo → aplicar → login con la nueva clave), uso único del código y

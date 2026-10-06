@@ -5,7 +5,7 @@ Login devuelve el token opaco de `AdminSession` (misma sesión revocable que el
 panel, ADR-0077). El cliente web lo guarda en una cookie `httpOnly`; las apps lo
 guardan en almacenamiento seguro y lo envían como `Authorization: Bearer`.
 
-La recuperación de contraseña (ADR-0094) usa un código de un solo uso enviado
+La recuperación de contraseña (ADR-0098) usa un código de un solo uso enviado
 por el correo de sistema; `forgot-password` responde siempre 202 sin filtrar si
 la cuenta existe.
 """
@@ -69,7 +69,7 @@ async def post_logout(
 
 @router.post("/forgot-password", status_code=202)
 async def post_forgot_password(payload: ForgotPasswordRequest, background: BackgroundTasks) -> Response:
-    """Siempre 202 con el mismo cuerpo: no filtra si la cuenta existe (ADR-0094).
+    """Siempre 202 con el mismo cuerpo: no filtra si la cuenta existe (ADR-0098).
 
     El trabajo pesado (hash + correo) va en background para emparejar el tiempo
     de respuesta de cuentas existentes e inexistentes.

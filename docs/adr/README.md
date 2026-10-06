@@ -103,3 +103,7 @@ Se crean con `/adr`.
 | [0093](0093-callback-oauth-google-en-el-panel.md) | El retorno OAuth de Google Calendar entra por el panel (supersede parcial de ADR-0070, HU-CAL-07) | aceptado |
 | [0094](0094-credenciales-de-meta-por-conexion.md) | Credenciales de Meta por conexión, con el origen guardado (`byok` / `embedded_signup` / `manual`; supersede parcial de ADR-0040 §3 y ADR-0041 §5, enmienda ADR-0034, HU-CONN-01) | aceptado |
 | [0095](0095-numero-y-waba-de-un-solo-negocio.md) | Un número o una WABA de Meta pertenecen a un solo negocio: ruteo por número primero, resolvedores sin ambigüedad y altas verificadas contra Graph (enmienda ADR-0012) | aceptado |
+| [0096](0096-busqueda-global-app.md) | Búsqueda global de la app oficial: `GET /api/v1/search` con providers que registran los packs, filtrados por acceso de lectura a su sección (HU-APP-14) | aceptado |
+| [0097](0097-sync-incremental-y-auditoria-movil.md) | Sync incremental por entidad (`GET /api/v1/sync/{entidad}`, adapters de los packs) y auditoría móvil idempotente en `mobile_audit_events` (HU-APP-15) | aceptado |
+| [0098](0098-recuperacion-y-token-de-gestor.md) | Recuperación de contraseña con código de un solo uso por SMTP de sistema y token de gestor desde la sesión admin (HU-APP-02; antes numerado 0094) | aceptado |
+| [0099](0099-notificaciones-push-expo.md) | Notificaciones push de la app oficial vía Expo Push Service: `push_tokens` por negocio y envío por Celery (HU-APP-05; antes numerado 0095) | aceptado |

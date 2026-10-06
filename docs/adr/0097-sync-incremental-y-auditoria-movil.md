@@ -43,7 +43,7 @@ registro que la búsqueda global (ADR-0096): el core ejecuta **adapters** que re
   cuando detecte huecos.
 
 **2. Auditoría de acciones críticas (`POST /api/v1/audit/mobile-events`)** con tabla de negocio
-`mobile_audit_events` (0053, RLS forzada): la app encola `{eventId, accion, entidad, entidadId,
+`mobile_audit_events` (0055, RLS forzada): la app encola `{eventId, accion, entidad, entidadId,
 payload, deviceId, ocurridoEn}` y el endpoint responde ack por evento
 (`sincronizado`/`duplicado`/`error`) con idempotencia por `(tenant_id, event_id)`, igual criterio
 que el sync offline de cobranza.
@@ -73,7 +73,7 @@ necesidad de sync bidireccional con merge de campos, o auditoría con retención
 ## Impacto en el código
 
 - `core/sync/{__init__,providers}.py`, `core/api/routers/{sync,audit}.py`, `core/api/__init__.py`,
-  `core/db/models.py` (`MobileAuditEvent`), `alembic/versions/0053_mobile_audit_events.py`.
+  `core/db/models.py` (`MobileAuditEvent`), `alembic/versions/0055_mobile_audit_events.py`.
 - Packs: `sync.py` por pack (cobranza/comercio/calendario) + migraciones aditivas
   (cobranza 0015, comercio crm_0008).
 - `docs/openapi.json` regenerado.

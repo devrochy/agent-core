@@ -1,4 +1,4 @@
-"""Cliente de Expo Push Service y envío de push de la app oficial (ADR-0095).
+"""Cliente de Expo Push Service y envío de push de la app oficial (ADR-0099).
 
 Separación de responsabilidades:
 
@@ -10,7 +10,7 @@ Separación de responsabilidades:
 - `PushTransportError`: fallo de red/servicio que justifica reintento del task.
 
 Sin `EXPO_PUSH_ENABLED`, el envío es log-only: un canal sin configurar no rompe
-el flujo (mismo criterio que el correo de sistema, ADR-0094).
+el flujo (mismo criterio que el correo de sistema, ADR-0098).
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Registro de dispositivos de push (`/api/v1/me/push-token`, ADR-0095).
+"""Registro de dispositivos de push (`/api/v1/me/push-token`, ADR-0099).
 
 Cubre: alta idempotente, reactivación tras baja, baja por soft delete,
 aislamiento RLS entre negocios y validación de payload. Requiere el stack

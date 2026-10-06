@@ -1,1 +1,1 @@
-"""Notificaciones de la app oficial (ADR-0095, HU-APP-05)."""
+"""Notificaciones de la app oficial (ADR-0099, HU-APP-05)."""

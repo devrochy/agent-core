@@ -1,4 +1,4 @@
-"""Sesión admin → tokens de campo (`POST /api/v1/pack/cobranza/gestor-token`, ADR-0094).
+"""Sesión admin → tokens de campo (`POST /api/v1/pack/cobranza/gestor-token`, ADR-0098).
 
 Cubre: intercambio del propietario (rol `propietario`), del gestor (rol
 `gestor`, con `requiereVinculacion` sin dispositivo), negocio ajeno (403 del

@@ -3668,7 +3668,7 @@ async def gestor_token(
     request: Request,
     principal: Annotated[Principal, Depends(get_principal)],
 ) -> JSONResponse:
-    """Sesión admin → par de tokens de campo del negocio activo (HU-APP-02, ADR-0094).
+    """Sesión admin → par de tokens de campo del negocio activo (HU-APP-02, ADR-0098).
 
     Reusa la lógica del login unificado de la API de campo (ADR-0081): resuelve
     la membresía de campo del admin en el negocio activo (`X-Tenant-Id`) y emite

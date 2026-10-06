@@ -1,4 +1,4 @@
-"""Correo de SISTEMA por SMTP (ADR-0094).
+"""Correo de SISTEMA por SMTP (ADR-0098).
 
 Distinto del canal SMTP por tenant (`core/gateway/channels/email.py`, que modela
 un `Message` dentro de un negocio): este correo sale de la plataforma misma,

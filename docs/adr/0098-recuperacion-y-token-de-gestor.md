@@ -1,4 +1,4 @@
-# ADR-0094 — Recuperación de contraseña con código de un solo uso y token de gestor desde la sesión admin
+# ADR-0098 — Recuperación de contraseña con código de un solo uso y token de gestor desde la sesión admin
 
 - **Estado:** aceptado
 - **Fecha:** 2026-10-05
@@ -68,7 +68,7 @@ cobranza migre a la identidad del core, o que aparezca abuso medible en `/auth/f
 
 ## Impacto en el código
 
-- `core/db/models.py` (`PasswordResetToken`), `alembic/versions/0051_password_reset_tokens.py`.
+- `core/db/models.py` (`PasswordResetToken`), `alembic/versions/0053_password_reset_tokens.py`.
 - `core/admin/password_reset_service.py`, `core/gateway/system_email.py`, `core/config.py`
   (settings `SYSTEM_SMTP_*`), `core/api/routers/auth.py` (forgot/reset).
 - `packages/pack-cobranza/pack_cobranza/admin_api.py` (`/gestor-token`), `docs/openapi.json`.

@@ -1,4 +1,4 @@
-# ADR-0095 — Notificaciones push de la app oficial vía Expo Push Service
+# ADR-0099 — Notificaciones push de la app oficial vía Expo Push Service
 
 - **Estado:** aceptado
 - **Fecha:** 2026-10-05
@@ -21,7 +21,7 @@ push natural es **Expo Push Service** (`https://exp.host/--/api/v2/push/send`).
   `DELETE /api/v1/me/push-token {token}` con la sesión admin (`get_principal`, sin gate de
   sección: cualquier usuario registra su propio dispositivo). Alta idempotente (reactiva un token
   que existía y se dio de baja); baja por soft delete. El gestor registra con su sesión admin
-  (misma identidad del exchange, ADR-0094): el `admin_id` es el de la cuenta, el `tenant_id` el
+  (misma identidad del exchange, ADR-0098): el `admin_id` es el de la cuenta, el `tenant_id` el
   negocio activo.
 - **Envío determinista desde el servidor** (Celery), nunca desde el modelo: cliente HTTP en
   `core/notifications/push.py`; tarea `core.push.send_batch` en `core/tasks/push_tasks.py` con
@@ -35,7 +35,7 @@ push natural es **Expo Push Service** (`https://exp.host/--/api/v2/push/send`).
   no prompts; invariante 3 no aplica a notificaciones deterministas del servidor).
 - **Canal opcional**: `EXPO_PUSH_ENABLED` (default false) + `EXPO_PUSH_URL` +
   `EXPO_PUSH_ACCESS_TOKEN` opcional. Sin habilitar, el envío es log-only (mismo criterio que el
-  correo de sistema ADR-0094 y las alertas de Slack): un canal sin configurar no rompe el flujo.
+  correo de sistema ADR-0098 y las alertas de Slack): un canal sin configurar no rompe el flujo.
 
 ## Alternativas consideradas
 
@@ -60,7 +60,7 @@ personalicen textos/tono por negocio, o que la app gestione el badge/sonido por 
 
 ## Impacto en el código
 
-- `core/db/models.py` (`PushToken`), `alembic/versions/0052_push_tokens.py`.
+- `core/db/models.py` (`PushToken`), `alembic/versions/0054_push_tokens.py`.
 - `core/notifications/push.py`, `core/tasks/push_tasks.py` (+ include en `celery_app`),
   `core/config.py` (`EXPO_PUSH_*`), `core/api/routers/push.py` (`/api/v1/me/push-token`).
 - `core/orchestrator/escalation.py` (disparo tras `escalate`) y

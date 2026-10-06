@@ -1780,7 +1780,7 @@ def _ack(evento_id: str, estado: str, error: str | None = None) -> dict[str, Any
 
 
 def _notificar_actividad_campo(tenant_id: uuid.UUID, payload: dict[str, Any], tipos_aplicados: list[str]) -> None:
-    """Push al dueño cuando un GESTOR sincroniza eventos de campo (ADR-0095).
+    """Push al dueño cuando un GESTOR sincroniza eventos de campo (ADR-0099).
 
     Solo si el autor es un gestor (un dueño operando su propia app no se
     auto-avisa) y se aplicó al menos un evento. Fire-and-forget por Celery; un

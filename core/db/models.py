@@ -458,7 +458,7 @@ class AdminSession(Base):
 
 
 class PasswordResetToken(Base):
-    """Código de recuperación de contraseña de un solo uso (ADR-0094).
+    """Código de recuperación de contraseña de un solo uso (ADR-0098).
 
     Tabla de SISTEMA (sin RLS): infraestructura de identidad, se consulta sin
     contexto de tenant (el admin pide recuperar su contraseña antes de elegir
@@ -480,7 +480,7 @@ class PasswordResetToken(Base):
 
 
 class PushToken(Base):
-    """Token de push (Expo) de un dispositivo de la app oficial (ADR-0095).
+    """Token de push (Expo) de un dispositivo de la app oficial (ADR-0099).
 
     Tabla de NEGOCIO: tenant_id + RLS forzada (invariante 1). La unicidad activa
     es parcial: (tenant_id, token) WHERE deleted_at IS NULL; un re-registro
