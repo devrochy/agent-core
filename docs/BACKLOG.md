@@ -27,14 +27,6 @@ modelos de Claude no están, así que su costo cae a cero. Existe
 `BaseLLMProvider.estimate_cost_usd()` (`core/llm/base.py:37-41`) precisamente para
 esto, pero nadie la llama. El panel `/admin/costos` subestima el gasto real.
 
-**Un negocio BYOK con la conexión `degraded` o `error` pierde su App Secret y todo su inbound da 401**
-`meta_byok._resolve_byok_token` solo lee conexiones `connected`/`pending`, pero el cron de salud
-(`meta_health.decide_status`) pasa a `degraded` con cualquier check fallando y a `error` con `token_valid` o
-`app_subscription_active`. Desde ahí `resolve_own_app_secret` no da secreto: los webhooks firmados con la app
-del negocio dan 401 (por slug y por el genérico) y el `verify_token` cae al `.env`. Preexistente (`arquitecto`,
-2026-10-05, al revisar ADR-0100); ADR-0100 no lo empeora. Arreglo probable: que el secreto y el `verify_token` se
-lean también de conexiones `degraded`/`error` (siguen siendo del negocio), con test del cron.
-
 **Confirmar el secreto de la plataforma antes de desplegar ADR-0100**
 `connections.platform_app_secret` usa `WHATSAPP_APP_SECRET or META_APP_SECRET`, y desde ADR-0100 es la única llave
 que autoriza eventos de cualquier negocio en el webhook genérico. Antes de desplegar, confirmar en el `.env` de
@@ -49,6 +41,12 @@ cuando el monto supera `monto_alto_threshold`. Ningún punto de `core/` lee esa 
 La señal se pierde y el LLM solo ve un error genérico.
 
 ## Media
+
+**Una conexión de Meta en `error` no vuelve a revisarse sola**
+El cron de salud (`core/tasks/meta_health_check.py:27`) solo revisa `connected`/`degraded`. Una conexión que pasa a
+`error` queda así hasta que alguien la reactive desde el panel, aunque Meta se haya recuperado. Desde ADR-0101 sigue
+recibiendo mensajes, pero el panel la muestra con error y no se le vuelve a probar el token. Arreglo: incluir `error`
+en el cron (con alertas deduplicadas para no repetir el aviso cada 15 minutos).
 
 **Otras dos altas de conversación con la misma carrera que tenía el consumidor**
 El consumidor ya serializa por cliente el get-or-create de la conversación (`pg_advisory_xact_lock`, 2026-10-06).

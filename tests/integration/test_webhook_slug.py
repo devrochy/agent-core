@@ -498,3 +498,105 @@ async def test_post_por_slug_rechaza_firma_de_otro_tenant(app_client) -> None:
         "/webhooks/whatsapp/" + slug_b, content=body, headers=_sign(body, "secreto-b")
     )
     assert r2.status_code != 401, r2.text
+
+
+# ------------------------------------------------------------------ ADR-0101: BYOK degradado
+async def _tenant_con_byok(
+    prefix: str, *, status: str, app_id: str, app_secret: str | None = None, verify_token: str | None = None,
+    connected_at=None,
+) -> tuple[uuid.UUID, str]:
+    from core.onboarding import onboard_tenant
+
+    slug = f"{prefix}-{uuid.uuid4().hex[:6]}"
+    tid, _ = await onboard_tenant(name=f"BYOK {slug}", slug=slug, persona={"tone": "cercano"})
+    await _agregar_byok(tid, status=status, app_id=app_id, app_secret=app_secret, verify_token=verify_token,
+                        connected_at=connected_at)
+    return tid, slug
+
+
+async def _agregar_byok(
+    tid: uuid.UUID, *, status: str, app_id: str, app_secret: str | None = None, verify_token: str | None = None,
+    connected_at=None,
+) -> None:
+    from core.db.models import MetaConnection
+    from core.db.session import get_session
+    from core.gateway import meta_byok
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            connection = MetaConnection(
+                tenant_id=tid, channel="whatsapp", environment="sandbox", origin="byok", meta_app_id=app_id,
+                status=status, connected_at=connected_at,
+            )
+            session.add(connection)
+            await session.flush()
+            connection_id = connection.id
+        if app_secret:
+            await meta_byok.meta_token_store.put_token(
+                connection_id, meta_byok.APP_SECRET_KIND, app_id, app_secret, tenant_id=tid
+            )
+        if verify_token:
+            await meta_byok.meta_token_store.put_token(
+                connection_id, meta_byok.WEBHOOK_VERIFY_TOKEN_KIND, app_id, verify_token, tenant_id=tid
+            )
+
+
+def _cuerpo(prefix: str) -> bytes:
+    return json.dumps(
+        _meta_payload(f"phone-{prefix}", f"wa-{prefix}", f"wamid.{prefix}.{uuid.uuid4().hex[:6]}", "hola")
+    ).encode()
+
+
+@pytest.mark.parametrize("status", ["degraded", "error"])
+async def test_post_por_slug_acepta_la_firma_de_un_byok_degradado(app_client, status) -> None:
+    """Un check de salud fallido no le quita el secreto al negocio: antes, todo su inbound
+    daba 401 y Meta lo reintentaba en vano (ADR-0101)."""
+    _, slug = await _tenant_con_byok("whdeg", status=status, app_id="app-deg", app_secret="secreto-deg")
+    body = _cuerpo("deg")
+
+    r = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-deg"))
+
+    assert r.status_code == 200, r.text
+
+
+async def test_post_por_slug_no_acepta_la_firma_de_un_byok_revocado(app_client) -> None:
+    """Desactivada a mano o borrada: cortar es intencional, el secreto ya no vale."""
+    _, slug = await _tenant_con_byok("whrev", status="revoked", app_id="app-rev", app_secret="secreto-rev")
+    body = _cuerpo("rev")
+
+    r = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-rev"))
+
+    assert r.status_code == 401
+
+
+async def test_handshake_por_slug_con_byok_degradado(app_client) -> None:
+    """El self-check de la suscripción usa este handshake: si fallaba, la conexión no salía
+    de `degraded` aunque Meta se recuperara."""
+    _, slug = await _tenant_con_byok("whdegv", status="degraded", app_id="app-degv", verify_token="token-degv")
+
+    r = await app_client.get(
+        "/webhooks/whatsapp/" + slug,
+        params={"hub.mode": "subscribe", "hub.verify_token": "token-degv", "hub.challenge": "CHAL-DEG"},
+    )
+
+    assert r.status_code == 200 and r.text == "CHAL-DEG"
+
+
+async def test_una_conexion_vieja_sana_le_gana_a_una_nueva_en_error(app_client) -> None:
+    """Con dos conexiones BYOK, el secreto sale de la sana aunque la de `error` sea más nueva."""
+    from datetime import UTC, datetime, timedelta
+
+    ahora = datetime.now(UTC)
+    tid, slug = await _tenant_con_byok(
+        "whdos", status="connected", app_id="app-sana", app_secret="secreto-sano",
+        connected_at=ahora - timedelta(days=30),
+    )
+    await _agregar_byok(tid, status="error", app_id="app-rota", app_secret="secreto-roto", connected_at=ahora)
+    body = _cuerpo("dos")
+
+    sana = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-sano"))
+    rota = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-roto"))
+
+    assert sana.status_code == 200, sana.text
+    assert rota.status_code == 401
