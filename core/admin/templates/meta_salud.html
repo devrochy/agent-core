@@ -75,7 +75,8 @@
           <td class="fw-semibold text-nowrap">{{ key }}</td>
           <td class="small text-secondary">{{ check.detail }}</td>
           <td class="text-end" style="width: 14rem">
-            {% if check.ok == false and check.repair_action == "subscribe_waba" %}
+            {# `ok != true`: `own_app_subscribed` (BYOK) queda en `None`, no en `false`, y también se repara así (ADR-0102). #}
+            {% if check.ok != true and check.repair_action == "subscribe_waba" %}
             <form method="post" action="/admin/conexiones/salud/{{ connection.id }}/resubscribe-waba">
               <button class="btn btn-sm btn-outline-warning">Re-suscribir WABA</button>
             </form>

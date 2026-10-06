@@ -2,16 +2,26 @@
 
 ## Sin versión — Una conexión de Meta en `error` o `degraded` se recupera sola (ADR-0102, 2026-10-06)
 
-- **Bug (medio, preexistente):** una conexión en `error` no volvía nunca a `connected`: el cron de salud no la
-  revisaba, el de suscripciones dejaba de mirar la app de una conexión degradada y el sync de plantillas se saltaba
-  las `degraded`. Ahora los tres las incluyen (las `error`, solo si todavía tienen números).
+- **Bug (medio, preexistente):** una conexión en `error` no volvía nunca a `connected`:
+  - el cron de salud no la revisaba;
+  - el de suscripciones dejaba de mirar la app de una conexión degradada;
+  - el sync de plantillas se saltaba las `degraded`.
+
+  Ahora el cron de salud y el de suscripciones revisan `connected`, `degraded` y `error`, tengan o no números. El sync
+  de plantillas suma `degraded`.
 - **Bug (alto, preexistente):** sin credenciales, el diagnóstico daba `connected`. "Diagnosticar" un alta BYOK
   fallida la pasaba a `connected` y, si era más nueva, le quitaba el secreto a la conexión sana: todo el inbound del
-  negocio daba 401. Ahora una conexión solo mejora de estado con el token verificado y, en BYOK, con la suscripción
-  de su app confirmada.
-- Las alertas de token inválido o por vencer y de calidad RED salen una vez al día, no en cada corrida del cron; el
-  wizard manual ya no manda una alerta crítica por un token mal pegado.
-- El diagnóstico ya no borra `coexistence` ni el estado de facturación que marca un admin.
+  negocio daba 401.
+  - Ahora una conexión solo mejora de estado con el token verificado y, en BYOK, con su app suscrita: la suscripción
+    de la app confirmada y la WABA suscrita a esa app.
+  - Una BYOK sin credenciales propias falla `token_valid`, así que las filas que ya estaban promovidas bajan a `error`
+    en la siguiente corrida.
+- El cron de suscripciones prueba con otra conexión de la app si la representativa falla. Así, un negocio que cargó el
+  `app_id` de otro no le traba la recuperación al dueño.
+- Las alertas de token (inválido, por vencer o vencido) y de calidad RED salen una vez al día por conexión, no en cada
+  corrida. El wizard manual ya no manda una alerta crítica por un token mal pegado.
+- El diagnóstico ya no borra `coexistence`, los datos del alta ni el estado de facturación que marca un admin. Se
+  descarta si el wizard reconectó la conexión mientras corría.
 
 ## Sin versión — Una conexión BYOK degradada sigue recibiendo mensajes (ADR-0101, 2026-10-06)
 

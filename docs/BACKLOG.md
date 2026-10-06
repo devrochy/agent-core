@@ -34,6 +34,16 @@ producción que no es el de la app de un cliente concreto (heredado del monolito
 `META_APP_SECRET`: si los dos están definidos y son distintos, sus entregas al genérico dan 401. Decidir si la
 plataforma es solo `META_APP_SECRET` (ADR-0094) y `WHATSAPP_APP_SECRET` queda como respaldo del endpoint por slug.
 
+**Un reintento BYOK fallido se queda con el número y puede quitarle el secreto a la conexión sana**
+`meta_byok.save_byok_connection` crea una fila nueva al reintentar el wizard con otra app y, en su primera transacción,
+le pasa el número y un `connected_at` más nuevo (`meta_byok.py:123-212`). Si después falla al guardar los tokens o al
+suscribir, solo la marca `error` (`:294-296`): se queda con el número y presta su secreto. Mientras la conexión sana
+esté `connected`, la sana gana el orden de `_resolve_byok_token`; pero en cuanto la sana también cae a `error` (un token
+a 7 días de vencer), las dos quedan en el mismo nivel, gana la más nueva y todo el inbound del negocio da 401. ADR-0102
+hace que la sana se recupere sola cuando se renueva el token, pero no evita el 401 mientras tanto. Arreglo: si el alta
+creó una fila nueva y falla, devolver el número a la conexión anterior y dejar de prestar secreto (p. ej. borrado
+lógico de la fila nueva), en `meta_byok.py` (ADR-0101/0036). Hallazgo del `arquitecto`, 2026-10-06.
+
 **El pedido de monto alto nunca escala**
 `plugins/pack_commerce/pack_commerce/skills.py:989` devuelve `{"escalate": True}`
 cuando el monto supera `monto_alto_threshold`. Ningún punto de `core/` lee esa clave:
@@ -64,11 +74,27 @@ La señal se pierde y el LLM solo ve un error genérico.
 - "Activar" (`meta_health_service.set_connection_status`) pasa una conexión de `error` a `connected` sin chequear nada.
   Es a propósito, lo hace un admin, pero tiene la misma trampa que tenía "Diagnosticar": un alta fallida más nueva le
   quita el secreto a la BYOK sana. Que avise, o que exija el diagnóstico verificado.
-- `check_webhook_subscribed` solo pide que la WABA tenga alguna app suscrita, no la de la conexión. Por eso
-  `next_status` le exige a BYOK la suscripción de su app; verificar el id de la app en `subscribed_apps` (comprobar
-  antes la forma de la respuesta de Meta) lo haría más preciso.
-- `meta_subscriptions_health._check_group` no persiste nada para un objeto que Meta omite en la respuesta: un
-  `active=True` viejo sobrevive aunque la suscripción ya no exista.
+- `check_webhook_subscribed` solo pide que la WABA tenga alguna app suscrita, no la de la conexión. En BYOK,
+  `own_app_subscribed` lo cubre con `WabaAccount.subscribed`, que es lo que se guardó al suscribir; no ve una
+  desuscripción posterior hecha en Meta. Verificar el id de la app en `subscribed_apps` (comprobar antes la forma de
+  la respuesta de Meta) lo cerraría.
+- `meta_subscriptions_health._check_group` no persiste nada para un objeto que Meta omite en la respuesta, y
+  `check_app_subscription` no mira la antigüedad de `last_checked_at`: un `active=True` viejo sobrevive aunque la
+  suscripción ya no exista o el cron se haya parado. Desde ADR-0102 pesa más, porque `next_status` depende de él.
+- Un alta BYOK interrumpida (reinicio del proceso o un `CancelledError`, que `except Exception` no captura) queda en
+  `pending` con el número y quizá con `app_access`. En `_resolve_byok_token`, `pending` va con `connected` y gana por
+  `connected_at`, y ningún cron revisa `pending`: le quita el secreto a la sana. Residuo de ADR-0101; un barrido que
+  pase a `error` las `pending` viejas, u ordenarlas después de `connected`.
+- El alta BYOK comprueba el token con el App Secret, pero no que el `app_id` cargado sea de ese secreto. Un negocio
+  puede dar de alta una conexión con el `app_id` de otro: queda en `error`, entra al grupo de esa app en el cron de
+  suscripciones (el respaldo de ADR-0102 evita que trabe la recuperación del dueño) y, si la activa, el panel le
+  muestra la fila de `meta_app_subscriptions` del otro, con su `callback_url` (`/webhooks/whatsapp/<slug>`).
+  Metadatos sin PII ni secretos. Arreglo: validar el par con `fetch_app_access_token(app_id, app_secret)` en el alta,
+  y no mostrar un `callback_url` que no sea el del propio negocio (auditor-multitenant, 2026-10-06).
+- La suscripción de la app de la plataforma no la revisa ningún cron: solo las conexiones BYOK guardan `app_access`.
+  Si Meta la desactiva, todas las conexiones de Embedded Signup dejan de recibir sin aviso.
+- `webhooks._alert_on_firma_ajena` repite a mano la deduplicación de `send_alert_once`; sus tests parchean
+  `webhooks.get_redis`, por eso no se tocó.
 - El candado horario del sync de plantillas es por `(tenant, waba_id)`, pero las plantillas se guardan por fila de
   WABA: si dos conexiones `connected` comparten la WABA, una de las dos no sincroniza y termina `degraded`.
 - `meta_production_readiness.check_connections_health_except_billing` corre los checks sobre todas las conexiones,

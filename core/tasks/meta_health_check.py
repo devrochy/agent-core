@@ -4,9 +4,9 @@
 `health`/`status`/`last_health_check_at`.
 
 `error` también (ADR-0102): desde ADR-0101 sigue recibiendo mensajes, y sin esto no
-volvía nunca a `connected`. Solo si todavía tiene números (un alta abandonada no se
-revisa cada hora), y solo mejora de estado con el diagnóstico verificado
-(`meta_health.next_status`).
+volvía nunca a `connected`. Todas, tengan o no números: un reintento BYOK fallido se queda
+con el número, y la que lo pierde es la conexión sana. Solo mejora de estado con el
+diagnóstico verificado (`meta_health.next_status`).
 
 El check `app_subscription_active` (15 min) sigue siendo el cron YA
 EXISTENTE (`meta_subscriptions_health.py`) -- acá solo se LEE su
@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from core.db.models import MetaConnection
 from core.db.session import get_session
-from core.gateway.meta_health import merge_health, next_status, run_health_checks
+from core.gateway.meta_health import merge_health, misma_conexion, next_status, run_health_checks
 from core.shared.alerts import send_alert
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
@@ -32,25 +32,29 @@ _CONNECTIONS_TO_CHECK = ("connected", "degraded", "error")
 
 
 async def _connections_to_check() -> list[MetaConnection]:
-    """Conexiones `connected`/`degraded`, y `error` con números, de TODOS los tenants.
+    """Conexiones `connected`/`degraded`/`error` de TODOS los tenants.
 
     Enumera ids cross-tenant vía `admin_meta_connection_ids` (SECURITY DEFINER,
     migración 0033) y luego hidrata cada fila bajo el `tenant_scope` de su
     tenant -- un `select` plano sin scope devolvería 0 filas por RLS (el cron
     correría como no-op silencioso)."""
-    from core.db.admin_enum import admin_meta_connection_ids, tiene_numeros
+    from core.db.admin_enum import admin_meta_connection_ids
 
     out: list[MetaConnection] = []
     for connection_id, tenant_id in await admin_meta_connection_ids(list(_CONNECTIONS_TO_CHECK)):
         async with tenant_scope(tenant_id):
             async with get_session() as session:
                 connection = await session.get(MetaConnection, connection_id)
-                if connection is None or connection.tenant_id != tenant_id:
-                    continue
-                if connection.status == "error" and not await tiene_numeros(session, connection.id, tenant_id):
-                    continue
-                out.append(connection)
+                # El estado se vuelve a mirar: pudo cambiar desde que se enumeró.
+                if (
+                    connection is not None
+                    and connection.tenant_id == tenant_id
+                    and connection.status in _CONNECTIONS_TO_CHECK
+                    and connection.deleted_at is None
+                ):
+                    out.append(connection)
     return out
+
 
 
 async def _check_one(connection: MetaConnection) -> None:
@@ -66,8 +70,10 @@ async def _check_one(connection: MetaConnection) -> None:
                 # Cambió durante la corrida (la desactivaron o la borraron): no se pisa. Con
                 # `degraded`/`error` volvería a prestar su secreto (ADR-0101).
                 return
-            # El estado de la fila bloqueada, no el de la lista: si el wizard la reconectó
-            # durante la corrida, un `error` viejo no le pisa el `connected` (ADR-0102).
+            if not misma_conexion(connection, db_connection):
+                return  # el wizard la reconectó: el diagnóstico es de otra credencial
+            # Desde el estado de la fila bloqueada, no el de la lista: si alguien la activó
+            # durante la corrida, se parte de ese estado (ADR-0102).
             db_connection.status, db_connection.status_reason = next_status(
                 db_connection.status, db_connection.status_reason, db_connection.origin, checks
             )

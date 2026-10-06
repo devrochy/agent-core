@@ -25,7 +25,10 @@ pytestmark = [
 
 OK = {"ok": True}
 SIN_DATO = {"ok": None}
-VERIFICADO = {"token_valid": OK, "app_subscription_active": OK, "billing": SIN_DATO, "templates": OK}
+FALLA = {"ok": False}
+VERIFICADO = {
+    "token_valid": OK, "app_subscription_active": OK, "own_app_subscribed": OK, "billing": SIN_DATO, "templates": OK,
+}
 SIN_VERIFICAR = {"app_subscription_active": SIN_DATO, "billing": SIN_DATO}
 
 
@@ -105,17 +108,21 @@ def _checks_falsos(monkeypatch, checks: dict) -> None:
     monkeypatch.setattr("core.gateway.meta_health.run_health_checks", fake_checks)
 
 
-async def test_el_cron_revisa_las_conexiones_en_error_con_numeros() -> None:
+async def test_el_cron_revisa_las_conexiones_en_error_tengan_o_no_numeros() -> None:
+    """Un reintento BYOK fallido se queda con el número: la que lo pierde es la conexión
+    sana, y no puede quedar fuera del cron."""
     from core.tasks.meta_health_check import _connections_to_check
 
     tid = await _tenant()
     con_numeros, _ = await _conexion(tid, "error")
-    abandonada, _ = await _conexion(tid, "error", numeros=0)
+    sin_numeros, _ = await _conexion(tid, "error", numeros=0)
+    desactivada, _ = await _conexion(tid, "revoked")
 
     ids = {c.id for c in await _connections_to_check()}
 
     assert con_numeros in ids
-    assert abandonada not in ids, "un alta abandonada no se revisa cada hora"
+    assert sin_numeros in ids
+    assert desactivada not in ids
 
 
 async def test_el_cron_recupera_una_conexion_en_error_con_el_diagnostico_verificado(monkeypatch) -> None:
@@ -148,7 +155,8 @@ async def test_sin_verificar_no_sale_de_error_y_conserva_la_razon(monkeypatch) -
 async def test_un_alta_fallida_sin_token_no_le_quita_el_secreto_a_la_sana() -> None:
     """La trampa de punta a punta, con el `run_health_checks` real: sin credenciales, antes
     `decide_status` daba `connected`, la conexión nueva ganaba el orden y el negocio se
-    quedaba sin secreto (todo su inbound daba 401)."""
+    quedaba sin secreto (todo su inbound daba 401). Una BYOK sin credenciales propias ahora
+    falla `token_valid`."""
     from core.admin.meta_health_service import diagnose_connection
     from core.shared.tenant import tenant_scope
     from core.tasks.meta_health_check import _check_one
@@ -162,12 +170,50 @@ async def test_un_alta_fallida_sin_token_no_le_quita_el_secreto_a_la_sana() -> N
         assert await diagnose_connection(tid, str(fallida)) is None
     fila = await _fila(tid, fallida)
     assert fila.status == "error"
-    assert fila.health["token_valid"]["ok"] is None
+    assert fila.health["token_valid"]["ok"] is False
     assert fila.health["token_valid"]["repair_action"] == "reauthorize"
     assert await _secreto(tid) == "SEC-SANA"
 
     await _check_one(fila)
     assert (await _fila(tid, fallida)).status == "error"
+    assert await _secreto(tid) == "SEC-SANA"
+
+
+async def test_un_alta_fallida_que_ya_estaba_en_connected_baja_a_error() -> None:
+    """Las filas que el "Diagnosticar" de antes ya pasó a `connected` siguen quitándole el
+    secreto a la sana. Una BYOK sin credenciales propias falla `token_valid`, y empeorar
+    siempre se puede: baja a `error` y la sana lo recupera."""
+    from core.admin.meta_health_service import diagnose_connection
+    from core.shared.tenant import tenant_scope
+
+    tid = await _tenant()
+    await _conexion(tid, "connected", app_secret="SEC-SANA", access_token="tok-sana", hace_dias=30)
+    promovida, _ = await _conexion(tid, "connected")  # más nueva, sin tokens
+    assert await _secreto(tid) is None  # hoy: el negocio no tiene secreto
+
+    async with tenant_scope(tid):
+        assert await diagnose_connection(tid, str(promovida)) is None
+
+    assert (await _fila(tid, promovida)).status == "error"
+    assert await _secreto(tid) == "SEC-SANA"
+
+
+async def test_la_sana_que_perdio_el_numero_se_recupera_y_recupera_el_secreto(monkeypatch) -> None:
+    """Un reintento con otra app falló y se quedó con el número; después la sana pasó a
+    `error` (token a 7 días de vencer). Las dos en `error`: gana la más nueva y el negocio da
+    401. Al renovar el token, el cron revisa la sana aunque no tenga números y la recupera."""
+    from core.tasks.meta_health_check import _check_one, _connections_to_check
+
+    tid = await _tenant()
+    sana, _ = await _conexion(tid, "error", numeros=0, app_secret="SEC-SANA", access_token="tok", hace_dias=30)
+    await _conexion(tid, "error", app_secret="SEC-FALLIDA", access_token="tok-f")
+    assert await _secreto(tid) == "SEC-FALLIDA"
+
+    (listada,) = [c for c in await _connections_to_check() if c.id == sana]
+    _checks_falsos(monkeypatch, VERIFICADO)
+    await _check_one(listada)
+
+    assert (await _fila(tid, sana)).status == "connected"
     assert await _secreto(tid) == "SEC-SANA"
 
 
@@ -209,6 +255,55 @@ async def test_el_cron_parte_del_estado_de_la_fila_bloqueada(monkeypatch) -> Non
 
     fila = await _fila(tid, cid)
     assert (fila.status, fila.status_reason) == ("connected", None)
+
+
+async def test_un_diagnostico_de_una_conexion_que_el_wizard_reconecto_se_descarta(monkeypatch) -> None:
+    """Se listó y, antes de escribir, el wizard la reconectó (nuevo `connected_at`): los
+    checks son de credenciales que ya no usa. Ni estado ni `health` cambian."""
+    from core.db.models import MetaConnection, utcnow
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+    from core.tasks.meta_health_check import _check_one
+
+    tid = await _tenant()
+    cid, _ = await _conexion(tid, "error", hace_dias=3, health={"token_valid": {"ok": False, "detail": "viejo"}})
+    listada = await _fila(tid, cid)
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            fila = await session.get(MetaConnection, cid)
+            fila.status, fila.status_reason, fila.connected_at = "connected", None, utcnow()
+    _checks_falsos(monkeypatch, {**VERIFICADO, "token_valid": FALLA})
+
+    await _check_one(listada)
+
+    fila = await _fila(tid, cid)
+    assert (fila.status, fila.status_reason) == ("connected", None)
+    assert fila.health["token_valid"]["detail"] == "viejo"
+
+
+async def test_diagnosticar_descarta_el_diagnostico_si_el_wizard_reconecto_mientras_tanto(monkeypatch) -> None:
+    from core.admin.meta_health_service import diagnose_connection
+    from core.db.models import MetaConnection, utcnow
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid = await _tenant()
+    cid, _ = await _conexion(tid, "connected", hace_dias=3, health={"token_valid": {"ok": True, "detail": "previo"}})
+
+    async def checks_mientras_reconecta(_connection, _tenant_id):
+        # El wizard reconecta la conexión mientras Diagnosticar consulta a Meta.
+        async with get_session() as session:
+            (await session.get(MetaConnection, cid)).connected_at = utcnow()
+        return {**VERIFICADO, "token_valid": FALLA}
+
+    monkeypatch.setattr("core.gateway.meta_health.run_health_checks", checks_mientras_reconecta)
+
+    async with tenant_scope(tid):
+        assert await diagnose_connection(tid, str(cid)) is None
+
+    fila = await _fila(tid, cid)
+    assert fila.status == "connected"
+    assert fila.health["token_valid"]["detail"] == "previo"
 
 
 async def test_diagnosticar_conserva_coexistence_y_el_estado_de_facturacion(monkeypatch) -> None:

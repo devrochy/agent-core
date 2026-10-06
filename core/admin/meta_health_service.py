@@ -57,7 +57,12 @@ _ESTADOS_SIN_DIAGNOSTICO = ("revoked", "draft")
 
 async def diagnose_connection(tenant_id: uuid.UUID, connection_id: str) -> str | None:
     """Corre los checks y persiste estado. Devuelve un error legible o None."""
-    from core.gateway.meta_health import merge_health, next_status, run_health_checks
+    from core.gateway.meta_health import (
+        merge_health,
+        misma_conexion,
+        next_status,
+        run_health_checks,
+    )
 
     try:
         cid = uuid.UUID(connection_id)
@@ -81,7 +86,8 @@ async def diagnose_connection(tenant_id: uuid.UUID, connection_id: str) -> str |
                 .with_for_update()
             )
         ).scalar_one_or_none()
-        if db_connection is not None:
+        # Si el wizard la reconectó mientras tanto, el diagnóstico es de otra credencial.
+        if db_connection is not None and misma_conexion(connection, db_connection):
             db_connection.health = merge_health(db_connection.health, checks)
             db_connection.last_health_check_at = utcnow()
             # Diagnosticar no reactiva: una conexión desactivada (`revoked`), sin alta (`draft`)

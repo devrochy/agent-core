@@ -410,7 +410,9 @@ async def test_el_cron_de_vencimiento_no_alerta_por_un_token_que_no_se_usa(monke
 
 async def test_el_cron_de_vencimiento_avisa_tambien_por_una_conexion_en_error(monkeypatch) -> None:
     """Un token a menos de 7 días de vencer ya pone la conexión en `error`. Desde ADR-0101 sigue
-    recibiendo mensajes, así que el aviso de vencimiento no puede saltársela."""
+    recibiendo mensajes, así que el aviso de vencimiento no puede saltársela. Tampoco si no
+    tiene números (ADR-0102): un reintento BYOK fallido se queda con el número, y la que lo
+    pierde es la conexión sana. Y avisa una vez al día, no en cada corrida."""
     from datetime import UTC, datetime, timedelta
 
     import core.shared.alerts as alerts_mod
@@ -437,7 +439,7 @@ async def test_el_cron_de_vencimiento_avisa_tambien_por_una_conexion_en_error(mo
         return conn_id
 
     con_numero = await conexion_en_error(True)
-    abandonada = await conexion_en_error(False)  # alta fallida o reemplazada: no tiene números
+    sin_numero = await conexion_en_error(False)  # la sana, después de que un reintento fallido le sacó el número
     alertas: list[str] = []
 
     async def fake_alert(title, message, severity="warning"):
@@ -446,9 +448,10 @@ async def test_el_cron_de_vencimiento_avisa_tambien_por_una_conexion_en_error(mo
     monkeypatch.setattr(alerts_mod, "send_alert", fake_alert)
 
     await check_tokens_expiry()
+    await check_tokens_expiry()
 
-    assert [a for a in alertas if str(con_numero) in a]
-    assert not [a for a in alertas if str(abandonada) in a]
+    assert len([a for a in alertas if str(con_numero) in a]) == 1
+    assert len([a for a in alertas if str(sin_numero) in a]) == 1
 
 
 # ------------------------------------------------------------------ crons por conexión

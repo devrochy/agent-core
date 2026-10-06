@@ -184,7 +184,13 @@ async def check_app_subscription(connection: MetaConnection) -> PreflightCheck:
 
 
 async def check_number_registered(
-    phone_number_id: str, token: str, app_secret: str, version: str, connection_id: uuid.UUID
+    phone_number_id: str,
+    token: str,
+    app_secret: str,
+    version: str,
+    connection_id: uuid.UUID,
+    *,
+    tenant_id: uuid.UUID | None = None,
 ) -> PreflightCheck:
     now = datetime.now(UTC)
     try:
@@ -201,11 +207,13 @@ async def check_number_registered(
     if quality == "RED":
         from core.shared.alerts import send_alert_once
 
-        # Una vez al día por número: el cron lo revisa cada hora (ADR-0102).
+        # Una vez al día por conexión y número: el cron lo revisa cada hora (ADR-0102). Con
+        # la conexión en la clave, si el número cambia de negocio el nuevo dueño también se entera.
         await send_alert_once(
-            f"meta_calidad_red:{phone_number_id}",
+            f"meta_calidad_red:{connection_id}:{phone_number_id}",
             "Calidad de número en RED",
-            f"phone_number_id={phone_number_id} tiene quality_rating=RED -- riesgo de bloqueo por Meta.",
+            f"phone_number_id={phone_number_id} de la conexión {connection_id} (tenant {tenant_id}) tiene "
+            "quality_rating=RED -- riesgo de bloqueo por Meta.",
             severity="critical",
         )
 
@@ -301,6 +309,54 @@ def check_billing(connection: MetaConnection) -> PreflightCheck:
     )
 
 
+# Sin estas credenciales propias una conexión BYOK no es la credencial de nadie (ADR-0094).
+_BYOK_SIN_CREDENCIALES = {"missing_app_secret", "missing_access_token"}
+
+
+def _token_sin_credenciales(connection: MetaConnection, exc: Exception | None) -> PreflightCheck:
+    """`token_valid` cuando no hay credenciales para revisarlo (ADR-0102).
+
+    - BYOK sin App Secret o sin token propios: `ok=False`. Nunca es legítimo, y así baja a
+      `error` un alta fallida que un "Diagnosticar" anterior dejó en `connected`, que si no
+      le seguiría ganando el secreto a la conexión sana.
+    - El resto (Embedded Signup o manual con la app de la plataforma sin configurar, un alta
+      manual a medias): `ok=None`. No empeora el estado, pero tampoco lo deja mejorar
+      (`next_status`), y el panel muestra por qué.
+    """
+    reason = getattr(exc, "reason", None)
+    message = getattr(exc, "message", None) or "Sin credenciales"
+    if connection.origin == "byok" and reason in _BYOK_SIN_CREDENCIALES:
+        return PreflightCheck(
+            key="token_valid", ok=False, detail=f"Faltan las credenciales propias: {message}",
+            checked_at=datetime.now(UTC), repair_action="reauthorize",
+        )
+    return PreflightCheck(
+        key="token_valid", ok=None, detail=f"No se pudo revisar: {message}",
+        checked_at=datetime.now(UTC), repair_action="reauthorize",
+    )
+
+
+OWN_APP_SUBSCRIBED = "own_app_subscribed"
+
+
+def check_own_app_subscribed(waba: WabaAccount | None) -> PreflightCheck:
+    """¿La WABA quedó suscrita a la app de ESTA conexión? Solo BYOK (ADR-0102).
+
+    `webhook_subscribed` solo pide que la WABA tenga alguna app suscrita: un reintento del
+    wizard con otra app que falló al suscribir lo pasa, porque la vieja sigue suscrita. Lo
+    sabemos por `WabaAccount.subscribed`, que ponen en `True` el alta BYOK y "Resuscribir la
+    WABA" después de un `POST /subscribed_apps` correcto. Nunca falla (`None` en vez de
+    `False`): no degrada a nadie, solo impide que una BYOK mejore de estado sin esa prueba."""
+    now = datetime.now(UTC)
+    if waba is not None and waba.subscribed:
+        return PreflightCheck(key=OWN_APP_SUBSCRIBED, ok=True, detail="La WABA está suscrita a esta app", checked_at=now)
+    return PreflightCheck(
+        key=OWN_APP_SUBSCRIBED, ok=None,
+        detail="No consta que la WABA esté suscrita a esta app -- resuscribila desde el panel.",
+        checked_at=now, repair_action="subscribe_waba",
+    )
+
+
 async def run_health_checks(connection: MetaConnection, tenant_id: uuid.UUID) -> dict[str, dict[str, Any]]:
     """Resuelve WABA/números/token UNA sola vez, corre los checks que
     aplican, devuelve el dict listo para `MetaConnection.health`."""
@@ -333,13 +389,7 @@ async def run_health_checks(connection: MetaConnection, tenant_id: uuid.UUID) ->
     checks["billing"] = check_billing(connection)
 
     if creds is None:
-        # `ok=None`: no se pudo revisar. No empeora el estado, pero tampoco lo deja mejorar
-        # (`next_status`, ADR-0102), y el panel muestra por qué.
-        detail = sin_credenciales.message if sin_credenciales is not None else "Sin credenciales"
-        checks["token_valid"] = PreflightCheck(
-            key="token_valid", ok=None, detail=f"No se pudo revisar: {detail}",
-            checked_at=datetime.now(UTC), repair_action="reauthorize",
-        )
+        checks["token_valid"] = _token_sin_credenciales(connection, sin_credenciales)
         return {key: check.model_dump(mode="json") for key, check in checks.items()}
 
     checks["token_valid"] = await check_token_valid(
@@ -352,11 +402,14 @@ async def run_health_checks(connection: MetaConnection, tenant_id: uuid.UUID) ->
             waba.waba_id, creds.access_token, creds.app_secret, creds.graph_api_version, connection.id
         )
         checks["templates"] = await check_templates(waba.id, tenant_id)
+    if connection.origin == "byok":
+        checks[OWN_APP_SUBSCRIBED] = check_own_app_subscribed(waba)
 
     for phone in phone_numbers:
         suffix = f":{phone.phone_number_id}" if len(phone_numbers) > 1 else ""
         number_check = await check_number_registered(
-            phone.phone_number_id, creds.access_token, creds.app_secret, creds.graph_api_version, connection.id
+            phone.phone_number_id, creds.access_token, creds.app_secret, creds.graph_api_version, connection.id,
+            tenant_id=tenant_id,
         )
         override_check = await check_webhook_override(
             phone.phone_number_id, creds.access_token, creds.app_secret, creds.graph_api_version, connection.id
@@ -383,9 +436,10 @@ def decide_status(checks: dict[str, dict[str, Any]]) -> tuple[str, str | None]:
     return "degraded", f"Checks fallando: {', '.join(sorted(failing))}"
 
 
-# Rango de cada estado para `next_status`: mejorar es bajar de rango. `pending` va con
-# `connected`, como en `_resolve_byok_token`; `revoked`/`draft` no pasan por acá.
-_RANGO = {"pending": 0, "connected": 0, "degraded": 1, "error": 2}
+# Rango de cada estado para `next_status`: mejorar es bajar de rango. `pending` (un alta a
+# medias) no está verificada: pasar a `connected` cuenta como mejora. `revoked`/`draft` no
+# pasan por acá; si llegaran, no cambian.
+_RANGO = {"connected": 0, "pending": 1, "degraded": 1, "error": 2}
 
 
 def next_status(
@@ -398,28 +452,48 @@ def next_status(
     - el token se verificó contra Meta (`token_valid` en `True`). Sin credenciales,
       `run_health_checks` no lo puede revisar y `decide_status` daría `connected`: un alta
       fallida pasaría a ser la conexión sana y le quitaría el secreto a la de verdad;
-    - en BYOK, además, la suscripción de SU app está confirmada (`app_subscription_active`
-      en `True`). Un reintento del wizard con otra app que falló al suscribir tiene token
-      válido, y la WABA sigue suscrita a la app vieja, que es la que firma.
+    - en BYOK, además, SU app está suscrita: la suscripción de la app confirmada
+      (`app_subscription_active`) y la WABA suscrita a esa app (`own_app_subscribed`). Un
+      reintento del wizard con otra app que falló al suscribir tiene token válido, y la WABA
+      sigue suscrita a la app vieja, que es la que firma.
 
-    Si no se cumple, quedan el estado y la razón actuales.
+    Si no se cumple, quedan el estado y la razón actuales. Con un estado que no conoce
+    tampoco cambia nada: falla cerrado.
     """
-    new_status, reason = decide_status(checks)
     rango_actual = _RANGO.get(current)
-    if rango_actual is None or _RANGO[new_status] >= rango_actual:
+    if rango_actual is None:
+        return current, current_reason
+    new_status, reason = decide_status(checks)
+    if _RANGO[new_status] >= rango_actual:
         return new_status, reason
 
     verificado = checks.get("token_valid", {}).get("ok") is True
     if origin == "byok":
-        verificado = verificado and checks.get("app_subscription_active", {}).get("ok") is True
+        verificado = (
+            verificado
+            and checks.get("app_subscription_active", {}).get("ok") is True
+            and checks.get(OWN_APP_SUBSCRIBED, {}).get("ok") is True
+        )
     if not verificado:
         return current, current_reason
     return new_status, reason
 
 
-# Claves de `health` que no son checks: el diagnóstico reemplaza el JSON y no debe
-# borrarlas (ADR-0102).
-_COEXISTENCE = "coexistence"
+def misma_conexion(snapshot: MetaConnection, locked: MetaConnection) -> bool:
+    """¿La fila bloqueada sigue siendo la conexión que se diagnosticó? (ADR-0102)
+
+    Si el wizard la reconectó durante el diagnóstico (otro origen, otra app, u otro
+    `connected_at`), los checks son de credenciales que ya no usa: se descartan."""
+    return (snapshot.origin, snapshot.meta_app_id, snapshot.connected_at) == (
+        locked.origin,
+        locked.meta_app_id,
+        locked.connected_at,
+    )
+
+
+# Claves de `health` que no son checks: las pone el alta, y el diagnóstico, que reemplaza
+# el JSON, no debe borrarlas (ADR-0102).
+_NO_SON_CHECKS = ("coexistence", "token_scope_check", "webhook_subscription_active")
 
 
 def merge_health(previous: dict[str, Any] | None, checks: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -427,12 +501,14 @@ def merge_health(previous: dict[str, Any] | None, checks: dict[str, dict[str, An
 
     - `coexistence`: lo pone Embedded Signup, y `meta_onboarding` lo usa para no registrar
       un número que comparte la app de WhatsApp Business.
+    - `token_scope_check` y `webhook_subscription_active`: datos de soporte del alta.
     - `billing.manual_status`: lo marca un admin a mano (Meta no tiene API).
     """
     previous = previous or {}
     merged: dict[str, Any] = dict(checks)
-    if _COEXISTENCE in previous:
-        merged[_COEXISTENCE] = previous[_COEXISTENCE]
+    for key in _NO_SON_CHECKS:
+        if key in previous:
+            merged[key] = previous[key]
     manual_status = (previous.get("billing") or {}).get("manual_status")
     if manual_status is not None:
         merged["billing"] = {**(merged.get("billing") or {}), "manual_status": manual_status}
