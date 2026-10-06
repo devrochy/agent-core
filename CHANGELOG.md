@@ -1,5 +1,18 @@
 # Changelog
 
+## Sin versión — Una conexión de Meta en `error` o `degraded` se recupera sola (ADR-0102, 2026-10-06)
+
+- **Bug (medio, preexistente):** una conexión en `error` no volvía nunca a `connected`: el cron de salud no la
+  revisaba, el de suscripciones dejaba de mirar la app de una conexión degradada y el sync de plantillas se saltaba
+  las `degraded`. Ahora los tres las incluyen (las `error`, solo si todavía tienen números).
+- **Bug (alto, preexistente):** sin credenciales, el diagnóstico daba `connected`. "Diagnosticar" un alta BYOK
+  fallida la pasaba a `connected` y, si era más nueva, le quitaba el secreto a la conexión sana: todo el inbound del
+  negocio daba 401. Ahora una conexión solo mejora de estado con el token verificado y, en BYOK, con la suscripción
+  de su app confirmada.
+- Las alertas de token inválido o por vencer y de calidad RED salen una vez al día, no en cada corrida del cron; el
+  wizard manual ya no manda una alerta crítica por un token mal pegado.
+- El diagnóstico ya no borra `coexistence` ni el estado de facturación que marca un admin.
+
 ## Sin versión — Una conexión BYOK degradada sigue recibiendo mensajes (ADR-0101, 2026-10-06)
 
 - **Bug (alto, preexistente):** cuando el cron de salud pasaba una conexión BYOK a `degraded` o `error`,

@@ -2,6 +2,10 @@
 min): `GET /{app_id}/subscriptions` por cada app de Meta en uso, persiste el
 estado y degrada las conexiones cuyo objeto dejó de estar activo.
 
+Revisa también las apps de conexiones `degraded` y `error` (ADR-0102): son las que más
+necesitan saber si la suscripción volvió, y el cron de salud solo deja mejorar una
+conexión BYOK con la suscripción de su app confirmada.
+
 Capacidad de CORE (no de un pack): se registra directo en el
 `beat_schedule` de `core/tasks/celery_app.py`, sin pasar por
 `register_cron` (que está atado a `plugin_manager.is_active`).
@@ -61,24 +65,35 @@ class _AppGroup:
     connections: list[MetaConnection]
 
 
+# Estados cuyas apps se revisan (ADR-0102). No solo `connected`: este cron degrada las
+# conexiones de una app con la suscripción caída, y si después no la revisaba más, el
+# `active=False` quedaba viejo y la conexión no se recuperaba nunca. `error` solo con
+# números, como el cron de salud.
+_ESTADOS_A_REVISAR = ("connected", "degraded", "error")
+_ORDEN_REPRESENTATIVA = {status: i for i, status in enumerate(_ESTADOS_A_REVISAR)}
+
+
 async def _group_connected_apps() -> list[_AppGroup]:
     """Una fila por `meta_app_id` distinto con al menos una `MetaConnection`
-    `connected`, guardando TODAS sus conexiones (necesarias para poder
-    degradar cada una bajo su propio `tenant_scope` más abajo -- una misma
-    app puede estar en uso por tenants distintos, BYOK real).
+    `connected`/`degraded` (o `error` con números), guardando TODAS sus conexiones
+    (necesarias para poder degradar cada una bajo su propio `tenant_scope` más abajo --
+    una misma app puede estar en uso por tenants distintos, BYOK real).
 
     Enumera ids cross-tenant vía `admin_meta_connection_ids` (SECURITY DEFINER,
     migración 0033) y luego hidrata cada fila bajo el `tenant_scope` de su
     tenant -- un `select` plano sin scope devolvería 0 filas por RLS."""
-    from core.db.admin_enum import admin_meta_connection_ids
+    from core.db.admin_enum import admin_meta_connection_ids, tiene_numeros
 
     all_connections: list[MetaConnection] = []
-    for connection_id, tenant_id in await admin_meta_connection_ids(["connected"]):
+    for connection_id, tenant_id in await admin_meta_connection_ids(list(_ESTADOS_A_REVISAR)):
         async with tenant_scope(tenant_id):
             async with get_session() as session:
                 connection = await session.get(MetaConnection, connection_id)
-                if connection is not None:
-                    all_connections.append(connection)
+                if connection is None or connection.tenant_id != tenant_id:
+                    continue
+                if connection.status == "error" and not await tiene_numeros(session, connection.id, tenant_id):
+                    continue
+                all_connections.append(connection)
 
     by_app: dict[str, list[MetaConnection]] = {}
     for row in all_connections:
@@ -86,18 +101,24 @@ async def _group_connected_apps() -> list[_AppGroup]:
 
     groups: list[_AppGroup] = []
     for meta_app_id, connections in by_app.items():
-        # Orden determinístico (la query no trae ORDER BY): la conexión más
-        # antigua es la "representativa" de forma estable entre corridas del
-        # cron -- hallazgo auditor-multitenant, 2026-09-21 (severidad baja).
-        connections = sorted(connections, key=lambda c: c.created_at)
-        representative = connections[0]
-        async with tenant_scope(representative.tenant_id):
-            app_secret = await meta_token_store.get_token(
-                representative.id, "app_access", meta_app_id, tenant_id=representative.tenant_id
-            )
-        if not app_secret:
+        # Orden determinístico (la query no trae ORDER BY), estable entre corridas del
+        # cron -- hallazgo auditor-multitenant, 2026-09-21 (severidad baja). Primero las
+        # sanas: la representativa es la primera CON App Secret (ADR-0102). Antes era la
+        # más antigua y, si no tenía secreto, se saltaba toda la app.
+        connections = sorted(connections, key=lambda c: (_ORDEN_REPRESENTATIVA[c.status], c.created_at))
+        secrets: list[str | None] = []
+        for connection in connections:
+            async with tenant_scope(connection.tenant_id):
+                secrets.append(
+                    await meta_token_store.get_token(
+                        connection.id, "app_access", meta_app_id, tenant_id=connection.tenant_id
+                    )
+                )
+        con_secreto = [(c, secret) for c, secret in zip(connections, secrets, strict=True) if secret]
+        if not con_secreto:
             log.warning("meta_subscriptions_health_sin_app_secret", meta_app_id=meta_app_id)
             continue
+        representative, app_secret = con_secreto[0]
 
         # Una misma app compartida por BYOK debería tener el MISMO app_secret
         # guardado por cada tenant que la usa -- si divergen, operar con el
@@ -106,11 +127,9 @@ async def _group_connected_apps() -> list[_AppGroup]:
         # datos (el secreto nunca se expone), pero sí una inconsistencia que
         # merece quedar loggeada en vez de pasar en silencio (hallazgo
         # auditor-multitenant, 2026-09-21, severidad media).
-        for other in connections[1:]:
-            async with tenant_scope(other.tenant_id):
-                other_secret = await meta_token_store.get_token(
-                    other.id, "app_access", meta_app_id, tenant_id=other.tenant_id
-                )
+        for other, other_secret in zip(connections, secrets, strict=True):
+            if other is representative:
+                continue
             if other_secret and other_secret != app_secret:
                 log.warning(
                     "meta_subscriptions_health_app_secret_divergente",

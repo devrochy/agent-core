@@ -22,10 +22,8 @@ _WARN_DAYS = 7
 async def check_tokens_expiry() -> None:
     """Nunca levanta excepción: una conexión con problema no debe interrumpir
     el chequeo de las demás."""
-    from sqlalchemy import func, select
-
-    from core.db.admin_enum import admin_meta_connection_ids
-    from core.db.models import MetaConnection, PhoneNumber
+    from core.db.admin_enum import admin_meta_connection_ids, tiene_numeros
+    from core.db.models import MetaConnection
     from core.db.session import get_session
     from core.gateway.meta_credentials import access_token_expires_at
     from core.shared.alerts import send_alert
@@ -45,16 +43,8 @@ async def check_tokens_expiry() -> None:
                     connection = await session.get(MetaConnection, connection_id)
                     if connection is None or connection.tenant_id != tenant_id:
                         continue
-                    if connection.status == "error":
-                        numeros = (
-                            await session.execute(
-                                select(func.count())
-                                .select_from(PhoneNumber)
-                                .where(PhoneNumber.connection_id == connection.id, PhoneNumber.tenant_id == tenant_id)
-                            )
-                        ).scalar_one()
-                        if not numeros:
-                            continue
+                    if connection.status == "error" and not await tiene_numeros(session, connection.id, tenant_id):
+                        continue
                 # Solo el token que la conexión usa según su `origin` (ADR-0094): uno
                 # viejo de otro origen no debe disparar alertas críticas falsas.
                 expires_at = await access_token_expires_at(connection)

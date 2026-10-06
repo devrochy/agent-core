@@ -17,6 +17,8 @@ from core.gateway.meta_health import (
     check_webhook_override,
     check_webhook_subscribed,
     decide_status,
+    merge_health,
+    next_status,
 )
 
 
@@ -29,6 +31,19 @@ class _FakeResponse:
 
     def json(self):
         return self._json
+
+
+class _FakeRedis:
+    """`SET NX` en memoria: lo que usa `send_alert_once`."""
+
+    def __init__(self):
+        self.keys: dict[str, str] = {}
+
+    async def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.keys:
+            return None
+        self.keys[key] = value
+        return True
 
 
 class _FakeClient:
@@ -129,6 +144,7 @@ async def test_number_registered_quality_red_dispara_alerta(monkeypatch):
 
     monkeypatch.setattr(health_mod, "graph_fetch", _fake_graph_fetch)
     monkeypatch.setattr("core.shared.alerts.send_alert", _fake_alert)
+    monkeypatch.setattr("core.memory.working.get_redis", lambda: _FakeRedis())
 
     check = await check_number_registered("phone-1", "tok", "secret", "v21.0", uuid.uuid4())
     assert check.ok is True
@@ -172,3 +188,266 @@ def test_decide_status_falla_critica_da_error():
     checks = {"token_valid": {"ok": False}, "templates": {"ok": True}}
     status, _reason = decide_status(checks)
     assert status == "error"
+
+
+# --- ADR-0102: solo se mejora de estado con el diagnóstico verificado ---------------
+
+OK = {"ok": True}
+FALLA = {"ok": False}
+SIN_DATO = {"ok": None}
+
+
+def _checks(token=OK, app=OK, **otros):
+    checks = {"app_subscription_active": app, "billing": SIN_DATO, **otros}
+    if token is not None:
+        checks["token_valid"] = token
+    return checks
+
+
+@pytest.mark.parametrize(
+    ("current", "origin", "checks", "esperado"),
+    [
+        # Mejora con todo verificado.
+        ("error", "byok", _checks(), "connected"),
+        ("error", "embedded_signup", _checks(), "connected"),
+        ("degraded", "byok", _checks(), "connected"),
+        ("error", "byok", _checks(templates=FALLA), "degraded"),
+        # Sin token verificado no mejora: falta (sin credenciales) o `None` (Meta no respondió).
+        ("error", "byok", _checks(token=None), "error"),
+        ("error", "byok", _checks(token=SIN_DATO), "error"),
+        ("error", "manual", _checks(token=None), "error"),
+        ("degraded", "embedded_signup", _checks(token=SIN_DATO), "degraded"),
+        # BYOK además necesita la suscripción de SU app confirmada; Embedded Signup y manual no.
+        ("error", "byok", _checks(app=SIN_DATO), "error"),
+        ("degraded", "byok", _checks(app=SIN_DATO), "degraded"),
+        ("error", "embedded_signup", _checks(app=SIN_DATO), "connected"),
+        ("error", "manual", _checks(app=SIN_DATO), "connected"),
+        # Empeorar siempre se puede, verificado o no.
+        ("connected", "byok", _checks(token=None, templates=FALLA), "degraded"),
+        ("connected", "byok", _checks(token=FALLA), "error"),
+        ("degraded", "embedded_signup", _checks(token=None, app=FALLA), "error"),
+        # Igual que hoy: `connected` sin credenciales sigue `connected`; `pending` se diagnostica.
+        ("connected", "manual", _checks(token=None, app=SIN_DATO), "connected"),
+        ("pending", "byok", _checks(token=None, app=SIN_DATO), "connected"),
+        ("pending", "byok", _checks(token=FALLA), "error"),
+    ],
+)
+def test_next_status(current, origin, checks, esperado):
+    status, _reason = next_status(current, "razón previa", origin, checks)
+    assert status == esperado
+
+
+def test_next_status_si_no_mejora_conserva_la_razon():
+    assert next_status("error", "Fallo guardando credenciales", "byok", _checks(token=None)) == (
+        "error",
+        "Fallo guardando credenciales",
+    )
+
+
+def test_next_status_si_cambia_usa_la_razon_nueva():
+    status, reason = next_status("connected", None, "byok", _checks(token=FALLA))
+    assert status == "error"
+    assert reason == "Checks críticos fallando: token_valid"
+
+
+def test_merge_health_conserva_coexistence_y_billing_manual():
+    previo = {
+        "coexistence": True,
+        "billing": {"ok": None, "manual_status": "al_dia"},
+        "token_valid": {"ok": False},
+        "number_registered:viejo": {"ok": False},
+    }
+    checks = {"token_valid": {"ok": True}, "billing": {"ok": None, "detail": "x"}}
+
+    merged = merge_health(previo, checks)
+
+    assert merged == {
+        "token_valid": {"ok": True},
+        "billing": {"ok": None, "detail": "x", "manual_status": "al_dia"},
+        "coexistence": True,
+    }
+
+
+def test_merge_health_sin_previo_son_los_checks():
+    checks = {"token_valid": {"ok": True}}
+    assert merge_health(None, checks) == checks
+
+
+@pytest.mark.asyncio
+async def test_run_health_checks_sin_credenciales_deja_token_valid_sin_dato(monkeypatch):
+    """Sin credenciales el token no se puede revisar: `ok=None` con el motivo, y el
+    panel ofrece reautorizar. No llega a Meta."""
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import core.gateway.meta_credentials as credentials_mod
+    from core.gateway.meta_credentials import CredentialsUnavailable
+
+    class _Result:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+        def all(self):
+            return []
+
+    class _Session:
+        async def execute(self, *_a, **_k):
+            return _Result()
+
+    @asynccontextmanager
+    async def _fake_session():
+        yield _Session()
+
+    async def _sin_credenciales(*_a, **_k):
+        raise CredentialsUnavailable(
+            "No hay token de acceso guardado para esta conexión", reason="missing_access_token"
+        )
+
+    async def _app_sin_dato(_connection):
+        from datetime import UTC, datetime
+
+        from core.gateway.meta_preflight import PreflightCheck
+
+        return PreflightCheck(key="app_subscription_active", ok=None, detail="x", checked_at=datetime.now(UTC))
+
+    async def _no_debe_llamarse(*_a, **_k):
+        raise AssertionError("sin credenciales no se le pega a Meta")
+
+    monkeypatch.setattr(health_mod, "get_session", _fake_session)
+    monkeypatch.setattr(credentials_mod, "credentials_for", _sin_credenciales)
+    monkeypatch.setattr(health_mod, "check_app_subscription", _app_sin_dato)
+    monkeypatch.setattr(health_mod, "check_token_valid", _no_debe_llamarse)
+
+    connection = SimpleNamespace(id=uuid.uuid4(), health={})
+    checks = await health_mod.run_health_checks(connection, uuid.uuid4())
+
+    assert checks["token_valid"]["ok"] is None
+    assert "No hay token de acceso guardado" in checks["token_valid"]["detail"]
+    assert checks["token_valid"]["repair_action"] == "reauthorize"
+    assert next_status("error", None, "byok", checks)[0] == "error"
+
+
+# --- ADR-0102: las alertas de un cron horario salen una vez al día ------------------
+
+
+@pytest.mark.asyncio
+async def test_send_alert_once_alerta_una_sola_vez(monkeypatch):
+    from core.shared import alerts
+
+    enviadas = []
+
+    async def _fake_alert(title, detail, severity="warning"):
+        enviadas.append(title)
+
+    redis = _FakeRedis()
+    monkeypatch.setattr(alerts, "send_alert", _fake_alert)
+    monkeypatch.setattr("core.memory.working.get_redis", lambda: redis)
+
+    await alerts.send_alert_once("k", "Una", "d")
+    await alerts.send_alert_once("k", "Una", "d")
+    await alerts.send_alert_once("otra", "Otra", "d")
+
+    assert enviadas == ["Una", "Otra"]
+
+
+@pytest.mark.asyncio
+async def test_send_alert_once_sin_redis_alerta_igual(monkeypatch):
+    from core.shared import alerts
+
+    enviadas = []
+
+    async def _fake_alert(title, detail, severity="warning"):
+        enviadas.append(title)
+
+    class _RedisCaido:
+        async def set(self, *_a, **_k):
+            raise ConnectionError("redis caído")
+
+    monkeypatch.setattr(alerts, "send_alert", _fake_alert)
+    monkeypatch.setattr("core.memory.working.get_redis", lambda: _RedisCaido())
+
+    await alerts.send_alert_once("k", "Una", "d")
+    await alerts.send_alert_once("k", "Una", "d")
+
+    assert enviadas == ["Una", "Una"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"is_valid": False},
+        {"is_valid": True, "expires_at": int((datetime.now(UTC) + timedelta(days=3)).timestamp())},
+    ],
+)
+async def test_check_token_valid_alerta_una_vez_por_conexion_y_nunca_sin_conexion(monkeypatch, data):
+    enviadas = []
+
+    async def _fake_alert(title, detail, severity="warning"):
+        enviadas.append((title, detail))
+
+    redis = _FakeRedis()
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **k: _FakeClient(_FakeResponse({"data": data})))
+    monkeypatch.setattr("core.shared.alerts.send_alert", _fake_alert)
+    monkeypatch.setattr("core.memory.working.get_redis", lambda: redis)
+    cid, tid = uuid.uuid4(), uuid.uuid4()
+
+    # Sin conexión (el wizard manual): no alerta, aunque el check falle.
+    assert (await check_token_valid("tok", "app-1", "secret", "v21.0")).ok is False
+    assert enviadas == []
+
+    for _ in range(3):  # el cron, hora tras hora
+        assert (await check_token_valid("tok", "app-1", "s", "v21.0", connection_id=cid, tenant_id=tid)).ok is False
+    assert len(enviadas) == 1
+    assert str(cid) in enviadas[0][1] and str(tid) in enviadas[0][1]
+
+    await check_token_valid("tok", "app-1", "s", "v21.0", connection_id=uuid.uuid4(), tenant_id=tid)
+    assert len(enviadas) == 2, "otra conexión alerta por su cuenta"
+
+
+@pytest.mark.asyncio
+async def test_check_token_valid_por_vencer_no_calla_el_invalido(monkeypatch):
+    enviadas = []
+
+    async def _fake_alert(title, detail, severity="warning"):
+        enviadas.append(title)
+
+    redis = _FakeRedis()
+    monkeypatch.setattr("core.shared.alerts.send_alert", _fake_alert)
+    monkeypatch.setattr("core.memory.working.get_redis", lambda: redis)
+    cid = uuid.uuid4()
+
+    pronto = int((datetime.now(UTC) + timedelta(days=3)).timestamp())
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **k: _FakeClient(_FakeResponse({"data": {"is_valid": True, "expires_at": pronto}}))
+    )
+    await check_token_valid("tok", "app-1", "s", "v21.0", connection_id=cid, tenant_id=uuid.uuid4())
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **k: _FakeClient(_FakeResponse({"data": {"is_valid": False}})))
+    await check_token_valid("tok", "app-1", "s", "v21.0", connection_id=cid, tenant_id=uuid.uuid4())
+
+    assert enviadas == ["Token de Meta por vencer", "Token de Meta inválido"]
+
+
+@pytest.mark.asyncio
+async def test_quality_red_alerta_una_vez_por_numero(monkeypatch):
+    enviadas = []
+
+    async def _fake_graph_fetch(*a, **k):
+        return {"quality_rating": "RED", "code_verification_status": "VERIFIED"}
+
+    async def _fake_alert(title, detail, severity="warning"):
+        enviadas.append(detail)
+
+    redis = _FakeRedis()
+    monkeypatch.setattr(health_mod, "graph_fetch", _fake_graph_fetch)
+    monkeypatch.setattr("core.shared.alerts.send_alert", _fake_alert)
+    monkeypatch.setattr("core.memory.working.get_redis", lambda: redis)
+
+    for _ in range(3):
+        await check_number_registered("phone-1", "tok", "secret", "v21.0", uuid.uuid4())
+    await check_number_registered("phone-2", "tok", "secret", "v21.0", uuid.uuid4())
+
+    assert len(enviadas) == 2

@@ -42,19 +42,6 @@ La señal se pierde y el LLM solo ve un error genérico.
 
 ## Media
 
-**Una conexión de Meta en `error` o `degraded` no se recupera sola**
-- El cron de salud (`core/tasks/meta_health_check.py`, cada hora) solo revisa `connected`/`degraded`: una conexión en
-  `error` queda así hasta que alguien la reactive desde el panel. Desde ADR-0101 sigue recibiendo mensajes, pero el
-  panel la muestra con error.
-- Otras causas de que no se recupere: `meta_subscriptions_health.py:76` solo revisa `connected`, así que el
-  `active=False` queda viejo y la conexión pasa a `error`; y `message_template_sync.py:41` solo sincroniza `connected`,
-  así que las plantillas pasan de 25 h y la conexión queda `degraded` para siempre.
-- **Trampa:** con credenciales en `None`, `run_health_checks` devuelve solo `app_subscription_active` y `billing`, y
-  `decide_status` da `connected`. Agregar `error` al cron sin más pasaría a `connected` una conexión con el alta rota.
-  "Diagnosticar" ya hace eso hoy con una conexión en `error`: si es más nueva y no tiene el token, sube al primer nivel
-  de `_resolve_byok_token` y deja sin secreto a la BYOK sana. Que `decide_status` no dé `connected` cuando falta
-  `token_valid`.
-
 **Otros que deciden por `status` sin seguir ADR-0101**
 - `core/api/routers/connections.py:121` y `core/admin/views.py:1788` muestran `active = status == "connected"`: una
   conexión `degraded`/`error` que recibe y responde aparece como inactiva.
@@ -72,6 +59,20 @@ La señal se pierde y el LLM solo ve un error genérico.
 - Si el alta BYOK falla entre guardar `app_access` y `cloud_api_access_token`, la conexión presta secreto pero no tiene
   token de acceso; el sender cae a la conexión primaria o al `.env` y respondería desde otro número. Que el sender
   falle cerrado si recibe `meta_connection_id` y no hay token.
+
+**Lo que quedó fuera de ADR-0102 (la conexión se recupera sola)**
+- "Activar" (`meta_health_service.set_connection_status`) pasa una conexión de `error` a `connected` sin chequear nada.
+  Es a propósito, lo hace un admin, pero tiene la misma trampa que tenía "Diagnosticar": un alta fallida más nueva le
+  quita el secreto a la BYOK sana. Que avise, o que exija el diagnóstico verificado.
+- `check_webhook_subscribed` solo pide que la WABA tenga alguna app suscrita, no la de la conexión. Por eso
+  `next_status` le exige a BYOK la suscripción de su app; verificar el id de la app en `subscribed_apps` (comprobar
+  antes la forma de la respuesta de Meta) lo haría más preciso.
+- `meta_subscriptions_health._check_group` no persiste nada para un objeto que Meta omite en la respuesta: un
+  `active=True` viejo sobrevive aunque la suscripción ya no exista.
+- El candado horario del sync de plantillas es por `(tenant, waba_id)`, pero las plantillas se guardan por fila de
+  WABA: si dos conexiones `connected` comparten la WABA, una de las dos no sincroniza y termina `degraded`.
+- `meta_production_readiness.check_connections_health_except_billing` corre los checks sobre todas las conexiones,
+  también `revoked` y borradas, y puede alertar por sus tokens.
 
 **Otras dos altas de conversación con la misma carrera que tenía el consumidor**
 El consumidor ya serializa por cliente el get-or-create de la conversación (`pg_advisory_xact_lock`, 2026-10-06).

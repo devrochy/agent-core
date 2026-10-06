@@ -53,14 +53,24 @@ class DebugTokenData(BaseModel):
 
 
 async def check_token_valid(
-    token: str, app_id: str, app_secret: str, version: str
+    token: str,
+    app_id: str,
+    app_secret: str,
+    version: str,
+    *,
+    connection_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID | None = None,
 ) -> PreflightCheck:
     """`GET /debug_token?input_token={token}&access_token={app_id}|{app_secret}`
     -- el `access_token` de ESTA llamada es el token de LA APP
     (`app_id|app_secret`), no el token que se está inspeccionando, así que
     no calza con `graph_fetch` (que pone Bearer + appsecret_proof sobre el
     MISMO token que envía). Va con httpx directo, mismo criterio que
-    `meta_preflight.py::_fetch_app_token`."""
+    `meta_preflight.py::_fetch_app_token`.
+
+    Alerta solo si recibe `connection_id`, una vez al día por conexión (ADR-0102): el
+    cron la revisa cada hora, también en `error`. Sin conexión (el wizard manual, antes
+    de crearla) no alerta: el admin ya ve el error en pantalla."""
     now = datetime.now(UTC)
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
@@ -84,13 +94,18 @@ async def check_token_valid(
     raw = ((response.json() or {}).get("data")) or {}
     data = DebugTokenData.model_validate(raw)
 
-    from core.shared.alerts import send_alert
+    from core.shared.alerts import send_alert_once
+
+    conexion = f"La conexión {connection_id} (tenant {tenant_id})"
 
     if data.is_valid is False:
-        await send_alert(
-            "Token de Meta inválido", "debug_token.is_valid=false -- la conexión pasa a degraded, requiere reautorización.",
-            severity="critical",
-        )
+        if connection_id is not None:
+            await send_alert_once(
+                f"meta_token_invalido:{connection_id}",
+                "Token de Meta inválido",
+                f"{conexion}: debug_token.is_valid=false -- la conexión pasa a error, requiere reautorización.",
+                severity="critical",
+            )
         return PreflightCheck(
             key="token_valid", ok=False, detail="Meta reporta el token como inválido -- requiere reautorización.",
             checked_at=now, repair_action="reauthorize",
@@ -101,11 +116,14 @@ async def check_token_valid(
     if data.expires_at is not None and data.expires_at != 0:
         expires_dt = datetime.fromtimestamp(data.expires_at, tz=UTC)
         if expires_dt < now + timedelta(days=7):
-            await send_alert(
-                "Token de Meta por vencer",
-                f"Vence el {expires_dt.date().isoformat()} (menos de 7 días) -- se encoló refresco, avisar al tenant.",
-                severity="warning",
-            )
+            if connection_id is not None:
+                await send_alert_once(
+                    f"meta_token_por_vencer:{connection_id}",
+                    "Token de Meta por vencer",
+                    f"{conexion}: vence el {expires_dt.date().isoformat()} (menos de 7 días) -- "
+                    "se encoló refresco, avisar al tenant.",
+                    severity="warning",
+                )
             return PreflightCheck(
                 key="token_valid", ok=False,
                 detail=f"El token vence el {expires_dt.date().isoformat()} (menos de 7 días).",
@@ -181,9 +199,11 @@ async def check_number_registered(
     verification = (data or {}).get("code_verification_status")
 
     if quality == "RED":
-        from core.shared.alerts import send_alert
+        from core.shared.alerts import send_alert_once
 
-        await send_alert(
+        # Una vez al día por número: el cron lo revisa cada hora (ADR-0102).
+        await send_alert_once(
+            f"meta_calidad_red:{phone_number_id}",
             "Calidad de número en RED",
             f"phone_number_id={phone_number_id} tiene quality_rating=RED -- riesgo de bloqueo por Meta.",
             severity="critical",
@@ -302,19 +322,29 @@ async def run_health_checks(connection: MetaConnection, tenant_id: uuid.UUID) ->
 
     # Credenciales de ESTA conexión según su origen (HU-CONN-01): antes el secreto
     # salía de "la" conexión del tenant, que con varias podía ser otra.
+    sin_credenciales: CredentialsUnavailable | None = None
     try:
         creds = await credentials_for(connection, waba_id=waba.waba_id if waba is not None else None)
-    except CredentialsUnavailable:
+    except CredentialsUnavailable as exc:
         creds = None
+        sin_credenciales = exc
 
     checks["app_subscription_active"] = await check_app_subscription(connection)
     checks["billing"] = check_billing(connection)
 
     if creds is None:
+        # `ok=None`: no se pudo revisar. No empeora el estado, pero tampoco lo deja mejorar
+        # (`next_status`, ADR-0102), y el panel muestra por qué.
+        detail = sin_credenciales.message if sin_credenciales is not None else "Sin credenciales"
+        checks["token_valid"] = PreflightCheck(
+            key="token_valid", ok=None, detail=f"No se pudo revisar: {detail}",
+            checked_at=datetime.now(UTC), repair_action="reauthorize",
+        )
         return {key: check.model_dump(mode="json") for key, check in checks.items()}
 
     checks["token_valid"] = await check_token_valid(
-        creds.access_token, creds.app_id, creds.app_secret, creds.graph_api_version
+        creds.access_token, creds.app_id, creds.app_secret, creds.graph_api_version,
+        connection_id=connection.id, tenant_id=tenant_id,
     )
 
     if waba is not None:
@@ -351,3 +381,59 @@ def decide_status(checks: dict[str, dict[str, Any]]) -> tuple[str, str | None]:
         high = [k for k in failing if k in _HIGH_SEVERITY_KEYS]
         return "error", f"Checks críticos fallando: {', '.join(sorted(high))}"
     return "degraded", f"Checks fallando: {', '.join(sorted(failing))}"
+
+
+# Rango de cada estado para `next_status`: mejorar es bajar de rango. `pending` va con
+# `connected`, como en `_resolve_byok_token`; `revoked`/`draft` no pasan por acá.
+_RANGO = {"pending": 0, "connected": 0, "degraded": 1, "error": 2}
+
+
+def next_status(
+    current: str, current_reason: str | None, origin: str, checks: dict[str, dict[str, Any]]
+) -> tuple[str, str | None]:
+    """Estado que queda después de un diagnóstico (ADR-0102).
+
+    Empeorar siempre se puede. Mejorar (`error` → `degraded` → `connected`) solo con el
+    diagnóstico verificado:
+    - el token se verificó contra Meta (`token_valid` en `True`). Sin credenciales,
+      `run_health_checks` no lo puede revisar y `decide_status` daría `connected`: un alta
+      fallida pasaría a ser la conexión sana y le quitaría el secreto a la de verdad;
+    - en BYOK, además, la suscripción de SU app está confirmada (`app_subscription_active`
+      en `True`). Un reintento del wizard con otra app que falló al suscribir tiene token
+      válido, y la WABA sigue suscrita a la app vieja, que es la que firma.
+
+    Si no se cumple, quedan el estado y la razón actuales.
+    """
+    new_status, reason = decide_status(checks)
+    rango_actual = _RANGO.get(current)
+    if rango_actual is None or _RANGO[new_status] >= rango_actual:
+        return new_status, reason
+
+    verificado = checks.get("token_valid", {}).get("ok") is True
+    if origin == "byok":
+        verificado = verificado and checks.get("app_subscription_active", {}).get("ok") is True
+    if not verificado:
+        return current, current_reason
+    return new_status, reason
+
+
+# Claves de `health` que no son checks: el diagnóstico reemplaza el JSON y no debe
+# borrarlas (ADR-0102).
+_COEXISTENCE = "coexistence"
+
+
+def merge_health(previous: dict[str, Any] | None, checks: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """`health` nuevo: los checks del diagnóstico más lo que no es un check.
+
+    - `coexistence`: lo pone Embedded Signup, y `meta_onboarding` lo usa para no registrar
+      un número que comparte la app de WhatsApp Business.
+    - `billing.manual_status`: lo marca un admin a mano (Meta no tiene API).
+    """
+    previous = previous or {}
+    merged: dict[str, Any] = dict(checks)
+    if _COEXISTENCE in previous:
+        merged[_COEXISTENCE] = previous[_COEXISTENCE]
+    manual_status = (previous.get("billing") or {}).get("manual_status")
+    if manual_status is not None:
+        merged["billing"] = {**(merged.get("billing") or {}), "manual_status": manual_status}
+    return merged

@@ -1,5 +1,9 @@
 """Cron de sync de plantillas de WhatsApp (cada hora): recorre todas las
-`WabaAccount` de conexiones `connected` y sincroniza sus plantillas.
+`WabaAccount` de conexiones `connected` y `degraded` y sincroniza sus plantillas.
+
+`degraded` también (ADR-0102): si una conexión degradada dejaba de sincronizar, a las 25 h
+el check de plantillas fallaba y no salía nunca de `degraded`. `error` no: o no tiene
+credenciales o su token no sirve; cuando el cron de salud la pasa a `degraded`, vuelve acá.
 
 Capacidad de CORE, mismo criterio que `meta_subscriptions_health.py`/
 `instagram_token_refresh.py`: entrada directa en el `beat_schedule` de
@@ -7,6 +11,8 @@ Capacidad de CORE, mismo criterio que `meta_subscriptions_health.py`/
 """
 
 from __future__ import annotations
+
+from sqlalchemy import select
 
 from core.db.models import MetaConnection, WabaAccount
 from core.db.session import get_session
@@ -19,29 +25,43 @@ from core.shared.tenant import tenant_scope
 log = get_logger(__name__)
 
 
-async def _connected_wabas() -> list[tuple[WabaAccount, MetaConnection]]:
-    """WABAs de conexiones `connected` de TODOS los tenants (ids cross-tenant
-    vía `admin_connected_waba_ids`, SECURITY DEFINER; hidratación bajo el
-    `tenant_scope` de cada tenant)."""
-    from core.db.admin_enum import admin_connected_waba_ids
+_ESTADOS_A_SINCRONIZAR = ("connected", "degraded")
+
+
+async def _wabas_a_sincronizar() -> list[tuple[WabaAccount, MetaConnection]]:
+    """WABAs de conexiones `connected`/`degraded` de TODOS los tenants, primero las de
+    conexiones `connected`.
+
+    Ids cross-tenant vía `admin_meta_connection_ids` (SECURITY DEFINER); la conexión y sus
+    WABAs se leen bajo el `tenant_scope` de cada tenant. Primero las sanas: el candado
+    horario es por `(tenant, waba_id)`, y dos conexiones pueden compartir la WABA; una
+    degradada no debe ganarle el turno a la sana."""
+    from core.db.admin_enum import admin_meta_connection_ids
 
     out: list[tuple[WabaAccount, MetaConnection]] = []
-    for waba_id, tenant_id in await admin_connected_waba_ids():
+    for connection_id, tenant_id in await admin_meta_connection_ids(list(_ESTADOS_A_SINCRONIZAR)):
         async with tenant_scope(tenant_id):
             async with get_session() as session:
-                waba = await session.get(WabaAccount, waba_id)
-                if waba is None or waba.tenant_id != tenant_id:
-                    continue
-                connection = await session.get(MetaConnection, waba.connection_id)
-                # Los tres tenants deben coincidir: el del enumerador, el de la WABA y el
-                # de la conexión (defensa en profundidad, igual que `meta_health_check`).
+                connection = await session.get(MetaConnection, connection_id)
+                # Los dos tenants deben coincidir: el del enumerador y el de la conexión
+                # (defensa en profundidad, igual que `meta_health_check`); el estado se
+                # vuelve a mirar porque pudo cambiar desde que se enumeró.
                 if (
-                    connection is not None
-                    and connection.tenant_id == tenant_id
-                    and connection.status == "connected"
+                    connection is None
+                    or connection.tenant_id != tenant_id
+                    or connection.status not in _ESTADOS_A_SINCRONIZAR
+                    or connection.deleted_at is not None
                 ):
-                    out.append((waba, connection))
-    return out
+                    continue
+                wabas = (
+                    await session.execute(
+                        select(WabaAccount).where(
+                            WabaAccount.connection_id == connection.id, WabaAccount.tenant_id == tenant_id
+                        )
+                    )
+                ).scalars().all()
+                out.extend((waba, connection) for waba in wabas)
+    return sorted(out, key=lambda pair: _ESTADOS_A_SINCRONIZAR.index(pair[1].status))
 
 
 async def _sync_one(waba: WabaAccount, connection: MetaConnection) -> None:
@@ -77,7 +97,7 @@ async def _sync_one(waba: WabaAccount, connection: MetaConnection) -> None:
 async def sync_all_waba_templates() -> None:
     """Nunca levanta excepción: una WABA caída no debe interrumpir el sync
     de las demás (mismo criterio que `check_all_subscriptions_health`)."""
-    for waba, connection in await _connected_wabas():
+    for waba, connection in await _wabas_a_sincronizar():
         try:
             await _sync_one(waba, connection)
         except Exception:

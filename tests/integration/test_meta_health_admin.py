@@ -110,7 +110,7 @@ async def test_desuscribir_waba_pasa_a_rojo_y_el_boton_repara(app_client, monkey
             return {"data": {"is_valid": True, "expires_at": 0}}
         raise AssertionError(f"path no esperado: {method} {path}")
 
-    async def _fake_debug_token(token, app_id, app_secret, version):
+    async def _fake_debug_token(token, app_id, app_secret, version, **_kwargs):
         from datetime import UTC, datetime
 
         from core.gateway.meta_preflight import PreflightCheck
