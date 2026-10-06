@@ -107,3 +107,4 @@ Se crean con `/adr`.
 | [0097](0097-sync-incremental-y-auditoria-movil.md) | Sync incremental por entidad (`GET /api/v1/sync/{entidad}`, adapters de los packs) y auditoría móvil idempotente en `mobile_audit_events` (HU-APP-15) | aceptado |
 | [0098](0098-recuperacion-y-token-de-gestor.md) | Recuperación de contraseña con código de un solo uso por SMTP de sistema y token de gestor desde la sesión admin (HU-APP-02; antes numerado 0094) | aceptado |
 | [0099](0099-notificaciones-push-expo.md) | Notificaciones push de la app oficial vía Expo Push Service: `push_tokens` por negocio y envío por Celery (HU-APP-05; antes numerado 0095) | aceptado |
+| [0100](0100-evento-del-webhook-solo-actua-sobre-un-negocio-autorizado.md) | Un evento del webhook solo actúa sobre un negocio autorizado por su firma: firma por grupo en el genérico, y plantillas y estados atados al negocio de la entry (enmienda ADR-0040, ADR-0031 y ADR-0032) | aceptado |

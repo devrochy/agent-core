@@ -9,15 +9,6 @@ Cuando arregles uno, bórralo de aquí y menciónalo en el commit.
 
 ## Alta
 
-**Un negocio BYOK puede inyectar eventos en otro por el webhook genérico** (arquitecto, 2026-10-05, preexistente)
-`POST /webhooks/whatsapp` resuelve el tenant de cada entry y junta en una sola lista los App Secrets de todos
-(`core/gateway/webhooks.py::_tenant_y_secretos`); la firma se acepta si coincide con **cualquiera**
-(`receive_whatsapp`, `any(verify_signature(...))`) y después se procesan **todas** las entries
-(`_process_payload`). Un tenant BYOK que conoce su propio App Secret puede firmar un payload con una entry suya y
-otra con el número de A, y meter mensajes falsos en A, que el agente de A responde con las credenciales de A.
-Arreglo propuesto: validar la firma por entry contra el secreto de **su** tenant (o el del framework) y descartar
-las entries cuyo tenant no firmó.
-
 **No hay dominio público estable para el webhook de Meta**
 La app `agent-core-test` de Coolify solo tiene el dominio *default*
 `http://<app-id>.186.82.102.11.sslip.io` (**HTTP, sin TLS**), y los puertos **80/443 del
@@ -36,10 +27,20 @@ modelos de Claude no están, así que su costo cae a cero. Existe
 `BaseLLMProvider.estimate_cost_usd()` (`core/llm/base.py:37-41`) precisamente para
 esto, pero nadie la llama. El panel `/admin/costos` subestima el gasto real.
 
-**La firma del webhook es opcional en la práctica**
-`core/gateway/webhooks.py:65` solo verifica el HMAC `X-Hub-Signature-256` si hay
-`app_secret` configurado. Sin él, cualquiera que conozca la URL puede inyectar
-mensajes. Debería fallar cerrado, o al menos gritar en los logs.
+**Un negocio BYOK con la conexión `degraded` o `error` pierde su App Secret y todo su inbound da 401**
+`meta_byok._resolve_byok_token` solo lee conexiones `connected`/`pending`, pero el cron de salud
+(`meta_health.decide_status`) pasa a `degraded` con cualquier check fallando y a `error` con `token_valid` o
+`app_subscription_active`. Desde ahí `resolve_own_app_secret` no da secreto: los webhooks firmados con la app
+del negocio dan 401 (por slug y por el genérico) y el `verify_token` cae al `.env`. Preexistente (`arquitecto`,
+2026-10-05, al revisar ADR-0100); ADR-0100 no lo empeora. Arreglo probable: que el secreto y el `verify_token` se
+lean también de conexiones `degraded`/`error` (siguen siendo del negocio), con test del cron.
+
+**Confirmar el secreto de la plataforma antes de desplegar ADR-0100**
+`connections.platform_app_secret` usa `WHATSAPP_APP_SECRET or META_APP_SECRET`, y desde ADR-0100 es la única llave
+que autoriza eventos de cualquier negocio en el webhook genérico. Antes de desplegar, confirmar en el `.env` de
+producción que no es el de la app de un cliente concreto (heredado del monolito). Además, Embedded Signup firma con
+`META_APP_SECRET`: si los dos están definidos y son distintos, sus entregas al genérico dan 401. Decidir si la
+plataforma es solo `META_APP_SECRET` (ADR-0094) y `WHATSAPP_APP_SECRET` queda como respaldo del endpoint por slug.
 
 **El pedido de monto alto nunca escala**
 `plugins/pack_commerce/pack_commerce/skills.py:989` devuelve `{"escalate": True}`
@@ -159,13 +160,6 @@ repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev
 - Antes de desplegar la `0052` en producción: confirmar que `agent_core_migrations` (el `MIGRATIONS_DATABASE_URL`
   de producción en `docs/despliegue-coolify.md`) es superusuario o tiene `BYPASSRLS`; si no, la migración aborta el
   arranque a propósito. El mismo documento dice en sus notas que las migraciones corren como superusuario: alinear.
-- Los eventos de plantillas (`core/gateway/meta_template_webhooks.py::handle_template_status_update` y sus
-  hermanos, llamados desde `webhooks.py::_dispatch_template_events`) resuelven el negocio por
-  `message_template_id` y abren su propio `tenant_scope`, sin compararlo con el negocio de la entry. Un negocio BYOK
-  que firma con su propio secreto en `/webhooks/whatsapp/<slug>`, con su propia WABA (sin `tenant_mismatch`),
-  puede cambiar el estado de una plantilla de otro: es una escritura entre tenants (auditor-multitenant,
-  2026-10-05, preexistente). Arreglo propuesto: descartar el evento si el negocio de la plantilla no es el de la
-  entry.
 - `save_connection` para `whatsapp_meta` (panel clásico `/admin/conexiones/guardar`, alta de tenant, CLI) verifica
   el número contra Graph pero no a qué WABA pertenece. Con la regla de conflicto de ADR-0095 ya no entrega mensajes
   ajenos, pero es la vía de alta más débil: pedir la WABA y usar `verify_waba_and_phone`, o retirarla a favor de
@@ -177,6 +171,20 @@ repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev
 - `resolve_tenant_for_page`, `resolve_tenant_for_ig_user` (migración `0021`) y la resolución de plantillas por
   `meta_template_id` (`0026`) siguen con `LIMIT 1` sin desempate. Hoy no hay clientes de Messenger ni Instagram;
   aplicar la misma regla (conexión viva, NULL si hay más de un dueño) cuando los haya.
+
+**Pendientes tras ADR-0100 (firma por negocio en el webhook)**
+- La respuesta del webhook dice si un número tiene dueño: un negocio que firma un grupo `(su WABA, número X)` recibe
+  `"ignored"` si X es de otro (`tenant_conflict`, o `tenant_mismatch` por slug) y `"ok", "enqueued": 1` si X no
+  tiene dueño (auditor-multitenant, 2026-10-05, preexistente). Responder con un cuerpo constante.
+- `APP_ENV` vale `development` por defecto (`core/config.py`): un despliegue que olvide la variable deja activo el
+  fallback que manda los eventos sin negocio (firmados por la plataforma) al primer negocio activo. Que su falta sea
+  un error, o que el valor por defecto sea `production`.
+- El wizard BYOK no impide que dos negocios carguen la misma app (`app_id`): con el mismo App Secret se autorizan
+  entre sí en el webhook (se registra `webhook_secreto_compartido`). Rechazarlo en el alta, como el reclamo de
+  ADR-0095.
+- Retirar la rama de negocios del webhook genérico: re-registrar al endpoint por slug las suscripciones BYOK
+  anteriores al wizard actual (`meta_subscriptions.upsert_app_subscription`) y, cuando el log
+  `webhook_generico_firmado_por_negocio` llegue a cero, que el genérico solo acepte la firma de la plataforma.
 
 **Código muerto**
 `MCPHost.register_resource()` y `MCPResource` (registrados, nunca leídos);

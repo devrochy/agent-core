@@ -193,7 +193,7 @@ async def test_un_numero_con_dos_duenos_no_cae_a_la_waba(app_client, monkeypatch
 async def test_un_conflicto_no_va_al_negocio_del_endpoint_por_slug() -> None:
     """En el endpoint por slug, un evento sin negocio resuelto va al de la URL. Un
     conflicto no es "sin negocio": no puede caer ahí."""
-    from core.gateway.webhooks import _process_payload
+    from core.gateway.webhooks import Firmantes, _process_payload
 
     waba_id, phone_x = uniq("waba-de-z"), uniq("phone-de-x")
     await _new_tenant("slug-x", phone_in_channel_connections=phone_x)
@@ -205,7 +205,9 @@ async def test_un_conflicto_no_va_al_negocio_del_endpoint_por_slug() -> None:
     payload = {"object": "whatsapp_business_account", "entry": [
         {"id": waba_id, "changes": [_cambio(phone_x, "wa-cliente-x", msg_id)]},
     ]}
-    await _process_payload(payload, known_tenant_id=tenant_slug, dev_fallback=False)
+    await _process_payload(
+        payload, known_tenant_id=tenant_slug, firmantes=Firmantes.de_negocio(tenant_slug), dev_fallback=False
+    )
 
     row = await _evento_registrado(msg_id)
     assert (row.tenant_id, row.process_error) == (None, "tenant_conflict")
