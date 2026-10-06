@@ -14,8 +14,8 @@
   negocio daba 401.
   - Ahora una conexión solo mejora de estado con el token verificado y, en BYOK, con su app suscrita: la suscripción
     de la app confirmada y la WABA suscrita a esa app.
-  - Las filas que ya estaban promovidas bajan en la siguiente corrida: una BYOK sin credenciales propias falla
-    `token_valid` y pasa a `error`; una con la WABA sin suscribir a su app pasa a `degraded`.
+  - Las filas que ya estaban promovidas bajan a `error` en la siguiente corrida: una BYOK sin credenciales propias
+    falla `token_valid`, y una con la WABA sin suscribir a su app falla `own_app_subscribed`.
   - El alta BYOK marca la WABA como no suscrita hasta confirmar la suscripción, también al reconectar.
 - El cron de suscripciones prueba con otra conexión de la app si la representativa falla, así un negocio que cargó el
   `app_id` de otro no le traba la recuperación al dueño. Ya no revisa la app de la plataforma, que una BYOK con su

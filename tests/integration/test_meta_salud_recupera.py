@@ -266,16 +266,20 @@ def _meta_responde_ok(monkeypatch) -> None:
         monkeypatch.setattr(health_mod, nombre, _ok(key))
 
 
-async def test_un_reintento_en_connected_sin_la_waba_suscrita_baja_y_devuelve_el_secreto(monkeypatch) -> None:
+@pytest.mark.parametrize("estado_sana", ["connected", "degraded"])
+async def test_un_reintento_en_connected_sin_la_waba_suscrita_baja_y_devuelve_el_secreto(
+    monkeypatch, estado_sana
+) -> None:
     """Un reintento con otra app guardó sus tokens, falló al suscribir la WABA y llegó a
-    `connected` (el "Diagnosticar" de antes, o "Activar"). Con las dos `connected` gana la
-    más nueva y la app vieja, que es la que firma, da 401. `own_app_subscribed` falla:
-    baja a `degraded` y la sana recupera el secreto. Con el `run_health_checks` real."""
+    `connected` (el "Diagnosticar" de antes, o "Activar"). Con las dos en el mismo nivel gana
+    la más nueva y la app vieja, que es la que firma, da 401. `own_app_subscribed` falla y es
+    de severidad alta: baja a `error` y la sana recupera el secreto, también si está
+    `degraded` (una plantilla rechazada basta). Con el `run_health_checks` real."""
     from core.tasks.meta_health_check import _check_one
 
     tid = await _tenant()
     await _conexion(
-        tid, "connected", app_secret="SEC-SANA", access_token="tok-sana", hace_dias=30, waba_suscrita=True
+        tid, estado_sana, app_secret="SEC-SANA", access_token="tok-sana", hace_dias=30, waba_suscrita=True
     )
     reintento, _ = await _conexion(
         tid, "connected", app_secret="SEC-REINTENTO", access_token="tok-r", waba_suscrita=False
@@ -286,7 +290,7 @@ async def test_un_reintento_en_connected_sin_la_waba_suscrita_baja_y_devuelve_el
     await _check_one(await _fila(tid, reintento))
 
     fila = await _fila(tid, reintento)
-    assert fila.status == "degraded"
+    assert fila.status == "error"
     assert fila.health["own_app_subscribed"]["ok"] is False
     assert await _secreto(tid) == "SEC-SANA"
 
@@ -445,9 +449,11 @@ async def test_el_cron_de_suscripciones_revisa_la_app_de_una_conexion_degradada(
     assert estado.active is True
 
 
-async def test_un_reintento_que_falla_al_suscribir_deja_la_waba_sin_suscribir(monkeypatch) -> None:
-    """Al reconectar la misma app se reusa la fila de la WABA: un `subscribed=True` de antes
-    haría pasar por suscrito un reintento que falló (`own_app_subscribed`)."""
+@pytest.mark.parametrize("misma_waba", [True, False])
+async def test_un_reintento_que_falla_al_suscribir_deja_la_waba_sin_suscribir(monkeypatch, misma_waba) -> None:
+    """Al reconectar la misma app se reusa la conexión (y la fila de la WABA, si es la misma):
+    un `subscribed=True` de antes haría pasar por suscrito un reintento que falló
+    (`own_app_subscribed`). Ninguna WABA de la conexión queda suscrita."""
     from _api_helpers import stub_meta_pair_ok
     from sqlalchemy import select
 
@@ -460,9 +466,10 @@ async def test_un_reintento_que_falla_al_suscribir_deja_la_waba_sin_suscribir(mo
     cid, app_id = await _conexion(tid, "error", numeros=0, waba_suscrita=True)
     async with tenant_scope(tid):
         async with get_session() as session:
-            waba_id = (
+            waba_vieja = (
                 await session.execute(select(WabaAccount.waba_id).where(WabaAccount.connection_id == cid))
             ).scalar_one()
+    waba_id = waba_vieja if misma_waba else f"waba-rec-{uuid.uuid4().hex[:8]}"
 
     async def _verify_ok(*_a, **_k):
         return True, "ok", {"display_phone_number": "+1 555", "verified_name": "Recupera"}
@@ -485,7 +492,8 @@ async def test_un_reintento_que_falla_al_suscribir_deja_la_waba_sin_suscribir(mo
                 environment="sandbox",
             )
         async with get_session() as session:
-            waba = (await session.execute(select(WabaAccount).where(WabaAccount.connection_id == cid))).scalar_one()
+            wabas = (await session.execute(select(WabaAccount).where(WabaAccount.connection_id == cid))).scalars().all()
 
-    assert waba.subscribed is False
+    assert len(wabas) == (1 if misma_waba else 2)
+    assert not any(waba.subscribed for waba in wabas)
     assert (await _fila(tid, cid)).status == "error"

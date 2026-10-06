@@ -377,9 +377,9 @@ async def test_run_health_checks_sin_credenciales(monkeypatch, origin, reason, o
     [
         ("byok", [True], True, "connected"),
         ("byok", [False, True], True, "connected"),  # alguna de sus WABAs
-        # WABA sin suscribir a esta app (un reintento que falló al suscribir): `degraded`,
-        # que la deja detrás de la sana `connected` en el orden del secreto.
-        ("byok", [False], False, "degraded"),
+        # WABA sin suscribir a esta app (un reintento que falló al suscribir): `error`, que la
+        # deja detrás de la sana, esté `connected` o `degraded`, en el orden del secreto.
+        ("byok", [False], False, "error"),
         # Sin WABA cargada (BYOK anteriores a ADR-0036): no degrada, pero no deja mejorar.
         ("byok", [], None, "connected"),
         ("embedded_signup", [False], "falta", "connected"),  # solo BYOK lo necesita

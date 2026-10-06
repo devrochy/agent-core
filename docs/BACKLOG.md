@@ -38,8 +38,8 @@ plataforma es solo `META_APP_SECRET` (ADR-0094) y `WHATSAPP_APP_SECRET` queda co
 `meta_byok.save_byok_connection` crea una fila nueva al reintentar el wizard con otra app y, en su primera transacción,
 le pasa el número y un `connected_at` más nuevo (`meta_byok.py:123-212`). Si después falla al guardar los tokens o al
 suscribir, solo la marca `error` (`:294-296`): se queda con el número y presta su secreto. ADR-0102 acota el daño: el
-reintento no sube de estado sin su WABA suscrita a su app, y si ya estaba en `connected` baja a `degraded`. Quedan dos
-huecos:
+reintento no sube de estado sin su WABA suscrita a su app, y si ya estaba en `connected` baja a `error`, detrás de la
+sana. Quedan dos huecos:
 - Si la sana también cae a `error` (un token a 7 días de vencer), las dos quedan en el mismo nivel, gana la más nueva y
   todo el inbound del negocio da 401 hasta que se renueve el token de la sana.
 - Un reintento que sí suscribió la WABA pero falló al suscribir la app tiene `own_app_subscribed` en verdadero; solo lo
@@ -107,7 +107,11 @@ La señal se pierde y el LLM solo ve un error genérico.
   WABA: si dos conexiones `connected` comparten la WABA, una de las dos no sincroniza y termina `degraded`.
 - Sentry captura las variables locales por defecto y `_before_send` (`core/observability/sentry_setup.py`) solo
   tapa los tokens `EAA...`, no los App Secrets (32 hex). Una excepción inesperada en un cron que tiene un secreto en
-  un frame lo mandaría al evento. `include_local_variables=False`, o tapar también los secretos de app.
+  un frame lo mandaría al evento. `include_local_variables=False`, o tapar también los secretos de app. En
+  `meta_subscriptions_health._group_connected_apps` se descifran los secretos de todas las conexiones de la app solo
+  para compararlos: se podría comparar `MetaToken.token_hash` y descifrar solo el que se usa.
+- `run_health_checks` toma la primera WABA de la conexión sin `ORDER BY`: con varias, `credentials_for`,
+  `webhook_subscribed` y `templates` revisan una cualquiera. Elegir la del número vigente.
 
 **Otras dos altas de conversación con la misma carrera que tenía el consumidor**
 El consumidor ya serializa por cliente el get-or-create de la conversación (`pg_advisory_xact_lock`, 2026-10-06).

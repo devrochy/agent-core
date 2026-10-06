@@ -8,7 +8,7 @@
   - ADR-0029, actualización 2026-09-21: la conexión que representa a una app en el cron de suscripciones ya no es "la
     más antigua".
   - ADR-0034: el estado ya no es directamente el semáforo de `decide_status` (pasa por `next_status`), se suma el check
-    `own_app_subscribed` y cambian las alertas.
+    `own_app_subscribed` como tercera clave de severidad alta, y cambian las alertas.
 - **Contexto:** entrada Media del BACKLOG que dejó ADR-0101. La revisión del diseño encontró además la variante
   con tokens, y la del `arquitecto`, que el filtro por números y las filas ya promovidas dejaban el problema abierto.
 
@@ -61,12 +61,15 @@ Revisar más conexiones tenía trampas, porque `_resolve_byok_token` toma la pri
    Para el resto (Embedded Signup o manual sin la app de la plataforma configurada, un alta manual a medias),
    `token_valid` queda con `ok=None`: no empeora ni deja mejorar, y el panel muestra el motivo y "reautorizar".
 3. **`own_app_subscribed`, solo BYOK: la WABA quedó suscrita a la app de esta conexión.** Sale de
-   `WabaAccount.subscribed`: el alta BYOK lo pone en `False` al empezar (también cuando reusa la fila al reconectar) y
-   en `True` después de un `POST /subscribed_apps` correcto; "Resuscribir la WABA" lo actualiza.
+   `WabaAccount.subscribed`: el alta BYOK lo pone en `False` en todas las WABAs de la conexión al empezar (también al
+   reconectar, cuando reusa la conexión) y en `True` después de un `POST /subscribed_apps` correcto; "Resuscribir la
+   WABA" lo actualiza.
    - Alguna WABA de la conexión suscrita: `True`.
-   - WABAs, pero ninguna suscrita: `False`. No es de severidad alta, así que la conexión queda `degraded`: un reintento
-     con otra app que no llegó a suscribir la WABA y ya estaba en `connected` (el "Diagnosticar" anterior, o "Activar")
-     baja un nivel, y la sana, `connected`, recupera el secreto. En `error` empataría con la sana y ganaría la más nueva.
+   - WABAs, pero ninguna suscrita: `False`, de severidad alta, así que la conexión queda en `error` (sin la WABA
+     suscrita, además, no le llegan mensajes). Un reintento con otra app que no llegó a suscribir la WABA y ya estaba en
+     `connected` (el "Diagnosticar" anterior, o "Activar") baja al último nivel de `_resolve_byok_token`, y la sana
+     recupera el secreto tanto si está `connected` como `degraded`. En `degraded` empataría con una sana degradada (una
+     plantilla rechazada basta) y ganaría el reintento, por más nuevo.
    - Sin WABA cargada (las BYOK anteriores al post-mortem de ADR-0036): `None`. No degrada, pero no deja mejorar; se
      arregla repitiendo el wizard.
 4. **El cron de salud revisa todas las conexiones `connected`, `degraded` y `error`,** tengan o no números. Una
@@ -132,8 +135,8 @@ y se arregla en `meta_byok.py` (ADR-0101/0036), no en los crons.
 - Un token renovado, una suscripción que Meta reactivó o una plantilla corregida devuelven la conexión a
   `connected` sin que nadie la toque.
 - Ni "Diagnosticar" ni el cron pueden convertir un alta fallida en la conexión que presta el secreto. Las que ya lo
-  hacían bajan en la siguiente corrida: a `error` si no tienen credenciales propias, a `degraded` si su WABA no está
-  suscrita a su app. Queda el caso angosto de la causa raíz (arriba).
+  hacían bajan a `error` en la siguiente corrida, por no tener credenciales propias o por no tener su WABA suscrita a
+  su app. Quedan los casos angostos de la causa raíz (arriba).
 - Las alertas de un problema que sigue ahí llegan una vez al día, no cada hora.
 
 **Negativas / lo que aceptamos pagar:**
@@ -141,7 +144,7 @@ y se arregla en `meta_byok.py` (ADR-0101/0036), no en los crons.
   reautorizando, o con "Activar".
 - Un `ok=None` pasajero de Meta en `token_valid` atrasa una hora la recuperación.
 - Una BYOK sin WABA cargada (anterior al post-mortem de ADR-0036) no mejora sola: hay que repetir el wizard. Una con
-  la WABA sin suscribir a su app queda `degraded` hasta que se la resuscribe desde el panel.
+  la WABA sin suscribir a su app queda en `error` hasta que se la resuscribe desde el panel.
 - Una conexión abandonada en `error` alerta una vez al día hasta que se la elimine.
 - "Activar" (`set_connection_status`) sigue pasando a `connected` sin chequear: es a propósito y lo hace un admin. Queda
   anotado en el BACKLOG.

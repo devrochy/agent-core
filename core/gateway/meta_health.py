@@ -350,9 +350,11 @@ def check_own_app_subscribed(wabas: Sequence[WabaAccount]) -> PreflightCheck:
     actualiza.
 
     - Alguna WABA suscrita: `True`.
-    - WABAs, pero ninguna suscrita: `False`. No es de severidad alta, así que la conexión
-      queda `degraded`: un reintento fallido que ya estaba en `connected` baja un nivel y la
-      sana, `connected`, recupera el secreto. En `error` empataría con ella.
+    - WABAs, pero ninguna suscrita: `False`, de severidad alta, así que la conexión queda en
+      `error`: un reintento fallido que ya estaba en `connected` baja al último nivel de
+      `_resolve_byok_token` y la sana gana tanto si está `connected` como `degraded` (una
+      plantilla rechazada basta). En `degraded` empataría con una sana degradada y ganaría
+      el reintento, por más nuevo. Sin la WABA suscrita, además, no le llegan mensajes.
     - Sin WABA cargada (las BYOK anteriores al post-mortem de ADR-0036): `None`. No degrada,
       pero tampoco deja mejorar; se arregla repitiendo el wizard."""
     now = datetime.now(UTC)
@@ -435,7 +437,9 @@ async def run_health_checks(connection: MetaConnection, tenant_id: uuid.UUID) ->
     return {key: check.model_dump(mode="json") for key, check in checks.items()}
 
 
-_HIGH_SEVERITY_KEYS = {"token_valid", "app_subscription_active"}
+# `own_app_subscribed` (ADR-0102): sin la WABA suscrita a su app no le llegan mensajes, y
+# un reintento fallido en `degraded` podría ganarle el secreto a una sana degradada.
+_HIGH_SEVERITY_KEYS = {"token_valid", "app_subscription_active", OWN_APP_SUBSCRIBED}
 
 
 def decide_status(checks: dict[str, dict[str, Any]]) -> tuple[str, str | None]:
