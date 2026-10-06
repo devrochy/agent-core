@@ -49,6 +49,18 @@ La señal se pierde y el LLM solo ve un error genérico.
 
 ## Media
 
+**Otras dos altas de conversación con la misma carrera que tenía el consumidor**
+El consumidor ya serializa por cliente el get-or-create de la conversación (`pg_advisory_xact_lock`, 2026-10-06).
+`core/gateway/outbound_email.py:72-100` y `core/admin/playground.py:59-96` siguen buscando y creando sin candado.
+- En el correo, turnos concurrentes de pack-calendar (`pack_calendar/skills.py:978`) hacia el mismo buzón pueden
+  dejar dos conversaciones abiertas. La primera alta del cliente puede soltar un `IntegrityError` crudo que
+  `core/tools/core_skill.py:137` no captura, y pack-calendar lo cuenta como `error_envio`.
+- En el playground, dos peticiones simultáneas del mismo negocio pueden crear dos conversaciones de prueba o dar
+  un 500.
+
+Afecta solo al mismo negocio. Arreglo: el mismo candado `conversation:{tenant}:{customer.id}` antes del `select`, y
+`begin_nested` + relectura en el alta del cliente (auditor-multitenant, 2026-10-06).
+
 **El system prompt promete una herramienta que no existe**
 `core/llm/prompt_builder.py:BASE_RULES` dice *"si el cliente pide hablar con una
 persona, usa la herramienta de escalamiento"*. No hay ninguna tool de escalamiento
