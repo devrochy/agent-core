@@ -29,7 +29,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import case, select
+from sqlalchemy import case, select, update
 from sqlalchemy.exc import IntegrityError
 
 from core.config import get_settings
@@ -210,6 +210,15 @@ async def save_byok_connection(
         if waba is None:
             waba = WabaAccount(tenant_id=tenant_id, connection_id=connection_id, waba_id=waba_id)
             session.add(waba)
+        # Ninguna WABA de la conexión cuenta como suscrita hasta que el `POST /subscribed_apps`
+        # de abajo salga bien: al reconectar se reusa la conexión (y la fila, si es la misma
+        # WABA), y un `True` de antes haría pasar por suscrito un reintento que falló
+        # (`own_app_subscribed`, ADR-0102).
+        await session.execute(
+            update(WabaAccount)
+            .where(WabaAccount.tenant_id == tenant_id, WabaAccount.connection_id == connection_id)
+            .values(subscribed=False)
+        )
 
     try:
         await meta_token_store.put_token(connection_id, APP_SECRET_KIND, app_id, app_secret, tenant_id=tenant_id)

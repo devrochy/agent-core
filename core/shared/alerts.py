@@ -41,3 +41,26 @@ async def send_alert(title: str, detail: str, severity: Severity = "warning") ->
             log.warning("alert_slack_post_fallo", status_code=response.status_code)
     except httpx.HTTPError as exc:
         log.warning("alert_slack_post_error", error=str(exc))
+
+
+_UNA_VEZ_POR_DIA_S = 24 * 60 * 60
+
+
+async def send_alert_once(
+    key: str, title: str, detail: str, *, severity: Severity = "warning", window_s: int = _UNA_VEZ_POR_DIA_S
+) -> None:
+    """`send_alert` como mucho una vez por `key` cada `window_s` (por defecto, un día).
+
+    Para condiciones que un cron vuelve a ver en cada corrida (un token vencido, un número
+    en RED): sin esto alertan cada hora y terminan silenciando el canal (ADR-0102). Si
+    Redis falla, alerta igual: mejor de más que callar una condición real.
+    """
+    from core.memory.working import get_redis
+
+    try:
+        primera_vez = await get_redis().set(f"alerta_una_vez:{key}", "1", nx=True, ex=window_s)
+    except Exception:
+        log.exception("alerta_una_vez_sin_redis", key=key)
+        primera_vez = True
+    if primera_vez:
+        await send_alert(title, detail, severity=severity)

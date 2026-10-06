@@ -37,3 +37,4 @@ async def admin_connected_waba_ids() -> list[tuple[uuid.UUID, uuid.UUID]]:
     async with get_session() as session:
         rows = (await session.execute(text("select id, tenant_id from admin_connected_waba_ids()"))).all()
     return [(row.id, row.tenant_id) for row in rows]
+

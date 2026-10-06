@@ -278,8 +278,16 @@ async def check_connections_health_except_billing(tenant_id: uuid.UUID) -> Prefl
 
     now = datetime.now(UTC)
     async with get_session() as session:
+        # Solo las que están en uso: una desactivada (`revoked`), sin alta (`draft`) o borrada no
+        # traba el paso a producción (desde ADR-0102, una BYOK sin credenciales falla el token).
         connections = (
-            await session.execute(select(MetaConnection).where(MetaConnection.tenant_id == tenant_id))
+            await session.execute(
+                select(MetaConnection).where(
+                    MetaConnection.tenant_id == tenant_id,
+                    MetaConnection.status.not_in(("revoked", "draft")),
+                    MetaConnection.deleted_at.is_(None),
+                )
+            )
         ).scalars().all()
 
     if not connections:

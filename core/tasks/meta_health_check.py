@@ -1,8 +1,12 @@
 """Cron de salud completa (horario): corre los 7 checks de
 `core/gateway/meta_health.py` por cada `MetaConnection` `connected`/
-`degraded` (no `draft`/`revoked`/`error`; una en `error` sigue recibiendo
-mensajes desde ADR-0101, pero este cron no la vuelve a revisar: ver BACKLOG), persiste
+`degraded`/`error` (no `draft`/`revoked`), persiste
 `health`/`status`/`last_health_check_at`.
+
+`error` también (ADR-0102): desde ADR-0101 sigue recibiendo mensajes, y sin esto no
+volvía nunca a `connected`. Todas, tengan o no números: un reintento BYOK fallido se queda
+con el número, y la que lo pierde es la conexión sana. Solo mejora de estado con el
+diagnóstico verificado (`meta_health.next_status`).
 
 El check `app_subscription_active` (15 min) sigue siendo el cron YA
 EXISTENTE (`meta_subscriptions_health.py`) -- acá solo se LEE su
@@ -17,18 +21,18 @@ from __future__ import annotations
 
 from core.db.models import MetaConnection
 from core.db.session import get_session
-from core.gateway.meta_health import decide_status, run_health_checks
+from core.gateway.meta_health import merge_health, misma_conexion, next_status, run_health_checks
 from core.shared.alerts import send_alert
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 
 log = get_logger(__name__)
 
-_CONNECTIONS_TO_CHECK = ("connected", "degraded")
+_CONNECTIONS_TO_CHECK = ("connected", "degraded", "error")
 
 
 async def _connections_to_check() -> list[MetaConnection]:
-    """Conexiones `connected`/`degraded` de TODOS los tenants.
+    """Conexiones `connected`/`degraded`/`error` de TODOS los tenants.
 
     Enumera ids cross-tenant vía `admin_meta_connection_ids` (SECURITY DEFINER,
     migración 0033) y luego hidrata cada fila bajo el `tenant_scope` de su
@@ -41,15 +45,21 @@ async def _connections_to_check() -> list[MetaConnection]:
         async with tenant_scope(tenant_id):
             async with get_session() as session:
                 connection = await session.get(MetaConnection, connection_id)
-                if connection is not None:
+                # El estado se vuelve a mirar: pudo cambiar desde que se enumeró.
+                if (
+                    connection is not None
+                    and connection.tenant_id == tenant_id
+                    and connection.status in _CONNECTIONS_TO_CHECK
+                    and connection.deleted_at is None
+                ):
                     out.append(connection)
     return out
+
 
 
 async def _check_one(connection: MetaConnection) -> None:
     async with tenant_scope(connection.tenant_id):
         checks = await run_health_checks(connection, connection.tenant_id)
-        new_status, reason = decide_status(checks)
 
         async with get_session() as session:
             # FOR UPDATE: una desactivación concurrente no queda pisada (ADR-0101).
@@ -60,9 +70,14 @@ async def _check_one(connection: MetaConnection) -> None:
                 # Cambió durante la corrida (la desactivaron o la borraron): no se pisa. Con
                 # `degraded`/`error` volvería a prestar su secreto (ADR-0101).
                 return
-            db_connection.health = checks
-            db_connection.status = new_status
-            db_connection.status_reason = reason
+            if not misma_conexion(connection, db_connection):
+                return  # el wizard la reconectó: el diagnóstico es de otra credencial
+            # Desde el estado de la fila bloqueada, no el de la lista: si alguien la activó
+            # durante la corrida, se parte de ese estado (ADR-0102).
+            db_connection.status, db_connection.status_reason = next_status(
+                db_connection.status, db_connection.status_reason, db_connection.origin, checks
+            )
+            db_connection.health = merge_health(db_connection.health, checks)
             from core.db.models import utcnow
 
             db_connection.last_health_check_at = utcnow()
