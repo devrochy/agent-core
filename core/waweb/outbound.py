@@ -49,7 +49,11 @@ async def process_job(
     request_id = str(job.get("request_id", ""))
     try:
         if allow is not None and not await allow():
-            reply: dict[str, Any] = {"ok": False, "error": "envíos pausados o tope diario alcanzado"}
+            reply: dict[str, Any] = {
+                "ok": False,
+                "reason": "policy",
+                "error": "envíos pausados o tope diario alcanzado",
+            }
         else:
             delay_ms = random.randint(policy.send_min_delay_ms, policy.send_max_delay_ms)
             if delay_ms > 0:

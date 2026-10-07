@@ -273,3 +273,113 @@ async def test_claim_outbound_setnx_excluye_segunda_tarea(monkeypatch):
     assert await _claim_outbound(mid, cid, tid) is False  # ya reclamado
     await _release_claim(mid, cid, tid)
     assert await _claim_outbound(mid, cid, tid) is True  # liberado -> reclama
+
+
+def test_policy_no_usa_el_backoff_normal_y_se_difiere():
+    """Un rechazo por política anti-baneo (tope/pausa de waweb) no es un
+    fallo de envío: nunca cae en fail_permanent (que dispara DLQ y escalación),
+    ni siquiera con los reintentos agotados."""
+    from core.gateway.meta_errors import GraphError
+    from core.tasks.outbound_send import decide_retry
+
+    exc = GraphError(
+        "envíos pausados o tope diario alcanzado", category="POLICY", is_transient=True
+    )
+    assert decide_retry(exc, attempts_made=0).action == "defer"
+    assert decide_retry(exc, attempts_made=MAX_ATTEMPTS).action == "defer"
+
+
+@pytest.mark.asyncio
+async def test_send_one_policy_bloqueado_deja_el_mensaje_en_cola(monkeypatch):
+    """Tope/pausa: el mensaje queda `queued` para reprogramarse y el error
+    viaja clasificado como POLICY, no como fallo transitorio."""
+    from types import SimpleNamespace
+
+    from core.gateway.meta_errors import GraphError
+    from core.tasks.outbound_send import _send_one
+    from core.waweb.handoff import WaWebPolicyBlocked
+
+    async def blocked(*a, **k):
+        raise WaWebPolicyBlocked("envíos pausados o tope diario alcanzado")
+
+    adapter = SimpleNamespace(send_text=blocked, send_image=blocked)
+    msg, tenant_id, calls = _send_one_fixture(monkeypatch, adapter=adapter)
+
+    result = await _send_one(msg.id, tenant_id)
+    assert isinstance(result, GraphError)
+    assert result.category == "POLICY"
+    assert msg.status == "queued"
+    assert calls["release"] == 1
+    assert calls["next"] == []
+
+
+@pytest.mark.asyncio
+async def test_handle_policy_defer_reprograma_con_eta(monkeypatch):
+    """El mensaje bloqueado se reprograma (misma tarea, nueva ETA) sin tocar
+    su estado ni escalar la conversación."""
+    import uuid
+    from datetime import datetime
+
+    import core.tasks.outbound_send as mod
+    from core.gateway.meta_errors import GraphError
+
+    reprogramados = []
+
+    class FakeTask:
+        def apply_async(self, args, eta=None, **kw):
+            reprogramados.append({"args": args, "eta": eta})
+
+    fijo = datetime(2026, 10, 8, 0, 2, tzinfo=UTC)
+    monkeypatch.setattr(mod, "outbound_send_task", FakeTask())
+
+    async def fake_bump(_message_id):
+        return 1
+
+    async def fake_eta(_tenant_id):
+        return fijo
+
+    monkeypatch.setattr(mod, "_bump_policy_deferrals", fake_bump)
+    monkeypatch.setattr(mod, "_policy_eta", fake_eta)
+
+    msg_id, tenant_id = uuid.uuid4(), uuid.uuid4()
+    await mod._handle_policy_defer(
+        msg_id, tenant_id, GraphError("tope", category="POLICY", is_transient=True)
+    )
+
+    assert reprogramados == [{"args": [str(msg_id), str(tenant_id)], "eta": fijo}]
+
+
+@pytest.mark.asyncio
+async def test_handle_policy_defer_agotado_audita_y_no_reprograma(monkeypatch):
+    """Tras 24 h de bloqueo se deja constancia en auditoría del negocio y no
+    se siguen encolando tareas."""
+    import uuid
+
+    import core.tasks.outbound_send as mod
+    from core.gateway.meta_errors import GraphError
+    from core.tasks.outbound_send import MAX_POLICY_DEFERRALS
+
+    reprogramados = []
+    auditorias = []
+
+    class FakeTask:
+        def apply_async(self, *a, **k):
+            reprogramados.append(1)
+
+    async def fake_bump(_message_id):
+        return MAX_POLICY_DEFERRALS + 1
+
+    async def fake_audit(**kw):
+        auditorias.append(kw)
+
+    monkeypatch.setattr(mod, "outbound_send_task", FakeTask())
+    monkeypatch.setattr(mod, "_bump_policy_deferrals", fake_bump)
+    monkeypatch.setattr(mod, "record_audit", fake_audit)
+
+    msg_id, tenant_id = uuid.uuid4(), uuid.uuid4()
+    await mod._handle_policy_defer(
+        msg_id, tenant_id, GraphError("tope", category="POLICY", is_transient=True)
+    )
+
+    assert reprogramados == []
+    assert auditorias[0]["action"] == "outbound_bloqueado_por_politica"
