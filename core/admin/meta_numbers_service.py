@@ -70,7 +70,7 @@ async def list_numbers(
                 tenant_id,
             )
         except GraphError as exc:
-            sync_error = exc.message
+            sync_error = _meta_error_text(exc)
 
     async with get_session() as session:
         rows = (
@@ -112,6 +112,18 @@ def _number_status(n) -> str:  # type: ignore[no-untyped-def]
     if n.registered:
         return "CONNECTED"
     return n.name_status or "PENDING"
+
+
+_ERROR_TEXT_MAX = 300
+
+
+def _meta_error_text(exc) -> str:  # type: ignore[no-untyped-def]
+    """Texto del error para el panel: con un `GraphError`, el motivo que da Meta
+    (`user_text`), no solo "Invalid parameter"; con otros errores, su mensaje."""
+    from core.gateway.meta_errors import GraphError
+
+    text = exc.user_text if isinstance(exc, GraphError) else exc.message
+    return (text or "")[:_ERROR_TEXT_MAX]
 
 
 _NOT_THIS_CONNECTION = "El número no es de esta conexión"
@@ -169,7 +181,7 @@ async def add_number(
             verified_name=verified_name,
         )
     except (GraphError, MetaAssetError) as exc:
-        return exc.message[:140]
+        return _meta_error_text(exc)
     return None
 
 
@@ -214,7 +226,7 @@ async def request_code(
             language=language,
         )
     except GraphError as exc:
-        return exc.message[:140]
+        return _meta_error_text(exc)
 
     await redis.set(rate_limit_key, "1", ex=60)
     return None
@@ -249,7 +261,7 @@ async def verify_number(
             code=code,
         )
     except GraphError as exc:
-        return False, exc.message[:140]
+        return False, _meta_error_text(exc)
     return bool(ok), None
 
 
@@ -340,7 +352,7 @@ async def register_number(
             return "Meta bloqueó por un rato los intentos de PIN de este número: esperá antes de reintentar"
         message = exc.message or ""
         if not ("already" in message.lower() and "regist" in message.lower()):
-            return message[:140]
+            return _meta_error_text(exc)
         # Ya estaba registrado: es idempotente, como en Embedded Signup. Meta no validó este
         # PIN, así que no se da por fijado.
         await _mark_registered(phone, connection, pin_set=False)

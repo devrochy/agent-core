@@ -78,6 +78,14 @@ class GraphError(AgentCoreError):
     def message(self) -> str:
         return str(self)
 
+    @property
+    def user_text(self) -> str:
+        """El motivo que da Meta para mostrarle a una persona (`error_user_title` y
+        `error_user_msg`), o `message` si no vino. "Invalid parameter" sola no dice qué
+        parámetro ni por qué; el motivo sí (p. ej. que el número ya está en otra cuenta)."""
+        parts = [p.strip() for p in (self.error_user_title, self.error_user_msg) if p and p.strip()]
+        return ": ".join(parts) if parts else self.message
+
 
 def _retry_after_from_usage(headers: httpx.Headers, attempt: int) -> int:
     """`estimated_time_to_regain_access` (minutos, en X-Business-Use-Case-Usage)

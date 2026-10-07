@@ -130,6 +130,16 @@ async def graph_fetch(
         return None
 
 
+def _error_message_for_log(error: GraphError | None) -> str | None:
+    """`str(error)` y, si Meta mandó motivo (`error_user_title`/`error_user_msg`), también
+    ese: "Invalid parameter" sola no permite saber después qué falló."""
+    if error is None:
+        return None
+    if error.user_text == error.message:
+        return error.message
+    return f"{error.message} | {error.user_text}"
+
+
 async def _log_call(
     *,
     tenant_id: uuid.UUID | None,
@@ -159,7 +169,7 @@ async def _log_call(
                 error_code=error.code if error else None,
                 error_subcode=error.error_subcode if error else None,
                 error_type=error.error_type if error else None,
-                error_message=str(error) if error else None,
+                error_message=_error_message_for_log(error),
                 fbtrace_id=error.fbtrace_id if error else None,
                 request_id=request_id,
             )
