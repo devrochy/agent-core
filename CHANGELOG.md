@@ -1,5 +1,17 @@
 # Changelog
 
+## Sin versión — Numeración única y checkout por tipo de producto (HU-COM-03, 2026-10-07)
+
+- **Número de pedido (D4):** `public_order_number` deja de ser columna computada con prefijo fijo `OC-`. Lo arma
+  `crear_pedido` con el prefijo del negocio (`order_prefix`, 1-8 alfanuméricos, fallback `OC`), sin truncar a
+  partir del pedido 10.000, y un índice único `(tenant_id, public_order_number)` lo respalda (migración
+  `crm_0009`, con backfill que conserva los números existentes). `consultar_estado_pedido` acepta el prefijo del
+  negocio.
+- **Checkout por tipo (D17):** `checkout_fields` configurables por tipo de entrega y de producto: los **planes
+  recurrentes** y el **retiro en tienda** no piden dirección. `crear_pedido` responde
+  `status: faltan_datos_cliente` con `missing_fields` y `existing_data` (captura progresiva, uno a uno) y solo
+  guarda los datos en el perfil del cliente si el cliente aceptó (`guardar_datos_cliente`, Ley 1581).
+
 ## Sin versión — Suscripciones v1: contrato único y tools del core (ADR-0106, 2026-10-07)
 
 - **HU-SUB-01:** `core/subscriptions` fija el contrato de 8 operaciones (`activate`, `get`, `list_for_customer`,

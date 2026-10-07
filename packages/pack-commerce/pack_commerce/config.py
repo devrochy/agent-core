@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 
 from core.mcp.types import BasePluginConfig
+
+_PREFIJO = re.compile(r"^[A-Za-z0-9]{1,8}$")
+_CAMPOS_VALIDOS = {"full_name", "id_document", "address", "municipality", "city", "phone", "email"}
 
 
 class CRMConfig(BasePluginConfig):
@@ -74,6 +78,41 @@ class CRMConfig(BasePluginConfig):
     # ---------------------------------------------------------------- moneda
     currency_symbol: str = Field(default="$", description="Símbolo de moneda para precios")
     currency_code: str = Field(default="COP", description="Código de moneda (COP, USD)")
+
+    # ---------------------------------------------------------------- numeración y checkout (HU-COM-03)
+    order_prefix: str = Field(
+        default="OC",
+        description="Prefijo del número público de pedido de este negocio (1-8 letras/números).",
+    )
+    checkout_fields: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "domicilio": ["full_name", "id_document", "address", "municipality", "city", "phone"],
+            "recoger_en_tienda": ["full_name", "id_document", "phone"],
+            "plan": ["full_name", "id_document", "phone", "email"],
+        },
+        description=(
+            "Campos que pide crear_pedido por tipo de entrega o producto "
+            "(claves: full_name, id_document, address, municipality, city, phone, email). "
+            "Los planes y el retiro en tienda no piden dirección."
+        ),
+    )
+
+    @field_validator("order_prefix", mode="before")
+    @classmethod
+    def _normalizar_prefijo(cls, valor: object) -> str:
+        texto = str(valor or "").strip().upper()
+        if not _PREFIJO.match(texto):
+            return "OC"
+        return texto
+
+    @field_validator("checkout_fields")
+    @classmethod
+    def _campos_conocidos(cls, valor: dict[str, list[str]]) -> dict[str, list[str]]:
+        for tipo, campos in (valor or {}).items():
+            desconocidos = [c for c in campos if c not in _CAMPOS_VALIDOS]
+            if desconocidos:
+                raise ValueError(f"checkout_fields['{tipo}'] con campos desconocidos: {desconocidos}")
+        return valor
 
     # ---------------------------------------------------------------- copy (ADR-0017: CONFIG editable)
     follow_up_lead_message: str = Field(

@@ -225,6 +225,7 @@ async def test_agregar_item_pedido_acepta_sku_directo(fake_tool_context):
                 delivery_method="domicilio",
                 total=0,
                 order_seq=order_seq,
+                public_order_number=f"OC-{order_seq:04d}",
                 idempotency_key=f"test:{uuid.uuid4().hex[:8]}",
             )
             session.add(order)

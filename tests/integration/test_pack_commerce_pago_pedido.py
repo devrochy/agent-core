@@ -99,6 +99,7 @@ async def _make_order(session, *, total: float = 185_000.0, status: str = "abier
         total=total,
         idempotency_key=f"test:{uuid.uuid4().hex[:8]}",
         order_seq=int(order_seq),
+        public_order_number=f"OC-{int(order_seq):04d}",
     )
     session.add(order)
     await session.flush()

@@ -73,6 +73,7 @@ async def _make_order(session, *, tenant_id, customer_id, order_seq: int):
         delivery_method="domicilio",
         total=100_000,
         order_seq=order_seq,
+        public_order_number=f"OC-{order_seq:04d}",
         idempotency_key=f"test:{uuid.uuid4().hex[:8]}",
     )
     session.add(order)
