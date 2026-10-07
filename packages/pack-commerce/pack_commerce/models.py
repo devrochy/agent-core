@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, Computed, DateTime, Index, Integer, Numeric, Text, text
+from sqlalchemy import Boolean, DateTime, Index, Integer, Numeric, Text, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -233,11 +233,11 @@ class Order(TenantMixin, Base):
     payment_reference: Mapped[str | None] = mapped_column(Text, default=None)
     payment_link_url: Mapped[str | None] = mapped_column(Text, default=None)
     payment_link_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # Numeración por tenant (ADR-0018): la asigna crear_pedido vía crm_next_order_seq(tenant).
+    # Numeración por tenant (ADR-0018 + HU-COM-03): la asigna crear_pedido vía
+    # crm_next_order_seq(tenant) con el prefijo del negocio; índice único
+    # (tenant_id, public_order_number) en la migración crm_0009.
     order_seq: Mapped[int] = mapped_column(Integer, nullable=False)
-    public_order_number: Mapped[str] = mapped_column(
-        Text, Computed("'OC-' || lpad(order_seq::text, 4, '0')", persisted=True), nullable=False
-    )
+    public_order_number: Mapped[str] = mapped_column(Text, nullable=False)
     # snapshot de entrega por pedido (el perfil del cliente vive en el core)
     delivery_full_name: Mapped[str | None] = mapped_column(Text, default=None)
     delivery_id_document: Mapped[str | None] = mapped_column(Text, default=None)

@@ -106,6 +106,7 @@ async def test_numeracion_pedidos_por_tenant(tenant_setup) -> None:
                 customer_id=cust.id,
                 idempotency_key=f"num:{uuid.uuid4().hex[:8]}",
                 order_seq=1,
+                public_order_number="OC-0001",
                 total=10,
             )
             session.add(order)
@@ -127,6 +128,7 @@ async def test_numeracion_pedidos_por_tenant(tenant_setup) -> None:
                     customer_id=cust2.id,
                     idempotency_key=f"num:{uuid.uuid4().hex[:8]}",
                     order_seq=1,
+                    public_order_number="OC-0001",
                     total=20,
                 )
             )

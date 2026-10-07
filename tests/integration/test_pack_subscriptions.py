@@ -228,6 +228,7 @@ async def test_opcion_b_commerce_activa_suscripcion_por_pago() -> None:
                 total=200000,
                 idempotency_key=str(uuid.uuid4()),
                 order_seq=1,
+                public_order_number="OC-0001",
             )
             session.add(order)
             await session.flush()

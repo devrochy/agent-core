@@ -261,9 +261,30 @@ async def _get_variant_with_stock(variant_id_or_sku) -> dict[str, Any] | None:  
     }
 
 
-def _validate_delivery_data(data: dict[str, Any]) -> tuple[bool, list[str]]:
-    required = ("full_name", "id_document", "address", "municipality", "city")
-    missing = [f for f in required if not str(data.get(f, "")).strip()]
+def _normalizar_prefijo(prefijo: str) -> str:
+    """Prefijo del número público: mayúsculas, 1-8 alfanuméricos; fallback OC."""
+    texto = str(prefijo or "").strip().upper()
+    if not re.fullmatch(r"[A-Z0-9]{1,8}", texto):
+        return "OC"
+    return texto
+
+
+def _campos_requeridos(config, es_plan: bool, delivery_method: str) -> list[str]:
+    """Campos que exige el checkout según tipo de producto y de entrega (D-SPEC-09-2).
+
+    Los planes (producto recurrente) usan la lista `plan` (sin dirección) y el
+    retiro en tienda la lista `recoger_en_tienda`; el resto, la de `domicilio`.
+    """
+    campos = getattr(config, "checkout_fields", None) or {}
+    if es_plan and "plan" in campos:
+        return list(campos["plan"])
+    if delivery_method in campos:
+        return list(campos[delivery_method])
+    return list(campos.get("domicilio", ["full_name", "id_document", "address", "municipality", "city"]))
+
+
+def _validar_checkout(campos_requeridos: list[str], data: dict[str, Any]) -> tuple[bool, list[str]]:
+    missing = [f for f in campos_requeridos if not str(data.get(f, "")).strip()]
     return (not missing, missing)
 
 
@@ -788,7 +809,12 @@ class OrderSkill(BaseSkill):
                         },
                         "customer_data": {
                             "type": "object",
-                            "description": "Datos de quien recibe el pedido",
+                            "description": (
+                                "Datos de quien recibe el pedido. Los campos obligatorios dependen "
+                                "del tipo de pedido (la tool responde faltan_datos_cliente con la "
+                                "lista exacta): domicilio pide dirección, retiro en tienda y planes "
+                                "no."
+                            ),
                             "properties": {
                                 "full_name": {"type": "string"},
                                 "id_document": {"type": "string"},
@@ -796,8 +822,15 @@ class OrderSkill(BaseSkill):
                                 "municipality": {"type": "string"},
                                 "city": {"type": "string"},
                                 "phone": {"type": "string"},
+                                "email": {"type": "string"},
                             },
-                            "required": ["full_name", "id_document", "address", "municipality", "city"],
+                        },
+                        "guardar_datos_cliente": {
+                            "type": "boolean",
+                            "description": (
+                                "True SOLO si el cliente aceptó guardar sus datos para la próxima "
+                                "compra (Ley 1581). False (default) = no se guarda nada en su perfil."
+                            ),
                         },
                     },
                     "required": ["quote_id", "payment_method", "delivery_method", "customer_data"],
@@ -1159,10 +1192,13 @@ class OrderSkill(BaseSkill):
         customer_data = arguments.get("customer_data") or {}
         if not isinstance(customer_data, dict):
             return {
-                "error": "Faltan datos de entrega",
-                "missing_fields": ["full_name", "id_document", "address", "municipality", "city"],
-                "hint": "Pide al cliente esos datos antes de confirmar el pedido.",
+                "status": "faltan_datos_cliente",
+                "error": "Faltan datos del cliente",
+                "missing_fields": ["full_name", "id_document"],
+                "existing_data": {},
+                "hint": "Pide los datos que faltan uno a uno.",
             }
+        guardar_datos = bool(arguments.get("guardar_datos_cliente", False))
         config = await _plugin_config()
 
         if payment_method not in PAYMENT_METHODS:
@@ -1254,26 +1290,34 @@ class OrderSkill(BaseSkill):
                     "hint": "Ofrecele transferencia o contraentrega en su lugar.",
                 }
 
-        complete, missing = _validate_delivery_data(customer_data)
+        complete, missing = _validar_checkout(
+            _campos_requeridos(config, es_plan, delivery_method), customer_data
+        )
         if not complete:
             return {
-                "error": "Faltan datos de entrega",
+                "status": "faltan_datos_cliente",
+                "error": "Faltan datos del cliente",
                 "missing_fields": missing,
-                "hint": "Pide al cliente esos datos antes de confirmar el pedido.",
+                "existing_data": {k: v for k, v in customer_data.items() if str(v or "").strip()},
+                "hint": "Pide los datos que faltan uno a uno, sin repetir los que ya tenés.",
             }
 
         # Guardar datos de entrega en la memoria de entidad del core (Capa 2)
-        await entity_memory.upsert_attributes(
-            context.customer_id,
-            {
-                "full_name": customer_data.get("full_name"),
-                "id_document": customer_data.get("id_document"),
-                "address": customer_data.get("address"),
-                "municipality": customer_data.get("municipality"),
-                "city": customer_data.get("city"),
-                "contact_phone": customer_data.get("phone"),
-            },
-        )
+        # SOLO con consentimiento (Ley 1581, D17): sin él, el pedido se crea
+        # igual pero nada queda en el perfil para la próxima compra.
+        if guardar_datos:
+            await entity_memory.upsert_attributes(
+                context.customer_id,
+                {
+                    "full_name": customer_data.get("full_name"),
+                    "id_document": customer_data.get("id_document"),
+                    "address": customer_data.get("address"),
+                    "municipality": customer_data.get("municipality"),
+                    "city": customer_data.get("city"),
+                    "contact_phone": customer_data.get("phone"),
+                    "email": customer_data.get("email"),
+                },
+            )
 
         async with get_session() as session:
             quote = (
@@ -1298,6 +1342,7 @@ class OrderSkill(BaseSkill):
                 total=quote.total,
                 idempotency_key=f"quote:{quote.id}",
                 order_seq=order_seq,
+                public_order_number=f"{_normalizar_prefijo(config.order_prefix)}-{order_seq:04d}",
                 delivery_full_name=customer_data.get("full_name"),
                 delivery_id_document=customer_data.get("id_document"),
                 delivery_address=customer_data.get("address"),
@@ -1552,14 +1597,15 @@ class OrderSkill(BaseSkill):
 
     async def consultar_estado_pedido(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         raw = str(arguments.get("public_order_number", "")).strip()
-        match = re.match(r"^\s*OC[-\s]?(\d{1,6})\s*$", raw, re.IGNORECASE)
+        config = await _plugin_config()
+        prefijo = _normalizar_prefijo(config.order_prefix)
+        match = re.match(rf"^{re.escape(prefijo)}[-\s]?(\d{{1,9}})$", raw, re.IGNORECASE)
         if not match:
             return {
                 "found": False,
-                "hint": "El número de pedido tiene el formato OC-0001. Pídelo al cliente.",
+                "hint": f"El número de pedido tiene el formato {prefijo}-0001. Pídelo al cliente.",
             }
-        public_number = f"OC-{int(match.group(1)):04d}"
-        config = await _plugin_config()
+        public_number = f"{prefijo}-{int(match.group(1)):04d}"
 
         async with get_session() as session:
             tenant_id = get_current_tenant_id()
