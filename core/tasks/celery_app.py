@@ -213,6 +213,26 @@ celery.conf.beat_schedule[_BILLING_LIFECYCLE_TASK] = {
     "schedule": crontab(hour="4", minute="0"),
 }
 
+# Despachador del outbox de dominio (HU-SUB-03, ADR-0107): cada 30 s entrega
+# los `domain_events` pendientes vencidos con backoff y DLQ.
+_DOMAIN_EVENTS_DISPATCH_TASK = "core.domain_events_dispatch"
+
+
+@celery.task(name=_DOMAIN_EVENTS_DISPATCH_TASK)
+def _domain_events_dispatch() -> None:
+    from core.tasks.domain_events_dispatch import dispatch_domain_events_task
+
+    try:
+        dispatch_domain_events_task()
+    except Exception:
+        log.exception("cron_task_failed", task=_DOMAIN_EVENTS_DISPATCH_TASK)
+
+
+celery.conf.beat_schedule[_DOMAIN_EVENTS_DISPATCH_TASK] = {
+    "task": _DOMAIN_EVENTS_DISPATCH_TASK,
+    "schedule": 30.0,
+}
+
 
 def _load_plugins() -> None:
     """Carga los plugins (entry_points) e importa los jobs para que corran los

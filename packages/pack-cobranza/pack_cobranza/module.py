@@ -84,9 +84,12 @@ class CobranzaModule(BaseModule):
         host.register_skill(CobranzaSkill())
         host.register_guardrail("cob_promesa_check", promesa_guardrail, priority=6)
         host.register_guardrail("cob_suscripcion_check", suscripcion_guardrail, priority=6)
-        import pack_cobranza.pagos
+        # Suscripción con tracking del host (ADR-0107): al desactivar el pack,
+        # el core lo des-suscribe solo (antes era `event_bus.subscribe` directo).
+        from core.shared.events import ON_PAYMENT_CONFIRMED
+        from pack_cobranza.pagos import _on_payment_confirmed
 
-        pack_cobranza.pagos.suscribir()
+        host.subscribe(ON_PAYMENT_CONFIRMED, _on_payment_confirmed)
 
     async def on_collaborator_role(self, tenant_id: Any, admin_id: Any, role_id: str) -> None:
         """Rol de pack asignado a un colaborador (ADR-0066): crea su perfil `Gestor`.

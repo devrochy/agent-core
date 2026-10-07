@@ -1,5 +1,17 @@
 # Changelog
 
+## Sin versión — Eventos de dominio durables con outbox (ADR-0107, 2026-10-07)
+
+- **HU-SUB-03:** los eventos de dominio (`payment.confirmed`/`payment.rejected`) se escriben en la tabla
+  `domain_events` **en la misma transacción** que el cambio de estado del pago (webhook de Wompi), con
+  `dedupe_key = payment:{provider_reference}:{status}` idempotente. Si la transacción se revierte, el
+  evento no existe.
+- Un despachador de Celery (beat 30 s) entrega los eventos pendientes bajo el `tenant_scope` de su tenant
+  con backoff exponencial (30 s→10 m) y, tras 5 intentos, los deja `fallido` con su error — visibles en la
+  "Bandeja de fallos" y reintentables a mano (`/api/v1/admin/domain-events`).
+- El bus in-process queda para eventos del core; el despachador usa `EventBus.emit_strict` (levanta si un
+  handler falla). `pack_cobranza` migra a `host.subscribe` (des-suscripción al desactivar el pack).
+
 ## Sin versión — Numeración única y checkout por tipo de producto (HU-COM-03, 2026-10-07)
 
 - **Número de pedido (D4):** `public_order_number` deja de ser columna computada con prefijo fijo `OC-`. Lo arma

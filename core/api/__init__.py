@@ -20,6 +20,7 @@ from core.api.routers import (
     costs,
     dashboard,
     dlq,
+    domain_events,
     escalations,
     invitations,
     leads,
@@ -62,6 +63,7 @@ api_router.include_router(costs.router)
 api_router.include_router(plan.router)
 api_router.include_router(platform.router)
 api_router.include_router(settings.router)
+api_router.include_router(domain_events.router)
 api_router.include_router(web_chat.router)
 
 __all__ = ["api_router"]

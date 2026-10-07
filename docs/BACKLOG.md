@@ -192,7 +192,9 @@ repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev
   `graph_api_calls`/`graph_api_usage` (endpoint público de tokens, sin `appsecret_proof`).
 - Rutas `POST /admin/conexiones/wizard/whatsapp-byok/token/inspect|extend` no validan que
   `app_id` pertenezca al tenant (en el alta inicial la conexión todavía no existe).
-- `core/shared/events.py::emit_nowait` (fallback sync) no propaga el tenant (hoy sin callers).
+- `core/shared/events.py::emit_nowait` (fallback sync) no propaga el tenant (hoy sin callers). Desde
+  ADR-0107/HU-SUB-03 los eventos de dominio ya no dependen de esto: van por el outbox `domain_events`
+  con `tenant_id` explícito; el bus in-process queda solo para eventos del core.
 - `meta_token_store.get_token` no filtra `tenant_id` en el WHERE (preexistente; el AAD falla
   cerrado).
 - `ix_meta_tokens_tenant` no es índice compuesto (preexistente).

@@ -6008,6 +6008,111 @@
         }
       }
     },
+    "/api/v1/admin/domain-events": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · domain events"
+        ],
+        "summary": "List Failed",
+        "description": "Últimos 50 eventos fallidos del tenant activo (RLS los acota).",
+        "operationId": "list_failed_api_v1_admin_domain_events_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainEventsPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/domain-events/{event_id}/retry": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · domain events"
+        ],
+        "summary": "Retry Event",
+        "description": "Re-encola un evento fallido: vuelve a `pendiente` con reintento inmediato.",
+        "operationId": "retry_event_api_v1_admin_domain_events__event_id__retry_post",
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Event Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/public/web-chat/{key}/config": {
       "get": {
         "tags": [
@@ -13946,6 +14051,62 @@
           "entries"
         ],
         "title": "DlqPage"
+      },
+      "DomainEventEntry": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "topic": {
+            "type": "string",
+            "title": "Topic"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "topic",
+          "attempts",
+          "last_error",
+          "created_at"
+        ],
+        "title": "DomainEventEntry"
+      },
+      "DomainEventsPage": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/DomainEventEntry"
+            },
+            "type": "array",
+            "title": "Entries"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "title": "DomainEventsPage"
       },
       "EscalationItem": {
         "properties": {
