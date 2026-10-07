@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.background import BackgroundTasks
 from pydantic import BaseModel, Field
 
@@ -48,10 +48,25 @@ class ResetPasswordRequest(BaseModel):
 
 
 @router.post("/login", response_model=LoginResponse)
-async def post_login(payload: LoginRequest) -> LoginResponse:
+async def post_login(payload: LoginRequest, request: Request) -> LoginResponse:
+    from core.security.login_lockout import (
+        client_ip,
+        is_blocked,
+        register_failure,
+        register_success,
+    )
+
+    ip = client_ip(request)
+    identifier = payload.identifier.strip().lower()
+    if await is_blocked("admin", identifier, ip):
+        raise ApiError(
+            429, "auth_bloqueado", "Demasiados intentos. Espera unos minutos e inténtalo de nuevo."
+        )
     token = await login(payload.identifier, payload.password)
     if token is None:
+        await register_failure("admin", identifier, ip)
         raise ApiError(401, "invalid_credentials", "Correo o contraseña incorrectos.")
+    await register_success("admin", identifier, ip)
     admin = await admin_from_token(token)
     if admin is None:  # credenciales válidas pero admin desactivado
         raise ApiError.unauthorized("La cuenta no está activa.")

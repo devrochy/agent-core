@@ -425,16 +425,43 @@ async def _login_con_tenant(request: Request, rol_esperado: str) -> JSONResponse
     if not (slug and usuario and password):
         return JSONResponse({"error": "faltan datos"}, status_code=400)
 
+    from core.security.login_lockout import (
+        client_ip,
+        is_blocked,
+        register_failure,
+        register_success,
+    )
+
+    scope = f"gestor:{slug}"
+    identificador = usuario.lower()
+    ip = client_ip(request)
+    if await is_blocked(scope, identificador, ip):
+        return JSONResponse({"error": "demasiados intentos, espera unos minutos"}, status_code=429)
+
     from core.tenants import resolve_tenant_by_slug
 
     tenant_id = await resolve_tenant_by_slug(slug)
     if tenant_id is None:
+        await register_failure(scope, None, ip)
         return JSONResponse({"error": "tenant desconocido"}, status_code=401)
 
     async with get_session() as session:
         admin = await _admin_por_credenciales(session, usuario, password)
     if admin is None:
+        bloqueado = await register_failure(scope, identificador, ip)
+        if bloqueado:
+            from core.shared.audit import record_audit
+            from core.shared.tenant import tenant_scope
+
+            async with tenant_scope(tenant_id):
+                await record_audit(
+                    actor="core:auth",
+                    action="login_bloqueado",
+                    input_data={"usuario": usuario, "ip": ip},
+                )
         return JSONResponse({"error": "credenciales inválidas"}, status_code=401)
+
+    await register_success(scope, identificador, ip)
 
     membresias = await _membresias_de_campo(admin, solo=tenant_id)
     if not membresias:
