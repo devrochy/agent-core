@@ -1342,7 +1342,7 @@ class OrderSkill(BaseSkill):
                 total=quote.total,
                 idempotency_key=f"quote:{quote.id}",
                 order_seq=order_seq,
-                public_order_number=f"{_normalizar_prefijo(config.order_prefix)}-{order_seq:04d}",
+                public_order_number=f"{_normalizar_prefijo(getattr(config, 'order_prefix', None))}-{order_seq:04d}",
                 delivery_full_name=customer_data.get("full_name"),
                 delivery_id_document=customer_data.get("id_document"),
                 delivery_address=customer_data.get("address"),
@@ -1598,7 +1598,7 @@ class OrderSkill(BaseSkill):
     async def consultar_estado_pedido(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         raw = str(arguments.get("public_order_number", "")).strip()
         config = await _plugin_config()
-        prefijo = _normalizar_prefijo(config.order_prefix)
+        prefijo = _normalizar_prefijo(getattr(config, "order_prefix", None))
         match = re.match(rf"^{re.escape(prefijo)}[-\s]?(\d{{1,9}})$", raw, re.IGNORECASE)
         if not match:
             return {
