@@ -1,5 +1,17 @@
 # Changelog
 
+## Sin versión — Números del portafolio de Meta (2026-10-07)
+
+- **Nuevo:** `GET /api/v1/admin/meta/connections/{id}/business-numbers` lista, solo lectura, los números de todas las
+  WABAs propias del portafolio de Meta dueño de la WABA de la conexión: el límite de números de Meta cuenta el portafolio
+  entero. Visto en test: "Se superó el límite de números de teléfono por negocio" al agregar un número BYOK.
+  - Solo BYOK recorre el portafolio (token del propio negocio). Con Embedded Signup y `manual` el token es de la
+    plataforma y se lista solo la WABA de la conexión.
+  - Nunca las WABAs de clientes (`client_whatsapp_business_accounts`); tope de 50 WABAs; no guarda nada en
+    `phone_numbers`.
+  - Los números que ya tiene otro negocio de la plataforma cuentan (`other_tenants_count`) pero no se muestran.
+  - Lo que falla por partes (permiso `business_management`, una WABA) va en `warnings`.
+
 ## Sin versión — El motivo de Meta en los errores de números (2026-10-07)
 
 - Los errores de agregar, pedir y verificar código, registrar y sincronizar números muestran el motivo que da Meta

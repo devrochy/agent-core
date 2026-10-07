@@ -24,8 +24,11 @@ log = get_logger(__name__)
 
 _PHONE_FIELDS = (
     "id,display_phone_number,verified_name,quality_rating,code_verification_status,"
-    "name_status,platform_type,messaging_limit_tier,throughput,account_mode"
+    "name_status,platform_type,messaging_limit_tier,throughput,account_mode,status"
 )
+# Tope de WABAs que se recorren al listar los números de un portafolio (cada una es una
+# llamada a Graph): un portafolio normal tiene pocas.
+_MAX_OWNED_WABAS = 50
 
 
 async def list_phone_numbers(
@@ -50,6 +53,43 @@ async def list_phone_numbers(
         if not after or not next_url:
             break
     return items
+
+
+async def waba_owner_business(
+    waba_id: str, token: str, app_secret: str, version: str, connection_id: uuid.UUID | None
+) -> dict[str, Any] | None:
+    """Portafolio de Meta Business dueño de la WABA (`owner_business_info`): `{id, name}`
+    o `None` si Meta no lo devuelve. Solo lectura."""
+    data = await graph_fetch(
+        f"/{waba_id}", token=token, app_secret=app_secret,
+        query={"fields": "owner_business_info"}, version=version, connection_id=connection_id,
+    )
+    info = (data or {}).get("owner_business_info") or None
+    return info if isinstance(info, dict) and info.get("id") else None
+
+
+async def list_owned_wabas(
+    business_id: str, token: str, app_secret: str, version: str, connection_id: uuid.UUID | None
+) -> list[dict[str, Any]]:
+    """WABAs PROPIAS del portafolio (`owned_whatsapp_business_accounts`), hasta
+    `_MAX_OWNED_WABAS`. Las de clientes (`client_whatsapp_business_accounts`) no: son de
+    otros negocios y no cuentan para el límite de números del portafolio. Solo lectura;
+    requiere `business_management` en el token (si no, Meta responde un error)."""
+    items: list[dict[str, Any]] = []
+    after: str | None = None
+    while len(items) < _MAX_OWNED_WABAS:
+        query = {"fields": "id,name", "limit": "100"}
+        if after:
+            query["after"] = after
+        data = await graph_fetch(
+            f"/{business_id}/owned_whatsapp_business_accounts", token=token, app_secret=app_secret,
+            query=query, version=version, connection_id=connection_id,
+        )
+        items.extend((data or {}).get("data", []))
+        after = ((data or {}).get("paging", {}).get("cursors", {}) or {}).get("after")
+        if not after or not (data or {}).get("paging", {}).get("next"):
+            break
+    return items[:_MAX_OWNED_WABAS]
 
 
 async def sync_phone_numbers(

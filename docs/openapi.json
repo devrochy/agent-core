@@ -2431,6 +2431,66 @@
         }
       }
     },
+    "/api/v1/admin/meta/connections/{connection_id}/business-numbers": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "List Business Numbers",
+        "description": "Números de todas las WABAs propias del portafolio de Meta de la conexión (el límite de\nnúmeros de Meta cuenta el portafolio entero). Solo lectura: no guarda nada.",
+        "operationId": "list_business_numbers_api_v1_admin_meta_connections__connection_id__business_numbers_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusinessNumbersResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/meta/connections/{connection_id}/numbers/{phone_number_id}/request-code": {
       "post": {
         "tags": [
@@ -12571,6 +12631,173 @@
           "model_primary"
         ],
         "title": "BrainSettings"
+      },
+      "BusinessNumberItem": {
+        "properties": {
+          "waba_id": {
+            "type": "string",
+            "title": "Waba Id"
+          },
+          "waba_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Waba Name"
+          },
+          "is_connection_waba": {
+            "type": "boolean",
+            "title": "Is Connection Waba"
+          },
+          "phone_number_id": {
+            "type": "string",
+            "title": "Phone Number Id"
+          },
+          "display_phone_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Phone Number"
+          },
+          "verified_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified Name"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "code_verification_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code Verification Status"
+          },
+          "platform_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Type"
+          },
+          "quality_rating": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Rating"
+          },
+          "name_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name Status"
+          },
+          "in_this_connection": {
+            "type": "boolean",
+            "title": "In This Connection"
+          }
+        },
+        "type": "object",
+        "required": [
+          "waba_id",
+          "is_connection_waba",
+          "phone_number_id",
+          "in_this_connection"
+        ],
+        "title": "BusinessNumberItem"
+      },
+      "BusinessNumbersResponse": {
+        "properties": {
+          "business_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Id"
+          },
+          "business_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Name"
+          },
+          "numbers": {
+            "items": {
+              "$ref": "#/components/schemas/BusinessNumberItem"
+            },
+            "type": "array",
+            "title": "Numbers"
+          },
+          "other_tenants_count": {
+            "type": "integer",
+            "title": "Other Tenants Count",
+            "default": 0
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "numbers"
+        ],
+        "title": "BusinessNumbersResponse"
       },
       "CalendarStatus": {
         "properties": {
