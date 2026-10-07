@@ -1,5 +1,11 @@
 # Changelog
 
+## Sin versión — Bloqueo progresivo de inicio de sesión (ADR-0105, 2026-10-07)
+
+- **HU-ARCH-04:** 5 intentos fallidos del mismo identificador (o IP) en 10 minutos → rechazo de 15 minutos con
+  mensaje neutro (`429` `auth_bloqueado`), en `/api/v1/auth/login` y en `/auth/gestor/login` (scope `gestor:<slug>`,
+  con aislamiento por negocio y `audit_log`). Estado en Redis con TTL y fail-open si Redis no responde.
+
 ## Sin versión — Una política anti-baneo de `waweb` no escala ni pausa el bot (ADR-0103, 2026-10-07)
 
 - **Bug (alto, preexistente):** el tope diario o la pausa de WhatsApp Web le llegaban al worker como un fallo
