@@ -64,6 +64,22 @@ class EventBus:
             except Exception:
                 log.exception("event_handler_failed", event_name=event, handler=repr(handler))
 
+    async def emit_strict(self, event: str, **payload: Any) -> None:
+        """Emite para el despachador del outbox (ADR-0107): si un handler
+        falla, levanta (el despachador reintenta con backoff). Corre TODOS los
+        handlers y levanta la primera excepción al final."""
+        errores: list[Exception] = []
+        for handler in list(self._subscribers.get(event, [])):
+            try:
+                result = handler(**payload)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as exc:
+                log.exception("event_handler_failed", event_name=event, handler=repr(handler))
+                errores.append(exc)
+        if errores:
+            raise errores[0]
+
     def emit_nowait(self, event: str, **payload: Any) -> None:
         """Emite sin esperar (fire-and-forget) desde contexto síncrono."""
         try:

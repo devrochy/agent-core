@@ -13,11 +13,25 @@ corrían como no-op silencioso.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import String, bindparam, text
+from sqlalchemy import DateTime, Integer, String, bindparam, text
 from sqlalchemy.dialects.postgresql import ARRAY
 
 from core.db.session import get_session
+
+
+async def admin_domain_events_due(
+    limit: int, before: datetime
+) -> list[tuple[uuid.UUID, uuid.UUID]]:
+    """Pares `(event_id, tenant_id)` de eventos de dominio pendientes y
+    vencidos, de TODOS los tenants (SECURITY DEFINER, migración 0056)."""
+    stmt = text("select id, tenant_id from admin_domain_events_due(:limit, :before)").bindparams(
+        bindparam("limit", type_=Integer), bindparam("before", type_=DateTime(timezone=True))
+    )
+    async with get_session() as session:
+        rows = (await session.execute(stmt, {"limit": int(limit), "before": before})).all()
+    return [(row.id, row.tenant_id) for row in rows]
 
 
 async def admin_meta_connection_ids(statuses: list[str]) -> list[tuple[uuid.UUID, uuid.UUID]]:

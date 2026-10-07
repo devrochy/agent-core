@@ -1,6 +1,6 @@
 """PaymentsModule: BaseModule con webhook público propio (confirmación de Wompi).
 
-Emite eventos de dominio (`ON_PAYMENT_CONFIRMED`/`ON_PAYMENT_REJECTED`) para que
+Escribe eventos de dominio (`ON_PAYMENT_CONFIRMED`/`ON_PAYMENT_REJECTED`, outbox ADR-0107) para que
 otros packs (p. ej. cobranza) reaccionen sin que este pack los importe --
 invariante nº5. Los topics viven ahora en el **core** (ADR-0067).
 
@@ -18,7 +18,6 @@ from sqlalchemy import select
 from core.db.session import get_session
 from core.mcp.types import BaseModule
 from core.payments import payment_registry
-from core.shared.events import ON_PAYMENT_CONFIRMED, ON_PAYMENT_REJECTED
 from core.shared.exceptions import PluginError
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, tenant_scope
@@ -69,29 +68,21 @@ async def wompi_webhook(request: Request, slug: str) -> dict[str, Any]:
             return {"status": "ignored"}
 
         event = provider.parse_webhook_event(payload)
-        transaction, status_changed = await _apply_webhook_event(event, payload)
-        # Wompi reintenta la entrega del webhook por red (no es un duplicado de otro
-        # tenant, es el mismo evento repetido) -- emitir en cada reintento duplicaría
-        # el efecto en cualquier suscriptor futuro no idempotente (ej. notificar al
-        # cliente, descontar inventario). Solo se emite en la transición real de estado.
-        if transaction is not None and status_changed and event.status in ("aprobado", "rechazado"):
-            from core.shared.events import event_bus
-
-            topic = ON_PAYMENT_CONFIRMED if event.status == "aprobado" else ON_PAYMENT_REJECTED
-            await event_bus.emit(
-                topic,
-                reference=transaction.reference,
-                provider=provider.provider_name,
-                provider_reference=transaction.provider_reference,
-                amount=float(transaction.amount),
-            )
+        # El estado del pago y su evento de dominio se escriben en la MISMA
+        # transacción (outbox, ADR-0107): si la transacción se revierte, el
+        # evento no existe. Wompi reintenta la entrega por red (mismo evento);
+        # la escritura es idempotente por `dedupe_key`, así que un reenvío no
+        # duplica el efecto.
+        transaction = await _apply_webhook_event(event, payload, provider.provider_name)
+        if transaction is None:
+            return {"status": "ok"}
 
     return {"status": "ok"}
 
 
 async def _apply_webhook_event(
-    event: WebhookEvent, raw_payload: dict[str, Any]
-) -> tuple[PaymentTransaction | None, bool]:
+    event: WebhookEvent, raw_payload: dict[str, Any], provider_name: str
+) -> PaymentTransaction | None:
     async with get_session() as session:
         transaction = (
             await session.execute(
@@ -103,13 +94,33 @@ async def _apply_webhook_event(
         ).scalar_one_or_none()
         if transaction is None:
             log.warning("wompi_webhook_no_matching_transaction", provider_reference=event.provider_reference)
-            return None, False
+            return None
         status_changed = transaction.status != event.status
         transaction.status = event.status
         transaction.last_webhook_payload = raw_payload
         await session.flush()
         await session.refresh(transaction)
-        return transaction, status_changed
+
+        # Solo se emite en la transición real de estado (como antes); el outbox
+        # lo escribe en esta misma transacción, con el tenant explícito.
+        if status_changed and event.status in ("aprobado", "rechazado"):
+            from core.events.outbox import emit_domain
+            from core.shared.events import ON_PAYMENT_CONFIRMED, ON_PAYMENT_REJECTED
+
+            topic = ON_PAYMENT_CONFIRMED if event.status == "aprobado" else ON_PAYMENT_REJECTED
+            await emit_domain(
+                session,
+                tenant_id=get_current_tenant_id(),
+                topic=topic,
+                dedupe_key=f"payment:{transaction.provider_reference}:{event.status}",
+                payload={
+                    "reference": transaction.reference,
+                    "provider": provider_name,
+                    "provider_reference": transaction.provider_reference,
+                    "amount": float(transaction.amount),
+                },
+            )
+        return transaction
 
 
 class PaymentsModule(BaseModule):

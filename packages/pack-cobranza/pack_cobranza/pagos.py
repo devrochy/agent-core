@@ -17,7 +17,6 @@ from sqlalchemy import func, select
 
 from core.db.session import get_owned, get_session
 from core.payments import PaymentCapabilityError, payment_registry, qr_png_data_uri
-from core.shared.events import ON_PAYMENT_CONFIRMED, event_bus
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, tenant_scope
 from pack_cobranza.config import CobranzaConfig
@@ -163,11 +162,6 @@ async def _on_payment_confirmed(reference: str | None = None, amount: Any = None
     log.info("cobranza_pago_en_linea", reference=reference)
 
 
-def suscribir() -> None:
-    """Suscribe el pack a las confirmaciones de pago del core (ADR-0067)."""
-    event_bus.subscribe(ON_PAYMENT_CONFIRMED, _on_payment_confirmed)
-
-
 async def crear_link_para_cuota(
     cuota: Cuota, cfg: CobranzaConfig, *, cliente_id: uuid.UUID | None = None
 ) -> dict[str, Any]:
@@ -211,4 +205,4 @@ async def crear_link_para_cuota(
     }
 
 
-__all__ = ["PaymentCapabilityError", "capability_del_tenant", "config_del_tenant", "crear_link_para_cuota", "datos_informativos", "suscribir"]
+__all__ = ["PaymentCapabilityError", "capability_del_tenant", "config_del_tenant", "crear_link_para_cuota", "datos_informativos"]

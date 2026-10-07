@@ -659,7 +659,6 @@ class AuditLog(Base):
     Al ser inmutable NO lleva deleted_at (contradice la invariante #8 de soft-delete;
     aquí el trigger impide cualquier borrado, físico o lógico).
     """
-
     __tablename__ = "audit_log"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -670,6 +669,33 @@ class AuditLog(Base):
     input: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     output: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DomainEvent(Base):
+    """Outbox de eventos de dominio (HU-SUB-03, ADR-0107).
+
+    Se escribe en la MISMA transacción que el cambio de estado; el despachador
+    de Celery lo entrega bajo el `tenant_scope` de su tenant con reintentos.
+    No lleva deleted_at (append-only; la depuración es de HU futuras).
+    """
+
+    __tablename__ = "domain_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    topic: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pendiente")  # pendiente|entregado|fallido
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    dedupe_key: Mapped[str] = mapped_column(Text, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
 
 class UsageLedger(Base):
