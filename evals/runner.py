@@ -178,6 +178,12 @@ async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tup
         assistant_name="Asistente de Prueba",
         business_description="Negocio de ejemplo para evaluación.",
     )
+    # `now` fijo opcional (ISO 8601 con zona): escenarios que dependen de fechas
+    # relativas ("el próximo miércoles") se evalúan de forma determinística.
+    if scenario.get("now"):
+        from datetime import datetime
+
+        ctx.now = datetime.fromisoformat(scenario["now"])
     # Fidelidad con producción (ADR-0054/#155): el eval debe ver el MISMO subconjunto
     # de tools que el asistente real — packs habilitados por el spec + flujo resuelto.
     # Antes se pasaban TODAS las skills del host, así que un escenario podía pasar
