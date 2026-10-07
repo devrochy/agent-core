@@ -1,5 +1,12 @@
 # Changelog
 
+## Sin versión — El motivo de Meta en los errores de números (2026-10-07)
+
+- Los errores de agregar, pedir y verificar código, registrar y sincronizar números muestran el motivo que da Meta
+  (`error_user_title`/`error_user_msg`) en vez de solo "Error de Meta: Invalid parameter". Visto en test al agregar un
+  número BYOK: el código 100 no decía si el número ya estaba en otra cuenta o si el nombre no se permitía.
+- `graph_api_calls.error_message` guarda también ese motivo (sin cambio de esquema).
+
 ## Sin versión — Registrar un número de una conexión BYOK o manual (2026-10-07)
 
 - **Nuevo:** `POST /api/v1/admin/meta/connections/{id}/numbers/{phone_number_id}/register` registra el número en la
