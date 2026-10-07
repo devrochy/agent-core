@@ -97,6 +97,20 @@ async def test_request_send_error_del_connector(monkeypatch: pytest.MonkeyPatch)
         await handoff.request_send(tenant_id="t1", connection_id=None, to="57300", text="x")
 
 
+@pytest.mark.asyncio
+async def test_request_send_policy_blocked_es_recuperable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """El rechazo por tope/pausa llega como `WaWebPolicyBlocked` (subclase de
+    `WaWebError`) para que el worker lo reprograme en vez de escalar (ADR-0103)."""
+    fake = FakeRedis(
+        reply={"ok": False, "reason": "policy", "error": "envíos pausados o tope diario alcanzado"}
+    )
+    fake.kv["waweb:ready:t1"] = "1"
+    monkeypatch.setattr(handoff, "_redis", lambda: fake)
+    with pytest.raises(handoff.WaWebPolicyBlocked, match="tope diario"):
+        await handoff.request_send(tenant_id="t1", connection_id=None, to="57300", text="x")
+    assert issubclass(handoff.WaWebPolicyBlocked, handoff.WaWebError)
+
+
 def test_qr_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeRedis()
     monkeypatch.setattr(handoff, "_redis", lambda: fake)

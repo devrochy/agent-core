@@ -17,7 +17,7 @@ from core.shared.logger import get_logger
 
 log = get_logger(__name__)
 
-ErrorCategory = Literal["RATE_LIMIT", "AUTH", "TRANSIENT", "PERMANENT"]
+ErrorCategory = Literal["RATE_LIMIT", "AUTH", "TRANSIENT", "PERMANENT", "POLICY"]
 
 # Meta: códigos de rate limit / uso excesivo de la app -- no reintentar en
 # bucle, se resuelve con backoff (real, no un "reintentá ahora" ciego --

@@ -1,5 +1,14 @@
 # Changelog
 
+## Sin versión — Una política anti-baneo de `waweb` no escala ni pausa el bot (ADR-0103, 2026-10-07)
+
+- **Bug (alto, preexistente):** el tope diario o la pausa de WhatsApp Web le llegaban al worker como un fallo
+  transitorio de envío: tras 3 reintentos el mensaje se marcaba `failed` y la conversación quedaba escalada con el
+  bot pausado (`send_failed`), incluso después de reiniciarse el tope (issue #231, incidente del 2026-10-05).
+- Ahora el connector distingue el rechazo anti-baneo (`reason: policy`), el worker lo clasifica como `POLICY` y
+  **reprograma** el mensaje —sin marcarlo `failed` ni escalar— para después del reinicio del tope (00:02 UTC) o
+  `+15 min` si la pausa es manual. Tras 24 h de bloqueo deja constancia en la auditoría del negocio.
+
 ## Sin versión — El autoescalado por turnos sin resolver no cuenta cortesías ni preguntas (ADR-0104, 2026-10-07)
 
 - **Bug (medio, preexistente):** `resolved=bool(all_tool_results)` contaba como "sin resolver" cualquier turno sin

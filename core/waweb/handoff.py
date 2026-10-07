@@ -37,6 +37,13 @@ class WaWebError(Exception):
     """Falla de envío por el canal waweb (se reintenta como transitoria)."""
 
 
+class WaWebPolicyBlocked(WaWebError):
+    """Rechazo recuperable por la política anti-baneo (pausa o tope diario).
+
+    No es un fallo de envío: el mensaje sigue válido y el worker lo reprograma
+    para cuando el envío vuelva a estar permitido (ADR-0103)."""
+
+
 def outbox_key(tenant_id: str) -> str:
     return f"{_OUTBOX_PREFIX}{tenant_id}"
 
@@ -107,7 +114,10 @@ async def request_send(
     except (TypeError, ValueError) as exc:
         raise WaWebError("Respuesta inválida del connector") from exc
     if not reply.get("ok"):
-        raise WaWebError(str(reply.get("error") or "el connector no pudo enviar"))
+        mensaje = str(reply.get("error") or "el connector no pudo enviar")
+        if reply.get("reason") == "policy":
+            raise WaWebPolicyBlocked(mensaje)
+        raise WaWebError(mensaje)
     return str(reply.get("wamid") or "")
 
 

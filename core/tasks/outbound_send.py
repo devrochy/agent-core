@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Literal
 
 from sqlalchemy import and_, or_, select
@@ -29,19 +30,26 @@ from core.gateway.channels.registry import outbound_adapter_for
 from core.gateway.meta_errors import REENGAGEMENT_WINDOW_CODE, GraphError
 from core.gateway.sender import resolve_credentials
 from core.shared.async_bridge import run_async
+from core.shared.audit import record_audit
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from core.tasks.celery_app import celery
+from core.waweb.handoff import WaWebPolicyBlocked
 
 log = get_logger(__name__)
 
 MAX_ATTEMPTS = 3  # `attempts: 3` del ticket (cola de salida)
 _DEFAULT_RETRY_S = 60.0
 
+_POLICY_DEFER_PREFIX = "outbound:policy_defer:"
+MAX_POLICY_DEFERRALS = 96  # ~24 h de reprogramaciones con cadencia de pausa
+_POLICY_PAUSE_RETRY_S = 15 * 60
+_POLICY_DEFER_TTL_S = 2 * 24 * 3600
+
 
 @dataclass
 class RetryDecision:
-    action: Literal["retry", "fail_permanent"]
+    action: Literal["retry", "fail_permanent", "defer"]
     countdown_s: float | None = None
 
 
@@ -51,6 +59,11 @@ def decide_retry(exc: GraphError, attempts_made: int, max_attempts: int = MAX_AT
     `meta_errors._retry_after_from_usage`) tal cual. 131047 (re-engagement)
     y AUTH nunca reintentan: ni el tiempo ni los reintentos cambian el
     resultado."""
+    if exc.category == "POLICY":
+        # Rechazo anti-baneo de waweb (pausa o tope): no es un fallo de envío.
+        # El mensaje sigue en cola y se reprograma (ADR-0103).
+        return RetryDecision("defer")
+
     if exc.code == REENGAGEMENT_WINDOW_CODE or exc.category in ("PERMANENT", "AUTH"):
         return RetryDecision("fail_permanent")
 
@@ -226,6 +239,9 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
         except GraphError as exc:
             await _release_claim(message.id, message.conversation_id, tenant_id)
             return exc
+        except WaWebPolicyBlocked as exc:
+            await _release_claim(message.id, message.conversation_id, tenant_id)
+            return GraphError(str(exc), category="POLICY", is_transient=True)
         except Exception as exc:  # transporte no clasificado (ej. httpx.ConnectError sin envolver)
             await _release_claim(message.id, message.conversation_id, tenant_id)
             return GraphError(f"Error de red enviando mensaje: {exc}", category="TRANSIENT", is_transient=True)
@@ -282,6 +298,70 @@ async def _mark_failed(
     return conversation_id, created_at, failed_id
 
 
+async def _bump_policy_deferrals(message_id: uuid.UUID) -> int:
+    """Cuenta las reprogramaciones del mensaje (tope de 24 h para no reeditarse sin fin)."""
+    from core.memory.working import get_redis
+
+    try:
+        key = f"{_POLICY_DEFER_PREFIX}{message_id}"
+        r = get_redis()
+        total = int(await r.incr(key))
+        if total == 1:
+            await r.expire(key, _POLICY_DEFER_TTL_S)
+        return total
+    except Exception:
+        return 1
+
+
+async def _policy_eta(tenant_id: uuid.UUID):
+    """Momento en que se volverá a intentar el envío bloqueado por política:
+    justo después del reinicio del tope diario (00:00 UTC), o en 15 minutos
+    si el canal está pausado a mano."""
+    from core.waweb.limits import is_paused
+
+    try:
+        if await is_paused(tenant_id):
+            return utcnow() + timedelta(seconds=_POLICY_PAUSE_RETRY_S)
+    except Exception:
+        pass
+    manana = utcnow() + timedelta(days=1)
+    return manana.replace(hour=0, minute=2, second=0, microsecond=0)
+
+
+async def _handle_policy_defer(
+    message_id: uuid.UUID, tenant_id: uuid.UUID, error: GraphError
+) -> None:
+    """Reprograma un mensaje bloqueado por política anti-baneo.
+
+    El mensaje se queda en `queued` (no se marca `failed` ni se escala la
+    conversación): al reiniciarse el tope, la conversación sigue atendida por
+    el bot. Tras 24 h de bloqueo se deja constancia en auditoría del negocio.
+    """
+    deferrals = await _bump_policy_deferrals(message_id)
+    if deferrals > MAX_POLICY_DEFERRALS:
+        log.error(
+            "outbound_policy_defer_exhausted",
+            message_id=str(message_id),
+            tenant_id=str(tenant_id),
+        )
+        async with tenant_scope(tenant_id):
+            await record_audit(
+                actor="core:outbound",
+                action="outbound_bloqueado_por_politica",
+                input_data={"message_id": str(message_id), "motivo": error.message[:200]},
+            )
+        return
+    eta = await _policy_eta(tenant_id)
+    outbound_send_task.apply_async(args=[str(message_id), str(tenant_id)], eta=eta)
+    log.warning(
+        "outbound_deferred_policy",
+        message_id=str(message_id),
+        tenant_id=str(tenant_id),
+        eta=eta.isoformat(),
+        deferral=deferrals,
+    )
+
+
 @celery.task(bind=True, max_retries=MAX_ATTEMPTS, name="core.outbound_send")
 def outbound_send_task(self, message_id: str, tenant_id: str) -> None:
     error = run_async(_send_one(uuid.UUID(message_id), uuid.UUID(tenant_id)))
@@ -291,6 +371,9 @@ def outbound_send_task(self, message_id: str, tenant_id: str) -> None:
     decision = decide_retry(error, attempts_made=self.request.retries)
     if decision.action == "retry":
         raise self.retry(exc=error, countdown=decision.countdown_s)
+    if decision.action == "defer":
+        run_async(_handle_policy_defer(uuid.UUID(message_id), uuid.UUID(tenant_id), error))
+        return
 
     dlq = self.request.retries >= MAX_ATTEMPTS and error.category not in ("PERMANENT", "AUTH")
     info = run_async(_mark_failed(uuid.UUID(message_id), uuid.UUID(tenant_id), error, dlq=dlq))

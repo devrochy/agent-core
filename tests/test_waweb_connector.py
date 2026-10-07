@@ -132,6 +132,35 @@ async def test_process_job_error_se_devuelve_al_worker(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
+async def test_process_job_policy_no_envia_y_marca_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tope/pausa: el connector no envía y el worker puede distinguir una
+    política anti-baneo de un fallo real de envío (ADR-0103)."""
+    fake = FakeRedis()
+    monkeypatch.setattr(handoff, "get_redis", lambda: fake)
+    backend = FakeBackend()
+
+    async def _allow() -> bool:
+        return False
+
+    async def _sleep(s: float) -> None:
+        return None
+
+    job = {"request_id": "r4", "to": "57300", "text": "x"}
+    await outbound.process_job(
+        job,
+        backend,
+        WaWebPolicy(send_min_delay_ms=0, send_max_delay_ms=0),
+        sleep=_sleep,
+        allow=_allow,
+    )
+
+    assert backend.sent == []
+    reply = json.loads(fake.replies["waweb:reply:r4"][0])
+    assert reply["ok"] is False
+    assert reply["reason"] == "policy"
+
+
+@pytest.mark.asyncio
 async def test_process_job_aplica_delay(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeRedis()
     monkeypatch.setattr(handoff, "get_redis", lambda: fake)
