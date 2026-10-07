@@ -9,6 +9,15 @@
   **reprograma** el mensaje —sin marcarlo `failed` ni escalar— para después del reinicio del tope (00:02 UTC) o
   `+15 min` si la pausa es manual. Tras 24 h de bloqueo deja constancia en la auditoría del negocio.
 
+## Sin versión — El autoescalado por turnos sin resolver no cuenta cortesías ni preguntas (ADR-0104, 2026-10-07)
+
+- **Bug (medio, preexistente):** `resolved=bool(all_tool_results)` contaba como "sin resolver" cualquier turno sin
+  tools: tres "Hola" seguidos —o un ciclo de preguntas pidiendo un dato— escalaban la conversación y pausaban el
+  bot (issue #234, incidente del 2026-10-05).
+- Ahora un turno sin tools no suma al contador si el mensaje del cliente es una cortesía suelta o si el asistente
+  pregunta para avanzar; el contador queda como estaba (no reinicia). El fallo neutral de guardrail sigue contando
+  (ADR-0092).
+
 ## Sin versión — Una conexión de Meta en `error` o `degraded` se recupera sola (ADR-0102, 2026-10-06)
 
 - **Bug (medio, preexistente):** una conexión en `error` no volvía nunca a `connected`:
