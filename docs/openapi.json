@@ -18328,7 +18328,9 @@
           "pin": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
               },
               {
                 "type": "null"

@@ -230,6 +230,18 @@ async def test_sin_respuesta_de_meta_se_queda_el_pin_nuevo(mundo):
 
 
 @pytest.mark.asyncio
+async def test_un_5xx_del_borde_de_meta_deja_el_pin_nuevo(mundo):
+    # Un 502 no-JSON llega como PERMANENT con `http_status`, pero Meta pudo haber aplicado el
+    # registro: es tan incierto como un timeout.
+    mundo.tokens[(PIN_KIND, PHONE_ID)] = "135790"
+    mundo.estado.graph_error = GraphError("Respuesta no-JSON (HTTP 502)", category="PERMANENT", http_status=502)
+
+    assert await service.register_number(TENANT, str(CONNECTION), PHONE_ID, pin="246810") is not None
+
+    assert _pin_guardado(mundo) == "246810"
+
+
+@pytest.mark.asyncio
 async def test_ya_registrado_es_exito_pero_no_da_el_pin_por_fijado(mundo):
     mundo.tokens[(PIN_KIND, PHONE_ID)] = "135790"
     mundo.estado.graph_error = _rechazo("Phone number is already registered", 1)

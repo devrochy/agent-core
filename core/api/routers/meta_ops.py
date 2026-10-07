@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 from sqlalchemy import select
 
 from core.admin.meta_health_service import (
@@ -204,8 +204,10 @@ class VerifyCodeRequest(BaseModel):
 
 
 class RegisterNumberRequest(BaseModel):
-    # PIN de verificación en dos pasos que ya tenga el número (6 dígitos). Sin él, se genera.
-    pin: str | None = None
+    # PIN de verificación en dos pasos que ya tenga el número (6 dígitos). Sin él, se usa el
+    # guardado o se genera. `SecretStr`: el repr del modelo (p. ej. en un frame que capture
+    # Sentry) no lo muestra.
+    pin: SecretStr | None = None
 
 
 @router.get("/connections/{connection_id}/numbers", response_model=NumbersResponse)
@@ -283,7 +285,12 @@ async def register_connection_number(
 ) -> Response:
     """Registra el número en la Cloud API con un PIN de verificación en dos pasos, para
     conexiones BYOK y manuales (Embedded Signup lo hace en su wizard). El PIN nunca vuelve."""
-    error = await register_number(principal.tenant_id, connection_id, phone_number_id, pin=payload.pin)
+    error = await register_number(
+        principal.tenant_id,
+        connection_id,
+        phone_number_id,
+        pin=payload.pin.get_secret_value() if payload.pin is not None else None,
+    )
     if error is not None:
         raise ApiError.bad_request(error, "register_failed")
     return Response(status_code=204)

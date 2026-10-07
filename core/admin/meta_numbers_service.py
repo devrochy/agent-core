@@ -312,11 +312,11 @@ async def register_number(
     if not await redis.set(rate_limit_key, "1", nx=True, ex=_REGISTER_RATE_LIMIT_S):
         return "Esperá un minuto antes de reintentar el registro"
 
-    previous = await meta_token_store.get_token(
+    previous_pin = await meta_token_store.get_token(
         connection.id, PIN_KIND, phone_number_id, tenant_id=connection.tenant_id
     )
-    pin = pin or previous or _generate_pin()
-    if pin != previous:
+    pin = pin or previous_pin or _generate_pin()
+    if pin != previous_pin:
         # Antes de llamar a Meta: si el registro sale bien y algo falla después, el PIN que
         # quedó en el número no se pierde (mismo criterio que `register_number_step`).
         await meta_token_store.put_token(connection.id, PIN_KIND, phone_number_id, pin, tenant_id=connection.tenant_id)
@@ -326,10 +326,11 @@ async def register_number(
             phone_number_id, creds.access_token, creds.app_secret, creds.graph_api_version, connection.id, pin=pin
         )
     except GraphError as exc:
-        # Meta contestó con un error: el PIN nuevo no quedó en el número, vuelve el que había.
-        # Sin respuesta (timeout, red) no se sabe: se queda el nuevo, por si sí llegó.
-        if exc.http_status is not None and pin != previous:
-            await _restore_pin(connection, phone_number_id, previous)
+        # Meta rechazó el pedido (4xx): el PIN nuevo no quedó en el número, vuelve el que había.
+        # Sin respuesta (timeout, red) o con un 5xx del borde no se sabe si el registro se
+        # aplicó: se queda el nuevo, por si sí.
+        if exc.http_status is not None and 400 <= exc.http_status < 500 and pin != previous_pin:
+            await _restore_pin(connection, phone_number_id, previous_pin)
         if exc.code == PIN_MISMATCH_CODE:
             return (
                 "El número ya tiene verificación en dos pasos con otro PIN: escribí ese PIN, o "
@@ -349,13 +350,13 @@ async def register_number(
     return None
 
 
-async def _restore_pin(connection: MetaConnection, phone_number_id: str, previous: str | None) -> None:
+async def _restore_pin(connection: MetaConnection, phone_number_id: str, previous_pin: str | None) -> None:
     from core.gateway import meta_token_store
     from core.gateway.meta_onboarding import PIN_KIND
 
-    if previous is not None:
+    if previous_pin is not None:
         await meta_token_store.put_token(
-            connection.id, PIN_KIND, phone_number_id, previous, tenant_id=connection.tenant_id
+            connection.id, PIN_KIND, phone_number_id, previous_pin, tenant_id=connection.tenant_id
         )
     else:
         await meta_token_store.revoke_token(connection.id, PIN_KIND, phone_number_id, tenant_id=connection.tenant_id)

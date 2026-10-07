@@ -197,6 +197,13 @@ repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev
 
 ## Baja
 
+**`graph_fetch` deja escapar errores de transporte de httpx**
+`core/gateway/meta_graph.py:84-94` solo convierte `TimeoutException` y `ConnectError` en `GraphError`. Un
+`ReadError`/`RemoteProtocolError` sube como excepción no controlada: la ruta da 500 y, con Sentry encendido, el evento
+lleva los frames de httpx/httpcore con el cuerpo del pedido en bytes (p. ej. el PIN de `.../register`), que el
+scrubber por clave no tapa. Arreglo: `except httpx.TransportError` → `GraphError(category="TRANSIENT")` sin
+`http_status`. Hallazgo del `auditor-multitenant` sobre `feat/registrar-numero`, 2026-10-07.
+
 **Follow-ups de auditoría diferidos (BYOK / token)**
 - `core/gateway/meta_token_tools.py::extend_token` usa `httpx` directo → no queda en
   `graph_api_calls`/`graph_api_usage` (endpoint público de tokens, sin `appsecret_proof`).

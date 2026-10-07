@@ -20,8 +20,9 @@ _META_TOKEN_RE = re.compile(r"EAA[A-Za-z0-9]{20,}")
 # Claves que se tapan además de las de sentry-sdk (`token`, `secret`, `password`...), en el
 # cuerpo del request y en las variables de cada frame, también dentro de dicts anidados: el
 # PIN de verificación en dos pasos de un número viaja en el cuerpo de
-# `POST .../numbers/{id}/register` y en locales como `pin` o `body`.
-_EXTRA_DENYLIST = ["pin", "new_pin", "app_secret", "access_token", "verify_token"]
+# `POST .../numbers/{id}/register` y en locales como `pin`, `previous_pin` o `body` (el modelo
+# del request lo lleva como `SecretStr`, que no sale en su repr).
+_EXTRA_DENYLIST = ["pin", "new_pin", "previous_pin", "app_secret", "access_token", "verify_token"]
 _configured = False
 
 
