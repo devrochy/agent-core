@@ -554,6 +554,9 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             latest_message,
             final_text,
             resolved=bool(all_tool_results),
+            count_unresolved=not _turno_avanza_sin_tools(
+                latest_message, final_text, bool(all_tool_results)
+            ),
             image_url=extras.image_url,
         )
 
@@ -915,6 +918,37 @@ async def _load_history(conversation_id: uuid.UUID) -> list[LLMMessage]:
     return history
 
 
+_CORTESIA = re.compile(
+    r"^[\s¿¡]*(?:hola+|holis|buen(?:os|as)(?:\s+d[ií]as|\s+tardes|\s+noches)?|hey|"
+    r"qu[eé]\s+tal|gracias|muchas\s+gracias|mil\s+gracias|ok(?:ay)?|listo|perfecto|"
+    r"de\s+acuerdo|entendido|dale)[\s!.,;…?¡]*$",
+    re.IGNORECASE,
+)
+
+
+def _es_cortesia(texto: str) -> bool:
+    """True para saludos, agradecimientos y confirmaciones sueltas: no son una
+    petición que el asistente haya dejado sin atender."""
+    return bool(_CORTESIA.match((texto or "").strip()))
+
+
+def _pregunta_de_avance(texto: str) -> bool:
+    """True si el asistente pregunta algo (pide un dato o confirma): el turno
+    avanza aunque no haya llamado tools."""
+    return "?" in texto or "¿" in texto
+
+
+def _turno_avanza_sin_tools(latest_message: str, final_text: str, hubo_tools: bool) -> bool:
+    """¿El turno representa avance para el autoescalado por turnos sin resolver
+    (ADR-0051, enmendada por ADR-0104)?
+
+    Cuenta como avance si hubo tools, si el asistente pregunta algo para
+    avanzar, o si el mensaje del cliente es una cortesía suelta. Así tres
+    "Hola" seguidos (o un ciclo de preguntas de datos) no escalan la
+    conversación ni pausan el bot."""
+    return hubo_tools or _pregunta_de_avance(final_text) or _es_cortesia(latest_message)
+
+
 async def _close_turn(
     conversation_id: uuid.UUID,
     spec,  # type: ignore[no-untyped-def]
@@ -926,6 +960,7 @@ async def _close_turn(
     *,
     resolved: bool,
     image_url: str | None,
+    count_unresolved: bool = True,
 ) -> TurnResult:
     """Cierra un turno que respondió: memoria, ledger y autoescalado por turnos
     sin resolver (ADR-0051). Lo comparten la respuesta normal y la neutral del
@@ -935,6 +970,7 @@ async def _close_turn(
         final_text,
         latest_message,
         resolved=resolved,
+        count_unresolved=count_unresolved,
         short_term_turns=spec.memory.shortTermTurns,
     )
     await _write_usage_ledger(conversation_id, spec, usage, turn_span)
@@ -959,9 +995,13 @@ async def _finish_turn(
     response_text: str,
     user_message: str,
     resolved: bool,
+    count_unresolved: bool = True,
     short_term_turns: int | None = None,
 ) -> int:
-    """Cierra el turno y devuelve `turnos_sin_resolver` (para autoescalado, ADR-0051)."""
+    """Cierra el turno y devuelve `turnos_sin_resolver` (para autoescalado, ADR-0051).
+
+    Con `count_unresolved=False` (ADR-0104) el contador queda como estaba: el
+    turno ni suma ni reinicia (cortesías y preguntas de avance)."""
     await working_memory.append_turn(
         conversation_id, "user", user_message, max_turns=short_term_turns
     )
@@ -974,7 +1014,13 @@ async def _finish_turn(
         conversation = await session.get(Conversation, conversation_id)
         if conversation is not None:
             state = dict(conversation.state)
-            unresolved = 0 if resolved else int(state.get("turnos_sin_resolver", 0)) + 1
+            anterior = int(state.get("turnos_sin_resolver", 0))
+            if resolved:
+                unresolved = 0
+            elif count_unresolved:
+                unresolved = anterior + 1
+            else:
+                unresolved = anterior
             state["turnos_sin_resolver"] = unresolved
             conversation.state = state
 
