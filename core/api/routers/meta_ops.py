@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 from sqlalchemy import select
 
 from core.admin.meta_health_service import (
@@ -30,6 +30,7 @@ from core.admin.meta_health_service import (
 from core.admin.meta_numbers_service import (
     add_number,
     list_numbers,
+    register_number,
     request_code,
     verify_number,
 )
@@ -178,6 +179,8 @@ class PhoneNumberItem(BaseModel):
     display_phone_number: str | None
     verified_name: str | None
     status: str
+    # Registrado en la Cloud API con PIN (`POST .../register`): sin esto el número no manda ni recibe.
+    registered: bool = False
 
 
 class NumbersResponse(BaseModel):
@@ -198,6 +201,13 @@ class RequestCodeRequest(BaseModel):
 
 class VerifyCodeRequest(BaseModel):
     code: str
+
+
+class RegisterNumberRequest(BaseModel):
+    # PIN de verificación en dos pasos que ya tenga el número (6 dígitos). Sin él, se usa el
+    # guardado o se genera. `SecretStr`: el repr del modelo (p. ej. en un frame que capture
+    # Sentry) no lo muestra.
+    pin: SecretStr | None = None
 
 
 @router.get("/connections/{connection_id}/numbers", response_model=NumbersResponse)
@@ -263,6 +273,26 @@ async def verify_connection_number(
         raise ApiError.bad_request(error, "verify_failed")
     if not ok:
         raise ApiError.bad_request("Código incorrecto.", "wrong_code")
+    return Response(status_code=204)
+
+
+@router.post("/connections/{connection_id}/numbers/{phone_number_id}/register", status_code=204)
+async def register_connection_number(
+    connection_id: str,
+    phone_number_id: str,
+    payload: RegisterNumberRequest,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> Response:
+    """Registra el número en la Cloud API con un PIN de verificación en dos pasos, para
+    conexiones BYOK y manuales (Embedded Signup lo hace en su wizard). El PIN nunca vuelve."""
+    error = await register_number(
+        principal.tenant_id,
+        connection_id,
+        phone_number_id,
+        pin=payload.pin.get_secret_value() if payload.pin is not None else None,
+    )
+    if error is not None:
+        raise ApiError.bad_request(error, "register_failed")
     return Response(status_code=204)
 
 

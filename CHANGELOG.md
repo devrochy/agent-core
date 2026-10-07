@@ -1,5 +1,22 @@
 # Changelog
 
+## Sin versión — Registrar un número de una conexión BYOK o manual (2026-10-07)
+
+- **Nuevo:** `POST /api/v1/admin/meta/connections/{id}/numbers/{phone_number_id}/register` registra el número en la
+  Cloud API con un PIN de verificación en dos pasos (`POST /{phone_number_id}/register` de Meta). Antes solo lo hacía el
+  wizard de Embedded Signup; un número agregado a una conexión BYOK o manual había que registrarlo a mano en Meta.
+  - El PIN es opcional: si el número ya tiene verificación en dos pasos, se manda ese; si no, se usa el guardado (por
+    ejemplo, el que fijó el wizard) y, si no hay, se genera uno. Se guarda cifrado antes de llamar a Meta y nunca se
+    devuelve (en el cuerpo es `SecretStr`). Si Meta lo rechaza (4xx) vuelve el PIN que había: un PIN errado no
+    borra el bueno; sin respuesta o con un 5xx se queda el nuevo, por si el registro se aplicó.
+  - Solo números de esa conexión y de ese negocio; un intento por minuto por número (cada PIN errado suma hacia el
+    bloqueo de Meta). En coexistencia con la app de WhatsApp Business no se registra, igual que en el wizard.
+- `GET .../numbers` devuelve `registered` por número, para que el panel muestre el botón "Registrar".
+- **Seguridad:** pedir y verificar el código de un número ahora también exigen que el número sea de esa conexión y de
+  ese negocio (antes el `phone_number_id` iba directo a Meta con el token de la conexión). Sentry tapa `pin`,
+  `new_pin`, `previous_pin`, `app_secret`, `access_token` y `verify_token` en el cuerpo del request y en las variables
+  de cada frame.
+
 ## Sin versión — Eventos de dominio durables con outbox (ADR-0107, 2026-10-07)
 
 - **HU-SUB-03:** los eventos de dominio (`payment.confirmed`/`payment.rejected`) se escriben en la tabla

@@ -56,6 +56,16 @@ La señal se pierde y el LLM solo ve un error genérico.
 
 ## Media
 
+**La migración `crm_0009` falla con un negocio de 10.000 pedidos o más**
+El backfill de `packages/pack-commerce/alembic/versions/0009_orders_numero_publico.py` arma
+`'OC-' || lpad(order_seq::text, 4, '0')`, y `lpad` **trunca** a 4 caracteres: el pedido 10000 queda `OC-1000`, igual
+que el 1000. El índice único `uq_crm_orders_tenant_number` aborta la migración y, con ella, la activación del pack
+(`PluginError: Activación falló`). En local se reproduce con pedidos de prueba de `order_seq` ≥ 10000:
+`test_admin_rbac`, `test_crm_playbooks` y `test_crm_tenant::test_numeracion_pedidos_por_tenant` fallan al activar
+`pack_commerce`. Arreglo: en el backfill, `lpad` solo por debajo de 10000 y el número completo desde ahí (o una
+migración nueva si `crm_0009` ya corrió en algún entorno). Visto el 2026-10-07 al correr la integración de
+`feat/registrar-numero`.
+
 **Otros que deciden por `status` sin seguir ADR-0101**
 - `core/api/routers/connections.py:121` y `core/admin/views.py:1788` muestran `active = status == "connected"`: una
   conexión `degraded`/`error` que recibe y responde aparece como inactiva.
@@ -186,6 +196,13 @@ justo la parte delicada (el `version_table` separado del ADR-005). La misma prom
 repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev.md`.
 
 ## Baja
+
+**`graph_fetch` deja escapar errores de transporte de httpx**
+`core/gateway/meta_graph.py:84-94` solo convierte `TimeoutException` y `ConnectError` en `GraphError`. Un
+`ReadError`/`RemoteProtocolError` sube como excepción no controlada: la ruta da 500 y, con Sentry encendido, el evento
+lleva los frames de httpx/httpcore con el cuerpo del pedido en bytes (p. ej. el PIN de `.../register`), que el
+scrubber por clave no tapa. Arreglo: `except httpx.TransportError` → `GraphError(category="TRANSIENT")` sin
+`http_status`. Hallazgo del `auditor-multitenant` sobre `feat/registrar-numero`, 2026-10-07.
 
 **Follow-ups de auditoría diferidos (BYOK / token)**
 - `core/gateway/meta_token_tools.py::extend_token` usa `httpx` directo → no queda en

@@ -194,3 +194,16 @@ async def verify_code(
             if row is not None:
                 row.code_verification_status = "VERIFIED"
     return success
+
+
+async def register_phone_number(
+    phone_number_id: str, token: str, app_secret: str, version: str, connection_id: uuid.UUID, *, pin: str
+) -> None:
+    """`POST /{phone_number_id}/register`: deja el número listo para mandar y recibir por la
+    Cloud API, con `pin` como PIN de verificación en dos pasos (6 dígitos). Misma llamada que
+    el paso `register_number` del wizard de Embedded Signup (`meta_onboarding`). El PIN nunca
+    se loguea: viaja solo en el cuerpo."""
+    await graph_fetch(
+        f"/{phone_number_id}/register", method="POST", token=token, app_secret=app_secret,
+        body={"messaging_product": "whatsapp", "pin": pin}, version=version, connection_id=connection_id,
+    )

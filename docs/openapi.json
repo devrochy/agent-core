@@ -2573,6 +2573,78 @@
         }
       }
     },
+    "/api/v1/admin/meta/connections/{connection_id}/numbers/{phone_number_id}/register": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Register Connection Number",
+        "description": "Registra el número en la Cloud API con un PIN de verificación en dos pasos, para\nconexiones BYOK y manuales (Embedded Signup lo hace en su wizard). El PIN nunca vuelve.",
+        "operationId": "register_connection_number_api_v1_admin_meta_connections__connection_id__numbers__phone_number_id__register_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "phone_number_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Phone Number Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterNumberRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/meta/connections/{connection_id}/templates": {
       "get": {
         "tags": [
@@ -16955,6 +17027,11 @@
           "status": {
             "type": "string",
             "title": "Status"
+          },
+          "registered": {
+            "type": "boolean",
+            "title": "Registered",
+            "default": false
           }
         },
         "type": "object",
@@ -18245,6 +18322,25 @@
           "status"
         ],
         "title": "RecentOrder"
+      },
+      "RegisterNumberRequest": {
+        "properties": {
+          "pin": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pin"
+          }
+        },
+        "type": "object",
+        "title": "RegisterNumberRequest"
       },
       "RegisterRequest": {
         "properties": {

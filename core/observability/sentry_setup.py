@@ -17,6 +17,12 @@ from typing import Any
 from core.config import get_settings
 
 _META_TOKEN_RE = re.compile(r"EAA[A-Za-z0-9]{20,}")
+# Claves que se tapan además de las de sentry-sdk (`token`, `secret`, `password`...), en el
+# cuerpo del request y en las variables de cada frame, también dentro de dicts anidados: el
+# PIN de verificación en dos pasos de un número viaja en el cuerpo de
+# `POST .../numbers/{id}/register` y en locales como `pin`, `previous_pin` o `body` (el modelo
+# del request lo lleva como `SecretStr`, que no sale en su repr).
+_EXTRA_DENYLIST = ["pin", "new_pin", "previous_pin", "app_secret", "access_token", "verify_token"]
 _configured = False
 
 
@@ -40,6 +46,12 @@ def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] 
         return event
 
 
+def _event_scrubber():  # type: ignore[no-untyped-def]
+    from sentry_sdk.scrubber import DEFAULT_DENYLIST, EventScrubber
+
+    return EventScrubber(denylist=[*DEFAULT_DENYLIST, *_EXTRA_DENYLIST], recursive=True)
+
+
 def configure_sentry() -> None:
     global _configured
     if _configured:
@@ -49,5 +61,7 @@ def configure_sentry() -> None:
         return
     import sentry_sdk
 
-    sentry_sdk.init(dsn=settings.sentry_dsn, before_send=_before_send, send_default_pii=False)
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn, before_send=_before_send, send_default_pii=False, event_scrubber=_event_scrubber()
+    )
     _configured = True
