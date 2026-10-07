@@ -1,5 +1,16 @@
 # Changelog
 
+## Sin versión — Suscripciones v1: contrato único y tools del core (ADR-0106, 2026-10-07)
+
+- **HU-SUB-01:** `core/subscriptions` fija el contrato de 8 operaciones (`activate`, `get`, `list_for_customer`,
+  `pause`, `resume`, `cancel`, `change_plan`, `charge_link`) con `PlanSnapshot`/`SubscriptionView`/`ChargeLink` y
+  `capability_for_tenant` (proveedor del negocio; dos habilitados sin elección → `proveedor_ambiguo`).
+- Las tools que ve el LLM pasan al core: `sub_consultar`, `sub_link_pago`, `sub_pausar`, `sub_cancelar` y
+  `sub_cambiar_plan` (ofrecidas solo con proveedor habilitado); las `sub_*_suscripcion` del pack se retiran.
+- `pack_subscriptions` implementa el contrato como proveedor de referencia; `charge_link` nunca crea períodos
+  futuros (`periodo_futuro`) y los rechazos de negocio salen como `SubscriptionError` (`monto_bajo_minimo`,
+  `sin_pasarela`).
+
 ## Sin versión — Bloqueo progresivo de inicio de sesión (ADR-0105, 2026-10-07)
 
 - **HU-ARCH-04:** 5 intentos fallidos del mismo identificador (o IP) en 10 minutos → rechazo de 15 minutos con

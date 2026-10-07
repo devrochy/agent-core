@@ -279,12 +279,18 @@ class CoreSkill(BaseSkill):
 
 
 def register_core_skills(host) -> None:
-    """Registra la skill del core en el MCPHost (idempotente)."""
-    if any(name == "core" for name, _ in getattr(host, "_skills", {}).items()):
+    """Registra las skills del core en el MCPHost (idempotente)."""
+    registradas = {name for name, _ in getattr(host, "_skills", {}).items()}
+    if registradas >= {"core", "subscriptions"}:
         return
     host.begin_activation("core")
     try:
-        host.register_skill(CoreSkill())
+        if "core" not in registradas:
+            host.register_skill(CoreSkill())
+        if "subscriptions" not in registradas:
+            from core.subscriptions.tools import SubscriptionSkill
+
+            host.register_skill(SubscriptionSkill())
     finally:
         host.end_activation()
 

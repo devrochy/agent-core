@@ -4,14 +4,14 @@
     {
       "id": "sub_gestion",
       "label": "Gestión de la suscripción",
-      "purpose": "Consultar, pausar, cancelar, renovar la suscripción del cliente y cobrar el período con un link de pago. Nunca afirmar un cambio sin llamar la tool.",
+      "purpose": "Consultar, pausar, cancelar y cambiar el plan de la suscripción del cliente y cobrar el período con un link de pago. Las tools viven en el core (ADR-0106) y despachan a este proveedor. Nunca afirmar un cambio sin llamar la tool.",
       "pack": "pack_subscriptions",
       "tools": [
-        "sub_consultar_suscripcion",
-        "sub_pausar_suscripcion",
-        "sub_cancelar_suscripcion",
-        "sub_renovar_suscripcion",
-        "sub_link_pago"
+        "sub_consultar",
+        "sub_link_pago",
+        "sub_pausar",
+        "sub_cancelar",
+        "sub_cambiar_plan"
       ]
     }
   ]

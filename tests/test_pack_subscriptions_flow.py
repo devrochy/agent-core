@@ -1,4 +1,7 @@
-"""pack-subscriptions declara su flujo de atención (ADR-0054, planes como productos)."""
+"""pack-subscriptions declara su flujo de atención (ADR-0054/ADR-0106).
+
+Las tools `sub_*` viven en el core y despachan al proveedor; el flujo del pack
+las referencia con su nombre de contrato."""
 
 from __future__ import annotations
 
@@ -9,9 +12,11 @@ def test_pack_subscriptions_declara_flujo_de_gestion():
     sections = load_pack_flows(["pack_subscriptions"])
     assert sections, "pack_subscriptions debe declarar flow.json"
     tools = {t for section in sections for t in section.tools}
-    assert "sub_consultar_suscripcion" in tools
-    assert "sub_pausar_suscripcion" in tools
+    assert "sub_consultar" in tools
+    assert "sub_pausar" in tools
     assert "sub_link_pago" in tools
+    assert "sub_cancelar" in tools
+    assert "sub_cambiar_plan" in tools
     # Los planes los informa commerce: este pack no expone tools de planes.
     assert "sub_informar_planes" not in tools
     assert "sub_crear_suscripcion" not in tools

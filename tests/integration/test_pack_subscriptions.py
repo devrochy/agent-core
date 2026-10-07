@@ -57,11 +57,11 @@ async def _crear_suscripcion_directa(tenant_id, customer_id, **overrides) -> uui
 
 
 async def test_gestion_de_suscripcion_por_snapshot() -> None:
-    """La suscripción se crea con el snapshot (sin tabla Plan) y las tools la gestionan."""
+    """La suscripción se crea con el snapshot (sin tabla Plan) y el proveedor
+    del contrato v1 (ADR-0106) la gestiona."""
+    from pack_subscriptions.capability import SubscriptionCapabilityImpl
     from pack_subscriptions.module import crear_suscripcion_para
-    from pack_subscriptions.skills import SubscriptionsSkill
 
-    from core.mcp.types import ToolContext
     from core.shared.tenant import tenant_scope
 
     tenant_id = await _tenant_subs()
@@ -77,49 +77,35 @@ async def test_gestion_de_suscripcion_por_snapshot() -> None:
         sub2 = await crear_suscripcion_para(customer_id=customer_id, variante_id=None, plan=PLAN_SNAPSHOT)
         assert sub2.id == sub.id
 
-    ctx = ToolContext(
-        conversation_id=uuid.uuid4(),
-        customer_id=customer_id,
-        idempotency_key=str(uuid.uuid4()),
-        channel="test",
-    )
-    skill = SubscriptionsSkill()
-    async with tenant_scope(tenant_id):
-        consulta = await skill.consultar_suscripcion({}, ctx)
-        assert consulta["encontrado"] is True
-        assert consulta["plan"] == "Plan Basic"
-        assert consulta["estado"] == "trialing"
+        cap = SubscriptionCapabilityImpl()
+        vistas = await cap.list_for_customer(customer_id)
+        assert vistas[0]["plan"] == "Plan Basic"
+        assert vistas[0]["estado"] == "trialing"
 
-        pausada = await skill.pausar({}, ctx)
+        pausada = await cap.pause(sub.id, actor="test")
         assert pausada["estado"] == "pausada"
-        renovada = await skill.renovar({}, ctx)
+        renovada = await cap.resume(sub.id, actor="test")
         assert renovada["estado"] == "activa"
 
 
 async def test_link_pago_genera_cargo_y_webhook_lo_paga() -> None:
+    from pack_subscriptions.capability import SubscriptionCapabilityImpl
     from pack_subscriptions.models import SubscriptionCharge
-    from pack_subscriptions.skills import SubscriptionsSkill
     from sqlalchemy import select
 
     from core.db.session import get_session
-    from core.mcp.types import ToolContext
     from core.shared.tenant import tenant_scope
+    from core.subscriptions import SubscriptionError
 
     tenant_id = await _tenant_subs()  # sin pack_payments → sin_pasarela
     customer_id = uuid.uuid4()
     sub_id = await _crear_suscripcion_directa(tenant_id, customer_id)
 
-    ctx = ToolContext(
-        conversation_id=uuid.uuid4(),
-        customer_id=customer_id,
-        idempotency_key=str(uuid.uuid4()),
-        channel="test",
-    )
-    skill = SubscriptionsSkill()
+    cap = SubscriptionCapabilityImpl()
     async with tenant_scope(tenant_id):
-        link = await skill.link_pago({}, ctx)
-        assert link.get("sin_pasarela") is True
-        assert link["encontrado"] is True
+        with pytest.raises(SubscriptionError) as exc:
+            await cap.charge_link(sub_id)
+        assert exc.value.code == "sin_pasarela"
 
         async with get_session() as session:
             cargos = (
