@@ -13,6 +13,7 @@ Create Date: 2026-10-07
 from __future__ import annotations
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
@@ -28,7 +29,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
         sa.Column("topic", sa.Text(), nullable=False),
-        sa.Column("payload", sa.JSONB(), nullable=False),
+        sa.Column("payload", postgresql.JSONB(), nullable=False),
         sa.Column(
             "status",
             sa.Text(),
