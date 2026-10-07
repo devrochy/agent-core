@@ -308,10 +308,14 @@ async def _sesion_de_membresia(
             else:
                 perfil = _perfil_admin(admin)
             tokens = _par_tokens(secret, tenant_id, admin.id, rol=rol, gestor_id=gestor_id)
+            permisos = await _permisos_de(
+                session, tenant_id, {"rol": rol, "gestor_id": str(gestor_id) if gestor_id else None}
+            )
     return JSONResponse(
         {
             **tokens,
             "rol": rol,
+            "permisos": permisos,
             "perfil": perfil,
             "tenantId": str(tenant_id),
             "tenantSlug": membresia.get("slug"),

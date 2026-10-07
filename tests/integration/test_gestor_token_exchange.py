@@ -104,6 +104,8 @@ async def test_gestor_intercambia_y_requiere_vinculacion(app_client) -> None:
     assert body["gestor"]["nombre"] == "Gestor Ex"
     assert body["requiereVinculacion"] is True
     assert body["estadoDispositivo"] == "none"
+    assert len(body["permisos"]) == 14
+    assert all(not p["habilitado"] for p in body["permisos"])
 
 
 async def test_negocio_ajeno_es_403(app_client) -> None:
