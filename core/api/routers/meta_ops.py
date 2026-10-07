@@ -29,6 +29,7 @@ from core.admin.meta_health_service import (
 )
 from core.admin.meta_numbers_service import (
     add_number,
+    business_numbers,
     list_numbers,
     register_number,
     request_code,
@@ -188,6 +189,33 @@ class NumbersResponse(BaseModel):
     sync_error: str | None = None
 
 
+class BusinessNumberItem(BaseModel):
+    waba_id: str
+    waba_name: str | None = None
+    # La WABA de esta conexión (las demás son del mismo portafolio de Meta).
+    is_connection_waba: bool
+    phone_number_id: str
+    display_phone_number: str | None = None
+    verified_name: str | None = None
+    status: str | None = None
+    code_verification_status: str | None = None
+    platform_type: str | None = None
+    quality_rating: str | None = None
+    name_status: str | None = None
+    # Ya está en los números de esta conexión en el panel.
+    in_this_connection: bool
+
+
+class BusinessNumbersResponse(BaseModel):
+    business_id: str | None = None
+    business_name: str | None = None
+    numbers: list[BusinessNumberItem]
+    # Números del portafolio que ya tiene otro negocio de la plataforma: cuentan para el límite
+    # de Meta pero no se muestran.
+    other_tenants_count: int = 0
+    warnings: list[str] = []
+
+
 class AddNumberRequest(BaseModel):
     cc: str
     phone_number: str
@@ -219,6 +247,25 @@ async def list_connection_numbers(
     rows, sync_error = await list_numbers(principal.tenant_id, connection_id)
     return NumbersResponse(
         numbers=[PhoneNumberItem(**row) for row in rows], sync_error=sync_error
+    )
+
+
+@router.get("/connections/{connection_id}/business-numbers", response_model=BusinessNumbersResponse)
+async def list_business_numbers(
+    connection_id: str,
+    principal: Annotated[Principal, Depends(require("connections"))],
+) -> BusinessNumbersResponse:
+    """Números de todas las WABAs propias del portafolio de Meta de la conexión (el límite de
+    números de Meta cuenta el portafolio entero). Solo lectura: no guarda nada."""
+    data, error = await business_numbers(principal.tenant_id, connection_id)
+    if error is not None or data is None:
+        raise ApiError.bad_request(error or "No se pudieron leer los números", "business_numbers_failed")
+    return BusinessNumbersResponse(
+        business_id=data["business_id"],
+        business_name=data["business_name"],
+        numbers=[BusinessNumberItem(**n) for n in data["numbers"]],
+        other_tenants_count=data["other_tenants_count"],
+        warnings=data["warnings"],
     )
 
 

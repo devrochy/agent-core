@@ -381,3 +381,128 @@ async def _mark_registered(phone: PhoneNumber, connection: MetaConnection, *, pi
             row.registered = True
             if pin_set:
                 row.pin_set = True
+
+
+# Orígenes cuyo token es del propio negocio: solo con ellos se recorre el portafolio. Con
+# Embedded Signup y `manual` el token es un system user de la PLATAFORMA (`credentials_for`,
+# ADR-0094): su portafolio puede ser el de la plataforma, con WABAs de otros negocios, así
+# que solo se lista la WABA de la conexión.
+_PORTFOLIO_ORIGINS = {"byok"}
+
+
+async def business_numbers(tenant_id: uuid.UUID, connection_id: str) -> tuple[dict | None, str | None]:
+    """Números de TODAS las WABAs propias del portafolio de Meta dueño de la WABA de la
+    conexión: el límite de números de Meta cuenta el portafolio entero. (datos, error).
+
+    Solo lectura: no sincroniza nada a `phone_numbers` (los números de otras WABAs no se le
+    asignan a este negocio). Lo que falle por partes (permiso del token sobre el portafolio,
+    una WABA) queda en `warnings` y el resto se muestra igual.
+    """
+    from core.gateway.meta_asset_claims import asset_claimed_by_other_tenant
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_phone_numbers import (
+        list_owned_wabas,
+        list_phone_numbers,
+        waba_owner_business,
+    )
+
+    try:
+        cid = uuid.UUID(connection_id)
+    except ValueError:
+        return None, "Conexión inválida"
+
+    connection, waba, creds = await resolve_waba_and_credentials(cid, tenant_id)
+    if connection is None:
+        return None, "Conexión no encontrada"
+    if waba is None or creds is None:
+        return None, "No hay conexión/WABA lista todavía"
+
+    graph_args = (creds.access_token, creds.app_secret, creds.graph_api_version, connection.id)
+    warnings: list[str] = []
+    business: dict | None = None
+    wabas: list[dict] = [{"id": waba.waba_id, "name": None}]
+
+    if connection.origin in _PORTFOLIO_ORIGINS:
+        try:
+            business = await waba_owner_business(waba.waba_id, *graph_args)
+        except GraphError as exc:
+            warnings.append(f"No se pudo leer el portafolio de la cuenta: {_meta_error_text(exc)}")
+        if business is not None:
+            try:
+                owned = await list_owned_wabas(str(business["id"]), *graph_args)
+            except GraphError as exc:
+                warnings.append(
+                    "Solo se muestra la cuenta de esta conexión: el token no puede leer las demás "
+                    f"cuentas del portafolio (permiso business_management). {_meta_error_text(exc)}"
+                )
+            else:
+                names = {str(w.get("id")): w.get("name") for w in owned if w.get("id")}
+                wabas[0]["name"] = names.pop(waba.waba_id, None)
+                wabas.extend({"id": wid, "name": name} for wid, name in names.items())
+    else:
+        warnings.append(
+            "Con esta conexión (token de la plataforma) solo se muestran los números de su cuenta "
+            "de WhatsApp, no los del resto del portafolio."
+        )
+
+    async with get_session() as session:
+        in_connection = set(
+            (
+                await session.execute(
+                    select(PhoneNumber.phone_number_id).where(
+                        PhoneNumber.connection_id == connection.id,
+                        PhoneNumber.tenant_id == connection.tenant_id,
+                    )
+                )
+            ).scalars()
+        )
+
+    numbers: list[dict] = []
+    other_tenants = 0
+    for w in wabas:
+        try:
+            items = await list_phone_numbers(w["id"], *graph_args)
+        except GraphError as exc:
+            warnings.append(f"Cuenta {w['name'] or w['id']}: {_meta_error_text(exc)}")
+            continue
+        for item in items:
+            pnid = str(item.get("id") or "")
+            if not pnid:
+                continue
+            # Un token de agencia (BYOK) ve WABAs de varios clientes: lo que ya tiene otro
+            # negocio de la plataforma cuenta para el límite, pero no se muestra.
+            if await asset_claimed_by_other_tenant(connection.tenant_id, waba_id=w["id"], phone_number_id=pnid):
+                other_tenants += 1
+                continue
+            numbers.append(
+                {
+                    "waba_id": w["id"],
+                    "waba_name": w["name"],
+                    "is_connection_waba": w["id"] == waba.waba_id,
+                    "phone_number_id": pnid,
+                    "display_phone_number": item.get("display_phone_number"),
+                    "verified_name": item.get("verified_name"),
+                    "status": item.get("status"),
+                    "code_verification_status": item.get("code_verification_status"),
+                    "platform_type": item.get("platform_type"),
+                    "quality_rating": item.get("quality_rating"),
+                    "name_status": item.get("name_status"),
+                    "in_this_connection": pnid in in_connection,
+                }
+            )
+
+    if other_tenants:
+        warnings.append(
+            f"{other_tenants} número(s) del portafolio están conectados a otro negocio de la "
+            "plataforma: cuentan para el límite de Meta, pero no se muestran aquí."
+        )
+    return (
+        {
+            "business_id": str(business["id"]) if business else None,
+            "business_name": business.get("name") if business else None,
+            "numbers": numbers,
+            "other_tenants_count": other_tenants,
+            "warnings": warnings,
+        },
+        None,
+    )
