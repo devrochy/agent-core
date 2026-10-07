@@ -35,14 +35,14 @@ class _CapRechaza:
 
 
 async def test_sub_link_pago_monto_bajo_minimo(monkeypatch):
+    from pack_subscriptions.capability import SubscriptionCapabilityImpl
     from pack_subscriptions.models import Subscription, SubscriptionCharge
-    from pack_subscriptions.skills import SubscriptionsSkill
 
     import core.agents.spec as spec_mod
     import core.payments as payments_mod
     from core.db.session import get_session
-    from core.mcp.types import ToolContext
     from core.shared.tenant import tenant_scope
+    from core.subscriptions import SubscriptionError
 
     customer_id = uuid.uuid4()
 
@@ -68,12 +68,9 @@ async def test_sub_link_pago_monto_bajo_minimo(monkeypatch):
                     monto=54_000, estado="pendiente",
                 )
             )
+            sub_id = sub.id
 
-        ctx = ToolContext(
-            conversation_id=uuid.uuid4(), customer_id=customer_id,
-            idempotency_key=str(uuid.uuid4()), channel="test",
-        )
-        result = await SubscriptionsSkill().link_pago({}, ctx)
+        with pytest.raises(SubscriptionError) as exc:
+            await SubscriptionCapabilityImpl().charge_link(sub_id)
 
-    assert result.get("status") == "monto_bajo_minimo", result
-    assert result.get("encontrado") is True
+    assert exc.value.code == "monto_bajo_minimo"

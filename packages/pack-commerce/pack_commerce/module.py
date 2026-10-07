@@ -1301,11 +1301,19 @@ class CRMModule(BaseModule):
             return
 
         from core.agents.spec import enabled_packs, load_active_spec
-        from core.subscriptions import subscription_registry
+        from core.subscriptions import SubscriptionError, subscription_registry
 
         spec = await load_active_spec(get_current_tenant_id())
         enabled = enabled_packs(spec)
         if "pack_subscriptions" not in enabled:
+            return
+
+        capability = await subscription_registry.capability_for_tenant(get_current_tenant_id())
+        if capability is None:
+            log.warning(
+                "subscription_provider_missing",
+                tenant_id=str(get_current_tenant_id()),
+            )
             return
 
         for item in items:
@@ -1321,19 +1329,23 @@ class CRMModule(BaseModule):
                 continue
             product = await session.get(Product, variant.product_id)
             plan = {
+                "plan_code": variant.sku,
                 "nombre": product.name if product else variant.sku,
                 "precio": float(variant.price or 0),
                 "moneda": "COP",
                 "periodicidad": variant.billing_period,
                 "trial_dias": variant.trial_days or 0,
             }
-            await subscription_registry.activate_for_customer(
-                customer_id=order.customer_id,
-                variant_id=str(item.variant_id),
-                plan=plan,
-                reference=order.public_order_number,
-                enabled=enabled,
-            )
+            try:
+                await capability.activate(
+                    customer_id=order.customer_id,
+                    variant_id=str(item.variant_id),
+                    plan=plan,
+                    reference=order.public_order_number,
+                )
+            except SubscriptionError:
+                log.exception("order_activate_subscription_failed", order_id=str(order.id))
+                continue
             log.info("order_activates_subscription", order_id=str(order.id), plan=plan["nombre"])
 
     # ------------------------------------------------------------ guardrail

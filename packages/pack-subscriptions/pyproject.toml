@@ -16,6 +16,5 @@ pack_subscriptions = "pack_subscriptions.module:SubscriptionsModule"
 include = ["pack_subscriptions*"]
 
 [tool.agent_core.plugin.entities]
-pack_subscriptions_plans = ["nombre", "precio", "periodicidad"]
-pack_subscriptions_subscriptions = ["customer_id", "plan_id", "estado", "proximo_cargo"]
+pack_subscriptions_subscriptions = ["customer_id", "variante_id", "estado", "proximo_cargo"]
 pack_subscriptions_charges = ["subscription_id", "periodo", "monto", "estado"]

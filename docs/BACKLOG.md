@@ -338,20 +338,21 @@ Requerimientos para que el asistente del tenant `solvershub` venda planes, gesti
 recurrente), 0083 (`pack_subscriptions`), 0084 (calendario interno), 0085 (persistencia
 de artefactos de tenant).
 
-**Suscripciones**
+**Suscripciones** (actualizado 2026-10-07 con ADR-0106 / HU-SUB-01)
 - **Cartera recurrente (Opción 2, ADR-0082)** — `Cartera`/`Cuota` solo modelan un préstamo
-  finito (`pack_cobranza/models.py:336-370`); no hay recurrencia indefinida ni tools para
-  crear/renovar/cancelar. → `Cartera.modalidad`, ciclo/estado, cron de cargos por período y
-  tools `cob_*sus*`. [Alta]
-- **`pack_subscriptions` (Opción 1, ADR-0083)** — no existe suscripción de cliente final
-  sobre planes; hoy los planes se “simulan” como productos. → pack opcional con
-  `Plan`/`Subscription`/`SubscriptionCharge` y tools `sub_*`. [Alta]
-- **Metadatos de recurrencia en productos** — `Product/ProductVariant` no tienen
-  `billing_period`/`trial_days`/entitlements; el asistente no puede informar plan/prueba sin
-  inventar. → añadir metadatos + tool `sub_informar_planes`/`informar_plan`. [Media]
+  finito (`pack_cobranza/models.py:336-370`); no hay recurrencia indefinida. → se integra
+  como **segundo proveedor** del contrato v1 de `core/subscriptions` en HU-SUB-15
+  (préstamo rodante, D-SPEC-06-2). [Alta]
+- **`pack_subscriptions` (Opción 1, ADR-0083)** — ✅ **existe desde el 2026-09-30**: pack
+  con `Subscription`/`SubscriptionCharge` (planes como productos de commerce). Desde
+  HU-SUB-01 implementa el contrato v1 (8 operaciones) y las tools `sub_*` viven en el
+  core y despachan a él. [Cerrado]
+- **Metadatos de recurrencia en productos** — `Product/ProductVariant` ya tienen
+  `billing_period`/`trial_days` (se validan por enum en HU-SUB-10). [Cerrado]
 - **Cobro recurrente con `pack_payments`** — `generar_link_pago` es one-shot
-  (`pack_payments/skills.py:52-75`); no hay cargo periódico ni reintentos. → cobro por
-  período con link (base) y débito recurrente (diferido, `ROADMAP.md:150-175`). [Media]
+  (`pack_payments/skills.py:52-75`); el cobro por período con link ya existe
+  (`charge_link` del contrato v1, con guard de período futuro); el débito recurrente
+  sigue diferido (HU-SUB-17, Fase 2). [Media]
 
 **Calendario / demos**
 - **Calendario interno (ADR-0084)** — las 5 tools requieren `google_calendar`

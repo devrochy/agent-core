@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from sqlalchemy import select
@@ -24,9 +24,12 @@ from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, tenant_scope
 from core.subscriptions import subscription_registry
 from pack_subscriptions.admin_api import router as subscriptions_admin_api_router
+from pack_subscriptions.capability import (
+    SubscriptionCapabilityImpl,
+    crear_suscripcion_para,
+)
 from pack_subscriptions.config import SubscriptionConfig
 from pack_subscriptions.models import Subscription, SubscriptionCharge
-from pack_subscriptions.skills import SubscriptionsSkill
 
 if TYPE_CHECKING:
     from core.mcp.host import MCPHost
@@ -37,78 +40,11 @@ PLUGIN_ID = "pack_subscriptions"
 
 _PAUSAR = re.compile(r"suscripci[oó]n\s+(?:qued\w*\s+)?pausad\w*|paus\w+\s+(?:tu\s+)?suscripci", re.IGNORECASE)
 _CANCELAR = re.compile(r"suscripci[oó]n\s+(?:qued\w*\s+)?(?:cancel\w*|anulad\w*)|cancel\w+\s+(?:tu\s+)?suscripci", re.IGNORECASE)
-_RENOVAR = re.compile(r"suscripci[oó]n\s+(?:qued\w*\s+)?(?:renov\w*|reactivad\w*)|(?:renov\w*|reactiv\w+)\s+(?:tu\s+)?suscripci", re.IGNORECASE)
 
 
-def _proximo(desde: datetime) -> datetime:
-    return (desde + timedelta(days=30)).replace(second=0, microsecond=0)
-
-
-async def crear_suscripcion_para(
-    *, customer_id: uuid.UUID, variante_id: uuid.UUID | None, plan: dict[str, Any], reference: str = ""
-) -> Subscription:
-    """Crea/activa la suscripción de un `Customer` a un plan (idempotente por cliente).
-
-    `plan` es el snapshot aportado por commerce/admin: nombre, precio, moneda,
-    periodicidad, trial_dias. Este pack NO guarda ni lee el catálogo.
-    """
-    async with get_session() as session:
-        existente = (
-            await session.execute(
-                select(Subscription).where(
-                    Subscription.tenant_id == get_current_tenant_id(),
-                    Subscription.customer_id == customer_id,
-                    Subscription.estado.in_(("trialing", "activa", "pausada")),
-                    Subscription.deleted_at.is_(None),
-                )
-            )
-        ).scalars().first()
-        if existente is not None:
-            return existente
-        now = datetime.now(UTC)
-        trial_dias = int(plan.get("trial_dias") or 0)
-        trial = trial_dias > 0
-        sub = Subscription(
-            tenant_id=get_current_tenant_id(),
-            customer_id=customer_id,
-            variante_id=variante_id,
-            concepto=plan.get("nombre") or "Plan",
-            estado="trialing" if trial else "activa",
-            valor_periodo=plan.get("precio") or 0,
-            moneda=plan.get("moneda") or "COP",
-            trial_termina=(now + timedelta(days=trial_dias)) if trial else None,
-            proximo_cargo=_proximo(now),
-            fecha_alta=now,
-        )
-        session.add(sub)
-        await session.flush()
-        return sub
-
-
-class _SubscriptionCapability:
-    """Capacidad registrada en el registry del core (consumida por commerce)."""
-
-    plugin_id = PLUGIN_ID
-
-    async def activate_for_customer(
-        self,
-        *,
-        customer_id: uuid.UUID,
-        variant_id: str,
-        plan: dict[str, Any],
-        reference: str = "",
-    ) -> dict[str, Any]:
-        """Crea/activa la suscripción con el snapshot del plan que aporta el caller."""
-        variante_id = None
-        try:
-            variante_id = uuid.UUID(str(variant_id))
-        except (ValueError, TypeError):
-            pass
-        async with tenant_scope(get_current_tenant_id()):
-            sub = await crear_suscripcion_para(
-                customer_id=customer_id, variante_id=variante_id, plan=plan, reference=reference
-            )
-        return {"activada": True, "suscripcion_id": str(sub.id), "plan": sub.concepto, "estado": sub.estado}
+# `crear_suscripcion_para` vive en capability.py (proveedor del contrato v1,
+# ADR-0106); se re-exporta para la API admin y los tests que la importan de acá.
+__all__ = ["crear_suscripcion_para"]
 
 
 class SubscriptionsModule(BaseModule):
@@ -124,15 +60,14 @@ class SubscriptionsModule(BaseModule):
     setup_guide = "Define tus planes con periodicidad y activa los cobros recurrentes."
     requires_config = True
     config_schema = SubscriptionConfig
-    declared_skills: list[type] = [SubscriptionsSkill]  # noqa: RUF012
+    declared_skills: list[type] = []  # noqa: RUF012 -- las tools sub_* viven en el core (ADR-0106)
     admin_menu: list[dict[str, str]] = [  # noqa: RUF012
         {"label": "Suscripciones", "path": "/subscriptions/lista", "section": "Operación", "section_key": "pack_subscriptions:suscripciones"},
     ]
 
     def on_activate(self, host: MCPHost) -> None:
-        host.register_skill(SubscriptionsSkill())
         host.register_guardrail("subs_completion_check", self._completion_guardrail, priority=6)
-        subscription_registry.register(PLUGIN_ID, _SubscriptionCapability())
+        subscription_registry.register(PLUGIN_ID, SubscriptionCapabilityImpl())
         host.subscribe("payment.confirmed", self._on_payment_confirmed)
 
     def on_deactivate(self) -> None:
@@ -175,9 +110,8 @@ class SubscriptionsModule(BaseModule):
         """Bloquea afirmar cambios de suscripción sin la tool correspondiente (ADR-0083)."""
         called = {r.get("_tool_name") for r in (tool_results or [])}
         checks = [
-            (_PAUSAR, {"sub_pausar_suscripcion"}),
-            (_CANCELAR, {"sub_cancelar_suscripcion"}),
-            (_RENOVAR, {"sub_renovar_suscripcion"}),
+            (_PAUSAR, {"sub_pausar"}),
+            (_CANCELAR, {"sub_cancelar"}),
         ]
         for pattern, tools in checks:
             if pattern.search(response_text or "") and not (called & tools):
