@@ -961,6 +961,10 @@ async def oauth_start(
     Deja dos cookies httponly que el panel reenvía al navegador: `oauth_state`
     (anti-CSRF, D-SPEC-24-12) y `oauth_next` (a dónde volver). El retorno de Google
     entra por la ruta BFF del panel (D-SPEC-24-11, ADR-0093).
+
+    El `state` lleva el negocio que inició el flujo (`<tenant_id>.<aleatorio>`): el
+    callback guarda la cuenta en el negocio de la sesión, que puede haber cambiado
+    mientras el usuario estaba en Google.
     """
     import secrets
 
@@ -975,7 +979,7 @@ async def oauth_start(
             "not_configured",
         )
     destino = next if next.startswith("/") and not next.startswith("//") else "/calendario"
-    state = secrets.token_urlsafe(32)
+    state = f"{principal.tenant_id}.{secrets.token_urlsafe(32)}"
     respuesta = RedirectResponse(
         build_authorization_url(config.client_id, redirect=panel_redirect_uri(), state=state),
         status_code=302,
@@ -1023,6 +1027,10 @@ async def oauth_callback(
     if not esperado or not state or not hmac.compare_digest(esperado, state):
         log.warning("calendar_oauth_state_invalido", tenant_id=str(principal.tenant_id))
         return volver("error")
+    if state.split(".", 1)[0] != str(principal.tenant_id):
+        # Validado contra la cookie: el flujo es legítimo pero de otro negocio.
+        log.warning("calendar_oauth_otro_negocio", tenant_id=str(principal.tenant_id))
+        return volver("otro_negocio")
     if error or not code:
         return volver("cancelado")
     config = await _calendar_config()
