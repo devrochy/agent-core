@@ -588,10 +588,17 @@ async def _resolve_conversation(
             )
             session.add(conversation)
             await session.flush()
-        else:
-            if connection and conversation.connection_id != connection.id:
-                conversation.connection_id = connection.id  # responder por donde escribió
-            if meta_connection_id and conversation.meta_connection_id != meta_connection_id:
+        elif connection is not None or meta_connection_id is not None:
+            # Responder por donde escribió: la conversación queda con la ruta de ESTA
+            # entrada y nada más. Si el cliente pasó de WhatsApp Web (QR) al número de Meta
+            # (o al revés), la conexión anterior queda obsoleta y `resolve_credentials`
+            # prioriza `connection_id`: la respuesta salía por WhatsApp Web aunque el
+            # cliente escribiera a Meta (visto en test, 2026-10-08). Sin ruta identificable
+            # (número de la plataforma) se conserva la que había.
+            nueva_conexion = connection.id if connection else None
+            if conversation.connection_id != nueva_conexion:
+                conversation.connection_id = nueva_conexion
+            if conversation.meta_connection_id != meta_connection_id:
                 conversation.meta_connection_id = meta_connection_id
 
     if is_new:

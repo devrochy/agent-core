@@ -1,5 +1,13 @@
 # Changelog
 
+## Sin versión — La respuesta sale por donde escribió el cliente (2026-10-08)
+
+- Un cliente que había escrito por WhatsApp Web (QR) le escribió al número de Meta del mismo negocio: el mensaje
+  entró a la conversación abierta, que quedó con las dos conexiones (`connection_id` de WhatsApp Web y
+  `meta_connection_id`), y `resolve_credentials` prioriza `connection_id`. La respuesta salía por WhatsApp Web
+  (sesión caída: `client is nil`) y el cliente nunca la recibía. Ahora la conversación queda con la ruta de la
+  última entrada y nada más; si la entrada no identifica ninguna (número de la plataforma), se conserva la anterior.
+
 ## Sin versión — Comercio agnóstico al proveedor de suscripciones (2026-10-08)
 
 - HU-SUB-09. Commerce ya no nombra `pack_subscriptions`: el core resuelve el proveedor del negocio
