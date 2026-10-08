@@ -31,6 +31,11 @@ log = get_logger(__name__)
 
 DEVICE_NOT_REGISTERED = "DeviceNotRegistered"
 
+# Canal de Android que crea la app oficial (`CANAL_DEFAULT` en solvershub-apk,
+# `src/modules/notificaciones/push.ts`). Sin él, Android usa el canal de respaldo de
+# FCM, sin la importancia ni el sonido de la app. Expo lo ignora en iOS.
+ANDROID_CHANNEL_ID = "solvershub-general"
+
 
 class PushTransportError(RuntimeError):
     """No se pudo entregar al servicio de Expo (red, 5xx, formato)."""
@@ -96,6 +101,7 @@ async def enviar_push(
                 "body": body,
                 "data": {**data, "tenantId": str(tenant_id)},
                 "sound": "default",
+                "channelId": ANDROID_CHANNEL_ID,
             }
             for t in tokens
         ]

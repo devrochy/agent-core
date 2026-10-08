@@ -108,6 +108,9 @@ async def test_enviar_push_envia_lote_a_tokens_activos(app_client, monkeypatch) 
     assert msg["title"] == "Título" and msg["body"] == "Cuerpo"
     assert msg["data"]["type"] == "core.escalation"
     assert msg["data"]["tenantId"] == str(tid)
+    # Canal que crea la app (CANAL_DEFAULT en solvershub-apk); sin él Android usa el de
+    # respaldo de FCM, sin la importancia ni el sonido configurados.
+    assert msg["channelId"] == "solvershub-general"
 
 
 async def test_device_not_registered_da_de_baja_el_token(app_client, monkeypatch) -> None:
