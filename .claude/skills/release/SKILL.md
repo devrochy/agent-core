@@ -49,9 +49,11 @@ Semver:
    la API cambió, los tipos del panel (`solvershub-panel`) se regeneran en su propio PR.
 7. **Variables de entorno nuevas** cargadas en Coolify **antes** del deploy, en la app, el
    worker y el beat de producción (`docs/despliegue-coolify.md`, sección de variables).
-8. **CHANGELOG**: las secciones "Sin versión" del rango se consolidan bajo
-   `## vX.Y.Z — <título> (AAAA-MM-DD)`, con qué cambió y **qué tiene que hacer el
-   operador** (variables, pasos manuales, cambios en Meta o Wompi). Bump en `pyproject.toml`.
+8. **CHANGELOG**: `python scripts/changelog.py --version vX.Y.Z --titulo "<título>"` junta
+   los fragmentos de `changelog.d/` y las secciones "Sin versión" que queden en
+   `## vX.Y.Z — <título> (AAAA-MM-DD)` y borra los fragmentos. Revisar el diff y agregar
+   arriba **qué tiene que hacer el operador** (variables, pasos manuales, cambios en Meta o
+   Wompi). Bump en `pyproject.toml`.
 9. **Backup** de la BD de producción antes de migrar, mientras no exista PITR (HU-ARCH-03).
    Lo corre el usuario:
    `docker exec huvhzaxim2notqkcxqa5930a pg_dump -U postgres -Fc agent_core > agent_core-$(date +%F).dump`.
