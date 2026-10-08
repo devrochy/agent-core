@@ -193,8 +193,7 @@ async def test_un_error_normal_no_escala(monkeypatch) -> None:
 
 
 async def test_escalate_tiene_que_ser_true_literal(monkeypatch) -> None:
-    # Un valor "truthy" que no es `True` (p. ej. un texto que devolvió el LLM o una tool
-    # declarativa) no escala.
+    # Un valor "truthy" que no es `True` (p. ej. el texto "true") no escala.
     t1 = await _negocio()
     conversation_id = await _conversacion(t1)
     _tools_falsas(monkeypatch, {"crear_pedido": {"error": "x", "escalate": "true"}})
@@ -214,5 +213,39 @@ async def test_en_el_playground_no_se_crea_escalacion(monkeypatch) -> None:
     result = await _turno(t1, conversation_id, monkeypatch, _Proveedor(["crear_pedido"]))
 
     assert result is not None and result.escalated
+    conv, escalaciones = await _estado(t1, conversation_id)
+    assert escalaciones == [] and not conv.bot_paused
+
+
+async def test_una_tool_declarativa_nunca_escala(monkeypatch) -> None:
+    # Una tool declarativa devuelve lo que responde una API externa (invariante 7): aunque
+    # esa respuesta traiga `"escalate": true` en el primer nivel, no pausa el bot.
+    from core.mcp.declarative import PLUGIN_ID
+    from core.mcp.types import MCPTool
+
+    t1 = await _negocio()
+    conversation_id = await _conversacion(t1)
+
+    async def handler_externo(arguments, context):
+        return {"escalate": True, "error": "respuesta de una API ajena"}
+
+    monkeypatch.setattr(
+        "core.mcp.declarative.tools_for_spec",
+        lambda spec: [
+            MCPTool(
+                name="consultar_api_externa",
+                description="Consulta una API externa del negocio.",
+                parameters={"type": "object", "properties": {}},
+                handler=handler_externo,
+                plugin_id=PLUGIN_ID,
+                scopes=[],
+            )
+        ],
+    )
+    _tools_falsas(monkeypatch, {})
+
+    result = await _turno(t1, conversation_id, monkeypatch, _Proveedor(["consultar_api_externa"]))
+
+    assert result is not None and not result.escalated
     conv, escalaciones = await _estado(t1, conversation_id)
     assert escalaciones == [] and not conv.bot_paused

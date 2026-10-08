@@ -6,7 +6,8 @@
   ningún punto del core leía la clave: el pedido no pasaba a un humano y el LLM veía un error genérico. Ahora el loop,
   ante un resultado de tool con `"escalate": True` (o un `BusinessError(escalate=True)`), escala con el mecanismo
   nativo (`plugin:<tool>`, con el error como resumen: pausa el bot, push a los dueños), no ejecuta el resto del lote y
-  cierra el turno con la respuesta de escalamiento. Solo cuenta `True` literal.
+  cierra el turno con la respuesta de escalamiento. Solo cuenta `True` literal, y solo de tools registradas (pack/core):
+  una tool declarativa devuelve datos de una API externa y su `escalate` se descarta (invariante 7).
 
 ## Sin versión — Un reintento BYOK fallido no se queda con el número (2026-10-08)
 

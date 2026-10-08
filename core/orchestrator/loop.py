@@ -711,6 +711,11 @@ async def _execute_tool_safely(
             # Tool declarativa del tenant (ADR-0052): se ejecuta con su handler
             # (ScopedHttp acotado), no vía mcp_host (que no la conoce).
             result = await declarative[tool_call.name].handler(tool_call.arguments, context)
+            # Una tool declarativa devuelve lo que responde una API externa: es dato, no
+            # instrucción (invariante 7). Nunca puede pedir relevo humano; solo las tools
+            # registradas (pack/core) escalan.
+            if isinstance(result, dict):
+                result.pop("escalate", None)
         else:
             result = await mcp_host.execute_tool(tool_call.name, tool_call.arguments, context)
     except BusinessError as exc:
