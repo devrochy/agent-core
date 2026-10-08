@@ -161,7 +161,10 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
         # guardrails) implica que se está anunciando -- si no llamó la tool,
         # es una promesa vacía sin importar el verbo que haya usado.
         re.compile(r"link\s+(?:de\s+pago|para\s+pagar)", re.IGNORECASE),
-        {"confirmar_pago_pedido"},
+        # El link de un pedido, el del período de una suscripción (tool del core) y el
+        # de pagos en línea respaldan por igual el aviso (antes solo el del pedido: el
+        # link de la suscripción terminaba en escalamiento; journeys de HU-SUB-12).
+        {"confirmar_pago_pedido", "sub_link_pago", "generar_link_pago"},
     ),
     "asesor_humano": (
         re.compile(

@@ -258,8 +258,20 @@ async def _get_variant_with_stock(variant_id_or_sku) -> dict[str, Any] | None:  
         "variant": variant,
         "product": product,
         "stock": inventory.stock_quantity if inventory else 0,
+        # Un plan recurrente es un servicio: no tiene inventario (SUB-12).
+        "sin_inventario": _es_plan_variante(variant),
         "price": _float(variant.price),
     }
+
+
+def _es_plan_variante(variant: ProductVariant) -> bool:
+    """Plan recurrente (`billing_period`): se vende sin stock ni descuento de inventario.
+
+    Antes un plan con stock 0 salía "no disponible" y `generar_cotizacion` lo rechazaba
+    ("No hay stock suficiente"): el asistente no podía vender planes por conversación
+    (visto con los journeys de HU-SUB-12; el catálogo de `solvershub` tiene stock 0).
+    """
+    return bool(variant.billing_period)
 
 
 def _normalizar_prefijo(prefijo: str) -> str:
@@ -583,8 +595,8 @@ class CatalogSkill(BaseSkill):
                 "attributes": variant.attributes or {},
                 "price": _float(variant.price),
                 "price_label": _money(variant.price),
-                "disponible": bool(inventory and inventory.stock_quantity > 0),
-                "stock": inventory.stock_quantity if inventory else 0,
+                "disponible": _es_plan_variante(variant) or bool(inventory and inventory.stock_quantity > 0),
+                "stock": None if _es_plan_variante(variant) else (inventory.stock_quantity if inventory else 0),
                 "description": product.description or "",
                 "billing_period": variant.billing_period,  # recurrencia del plan (#153)
                 "trial_days": variant.trial_days,
@@ -633,11 +645,11 @@ class CatalogSkill(BaseSkill):
             fallback_stmt = (
                 select(ProductVariant, Product, Inventory)
                 .join(Product, Product.id == ProductVariant.product_id)
-                .join(Inventory, Inventory.variant_id == ProductVariant.id)
+                .outerjoin(Inventory, Inventory.variant_id == ProductVariant.id)
                 .where(
                     ProductVariant.active.is_(True),
                     ProductVariant.tenant_id == get_current_tenant_id(),
-                    Inventory.stock_quantity > 0,
+                    or_(Inventory.stock_quantity > 0, ProductVariant.billing_period.isnot(None)),
                 )
                 .order_by(Product.name)
                 .limit(5)
@@ -685,7 +697,7 @@ class CatalogSkill(BaseSkill):
                         Product.category_id.in_(complements),
                         Product.id != product.id,
                         ProductVariant.active.is_(True),
-                        Inventory.stock_quantity > 0,
+                        or_(Inventory.stock_quantity > 0, ProductVariant.billing_period.isnot(None)),
                         ProductVariant.tenant_id == get_current_tenant_id(),
                     )
                     .order_by(Product.name)
@@ -929,7 +941,7 @@ class OrderSkill(BaseSkill):
             data = await _get_variant_with_stock(variant_ref)
             if data is None or not data["variant"].active:
                 return {"error": "Uno de los productos solicitados no está disponible."}
-            if data["stock"] < quantity:
+            if not data["sin_inventario"] and data["stock"] < quantity:
                 return {
                     "error": f"No hay stock suficiente de {data['product'].name} "
                              f"(disponible: {data['stock']})."
@@ -1481,7 +1493,7 @@ class OrderSkill(BaseSkill):
                 data = await _get_variant_with_stock(variant_ref)
                 if data is None or not data["variant"].active:
                     return {"error": "Uno de los productos no está disponible."}
-                if data["stock"] < quantity:
+                if not data["sin_inventario"] and data["stock"] < quantity:
                     return {"error": f"No hay stock suficiente de {data['product'].name}."}
                 additions.append((data["variant"], quantity, data["price"]))
                 add_total += data["price"] * quantity
@@ -1671,6 +1683,16 @@ class OrderSkill(BaseSkill):
 
     @staticmethod
     async def _decrement_stock(session, variant_id, quantity: int) -> None:  # type: ignore[no-untyped-def]
+        variant = (
+            await session.execute(
+                select(ProductVariant).where(
+                    ProductVariant.id == variant_id,
+                    ProductVariant.tenant_id == get_current_tenant_id(),
+                )
+            )
+        ).scalar_one_or_none()
+        if variant is None or _es_plan_variante(variant):
+            return  # variante ajena al negocio, o un plan: no se toca inventario
         inventory = (
             await session.execute(
                 select(Inventory).where(
