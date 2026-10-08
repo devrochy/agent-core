@@ -76,6 +76,9 @@ o `/admin/tenants/nuevo`), nunca código por cliente.
   `python scripts/export_openapi.py` (commiteado: el panel y la app generan tipos TS
   desde ahí, ADR-0077).
 - Antes de cerrar cualquier tanda de cambios: correr el subagente `auditor-multitenant`.
+- El changelog de cada PR va en **un archivo nuevo** `changelog.d/AAAA-MM-DD-<tema>.md`, no
+  en `CHANGELOG.md`: así los PRs en paralelo no chocan. La release los consolida
+  (`scripts/changelog.py`, ver `changelog.d/README.md`).
 - Un cambio no está completo si `ruff check` && `pytest` no pasan.
 
 ## Herramientas de asistentes IA (OpenCode + Claude Code)
