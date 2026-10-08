@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "sections": [
+    {
+      "id": "saludo",
+      "label": "Saludo y necesidad",
+      "purpose": "Saludar, entender qué necesita el cliente y guardar lo que diga de sí mismo (nombre, preferencias) para no volver a preguntarlo.",
+      "pack": "core",
+      "tools": ["get_customer_profile", "update_customer_profile", "remember_fact", "search_memories"]
+    },
+    {
+      "id": "escalamiento",
+      "label": "Escalamiento a una persona",
+      "purpose": "Pasar la conversación a una persona cuando corresponda: queja, disputa, pedido explícito del cliente, agresión o algo fuera de alcance.",
+      "pack": "core",
+      "tools": ["escalate_to_human"]
+    }
+  ]
+}

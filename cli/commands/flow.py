@@ -1,13 +1,14 @@
-"""agent-core flow: flujo de atención del tenant (ADR-0054).
+"""agent-core flow: flujo de atención del tenant (ADR-0054, ADR-0109).
 
-El flujo vive en `TENANTS_ROOT/<slug>/flow.json` (se sembró al habilitar el pack).
-Un pack declara su default en `packages/pack-*/flow.json`; el archivo del tenant es
-autoritativo si existe. Estos comandos lo muestran, validan y re-siembran.
+El flujo efectivo se compone: `core/flow.json` + `packages/pack-*/flow.json` de los
+packs habilitados + las secciones propias del negocio en `TENANTS_ROOT/<slug>/flow.json`
+(que ya no es autoritativo). Estos comandos lo muestran, validan, normalizan y migran.
 
 Uso:
   agent-core flow show <slug>
   agent-core flow validate <slug>
   agent-core flow sync <slug>
+  agent-core flow migrate <slug> [--apply]
 """
 
 from __future__ import annotations
@@ -134,7 +135,7 @@ def sync(
     slug: str = typer.Argument(..., help="Slug del tenant"),
     packs: str = typer.Option("", "--packs", help="Coma-separado (default: packs del spec)"),
 ) -> None:
-    """Re-siembra TENANTS_ROOT/<slug>/flow.json desde los packs (ADR-0054)."""
+    """Normaliza TENANTS_ROOT/<slug>/flow.json: quita copias de packs (ADR-0109)."""
     from core.agents.flow import pack_flow_path, seed_tenant_flow
 
     async def _run() -> None:
@@ -157,5 +158,30 @@ def sync(
             return
         for step in steps:
             console.print(f"  · {step}")
+
+    asyncio.run(_run())
+
+
+@app.command()
+def migrate(
+    slug: str = typer.Argument(..., help="Slug del tenant"),
+    apply: bool = typer.Option(False, "--apply", help="Escribe el archivo (por defecto solo muestra el diff)"),
+) -> None:
+    """Migra el flow.json del negocio al modelo compuesto (HU-FWK-01, ADR-0109).
+
+    Quita las copias de secciones de packs, convierte en propias (`tenant`) las que
+    su pack no declara y avisa de overrides y de tools que ningún flow.json declara.
+    """
+    from core.agents.flow import normalize_tenant_flow
+
+    async def _run() -> None:
+        await _load_spec_and_slug(slug)
+        migracion = normalize_tenant_flow(slug, apply=apply)
+        titulo = "aplicada" if apply else "dry-run (usa --apply para escribir)"
+        console.print(f"[bold]Migración del flujo · {slug} · {titulo}[/bold]")
+        if not migracion.cambia:
+            console.print("  · sin cambios")
+        for linea in migracion.resumen():
+            console.print(f"  · {linea}")
 
     asyncio.run(_run())
