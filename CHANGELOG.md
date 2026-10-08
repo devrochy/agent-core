@@ -1,5 +1,12 @@
 # Changelog
 
+## Sin versión — `crm_0009` no trunca el número de pedido al migrar (2026-10-08)
+
+- El backfill de `public_order_number` repetía `'OC-' || lpad(order_seq::text, 4, '0')`, y `lpad` **trunca** en
+  Postgres: los pedidos 83790..83799 quedaban todos `OC-8379` y el índice único `(tenant_id, public_order_number)`
+  abortaba la migración (visto en la base local: seq 837966..837971). Ahora rellena hasta 4 dígitos sin cortar
+  (`OC-0042`, `OC-837966`). Donde `crm_0009` ya corrió sin pedidos ≥ 10.000 (test) el resultado es el mismo.
+
 ## Sin versión — Composición de flujos multi-pack (2026-10-08)
 
 - HU-FWK-01 / ADR-0109 (enmienda ADR-0054). El flujo efectivo se compone en cada turno: `core/flow.json`
