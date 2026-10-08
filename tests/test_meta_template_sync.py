@@ -60,3 +60,14 @@ async def test_acquire_sync_lock_bloquea_segunda_llamada_misma_hora(monkeypatch)
     assert await acquire_sync_lock(tenant_a, "waba-2") is True
     # `waba_id` no es único entre negocios: el turno de A no bloquea a B.
     assert await acquire_sync_lock(tenant_b, "waba-1") is True
+
+
+def test_quality_score_de_graph_v2x_se_guarda_como_texto():
+    """Graph v26 manda `quality_score` como objeto; la columna es texto. Con el
+    objeto crudo el INSERT fallaba (asyncpg: expected str, got dict) y no se
+    sincronizaba ninguna plantilla (visto en test el 2026-10-08)."""
+    q = sync_mod._quality_score
+    assert q({"quality_score": {"score": "UNKNOWN", "date": 1790240375}}) == "UNKNOWN"
+    assert q({"quality_score": "GREEN"}) == "GREEN"
+    assert q({"quality_score": {"date": 1}}) is None
+    assert q({}) is None
