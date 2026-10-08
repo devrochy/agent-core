@@ -68,6 +68,11 @@ class SubscriptionView(TypedDict, total=False):
     proximo_cargo: str | None
     trial_termina: str | None
     cargos: list[dict[str, Any]]
+    # HU-SUB-07 (ADR-0111)
+    referencia: str | None  # pedido que la creó
+    cambio_programado: dict[str, Any] | None  # downgrade al próximo período
+    cambio: str  # resultado de change_plan: inmediato | pendiente_pago | programado
+    cargo_cambio: dict[str, Any] | None  # cargo de la diferencia (monto, link, referencia)
 
 
 class ChargeLink(TypedDict, total=False):
@@ -276,3 +281,55 @@ async def estado_proveedor(tenant_id: uuid.UUID) -> EstadoProveedor:
             "(cobro en línea) o Cobranza (cobro en campo) para vender planes recurrentes.",
         }
     return {**base, "efectivo": cap.provider_id}
+
+
+# ------------------------------------------------- catálogo de planes (HU-SUB-07, ADR-0111)
+@runtime_checkable
+class PlanCatalog(Protocol):
+    """Catálogo de planes de un pack (commerce): el precio de un plan nunca sale del LLM."""
+
+    provider_id: str
+
+    async def plan_por_codigo(self, codigo: str) -> tuple[str, PlanSnapshot] | None:
+        """(variant_id, snapshot) del plan por SKU o `variant_id`, o None si no existe."""
+        ...
+
+
+@dataclass
+class PlanCatalogRegistry:
+    _catalogos: dict[str, PlanCatalog] = field(default_factory=dict)
+
+    def register(self, provider_id: str, catalogo: PlanCatalog) -> None:
+        self._catalogos[provider_id] = catalogo
+
+    def unregister(self, provider_id: str) -> None:
+        self._catalogos.pop(provider_id, None)
+
+    async def para_negocio(self, tenant_id: uuid.UUID) -> PlanCatalog | None:
+        """Catálogo de un pack habilitado en el AgentSpec del negocio (el primero)."""
+        from core.agents.spec import enabled_packs, load_active_spec
+        from core.shared.tenant import tenant_scope
+
+        async with tenant_scope(tenant_id):
+            spec = await load_active_spec(tenant_id)
+        packs = enabled_packs(spec)
+        for pid in sorted(self._catalogos):
+            if pid in packs:
+                return self._catalogos[pid]
+        return None
+
+
+plan_catalog_registry = PlanCatalogRegistry()
+
+
+async def permite_varias(capability: SubscriptionCapability) -> bool:
+    """¿El proveedor permite varias suscripciones por cliente? Operación opcional del
+    contrato (ADR-0111): si no la implementa, no las permite."""
+    metodo = getattr(capability, "permite_varias", None)
+    if metodo is None:
+        return False
+    try:
+        return bool(await metodo())
+    except Exception:
+        log.warning("permite_varias_fallo", provider=getattr(capability, "provider_id", "?"), exc_info=True)
+        return False

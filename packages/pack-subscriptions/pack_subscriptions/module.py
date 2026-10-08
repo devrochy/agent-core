@@ -118,6 +118,15 @@ class SubscriptionsModule(BaseModule):
                     return
                 cargo.estado = "pagado"
                 sub = await session.get(Subscription, cargo.subscription_id)
+                if cargo.tipo == "cambio_plan" and sub is not None and cargo.cambio_plan:
+                    # Upgrade pagado (HU-SUB-07, ADR-0111): el plan cambia en el acto.
+                    from pack_subscriptions.capability import _emitir_activada, aplicar_plan
+
+                    aplicar_plan(sub, cargo.cambio_plan, datetime.now(UTC))
+                    await session.flush()
+                    await _emitir_activada(session, sub, reference, cambio=True)
+                    log.info("subs_cambio_de_plan_pagado", reference=reference, plan=sub.concepto)
+                    return
                 # Reactiva una vencida, una prueba o una pausada POR MORA (HU-SUB-05);
                 # una pausa que pidió el cliente sigue pausada.
                 reactivable = sub is not None and (

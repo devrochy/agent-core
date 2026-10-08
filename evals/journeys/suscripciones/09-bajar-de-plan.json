@@ -1,0 +1,87 @@
+{
+  "nombre": "bajar-de-plan",
+  "descripcion": "Premium → Basic: queda programado para el próximo período, sin reembolso, y el cargo siguiente sale al precio del Basic (HU-SUB-07).",
+  "pasos": [
+    {
+      "nota": "cliente con Premium activo",
+      "accion": "activar_suscripcion",
+      "datos": {
+        "plan": {
+          "plan_code": "PLAN-PREMIUM",
+          "nombre": "Plan Premium",
+          "precio": 600000,
+          "moneda": "COP",
+          "periodicidad": "mensual",
+          "trial_dias": 0
+        }
+      }
+    },
+    {
+      "nota": "pide bajar de plan",
+      "usuario": "Quiero bajar al Plan Basic, el Premium me queda grande.",
+      "hasta_herramienta": "sub_cambiar_plan",
+      "insistir": "Sí, confirmo el cambio al Plan Basic.",
+      "max_turnos": 4,
+      "espera": {
+        "texto_no_contiene": [
+          "reembolso de",
+          "te devolvemos"
+        ]
+      }
+    },
+    {
+      "nota": "programado, sigue en Premium",
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "id": "{suscripcion.subscription_id}"
+        },
+        "espera": {
+          "concepto": {
+            "$contiene": "Premium"
+          },
+          "valor_periodo": 600000,
+          "cambio_programado": {
+            "$no_nulo": true
+          }
+        }
+      }
+    },
+    {
+      "nota": "llega el próximo período",
+      "reloj": "+28d"
+    },
+    {
+      "job": "pack_subscriptions.generar_cargos"
+    },
+    {
+      "nota": "ya en Basic",
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "id": "{suscripcion.subscription_id}"
+        },
+        "espera": {
+          "concepto": {
+            "$contiene": "Basic"
+          },
+          "valor_periodo": 200000
+        }
+      }
+    },
+    {
+      "nota": "el cargo sale al precio nuevo",
+      "verifica": {
+        "tabla": "pack_subscriptions_charges",
+        "donde": {
+          "subscription_id": "{suscripcion.subscription_id}",
+          "tipo": "periodo"
+        },
+        "filas": 1,
+        "espera": {
+          "monto": 200000
+        }
+      }
+    }
+  ]
+}

@@ -36,7 +36,11 @@ from pack_commerce.models import (
     Quote,
     QuoteItem,
 )
-from pack_commerce.planes import activar_planes_del_pedido, estado_pago_inicial
+from pack_commerce.planes import (
+    activar_planes_del_pedido,
+    estado_pago_inicial,
+    segundo_plan_bloqueado,
+)
 
 CUSTOMER_SEGMENTS = ("nuevo", "ocasional", "frecuente", "fiel", "inactivo")
 
@@ -1270,6 +1274,10 @@ class OrderSkill(BaseSkill):
                 return {"error": "La cotización no tiene productos."}
 
             es_plan = await _es_pedido_de_plan(session, [i.variant_id for i in items])
+            if es_plan and _float(quote.total) > 0:
+                bloqueo = await segundo_plan_bloqueado(context.customer_id, [i.variant_id for i in items])
+                if bloqueo:
+                    return bloqueo
             threshold = _monto_alto_threshold(config, es_plan)
             if threshold is not None and _float(quote.total) > threshold:
                 return {

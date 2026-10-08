@@ -118,6 +118,7 @@ async def _generar_cargos(now: datetime) -> int:
                         # Free al terminar la prueba: no se renueva, vence (`_marcar_vencidas`).
                         continue
                     inicio = sub.proximo_cargo
+                    _aplicar_cambio_programado(sub, inicio)
                     siguiente = sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla)
                     if not Decimal(sub.valor_periodo or 0):
                         sub.periodo_actual_inicio = inicio
@@ -130,6 +131,7 @@ async def _generar_cargos(now: datetime) -> int:
                                 SubscriptionCharge.tenant_id == tenant_id,
                                 SubscriptionCharge.subscription_id == sub.id,
                                 SubscriptionCharge.periodo == periodo,
+                                SubscriptionCharge.tipo == "periodo",
                                 SubscriptionCharge.deleted_at.is_(None),
                             )
                         )
@@ -212,6 +214,7 @@ async def _marcar_vencidas(now: datetime) -> int:
                             SubscriptionCharge.tenant_id == tenant_id,
                             Subscription.tenant_id == tenant_id,
                             SubscriptionCharge.estado == "pendiente",
+                            SubscriptionCharge.tipo == "periodo",
                             SubscriptionCharge.deleted_at.is_(None),
                             SubscriptionCharge.fecha_vencimiento.isnot(None),
                             SubscriptionCharge.fecha_vencimiento <= limite,
@@ -282,6 +285,19 @@ async def _marcar_vencidas(now: datetime) -> int:
     return total
 
 
+def _aplicar_cambio_programado(sub: Subscription, inicio: datetime) -> None:
+    """Downgrade programado (HU-SUB-07): el período que empieza en `inicio` ya va con el
+    plan nuevo, así que su cargo sale con el precio nuevo."""
+    cambio = sub.cambio_programado or {}
+    desde = cambio.get("desde")
+    if not cambio or not desde or datetime.fromisoformat(desde) > inicio:
+        return
+    from pack_subscriptions.capability import aplicar_plan
+
+    aplicar_plan(sub, cambio, inicio)
+    log.info("subs_downgrade_aplicado", subscription_id=str(sub.id), plan=sub.concepto)
+
+
 def _payload_cargo(cargo: SubscriptionCharge, sub: Subscription) -> dict[str, object]:
     return {
         "charge_id": str(cargo.id),
@@ -326,6 +342,7 @@ async def _avisos_de_cobro(now: datetime) -> dict[str, int]:
                             SubscriptionCharge.tenant_id == tenant_id,
                             Subscription.tenant_id == tenant_id,
                             SubscriptionCharge.estado == "pendiente",
+                            SubscriptionCharge.tipo == "periodo",
                             SubscriptionCharge.deleted_at.is_(None),
                             SubscriptionCharge.fecha_vencimiento.isnot(None),
                             Subscription.estado.in_(("activa", "vencida", "trialing")),
