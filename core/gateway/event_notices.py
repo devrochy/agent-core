@@ -33,16 +33,31 @@ SIN_PLANTILLA = "sin_plantilla"
 
 # Evento → rutas del contexto que se pueden usar como variables. Lo que no está
 # aquí no se puede mapear (el panel solo ofrece estas rutas).
+_VARIABLES_CARGO = {
+    "cliente.nombre": "Nombre del cliente",
+    "suscripcion.concepto": "Plan o concepto de la suscripción",
+    "cargo.monto": "Monto del cargo",
+    "cargo.moneda": "Moneda",
+    "cargo.periodo": "Período (AAAA-MM)",
+    "cargo.fecha_vencimiento": "Fecha de vencimiento",
+    "cargo.referencia": "Referencia del pago",
+    "cargo.link": "Link de pago",
+}
+
 EVENTOS: dict[str, dict[str, str]] = {
-    "subscription.charge_created": {
+    "subscription.charge_created": dict(_VARIABLES_CARGO),
+    # HU-SUB-05: recordatorios y pausa por mora.
+    "subscription.charge_reminder": {
+        **_VARIABLES_CARGO,
+        "recordatorio.dias": "Cuándo vence (\"en 3 días\", \"hoy\", \"hace 3 días\")",
+    },
+    "subscription.paused": {
         "cliente.nombre": "Nombre del cliente",
         "suscripcion.concepto": "Plan o concepto de la suscripción",
-        "cargo.monto": "Monto del cargo",
-        "cargo.moneda": "Moneda",
-        "cargo.periodo": "Período (AAAA-MM)",
-        "cargo.fecha_vencimiento": "Fecha de vencimiento",
-        "cargo.referencia": "Referencia del pago",
+        "cargo.monto": "Monto adeudado",
+        "cargo.periodo": "Período adeudado",
         "cargo.link": "Link de pago",
+        "mora.dias": "Días de mora",
     },
 }
 

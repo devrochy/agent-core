@@ -17,10 +17,16 @@ from sqlalchemy import select, text
 
 from core.db.session import get_session
 from core.events.outbox import emit_domain
-from core.shared.events import ON_SUBSCRIPTION_CHARGE_CREATED, ON_SUBSCRIPTION_PAST_DUE
+from core.shared.events import (
+    ON_SUBSCRIPTION_CHARGE_CREATED,
+    ON_SUBSCRIPTION_CHARGE_REMINDER,
+    ON_SUBSCRIPTION_PAST_DUE,
+    ON_SUBSCRIPTION_PAUSED,
+)
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from core.tasks.decorators import register_cron
+from pack_subscriptions.avisos import recordatorio_de_hoy
 from pack_subscriptions.models import Subscription, SubscriptionCharge
 from pack_subscriptions.periodos import etiqueta_periodo, sumar_periodo
 
@@ -86,6 +92,11 @@ async def _generar_cargos(now: datetime) -> int:
         async with tenant_scope(tenant_id):
             spec = await load_active_spec()
             cap = payment_registry.capability_for(enabled_packs(spec))
+            config = await _config_del_negocio()
+            # HU-SUB-05: el cargo se genera `dias_anticipacion` antes del vencimiento
+            # para que el link llegue antes (su vencimiento sigue siendo el inicio del
+            # período, D-SPEC-06-3).
+            horizonte = now + timedelta(days=config.dias_anticipacion)
             async with get_session() as session:
                 subs = (
                     await session.execute(
@@ -94,7 +105,7 @@ async def _generar_cargos(now: datetime) -> int:
                             Subscription.estado.in_(("trialing", "activa")),
                             Subscription.deleted_at.is_(None),
                             Subscription.proximo_cargo.isnot(None),
-                            Subscription.proximo_cargo <= now,
+                            Subscription.proximo_cargo <= horizonte,
                         )
                     )
                 ).scalars().all()
@@ -143,6 +154,7 @@ async def _generar_cargos(now: datetime) -> int:
                                 description=f"Suscripción {sub.concepto}",
                             )
                             cargo.referencia = link.reference
+                            cargo.link_url = link.url
                             link_url = link.url
                         except Exception:
                             log.warning("subs_link_fallido", subscription_id=str(sub.id), exc_info=True)
@@ -165,6 +177,7 @@ async def _generar_cargos(now: datetime) -> int:
                             "fecha_vencimiento": inicio.date().isoformat(),
                             "referencia": cargo.referencia,
                             "link": link_url,
+                            "texto": config.aviso_cargo_texto,
                         },
                     )
         total += generadas
@@ -231,3 +244,126 @@ async def _marcar_vencidas(now: datetime) -> int:
             if vistas:
                 log.info("subs_vencidas", tenant_id=str(tenant_id), total=len(vistas))
     return total
+
+
+def _payload_cargo(cargo: SubscriptionCharge, sub: Subscription) -> dict[str, object]:
+    return {
+        "charge_id": str(cargo.id),
+        "subscription_id": str(sub.id),
+        "customer_id": str(sub.customer_id),
+        "concepto": sub.concepto,
+        "monto": str(cargo.monto),
+        "moneda": sub.moneda,
+        "periodo": cargo.periodo,
+        "fecha_vencimiento": cargo.fecha_vencimiento.date().isoformat() if cargo.fecha_vencimiento else None,
+        "referencia": cargo.referencia,
+        "link": cargo.link_url,
+    }
+
+
+@register_cron(PACK_ID, "0 14 * * *")
+async def avisos_de_cobro() -> None:
+    """Recordatorios y pausa por mora (HU-SUB-05), a las 09:00 de Bogotá."""
+    await _avisos_de_cobro(datetime.now(UTC))
+
+
+async def _avisos_de_cobro(now: datetime) -> dict[str, int]:
+    """Por cada cargo impago de una suscripción viva:
+
+    - **recordatorio** del día configurado que toque (`recordatorio_de_hoy`), una vez;
+    - **pausa** si el negocio la activó y la mora pasó `pausar_tras_dias_mora`: la
+      suscripción queda `pausada` (`motivo_pausa = "mora"`), se avisa al cliente y a
+      los dueños.
+    Un cargo pagado no entra (sin spam). Todo sale por el outbox (`dedupe_key`).
+    """
+    totales = {"recordatorios": 0, "pausadas": 0}
+    hoy = now.date()
+    for tenant_id in await _tenant_ids():
+        async with tenant_scope(tenant_id):
+            config = await _config_del_negocio()
+            async with get_session() as session:
+                filas = (
+                    await session.execute(
+                        select(SubscriptionCharge, Subscription)
+                        .join(Subscription, Subscription.id == SubscriptionCharge.subscription_id)
+                        .where(
+                            SubscriptionCharge.tenant_id == tenant_id,
+                            Subscription.tenant_id == tenant_id,
+                            SubscriptionCharge.estado == "pendiente",
+                            SubscriptionCharge.deleted_at.is_(None),
+                            SubscriptionCharge.fecha_vencimiento.isnot(None),
+                            Subscription.estado.in_(("activa", "vencida", "trialing")),
+                            Subscription.deleted_at.is_(None),
+                        )
+                        .order_by(SubscriptionCharge.fecha_vencimiento)
+                    )
+                ).all()
+                pausadas: set[uuid.UUID] = set()
+                for cargo, sub in filas:
+                    vence = cargo.fecha_vencimiento
+                    dias_mora = (now - vence).days
+                    if (
+                        config.pausar_tras_dias_mora
+                        and dias_mora >= config.pausar_tras_dias_mora
+                        and sub.estado in ("activa", "vencida")
+                        and sub.id not in pausadas
+                    ):
+                        pausadas.add(sub.id)
+                        sub.estado = "pausada"
+                        sub.motivo_pausa = "mora"
+                        sub.proximo_cargo = None
+                        await emit_domain(
+                            session,
+                            tenant_id=tenant_id,
+                            topic=ON_SUBSCRIPTION_PAUSED,
+                            dedupe_key=f"sub_paused:{sub.id}:{cargo.id}",
+                            payload={
+                                **_payload_cargo(cargo, sub),
+                                "dias_mora": dias_mora,
+                                "texto": config.aviso_pausa_texto,
+                            },
+                        )
+                        await _avisar_pausa_al_negocio(tenant_id, sub, cargo, dias_mora)
+                        continue
+                    if sub.id in pausadas:
+                        continue
+                    dia = recordatorio_de_hoy(
+                        vence.date(), cargo.created_at.date(), hoy, config.recordatorios_dias
+                    )
+                    if dia is None:
+                        continue
+                    insertado = await emit_domain(
+                        session,
+                        tenant_id=tenant_id,
+                        topic=ON_SUBSCRIPTION_CHARGE_REMINDER,
+                        dedupe_key=f"sub_reminder:{cargo.id}:{dia}",
+                        payload={**_payload_cargo(cargo, sub), "dias": dia, "texto": config.recordatorio_texto},
+                    )
+                    totales["recordatorios"] += int(insertado)
+                totales["pausadas"] += len(pausadas)
+    if any(totales.values()):
+        log.info("subs_avisos_de_cobro", **totales)
+    return totales
+
+
+async def _avisar_pausa_al_negocio(
+    tenant_id: uuid.UUID, sub: Subscription, cargo: SubscriptionCharge, dias_mora: int
+) -> None:
+    from core.shared.audit import record_audit
+
+    await record_audit(
+        actor=f"plugin:{PACK_ID}",
+        action="subs_pausada_por_mora",
+        output_data={"subscription_id": str(sub.id), "charge_id": str(cargo.id), "dias_mora": dias_mora},
+    )
+    try:
+        from core.tasks.push_tasks import notify_owners_push
+
+        notify_owners_push.delay(
+            str(tenant_id),
+            "Suscripción pausada por mora",
+            f"Se pausó «{sub.concepto}»: el pago de {cargo.monto} lleva {dias_mora} días pendiente.",
+            {"kind": "subs_pausada_por_mora", "subscription_id": str(sub.id)},
+        )
+    except Exception:
+        log.warning("subs_alerta_push_fallida", subscription_id=str(sub.id), exc_info=True)

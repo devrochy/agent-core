@@ -45,6 +45,11 @@ ON_SUBSCRIPTION_CHARGE_CREATED = "subscription.charge_created"
 # payload: charge_id, subscription_id, customer_id, concepto, monto, moneda,
 #          periodo, fecha_vencimiento, dias_gracia
 ON_SUBSCRIPTION_PAST_DUE = "subscription.past_due"
+# HU-SUB-05: recordatorio de un cargo impago (una vez por día configurado) y pausa
+# automática por mora. payload: los del cargo + `dias` (recordatorio) o `dias_mora`
+# (pausa) y `texto` (respaldo del pack, editable por el negocio).
+ON_SUBSCRIPTION_CHARGE_REMINDER = "subscription.charge_reminder"
+ON_SUBSCRIPTION_PAUSED = "subscription.paused"
 
 
 class EventBus:

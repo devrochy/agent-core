@@ -1,5 +1,19 @@
 # Changelog
 
+## Sin versión — Cobro y mora con avisos por plantilla (2026-10-08)
+
+- HU-SUB-05. El cargo se genera `dias_anticipacion` antes del vencimiento (3 por defecto) y guarda su link
+  (`link_url`, migración `pack_subscriptions_0005`); el aviso al cliente lleva el texto del pack
+  (`aviso_cargo_texto`, editable) o la plantilla mapeada si la ventana está cerrada.
+- Cron `avisos_de_cobro` (09:00 Bogotá): recordatorios en `recordatorios_dias` (−3, 0, +3, +7), una sola vez cada
+  uno (`subscription.charge_reminder`, dedupe por cargo y día), nunca si el cargo está pagado; y pausa por mora si
+  `pausar_tras_dias_mora` > 0 (`subscription.paused`, `motivo_pausa = "mora"`, push a los dueños + `audit_log`).
+  Pagar reactiva una pausada por mora, no una que pausó el cliente.
+- El core avisa por los tres eventos (`charge_created`, `charge_reminder`, `paused`) con su clave de idempotencia y
+  el texto de respaldo del pack; el catálogo de plantillas por evento los incluye.
+- `GET /api/v1/pack/pack_subscriptions/cargos/{id}/avisos`: qué se envió por cada cargo, cuándo y con qué resultado.
+- `docs/plantillas-suscripciones.md`: plantillas de utilidad sugeridas por evento.
+
 ## Sin versión — Los push de la app usan el canal de Android de la app (2026-10-08)
 
 - Los mensajes a Expo no llevaban `channelId`, así que Android los mostraba por el canal de respaldo de FCM

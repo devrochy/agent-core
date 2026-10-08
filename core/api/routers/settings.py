@@ -659,7 +659,11 @@ async def save_raw_spec(
 
 
 # ---------------------------------------------------------------- plantillas por evento
-EVENTO_LABEL = {"subscription.charge_created": "Cargo de suscripción"}
+EVENTO_LABEL = {
+    "subscription.charge_created": "Cargo de suscripción",
+    "subscription.charge_reminder": "Recordatorio de pago",
+    "subscription.paused": "Suscripción pausada por mora",
+}
 
 class EventTemplateEntry(BaseModel):
     """Evento → plantilla aprobada (HU-ARCH-13, ADR-0108)."""
