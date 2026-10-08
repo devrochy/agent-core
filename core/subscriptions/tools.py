@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import Any, ClassVar
 
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
@@ -82,6 +83,10 @@ class SubscriptionSkill(BaseSkill):
     keywords: ClassVar[list[str]] = []  # siempre activa; el predicado filtra por negocio
 
     def get_tools(self) -> list[MCPTool]:
+        """Tools del core: siempre disponibles, fuera del flujo (HU-FWK-01, ADR-0109)."""
+        return [replace(t, always_available=True) for t in self._build_tools()]
+
+    def _build_tools(self) -> list[MCPTool]:
         providers = frozenset(subscription_registry.registered_provider_ids())
         predicate = _proveedor_habilitado(providers)
         return [

@@ -256,6 +256,10 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     if flow is not None:
         by_name = {t.name: t for t in candidate_tools}
         active_tools = [by_name[name] for name in flow.tool_names if name in by_name]
+        # Las tools del core (memoria, perfil, escalamiento, correo, suscripciones)
+        # se ofrecen aunque ninguna sección las nombre (HU-FWK-01, ADR-0109).
+        en_flujo = {t.name for t in active_tools}
+        active_tools += [t for t in candidate_tools if t.always_available and t.name not in en_flujo]
         flow_summary = render_flow(flow)
     else:
         selected_names = select_relevant_skills(latest_message, recent_context, available_skills)

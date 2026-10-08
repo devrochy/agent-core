@@ -1,9 +1,9 @@
 {
-  "version": 1,
+  "version": 2,
   "sections": [
     {
-      "id": "saludo",
-      "label": "Saludo y descubrimiento",
+      "id": "descubrimiento",
+      "label": "Descubrimiento e intención",
       "purpose": "Recibir al cliente y detectar su intención: si quiere información o comprar (venta) o agendar una demo/reunión (agendamiento). Si el cliente se presenta con nombre e intención de compra o de que lo contacten, registralo DE INMEDIATO con crear_lead antes de seguir preguntando. Cuando el lead confirme un presupuesto o monto de compra, calificalo con calificar_lead.",
       "pack": "pack_commerce",
       "tools": [
@@ -20,21 +20,23 @@
       "label": "Cotización",
       "purpose": "Armar la cotización con precios y stock reales, aplicar promociones y confirmar el total con el cliente.",
       "pack": "pack_commerce",
-      "tools": ["generar_cotizacion", "aplicar_promocion", "confirmar_cotizacion"]
+      "tools": [
+        "generar_cotizacion",
+        "aplicar_promocion",
+        "confirmar_cotizacion"
+      ]
     },
     {
       "id": "pedido",
       "label": "Pedido y cierre",
       "purpose": "Confirmar el pedido, resolver el pago y responder por su estado.",
       "pack": "pack_commerce",
-      "tools": ["crear_pedido", "agregar_item_pedido", "generar_link_pago", "consultar_estado_pedido"]
-    },
-    {
-      "id": "escalamiento",
-      "label": "Escalamiento a un asesor",
-      "purpose": "Pasar la conversación a una persona cuando corresponda (queja, pedido explícito o fuera de alcance).",
-      "pack": "core",
-      "tools": ["escalate_to_human"]
+      "tools": [
+        "crear_pedido",
+        "agregar_item_pedido",
+        "generar_link_pago",
+        "consultar_estado_pedido"
+      ]
     }
   ]
 }
