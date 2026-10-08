@@ -180,6 +180,8 @@ async def send_to_conversation(
     sender_type: str = "agent",
     *,
     is_template: bool = False,
+    raise_on_window_expired: bool = False,
+    client_message_id_prefix: str | None = None,
 ) -> bool:
     """Encola el envío al canal (cada burbuja, su propia tarea Celery).
     Devuelve True si se encoló correctamente -- NO si Meta ya lo entregó
@@ -190,6 +192,12 @@ async def send_to_conversation(
     'failed' más tarde) para que un envío roto quede auditado en BD y
     pueda reintentarse/escalarse, en vez de descartarse en silencio
     (incidente de envío silencioso detectado en producción).
+
+    `raise_on_window_expired`: el operador humano necesita saber que la ventana
+    venció para ofrecer una plantilla (409 `window_expired`, HU-ARCH-13); el
+    mensaje fallido se guarda igual y después se relanza el error.
+    `client_message_id_prefix`: id estable (`<prefijo>:<burbuja>`) para que un
+    aviso por evento reintentado no se duplique (índice único por tenant).
     """
     async with get_session() as session:
         conversation = await session.get(Conversation, conversation_id)
@@ -210,6 +218,8 @@ async def send_to_conversation(
                     status="failed", error_reason=str(exc),
                 )
             )
+        if raise_on_window_expired:
+            raise
         return False
 
     # Canal `web` (HU-CHAN-02): no hay proveedor externo ni credenciales. La
@@ -259,7 +269,9 @@ async def send_to_conversation(
 
     for index, bubble in enumerate(bubbles):
         is_last = index == len(bubbles) - 1
-        client_message_id = str(uuid.uuid4())
+        client_message_id = (
+            f"{client_message_id_prefix}:{index}" if client_message_id_prefix else str(uuid.uuid4())
+        )
         async with get_session() as session:
             message = Message(
                 tenant_id=current_tenant_id,
@@ -279,6 +291,68 @@ async def send_to_conversation(
         outbound_send_task.delay(str(message_id), str(current_tenant_id))
 
     await event_bus.emit(ON_MESSAGE_SENT, conversation_id=conversation_id, content=text)
+    return True
+
+
+async def send_template_to_conversation(
+    conversation_id: uuid.UUID,
+    *,
+    template_name: str,
+    language: str,
+    components: list[dict[str, object]],
+    preview_text: str,
+    sender_type: str = "agent",
+    client_message_id: str | None = None,
+) -> bool:
+    """Encola una plantilla aprobada de WhatsApp (HU-ARCH-13, ADR-0108).
+
+    No mira la ventana de 24 h (una plantilla sale siempre) pero sí la pausa por
+    uso de la API de Meta, igual que el texto. `components` ya viene resuelto;
+    `preview_text` es el cuerpo renderizado que se guarda en `content` para el
+    panel. Devuelve True si quedó encolada.
+    """
+    async with get_session() as session:
+        conversation = await session.get(Conversation, conversation_id)
+        if conversation is None or conversation.channel == "web":
+            return False
+
+    _provider, credentials = await resolve_credentials(
+        conversation.connection_id, conversation.meta_connection_id, expected_tenant_id=conversation.tenant_id
+    )
+    from core.gateway.meta_usage import connection_id_for_phone_number, is_paused
+
+    current_tenant_id = get_current_tenant_id()
+    meta_connection_id = await connection_id_for_phone_number(
+        credentials.get("phone_number_id", ""), current_tenant_id
+    )
+    paused = await is_paused(current_tenant_id, meta_connection_id)
+    async with get_session() as session:
+        message = Message(
+            tenant_id=current_tenant_id,
+            conversation_id=conversation_id,
+            direction="outbound",
+            sender_type=sender_type,
+            content=preview_text,
+            status="failed" if paused else "queued",
+            error_reason=(
+                "Envío pausado: uso de la API de Meta cerca del límite (>=90%)" if paused else None
+            ),
+            client_message_id=client_message_id or str(uuid.uuid4()),
+            template_name=template_name,
+            template_language=language,
+            template_components=list(components),
+        )
+        session.add(message)
+        await session.flush()
+        message_id = message.id
+    if paused:
+        log.error("envio_pausado_por_uso_de_api", conversation_id=str(conversation_id))
+        return False
+
+    from core.tasks.outbound_send import outbound_send_task
+
+    outbound_send_task.delay(str(message_id), str(current_tenant_id))
+    await event_bus.emit(ON_MESSAGE_SENT, conversation_id=conversation_id, content=preview_text)
     return True
 
 

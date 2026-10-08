@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 
 from core.gateway.channels.base import OutboundAdapter
@@ -34,6 +36,28 @@ class WhatsAppMetaOutbound(OutboundAdapter):
             "to": to,
             "type": "image",
             "image": {"link": image_url, "caption": caption},
+        }
+        return await self._post(credentials, payload)
+
+    async def send_template(
+        self,
+        credentials: dict[str, str],
+        to_external_id: str,
+        name: str,
+        language: str,
+        components: list[dict[str, Any]],
+    ) -> str:
+        """Plantilla aprobada fuera de la ventana de 24 h (HU-ARCH-13, ADR-0108).
+        `components` llega ya resuelto (parámetros del evento o de la BD)."""
+        to = to_external_id.removeprefix("whatsapp:").lstrip("+")
+        template: dict[str, Any] = {"name": name, "language": {"code": language}}
+        if components:
+            template["components"] = components
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "template",
+            "template": template,
         }
         return await self._post(credentials, payload)
 

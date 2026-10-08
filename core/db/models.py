@@ -131,6 +131,14 @@ class AppSettings(Base):
     # fragmento del widget); el `turnstile_secret` NUNCA se expone al cliente.
     web_chat_config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
 
+    # Plantillas por evento (HU-ARCH-13, ADR-0108, migración 0057):
+    # {"<evento>": {"template": str, "language": str, "variables": [ruta, ...],
+    #  "fallback_text": str}}. Las variables son rutas del contexto del evento
+    # (p. ej. "cliente.nombre"), nunca texto del LLM.
+    message_templates_map: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb")
+    )
+
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -338,6 +346,11 @@ class Message(Base):
     error_fbtrace_id: Mapped[str | None] = mapped_column(Text)
     error_reason: Mapped[str | None] = mapped_column(Text)
     status_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Envío como plantilla de WhatsApp (HU-ARCH-13, ADR-0108): `content` guarda el
+    # texto renderizado para el panel; `template_components` es el payload de Graph.
+    template_name: Mapped[str | None] = mapped_column(Text)
+    template_language: Mapped[str | None] = mapped_column(Text)
+    template_components: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

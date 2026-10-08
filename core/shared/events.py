@@ -36,6 +36,11 @@ ON_TOOL_EXECUTED = "tool.executed"                # payload: tool_name, plugin_i
 # suscriben para registrar el cobro. Contrato compartido del core.
 ON_PAYMENT_CONFIRMED = "payment.confirmed"        # payload: reference, provider, provider_reference, amount
 ON_PAYMENT_REJECTED = "payment.rejected"          # payload: reference, provider, provider_reference, amount
+# Suscripciones (HU-ARCH-13, ADR-0108): se emite por el outbox al generar el cargo
+# del período; el core avisa al cliente (plantilla fuera de 24 h, texto dentro).
+# payload: charge_id, subscription_id, customer_id, concepto, monto, moneda,
+#          periodo, fecha_vencimiento, referencia, link
+ON_SUBSCRIPTION_CHARGE_CREATED = "subscription.charge_created"
 
 
 class EventBus:

@@ -1018,6 +1018,135 @@
         }
       }
     },
+    "/api/v1/admin/conversations/{conversation_id}/templates": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · conversaciones"
+        ],
+        "summary": "List Conversation Templates",
+        "description": "Plantillas APROBADAS de la WABA de la conexión de esta conversación.",
+        "operationId": "list_conversation_templates_api_v1_admin_conversations__conversation_id__templates_get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApprovedTemplate"
+                  },
+                  "title": "Response List Conversation Templates Api V1 Admin Conversations  Conversation Id  Templates Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/conversations/{conversation_id}/template-messages": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · conversaciones"
+        ],
+        "summary": "Send Template Message",
+        "description": "Envía una plantilla aprobada como persona del equipo (fuera de la ventana).",
+        "operationId": "send_template_message_api_v1_admin_conversations__conversation_id__template_messages_post",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateMessageIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/conversations/{conversation_id}/toggle-bot": {
       "post": {
         "tags": [
@@ -6123,6 +6252,167 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SpecPayload"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/settings/message-templates": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Get Message Templates",
+        "description": "Catálogo de eventos (con sus variables permitidas) y el mapeo del negocio.",
+        "operationId": "get_message_templates_api_v1_admin_settings_message_templates_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageTemplatesSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Save Message Templates",
+        "description": "Guarda el mapeo evento → plantilla. Valida que el evento exista, que las\nrutas estén permitidas y que la plantilla exista en alguna WABA del negocio\ncon la misma cantidad de variables en el cuerpo.",
+        "operationId": "save_message_templates_api_v1_admin_settings_message_templates_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageTemplatesUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageTemplatesSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/settings/message-templates/missing": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Get Missing Templates",
+        "description": "Avisos que no salieron por falta de plantilla en los últimos 7 días (alerta del panel).",
+        "operationId": "get_missing_templates_api_v1_admin_settings_message_templates_missing_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MissingTemplates"
                 }
               }
             }
@@ -11684,7 +11974,7 @@
           "pack · calendario"
         ],
         "summary": "Oauth Start",
-        "description": "Inicia el OAuth2 de Google (302 a accounts.google.com).\n\nDeja dos cookies httponly que el panel reenvía al navegador: `oauth_state`\n(anti-CSRF, D-SPEC-24-12) y `oauth_next` (a dónde volver). El retorno de Google\nentra por la ruta BFF del panel (D-SPEC-24-11, ADR-0093).",
+        "description": "Inicia el OAuth2 de Google (302 a accounts.google.com).\n\nDeja dos cookies httponly que el panel reenvía al navegador: `oauth_state`\n(anti-CSRF, D-SPEC-24-12) y `oauth_next` (a dónde volver). El retorno de Google\nentra por la ruta BFF del panel (D-SPEC-24-11, ADR-0093).\n\nEl `state` lleva el negocio que inició el flujo (`<tenant_id>.<aleatorio>`): el\ncallback guarda la cuenta en el negocio de la sesión, que puede haber cambiado\nmientras el usuario estaba en Google.",
         "operationId": "oauth_start_api_v1_pack_calendar_oauth_start_get",
         "parameters": [
           {
@@ -12260,6 +12550,57 @@
         },
         "type": "object",
         "title": "AppointmentPatch"
+      },
+      "ApprovedTemplate": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          },
+          "variables": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Variables",
+            "description": "Placeholders del cuerpo, en orden."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "language",
+          "category",
+          "body",
+          "variables"
+        ],
+        "title": "ApprovedTemplate",
+        "description": "Plantilla aprobada de la conexión de la conversación (HU-ARCH-13)."
       },
       "AttemptRow": {
         "properties": {
@@ -14527,6 +14868,67 @@
         ],
         "title": "EvalRunItem"
       },
+      "EventCatalogItem": {
+        "properties": {
+          "event": {
+            "type": "string",
+            "title": "Event"
+          },
+          "variables": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Variables"
+          }
+        },
+        "type": "object",
+        "required": [
+          "event",
+          "variables"
+        ],
+        "title": "EventCatalogItem"
+      },
+      "EventTemplateEntry": {
+        "properties": {
+          "template": {
+            "type": "string",
+            "title": "Template",
+            "default": ""
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": "es"
+          },
+          "variables": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              }
+            ],
+            "title": "Variables",
+            "default": []
+          },
+          "fallback_text": {
+            "type": "string",
+            "title": "Fallback Text",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "EventTemplateEntry",
+        "description": "Evento → plantilla aprobada (HU-ARCH-13, ADR-0108)."
+      },
       "Expense": {
         "properties": {
           "id": {
@@ -16041,6 +16443,28 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "template_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Name"
+          },
+          "error_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Reason"
           }
         },
         "type": "object",
@@ -16053,6 +16477,46 @@
           "created_at"
         ],
         "title": "MessageItem"
+      },
+      "MessageTemplatesSettings": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/EventCatalogItem"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "mapping": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EventTemplateEntry"
+            },
+            "type": "object",
+            "title": "Mapping"
+          }
+        },
+        "type": "object",
+        "required": [
+          "events",
+          "mapping"
+        ],
+        "title": "MessageTemplatesSettings"
+      },
+      "MessageTemplatesUpdate": {
+        "properties": {
+          "mapping": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EventTemplateEntry"
+            },
+            "type": "object",
+            "title": "Mapping"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mapping"
+        ],
+        "title": "MessageTemplatesUpdate"
       },
       "MetaCategoryCost": {
         "properties": {
@@ -16280,6 +16744,51 @@
           "errors"
         ],
         "title": "MetaSyncResult"
+      },
+      "MissingTemplateItem": {
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "title": "Conversation Id"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "conversation_id",
+          "detail",
+          "created_at"
+        ],
+        "title": "MissingTemplateItem"
+      },
+      "MissingTemplates": {
+        "properties": {
+          "total_7d": {
+            "type": "integer",
+            "title": "Total 7D"
+          },
+          "recent": {
+            "items": {
+              "$ref": "#/components/schemas/MissingTemplateItem"
+            },
+            "type": "array",
+            "title": "Recent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_7d",
+          "recent"
+        ],
+        "title": "MissingTemplates"
       },
       "MobileEvent": {
         "properties": {
@@ -19463,6 +19972,27 @@
           "rejected_reason"
         ],
         "title": "TemplateItem"
+      },
+      "TemplateMessageIn": {
+        "properties": {
+          "template_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Template Id"
+          },
+          "variables": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Variables"
+          }
+        },
+        "type": "object",
+        "required": [
+          "template_id"
+        ],
+        "title": "TemplateMessageIn"
       },
       "TemplatesResponse": {
         "properties": {

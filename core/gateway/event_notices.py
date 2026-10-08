@@ -1,0 +1,335 @@
+"""Avisos por evento con plantillas de WhatsApp (HU-ARCH-13, ADR-0108).
+
+Un aviso (cobro, recordatorio, seguimiento) sale así:
+
+- ventana de 24 h abierta → texto de respaldo (más barato que una plantilla);
+- ventana cerrada y el evento mapeado a una plantilla APROBADA de la WABA de la
+  conversación → la plantilla, con las variables resueltas del contexto del evento;
+- ventana cerrada sin mapeo (o la plantilla no está aprobada) → se registra un
+  mensaje `failed` con `error_reason = "sin_plantilla"` y el panel lo muestra.
+
+Las variables salen SOLO del contexto que arma el servidor a partir del evento y de
+la base (rutas permitidas por evento en `EVENTOS`). Nunca del texto del LLM.
+"""
+
+from __future__ import annotations
+
+import re
+import uuid
+from dataclasses import dataclass
+from typing import Any
+
+from sqlalchemy import select
+
+from core.db.models import AppSettings, Conversation, Message, MessageTemplate, WabaAccount
+from core.db.session import get_session
+from core.shared.exceptions import OutboundWindowExpiredError
+from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
+
+log = get_logger(__name__)
+
+SIN_PLANTILLA = "sin_plantilla"
+
+# Evento → rutas del contexto que se pueden usar como variables. Lo que no está
+# aquí no se puede mapear (el panel solo ofrece estas rutas).
+EVENTOS: dict[str, dict[str, str]] = {
+    "subscription.charge_created": {
+        "cliente.nombre": "Nombre del cliente",
+        "suscripcion.concepto": "Plan o concepto de la suscripción",
+        "cargo.monto": "Monto del cargo",
+        "cargo.moneda": "Moneda",
+        "cargo.periodo": "Período (AAAA-MM)",
+        "cargo.fecha_vencimiento": "Fecha de vencimiento",
+        "cargo.referencia": "Referencia del pago",
+        "cargo.link": "Link de pago",
+    },
+}
+
+_PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
+
+
+class NoticeConfigError(ValueError):
+    """La configuración de un evento no es válida (ruta, plantilla o variables)."""
+
+
+@dataclass(frozen=True)
+class NoticeResult:
+    modo: str  # "texto" | "plantilla" | "sin_plantilla" | "duplicado" | "no_enviado"
+    detalle: str = ""
+
+
+# ---------------------------------------------------------------- plantillas
+def _component(template_components: Any, tipo: str) -> dict[str, Any] | None:
+    for comp in template_components or []:
+        if isinstance(comp, dict) and str(comp.get("type", "")).upper() == tipo:
+            return comp
+    return None
+
+
+def template_placeholders(template_components: Any) -> list[str]:
+    """Placeholders del cuerpo en orden de aparición, sin repetir ("1", "2" o nombres)."""
+    body = _component(template_components, "BODY")
+    vistos: list[str] = []
+    for nombre in _PLACEHOLDER.findall(str((body or {}).get("text", ""))):
+        if nombre not in vistos:
+            vistos.append(nombre)
+    return vistos
+
+
+def template_has_non_body_variables(template_components: Any) -> bool:
+    """v1 solo resuelve variables del cuerpo: cabecera o botones con variables no se mapean."""
+    for comp in template_components or []:
+        if not isinstance(comp, dict) or str(comp.get("type", "")).upper() == "BODY":
+            continue
+        if _PLACEHOLDER.search(str(comp.get("text", ""))):
+            return True
+        for boton in comp.get("buttons") or []:
+            if isinstance(boton, dict) and _PLACEHOLDER.search(str(boton.get("url", ""))):
+                return True
+    return False
+
+
+def build_components(template: MessageTemplate, values: dict[str, str]) -> list[dict[str, Any]]:
+    """Componentes de Graph para el cuerpo. `values`: placeholder → texto."""
+    placeholders = template_placeholders(template.components)
+    if not placeholders:
+        return []
+    named = (template.parameter_format or "").upper() == "NAMED"
+    parametros = []
+    for nombre in placeholders:
+        parametro: dict[str, Any] = {"type": "text", "text": values[nombre]}
+        if named:
+            parametro["parameter_name"] = nombre
+        parametros.append(parametro)
+    return [{"type": "body", "parameters": parametros}]
+
+
+def render_body(template: MessageTemplate, values: dict[str, str]) -> str:
+    body = _component(template.components, "BODY")
+    texto = str((body or {}).get("text", ""))
+    return _PLACEHOLDER.sub(lambda m: values.get(m.group(1), m.group(0)), texto)
+
+
+# ---------------------------------------------------------------- variables
+def _lookup(context: dict[str, Any], ruta: str) -> str | None:
+    actual: Any = context
+    for parte in ruta.split("."):
+        if not isinstance(actual, dict) or parte not in actual:
+            return None
+        actual = actual[parte]
+    if actual is None or isinstance(actual, dict | list):
+        return None
+    texto = str(actual).strip()
+    return texto or None
+
+
+def resolve_values(
+    event_key: str, variables: list[str] | dict[str, str], placeholders: list[str], context: dict[str, Any]
+) -> dict[str, str]:
+    """placeholder → valor, solo con rutas permitidas del evento. Lanza
+    `NoticeConfigError` si una ruta no está permitida o falta el dato."""
+    permitidas = EVENTOS.get(event_key, {})
+    if isinstance(variables, dict):
+        mapeo = {str(k): str(v) for k, v in variables.items()}
+    else:
+        mapeo = {nombre: str(ruta) for nombre, ruta in zip(placeholders, variables, strict=False)}
+    if set(mapeo) != set(placeholders):
+        raise NoticeConfigError(
+            f"La plantilla pide {len(placeholders)} variables y el mapeo tiene {len(mapeo)}."
+        )
+    valores: dict[str, str] = {}
+    for nombre in placeholders:
+        ruta = mapeo[nombre]
+        if ruta not in permitidas:
+            raise NoticeConfigError(f"La ruta «{ruta}» no está permitida para {event_key}.")
+        valor = _lookup(context, ruta)
+        if valor is None:
+            raise NoticeConfigError(f"Falta el dato «{ruta}» en el evento.")
+        valores[nombre] = valor
+    return valores
+
+
+def render_fallback(texto: str, context: dict[str, Any], event_key: str) -> str:
+    """Texto de respaldo con `{ruta}` reemplazadas por datos del evento (solo rutas permitidas)."""
+    permitidas = EVENTOS.get(event_key, {})
+
+    def _sub(m: re.Match[str]) -> str:
+        ruta = m.group(1)
+        if ruta not in permitidas:
+            return m.group(0)
+        return _lookup(context, ruta) or ""
+
+    return re.sub(r"\{([a-z_]+\.[a-z_]+)\}", _sub, texto)
+
+
+# ---------------------------------------------------------------- config
+async def load_templates_map(tenant_id: uuid.UUID) -> dict[str, Any]:
+    async with get_session() as session:
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None)
+                )
+            )
+        ).scalar_one_or_none()
+    return dict((app_settings.message_templates_map if app_settings else None) or {})
+
+
+async def approved_template_for(
+    conversation: Conversation, name: str, language: str
+) -> MessageTemplate | None:
+    """Plantilla APROBADA con ese nombre e idioma en la WABA de la conexión de la
+    conversación. Sin conexión de Meta no hay plantillas."""
+    if conversation.meta_connection_id is None:
+        return None
+    async with get_session() as session:
+        return (
+            await session.execute(
+                select(MessageTemplate)
+                .join(WabaAccount, WabaAccount.id == MessageTemplate.waba_account_id)
+                .where(
+                    WabaAccount.connection_id == conversation.meta_connection_id,
+                    MessageTemplate.tenant_id == conversation.tenant_id,
+                    MessageTemplate.name == name,
+                    MessageTemplate.language == language,
+                    MessageTemplate.status == "APPROVED",
+                )
+            )
+        ).scalars().first()
+
+
+async def approved_templates_for_conversation(conversation: Conversation) -> list[MessageTemplate]:
+    if conversation.meta_connection_id is None:
+        return []
+    async with get_session() as session:
+        return list(
+            (
+                await session.execute(
+                    select(MessageTemplate)
+                    .join(WabaAccount, WabaAccount.id == MessageTemplate.waba_account_id)
+                    .where(
+                        WabaAccount.connection_id == conversation.meta_connection_id,
+                        MessageTemplate.tenant_id == conversation.tenant_id,
+                        MessageTemplate.status == "APPROVED",
+                    )
+                    .order_by(MessageTemplate.name, MessageTemplate.language)
+                )
+            ).scalars().all()
+        )
+
+
+# ---------------------------------------------------------------- envío
+async def _ya_enviado(notice_key: str) -> bool:
+    async with get_session() as session:
+        existe = (
+            await session.execute(
+                select(Message.id).where(
+                    Message.tenant_id == get_current_tenant_id(),
+                    Message.client_message_id.in_((notice_key, f"{notice_key}:0")),
+                )
+            )
+        ).first()
+    return existe is not None
+
+
+async def _registrar_sin_plantilla(
+    conversation_id: uuid.UUID, notice_key: str, event_key: str, detalle: str
+) -> None:
+    async with get_session() as session:
+        session.add(
+            Message(
+                tenant_id=get_current_tenant_id(),
+                conversation_id=conversation_id,
+                direction="outbound",
+                sender_type="agent",
+                content=f"Aviso «{event_key}» sin enviar: {detalle}",
+                status="failed",
+                error_reason=SIN_PLANTILLA,
+                client_message_id=notice_key,
+            )
+        )
+    log.warning(
+        "event_notice_sin_plantilla",
+        tenant_id=str(get_current_tenant_id()),
+        conversation_id=str(conversation_id),
+        event_key=event_key,
+        detalle=detalle,
+    )
+
+
+async def send_event_notice(
+    conversation_id: uuid.UUID,
+    event_key: str,
+    context: dict[str, Any],
+    *,
+    notice_key: str,
+    default_fallback_text: str = "",
+) -> NoticeResult:
+    """Envía el aviso de `event_key` a la conversación (ver el docstring del módulo).
+
+    `notice_key` es estable por aviso (p. ej. `sub_charge:<cargo>`): un reintento
+    del evento no duplica el mensaje. Corre dentro del `tenant_scope` del evento.
+    """
+    from core.gateway.sender import (
+        send_template_to_conversation,
+        send_to_conversation,
+        validate_service_window,
+    )
+
+    if await _ya_enviado(notice_key):
+        return NoticeResult("duplicado")
+    async with get_session() as session:
+        conversation = await session.get(Conversation, conversation_id)
+    if conversation is None or conversation.tenant_id != get_current_tenant_id():
+        return NoticeResult("no_enviado", "conversación inexistente")
+
+    entrada = (await load_templates_map(conversation.tenant_id)).get(event_key) or {}
+    fallback = str(entrada.get("fallback_text") or default_fallback_text).strip()
+
+    try:
+        validate_service_window(conversation, is_template=False)
+        ventana_abierta = True
+    except OutboundWindowExpiredError:
+        ventana_abierta = False
+
+    if ventana_abierta:
+        if not fallback:
+            return NoticeResult("no_enviado", "sin texto de respaldo")
+        enviado = await send_to_conversation(
+            conversation_id,
+            render_fallback(fallback, context, event_key),
+            client_message_id_prefix=notice_key,
+        )
+        return NoticeResult("texto" if enviado else "no_enviado")
+
+    nombre = str(entrada.get("template") or "").strip()
+    idioma = str(entrada.get("language") or "es").strip()
+    if not nombre:
+        await _registrar_sin_plantilla(conversation_id, notice_key, event_key, "evento sin plantilla")
+        return NoticeResult(SIN_PLANTILLA, "evento sin plantilla")
+    plantilla = await approved_template_for(conversation, nombre, idioma)
+    if plantilla is None:
+        detalle = f"la plantilla {nombre} ({idioma}) no está aprobada en esta conexión"
+        await _registrar_sin_plantilla(conversation_id, notice_key, event_key, detalle)
+        return NoticeResult(SIN_PLANTILLA, detalle)
+    try:
+        valores = resolve_values(
+            event_key,
+            entrada.get("variables") or [],
+            template_placeholders(plantilla.components),
+            context,
+        )
+    except NoticeConfigError as exc:
+        await _registrar_sin_plantilla(conversation_id, notice_key, event_key, str(exc))
+        return NoticeResult(SIN_PLANTILLA, str(exc))
+
+    enviado = await send_template_to_conversation(
+        conversation_id,
+        template_name=plantilla.name,
+        language=plantilla.language,
+        components=build_components(plantilla, valores),
+        preview_text=render_body(plantilla, valores),
+        client_message_id=notice_key,
+    )
+    return NoticeResult("plantilla" if enviado else "no_enviado")

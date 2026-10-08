@@ -16,6 +16,8 @@ from decimal import Decimal
 from sqlalchemy import select, text
 
 from core.db.session import get_session
+from core.events.outbox import emit_domain
+from core.shared.events import ON_SUBSCRIPTION_CHARGE_CREATED
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from core.tasks.decorators import register_cron
@@ -106,6 +108,7 @@ async def generar_cargos() -> None:
                     session.add(cargo)
                     await session.flush()
                     sub.estado = "activa"
+                    link_url: str | None = None
                     if cap is not None:
                         try:
                             link = await cap.create_link(
@@ -114,7 +117,31 @@ async def generar_cargos() -> None:
                                 description=f"Suscripción {sub.concepto}",
                             )
                             cargo.referencia = link.reference
+                            link_url = link.url
                         except Exception:
                             log.warning("subs_link_fallido", subscription_id=str(sub.id), exc_info=True)
+                    # Aviso al cliente por el outbox, en la MISMA transacción que el
+                    # cargo (ADR-0107): si el cargo se revierte, no hay aviso. El core
+                    # lo envía como plantilla o texto según la ventana (ADR-0108).
+                    await emit_domain(
+                        session,
+                        tenant_id=tenant_id,
+                        topic=ON_SUBSCRIPTION_CHARGE_CREATED,
+                        dedupe_key=f"sub_charge:{cargo.id}",
+                        payload={
+                            "charge_id": str(cargo.id),
+                            "subscription_id": str(sub.id),
+                            "customer_id": str(sub.customer_id),
+                            "concepto": sub.concepto,
+                            "monto": str(cargo.monto),
+                            "moneda": sub.moneda,
+                            "periodo": periodo,
+                            "fecha_vencimiento": cargo.fecha_vencimiento.date().isoformat()
+                            if cargo.fecha_vencimiento
+                            else None,
+                            "referencia": cargo.referencia,
+                            "link": link_url,
+                        },
+                    )
                     sub.proximo_cargo = _proximo(sub.proximo_cargo)
         log.info("subs_cargos_generados", tenant_id=str(tenant_id), generadas=len(subs))

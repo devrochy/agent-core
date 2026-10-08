@@ -43,6 +43,9 @@ class MessageItem(BaseModel):
     content: str
     status: str
     created_at: datetime
+    # HU-ARCH-13: plantilla con la que salió y motivo de un fallo (p. ej. `sin_plantilla`).
+    template_name: str | None = None
+    error_reason: str | None = None
 
 
 class ConversationDetail(ConversationSummary):
@@ -55,6 +58,23 @@ class MessageIn(BaseModel):
 
 class BotState(BaseModel):
     bot_paused: bool
+
+
+class ApprovedTemplate(BaseModel):
+    """Plantilla aprobada de la conexión de la conversación (HU-ARCH-13)."""
+
+    id: uuid.UUID
+    name: str
+    language: str
+    category: str | None
+    body: str
+    variables: list[str] = Field(description="Placeholders del cuerpo, en orden.")
+
+
+class TemplateMessageIn(BaseModel):
+    template_id: uuid.UUID
+    # placeholder ("1", "2" o el nombre) → texto que escribe la persona del equipo.
+    variables: dict[str, str] = Field(default_factory=dict)
 
 
 async def _owned_conversation(conversation_id: uuid.UUID, tenant_id) -> Conversation:
@@ -170,6 +190,8 @@ async def get_conversation(
                 content=m.content,
                 status=m.status,
                 created_at=m.created_at,
+                template_name=m.template_name,
+                error_reason=m.error_reason,
             )
             for m in messages
         ],
@@ -190,13 +212,96 @@ async def send_human_message(
     from core.gateway.sender import send_to_conversation
 
     try:
-        await send_to_conversation(conversation_id, payload.content, sender_type="human")
+        await send_to_conversation(
+            conversation_id, payload.content, sender_type="human", raise_on_window_expired=True
+        )
     except OutboundWindowExpiredError as exc:
+        # Antes `send_to_conversation` se tragaba el error y este 409 nunca salía
+        # (HU-ARCH-13): el panel ofrece las plantillas de `GET .../templates`.
         raise ApiError(
             409,
             "window_expired",
             "La ventana de 24 h expiró: envía una plantilla aprobada.",
         ) from exc
+    return Response(status_code=204)
+
+
+@router.get("/{conversation_id}/templates", response_model=list[ApprovedTemplate])
+async def list_conversation_templates(
+    conversation_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("conversations"))],
+) -> list[ApprovedTemplate]:
+    """Plantillas APROBADAS de la WABA de la conexión de esta conversación."""
+    from core.gateway.event_notices import (
+        approved_templates_for_conversation,
+        render_body,
+        template_has_non_body_variables,
+        template_placeholders,
+    )
+
+    conversation = await _owned_conversation(conversation_id, principal.tenant_id)
+    return [
+        ApprovedTemplate(
+            id=t.id,
+            name=t.name,
+            language=t.language,
+            category=t.category,
+            body=render_body(t, {}),
+            variables=template_placeholders(t.components),
+        )
+        for t in await approved_templates_for_conversation(conversation)
+        if not template_has_non_body_variables(t.components)
+    ]
+
+
+@router.post("/{conversation_id}/template-messages", status_code=204)
+async def send_template_message(
+    conversation_id: uuid.UUID,
+    payload: TemplateMessageIn,
+    principal: Annotated[Principal, Depends(require("conversations", write=True))],
+) -> Response:
+    """Envía una plantilla aprobada como persona del equipo (fuera de la ventana)."""
+    from core.gateway.event_notices import (
+        approved_templates_for_conversation,
+        build_components,
+        render_body,
+        template_placeholders,
+    )
+    from core.gateway.sender import send_template_to_conversation
+
+    conversation = await _owned_conversation(conversation_id, principal.tenant_id)
+    if conversation.channel == TEST_CHANNEL:
+        raise ApiError.bad_request("Las conversaciones de prueba no envían mensajes.", "test_channel")
+    plantilla = next(
+        (
+            t
+            for t in await approved_templates_for_conversation(conversation)
+            if t.id == payload.template_id
+        ),
+        None,
+    )
+    if plantilla is None:
+        raise ApiError.not_found("Plantilla no aprobada en la conexión de esta conversación.")
+    placeholders = template_placeholders(plantilla.components)
+    valores = {k: v.strip() for k, v in payload.variables.items() if v and v.strip()}
+    faltan = [p for p in placeholders if p not in valores]
+    if faltan:
+        raise ApiError.bad_request(
+            "Completa todas las variables de la plantilla.",
+            "template_variables",
+            fields={p: "Requerida." for p in faltan},
+        )
+    valores = {p: valores[p][:1000] for p in placeholders}
+    enviado = await send_template_to_conversation(
+        conversation_id,
+        template_name=plantilla.name,
+        language=plantilla.language,
+        components=build_components(plantilla, valores),
+        preview_text=render_body(plantilla, valores),
+        sender_type="human",
+    )
+    if not enviado:
+        raise ApiError(409, "send_paused", "No se pudo enviar: la conexión está pausada por uso.")
     return Response(status_code=204)
 
 

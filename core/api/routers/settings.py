@@ -656,3 +656,174 @@ async def save_raw_spec(
     spec = await load_active_spec()
     await save_spec_if_changed(spec, nuevo.model_dump(mode="json"), principal.tenant_id)
     return SpecPayload(spec=nuevo.model_dump(mode="json"))
+
+
+# ---------------------------------------------------------------- plantillas por evento
+class EventTemplateEntry(BaseModel):
+    """Evento → plantilla aprobada (HU-ARCH-13, ADR-0108)."""
+
+    template: str = ""
+    language: str = "es"
+    # Lista (variables posicionales, en orden) o {placeholder: ruta} (con nombre).
+    variables: list[str] | dict[str, str] = []
+    fallback_text: str = ""
+
+
+class EventCatalogItem(BaseModel):
+    event: str
+    variables: dict[str, str]  # ruta permitida → descripción
+
+
+class MessageTemplatesSettings(BaseModel):
+    events: list[EventCatalogItem]
+    mapping: dict[str, EventTemplateEntry]
+
+
+class MessageTemplatesUpdate(BaseModel):
+    mapping: dict[str, EventTemplateEntry]
+
+
+class MissingTemplateItem(BaseModel):
+    conversation_id: str
+    detail: str
+    created_at: datetime
+
+
+class MissingTemplates(BaseModel):
+    total_7d: int
+    recent: list[MissingTemplateItem]
+
+
+async def _message_templates_out(tenant_id) -> MessageTemplatesSettings:
+    from core.gateway.event_notices import EVENTOS
+
+    app_settings = await _load_app_settings(tenant_id)
+    raw = dict((app_settings.message_templates_map if app_settings else None) or {})
+    return MessageTemplatesSettings(
+        events=[EventCatalogItem(event=k, variables=v) for k, v in EVENTOS.items()],
+        mapping={k: EventTemplateEntry.model_validate(v) for k, v in raw.items() if k in EVENTOS},
+    )
+
+
+@router.get("/message-templates", response_model=MessageTemplatesSettings)
+async def get_message_templates(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> MessageTemplatesSettings:
+    """Catálogo de eventos (con sus variables permitidas) y el mapeo del negocio."""
+    return await _message_templates_out(principal.tenant_id)
+
+
+@router.put("/message-templates", response_model=MessageTemplatesSettings)
+async def save_message_templates(
+    payload: MessageTemplatesUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> MessageTemplatesSettings:
+    """Guarda el mapeo evento → plantilla. Valida que el evento exista, que las
+    rutas estén permitidas y que la plantilla exista en alguna WABA del negocio
+    con la misma cantidad de variables en el cuerpo."""
+    from core.db.models import MessageTemplate
+    from core.gateway.event_notices import (
+        EVENTOS,
+        template_has_non_body_variables,
+        template_placeholders,
+    )
+
+    errores: dict[str, str] = {}
+    limpio: dict[str, Any] = {}
+    for evento, entrada in payload.mapping.items():
+        if evento not in EVENTOS:
+            errores[evento] = "Evento desconocido."
+            continue
+        nombre = entrada.template.strip()
+        idioma = entrada.language.strip() or "es"
+        fallback = entrada.fallback_text.strip()[:1000]
+        if not nombre:
+            if fallback:
+                limpio[evento] = {"template": "", "language": idioma, "variables": [], "fallback_text": fallback}
+            continue
+        rutas = list(entrada.variables.values()) if isinstance(entrada.variables, dict) else list(entrada.variables)
+        no_permitidas = [r for r in rutas if r not in EVENTOS[evento]]
+        if no_permitidas:
+            errores[evento] = f"Variables no permitidas: {', '.join(no_permitidas)}."
+            continue
+        async with get_session() as session:
+            plantilla = (
+                await session.execute(
+                    select(MessageTemplate).where(
+                        MessageTemplate.tenant_id == principal.tenant_id,
+                        MessageTemplate.name == nombre,
+                        MessageTemplate.language == idioma,
+                    )
+                )
+            ).scalars().first()
+        if plantilla is None:
+            errores[evento] = f"No existe la plantilla {nombre} ({idioma}) en tus conexiones."
+            continue
+        if template_has_non_body_variables(plantilla.components):
+            errores[evento] = "La plantilla tiene variables fuera del cuerpo (cabecera o botón): no se admite todavía."
+            continue
+        placeholders = template_placeholders(plantilla.components)
+        claves = set(entrada.variables) if isinstance(entrada.variables, dict) else None
+        if (claves is not None and claves != set(placeholders)) or (
+            claves is None and len(rutas) != len(placeholders)
+        ):
+            errores[evento] = f"La plantilla tiene {len(placeholders)} variables y mapeaste {len(rutas)}."
+            continue
+        limpio[evento] = {
+            "template": nombre,
+            "language": idioma,
+            "variables": entrada.variables,
+            "fallback_text": fallback,
+        }
+    if errores:
+        raise ApiError.bad_request("Revisa el mapeo de plantillas.", "message_templates_invalid", fields=errores)
+
+    async with get_session() as session:
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == principal.tenant_id,
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if app_settings is None:
+            app_settings = AppSettings(tenant_id=principal.tenant_id)
+            session.add(app_settings)
+        app_settings.message_templates_map = limpio
+    return await _message_templates_out(principal.tenant_id)
+
+
+@router.get("/message-templates/missing", response_model=MissingTemplates)
+async def get_missing_templates(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> MissingTemplates:
+    """Avisos que no salieron por falta de plantilla en los últimos 7 días (alerta del panel)."""
+    from datetime import UTC, timedelta
+
+    from sqlalchemy import func
+
+    from core.db.models import Message
+    from core.gateway.event_notices import SIN_PLANTILLA
+
+    desde = datetime.now(UTC) - timedelta(days=7)
+    filtro = (
+        Message.tenant_id == principal.tenant_id,
+        Message.error_reason == SIN_PLANTILLA,
+        Message.created_at >= desde,
+        Message.deleted_at.is_(None),
+    )
+    async with get_session() as session:
+        total = (await session.execute(select(func.count()).select_from(Message).where(*filtro))).scalar_one()
+        filas = (
+            await session.execute(
+                select(Message).where(*filtro).order_by(Message.created_at.desc()).limit(10)
+            )
+        ).scalars().all()
+    return MissingTemplates(
+        total_7d=int(total),
+        recent=[
+            MissingTemplateItem(conversation_id=str(m.conversation_id), detail=m.content, created_at=m.created_at)
+            for m in filas
+        ],
+    )

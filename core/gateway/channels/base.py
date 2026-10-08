@@ -55,3 +55,17 @@ class OutboundAdapter(ABC):
     async def send_image(
         self, credentials: dict[str, str], to_external_id: str, image_url: str, caption: str = ""
     ) -> str: ...
+
+    async def send_template(
+        self,
+        credentials: dict[str, str],
+        to_external_id: str,
+        name: str,
+        language: str,
+        components: list[dict[str, Any]],
+    ) -> str:
+        """Envía una plantilla aprobada (HU-ARCH-13, ADR-0108). Solo WhatsApp Cloud
+        tiene plantillas: los demás canales no tienen ventana de 24 h y no la usan."""
+        from core.shared.exceptions import ChannelError
+
+        raise ChannelError(f"El canal {self.provider or '?'} no envía plantillas")
