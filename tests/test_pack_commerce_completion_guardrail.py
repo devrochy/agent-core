@@ -271,3 +271,16 @@ async def test_config_ausente_o_invalida_no_rompe_el_guardrail(monkeypatch: pyte
     verdict = await module._completion_guardrail(REAL_INCIDENT_TEXT, [])
     assert not verdict.passed
     assert "pedido" in verdict.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["sub_link_pago", "generar_link_pago"])
+async def test_link_de_suscripcion_o_de_pagos_tambien_respalda_el_aviso(tool):
+    """El link del período de una suscripción (tool del core) o de pagos en línea es
+    evidencia igual que el de un pedido (antes terminaba en escalamiento; HU-SUB-12)."""
+    module = CRMModule()
+    tool_results = [_tool_result(tool, url="https://pagos.simulados/sub-1", monto=90000.0)]
+    verdict = await module._completion_guardrail(
+        "Tu cargo es de $90.000. Aquí tienes el link de pago: https://pagos.simulados/sub-1", tool_results
+    )
+    assert verdict.passed, verdict.reason
