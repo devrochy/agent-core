@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import beat_init, worker_init
+from celery.signals import after_setup_logger, after_setup_task_logger, beat_init, worker_init
 
 from core.config import get_settings
 from core.shared.async_bridge import run_async
-from core.shared.logger import get_logger
+from core.shared.logger import get_logger, silenciar_urls_de_clientes_http
 
 log = get_logger(__name__)
 settings = get_settings()
@@ -244,6 +244,15 @@ def _load_plugins() -> None:
     plugin_manager.scan()
     # Importa los módulos de jobs para que los decoradores corran
     import core.tasks.decorators  # noqa: F401
+
+
+@after_setup_logger.connect
+@after_setup_task_logger.connect
+def _silenciar_urls_al_configurar_logs(**_kwargs: object) -> None:
+    """El worker y el beat configuran sus logs con Celery, no con `configure_logging`:
+    sin esto, `httpx` registraba a nivel INFO la URL de `/oauth/access_token` con el
+    App Secret en la query (visto en el worker de test, 2026-10-08)."""
+    silenciar_urls_de_clientes_http()
 
 
 @worker_init.connect

@@ -10,6 +10,14 @@
 - CLI: `agent-core tenant aplicar-preset <slug> <preset>` para negocios existentes y
   `agent-core tenant seed <slug> --voz-de-marca` para reemplazar la voz de marca por la del archivo.
 
+## Sin versión — Los logs ya no muestran URLs con secretos (2026-10-08)
+
+- **Seguridad.** `httpx` registra cada petición a nivel INFO con la URL completa, y el intercambio `client_credentials`
+  de Graph manda el App Secret en la query (`/oauth/access_token?client_id=…&client_secret=…`). El worker de Celery
+  no pasaba por `configure_logging`, así que esa línea salía en claro en los logs del worker de test. Ahora `httpx` y
+  `httpcore` quedan en WARNING en la API, el worker y el beat (señales `after_setup_logger`/`after_setup_task_logger`).
+  Afecta también a `fb_exchange_token` y al intercambio de código de Embedded Signup, que llevan secretos en la query.
+
 ## Sin versión — El beat agenda los crons de los packs (2026-10-08)
 
 - Ningún cron de pack se despachaba: Celery crea el planificador del beat (copiando `beat_schedule`) antes de emitir
