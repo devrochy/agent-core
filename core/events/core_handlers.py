@@ -19,6 +19,7 @@ from core.shared.events import (
     ON_SUBSCRIPTION_CHARGE_CREATED,
     ON_SUBSCRIPTION_CHARGE_REMINDER,
     ON_SUBSCRIPTION_PAUSED,
+    ON_SUBSCRIPTION_TRIAL_ENDING,
     event_bus,
 )
 from core.shared.logger import get_logger
@@ -65,6 +66,8 @@ def notice_key_for(topic: str, payload: dict[str, Any]) -> str:
         return f"sub_reminder:{cargo}:{payload.get('dias')}"
     if topic == ON_SUBSCRIPTION_PAUSED:
         return f"sub_paused:{payload.get('subscription_id')}:{cargo}"
+    if topic == ON_SUBSCRIPTION_TRIAL_ENDING:
+        return f"sub_trial_ending:{payload.get('subscription_id')}"
     return f"sub_charge:{cargo}"
 
 
@@ -105,6 +108,7 @@ async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
         },
         "recordatorio": {"dias": _dias_legibles(payload.get("dias"))},
         "mora": {"dias": payload.get("dias_mora")},
+        "prueba": {"termina": payload.get("trial_termina")},
     }
     result = await send_event_notice(
         conversation.id,
@@ -145,10 +149,15 @@ async def on_subscription_paused(**payload: Any) -> None:
     await _avisar_suscripcion(ON_SUBSCRIPTION_PAUSED, payload)
 
 
+async def on_subscription_trial_ending(**payload: Any) -> None:
+    await _avisar_suscripcion(ON_SUBSCRIPTION_TRIAL_ENDING, payload)
+
+
 _HANDLERS = (
     (ON_SUBSCRIPTION_CHARGE_CREATED, on_subscription_charge_created),
     (ON_SUBSCRIPTION_CHARGE_REMINDER, on_subscription_charge_reminder),
     (ON_SUBSCRIPTION_PAUSED, on_subscription_paused),
+    (ON_SUBSCRIPTION_TRIAL_ENDING, on_subscription_trial_ending),
 )
 
 

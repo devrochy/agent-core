@@ -663,6 +663,7 @@ EVENTO_LABEL = {
     "subscription.charge_created": "Cargo de suscripción",
     "subscription.charge_reminder": "Recordatorio de pago",
     "subscription.paused": "Suscripción pausada por mora",
+    "subscription.trial_ending": "Fin de la prueba gratis",
 }
 
 class EventTemplateEntry(BaseModel):

@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from core.api.deps import Principal, require
@@ -49,6 +49,11 @@ async def crear_suscripcion_manual(
         crear_suscripcion_para,  # import perezoso: evita ciclo module↔admin_api
     )
 
+    if body.precio > 0 and body.trial_dias > 0:
+        raise HTTPException(
+            status_code=422,
+            detail="Solo el plan Free ($0) tiene días de prueba (D-16).",
+        )
     plan = {
         "nombre": body.nombre,
         "precio": body.precio,
@@ -87,6 +92,7 @@ _TOPICS_AVISO = (
     "subscription.charge_reminder",
     "subscription.past_due",
     "subscription.paused",
+    "subscription.trial_ending",
 )
 
 

@@ -72,7 +72,8 @@ async def test_gestion_de_suscripcion_por_snapshot() -> None:
         )
         assert sub.concepto == "Plan Basic"
         assert float(sub.valor_periodo or 0) == 200000
-        assert sub.estado == "trialing"  # trial_dias=30
+        assert sub.estado == "activa"  # D-16: un plan pago no tiene prueba (HU-SUB-06)
+        assert sub.trial_termina is None
         # Idempotente: no crea una segunda activa.
         sub2 = await crear_suscripcion_para(customer_id=customer_id, variante_id=None, plan=PLAN_SNAPSHOT)
         assert sub2.id == sub.id
@@ -80,7 +81,7 @@ async def test_gestion_de_suscripcion_por_snapshot() -> None:
         cap = SubscriptionCapabilityImpl()
         vistas = await cap.list_for_customer(customer_id)
         assert vistas[0]["plan"] == "Plan Basic"
-        assert vistas[0]["estado"] == "trialing"
+        assert vistas[0]["estado"] == "activa"
 
         pausada = await cap.pause(sub.id, actor="test")
         assert pausada["estado"] == "pausada"
@@ -256,7 +257,9 @@ async def test_opcion_b_commerce_activa_suscripcion_por_pago() -> None:
             assert subs[0].customer_id == customer_id
             assert subs[0].concepto == "Plan Basic"
             assert float(subs[0].valor_periodo or 0) == 200000
-            assert subs[0].estado == "trialing"  # trial_days=30 del producto
+            # D-16 (HU-SUB-06): el trial_days=30 de una variante paga se ignora.
+            assert subs[0].estado == "activa"
+            assert subs[0].trial_termina is None
 
 
 async def test_crear_suscripcion_manual_admin() -> None:
@@ -277,7 +280,7 @@ async def test_crear_suscripcion_manual_admin() -> None:
         precio=1800000,
         moneda="COP",
         periodicidad="mensual",
-        trial_dias=30,
+        trial_dias=0,
     )
 
     # El handler usa `require(...)`: lo invocamos con un principal del tenant.

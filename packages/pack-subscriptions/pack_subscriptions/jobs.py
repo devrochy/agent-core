@@ -22,6 +22,7 @@ from core.shared.events import (
     ON_SUBSCRIPTION_CHARGE_REMINDER,
     ON_SUBSCRIPTION_PAST_DUE,
     ON_SUBSCRIPTION_PAUSED,
+    ON_SUBSCRIPTION_TRIAL_ENDING,
 )
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
@@ -112,6 +113,9 @@ async def _generar_cargos(now: datetime) -> int:
                 generadas = 0
                 for sub in subs:
                     if sub.trial_termina is not None and sub.trial_termina > now:
+                        continue
+                    if sub.estado == "trialing" and not Decimal(sub.valor_periodo or 0):
+                        # Free al terminar la prueba: no se renueva, vence (`_marcar_vencidas`).
                         continue
                     inicio = sub.proximo_cargo
                     siguiente = sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla)
@@ -240,6 +244,38 @@ async def _marcar_vencidas(now: datetime) -> int:
                             "dias_gracia": config.dias_gracia,
                         },
                     )
+                # HU-SUB-06: Free sin pasar a un plan pago vence al terminar la prueba.
+                free_fin = (
+                    await session.execute(
+                        select(Subscription).where(
+                            Subscription.tenant_id == tenant_id,
+                            Subscription.estado == "trialing",
+                            Subscription.valor_periodo == 0,
+                            Subscription.trial_termina.isnot(None),
+                            Subscription.trial_termina <= now,
+                            Subscription.deleted_at.is_(None),
+                        )
+                    )
+                ).scalars().all()
+                for sub in free_fin:
+                    if sub.id in vistas:
+                        continue
+                    vistas.add(sub.id)
+                    sub.estado = "vencida"
+                    sub.proximo_cargo = None
+                    await emit_domain(
+                        session,
+                        tenant_id=tenant_id,
+                        topic=ON_SUBSCRIPTION_PAST_DUE,
+                        dedupe_key=f"sub_trial_expired:{sub.id}",
+                        payload={
+                            "subscription_id": str(sub.id),
+                            "customer_id": str(sub.customer_id),
+                            "concepto": sub.concepto,
+                            "motivo": "fin_de_prueba",
+                            "trial_termina": sub.trial_termina.date().isoformat() if sub.trial_termina else None,
+                        },
+                    )
             total += len(vistas)
             if vistas:
                 log.info("subs_vencidas", tenant_id=str(tenant_id), total=len(vistas))
@@ -276,7 +312,7 @@ async def _avisos_de_cobro(now: datetime) -> dict[str, int]:
       los dueños.
     Un cargo pagado no entra (sin spam). Todo sale por el outbox (`dedupe_key`).
     """
-    totales = {"recordatorios": 0, "pausadas": 0}
+    totales = {"recordatorios": 0, "pausadas": 0, "fin_de_prueba": 0}
     hoy = now.date()
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
@@ -341,9 +377,47 @@ async def _avisos_de_cobro(now: datetime) -> dict[str, int]:
                     )
                     totales["recordatorios"] += int(insertado)
                 totales["pausadas"] += len(pausadas)
+                totales["fin_de_prueba"] += await _ofertas_fin_de_prueba(session, tenant_id, config, now)
     if any(totales.values()):
         log.info("subs_avisos_de_cobro", **totales)
     return totales
+
+
+async def _ofertas_fin_de_prueba(session, tenant_id: uuid.UUID, config, now: datetime) -> int:  # type: ignore[no-untyped-def]
+    """Free en prueba que termina dentro de `dias_aviso_fin_prueba`: se le ofrece un
+    plan pago (HU-SUB-06), una sola vez por suscripción."""
+    if not config.dias_aviso_fin_prueba:
+        return 0
+    subs = (
+        await session.execute(
+            select(Subscription).where(
+                Subscription.tenant_id == tenant_id,
+                Subscription.estado == "trialing",
+                Subscription.valor_periodo == 0,
+                Subscription.trial_termina.isnot(None),
+                Subscription.trial_termina > now,
+                Subscription.trial_termina <= now + timedelta(days=config.dias_aviso_fin_prueba),
+                Subscription.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    enviados = 0
+    for sub in subs:
+        insertado = await emit_domain(
+            session,
+            tenant_id=tenant_id,
+            topic=ON_SUBSCRIPTION_TRIAL_ENDING,
+            dedupe_key=f"sub_trial_ending:{sub.id}",
+            payload={
+                "subscription_id": str(sub.id),
+                "customer_id": str(sub.customer_id),
+                "concepto": sub.concepto,
+                "trial_termina": sub.trial_termina.date().isoformat(),
+                "texto": config.aviso_fin_prueba_texto,
+            },
+        )
+        enviados += int(insertado)
+    return enviados
 
 
 async def _avisar_pausa_al_negocio(

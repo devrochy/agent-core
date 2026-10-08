@@ -91,7 +91,11 @@ async def seed_catalog(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
                     attrs = variante.get("attributes", {}) or {}
                     plan_meta = {
                         "billing_period": attrs.get("periodicidad") or attrs.get("billing_period"),
-                        "trial_days": attrs.get("trial_dias") or attrs.get("trial_days"),
+                        # `0` es un valor válido (plan pago sin prueba, D-16): no usar `or`.
+                        "trial_days": next(
+                            (attrs[k] for k in ("trial_dias", "trial_days") if attrs.get(k) is not None),
+                            None,
+                        ),
                         "entitlements": attrs.get("limites") or attrs.get("entitlements"),
                     }
                     if variant is None:
@@ -102,7 +106,7 @@ async def seed_catalog(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
                             price=variante["price"],
                             active=True,
                             billing_period=plan_meta["billing_period"],
-                            trial_days=int(plan_meta["trial_days"]) if plan_meta["trial_days"] else None,
+                            trial_days=int(plan_meta["trial_days"]) if plan_meta["trial_days"] is not None else None,
                             entitlements=plan_meta["entitlements"],
                         )
                         session.add(variant)
@@ -111,7 +115,7 @@ async def seed_catalog(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
                         variant.attributes = attrs
                         if plan_meta["billing_period"]:
                             variant.billing_period = plan_meta["billing_period"]
-                        if plan_meta["trial_days"]:
+                        if plan_meta["trial_days"] is not None:
                             variant.trial_days = int(plan_meta["trial_days"])
                         if plan_meta["entitlements"]:
                             variant.entitlements = plan_meta["entitlements"]

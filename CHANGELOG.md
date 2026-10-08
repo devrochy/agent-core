@@ -1,5 +1,19 @@
 # Changelog
 
+## Sin versión — Free con prueba y planes pagos sin prueba (2026-10-08)
+
+- HU-SUB-06 (D-16). Solo un plan de $0 tiene prueba: commerce arma el snapshot con `trial_dias = 0` si el plan es
+  pago y registra en `audit_log` (`trial_ignorado_en_plan_pago`) la variante que traía prueba; el pack lo vuelve a
+  aplicar al crear la suscripción y la API manual responde 422 si se pide prueba en un plan pago.
+- Un pedido de Free nace pagado (sin link ni cobro) y activa la suscripción en el acto (`trialing`, 30 días). Un
+  plan por contra entrega ya no nace pagado: espera el pago real.
+- Comprar un plan pago estando en Free cambia la suscripción a ese plan (`activa`, período pagado); antes se
+  devolvía la Free sin tocar. Toda activación emite `subscription.activated`.
+- Fin de la prueba: `avisos_de_cobro` ofrece un plan pago `dias_aviso_fin_prueba` antes (3 por defecto, una vez,
+  `subscription.trial_ending`, texto `aviso_fin_prueba_texto` o plantilla mapeada) y `marcar_vencidas` pasa a
+  `vencida` la Free que terminó la prueba (`subscription.past_due`, `motivo = "fin_de_prueba"`), sin generar cargos.
+- El seed del catálogo respeta `trial_dias: 0` (antes un 0 no actualizaba la variante existente).
+
 ## Sin versión — Cobro y mora con avisos por plantilla (2026-10-08)
 
 - HU-SUB-05. El cargo se genera `dias_anticipacion` antes del vencimiento (3 por defecto) y guarda su link
