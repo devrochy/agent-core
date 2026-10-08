@@ -57,6 +57,7 @@ class Subscription(Base):
     # HU-SUB-04 (migración 0004): período por calendario, no +30 días.
     periodicidad: Mapped[str] = mapped_column(Text, nullable=False, default="mensual")  # mensual|trimestral|anual
     dia_ancla: Mapped[int | None] = mapped_column(SmallInteger)  # día del mes en que empezó
+    motivo_pausa: Mapped[str | None] = mapped_column(Text)  # HU-SUB-05: "mora" si la pausó el cron
     periodo_actual_inicio: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     periodo_actual_fin: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     proximo_cargo: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -83,6 +84,7 @@ class SubscriptionCharge(Base):
     monto: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
     estado: Mapped[str] = mapped_column(Text, nullable=False, default="pendiente")  # pendiente|pagado|rechazado
     referencia: Mapped[str | None] = mapped_column(Text, default=None)
+    link_url: Mapped[str | None] = mapped_column(Text, default=None)  # HU-SUB-05
     fecha_vencimiento: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

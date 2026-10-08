@@ -118,8 +118,15 @@ class SubscriptionsModule(BaseModule):
                     return
                 cargo.estado = "pagado"
                 sub = await session.get(Subscription, cargo.subscription_id)
-                if sub is not None and sub.estado in ("vencida", "trialing", "activa"):
+                # Reactiva una vencida, una prueba o una pausada POR MORA (HU-SUB-05);
+                # una pausa que pidió el cliente sigue pausada.
+                reactivable = sub is not None and (
+                    sub.estado in ("vencida", "trialing", "activa")
+                    or (sub.estado == "pausada" and sub.motivo_pausa == "mora")
+                )
+                if sub is not None and reactivable:
                     sub.estado = "activa"
+                    sub.motivo_pausa = None
                     inicio = cargo.fecha_vencimiento or datetime.now(UTC)
                     siguiente = sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla)
                     if sub.periodo_actual_inicio is None or sub.periodo_actual_inicio < inicio:

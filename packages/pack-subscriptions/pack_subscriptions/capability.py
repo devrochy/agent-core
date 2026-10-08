@@ -196,6 +196,7 @@ class SubscriptionCapabilityImpl:
         async with get_session() as session:
             sub = await self._sub_vigente(session, subscription_id)
             sub.estado = "pausada"
+            sub.motivo_pausa = "cliente"
             sub.proximo_cargo = None
             await session.flush()
             return _view(sub)
@@ -204,6 +205,7 @@ class SubscriptionCapabilityImpl:
         async with get_session() as session:
             sub = await self._sub_vigente(session, subscription_id)
             sub.estado = "activa"
+            sub.motivo_pausa = None
             sub.fecha_cancelacion = None
             if sub.proximo_cargo is None:
                 sub.proximo_cargo = sumar_periodo(datetime.now(UTC), sub.periodicidad, sub.dia_ancla)
@@ -324,6 +326,7 @@ class SubscriptionCapabilityImpl:
             fila = await session.get(SubscriptionCharge, cargo.id)
             if fila is not None:
                 fila.referencia = link.reference
+                fila.link_url = link.url
                 await session.flush()
         return {
             "url": link.url,

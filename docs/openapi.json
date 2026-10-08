@@ -6734,6 +6734,70 @@
         }
       }
     },
+    "/api/v1/pack/pack_subscriptions/cargos/{charge_id}/avisos": {
+      "get": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Avisos Del Cargo",
+        "description": "Qué se le avisó al cliente por este cargo, cuándo y con qué resultado (HU-SUB-05).",
+        "operationId": "avisos_del_cargo_api_v1_pack_pack_subscriptions_cargos__charge_id__avisos_get",
+        "parameters": [
+          {
+            "name": "charge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Charge Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AvisoOut"
+                  },
+                  "title": "Response Avisos Del Cargo Api V1 Pack Pack Subscriptions Cargos  Charge Id  Avisos Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/commerce/dashboard": {
       "get": {
         "tags": [
@@ -12725,6 +12789,91 @@
           "motivo"
         ],
         "title": "AuditRow"
+      },
+      "AvisoOut": {
+        "properties": {
+          "evento": {
+            "type": "string",
+            "title": "Evento"
+          },
+          "creado": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Creado"
+          },
+          "estado_evento": {
+            "type": "string",
+            "title": "Estado Evento"
+          },
+          "intentos": {
+            "type": "integer",
+            "title": "Intentos"
+          },
+          "error_evento": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Evento"
+          },
+          "mensaje_estado": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mensaje Estado"
+          },
+          "mensaje_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mensaje Error"
+          },
+          "plantilla": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plantilla"
+          },
+          "enviado": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enviado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "evento",
+          "creado",
+          "estado_evento",
+          "intentos"
+        ],
+        "title": "AvisoOut"
       },
       "BillingRequest": {
         "properties": {

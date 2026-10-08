@@ -15,7 +15,12 @@ from sqlalchemy import select
 
 from core.db.models import Conversation, Customer
 from core.db.session import get_session
-from core.shared.events import ON_SUBSCRIPTION_CHARGE_CREATED, event_bus
+from core.shared.events import (
+    ON_SUBSCRIPTION_CHARGE_CREATED,
+    ON_SUBSCRIPTION_CHARGE_REMINDER,
+    ON_SUBSCRIPTION_PAUSED,
+    event_bus,
+)
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 
@@ -53,29 +58,37 @@ async def _whatsapp_conversation_for(customer_id: uuid.UUID) -> Conversation | N
         ).scalar_one_or_none()
 
 
-async def on_subscription_charge_created(**payload: Any) -> None:
-    """Avisa al cliente del cargo del período (plantilla o texto según la ventana)."""
-    from core.gateway.event_notices import send_event_notice
+def notice_key_for(topic: str, payload: dict[str, Any]) -> str:
+    """Clave estable del aviso: un reintento del evento no lo duplica (ADR-0108)."""
+    cargo = payload.get("charge_id")
+    if topic == ON_SUBSCRIPTION_CHARGE_REMINDER:
+        return f"sub_reminder:{cargo}:{payload.get('dias')}"
+    if topic == ON_SUBSCRIPTION_PAUSED:
+        return f"sub_paused:{payload.get('subscription_id')}:{cargo}"
+    return f"sub_charge:{cargo}"
+
+
+async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
+    """Aviso al cliente de un evento de suscripción (plantilla o texto según la ventana).
+
+    El texto de respaldo lo manda el pack en `payload["texto"]` (su config, editable
+    por el negocio); las variables salen solo del contexto que arma este handler.
+    """
+    from core.gateway.event_notices import clean_param, send_event_notice
 
     try:
         customer_id = uuid.UUID(str(payload.get("customer_id")))
     except ValueError:
-        log.warning("event_notice_payload_invalido", topic=ON_SUBSCRIPTION_CHARGE_CREATED)
+        log.warning("event_notice_payload_invalido", topic=topic)
         return
     conversation = await _whatsapp_conversation_for(customer_id)
     if conversation is None:
         # Sin conversación de WhatsApp no hay a quién escribir: no es un fallo
         # que valga reintentar.
-        log.info(
-            "event_notice_sin_conversacion",
-            topic=ON_SUBSCRIPTION_CHARGE_CREATED,
-            customer_id=str(customer_id),
-        )
+        log.info("event_notice_sin_conversacion", topic=topic, customer_id=str(customer_id))
         return
     async with get_session() as session:
         customer = await session.get(Customer, customer_id)
-    from core.gateway.event_notices import clean_param
-
     # `customer.name` lo puede escribir el LLM (`update_customer_profile`): se
     # limpia y se acota antes de que llegue a una plantilla (ADR-0108).
     nombre = clean_param((customer.name if customer else None) or "", 60) or "cliente"
@@ -90,20 +103,53 @@ async def on_subscription_charge_created(**payload: Any) -> None:
             "referencia": payload.get("referencia"),
             "link": payload.get("link"),
         },
+        "recordatorio": {"dias": _dias_legibles(payload.get("dias"))},
+        "mora": {"dias": payload.get("dias_mora")},
     }
     result = await send_event_notice(
         conversation.id,
-        ON_SUBSCRIPTION_CHARGE_CREATED,
+        topic,
         context,
-        notice_key=f"sub_charge:{payload.get('charge_id')}",
+        notice_key=notice_key_for(topic, payload),
+        default_fallback_text=str(payload.get("texto") or ""),
     )
     log.info(
         "event_notice_resultado",
-        topic=ON_SUBSCRIPTION_CHARGE_CREATED,
+        topic=topic,
         conversation_id=str(conversation.id),
         modo=result.modo,
         detalle=result.detalle,
     )
+
+
+def _dias_legibles(dias: Any) -> str | None:
+    """`-3` → "en 3 días"; `0` → "hoy"; `3` → "hace 3 días"."""
+    try:
+        n = int(dias)
+    except (TypeError, ValueError):
+        return None
+    if n == 0:
+        return "hoy"
+    return f"en {abs(n)} días" if n < 0 else f"hace {n} días"
+
+
+async def on_subscription_charge_created(**payload: Any) -> None:
+    await _avisar_suscripcion(ON_SUBSCRIPTION_CHARGE_CREATED, payload)
+
+
+async def on_subscription_charge_reminder(**payload: Any) -> None:
+    await _avisar_suscripcion(ON_SUBSCRIPTION_CHARGE_REMINDER, payload)
+
+
+async def on_subscription_paused(**payload: Any) -> None:
+    await _avisar_suscripcion(ON_SUBSCRIPTION_PAUSED, payload)
+
+
+_HANDLERS = (
+    (ON_SUBSCRIPTION_CHARGE_CREATED, on_subscription_charge_created),
+    (ON_SUBSCRIPTION_CHARGE_REMINDER, on_subscription_charge_reminder),
+    (ON_SUBSCRIPTION_PAUSED, on_subscription_paused),
+)
 
 
 def ensure_core_handlers() -> None:
@@ -112,6 +158,7 @@ def ensure_core_handlers() -> None:
     pid = os.getpid()
     if _registered_pid == pid:
         return
-    event_bus.unsubscribe_all([on_subscription_charge_created])
-    event_bus.subscribe(ON_SUBSCRIPTION_CHARGE_CREATED, on_subscription_charge_created)
+    event_bus.unsubscribe_all([handler for _, handler in _HANDLERS])
+    for topic, handler in _HANDLERS:
+        event_bus.subscribe(topic, handler)
     _registered_pid = pid
