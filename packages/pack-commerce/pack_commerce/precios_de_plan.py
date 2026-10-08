@@ -4,6 +4,10 @@ Una variante que vende un plan de SolversHub declara `attributes.precio_de_plan`
 (`"basic"`, `"premium"`…): su precio sale de `core/billing/plans.py`, no del
 `catalog.json` ni de la voz de marca. El seed lo aplica al sembrar y el cron
 `sincronizar_precios_de_plan` lo mantiene al día tras un deploy con precios nuevos.
+
+Cualquier negocio con commerce puede marcar una variante así (p. ej. un revendedor de
+SolversHub): solo cambia sus propias filas y el catálogo de planes es público. Lo usa el
+tenant `solvershub`; el atributo es opt-in por variante.
 """
 
 from __future__ import annotations

@@ -398,6 +398,7 @@ async def ensure_brand_voice(tenant_id: uuid.UUID, slug: str, *, sobrescribir: b
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
+    _validate_slug(slug)  # nunca salir de TENANTS_ROOT con un slug armado (auditoría HU-SH-01)
     voice_path = tenant_dir(slug) / "docs" / "voz-de-marca.md"
     if not voice_path.exists():
         return False
