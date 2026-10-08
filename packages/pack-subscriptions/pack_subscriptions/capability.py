@@ -181,6 +181,9 @@ class SubscriptionCapabilityImpl:
 
     async def _sub_vigente(self, session, subscription_id: uuid.UUID) -> Subscription:
         sub = await session.get(Subscription, subscription_id)
+        # `tenant_id` explícito además de RLS (defensa en profundidad; auditoría HU-SUB-12).
+        if sub is not None and sub.tenant_id != get_current_tenant_id():
+            sub = None
         if sub is None or sub.deleted_at is not None or sub.estado == "cancelada":
             raise SubscriptionError(
                 "La suscripción no existe o está cancelada.", code="suscripcion_no_encontrada"
