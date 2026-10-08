@@ -6,8 +6,10 @@ despacha las tools `sub_*` al proveedor del negocio y commerce consume el
 registro para activar la suscripción al pagarse un pedido.
 
 Selección del proveedor: `capability_for_tenant` resuelve entre los proveedores
-habilitados para el tenant; dos habilitados sin elección explícita lanzan
-`SubscriptionProviderAmbiguity` (configuración visible en el panel).
+habilitados para el tenant (packs de su AgentSpec); dos habilitados sin elección
+explícita lanzan `SubscriptionProviderAmbiguity` (configuración visible en el panel).
+La elección del negocio vive en `tenants.settings["subscriptions"]["provider"]`
+(HU-SUB-09): `capability_del_negocio` la aplica y `estado_proveedor` la explica.
 """
 
 from __future__ import annotations
@@ -142,6 +144,21 @@ class SubscriptionRegistry:
                 return cap
         return None
 
+    async def enabled_for_tenant(self, tenant_id: uuid.UUID) -> list[str]:
+        """Proveedores registrados que el negocio tiene habilitados en su AgentSpec.
+
+        Antes se miraba `plugin_manager.is_active`, que es por PROCESO: con todos los
+        packs activos en el worker, cualquier proveedor contaba para cualquier negocio
+        (HU-SUB-09).
+        """
+        from core.agents.spec import enabled_packs, load_active_spec
+        from core.shared.tenant import tenant_scope
+
+        async with tenant_scope(tenant_id):
+            spec = await load_active_spec(tenant_id)
+        packs = enabled_packs(spec)
+        return sorted(pid for pid in self._caps if pid in packs)
+
     async def capability_for_tenant(
         self, tenant_id: uuid.UUID, provider: str | None = None
     ) -> SubscriptionCapability | None:
@@ -152,13 +169,7 @@ class SubscriptionRegistry:
         - Sin `provider`: 0 habilitados → None; 1 → ese; 2+ →
           `SubscriptionProviderAmbiguity`.
         """
-        from core.plugin_manager import plugin_manager
-        from core.shared.tenant import tenant_scope
-
-        async with tenant_scope(tenant_id):
-            habilitados = [
-                pid for pid in self._caps if plugin_manager.is_active(pid)
-            ]
+        habilitados = await self.enabled_for_tenant(tenant_id)
         if provider is not None:
             cap = self._caps.get(provider)
             if cap is None:
@@ -180,3 +191,88 @@ class SubscriptionRegistry:
 
 
 subscription_registry = SubscriptionRegistry()
+
+
+# ------------------------------------------------- elección del negocio (HU-SUB-09)
+SETTINGS_KEY = "subscriptions"
+
+
+async def proveedor_configurado(tenant_id: uuid.UUID) -> str | None:
+    """Proveedor elegido por el negocio (`tenants.settings.subscriptions.provider`).
+
+    `tenants` es tabla de sistema (sin RLS): el `tenant_id` debe venir del principal o
+    del contexto (`get_current_tenant_id()`), nunca del cuerpo de una petición ni del LLM.
+    """
+    from core.db.models import Tenant
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        tenant = await session.get(Tenant, tenant_id)
+    if tenant is None:
+        return None
+    valor = ((tenant.settings or {}).get(SETTINGS_KEY) or {}).get("provider")
+    return str(valor) if valor else None
+
+
+async def guardar_proveedor(tenant_id: uuid.UUID, provider: str | None) -> None:
+    """Guarda (o borra con None) la elección. Quien llama valida que esté habilitado.
+
+    Igual que `proveedor_configurado`: el `tenant_id` sale del principal, nunca del body.
+    """
+    from core.db.models import Tenant
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        tenant = await session.get(Tenant, tenant_id)
+        if tenant is None:
+            raise SubscriptionError("Negocio no encontrado.", code="sin_negocio")
+        settings = dict(tenant.settings or {})
+        bloque = dict(settings.get(SETTINGS_KEY) or {})
+        if provider:
+            bloque["provider"] = provider
+        else:
+            bloque.pop("provider", None)
+        settings[SETTINGS_KEY] = bloque
+        tenant.settings = settings
+
+
+async def capability_del_negocio(tenant_id: uuid.UUID) -> SubscriptionCapability | None:
+    """Proveedor que usa el negocio: el elegido o, sin elección, el único habilitado.
+
+    Lanza `SubscriptionProviderAmbiguity` con 2+ habilitados sin elección y
+    `SubscriptionError` si el elegido ya no está habilitado.
+    """
+    return await subscription_registry.capability_for_tenant(
+        tenant_id, await proveedor_configurado(tenant_id)
+    )
+
+
+class EstadoProveedor(TypedDict):
+    estado: str  # ok | sin_proveedor | ambiguo | invalido
+    configurado: str | None
+    efectivo: str | None
+    habilitados: list[str]
+    mensaje: str
+
+
+async def estado_proveedor(tenant_id: uuid.UUID) -> EstadoProveedor:
+    """Diagnóstico para el panel: qué proveedor se usa y, si no hay uno claro, por qué."""
+    habilitados = await subscription_registry.enabled_for_tenant(tenant_id)
+    configurado = await proveedor_configurado(tenant_id)
+    base: EstadoProveedor = {
+        "estado": "ok", "configurado": configurado, "efectivo": None, "habilitados": habilitados, "mensaje": "",
+    }
+    try:
+        cap = await subscription_registry.capability_for_tenant(tenant_id, configurado)
+    except SubscriptionProviderAmbiguity as exc:
+        return {**base, "estado": "ambiguo", "mensaje": exc.message}
+    except SubscriptionError as exc:
+        return {**base, "estado": "invalido", "mensaje": exc.message}
+    if cap is None:
+        return {
+            **base,
+            "estado": "sin_proveedor",
+            "mensaje": "No hay una habilidad de suscripciones activa: activa Suscripciones "
+            "(cobro en línea) o Cobranza (cobro en campo) para vender planes recurrentes.",
+        }
+    return {**base, "efectivo": cap.provider_id}

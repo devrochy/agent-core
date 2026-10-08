@@ -246,6 +246,9 @@ class Order(TenantMixin, Base):
     delivery_city: Mapped[str | None] = mapped_column(Text, default=None)
     status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     status_reason: Mapped[str | None] = mapped_column(Text, default=None)
+    # HU-SUB-09: activación del plan del pedido (NULL si no lleva planes).
+    plan_activation_status: Mapped[str | None] = mapped_column(Text, default=None)  # pendiente|activada
+    plan_activation_error: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

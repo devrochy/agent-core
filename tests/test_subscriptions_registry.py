@@ -27,10 +27,29 @@ class _Cap:
 
 @pytest.fixture()
 def registro(monkeypatch):
+    """`activos` son los packs habilitados en el AgentSpec del negocio (HU-SUB-09)."""
+    import core.agents.spec as spec_mod
+
     reg = SubscriptionRegistry()
     activos: set[str] = set()
-    monkeypatch.setattr(plugin_manager, "is_active", lambda pid: pid in activos)
+
+    async def _spec(_tenant_id=None):
+        return object()
+
+    monkeypatch.setattr(spec_mod, "load_active_spec", _spec)
+    monkeypatch.setattr(spec_mod, "enabled_packs", lambda _spec: set(activos))
     return reg, activos
+
+
+@pytest.mark.asyncio
+async def test_habilitado_es_por_negocio_no_por_proceso(registro, monkeypatch) -> None:
+    """HU-SUB-09: un pack activo en el proceso pero no en el AgentSpec no cuenta."""
+    reg, _ = registro
+    monkeypatch.setattr(plugin_manager, "is_active", lambda _pid: True)
+    reg.register("pack_subscriptions", _Cap("pack_subscriptions"))
+    reg.register("pack_cobranza", _Cap("pack_cobranza"))
+    assert await reg.enabled_for_tenant(uuid.uuid4()) == []
+    assert await reg.capability_for_tenant(uuid.uuid4()) is None
 
 
 @pytest.mark.asyncio

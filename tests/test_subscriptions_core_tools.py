@@ -42,9 +42,9 @@ class _FakeCap:
 def fake_cap(monkeypatch):
     cap = _FakeCap()
     subscription_registry.register("pack_subscriptions", cap)
-    async def _cap_para_tenant(tenant_id, provider=None):
+    async def _cap_del_negocio(tenant_id):
         return cap
-    monkeypatch.setattr(subscription_registry, "capability_for_tenant", _cap_para_tenant)
+    monkeypatch.setattr(tools_mod, "capability_del_negocio", _cap_del_negocio)
     monkeypatch.setattr(tools_mod, "get_current_tenant_id", lambda: uuid.uuid4())
     yield cap
     subscription_registry.unregister("pack_subscriptions")
@@ -141,9 +141,7 @@ async def test_sin_proveedor_es_error_controlado(monkeypatch) -> None:
 
     from core.subscriptions import SubscriptionError
 
-    monkeypatch.setattr(
-        subscription_registry, "capability_for_tenant", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr(tools_mod, "capability_del_negocio", AsyncMock(return_value=None))
     monkeypatch.setattr(tools_mod, "get_current_tenant_id", lambda: uuid.uuid4())
     with pytest.raises(SubscriptionError) as exc:
         await tools_mod.SubscriptionSkill().consultar({}, _ctx())

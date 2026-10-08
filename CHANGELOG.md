@@ -1,5 +1,20 @@
 # Changelog
 
+## Sin versión — Comercio agnóstico al proveedor de suscripciones (2026-10-08)
+
+- HU-SUB-09. Commerce ya no nombra `pack_subscriptions`: el core resuelve el proveedor del negocio
+  (`capability_del_negocio`) con la elección guardada en `tenants.settings["subscriptions"]["provider"]`; sin elección
+  y con un solo proveedor habilitado se usa ese. Las tools `sub_*` usan la misma resolución.
+- Defecto: `capability_for_tenant` contaba como habilitado cualquier pack activo en el proceso (todos en el worker);
+  ahora usa los packs del AgentSpec del negocio (`enabled_for_tenant`).
+- `GET/PUT /api/v1/admin/settings/subscription-provider`: estado (`ok`, `sin_proveedor`, `ambiguo`, `invalido`), el
+  motivo y la elección entre los habilitados.
+- Si al pagarse un plan no hay un proveedor claro, el pedido queda pagado y la activación `pendiente` con el motivo
+  (migración `crm_0010`: `plan_activation_status`/`plan_activation_error`, visibles en `GET /orders`), aviso a los
+  dueños (push + `audit_log`, una vez) y el cron `reintentar_activaciones` (cada 10 min) la retoma.
+- Productos: `billing_period` y `trial_days` en el alta/edición; crear un plan recurrente sin ningún proveedor responde
+  400 con la habilidad a activar, y una prueba en un plan pago también (D-16).
+
 ## Sin versión — Free con prueba y planes pagos sin prueba (2026-10-08)
 
 - HU-SUB-06 (D-16). Solo un plan de $0 tiene prueba: commerce arma el snapshot con `trial_dias = 0` si el plan es

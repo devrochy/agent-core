@@ -6,8 +6,8 @@
   suscripción se activa en el acto (en `trialing`).
 - Un plan por contra entrega NO nace pagado: espera el pago real.
 
-Commerce lee SU propia variante y entrega el snapshot al proveedor de suscripciones vía
-el registry del core (sin importar el pack, invariante nº5).
+Commerce lee SU propia variante y entrega el snapshot al proveedor de suscripciones que
+el core resuelve para el negocio (HU-SUB-09): sin nombrar ningún pack (invariante nº5).
 """
 
 from __future__ import annotations
@@ -60,7 +60,77 @@ def snapshot_de_plan(
 
 async def activar_planes_del_pedido(session, order: Order) -> int:
     """Activa la suscripción del cliente por cada línea del pedido con recurrencia.
-    Idempotente en el proveedor. Devuelve cuántas activó."""
+
+    El proveedor lo resuelve el core según la configuración del negocio (HU-SUB-09):
+    commerce no nombra ningún pack. Si no hay un proveedor claro, el pedido sigue
+    pagado y la activación queda `pendiente` con el motivo (panel + aviso a los
+    dueños, una vez); `reintentar_activaciones` la retoma. Idempotente en el
+    proveedor. Devuelve cuántas activó.
+    """
+    from core.subscriptions import SubscriptionError, capability_del_negocio
+
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return 0
+    planes = await _lineas_de_plan(session, order)
+    if not planes:
+        return 0
+
+    try:
+        capability = await capability_del_negocio(tenant_id)
+    except SubscriptionError as exc:
+        await _activacion_pendiente(order, exc.message)
+        return 0
+    if capability is None:
+        await _activacion_pendiente(order, SIN_PROVEEDOR)
+        return 0
+
+    activadas = 0
+    fallos: list[str] = []
+    for item, variant in planes:
+        product = await session.get(Product, variant.product_id)
+        plan, trial_ignorado = snapshot_de_plan(
+            sku=variant.sku,
+            nombre=product.name if product else variant.sku,
+            precio=variant.price,
+            periodicidad=variant.billing_period or "mensual",
+            trial_days=variant.trial_days,
+        )
+        if trial_ignorado and order.plan_activation_status != "pendiente":
+            await _avisar_trial_ignorado(variant, order)
+        try:
+            await capability.activate(
+                customer_id=order.customer_id,
+                variant_id=str(item.variant_id),
+                plan=plan,
+                reference=order.public_order_number,
+            )
+        except SubscriptionError as exc:
+            log.warning("order_activate_subscription_failed", order_id=str(order.id), error=exc.message)
+            fallos.append(exc.message)
+            continue
+        activadas += 1
+        log.info(
+            "order_activates_subscription",
+            order_id=str(order.id),
+            plan=plan.get("nombre"),
+            provider=capability.provider_id,
+        )
+    if fallos:
+        await _activacion_pendiente(order, "; ".join(fallos))
+    else:
+        order.plan_activation_status = "activada"
+        order.plan_activation_error = None
+    return activadas
+
+
+SIN_PROVEEDOR = (
+    "No hay una habilidad de suscripciones activa: activa Suscripciones (cobro en línea) "
+    "o Cobranza (cobro en campo) para vender planes recurrentes."
+)
+
+
+async def _lineas_de_plan(session, order: Order) -> list[tuple[OrderItem, ProductVariant]]:
     items = (
         await session.execute(
             select(OrderItem).where(
@@ -69,24 +139,7 @@ async def activar_planes_del_pedido(session, order: Order) -> int:
             )
         )
     ).scalars().all()
-    if not items:
-        return 0
-
-    from core.agents.spec import enabled_packs, load_active_spec
-    from core.subscriptions import SubscriptionError, subscription_registry
-
-    tenant_id = get_current_tenant_id()
-    if tenant_id is None:
-        return 0
-    spec = await load_active_spec(tenant_id)
-    if "pack_subscriptions" not in enabled_packs(spec):
-        return 0
-    capability = await subscription_registry.capability_for_tenant(tenant_id)
-    if capability is None:
-        log.warning("subscription_provider_missing", tenant_id=str(tenant_id))
-        return 0
-
-    activadas = 0
+    lineas: list[tuple[OrderItem, ProductVariant]] = []
     for item in items:
         variant = (
             await session.execute(
@@ -96,31 +149,37 @@ async def activar_planes_del_pedido(session, order: Order) -> int:
                 )
             )
         ).scalars().first()
-        if variant is None or not variant.billing_period:
-            continue
-        product = await session.get(Product, variant.product_id)
-        plan, trial_ignorado = snapshot_de_plan(
-            sku=variant.sku,
-            nombre=product.name if product else variant.sku,
-            precio=variant.price,
-            periodicidad=variant.billing_period,
-            trial_days=variant.trial_days,
+        if variant is not None and variant.billing_period:
+            lineas.append((item, variant))
+    return lineas
+
+
+async def _activacion_pendiente(order: Order, motivo: str) -> None:
+    """Deja la activación pendiente; avisa a los dueños solo la primera vez."""
+    primera = order.plan_activation_status != "pendiente"
+    order.plan_activation_status = "pendiente"
+    order.plan_activation_error = motivo[:500]
+    log.warning("order_plan_activation_pendiente", order_id=str(order.id), motivo=motivo)
+    if not primera:
+        return
+    from core.shared.audit import record_audit
+
+    await record_audit(
+        actor="plugin:pack_commerce",
+        action="activacion_plan_pendiente",
+        output_data={"order": order.public_order_number, "motivo": motivo},
+    )
+    try:
+        from core.tasks.push_tasks import notify_owners_push
+
+        notify_owners_push.delay(
+            str(get_current_tenant_id()),
+            "Plan pagado sin activar",
+            f"El pedido {order.public_order_number} está pagado pero su plan no se activó: {motivo}",
+            {"kind": "activacion_plan_pendiente", "order_id": str(order.id)},
         )
-        if trial_ignorado:
-            await _avisar_trial_ignorado(variant, order)
-        try:
-            await capability.activate(
-                customer_id=order.customer_id,
-                variant_id=str(item.variant_id),
-                plan=plan,
-                reference=order.public_order_number,
-            )
-        except SubscriptionError:
-            log.exception("order_activate_subscription_failed", order_id=str(order.id))
-            continue
-        activadas += 1
-        log.info("order_activates_subscription", order_id=str(order.id), plan=plan.get("nombre"))
-    return activadas
+    except Exception:
+        log.warning("activacion_plan_push_fallido", order_id=str(order.id), exc_info=True)
 
 
 async def _avisar_trial_ignorado(variant: ProductVariant, order: Order) -> None:
