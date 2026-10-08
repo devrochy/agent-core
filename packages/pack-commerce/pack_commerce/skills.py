@@ -1691,8 +1691,8 @@ class OrderSkill(BaseSkill):
                 )
             )
         ).scalar_one_or_none()
-        if variant is not None and _es_plan_variante(variant):
-            return  # un plan no descuenta inventario
+        if variant is None or _es_plan_variante(variant):
+            return  # variante ajena al negocio, o un plan: no se toca inventario
         inventory = (
             await session.execute(
                 select(Inventory).where(
