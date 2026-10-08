@@ -26,6 +26,7 @@ comportamiento actual.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 
@@ -150,6 +151,7 @@ async def save_byok_connection(
         # Si el alta falla más abajo, `_rollback_failed_alta` deshace lo de esta transacción:
         # da de baja la fila que se creó aquí y le devuelve el número a su conexión anterior.
         created_new = connection is None
+        previous_origin: str | None = None
         if connection is None:
             connection = MetaConnection(
                 tenant_id=tenant_id, channel="whatsapp", environment=environment, meta_app_id=app_id,
@@ -161,6 +163,7 @@ async def save_byok_connection(
             # Estado intermedio hasta confirmar que los dos tokens se
             # guardaron -- recién al final se marca "connected" (ver abajo).
             connection.status = "pending"
+            previous_origin = connection.origin
             connection.origin = "byok"  # guarda token y App Secret propios: ya es BYOK
         connection.status_reason = None
         connection.connected_by = admin_id
@@ -292,20 +295,26 @@ async def save_byok_connection(
                 # `#2200 Callback verification failed`); sin capturarlo acá, escapaba
                 # hasta la ruta del panel (que solo captura `ByokError`) -> 500.
                 raise ByokError(f"No se pudo suscribir los campos de webhook en Meta: {exc}") from exc
-    except Exception as exc:
+    except BaseException as exc:
+        # `BaseException`: una petición cancelada (`asyncio.CancelledError`) también deshace el
+        # alta; si no, el intento quedaba `pending` con el número.
         # Las credenciales YA fueron verificadas contra Graph -- este
         # except cubre un fallo de infraestructura al guardar el token o al
         # suscribir la WABA (no credenciales inválidas), y evita dejar la
         # conexión en "connected" sin secretos reales o sin poder recibir
         # mensajes.
-        detail = exc.message if isinstance(exc, GraphError) else str(exc)
-        await _rollback_failed_alta(
-            tenant_id,
-            connection_id,
-            phone_number_id,
-            created_new=created_new,
-            previous_connection_id=previous_connection_id,
-            reason=f"Fallo guardando credenciales o suscripción: {detail}"[:250],
+        detail = exc.message if isinstance(exc, GraphError) else (str(exc) or type(exc).__name__)
+        # `shield`: si la petición se canceló, el rollback igual termina.
+        await asyncio.shield(
+            _rollback_failed_alta(
+                tenant_id,
+                connection_id,
+                phone_number_id,
+                created_new=created_new,
+                previous_connection_id=previous_connection_id,
+                previous_origin=previous_origin,
+                reason=f"Fallo guardando credenciales o suscripción: {detail}"[:250],
+            )
         )
         raise
 
@@ -329,6 +338,7 @@ async def _rollback_failed_alta(
     created_new: bool,
     previous_connection_id: uuid.UUID | None,
     reason: str,
+    previous_origin: str | None = None,
 ) -> None:
     """Deshace un alta BYOK que falló después de reasignar el número (BACKLOG, ADR-0101).
 
@@ -340,6 +350,8 @@ async def _rollback_failed_alta(
     - Si la fila la creó este intento, se da de baja (borrado lógico) y se liberan sus números
       y WABAs, como `soft_delete_connection`: deja de prestar su secreto y de contar como
       suscrita (`own_app_subscribed`).
+    - Si se reusó (misma app), recupera su `origin` anterior: `_resolve_byok_token` ordena
+      primero por origen y un intento fallido no la convierte en BYOK.
     """
     async with get_session() as session:
         connection = (
@@ -351,6 +363,8 @@ async def _rollback_failed_alta(
             return
         connection.status = "error"
         connection.status_reason = reason
+        if not created_new and previous_origin:
+            connection.origin = previous_origin
 
         if previous_connection_id is not None and previous_connection_id != connection_id:
             previous = (

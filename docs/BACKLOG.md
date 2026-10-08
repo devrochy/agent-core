@@ -57,10 +57,10 @@ migración nueva si `crm_0009` ya corrió en algún entorno). Visto el 2026-10-0
   conexión `degraded`/`error` que recibe y responde aparece como inactiva.
 - `core/admin/meta_health_service.py:144`: las conexiones `degraded`/`error` desaparecen de la tabla de suscripciones,
   justo cuando la suscripción es el problema.
-- `core/gateway/meta_preflight.py::resolve_app_credentials` no filtra por estado ni por `deleted_at`, no prefiere
-  `origin = 'byok'` y ordena por `created_at`: puede devolver el `app_access` de una conexión `revoked` o borrada, y
-  elegir una conexión distinta de la que elige `_resolve_byok_token` (auditor-multitenant, 2026-10-06). Usar el mismo
-  selector.
+- `core/gateway/meta_preflight.py::resolve_app_credentials` no filtra por estado, no prefiere `origin = 'byok'` y
+  ordena por `created_at`: puede devolver el `app_access` de una conexión `revoked` y elegir una conexión distinta de la
+  que elige `_resolve_byok_token` (auditor-multitenant, 2026-10-06). Usar el mismo selector. (El filtro de
+  `deleted_at` ya está, core #271.)
 - Al tomar una conexión BYOK, el wizard de Embedded Signup (`meta_onboarding.exchange_code`) no revoca su
   `app_access`/`webhook_verify_token` ni desuscribe la app BYOK de la WABA. Meta sigue mandando eventos firmados por
   esa app; ADR-0101 los acepta, pero lo limpio es revocarlos y desuscribir.

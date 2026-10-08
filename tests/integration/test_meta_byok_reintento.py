@@ -213,3 +213,76 @@ async def test_otro_negocio_no_recibe_el_numero_de_vuelta(app_client, monkeypatc
     phone, _intento, _ = await _estado(tid, phone_id, uuid.uuid4().hex)
     assert phone.connection_id == sana_id
     assert otro_tid != tid
+
+
+async def test_una_peticion_cancelada_tambien_deshace_el_alta(app_client, monkeypatch) -> None:
+    import asyncio
+
+    import core.gateway.meta_byok as byok_mod
+    from core.gateway.meta_byok import save_byok_connection
+    from core.shared.tenant import tenant_scope
+
+    tid, sana_id, _app_a, waba, phone_id = await _negocio_con_conexion_sana()
+    _meta_falso(monkeypatch)
+
+    async def _cancelada(*_a, **_k):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(byok_mod, "_subscribe_waba_to_app", _cancelada)
+    app_b = uniq("app-b")
+
+    async with tenant_scope(tid):
+        with pytest.raises(asyncio.CancelledError):
+            await save_byok_connection(tid, None, app_b, "secreto-b", phone_id, "token-b", waba)
+
+    phone, intento, _ = await _estado(tid, phone_id, app_b)
+    assert phone.connection_id == sana_id
+    assert intento.deleted_at is not None
+
+
+async def test_la_conexion_reusada_recupera_su_origen(app_client, monkeypatch) -> None:
+    from core.db.models import MetaConnection
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid, _sana_id, _app_a, waba, phone_id = await _negocio_con_conexion_sana()
+    app_c = uniq("app-c")
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            session.add(
+                MetaConnection(
+                    tenant_id=tid, channel="whatsapp", environment="sandbox", origin="manual", meta_app_id=app_c,
+                    status="connected",
+                )
+            )
+    _meta_falso(monkeypatch, suscribe_waba=False)
+
+    await _reintentar(tid, app_c, phone_id, waba)
+
+    _phone, intento, _ = await _estado(tid, phone_id, app_c)
+    assert intento.origin == "manual"
+    assert intento.deleted_at is None
+
+
+async def test_una_conexion_borrada_no_presta_su_secreto_al_preflight(app_client, monkeypatch) -> None:
+    # Sin ninguna `connected`, `resolve_app_credentials` elegía la más nueva aunque estuviera
+    # borrada: la del intento fallido.
+    from sqlalchemy import update
+
+    from core.db.models import MetaConnection
+    from core.db.session import get_session
+    from core.gateway.meta_preflight import resolve_app_credentials
+    from core.shared.tenant import tenant_scope
+
+    tid, sana_id, app_a, waba, phone_id = await _negocio_con_conexion_sana()
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            await session.execute(update(MetaConnection).where(MetaConnection.id == sana_id).values(status="error"))
+    _meta_falso(monkeypatch, suscribe_waba=False)
+    await _reintentar(tid, uniq("app-b"), phone_id, waba)
+
+    async with tenant_scope(tid):
+        creds = await resolve_app_credentials(tid)
+
+    assert creds is not None
+    assert (creds.app_id, creds.app_secret, creds.connection_id) == (app_a, "secreto-a", sana_id)

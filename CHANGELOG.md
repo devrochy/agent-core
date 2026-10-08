@@ -8,6 +8,8 @@
   (si sigue viva y es del negocio) y, si la fila se creó en ese intento, la da de baja (borrado lógico) y libera sus
   números y WABAs: deja de prestar su secreto y de contar como suscrita. Una conexión reusada (misma app) no se borra.
 - `_token_expiry` ya no aborta el alta por un error de red (`httpx.HTTPError`): es best-effort.
+- Una petición cancelada también deshace el alta (`asyncio.CancelledError`, rollback con `shield`), y una conexión
+  reusada recupera su `origin` anterior. `resolve_app_credentials` (preflight) ya no elige una conexión borrada.
 
 ## Sin versión — Números del portafolio de Meta (2026-10-07)
 
