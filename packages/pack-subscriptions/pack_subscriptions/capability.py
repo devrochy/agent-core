@@ -181,6 +181,9 @@ class SubscriptionCapabilityImpl:
 
     async def _sub_vigente(self, session, subscription_id: uuid.UUID) -> Subscription:
         sub = await session.get(Subscription, subscription_id)
+        # `tenant_id` explícito además de RLS (defensa en profundidad; auditoría HU-SUB-12).
+        if sub is not None and sub.tenant_id != get_current_tenant_id():
+            sub = None
         if sub is None or sub.deleted_at is not None or sub.estado == "cancelada":
             raise SubscriptionError(
                 "La suscripción no existe o está cancelada.", code="suscripcion_no_encontrada"
@@ -349,6 +352,16 @@ class SubscriptionCapabilityImpl:
                 )
                 session.add(cargo)
                 await session.flush()
+
+        if cargo.link_url and cargo.referencia:
+            # El cron ya generó el link de este cargo (HU-SUB-05): se reusa. Antes se pedía
+            # otro con la misma referencia y la pasarela fallaba (journeys de HU-SUB-12).
+            return {
+                "url": cargo.link_url,
+                "referencia": cargo.referencia,
+                "periodo": periodo,
+                "monto": float(cargo.monto or 0),
+            }
 
         from core.agents.spec import enabled_packs, load_active_spec
         from core.payments import PaymentCapabilityError, payment_registry
