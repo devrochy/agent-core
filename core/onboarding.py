@@ -31,6 +31,7 @@ from core.db.models import (
 )
 from core.db.session import get_session
 from core.plugin_manager import plugin_manager
+from core.shared.exceptions import PluginConfigError, PluginError
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 
@@ -186,6 +187,8 @@ async def onboard_tenant(
     admin_password: str | None = None,
     whatsapp: dict | None = None,
     tenant_id: uuid.UUID | None = None,
+    preset: str | None = None,
+    plan: str | None = None,
 ) -> tuple[uuid.UUID, list[str]]:
     """Da de alta un tenant con su asistente. Idempotente.
 
@@ -193,7 +196,9 @@ async def onboard_tenant(
     "verify_token"}. Si se pasa, las credenciales se cifran y se persisten
     (se espera que el llamador las haya verificado contra Meta antes). El
     `phone_number_id` no puede pertenecer ya a OTRO tenant (evita ruteo
-    cross-tenant del webhook). Devuelve (tenant_id, pasos ejecutados).
+    cross-tenant del webhook). `preset`: id de `core/presets/` (ADR-0110), se aplica
+    después de los `packs` sueltos; `plan` asigna el plan de la suscripción inicial
+    (sin él queda free y un preset de plan mayor falla). Devuelve (tenant_id, pasos).
     """
     _validate_slug(slug)
 
@@ -337,15 +342,36 @@ async def onboard_tenant(
                     steps.append("conexión WhatsApp ya existía")
             from core.billing.service import ensure_free_subscription
 
-            await ensure_free_subscription(session, tenant_id)
+            sub = await ensure_free_subscription(session, tenant_id)
             steps.append("suscripción free creada")
+            if plan and sub.plan_id != plan:
+                from core.billing.plans import get_plan
+
+                if get_plan(plan) is None:
+                    raise ValueError(f"Plan desconocido: {plan}")
+                # Lo decide el master (CLI) o el aprovisionamiento con el plan comprado.
+                sub.plan_id = plan
+                sub.status = "active"
+                steps.append(f"plan {plan} asignado")
             await session.commit()
 
     for pack in packs or []:
         async with tenant_scope(tenant_id):
-            await plugin_manager.save_config(pack, {})
-            await plugin_manager.activate(pack)
+            try:
+                await plugin_manager.save_config(pack, {})
+                await plugin_manager.activate(pack)
+            except (PluginConfigError, PluginError) as exc:
+                # Un pack que exige claves (p. ej. pack_payments) no rompe el alta:
+                # queda pendiente de configurar desde el panel (ADR-0110).
+                steps.append(f"pack {pack} pendiente de configurar ({exc})")
+                continue
         steps.append(f"pack {pack} configurado y activo")
+
+    if preset:
+        from core.presets.apply import apply_preset
+
+        resultado = await apply_preset(tenant_id, preset)
+        steps.extend(resultado.pasos)
 
     # Flujo de atención (ADR-0054, ADR-0109): el flujo de los packs se compone en
     # runtime; ya no se copia al flow.json del negocio. Esto solo normaliza un

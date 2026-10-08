@@ -7,6 +7,8 @@ los datos del tenant (catalog.json) que viven en TENANTS_ROOT (gitignored).
 Uso:
   agent-core tenant create                # wizard interactivo paso a paso
   agent-core tenant create --non-interactive --name "Mi Bot" --packs pack_commerce
+  agent-core tenant create -y --name "Mi Restaurante" --preset restaurante --plan basic
+  agent-core tenant presets               # presets de negocio disponibles (ADR-0110)
   agent-core tenant seed <slug>           # importa TENANTS_ROOT/<slug>/catalog.json
   agent-core tenant list
   agent-core tenant docs <slug>
@@ -44,6 +46,8 @@ def create(
     language: str = typer.Option("es", "--language", help="Idioma principal (es/en/pt)"),
     tone: str = typer.Option("cercano", "--tone", help="formal | neutral | cercano | informal"),
     packs: str = typer.Option("", "--packs", help="Coma-separado, ej: pack_commerce"),
+    preset: str = typer.Option("", "--preset", help="Preset de negocio (ver `tenant presets`), ej: restaurante"),
+    plan: str = typer.Option("", "--plan", help="Plan inicial (free, basic, premium, empresarial)"),
     escalation_triggers: str = typer.Option("", "--escalation-triggers",
                                             help="Coma-separado (default: asesor, humano, persona real, reclamo, queja)"),
     admin_email: str = typer.Option("", "--admin-email", help="Email del admin del tenant (opcional)"),
@@ -72,6 +76,8 @@ def create(
             "language": language,
             "tone": tone,
             "packs": [p.strip() for p in packs.split(",") if p.strip()],
+            "preset": preset.strip() or None,
+            "plan": plan.strip() or None,
             "escalation_triggers": [t.strip() for t in escalation_triggers.split(",") if t.strip()],
             "admin_email": admin_email,
             "admin_password": admin_password,
@@ -97,7 +103,13 @@ def create(
             console.print(f"[red]Credenciales WhatsApp rechazadas: {msg}[/red]")
             raise typer.Exit(1)
 
-    tid, steps = asyncio.run(_onboard(answers))
+    from core.presets import PresetError
+
+    try:
+        tid, steps = asyncio.run(_onboard(answers))
+    except PresetError as exc:
+        console.print(f"[red]Preset: {exc}[/red]")
+        raise typer.Exit(1) from exc
     console.print("✓ [green]Onboarding completado[/green]")
     for s in steps:
         console.print(f"  · {s}")
@@ -205,6 +217,8 @@ async def _onboard(answers: dict) -> tuple[uuid.UUID, list[str]]:
         admin_email=admin_email,
         admin_password=admin_password,
         whatsapp=answers["whatsapp"],
+        preset=answers.get("preset"),
+        plan=answers.get("plan"),
     )
     if generated:
         console.print(
@@ -233,44 +247,17 @@ async def seed_pack_plugins(slug: str, tenant_id: uuid.UUID) -> list[str]:
     """Seed genérico por pack (ADR-0083, issue #154).
 
     Importa `TENANTS_ROOT/<slug>/<plugin_id>.json` para cada pack detectado que
-    tenga uno y un `seed_data` no no-op (commerce usa `catalog.json`, por eso se
-    excluye). Antes de delegar, resuelve `variante_sku` → `variante_id` del
-    catálogo commerce: el CLI es el único que cruza tablas de packs.
+    tenga uno (commerce usa `catalog.json`, por eso se excluye). El CLI no
+    importa packs ni cruza sus tablas (ADR-0110).
     """
     import json
     from pathlib import Path
 
-    from pack_commerce.models import ProductVariant
-
     from core.config import get_settings
-    from core.db.session import get_session
     from core.plugin_manager import plugin_manager
-    from core.shared.tenant import tenant_scope
 
     root = Path(get_settings().tenants_root)
     steps: list[str] = []
-
-    async def _resolve_skus(data: dict) -> dict:
-        planes = data.get("planes", []) if isinstance(data, dict) else []
-        if not planes:
-            return data
-        async with tenant_scope(tenant_id):
-            async with get_session() as session:
-                for plan in planes:
-                    sku = plan.get("variante_sku")
-                    if not sku or plan.get("variante_id"):
-                        continue
-                    row = (
-                        await session.execute(
-                            select(ProductVariant).where(
-                                ProductVariant.tenant_id == tenant_id,
-                                ProductVariant.sku == sku,
-                            )
-                        )
-                    ).scalars().first()
-                    if row is not None:
-                        plan["variante_id"] = str(row.id)
-        return data
 
     for module in plugin_manager.list_modules():
         if module.id == "pack_commerce":
@@ -283,7 +270,6 @@ async def seed_pack_plugins(slug: str, tenant_id: uuid.UUID) -> list[str]:
         except json.JSONDecodeError:
             console.print(f"[yellow]{module.id}.json de {slug} no es JSON válido; se ignora[/yellow]")
             continue
-        data = await _resolve_skus(data)
         applied = await module.seed_data(tenant_id, data)
         steps.extend(applied)
         console.print(f"✓ [green]{module.id}.json importado desde {slug}/[/green]")
@@ -292,146 +278,33 @@ async def seed_pack_plugins(slug: str, tenant_id: uuid.UUID) -> list[str]:
 
 # ------------------------------------------------------------------ seed
 async def seed_catalog(tenant_id: uuid.UUID, data: dict) -> list[str]:
-    """Importa un catálogo pack_commerce a la BD del tenant. Idempotente.
+    """Importa un catálogo de pack_commerce a la BD del tenant. Idempotente.
 
-    Los productos del tenant viven en `TENANTS_ROOT/<slug>/catalog.json` (dato,
-    no código). Formato: {"category_paths": [[...]], "products": [...],
-    "complement_pairs": [[...],[...]]}. Las filas se miran SIEMPRE acotadas al
-    tenant (defensa más allá de RLS, ADR-0018).
+    Delegado en `seed_data` del pack (ADR-0110): el CLI no importa packs.
     """
-    from pack_commerce.models import (
-        Category,
-        CategoryComplement,
-        Inventory,
-        Product,
-        ProductVariant,
-    )
+    from core.plugin_manager import plugin_manager
 
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
+    plugin_manager.scan()
+    module = plugin_manager.get("pack_commerce")
+    if module is None:
+        raise RuntimeError("pack_commerce no está instalado")
+    return await module.seed_data(tenant_id, data)
 
-    steps: list[str] = []
-    category_ids: dict[tuple[str, ...], uuid.UUID] = {}
-    order = 0
 
-    async def category_id(path: tuple[str, ...]) -> uuid.UUID:
-        nonlocal order
-        if path in category_ids:
-            return category_ids[path]
-        parent = await category_id(path[:-1]) if len(path) > 1 else None
-        stmt = select(Category).where(
-            Category.tenant_id == tenant_id,
-            Category.name == path[-1],
-            Category.parent_id.is_(None) if parent is None else Category.parent_id == parent,
+@app.command()
+def presets() -> None:
+    """Lista los presets de negocio disponibles (ADR-0110)."""
+    from core.presets import list_presets
+
+    table = Table(title="Presets de negocio")
+    for columna in ("id", "versión", "plan mínimo", "packs", "pasos de activación"):
+        table.add_column(columna)
+    for preset in list_presets():
+        table.add_row(
+            preset.id, str(preset.version), preset.plan_minimo,
+            ", ".join(preset.packs), ", ".join(preset.pasos_de_activacion),
         )
-        cat = (await session.execute(stmt)).scalars().first()
-        if cat is None:
-            cat = Category(parent_id=parent, name=path[-1], sort_order=order, active=True)
-            session.add(cat)
-            await session.flush()
-            order += 1
-        category_ids[path] = cat.id
-        return cat.id
-
-    async with tenant_scope(tenant_id):
-        async with get_session() as session:
-            for path in data.get("category_paths", []):
-                await category_id(tuple(path))
-            await session.flush()
-
-            for producto in data.get("products", []):
-                cat = await category_id(tuple(producto["category_path"]))
-                has_variants = len(producto.get("variants", [])) > 1
-                base_sku = producto["variants"][0]["sku"]
-                prod_stmt = (
-                    select(Product)
-                    .join(ProductVariant, ProductVariant.product_id == Product.id)
-                    .where(ProductVariant.sku == base_sku, Product.tenant_id == tenant_id)
-                )
-                product = (await session.execute(prod_stmt)).scalars().first()
-                if product is None:
-                    product = Product(
-                        name=producto["name"],
-                        description=producto.get("description", ""),
-                        image_url=producto.get("image_url", ""),
-                        category_id=cat,
-                        has_variants=has_variants,
-                    )
-                    session.add(product)
-                    await session.flush()
-
-                for variante in producto.get("variants", []):
-                    vstmt = select(ProductVariant).where(
-                        ProductVariant.sku == variante["sku"],
-                        ProductVariant.tenant_id == tenant_id,
-                        ProductVariant.product_id == product.id,
-                    )
-                    variant = (await session.execute(vstmt)).scalars().first()
-                    attrs = variante.get("attributes", {}) or {}
-                    plan_meta = {
-                        "billing_period": attrs.get("periodicidad") or attrs.get("billing_period"),
-                        "trial_days": attrs.get("trial_dias") or attrs.get("trial_days"),
-                        "entitlements": attrs.get("limites") or attrs.get("entitlements"),
-                    }
-                    if variant is None:
-                        variant = ProductVariant(
-                            product_id=product.id,
-                            sku=variante["sku"],
-                            attributes=attrs,
-                            price=variante["price"],
-                            active=True,
-                            billing_period=plan_meta["billing_period"],
-                            trial_days=int(plan_meta["trial_days"]) if plan_meta["trial_days"] else None,
-                            entitlements=plan_meta["entitlements"],
-                        )
-                        session.add(variant)
-                        await session.flush()
-                    else:
-                        variant.attributes = attrs
-                        if plan_meta["billing_period"]:
-                            variant.billing_period = plan_meta["billing_period"]
-                        if plan_meta["trial_days"]:
-                            variant.trial_days = int(plan_meta["trial_days"])
-                        if plan_meta["entitlements"]:
-                            variant.entitlements = plan_meta["entitlements"]
-                    existing_stock = (
-                        await session.execute(
-                            select(Inventory).where(
-                                Inventory.variant_id == variant.id,
-                                Inventory.tenant_id == tenant_id,
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    if existing_stock is None:
-                        session.add(
-                            Inventory(
-                                variant_id=variant.id,
-                                stock_quantity=variante.get("stock", 0),
-                                source="import",
-                            )
-                        )
-                await session.flush()
-
-            for path_a, path_b in data.get("complement_pairs", []):
-                id_a = category_ids.get(tuple(path_a))
-                id_b = category_ids.get(tuple(path_b))
-                if id_a is None or id_b is None:
-                    continue
-                for (a, b) in ((id_a, id_b), (id_b, id_a)):
-                    exists = (
-                        await session.execute(
-                            select(CategoryComplement).where(
-                                CategoryComplement.tenant_id == tenant_id,
-                                CategoryComplement.category_id == a,
-                                CategoryComplement.complementary_category_id == b,
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    if exists is None:
-                        session.add(CategoryComplement(category_id=a, complementary_category_id=b))
-            await session.commit()
-    steps.append(f"catálogo sembrado ({len(data.get('products', []))} productos)")
-    return steps
+    console.print(table)
 
 
 @app.command()

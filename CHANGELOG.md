@@ -1,5 +1,17 @@
 # Changelog
 
+## Sin versión — Presets de negocio (2026-10-08)
+
+- HU-FWK-03 / ADR-0110. `core/presets/` con los manifiestos `comercio`, `restaurante` y `cobranza`, y
+  `apply_preset(tenant_id, preset)`: valida plan y cuota, habilita los packs completando su config sin pisar lo del
+  negocio, deja **pendientes** los que exigen claves (`pack_payments`), siembra con `seed_data` y registra
+  `tenants.settings["preset"]` + `audit_log`. Idempotente.
+- Fragmentos por pack en `packages/pack-x/presets/<vertical>.json` (config sin secretos + `seed`); commerce trae
+  catálogo genérico y menú de restaurante.
+- `pack_commerce.seed_data` siembra el catálogo (antes vivía en el CLI). `cli/commands/tenant.py` ya no importa packs.
+- `agent-core tenant create --preset <id> --plan <plan>` y `agent-core tenant presets`. El alta con `--packs` ya no
+  falla con un pack que exige claves: lo marca pendiente.
+
 ## Sin versión — `flow validate` y los evals ven las tools del core como el runtime (2026-10-08)
 
 - `agent-core flow validate` daba falso negativo con las `sub_*` del core (HU-SUB-01): ahora las cuenta si el negocio
