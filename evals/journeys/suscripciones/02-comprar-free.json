@@ -1,0 +1,61 @@
+{
+  "nombre": "comprar-free",
+  "descripcion": "El cliente activa el plan Free: el pedido nace pagado sin link y la suscripción queda en prueba de 30 días (D-16).",
+  "pasos": [
+    {
+      "nota": "pide el Free con sus datos",
+      "usuario": "Quiero activar el Plan Free. Mis datos: Ana Gómez, cédula 1012345678, celular 3001234567, correo ana.gomez@example.com.",
+      "hasta_herramienta": "crear_pedido",
+      "insistir": "Sí, confirmo. Creá el pedido del Plan Free con esos datos.",
+      "max_turnos": 4,
+      "espera": {
+        "sin_herramientas": [
+          "confirmar_pago_pedido",
+          "generar_link_pago"
+        ]
+      }
+    },
+    {
+      "nota": "el pedido nace pagado",
+      "verifica": {
+        "tabla": "pack_commerce_orders",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "payment_status": "pagado",
+          "total": 0
+        }
+      }
+    },
+    {
+      "nota": "suscripción en prueba",
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "estado": "trialing",
+          "valor_periodo": 0,
+          "trial_termina": {
+            "$no_nulo": true
+          }
+        }
+      }
+    },
+    {
+      "nota": "se emitió subscription.activated",
+      "verifica": {
+        "tabla": "domain_events",
+        "donde": {
+          "topic": "subscription.activated",
+          "payload->>customer_id": "{cliente.id}"
+        },
+        "filas": 1
+      }
+    }
+  ]
+}

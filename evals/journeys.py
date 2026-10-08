@@ -1,0 +1,602 @@
+"""Runner de journeys: conversaciones completas con herramientas, pagos y reloj (HU-SUB-12).
+
+El golden set de `evals/runner.py` mira la PRIMERA respuesta del modelo, sin ejecutar
+herramientas: no ve si una compra termina, si un pago activa la suscripción o si la
+mora avisa. Un journey corre el **loop real** (`process_conversation`) turno a turno,
+con un **proveedor de pagos simulado** (sin red), eventos (`payment.confirmed`),
+**saltos de reloj** y jobs de los packs, y verifica herramientas, estados y mensajes.
+
+Uso:
+  python evals/journeys.py                          # set `suscripciones` completo
+  python evals/journeys.py 03,05                    # solo los que matcheen
+  python evals/journeys.py --set comercio           # otro set de evals/journeys/<set>/
+  python evals/journeys.py --umbral 0.95 --reporte evals/reportes/journeys.json
+
+Requiere LLM_API_KEY y la base migrada (crea un negocio de prueba por corrida). El
+formato de los journeys está en `evals/journeys/README.md`.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import re
+import sys
+import time
+import uuid
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+EVALS_DIR = Path(__file__).resolve().parent
+JOURNEYS_DIR = EVALS_DIR / "journeys"
+_IDENT = re.compile(r"^[a-z_][a-z0-9_]*$")
+_PLANTILLA = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_.]*)\}")
+_SALTO = re.compile(r"^\+(\d+)([dhm])$")
+
+
+class FallaJourney(AssertionError):
+    """Un paso no cumplió lo esperado (el journey se corta ahí)."""
+
+
+# ------------------------------------------------------------------ pagos simulados
+@dataclass
+class PagoSimulado:
+    """Pasarela simulada: reemplaza al PROVEEDOR de `pack_payments` (la pieza que habla
+    con Wompi), así corre el camino real del pack (capacidad, tool, transacciones) sin red.
+
+    Respeta el mismo mínimo que la pasarela real (`monto_minimo`; Wompi: 150.000 COP).
+    """
+
+    monto_minimo: float = 0
+    links: list[dict[str, Any]] = field(default_factory=list)
+
+    def instalar(self) -> None:
+        try:
+            import pack_payments.payments as capacidad
+            import pack_payments.skills as tool
+        except ImportError:  # sin pack de pagos instalado no hay nada que simular
+            return
+        tool.build_provider = self._proveedor  # type: ignore[assignment]
+        capacidad.build_provider = self._proveedor  # type: ignore[assignment]
+
+    def _proveedor(self, _config: Any) -> Any:
+        from pack_payments.providers.base import (
+            BasePaymentProvider,
+            PaymentLinkResult,
+            PaymentRequestRejected,
+        )
+
+        pago = self
+
+        class _Proveedor(BasePaymentProvider):
+            provider_name = "simulado"
+
+            async def create_payment_link(self, *, reference, amount, currency, expires_in_hours):  # type: ignore[no-untyped-def, override]
+                if float(amount) < pago.monto_minimo:
+                    raise PaymentRequestRejected(f"El monto {amount} es menor al mínimo de la pasarela ({pago.monto_minimo}).")
+                pago.links.append({"reference": reference, "amount": float(amount)})
+                return PaymentLinkResult(
+                    provider_reference=f"sim-{reference}", payment_link_url=f"https://pagos.simulados/{reference}"
+                )
+
+            def verify_webhook_signature(self, payload):  # type: ignore[no-untyped-def, override]
+                return True
+
+            def parse_webhook_event(self, payload):  # type: ignore[no-untyped-def, override]
+                # Los journeys confirman pagos con el evento del bus, no con webhooks.
+                raise NotImplementedError("la pasarela simulada no recibe webhooks")
+
+        return _Proveedor()
+
+
+# ------------------------------------------------------------------ contexto
+@dataclass
+class Contexto:
+    tenant_id: uuid.UUID
+    customer_id: uuid.UUID
+    conversation_id: uuid.UUID
+    pagos: PagoSimulado
+    desfase: timedelta = timedelta(0)
+    variables: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def ahora(self) -> datetime:
+        return datetime.now(UTC) + self.desfase
+
+    def valor(self, ruta: str) -> Any:
+        partes = ruta.split(".")
+        actual: Any = {
+            **self.variables,
+            "negocio": {"id": str(self.tenant_id)},
+            "cliente": {"id": str(self.customer_id)},
+            "ahora": self.ahora.isoformat(),
+            "pagos": {"ultimo": self.pagos.links[-1] if self.pagos.links else {}},
+        }
+        for parte in partes:
+            if isinstance(actual, dict) and parte in actual:
+                actual = actual[parte]
+            elif isinstance(actual, list) and parte.isdigit() and int(parte) < len(actual):
+                actual = actual[int(parte)]
+            else:
+                raise FallaJourney(f"variable sin valor: {{{ruta}}}")
+        return actual
+
+    def render(self, dato: Any) -> Any:
+        """Reemplaza `{ruta}` en strings (recursivo). Un string que es solo `{ruta}` toma el valor crudo."""
+        if isinstance(dato, str):
+            unico = _PLANTILLA.fullmatch(dato)
+            if unico:
+                return self.valor(unico.group(1))
+            return _PLANTILLA.sub(lambda m: str(self.valor(m.group(1))), dato)
+        if isinstance(dato, list):
+            return [self.render(d) for d in dato]
+        if isinstance(dato, dict):
+            return {k: self.render(v) for k, v in dato.items()}
+        return dato
+
+
+# ------------------------------------------------------------------ negocio y cliente
+async def preparar_negocio(definicion: dict[str, Any], pagos: PagoSimulado) -> uuid.UUID:
+    """Negocio de prueba de la corrida: preset, plan, catálogo y config de packs."""
+    from core.admin.views import set_pack_for_tenant
+    from core.onboarding import onboard_tenant
+    from core.plugin_manager import plugin_manager
+    from core.shared.tenant import tenant_scope
+
+    slug = f"journeys-{uuid.uuid4().hex[:8]}"
+    tenant_id, _ = await onboard_tenant(
+        name=definicion.get("nombre", "Negocio de journeys"),
+        slug=slug,
+        business_description=definicion.get("descripcion", "Negocio de prueba de los journeys."),
+        packs=list(definicion.get("packs", [])),
+        preset=definicion.get("preset"),
+        plan=definicion.get("plan", "premium"),
+        sembrar_ejemplos=not definicion.get("catalogo"),
+    )
+    async with tenant_scope(tenant_id):
+        for pack_id, config in (definicion.get("config") or {}).items():
+            await plugin_manager.save_config(pack_id, config)
+            error = await set_pack_for_tenant(pack_id, True)
+            if error:
+                raise RuntimeError(f"No se pudo habilitar {pack_id}: {error}")
+    if definicion.get("catalogo"):
+        from pack_commerce.seed import seed_catalog  # el set declara su catálogo de commerce
+
+        await seed_catalog(tenant_id, definicion["catalogo"])
+    pagos.instalar()
+    return tenant_id
+
+
+async def nuevo_cliente(tenant_id: uuid.UUID, nombre: str) -> tuple[uuid.UUID, uuid.UUID]:
+    """Cliente y conversación propios del journey (canal `test`: sin envíos ni métricas)."""
+    from core.db.models import Conversation, Customer
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+    from core.shared.test_mode import TEST_CHANNEL
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            cliente = Customer(
+                tenant_id=tenant_id, channel=TEST_CHANNEL, external_id=f"journey:{uuid.uuid4().hex}", name=nombre
+            )
+            session.add(cliente)
+            await session.flush()
+            conversacion = Conversation(
+                tenant_id=tenant_id, customer_id=cliente.id, channel=TEST_CHANNEL, status="open", state={"is_test": True}
+            )
+            session.add(conversacion)
+            await session.flush()
+            return cliente.id, conversacion.id
+
+
+# ------------------------------------------------------------------ pasos
+async def _herramientas_desde(ctx: Contexto, desde: datetime) -> list[dict[str, Any]]:
+    """Herramientas ejecutadas en la conversación desde `desde` (fuente: `audit_log`)."""
+    from sqlalchemy import select
+
+    from core.db.models import AuditLog
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(ctx.tenant_id):
+        async with get_session() as session:
+            filas = (
+                await session.execute(
+                    select(AuditLog)
+                    .where(
+                        AuditLog.tenant_id == ctx.tenant_id,
+                        AuditLog.conversation_id == ctx.conversation_id,
+                        AuditLog.actor.like("tool:%"),
+                        AuditLog.created_at >= desde,
+                    )
+                    .order_by(AuditLog.created_at)
+                )
+            ).scalars().all()
+    return [{"nombre": f.actor.removeprefix("tool:"), "entrada": f.input or {}, "salida": f.output or {}} for f in filas]
+
+
+def _revisar_turno(texto: str, herramientas: list[str], escalo: bool, espera: dict[str, Any]) -> list[str]:
+    fallas: list[str] = []
+    bajo = texto.lower()
+    usadas = set(herramientas)
+    for nombre in espera.get("herramientas", []):
+        if nombre not in usadas:
+            fallas.append(f"no llamó {nombre} (llamó {herramientas})")
+    alguna = espera.get("alguna_herramienta", [])
+    if alguna and not usadas & set(alguna):
+        fallas.append(f"no llamó ninguna de {alguna} (llamó {herramientas})")
+    for nombre in espera.get("sin_herramientas", []):
+        if nombre in usadas:
+            fallas.append(f"llamó {nombre}, que no debía")
+    for frase in espera.get("texto_contiene", []):
+        if frase.lower() not in bajo:
+            fallas.append(f"la respuesta no dice «{frase}»")
+    alguna_frase = espera.get("texto_contiene_alguno", [])
+    if alguna_frase and not any(f.lower() in bajo for f in alguna_frase):
+        fallas.append(f"la respuesta no dice ninguna de {alguna_frase}")
+    for frase in espera.get("texto_no_contiene", []):
+        if frase.lower() in bajo:
+            fallas.append(f"la respuesta dice «{frase}», que no debía")
+    maximo = espera.get("max_caracteres")
+    if maximo and len(texto) > maximo:
+        fallas.append(f"respuesta de {len(texto)} caracteres (máx {maximo})")
+    if "escala" in espera and bool(espera["escala"]) != escalo:
+        fallas.append("debía escalar" if espera["escala"] else "escaló sin motivo")
+    return fallas
+
+
+async def paso_usuario(ctx: Contexto, paso: dict[str, Any], registro: list[str]) -> None:
+    """Uno o más turnos del cliente. Con `hasta_herramienta`, insiste con `insistir`
+    (hasta `max_turnos`) mientras el asistente no haya llamado esa herramienta."""
+    from core.orchestrator.loop import process_conversation
+    from core.shared.tenant import tenant_scope
+
+    espera = paso.get("espera", {})
+    objetivo = paso.get("hasta_herramienta")
+    objetivos = set([objetivo] if isinstance(objetivo, str) else (objetivo or []))
+    mensaje = ctx.render(paso["usuario"])
+    inicio = datetime.now(UTC) - timedelta(seconds=1)
+    textos: list[str] = []
+    escalo = False
+    for turno in range(int(paso.get("max_turnos", 1 if not objetivo else 3))):
+        async with tenant_scope(ctx.tenant_id):
+            resultado = await process_conversation(ctx.conversation_id, mensaje)
+        if resultado is None:
+            raise FallaJourney("el loop no devolvió respuesta (conversación pausada o escalada)")
+        textos.append(resultado.text)
+        escalo = escalo or resultado.escalated
+        registro.append(f"    cliente: {mensaje}\n    asistente: {resultado.text}")
+        if not objetivo:
+            break
+        usadas = {h["nombre"] for h in await _herramientas_desde(ctx, inicio)}
+        if usadas & objetivos:
+            break
+        mensaje = ctx.render(paso.get("insistir", "Sí, confirmo. Adelante."))
+        _ = turno
+    herramientas = await _herramientas_desde(ctx, inicio)
+    for h in herramientas:  # disponibles para los pasos siguientes: {herramientas.crear_pedido.order_id}
+        ctx.variables.setdefault("herramientas", {})[h["nombre"]] = h["salida"]
+    nombres = [h["nombre"] for h in herramientas]
+    registro.append(f"    herramientas: {nombres}")
+    for h in herramientas:
+        salida = json.dumps(h["salida"], ensure_ascii=False, default=str)
+        registro.append(f"      {h['nombre']}({json.dumps(h['entrada'], ensure_ascii=False, default=str)[:200]}) → {salida[:400]}")
+    fallas = _revisar_turno(textos[-1], nombres, escalo, espera)
+    if objetivos and not objetivos & set(nombres):
+        fallas.insert(0, f"tras {len(textos)} turnos no llamó {' ni '.join(sorted(objetivos))}")
+    if fallas:
+        raise FallaJourney("; ".join(fallas))
+
+
+async def paso_evento(ctx: Contexto, paso: dict[str, Any], registro: list[str]) -> None:
+    """Evento del bus con su payload (p. ej. `payment.confirmed` de la pasarela)."""
+    from core.shared.events import event_bus
+    from core.shared.tenant import tenant_scope
+
+    datos = ctx.render(paso.get("datos", {}))
+    registro.append(f"    evento {paso['evento']}: {datos}")
+    async with tenant_scope(ctx.tenant_id):
+        await event_bus.emit_strict(paso["evento"], **datos)
+
+
+def paso_reloj(ctx: Contexto, paso: dict[str, Any], registro: list[str]) -> None:
+    salto = _SALTO.match(str(paso["reloj"]))
+    if not salto:
+        raise FallaJourney(f"reloj inválido: {paso['reloj']!r} (formato +30d, +6h, +15m)")
+    cantidad, unidad = int(salto.group(1)), salto.group(2)
+    ctx.desfase += {"d": timedelta(days=cantidad), "h": timedelta(hours=cantidad), "m": timedelta(minutes=cantidad)}[unidad]
+    registro.append(f"    reloj → {ctx.ahora:%Y-%m-%d %H:%M} UTC")
+
+
+async def paso_job(ctx: Contexto, paso: dict[str, Any], registro: list[str]) -> None:
+    """Corre un job de pack con el reloj del journey: `<pack>.jobs._<nombre>(now)`."""
+    import importlib
+
+    pack, _, nombre = str(paso["job"]).partition(".")
+    if not (pack.startswith("pack_") and _IDENT.match(pack) and _IDENT.match(nombre)):
+        raise FallaJourney(f"job inválido: {paso['job']!r} (formato pack_x.nombre)")
+    modulo = importlib.import_module(f"{pack}.jobs")
+    funcion = getattr(modulo, f"_{nombre}", None)
+    if funcion is None:
+        raise FallaJourney(f"{pack}.jobs no tiene _{nombre}(now)")
+    # El job recorre los negocios de `_tenant_ids()`: acá SOLO el del journey, para no
+    # tocar otros negocios con el reloj adelantado y la pasarela simulada (auditoría).
+    original = getattr(modulo, "_tenant_ids", None)
+
+    async def _solo_este_negocio() -> list[uuid.UUID]:
+        return [ctx.tenant_id]
+
+    if original is not None:
+        modulo._tenant_ids = _solo_este_negocio  # type: ignore[attr-defined]
+    try:
+        resultado = await funcion(ctx.ahora)
+    finally:
+        if original is not None:
+            modulo._tenant_ids = original  # type: ignore[attr-defined]
+    registro.append(f"    job {paso['job']} @ {ctx.ahora:%Y-%m-%d}: {resultado}")
+
+
+def _coincide(valor: Any, esperado: Any) -> bool:
+    if isinstance(esperado, dict):
+        if "$no_nulo" in esperado:
+            return (valor is not None) == bool(esperado["$no_nulo"])
+        if "$en" in esperado:
+            return any(_coincide(valor, e) for e in esperado["$en"])
+        if "$contiene" in esperado:
+            return str(esperado["$contiene"]).lower() in str(valor or "").lower()
+    if valor is None or esperado is None:
+        return valor is esperado
+    try:
+        return float(valor) == float(esperado)
+    except (TypeError, ValueError):
+        return str(valor) == str(esperado)
+
+
+async def paso_verifica(ctx: Contexto, paso: dict[str, Any], registro: list[str]) -> None:
+    """Consulta filas del negocio (RLS + `tenant_id` explícito) y compara campos.
+
+    `donde` filtra por igualdad (o `campo->>clave` para JSONB); `espera` compara la
+    primera fila; `filas` exige una cantidad; `guardar_como` deja la fila para `{x.campo}`.
+    """
+    from sqlalchemy import text
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    crudo = paso["verifica"]
+    # `tabla` y `orden` salen del JSON versionado, nunca de una plantilla (una salida de
+    # tool no puede elegir la tabla).
+    datos = {**ctx.render({k: v for k, v in crudo.items() if k not in ("tabla", "orden")}), "tabla": crudo["tabla"]}
+    if "orden" in crudo:
+        datos["orden"] = crudo["orden"]
+    tabla = datos["tabla"]
+    if not _IDENT.match(tabla):
+        raise FallaJourney(f"tabla inválida: {tabla!r}")
+    condiciones = ["tenant_id = :_tenant"]
+    valores: dict[str, Any] = {"_tenant": str(ctx.tenant_id)}
+    for i, (campo, valor) in enumerate((datos.get("donde") or {}).items()):
+        columna, _, clave = campo.partition("->>")
+        if not _IDENT.match(columna) or (clave and not _IDENT.match(clave)):
+            raise FallaJourney(f"campo inválido: {campo!r}")
+        expresion = f"{columna}->>'{clave}'" if clave else f"{columna}::text"
+        condiciones.append(f"{expresion} = :v{i}")
+        valores[f"v{i}"] = str(valor)
+    orden = datos.get("orden", "created_at desc")
+    if not re.fullmatch(r"[a-z_]+( (asc|desc))?", orden):
+        raise FallaJourney(f"orden inválido: {orden!r}")
+    consulta = text(f"select * from {tabla} where {' and '.join(condiciones)} order by {orden}")
+    async with tenant_scope(ctx.tenant_id):
+        async with get_session() as session:
+            filas = [dict(r._mapping) for r in (await session.execute(consulta, valores)).all()]
+    registro.append(f"    verifica {tabla}: {len(filas)} fila(s)")
+    if "filas" in datos and len(filas) != int(datos["filas"]):
+        raise FallaJourney(f"{tabla}: {len(filas)} filas, se esperaban {datos['filas']}")
+    esperado = datos.get("espera") or {}
+    if esperado and not filas:
+        raise FallaJourney(f"{tabla}: sin filas para {datos.get('donde')}")
+    fallas = [
+        f"{tabla}.{campo} = {filas[0].get(campo)!r}, se esperaba {valor!r}"
+        for campo, valor in esperado.items()
+        if not _coincide(filas[0].get(campo), valor)
+    ]
+    if fallas:
+        raise FallaJourney("; ".join(fallas))
+    if datos.get("guardar_como") and filas:
+        ctx.variables[datos["guardar_como"]] = {k: (str(v) if v is not None else None) for k, v in filas[0].items()}
+
+
+async def paso_accion(ctx: Contexto, paso: dict[str, Any], registro: list[str]) -> None:
+    """Acciones del contrato del core, sin conversación (preparan estados largos)."""
+    accion = paso["accion"]
+    datos = ctx.render(paso.get("datos", {}))
+    if accion == "activar_suscripcion":
+        from core.shared.tenant import tenant_scope
+        from core.subscriptions import capability_del_negocio
+
+        async with tenant_scope(ctx.tenant_id):
+            cap = await capability_del_negocio(ctx.tenant_id)
+            if cap is None:
+                raise FallaJourney("el negocio no tiene proveedor de suscripciones")
+            vista = await cap.activate(
+                customer_id=ctx.customer_id,
+                variant_id=str(datos.get("variant_id") or uuid.uuid4()),
+                plan=datos["plan"],
+                reference=str(datos.get("referencia", "journey")),
+            )
+        ctx.variables["suscripcion"] = dict(vista)
+        registro.append(f"    acción activar_suscripcion: {vista.get('estado')}")
+        return
+    raise FallaJourney(f"acción desconocida: {accion!r}")
+
+
+# ------------------------------------------------------------------ journey
+@dataclass
+class Resultado:
+    nombre: str
+    ok: bool
+    detalle: str = ""
+    segundos: float = 0.0
+    registro: list[str] = field(default_factory=list)
+
+
+async def correr_journey(ruta: Path, tenant_id: uuid.UUID, pagos: PagoSimulado) -> Resultado:
+    journey = json.loads(ruta.read_text(encoding="utf-8"))
+    nombre = journey.get("nombre", ruta.stem)
+    inicio = time.monotonic()
+    registro: list[str] = []
+    customer_id, conversation_id = await nuevo_cliente(tenant_id, journey.get("cliente", "Cliente de prueba"))
+    ctx = Contexto(tenant_id, customer_id, conversation_id, pagos)
+    for numero, paso in enumerate(journey["pasos"], start=1):
+        registro.append(f"  paso {numero}: {paso.get('nota', next(iter(paso)))}")
+        try:
+            if "usuario" in paso:
+                await paso_usuario(ctx, paso, registro)
+            elif "evento" in paso:
+                await paso_evento(ctx, paso, registro)
+            elif "reloj" in paso:
+                paso_reloj(ctx, paso, registro)
+            elif "job" in paso:
+                await paso_job(ctx, paso, registro)
+            elif "verifica" in paso:
+                await paso_verifica(ctx, paso, registro)
+            elif "accion" in paso:
+                await paso_accion(ctx, paso, registro)
+            else:
+                raise FallaJourney(f"paso sin tipo conocido: {sorted(paso)}")
+        except FallaJourney as exc:
+            return Resultado(nombre, False, f"paso {numero}: {exc}", time.monotonic() - inicio, registro)
+        except Exception as exc:  # un error del sistema bajo prueba también es una falla del journey
+            import traceback
+
+            registro.append("    " + "".join(traceback.format_exc(limit=-6)).replace("\n", "\n    "))
+            return Resultado(nombre, False, f"paso {numero}: {type(exc).__name__}: {exc}", time.monotonic() - inicio, registro)
+    return Resultado(nombre, True, "", time.monotonic() - inicio, registro)
+
+
+def rutas_del_set(set_id: str, patrones: list[str]) -> tuple[dict[str, Any], list[Path]]:
+    if not _IDENT.match(set_id.replace("-", "_")):
+        raise SystemExit(f"Set inválido: {set_id!r}")
+    carpeta = JOURNEYS_DIR / set_id
+    negocio = json.loads((carpeta / "negocio.json").read_text(encoding="utf-8"))
+    rutas = sorted(p for p in carpeta.glob("*.json") if p.name != "negocio.json")
+    if patrones != [""]:
+        rutas = [p for p in rutas if any(pat in p.stem for pat in patrones)]
+    return negocio, rutas
+
+
+async def _preparar_proceso() -> None:
+    """Igual que el runner del golden set: packs activos y tools del core registradas."""
+    from core.mcp.host import mcp_host
+    from core.plugin_manager import plugin_manager
+    from core.tools.core_skill import register_core_skills
+
+    plugin_manager.scan()
+    await plugin_manager.sync_registry()
+    await plugin_manager.activate_all_configured()
+    await plugin_manager.ensure_process_activation()
+    register_core_skills(mcp_host)
+
+
+async def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Runner de journeys (HU-SUB-12)")
+    parser.add_argument("patron", nargs="?", default="", help="Subconjunto por nombre (ej: 03,05)")
+    parser.add_argument("--set", default="suscripciones", help="Carpeta de evals/journeys/")
+    parser.add_argument("--umbral", type=float, default=1.0, help="Pase mínimo (0..1) para salir con 0")
+    parser.add_argument("--reporte", default="", help="Ruta del reporte JSON (opcional)")
+    parser.add_argument("--detalle", action="store_true", help="Imprimir la conversación de cada journey")
+    args = parser.parse_args(argv)
+
+    patrones = [p.strip() for p in args.patron.split(",") if p.strip()] or [""]
+    negocio, rutas = rutas_del_set(args.set, patrones)
+    if not rutas:
+        print(f"No hay journeys que matcheen '{args.patron}' en evals/journeys/{args.set}/")
+        return 1
+
+    _solo_bases_de_prueba()
+    await _preparar_proceso()
+    pagos = PagoSimulado(monto_minimo=float((negocio.get("pagos_simulados") or {}).get("monto_minimo", 0)))
+    tenant_id = await preparar_negocio(negocio, pagos)
+    print(f"Corriendo {len(rutas)} journeys del set {args.set} (negocio {tenant_id})...\n")
+
+    resultados: list[Resultado] = []
+    for ruta in rutas:
+        resultado = await correr_journey(ruta, tenant_id, pagos)
+        resultados.append(resultado)
+        estado = "✓ PASS" if resultado.ok else "✗ FAIL"
+        print(f"  {estado}  {resultado.nombre} ({resultado.segundos:.0f}s)" + (f"  — {resultado.detalle}" if resultado.detalle else ""))
+        if args.detalle or not resultado.ok:
+            print("\n".join(resultado.registro))
+
+    pasaron = sum(r.ok for r in resultados)
+    tasa = pasaron / len(resultados)
+    print(f"\nJourneys {args.set}: {pasaron}/{len(resultados)} ({tasa:.0%}) · umbral {args.umbral:.0%}")
+    await _guardar(tenant_id, args.set, resultados)
+    if args.reporte:
+        destino = Path(args.reporte)
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_text(
+            json.dumps(
+                {
+                    "set": args.set,
+                    "fecha": datetime.now(UTC).isoformat(),
+                    "pasaron": pasaron,
+                    "total": len(resultados),
+                    "tasa": tasa,
+                    "journeys": [
+                        {"nombre": r.nombre, "ok": r.ok, "detalle": r.detalle, "segundos": round(r.segundos, 1)}
+                        for r in resultados
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return 0 if tasa >= args.umbral else 1
+
+
+def _solo_bases_de_prueba() -> None:
+    """Los journeys crean negocios y reemplazan la pasarela en el proceso: nunca contra
+    producción. Se corren en bases efímeras (CI, nightly, stack local de prueba)."""
+    from core.config import get_settings
+
+    entorno = (get_settings().app_env or "").lower()
+    if entorno not in ("development", "ci", "test"):
+        raise SystemExit(f"Los journeys no corren con APP_ENV={entorno!r}: solo en bases de prueba.")
+
+
+async def _guardar(tenant_id: uuid.UUID, set_id: str, resultados: list[Resultado]) -> None:
+    """`eval_runs` del negocio de la corrida, atado a la versión de su AgentSpec."""
+    try:
+        from core.agents.spec import load_active_spec
+        from core.shared.tenant import tenant_scope
+
+        sys.path.insert(0, str(EVALS_DIR))
+        from runner import _persist_run  # type: ignore[import-not-found]
+
+        async with tenant_scope(tenant_id):
+            spec = await load_active_spec()
+        await _persist_run(
+            tenant_id, f"journeys:{set_id}@{spec.version}", [(r.nombre, r.ok, r.detalle) for r in resultados]
+        )
+    except Exception as exc:  # no rompe la corrida: el resultado ya se imprimió
+        print(f"(no se guardó la corrida: {type(exc).__name__})")
+
+
+async def _correr() -> int:
+    try:
+        return await main()
+    finally:  # cerrar conexiones antes de que asyncio cierre el loop (sin ruido al salir)
+        from core.db.session import get_engine
+        from core.memory import working
+
+        await get_engine().dispose()
+        if getattr(working, "_client", None) is not None:
+            await working._client.aclose()
+
+
+if __name__ == "__main__":
+    raise SystemExit(asyncio.run(_correr()))

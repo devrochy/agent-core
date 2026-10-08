@@ -1,0 +1,41 @@
+{
+  "nombre": "cambio-de-plan",
+  "descripcion": "El cliente pasa de Basic a Premium: la suscripción cambia al Premium con el precio del catálogo, no uno inventado.",
+  "pasos": [
+    {
+      "accion": "activar_suscripcion",
+      "datos": {
+        "plan": {
+          "plan_code": "PLAN-BASIC",
+          "nombre": "Plan Basic",
+          "precio": 200000,
+          "moneda": "COP",
+          "periodicidad": "mensual",
+          "trial_dias": 0
+        }
+      }
+    },
+    {
+      "nota": "pide subir de plan",
+      "usuario": "Quiero pasarme del Plan Basic al Plan Premium.",
+      "hasta_herramienta": "sub_cambiar_plan",
+      "insistir": "Sí, confirmo el cambio al Plan Premium.",
+      "max_turnos": 4
+    },
+    {
+      "nota": "plan nuevo con el precio del catálogo",
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "id": "{suscripcion.subscription_id}"
+        },
+        "espera": {
+          "concepto": {
+            "$contiene": "Premium"
+          },
+          "valor_periodo": 600000
+        }
+      }
+    }
+  ]
+}

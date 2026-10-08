@@ -1,0 +1,37 @@
+{
+  "nombre": "cancelacion",
+  "descripcion": "El cliente pide cancelar: el asistente usa sub_cancelar y la suscripción queda cancelada.",
+  "pasos": [
+    {
+      "accion": "activar_suscripcion",
+      "datos": {
+        "plan": {
+          "plan_code": "PLAN-BASIC",
+          "nombre": "Plan Basic",
+          "precio": 200000,
+          "moneda": "COP",
+          "periodicidad": "mensual",
+          "trial_dias": 0
+        }
+      }
+    },
+    {
+      "nota": "pide cancelar",
+      "usuario": "Quiero cancelar mi suscripción al Plan Basic, ya no la voy a usar.",
+      "hasta_herramienta": "sub_cancelar",
+      "insistir": "Sí, estoy seguro. Cancelala.",
+      "max_turnos": 3
+    },
+    {
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "id": "{suscripcion.subscription_id}"
+        },
+        "espera": {
+          "estado": "cancelada"
+        }
+      }
+    }
+  ]
+}

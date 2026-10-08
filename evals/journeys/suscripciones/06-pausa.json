@@ -1,0 +1,37 @@
+{
+  "nombre": "pausa",
+  "descripcion": "El cliente pide pausar su suscripción: el asistente usa sub_pausar y la suscripción queda pausada.",
+  "pasos": [
+    {
+      "accion": "activar_suscripcion",
+      "datos": {
+        "plan": {
+          "plan_code": "PLAN-BASIC",
+          "nombre": "Plan Basic",
+          "precio": 200000,
+          "moneda": "COP",
+          "periodicidad": "mensual",
+          "trial_dias": 0
+        }
+      }
+    },
+    {
+      "nota": "pide pausar",
+      "usuario": "Hola, este mes me voy de viaje. ¿Pueden pausar mi suscripción al Plan Basic?",
+      "hasta_herramienta": "sub_pausar",
+      "insistir": "Sí, pausala por favor.",
+      "max_turnos": 3
+    },
+    {
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "id": "{suscripcion.subscription_id}"
+        },
+        "espera": {
+          "estado": "pausada"
+        }
+      }
+    }
+  ]
+}
