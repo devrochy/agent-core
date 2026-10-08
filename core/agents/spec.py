@@ -173,7 +173,13 @@ async def _ensure_default_playbooks(tenant_id: uuid.UUID, spec: AgentSpec) -> Ag
         pass
     if not missing:
         return spec
-    merged = spec.model_copy(update={"playbooks": [*spec.playbooks, *missing]})
+    # `model_validate`, no `model_copy(update=...)`: model_copy no valida y los `missing`
+    # (dicts) quedaban como dicts en el spec devuelto; el primer turno tras sumarse un
+    # playbook de pack se caía en `load_playbook` (`'dict' object has no attribute
+    # 'name'`). Visto con los journeys de HU-SUB-12.
+    merged = AgentSpec.model_validate(
+        {**spec.model_dump(mode="json"), "playbooks": [*spec.model_dump(mode="json")["playbooks"], *missing]}
+    )
     async with get_session() as session:
         row = (
             await session.execute(
