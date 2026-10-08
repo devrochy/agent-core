@@ -37,6 +37,21 @@ class WompiPaymentCapability:
     async def create_link(
         self, *, reference: str, amount: float, description: str = "", method: str | None = None
     ) -> PaymentLink:
+        """Idempotente por `reference`: si ya hay un link pendiente con ese monto, se
+        devuelve ese (antes se creaba otro en Wompi y el insert chocaba con el índice
+        único: link huérfano y una excepción que apagaba el pack; journeys HU-SUB-12)."""
+        existente = await _transaccion(reference)
+        if existente is not None:
+            if existente.status == "pendiente" and float(existente.amount or 0) == float(amount) and existente.payment_link_url:
+                return PaymentLink(
+                    reference=reference,
+                    url=existente.payment_link_url,
+                    qr_payload=existente.payment_link_url,
+                    method="wompi",
+                )
+            raise PaymentCapabilityError(
+                f"Ya existe un cobro con la referencia {reference} ({existente.status}, {existente.amount})."
+            )
         try:
             config = await tenant_config()
         except Exception as exc:  # config ausente/inválida del tenant
@@ -73,3 +88,19 @@ class WompiPaymentCapability:
             qr_payload=link.payment_link_url,
             method="wompi",
         )
+
+
+async def _transaccion(reference: str) -> PaymentTransaction | None:
+    from sqlalchemy import select
+
+    from core.shared.tenant import get_current_tenant_id
+
+    async with get_session() as session:
+        return (
+            await session.execute(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.tenant_id == get_current_tenant_id(),
+                    PaymentTransaction.reference == reference,
+                )
+            )
+        ).scalar_one_or_none()
