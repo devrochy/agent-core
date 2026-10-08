@@ -117,6 +117,15 @@ jobs:
         # Camino feliz + manipulación + escalamiento: las regresiones que importan.
         run: python evals/runner.py "06,07,08,21,22,23,24,25,26"
 
+      - name: Gate de journeys (subconjunto estable)
+        # HU-SUB-12: conversación completa contra el loop real con pagos simulados (sin
+        # red). 01 informa planes; 05 recorre cargo → recordatorio → vencida → pago →
+        # reactivación con saltos de reloj. El set completo corre en el nightly.
+        if: github.actor != 'dependabot[bot]'
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: python evals/journeys.py "01,05" --umbral 1.0
+
       - name: Gate de evals no ejecutado (Dependabot)
         if: github.actor == 'dependabot[bot]'
         run: echo "::notice title=Evals no ejecutados::Dependabot no tiene LLM_API_KEY. Corren en el push a develop después del merge y en el nightly."

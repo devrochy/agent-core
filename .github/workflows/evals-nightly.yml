@@ -69,3 +69,18 @@ jobs:
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: python evals/runner.py
+      - name: Journeys (HU-SUB-12)
+        # Conversaciones completas con pagos simulados y reloj. Umbral 95 % (D: 3 noches
+        # seguidas ≥95 %); el reporte queda como artefacto para comparar noches.
+        if: always()
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: python evals/journeys.py --umbral 0.95 --reporte evals/reportes/journeys.json
+      - name: Reporte de journeys
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: journeys-${{ github.run_number }}
+          path: evals/reportes/journeys.json
+          if-no-files-found: warn
+          retention-days: 30

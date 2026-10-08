@@ -1,0 +1,105 @@
+{
+  "nombre": "comprar-basic-y-pagar",
+  "descripcion": "Compra del Basic con pago en línea: link por el total del pedido, pago confirmado por la pasarela y suscripción activa sin prueba.",
+  "pasos": [
+    {
+      "nota": "pide el Basic con pago en línea",
+      "usuario": "Quiero el Plan Basic y pagarlo en línea. Mis datos: Ana Gómez, cédula 1012345678, celular 3001234567, correo ana.gomez@example.com.",
+      "hasta_herramienta": [
+        "confirmar_pago_pedido",
+        "generar_link_pago"
+      ],
+      "insistir": "Sí, confirmo el Plan Basic con pago en línea. Pasame el link de pago.",
+      "max_turnos": 4,
+      "espera": {
+        "texto_contiene": [
+          "https://pagos.simulados/"
+        ]
+      }
+    },
+    {
+      "nota": "pedido pendiente con link",
+      "verifica": {
+        "tabla": "pack_commerce_orders",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "payment_status": "pendiente",
+          "total": 200000
+        },
+        "guardar_como": "pedido"
+      },
+      "espera": {
+        "payment_status": "pendiente",
+        "total": 200000
+      }
+    },
+    {
+      "nota": "el link cobra el total del pedido, no un monto inventado",
+      "verifica": {
+        "tabla": "pack_payments_transactions",
+        "donde": {
+          "reference": "{pedido.public_order_number}"
+        },
+        "filas": 1,
+        "espera": {
+          "amount": 200000,
+          "provider": "simulado"
+        }
+      }
+    },
+    {
+      "nota": "todavía no hay suscripción",
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 0
+      }
+    },
+    {
+      "nota": "la pasarela confirma el pago",
+      "evento": "payment.confirmed",
+      "datos": {
+        "reference": "{pedido.public_order_number}",
+        "provider": "simulado",
+        "provider_reference": "sim-{pedido.public_order_number}",
+        "amount": 200000
+      }
+    },
+    {
+      "nota": "pedido pagado",
+      "verifica": {
+        "tabla": "pack_commerce_orders",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "espera": {
+          "payment_status": "pagado",
+          "plan_activation_status": "activada"
+        }
+      }
+    },
+    {
+      "nota": "suscripción activa sin prueba",
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "estado": "activa",
+          "valor_periodo": 200000,
+          "trial_termina": null,
+          "proximo_cargo": {
+            "$no_nulo": true
+          }
+        }
+      }
+    }
+  ]
+}

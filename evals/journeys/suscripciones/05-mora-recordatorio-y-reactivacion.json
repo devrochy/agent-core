@@ -1,0 +1,119 @@
+{
+  "nombre": "mora-recordatorio-y-reactivacion",
+  "descripcion": "Cargo impago: recordatorio a los 3 días, vencida tras la gracia y reactivación al pagar el cargo.",
+  "pasos": [
+    {
+      "nota": "cliente con Basic activo",
+      "accion": "activar_suscripcion",
+      "datos": {
+        "plan": {
+          "plan_code": "PLAN-BASIC",
+          "nombre": "Plan Basic",
+          "precio": 200000,
+          "moneda": "COP",
+          "periodicidad": "mensual",
+          "trial_dias": 0
+        }
+      }
+    },
+    {
+      "reloj": "+28d"
+    },
+    {
+      "job": "pack_subscriptions.generar_cargos"
+    },
+    {
+      "verifica": {
+        "tabla": "pack_subscriptions_charges",
+        "donde": {
+          "subscription_id": "{suscripcion.subscription_id}"
+        },
+        "filas": 1,
+        "guardar_como": "cargo"
+      }
+    },
+    {
+      "nota": "3 días después del vencimiento",
+      "reloj": "+6d"
+    },
+    {
+      "job": "pack_subscriptions.avisos_de_cobro"
+    },
+    {
+      "nota": "recordatorio +3",
+      "verifica": {
+        "tabla": "domain_events",
+        "donde": {
+          "topic": "subscription.charge_reminder",
+          "payload->>charge_id": "{cargo.id}",
+          "payload->>dias": "3"
+        },
+        "filas": 1
+      }
+    },
+    {
+      "nota": "sigue activa dentro de la gracia",
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "id": "{suscripcion.subscription_id}"
+        },
+        "espera": {
+          "estado": "activa"
+        }
+      }
+    },
+    {
+      "nota": "pasan los días de gracia",
+      "reloj": "+3d"
+    },
+    {
+      "job": "pack_subscriptions.marcar_vencidas"
+    },
+    {
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "id": "{suscripcion.subscription_id}"
+        },
+        "espera": {
+          "estado": "vencida"
+        }
+      }
+    },
+    {
+      "nota": "el cliente paga el cargo",
+      "evento": "payment.confirmed",
+      "datos": {
+        "reference": "sub-{cargo.id}",
+        "provider": "simulado",
+        "provider_reference": "sim-cargo",
+        "amount": 200000
+      }
+    },
+    {
+      "nota": "cargo pagado",
+      "verifica": {
+        "tabla": "pack_subscriptions_charges",
+        "donde": {
+          "id": "{cargo.id}"
+        },
+        "espera": {
+          "estado": "pagado"
+        }
+      }
+    },
+    {
+      "nota": "reactivada",
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "id": "{suscripcion.subscription_id}"
+        },
+        "espera": {
+          "estado": "activa"
+        }
+      }
+    }
+  ]
+}
