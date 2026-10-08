@@ -25,6 +25,7 @@ from core.subscriptions import (
     SubscriptionCapability,
     SubscriptionError,
     SubscriptionView,
+    capability_del_negocio,
     subscription_registry,
 )
 
@@ -36,7 +37,7 @@ async def _capability(ctx: ToolContext) -> SubscriptionCapability:
     tenant_id = get_current_tenant_id()
     if tenant_id is None:
         raise SubscriptionError("Sin negocio en contexto para suscripciones.", code="sin_negocio")
-    cap = await subscription_registry.capability_for_tenant(tenant_id)
+    cap = await capability_del_negocio(tenant_id)
     if cap is None:
         raise SubscriptionError(
             "Este negocio no tiene un proveedor de suscripciones habilitado.",

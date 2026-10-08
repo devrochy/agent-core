@@ -881,3 +881,72 @@ async def get_missing_templates(
             for m in filas
         ],
     )
+
+
+# ------------------------------------------------- proveedor de suscripciones (HU-SUB-09)
+class ProveedorSuscripcion(BaseModel):
+    id: str
+    label: str
+
+
+class SubscriptionProviderSettings(BaseModel):
+    estado: Literal["ok", "sin_proveedor", "ambiguo", "invalido"]
+    configurado: str | None = None
+    efectivo: str | None = None
+    habilitados: list[ProveedorSuscripcion] = []
+    mensaje: str = ""
+
+
+class SubscriptionProviderUpdate(BaseModel):
+    provider: str | None = None
+
+
+async def _subscription_provider_out(tenant_id) -> SubscriptionProviderSettings:  # type: ignore[no-untyped-def]
+    from core.plugin_manager import plugin_manager
+    from core.subscriptions import estado_proveedor
+
+    estado = await estado_proveedor(tenant_id)
+
+    def _label(pid: str) -> str:
+        modulo = plugin_manager.get(pid)
+        return (modulo.display_name or modulo.name) if modulo else pid
+
+    return SubscriptionProviderSettings(
+        estado=estado["estado"],  # type: ignore[arg-type]
+        configurado=estado["configurado"],
+        efectivo=estado["efectivo"],
+        habilitados=[ProveedorSuscripcion(id=pid, label=_label(pid)) for pid in estado["habilitados"]],
+        mensaje=estado["mensaje"],
+    )
+
+
+@router.get("/subscription-provider", response_model=SubscriptionProviderSettings)
+async def get_subscription_provider(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> SubscriptionProviderSettings:
+    """Qué habilidad cobra los planes del negocio y, si no hay una clara, por qué."""
+    return await _subscription_provider_out(principal.tenant_id)
+
+
+@router.put("/subscription-provider", response_model=SubscriptionProviderSettings)
+async def save_subscription_provider(
+    payload: SubscriptionProviderUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> SubscriptionProviderSettings:
+    """Elige el proveedor entre los habilitados (o lo borra con `null`).
+
+    Las activaciones de planes que quedaron pendientes por la configuración las
+    reintenta el pack del pedido en su próximo ciclo.
+    """
+    from core.subscriptions import guardar_proveedor, subscription_registry
+
+    tenant_id = principal.tenant_id
+    if tenant_id is None:
+        raise ApiError.bad_request("Elige un negocio primero.", "sin_negocio")
+    provider = (payload.provider or "").strip() or None
+    if provider is not None and provider not in await subscription_registry.enabled_for_tenant(tenant_id):
+        raise ApiError.bad_request(
+            "Ese proveedor de suscripciones no está habilitado para este negocio.", "proveedor_no_habilitado"
+        )
+    await guardar_proveedor(tenant_id, provider)
+    return await _subscription_provider_out(tenant_id)

@@ -6430,6 +6430,116 @@
         }
       }
     },
+    "/api/v1/admin/settings/subscription-provider": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Get Subscription Provider",
+        "description": "Qué habilidad cobra los planes del negocio y, si no hay una clara, por qué.",
+        "operationId": "get_subscription_provider_api_v1_admin_settings_subscription_provider_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionProviderSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Save Subscription Provider",
+        "description": "Elige el proveedor entre los habilitados (o lo borra con `null`).\n\nLas activaciones de planes que quedaron pendientes por la configuración las\nreintenta el pack del pedido en su próximo ciclo.",
+        "operationId": "save_subscription_provider_api_v1_admin_settings_subscription_provider_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscriptionProviderUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionProviderSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/domain-events": {
       "get": {
         "tags": [
@@ -17346,6 +17456,28 @@
             },
             "type": "array",
             "title": "Line Items"
+          },
+          "plan_activation_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Activation Status"
+          },
+          "plan_activation_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Activation Error"
           }
         },
         "type": "object",
@@ -18782,6 +18914,34 @@
             "type": "integer",
             "title": "Stock",
             "default": 0
+          },
+          "billing_period": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "mensual",
+                  "trimestral",
+                  "anual",
+                  ""
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billing Period"
+          },
+          "trial_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trial Days"
           }
         },
         "type": "object",
@@ -19094,6 +19254,24 @@
           "type"
         ],
         "title": "PromotionSave"
+      },
+      "ProveedorSuscripcion": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "ProveedorSuscripcion"
       },
       "PurgeRequest": {
         "properties": {
@@ -19872,6 +20050,77 @@
           "last_error"
         ],
         "title": "SubscriptionItem"
+      },
+      "SubscriptionProviderSettings": {
+        "properties": {
+          "estado": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "sin_proveedor",
+              "ambiguo",
+              "invalido"
+            ],
+            "title": "Estado"
+          },
+          "configurado": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configurado"
+          },
+          "efectivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Efectivo"
+          },
+          "habilitados": {
+            "items": {
+              "$ref": "#/components/schemas/ProveedorSuscripcion"
+            },
+            "type": "array",
+            "title": "Habilitados",
+            "default": []
+          },
+          "mensaje": {
+            "type": "string",
+            "title": "Mensaje",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "estado"
+        ],
+        "title": "SubscriptionProviderSettings"
+      },
+      "SubscriptionProviderUpdate": {
+        "properties": {
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          }
+        },
+        "type": "object",
+        "title": "SubscriptionProviderUpdate"
       },
       "Summary": {
         "properties": {
@@ -20747,6 +20996,28 @@
           "active": {
             "type": "boolean",
             "title": "Active"
+          },
+          "billing_period": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billing Period"
+          },
+          "trial_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trial Days"
           }
         },
         "type": "object",

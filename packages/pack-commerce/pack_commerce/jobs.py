@@ -166,3 +166,35 @@ async def follow_up_quotes() -> None:
                     log.exception("follow_up_quote_send_failed", quote_id=str(quote.id))
 
     log.info("follow_up_completed", kind="quote", candidates=total_candidates, sent=total_sent)
+
+
+@register_cron(PACK_ID, "*/10 * * * *")
+async def reintentar_activaciones() -> None:
+    """Reintenta la activación de planes pagados que quedaron pendientes (HU-SUB-09)."""
+    await _reintentar_activaciones()
+
+
+async def _reintentar_activaciones() -> int:
+    from pack_commerce.models import Order
+    from pack_commerce.planes import activar_planes_del_pedido
+
+    total = 0
+    for tenant_id in await _tenant_ids():
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                pedidos = (
+                    await session.execute(
+                        select(Order).where(
+                            Order.tenant_id == tenant_id,
+                            Order.payment_status == "pagado",
+                            Order.plan_activation_status == "pendiente",
+                        )
+                    )
+                ).scalars().all()
+                for order in pedidos:
+                    await activar_planes_del_pedido(session, order)
+                    if order.plan_activation_status == "activada":
+                        total += 1
+    if total:
+        log.info("planes_activados_al_reintentar", total=total)
+    return total
