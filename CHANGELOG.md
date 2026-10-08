@@ -1,5 +1,14 @@
 # Changelog
 
+## Sin versión — Un reintento BYOK fallido no se queda con el número (2026-10-08)
+
+- `save_byok_connection` reasignaba el número a la conexión del intento antes de guardar tokens y suscribir; si eso
+  fallaba, solo la marcaba `error`: se quedaba con el número y, con un `connected_at` más nuevo, podía ganarle a la sana
+  en `_resolve_byok_token` (inbound en 401). Ahora `_rollback_failed_alta` le devuelve el número a su conexión anterior
+  (si sigue viva y es del negocio) y, si la fila se creó en ese intento, la da de baja (borrado lógico) y libera sus
+  números y WABAs: deja de prestar su secreto y de contar como suscrita. Una conexión reusada (misma app) no se borra.
+- `_token_expiry` ya no aborta el alta por un error de red (`httpx.HTTPError`): es best-effort.
+
 ## Sin versión — Números del portafolio de Meta (2026-10-07)
 
 - **Nuevo:** `GET /api/v1/admin/meta/connections/{id}/business-numbers` lista, solo lectura, los números de todas las

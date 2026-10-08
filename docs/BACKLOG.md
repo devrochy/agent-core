@@ -34,20 +34,6 @@ producción que no es el de la app de un cliente concreto (heredado del monolito
 `META_APP_SECRET`: si los dos están definidos y son distintos, sus entregas al genérico dan 401. Decidir si la
 plataforma es solo `META_APP_SECRET` (ADR-0094) y `WHATSAPP_APP_SECRET` queda como respaldo del endpoint por slug.
 
-**Un reintento BYOK fallido se queda con el número y puede quitarle el secreto a la conexión sana**
-`meta_byok.save_byok_connection` crea una fila nueva al reintentar el wizard con otra app y, en su primera transacción,
-le pasa el número y un `connected_at` más nuevo (`meta_byok.py:123-212`). Si después falla al guardar los tokens o al
-suscribir, solo la marca `error` (`:294-296`): se queda con el número y presta su secreto. ADR-0102 acota el daño: el
-reintento no sube de estado sin su WABA suscrita a su app, y si ya estaba en `connected` baja a `error`, detrás de la
-sana. Quedan dos huecos:
-- Si la sana también cae a `error` (un token a 7 días de vencer), las dos quedan en el mismo nivel, gana la más nueva y
-  todo el inbound del negocio da 401 hasta que se renueve el token de la sana.
-- Un reintento que sí suscribió la WABA pero falló al suscribir la app tiene `own_app_subscribed` en verdadero; solo lo
-  frena `app_subscription_active`, que no compara el `callback_url` (ver abajo).
-
-Arreglo: si el alta creó una fila nueva y falla, devolver el número a la conexión anterior y dejar de prestar secreto
-(p. ej. borrado lógico de la fila nueva), en `meta_byok.py` (ADR-0101/0036). Hallazgo del `arquitecto`, 2026-10-06.
-
 **El pedido de monto alto nunca escala**
 `plugins/pack_commerce/pack_commerce/skills.py:989` devuelve `{"escalate": True}`
 cuando el monto supera `monto_alto_threshold`. Ningún punto de `core/` lee esa clave:

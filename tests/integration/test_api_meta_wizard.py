@@ -215,6 +215,9 @@ async def test_byok_sin_suscripcion_confirmada_queda_en_error(app_client, monkey
             ).scalar_one()
     assert connection.status == "error"
     assert "suscripción" in (connection.status_reason or "")
+    # La fila la creó este intento: se da de baja para que no preste su secreto ni se quede
+    # con el número (BACKLOG Alta, `_rollback_failed_alta`).
+    assert connection.deleted_at is not None
 
 
 async def test_manual_con_token_invalido_no_crea_nada(app_client, monkeypatch) -> None:

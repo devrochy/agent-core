@@ -29,7 +29,8 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import case, select, update
+import httpx
+from sqlalchemy import case, delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from core.config import get_settings
@@ -59,7 +60,8 @@ async def _token_expiry(app_id: str, app_secret: str, access_token: str) -> date
 
     try:
         info = await inspect_token(app_id, app_secret, access_token)
-    except GraphError:
+    except (GraphError, httpx.HTTPError):
+        # Un corte de red tampoco bloquea el alta (antes abortaba y la dejaba en `error`).
         return None
     expires_at = info.get("expires_at")
     if not expires_at:  # None o 0 (0 = "no expira" en Meta)
@@ -145,6 +147,9 @@ async def save_byok_connection(
             )
         ).scalar_one_or_none()
 
+        # Si el alta falla más abajo, `_rollback_failed_alta` deshace lo de esta transacción:
+        # da de baja la fila que se creó aquí y le devuelve el número a su conexión anterior.
+        created_new = connection is None
         if connection is None:
             connection = MetaConnection(
                 tenant_id=tenant_id, channel="whatsapp", environment=environment, meta_app_id=app_id,
@@ -177,10 +182,12 @@ async def save_byok_connection(
                 )
             )
         ).scalar_one_or_none()
+        previous_connection_id: uuid.UUID | None = None
         if phone is None:
             phone = PhoneNumber(tenant_id=tenant_id, connection_id=connection_id, phone_number_id=phone_number_id)
             session.add(phone)
         else:
+            previous_connection_id = phone.connection_id
             phone.connection_id = connection_id
         phone.display_phone_number = info.get("display_phone_number")
         phone.verified_name = info.get("verified_name")
@@ -292,17 +299,14 @@ async def save_byok_connection(
         # conexión en "connected" sin secretos reales o sin poder recibir
         # mensajes.
         detail = exc.message if isinstance(exc, GraphError) else str(exc)
-        async with get_session() as session:
-            db_connection = (
-                await session.execute(
-                    select(MetaConnection).where(
-                        MetaConnection.id == connection_id, MetaConnection.tenant_id == tenant_id
-                    )
-                )
-            ).scalar_one_or_none()
-            if db_connection is not None:
-                db_connection.status = "error"
-                db_connection.status_reason = f"Fallo guardando credenciales o suscripción: {detail}"[:250]
+        await _rollback_failed_alta(
+            tenant_id,
+            connection_id,
+            phone_number_id,
+            created_new=created_new,
+            previous_connection_id=previous_connection_id,
+            reason=f"Fallo guardando credenciales o suscripción: {detail}"[:250],
+        )
         raise
 
     async with get_session() as session:
@@ -315,6 +319,68 @@ async def save_byok_connection(
         ).scalar_one()
         db_connection.status = "connected"
         return db_connection
+
+
+async def _rollback_failed_alta(
+    tenant_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    phone_number_id: str,
+    *,
+    created_new: bool,
+    previous_connection_id: uuid.UUID | None,
+    reason: str,
+) -> None:
+    """Deshace un alta BYOK que falló después de reasignar el número (BACKLOG, ADR-0101).
+
+    Sin esto, la conexión del intento se quedaba con el número y, con un `connected_at` más
+    nuevo, podía ganarle a la sana en `_resolve_byok_token` y dejar el inbound en 401.
+
+    - La conexión del intento queda en `error` con el motivo (como antes).
+    - El número vuelve a la conexión que lo tenía, si sigue viva y es de este negocio.
+    - Si la fila la creó este intento, se da de baja (borrado lógico) y se liberan sus números
+      y WABAs, como `soft_delete_connection`: deja de prestar su secreto y de contar como
+      suscrita (`own_app_subscribed`).
+    """
+    async with get_session() as session:
+        connection = (
+            await session.execute(
+                select(MetaConnection).where(MetaConnection.id == connection_id, MetaConnection.tenant_id == tenant_id)
+            )
+        ).scalar_one_or_none()
+        if connection is None:
+            return
+        connection.status = "error"
+        connection.status_reason = reason
+
+        if previous_connection_id is not None and previous_connection_id != connection_id:
+            previous = (
+                await session.execute(
+                    select(MetaConnection.id).where(
+                        MetaConnection.id == previous_connection_id,
+                        MetaConnection.tenant_id == tenant_id,
+                        MetaConnection.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if previous is not None:
+                await session.execute(
+                    update(PhoneNumber)
+                    .where(
+                        PhoneNumber.tenant_id == tenant_id,
+                        PhoneNumber.connection_id == connection_id,
+                        PhoneNumber.phone_number_id == phone_number_id,
+                    )
+                    .values(connection_id=previous)
+                )
+
+        if created_new:
+            connection.deleted_at = utcnow()
+            await session.execute(
+                delete(PhoneNumber).where(PhoneNumber.tenant_id == tenant_id, PhoneNumber.connection_id == connection_id)
+            )
+            await session.execute(
+                delete(WabaAccount).where(WabaAccount.tenant_id == tenant_id, WabaAccount.connection_id == connection_id)
+            )
 
 
 # Estados en los que la conexión sigue siendo la credencial del negocio (ADR-0101).
