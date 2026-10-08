@@ -42,7 +42,15 @@ importa otro (invariante 5).
    el cambio de plan. Un proveedor que no la implemente cuenta como «no permite».
 5. **Referencia del pedido.** La suscripción guarda `referencia_origen` (número público del pedido), con un índice
    único parcial por negocio. Activar dos veces con la misma referencia devuelve la misma suscripción.
-6. Los jobs de período (`generar_cargos`, `marcar_vencidas`, `avisos_de_cobro`) y `charge_link` solo miran cargos
+6. **Cierres de dinero:**
+   - Solo cambia de plan una suscripción `activa` o en prueba.
+   - No hay cambio entre periodicidades distintas, salvo desde un plan de $0, que arranca un período nuevo.
+   - No hay cambio entre planes gratis.
+   - Un cargo de cambio guarda el período sobre el que se calculó. Si al pagarse la suscripción ya no está activa,
+     el período cambió o el cargo estaba anulado, el plan no se aplica: se audita y se avisa a los dueños.
+   - Pedir otro cambio, programar un downgrade o pasar de período (`generar_cargos`) anula los cambios pendientes.
+   - La idempotencia por pedido es por `(referencia, plan)`: un pedido con dos planes crea dos suscripciones.
+7. Los jobs de período (`generar_cargos`, `marcar_vencidas`, `avisos_de_cobro`) y `charge_link` solo miran cargos
    `tipo = periodo`: un cargo de cambio pendiente no vence la suscripción ni se cobra como período.
 
 ## Alternativas descartadas
