@@ -186,24 +186,29 @@ async def test_dlq_con_eventos_pendientes_falla(monkeypatch):
     assert check.ok is False
 
 
-def test_rls_tests_pass_exit_distinto_de_cero_falla(monkeypatch):
-    class FakeResult:
-        returncode = 1
-        stdout = "1 failed"
+def test_rls_tests_pass_no_corre_pytest_en_el_contenedor(monkeypatch):
+    """La imagen desplegada no trae pytest ni tests/, y los tests de integración crean
+    negocios en la base configurada: correrlos en un entorno real ensuciaría datos.
+    El check informa (ok=None) dónde corren: en CI."""
 
-    monkeypatch.setattr(readiness_mod.subprocess, "run", lambda *a, **k: FakeResult())
+    def _prohibido(*args, **kwargs):
+        raise AssertionError("no debe lanzar subprocesos")
+
+    monkeypatch.setattr("subprocess.run", _prohibido)
+    monkeypatch.setenv("SOURCE_COMMIT", "a2c60a3d1b11d160b61fd6caf0d2c9914c5dd1d6")
+    monkeypatch.setenv("COOLIFY_BRANCH", "develop")
     check = check_rls_tests_pass()
-    assert check.ok is False
+    assert check.ok is None
+    assert "CI" in check.detail
+    assert "a2c60a3" in check.detail and "develop" in check.detail
 
 
-def test_rls_tests_pass_exit_cero_pasa(monkeypatch):
-    class FakeResult:
-        returncode = 0
-        stdout = "10 passed"
-
-    monkeypatch.setattr(readiness_mod.subprocess, "run", lambda *a, **k: FakeResult())
+def test_rls_tests_pass_sin_commit_conocido(monkeypatch):
+    monkeypatch.delenv("SOURCE_COMMIT", raising=False)
+    monkeypatch.delenv("COOLIFY_BRANCH", raising=False)
     check = check_rls_tests_pass()
-    assert check.ok is True
+    assert check.ok is None
+    assert "CI" in check.detail
 
 
 def test_no_secret_leak_detecta_interpolacion_sospechosa(tmp_path, monkeypatch):

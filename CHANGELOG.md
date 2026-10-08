@@ -1,5 +1,13 @@
 # Changelog
 
+## Sin versión — `rls_tests_pass` deja de correr tests en el servidor (2026-10-08)
+
+- El check de producción de Meta `rls_tests_pass` corría `pytest tests/integration` dentro del proceso. La imagen
+  desplegada no trae pytest ni `tests/`, así que en test y producción siempre daba `exit=1`; y si los trajera, esos tests
+  crean negocios en la base configurada (ensuciarían datos reales). Ahora es informativo (`ok=None`): los tests de
+  aislamiento corren en CI (`build-and-test`) y el detalle muestra el commit desplegado (`SOURCE_COMMIT`/`COOLIFY_BRANCH`
+  de Coolify). El aislamiento en runtime lo sigue cubriendo `rls_forced`.
+
 ## Sin versión — Google Calendar se conecta solo al negocio que inició el flujo (2026-10-08)
 
 - El `state` del OAuth de Google Calendar ahora lleva el negocio que lo inició (`<tenant_id>.<aleatorio>`). El callback
