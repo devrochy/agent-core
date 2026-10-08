@@ -13,6 +13,7 @@ el core resuelve para el negocio (HU-SUB-09): sin nombrar ningún pack (invarian
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import select
 
@@ -196,3 +197,88 @@ async def _avisar_trial_ignorado(variant: ProductVariant, order: Order) -> None:
             "regla": "Solo el plan Free ($0) tiene prueba (D-16).",
         },
     )
+
+
+# ------------------------------------------------- catálogo de planes (HU-SUB-07, ADR-0111)
+class CatalogoDePlanes:
+    """Plan por SKU o `variant_id` desde el catálogo de commerce, para el core
+    (`plan_catalog_registry`): el precio de un cambio de plan sale de acá, no del LLM."""
+
+    provider_id = "pack_commerce"
+
+    async def plan_por_codigo(self, codigo: str) -> tuple[str, PlanSnapshot] | None:
+        import uuid as _uuid
+
+        from core.db.session import get_session
+
+        tenant_id = get_current_tenant_id()
+        valor = str(codigo or "").strip()
+        if tenant_id is None or not valor:
+            return None
+        try:
+            condicion = ProductVariant.id == _uuid.UUID(valor)
+        except ValueError:
+            condicion = ProductVariant.sku == valor
+        async with get_session() as session:
+            fila = (
+                await session.execute(
+                    select(ProductVariant, Product)
+                    .join(Product, Product.id == ProductVariant.product_id)
+                    .where(
+                        condicion,
+                        ProductVariant.tenant_id == tenant_id,
+                        Product.tenant_id == tenant_id,
+                        ProductVariant.active.is_(True),
+                        ProductVariant.billing_period.isnot(None),
+                    )
+                )
+            ).first()
+        if fila is None:
+            return None
+        variant, product = fila
+        plan, _ = snapshot_de_plan(
+            sku=variant.sku,
+            nombre=product.name,
+            precio=variant.price,
+            periodicidad=variant.billing_period or "mensual",
+            trial_days=variant.trial_days,
+        )
+        return str(variant.id), plan
+
+
+async def segundo_plan_bloqueado(customer_id, variant_ids: list) -> dict[str, Any] | None:  # type: ignore[no-untyped-def]
+    """Si el negocio no permite varias suscripciones y el cliente ya tiene una paga
+    vigente a OTRO plan, el pedido no se crea: se ofrece el cambio de plan (ADR-0111)."""
+    from core.subscriptions import SubscriptionError, capability_del_negocio, permite_varias
+
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return None
+    try:
+        cap = await capability_del_negocio(tenant_id)
+    except SubscriptionError:
+        return None  # sin proveedor claro: lo resuelve la activación (HU-SUB-09)
+    if cap is None or await permite_varias(cap):
+        return None
+    pedidas = {str(v) for v in variant_ids}
+    for vista in await cap.list_for_customer(customer_id):
+        if vista.get("estado") not in ("activa", "pausada", "vencida"):
+            continue
+        if float(vista.get("valor_periodo") or 0) <= 0:
+            continue
+        if vista.get("plan_code") in pedidas:
+            # Mismo plan ya vigente: un pedido nuevo cobraría sin dar nada (auditoría).
+            return {
+                "error": "ya_tiene_este_plan",
+                "suscripcion_actual": vista.get("plan"),
+                "hint": "El cliente ya tiene este plan. Para pagar el período usá sub_link_pago.",
+            }
+        return {
+            "error": "ya_tiene_suscripcion",
+            "suscripcion_actual": vista.get("plan"),
+            "hint": (
+                "El cliente ya tiene una suscripción paga. No crees otro pedido: ofrecé "
+                "cambiar de plan con sub_cambiar_plan (SKU del plan nuevo)."
+            ),
+        }
+    return None

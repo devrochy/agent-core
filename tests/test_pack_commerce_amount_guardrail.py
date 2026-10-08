@@ -137,3 +137,17 @@ async def test_amount_guardrail_bloquea_monto_inventado_por_substring():
     tool_results = [{"total": 150_000.0}]
     verdict = await module._amount_guardrail("Te queda en $15.", tool_results)
     assert not verdict.passed, "un monto inventado no debe colarse por substring"
+
+
+def test_extract_monetary_values_de_suscripciones_y_pagos():
+    """HU-SUB-07: los montos de las tools de suscripción y de pagos son verificables
+    (antes, mencionar la diferencia de un cambio de plan se bloqueaba y escalaba)."""
+    resultado = {
+        "plan": "Plan Basic",
+        "valor_periodo": 200000.0,
+        "cargo_cambio": {"monto": 400000.0, "link": "https://pagos/x"},
+        "dias": 3,
+    }
+    assert sorted(_extract_monetary_values(resultado)) == [200000.0, 400000.0]
+    # `amount` lo pone el LLM en generar_link_pago: no cuenta como verificado.
+    assert _extract_monetary_values({"amount": 150000.0, "reference": "OC-1"}) == []

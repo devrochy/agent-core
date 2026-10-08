@@ -36,7 +36,11 @@ from pack_commerce.models import (
     Quote,
     QuoteItem,
 )
-from pack_commerce.planes import activar_planes_del_pedido, estado_pago_inicial
+from pack_commerce.planes import (
+    activar_planes_del_pedido,
+    estado_pago_inicial,
+    segundo_plan_bloqueado,
+)
 
 CUSTOMER_SEGMENTS = ("nuevo", "ocasional", "frecuente", "fiel", "inactivo")
 
@@ -1281,6 +1285,10 @@ class OrderSkill(BaseSkill):
                     return {"error": "Falta el método de entrega: 'domicilio' o 'recoger_en_tienda'."}
                 # Un plan es un servicio: no se pregunta cómo se entrega (journeys HU-SUB-12).
                 delivery_method = "recoger_en_tienda"
+            if es_plan and _float(quote.total) > 0:
+                bloqueo = await segundo_plan_bloqueado(context.customer_id, [i.variant_id for i in items])
+                if bloqueo:
+                    return bloqueo
             threshold = _monto_alto_threshold(config, es_plan)
             if threshold is not None and _float(quote.total) > threshold:
                 return {

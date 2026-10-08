@@ -71,7 +71,37 @@ def _view(sub: Subscription, cargos: list[SubscriptionCharge] | None = None) -> 
             {"periodo": c.periodo, "monto": float(c.monto or 0), "estado": c.estado}
             for c in (cargos or [])
         ],
+        "referencia": sub.referencia_origen,
+        "cambio_programado": sub.cambio_programado,
     }
+
+
+# Referencias que no vienen de un pedido: no se guardan como `referencia_origen`.
+_REFERENCIAS_INTERNAS = {"", "admin-manual", "journey"}
+
+
+def aplicar_plan(sub: Subscription, datos: dict[str, Any], ahora: datetime) -> None:
+    """Deja la suscripción en el plan `datos` ({"variante_id", "plan", "desde_cero"}).
+
+    `desde_cero` (venía de un plan de $0): arranca un período nuevo hoy. Si no, el
+    período en curso sigue igual (upgrade a mitad de período o downgrade al corte).
+    """
+    plan = datos.get("plan") or {}
+    try:
+        sub.variante_id = uuid.UUID(str(datos.get("variante_id")))
+    except (ValueError, TypeError):
+        pass
+    sub.concepto = plan.get("nombre") or sub.concepto
+    sub.valor_periodo = Decimal(str(plan.get("precio") or 0))
+    sub.moneda = plan.get("moneda") or sub.moneda
+    sub.periodicidad = _periodicidad(plan.get("periodicidad"), sub.periodicidad)
+    sub.cambio_programado = None
+    if datos.get("desde_cero"):
+        sub.estado = "activa"
+        sub.trial_termina = None
+        sub.dia_ancla = ahora.day
+        sub.periodo_actual_inicio = ahora
+        sub.proximo_cargo = sumar_periodo(ahora, sub.periodicidad, ahora.day)
 
 
 async def crear_suscripcion_para(
@@ -89,19 +119,35 @@ async def crear_suscripcion_para(
     """
     precio = Decimal(str(plan.get("precio") or 0))
     trial_dias = int(plan.get("trial_dias") or 0) if precio == 0 else 0
+    referencia = reference.strip() if reference and reference.strip() not in _REFERENCIAS_INTERNAS else None
+    config = await _config()
     async with get_session() as session:
-        existente = (
-            await session.execute(
-                select(Subscription).where(
-                    Subscription.tenant_id == get_current_tenant_id(),
-                    Subscription.customer_id == customer_id,
-                    Subscription.estado.in_(_ESTADOS_VIGENTES),
-                    Subscription.deleted_at.is_(None),
+        if referencia:
+            # HU-SUB-07: el mismo pedido procesado dos veces no crea dos suscripciones.
+            previa = (
+                await session.execute(
+                    select(Subscription).where(
+                        Subscription.tenant_id == get_current_tenant_id(),
+                        Subscription.referencia_origen == referencia,
+                        # Un pedido con dos planes crea dos suscripciones (auditoría).
+                        Subscription.variante_id.is_(None) if variante_id is None else Subscription.variante_id == variante_id,
+                        Subscription.deleted_at.is_(None),
+                    )
                 )
-            )
-        ).scalars().first()
+            ).scalar_one_or_none()
+            if previa is not None:
+                return previa
+        filtros = [
+            Subscription.tenant_id == get_current_tenant_id(),
+            Subscription.customer_id == customer_id,
+            Subscription.estado.in_(_ESTADOS_VIGENTES),
+            Subscription.deleted_at.is_(None),
+        ]
+        if config.varias_por_cliente and variante_id is not None:
+            # Varias por cliente (ADR-0111): solo cuenta una vigente del MISMO plan.
+            filtros.append(Subscription.variante_id == variante_id)
+        existente = (await session.execute(select(Subscription).where(*filtros))).scalars().first()
         now = datetime.now(UTC)
-        config = await _config()
         periodicidad = _periodicidad(plan.get("periodicidad"), config.periodicidad)
         if existente is not None:
             otra_variante = (
@@ -123,6 +169,8 @@ async def crear_suscripcion_para(
             existente.periodo_actual_inicio = now
             existente.proximo_cargo = existente.trial_termina or sumar_periodo(now, periodicidad, now.day)
             existente.motivo_pausa = None
+            existente.cambio_programado = None
+            existente.referencia_origen = referencia or existente.referencia_origen
             await session.flush()
             await _emitir_activada(session, existente, reference, cambio=True)
             return existente
@@ -144,6 +192,7 @@ async def crear_suscripcion_para(
             # por calendario (HU-SUB-04).
             proximo_cargo=trial_termina or sumar_periodo(now, periodicidad, now.day),
             fecha_alta=now,
+            referencia_origen=referencia,
         )
         session.add(sub)
         await session.flush()
@@ -172,6 +221,56 @@ async def _emitir_activada(session, sub: Subscription, reference: str, *, cambio
             "cambio_de_plan": cambio,
         },
     )
+
+
+async def _anular_cambios_pendientes(
+    session, sub: Subscription, *, salvo: tuple[str, Decimal] | None = None  # type: ignore[no-untyped-def]
+) -> SubscriptionCharge | None:
+    """Anula los cargos de cambio pendientes de la suscripción (su link deja de aplicar el
+    plan: `_on_payment_confirmed` solo procesa cargos pendientes). Devuelve el que coincide
+    con `salvo` (variante, monto), que se conserva."""
+    previos = (
+        await session.execute(
+            select(SubscriptionCharge).where(
+                SubscriptionCharge.tenant_id == get_current_tenant_id(),
+                SubscriptionCharge.subscription_id == sub.id,
+                SubscriptionCharge.tipo == "cambio_plan",
+                SubscriptionCharge.estado == "pendiente",
+                SubscriptionCharge.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    conservado = None
+    for previo in previos:
+        if salvo and (previo.cambio_plan or {}).get("variante_id") == salvo[0] and Decimal(previo.monto) == salvo[1]:
+            conservado = previo
+        else:
+            previo.estado = "anulado"
+    return conservado
+
+
+async def _link_de_cargo(cargo: SubscriptionCharge, sub: Subscription, descripcion: str) -> dict[str, Any]:
+    """Link de pago en línea de un cargo (`sub-<id>`), o {} si no hay pasarela o la
+    pasarela no acepta el monto: el cargo queda pendiente para cobrarlo por transferencia."""
+    if cargo.link_url and cargo.referencia:
+        return {"url": cargo.link_url, "referencia": cargo.referencia}
+    from core.agents.spec import enabled_packs, load_active_spec
+    from core.payments import PaymentCapabilityError, payment_registry
+
+    cap = payment_registry.capability_for(enabled_packs(await load_active_spec()))
+    if cap is None:
+        return {}
+    try:
+        link = await cap.create_link(reference=f"sub-{cargo.id}", amount=float(cargo.monto or 0), description=descripcion)
+    except PaymentCapabilityError:
+        log.info("subs_cargo_sin_link", charge_id=str(cargo.id), monto=str(cargo.monto))
+        return {}
+    async with get_session() as session:
+        fila = await session.get(SubscriptionCharge, cargo.id)
+        if fila is not None:
+            fila.referencia = link.reference
+            fila.link_url = link.url
+    return {"url": link.url, "referencia": link.reference}
 
 
 class SubscriptionCapabilityImpl:
@@ -278,6 +377,10 @@ class SubscriptionCapabilityImpl:
             await session.flush()
             return _view(sub)
 
+    async def permite_varias(self) -> bool:
+        """Operación opcional del contrato (ADR-0111): ¿varias suscripciones por cliente?"""
+        return bool((await _config()).varias_por_cliente)
+
     async def change_plan(
         self,
         subscription_id: uuid.UUID,
@@ -285,21 +388,85 @@ class SubscriptionCapabilityImpl:
         variant_id: str,
         plan: PlanSnapshot,
     ) -> SubscriptionView:
-        variante_id = None
-        try:
-            variante_id = uuid.UUID(str(variant_id))
-        except (ValueError, TypeError):
-            pass
+        """Cambio de plan con el snapshot del CATÁLOGO (HU-SUB-07, ADR-0111).
+
+        - upgrade: cargo `cambio_plan` por la diferencia prorrateada (o el precio completo si
+          venía de un plan de $0); el plan cambia al pagarlo (`_on_payment_confirmed`);
+        - downgrade: `cambio_programado` para el próximo período, sin reembolso;
+        - mismo precio: inmediato.
+        """
+        from pack_subscriptions.prorrateo import diferencia_prorrateada
+
+        ahora = datetime.now(UTC)
+        nuevo = Decimal(str(plan.get("precio") or 0))
+        destino = {"variante_id": str(variant_id), "plan": dict(plan)}
         async with get_session() as session:
             sub = await self._sub_vigente(session, subscription_id)
-            sub.variante_id = variante_id
-            sub.concepto = plan.get("nombre") or sub.concepto
-            if plan.get("precio") is not None:
-                sub.valor_periodo = plan["precio"]
-            sub.moneda = plan.get("moneda") or sub.moneda
-            sub.periodicidad = _periodicidad(plan.get("periodicidad"), sub.periodicidad)
+            if sub.variante_id is not None and str(sub.variante_id) == str(variant_id):
+                raise SubscriptionError("El cliente ya tiene ese plan.", code="mismo_plan")
+            # Auditoría HU-SUB-07: sin cambios desde una pausada o vencida (el período no
+            # está vigente y la diferencia se calcularía mal); primero se reactiva.
+            if sub.estado not in ("activa", "trialing"):
+                raise SubscriptionError(
+                    "Solo se puede cambiar de plan con la suscripción activa; primero hay que reactivarla.",
+                    code="estado_no_permite_cambio",
+                )
+            actual = Decimal(sub.valor_periodo or 0)
+            desde_cero = actual == 0 or sub.estado == "trialing"
+            if nuevo == 0 and desde_cero:
+                raise SubscriptionError("Ya está en un plan sin costo.", code="plan_gratis")
+            # Precios de periodicidades distintas no se comparan (auditoría): solo desde un
+            # plan de $0, que arranca un período nuevo.
+            periodicidad_nueva = _periodicidad(plan.get("periodicidad"), sub.periodicidad)
+            if not desde_cero and periodicidad_nueva != sub.periodicidad:
+                raise SubscriptionError(
+                    "El cambio entre periodicidades distintas (p. ej. mensual a anual) se hace con "
+                    "una compra nueva al terminar el período.",
+                    code="periodicidad_distinta",
+                )
+            if nuevo < actual:
+                await _anular_cambios_pendientes(session, sub)
+                sub.cambio_programado = {**destino, "desde": (sub.proximo_cargo or ahora).isoformat()}
+                await session.flush()
+                return {**_view(sub), "cambio": "programado"}
+            if desde_cero:
+                monto = nuevo
+            else:
+                inicio = sub.periodo_actual_inicio or ahora
+                fin = sub.proximo_cargo or sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla)
+                monto = diferencia_prorrateada(actual, nuevo, inicio, fin, ahora, sub.moneda)
+            if monto <= 0:
+                await _anular_cambios_pendientes(session, sub)
+                aplicar_plan(sub, {**destino, "desde_cero": desde_cero}, ahora)
+                await session.flush()
+                return {**_view(sub), "cambio": "inmediato"}
+            # Un cambio pendiente anterior a OTRO plan (u otro monto) se anula; al mismo se reusa.
+            cargo = await _anular_cambios_pendientes(session, sub, salvo=(str(variant_id), monto))
+            if cargo is None:
+                cargo = SubscriptionCharge(
+                    tenant_id=get_current_tenant_id(),
+                    subscription_id=sub.id,
+                    periodo=f"cambio-{ahora:%Y%m%d%H%M%S}",
+                    monto=monto,
+                    estado="pendiente",
+                    fecha_vencimiento=ahora,
+                    tipo="cambio_plan",
+                    # El período del cálculo: si al pagar ya es otro, el cambio no se aplica.
+                    cambio_plan={
+                        **destino,
+                        "desde_cero": desde_cero,
+                        "proximo_cargo": sub.proximo_cargo.isoformat() if sub.proximo_cargo else None,
+                    },
+                )
+                session.add(cargo)
             await session.flush()
-            return _view(sub)
+            vista = _view(sub)
+        link = await _link_de_cargo(cargo, sub, f"Cambio a {plan.get('nombre')}")
+        return {
+            **vista,
+            "cambio": "pendiente_pago",
+            "cargo_cambio": {"monto": float(monto), "link": link.get("url"), "referencia": link.get("referencia")},
+        }
 
     async def charge_link(
         self, subscription_id: uuid.UUID, *, period: str = ""
@@ -319,6 +486,7 @@ class SubscriptionCapabilityImpl:
             filtro = [
                 SubscriptionCharge.tenant_id == get_current_tenant_id(),
                 SubscriptionCharge.subscription_id == subscription_id,
+                SubscriptionCharge.tipo == "periodo",  # un cargo de cambio no es un período (ADR-0111)
                 SubscriptionCharge.deleted_at.is_(None),
             ]
             if period:

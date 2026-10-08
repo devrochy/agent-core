@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import DateTime, Index, Numeric, SmallInteger, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from core.shared.tenant import get_current_tenant_id
@@ -58,6 +58,9 @@ class Subscription(Base):
     periodicidad: Mapped[str] = mapped_column(Text, nullable=False, default="mensual")  # mensual|trimestral|anual
     dia_ancla: Mapped[int | None] = mapped_column(SmallInteger)  # día del mes en que empezó
     motivo_pausa: Mapped[str | None] = mapped_column(Text)  # HU-SUB-05: "mora" si la pausó el cron
+    # HU-SUB-07 (ADR-0111): pedido que la creó (único por negocio) y downgrade programado.
+    referencia_origen: Mapped[str | None] = mapped_column(Text)
+    cambio_programado: Mapped[dict | None] = mapped_column(JSONB)
     periodo_actual_inicio: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     periodo_actual_fin: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     proximo_cargo: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -85,6 +88,9 @@ class SubscriptionCharge(Base):
     estado: Mapped[str] = mapped_column(Text, nullable=False, default="pendiente")  # pendiente|pagado|rechazado
     referencia: Mapped[str | None] = mapped_column(Text, default=None)
     link_url: Mapped[str | None] = mapped_column(Text, default=None)  # HU-SUB-05
+    # HU-SUB-07 (ADR-0111): `periodo` | `cambio_plan` (diferencia prorrateada de un upgrade).
+    tipo: Mapped[str] = mapped_column(Text, nullable=False, default="periodo", server_default="periodo")
+    cambio_plan: Mapped[dict | None] = mapped_column(JSONB, default=None)  # plan al que lleva el cargo
     fecha_vencimiento: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

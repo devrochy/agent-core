@@ -79,6 +79,14 @@ class SubscriptionConfig(BasePluginConfig):
         description="Texto del aviso de pausa por mora (dentro de las 24 h).",
     )
 
+    varias_por_cliente: bool = Field(
+        default=False,
+        description=(
+            "Permitir varias suscripciones por cliente (p. ej. plan individual y familiar). "
+            "Si está apagado, comprar otro plan pago se redirige al cambio de plan (HU-SUB-07)."
+        ),
+    )
+
     # ------------------------------------------------------ fin de la prueba (HU-SUB-06)
     dias_aviso_fin_prueba: int = Field(
         default=3,
