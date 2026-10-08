@@ -65,11 +65,11 @@ MONEY_IN_TEXT = re.compile(r"\$\s?[\d][\d.,]*|\bCOP\s?[\d][\d.,]*")
 # confundir un stock/quantity numérico con un monto verificado.
 MONEY_KEYS = {
     "price", "unit_price", "line_total", "subtotal", "total", "discount",
-    # Montos que devuelven las tools de suscripción (core) y de pagos: `monto` del cargo,
-    # `valor_periodo` del plan, `amount` del link. Sin ellos, mencionar el valor de una
-    # suscripción o la diferencia de un cambio de plan se bloqueaba y escalaba
-    # (journeys de HU-SUB-12/HU-SUB-07).
-    "monto", "valor_periodo", "amount",
+    # Montos que el SERVIDOR pone en las tools de suscripción (core): `monto` del cargo y
+    # `valor_periodo` del plan. Sin ellos, mencionar el valor de una suscripción o la
+    # diferencia de un cambio de plan se bloqueaba y escalaba (journeys HU-SUB-12/07).
+    # `amount` NO: `generar_link_pago` lo devuelve tal como lo pasó el LLM (auditoría).
+    "monto", "valor_periodo",
 }
 
 # Claves reservadas del core (docs/SAFE-RENDERER.md, core/orchestrator/safe_renderer.py)

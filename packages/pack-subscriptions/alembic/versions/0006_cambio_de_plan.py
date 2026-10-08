@@ -4,7 +4,8 @@
   prorrateada de un upgrade). Default `periodo`: las filas existentes quedan como período.
 - `pack_subscriptions_charges.cambio_plan` (JSONB): el plan al que lleva el cargo de cambio.
 - `pack_subscriptions_subscriptions.referencia_origen`: número público del pedido que la
-  creó; índice único parcial por negocio (el mismo pedido no crea dos suscripciones).
+  creó; índice único parcial por negocio y variante (el mismo pedido no crea dos
+  suscripciones del mismo plan; un pedido con dos planes crea dos).
 - `pack_subscriptions_subscriptions.cambio_programado` (JSONB): downgrade al próximo período.
 
 Columnas nullable o con default constante: sin reescritura de tabla ni bloqueo largo. Las
@@ -43,7 +44,7 @@ def upgrade() -> None:
     op.create_index(
         "uq_pack_subscriptions_subs_tenant_referencia",
         "pack_subscriptions_subscriptions",
-        ["tenant_id", "referencia_origen"],
+        ["tenant_id", "referencia_origen", "variante_id"],
         unique=True,
         postgresql_where=sa.text("referencia_origen is not null and deleted_at is null"),
     )

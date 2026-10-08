@@ -95,17 +95,26 @@ class SubscriptionsModule(BaseModule):
         except (ValueError, TypeError):
             return
         tenant_id = get_current_tenant_id()
+        if tenant_id is None:
+            return
         async with tenant_scope(tenant_id):
             async with get_session() as session:
                 cargo = (
                     await session.execute(
-                        select(SubscriptionCharge).where(
+                        select(SubscriptionCharge)
+                        .where(
                             SubscriptionCharge.tenant_id == tenant_id,
                             SubscriptionCharge.id == charge_id,
                         )
+                        .with_for_update()  # dos entregas a la vez no aplican dos veces
                     )
                 ).scalar_one_or_none()
                 if cargo is None or cargo.estado == "pagado":
+                    return
+                if cargo.estado != "pendiente":
+                    # Pago de un cargo anulado (p. ej. un cambio de plan reemplazado): no se
+                    # aplica nada y se avisa al negocio (auditoría HU-SUB-07).
+                    await _alertar_pago_sin_aplicar(tenant_id, cargo, f"el cargo estaba {cargo.estado}")
                     return
                 if abs(Decimal(str(amount)) - Decimal(cargo.monto or 0)) > Decimal("0.01"):
                     log.error(
@@ -117,8 +126,18 @@ class SubscriptionsModule(BaseModule):
                     await _alertar_monto_distinto(tenant_id, cargo, amount, provider_reference)
                     return
                 cargo.estado = "pagado"
-                sub = await session.get(Subscription, cargo.subscription_id)
+                sub = (
+                    await session.execute(
+                        select(Subscription).where(
+                            Subscription.tenant_id == tenant_id, Subscription.id == cargo.subscription_id
+                        )
+                    )
+                ).scalar_one_or_none()
                 if cargo.tipo == "cambio_plan" and sub is not None and cargo.cambio_plan:
+                    motivo = _cambio_no_aplicable(sub, cargo.cambio_plan)
+                    if motivo:
+                        await _alertar_pago_sin_aplicar(tenant_id, cargo, motivo)
+                        return
                     # Upgrade pagado (HU-SUB-07, ADR-0111): el plan cambia en el acto.
                     from pack_subscriptions.capability import _emitir_activada, aplicar_plan
 
@@ -165,6 +184,44 @@ class SubscriptionsModule(BaseModule):
                     ),
                 )
         return GuardrailResult(passed=True)
+
+
+def _cambio_no_aplicable(sub: Subscription, cambio: dict[str, Any]) -> str | None:
+    """Motivo para NO aplicar un cambio de plan pagado (auditoría HU-SUB-07): la suscripción
+    ya no está activa, o el período del cálculo ya pasó (la diferencia era de otro período)."""
+    if sub.estado not in ("activa", "trialing"):
+        return f"la suscripción está {sub.estado}"
+    if cambio.get("desde_cero"):
+        return None
+    calculado = cambio.get("proximo_cargo")
+    vigente = sub.proximo_cargo.isoformat() if sub.proximo_cargo else None
+    if calculado != vigente:
+        return "la diferencia era de un período que ya cerró"
+    return None
+
+
+async def _alertar_pago_sin_aplicar(tenant_id: uuid.UUID, cargo: SubscriptionCharge, motivo: str) -> None:
+    """Llegó plata por un cargo que no corresponde aplicar: se registra y se avisa a los
+    dueños para resolverlo a mano (devolución o cambio manual)."""
+    from core.shared.audit import record_audit
+
+    log.warning("subs_pago_sin_aplicar", charge_id=str(cargo.id), motivo=motivo)
+    await record_audit(
+        actor=f"plugin:{PLUGIN_ID}",
+        action="subs_pago_sin_aplicar",
+        output_data={"charge_id": str(cargo.id), "tipo": cargo.tipo, "monto": str(cargo.monto), "motivo": motivo},
+    )
+    try:
+        from core.tasks.push_tasks import notify_owners_push
+
+        notify_owners_push.delay(
+            str(tenant_id),
+            "Pago de suscripción sin aplicar",
+            f"Llegó el pago de {cargo.monto} ({cargo.periodo}) pero no se aplicó: {motivo}. Revísalo.",
+            {"kind": "subs_pago_sin_aplicar", "charge_id": str(cargo.id)},
+        )
+    except Exception:
+        log.warning("subs_alerta_push_fallida", charge_id=str(cargo.id), exc_info=True)
 
 
 async def _alertar_monto_distinto(

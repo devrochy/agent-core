@@ -227,6 +227,7 @@ class CatalogoDePlanes:
                     .where(
                         condicion,
                         ProductVariant.tenant_id == tenant_id,
+                        Product.tenant_id == tenant_id,
                         ProductVariant.active.is_(True),
                         ProductVariant.billing_period.isnot(None),
                     )
@@ -263,8 +264,15 @@ async def segundo_plan_bloqueado(customer_id, variant_ids: list) -> dict[str, An
     for vista in await cap.list_for_customer(customer_id):
         if vista.get("estado") not in ("activa", "pausada", "vencida"):
             continue
-        if float(vista.get("valor_periodo") or 0) <= 0 or vista.get("plan_code") in pedidas:
+        if float(vista.get("valor_periodo") or 0) <= 0:
             continue
+        if vista.get("plan_code") in pedidas:
+            # Mismo plan ya vigente: un pedido nuevo cobraría sin dar nada (auditoría).
+            return {
+                "error": "ya_tiene_este_plan",
+                "suscripcion_actual": vista.get("plan"),
+                "hint": "El cliente ya tiene este plan. Para pagar el período usá sub_link_pago.",
+            }
         return {
             "error": "ya_tiene_suscripcion",
             "suscripcion_actual": vista.get("plan"),

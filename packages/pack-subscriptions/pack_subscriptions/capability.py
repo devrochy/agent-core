@@ -129,6 +129,8 @@ async def crear_suscripcion_para(
                     select(Subscription).where(
                         Subscription.tenant_id == get_current_tenant_id(),
                         Subscription.referencia_origen == referencia,
+                        # Un pedido con dos planes crea dos suscripciones (auditoría).
+                        Subscription.variante_id.is_(None) if variante_id is None else Subscription.variante_id == variante_id,
                         Subscription.deleted_at.is_(None),
                     )
                 )
@@ -219,6 +221,32 @@ async def _emitir_activada(session, sub: Subscription, reference: str, *, cambio
             "cambio_de_plan": cambio,
         },
     )
+
+
+async def _anular_cambios_pendientes(
+    session, sub: Subscription, *, salvo: tuple[str, Decimal] | None = None  # type: ignore[no-untyped-def]
+) -> SubscriptionCharge | None:
+    """Anula los cargos de cambio pendientes de la suscripción (su link deja de aplicar el
+    plan: `_on_payment_confirmed` solo procesa cargos pendientes). Devuelve el que coincide
+    con `salvo` (variante, monto), que se conserva."""
+    previos = (
+        await session.execute(
+            select(SubscriptionCharge).where(
+                SubscriptionCharge.tenant_id == get_current_tenant_id(),
+                SubscriptionCharge.subscription_id == sub.id,
+                SubscriptionCharge.tipo == "cambio_plan",
+                SubscriptionCharge.estado == "pendiente",
+                SubscriptionCharge.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    conservado = None
+    for previo in previos:
+        if salvo and (previo.cambio_plan or {}).get("variante_id") == salvo[0] and Decimal(previo.monto) == salvo[1]:
+            conservado = previo
+        else:
+            previo.estado = "anulado"
+    return conservado
 
 
 async def _link_de_cargo(cargo: SubscriptionCharge, sub: Subscription, descripcion: str) -> dict[str, Any]:
@@ -376,12 +404,31 @@ class SubscriptionCapabilityImpl:
             sub = await self._sub_vigente(session, subscription_id)
             if sub.variante_id is not None and str(sub.variante_id) == str(variant_id):
                 raise SubscriptionError("El cliente ya tiene ese plan.", code="mismo_plan")
+            # Auditoría HU-SUB-07: sin cambios desde una pausada o vencida (el período no
+            # está vigente y la diferencia se calcularía mal); primero se reactiva.
+            if sub.estado not in ("activa", "trialing"):
+                raise SubscriptionError(
+                    "Solo se puede cambiar de plan con la suscripción activa; primero hay que reactivarla.",
+                    code="estado_no_permite_cambio",
+                )
             actual = Decimal(sub.valor_periodo or 0)
+            desde_cero = actual == 0 or sub.estado == "trialing"
+            if nuevo == 0 and desde_cero:
+                raise SubscriptionError("Ya está en un plan sin costo.", code="plan_gratis")
+            # Precios de periodicidades distintas no se comparan (auditoría): solo desde un
+            # plan de $0, que arranca un período nuevo.
+            periodicidad_nueva = _periodicidad(plan.get("periodicidad"), sub.periodicidad)
+            if not desde_cero and periodicidad_nueva != sub.periodicidad:
+                raise SubscriptionError(
+                    "El cambio entre periodicidades distintas (p. ej. mensual a anual) se hace con "
+                    "una compra nueva al terminar el período.",
+                    code="periodicidad_distinta",
+                )
             if nuevo < actual:
+                await _anular_cambios_pendientes(session, sub)
                 sub.cambio_programado = {**destino, "desde": (sub.proximo_cargo or ahora).isoformat()}
                 await session.flush()
                 return {**_view(sub), "cambio": "programado"}
-            desde_cero = actual == 0 or sub.estado == "trialing"
             if desde_cero:
                 monto = nuevo
             else:
@@ -389,27 +436,12 @@ class SubscriptionCapabilityImpl:
                 fin = sub.proximo_cargo or sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla)
                 monto = diferencia_prorrateada(actual, nuevo, inicio, fin, ahora, sub.moneda)
             if monto <= 0:
+                await _anular_cambios_pendientes(session, sub)
                 aplicar_plan(sub, {**destino, "desde_cero": desde_cero}, ahora)
                 await session.flush()
                 return {**_view(sub), "cambio": "inmediato"}
-            # Un cambio pendiente anterior a OTRO plan se anula; al mismo plan se reusa.
-            previos = (
-                await session.execute(
-                    select(SubscriptionCharge).where(
-                        SubscriptionCharge.tenant_id == get_current_tenant_id(),
-                        SubscriptionCharge.subscription_id == sub.id,
-                        SubscriptionCharge.tipo == "cambio_plan",
-                        SubscriptionCharge.estado == "pendiente",
-                        SubscriptionCharge.deleted_at.is_(None),
-                    )
-                )
-            ).scalars().all()
-            cargo = None
-            for previo in previos:
-                if (previo.cambio_plan or {}).get("variante_id") == str(variant_id) and Decimal(previo.monto) == monto:
-                    cargo = previo
-                else:
-                    previo.estado = "anulado"
+            # Un cambio pendiente anterior a OTRO plan (u otro monto) se anula; al mismo se reusa.
+            cargo = await _anular_cambios_pendientes(session, sub, salvo=(str(variant_id), monto))
             if cargo is None:
                 cargo = SubscriptionCharge(
                     tenant_id=get_current_tenant_id(),
@@ -419,7 +451,12 @@ class SubscriptionCapabilityImpl:
                     estado="pendiente",
                     fecha_vencimiento=ahora,
                     tipo="cambio_plan",
-                    cambio_plan={**destino, "desde_cero": desde_cero},
+                    # El período del cálculo: si al pagar ya es otro, el cambio no se aplica.
+                    cambio_plan={
+                        **destino,
+                        "desde_cero": desde_cero,
+                        "proximo_cargo": sub.proximo_cargo.isoformat() if sub.proximo_cargo else None,
+                    },
                 )
                 session.add(cargo)
             await session.flush()

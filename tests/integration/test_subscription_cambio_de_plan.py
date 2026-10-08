@@ -169,12 +169,29 @@ async def test_mismo_pedido_dos_veces_una_sola_suscripcion() -> None:
 
     tid = await _negocio()
     cliente = uuid.uuid4()
+    variante = uuid.uuid4()
     async with tenant_scope(tid):
-        a = await crear_suscripcion_para(customer_id=cliente, variante_id=uuid.uuid4(), plan=BASIC, reference="OC-0007")
-        b = await crear_suscripcion_para(customer_id=uuid.uuid4(), variante_id=uuid.uuid4(), plan=PREMIUM, reference="OC-0007")
+        a = await crear_suscripcion_para(customer_id=cliente, variante_id=variante, plan=BASIC, reference="OC-0007")
+        b = await crear_suscripcion_para(customer_id=uuid.uuid4(), variante_id=variante, plan=BASIC, reference="OC-0007")
         vistas = await SubscriptionCapabilityImpl().list_for_customer(cliente)
     assert a.id == b.id
     assert vistas[0]["referencia"] == "OC-0007"
+
+
+async def test_un_pedido_con_dos_planes_crea_dos_suscripciones() -> None:
+    """Auditoría: la idempotencia es por pedido Y plan (antes la 2.ª línea devolvía la 1.ª)."""
+    from pack_subscriptions.capability import crear_suscripcion_para
+
+    from core.plugin_manager import plugin_manager
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    cliente = uuid.uuid4()
+    async with tenant_scope(tid):
+        await plugin_manager.save_config("pack_subscriptions", {"varias_por_cliente": True})
+        a = await crear_suscripcion_para(customer_id=cliente, variante_id=uuid.uuid4(), plan=BASIC, reference="OC-0008")
+        b = await crear_suscripcion_para(customer_id=cliente, variante_id=uuid.uuid4(), plan=PREMIUM, reference="OC-0008")
+    assert a.id != b.id
 
 
 async def test_varias_por_cliente_segun_el_negocio() -> None:
@@ -271,3 +288,136 @@ async def test_el_catalogo_de_commerce_da_el_precio_del_servidor() -> None:
     _, plan = encontrado
     assert (plan["precio"], plan["trial_dias"]) == (600000.0, 0)  # D-16: la prueba de un plan pago se ignora
     assert no_plan is None
+
+
+# ------------------------------------------------------------- auditoría (dinero)
+async def _cargo_de_cambio(tid, sid):
+    from pack_subscriptions.models import SubscriptionCharge
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            return (
+                await s.execute(
+                    select(SubscriptionCharge)
+                    .where(SubscriptionCharge.subscription_id == sid, SubscriptionCharge.tipo == "cambio_plan")
+                    .order_by(SubscriptionCharge.created_at)
+                )
+            ).scalars().all()
+
+
+async def test_pagar_un_cambio_anulado_no_aplica_el_plan() -> None:
+    from pack_subscriptions.capability import SubscriptionCapabilityImpl
+    from pack_subscriptions.models import Subscription
+
+    from core.db.models import AuditLog
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    ahora = datetime.now(UTC)
+    sid = await _sub(tid, BASIC, periodo_actual_inicio=ahora - timedelta(days=15), proximo_cargo=ahora + timedelta(days=15))
+    async with tenant_scope(tid):
+        cap = SubscriptionCapabilityImpl()
+        await cap.change_plan(sid, variant_id=str(uuid.uuid4()), plan=PREMIUM)
+        # Pide otro destino: el primer cargo queda anulado.
+        otro = {**PREMIUM, "plan_code": "PLAN-PRO", "nombre": "Pro", "precio": 400000.0}
+        await cap.change_plan(sid, variant_id=str(uuid.uuid4()), plan=otro)
+    cargos = await _cargo_de_cambio(tid, sid)
+    assert [c.estado for c in cargos] == ["anulado", "pendiente"]
+    await _pagar(tid, cargos[0].id, cargos[0].monto)
+    assert (await _leer(tid, Subscription, sid)).concepto == "Basic"
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            alertas = (
+                await s.execute(select(AuditLog).where(AuditLog.tenant_id == tid, AuditLog.action == "subs_pago_sin_aplicar"))
+            ).scalars().all()
+    assert len(alertas) == 1
+
+
+async def test_pagar_un_cambio_de_un_periodo_cerrado_no_aplica_el_plan() -> None:
+    from pack_subscriptions.capability import SubscriptionCapabilityImpl
+    from pack_subscriptions.jobs import _generar_cargos
+    from pack_subscriptions.models import Subscription
+
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    ahora = datetime.now(UTC)
+    fin = ahora + timedelta(days=1)
+    sid = await _sub(tid, BASIC, periodo_actual_inicio=ahora - timedelta(days=29), proximo_cargo=fin)
+    async with tenant_scope(tid):
+        await SubscriptionCapabilityImpl().change_plan(sid, variant_id=str(uuid.uuid4()), plan=PREMIUM)
+    cargo = (await _cargo_de_cambio(tid, sid))[0]
+    await _generar_cargos(fin)  # el cron pasa de período: el cambio pendiente se anula
+    await _pagar(tid, cargo.id, cargo.monto)
+    sub = await _leer(tid, Subscription, sid)
+    assert (sub.concepto, Decimal(sub.valor_periodo)) == ("Basic", Decimal("200000"))
+
+
+@pytest.mark.parametrize(
+    ("estado_inicial", "plan_nuevo", "codigo"),
+    [
+        ("pausada", PREMIUM, "estado_no_permite_cambio"),
+        ("vencida", PREMIUM, "estado_no_permite_cambio"),
+        ("activa", {**PREMIUM, "periodicidad": "trimestral"}, "periodicidad_distinta"),
+    ],
+)
+async def test_cambios_que_no_se_permiten(estado_inicial, plan_nuevo, codigo) -> None:
+    from pack_subscriptions.capability import SubscriptionCapabilityImpl
+
+    from core.shared.tenant import tenant_scope
+    from core.subscriptions import SubscriptionError
+
+    tid = await _negocio()
+    sid = await _sub(tid, BASIC, estado=estado_inicial)
+    async with tenant_scope(tid):
+        with pytest.raises(SubscriptionError) as exc:
+            await SubscriptionCapabilityImpl().change_plan(sid, variant_id=str(uuid.uuid4()), plan=plan_nuevo)
+    assert exc.value.code == codigo
+
+
+async def test_de_free_a_otro_plan_gratis_no_se_permite() -> None:
+    from pack_subscriptions.capability import SubscriptionCapabilityImpl
+
+    from core.shared.tenant import tenant_scope
+    from core.subscriptions import SubscriptionError
+
+    tid = await _negocio()
+    sid = await _sub(tid, FREE)
+    async with tenant_scope(tid):
+        with pytest.raises(SubscriptionError) as exc:
+            await SubscriptionCapabilityImpl().change_plan(
+                sid, variant_id=str(uuid.uuid4()), plan={**FREE, "plan_code": "FREE-ANUAL", "periodicidad": "anual"}
+            )
+    assert exc.value.code == "plan_gratis"
+
+
+async def test_comprar_el_mismo_plan_vigente_se_frena() -> None:
+    """Auditoría: un pedido del plan que ya tiene cobraría sin dar nada; se ofrece el link."""
+    from pack_commerce.models import Product, ProductVariant
+    from pack_commerce.planes import segundo_plan_bloqueado
+    from pack_subscriptions.capability import crear_suscripcion_para
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+    from core.subscriptions import guardar_proveedor
+
+    tid = await _negocio(["pack_commerce", "pack_subscriptions"])
+    await guardar_proveedor(tid, "pack_subscriptions")
+    cliente = uuid.uuid4()
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            producto = Product(tenant_id=tid, name="Basic")
+            s.add(producto)
+            await s.flush()
+            variante = ProductVariant(tenant_id=tid, product_id=producto.id, sku="PLAN-BASIC", price=200000, billing_period="mensual")
+            s.add(variante)
+            await s.flush()
+            variante_id = variante.id
+        await crear_suscripcion_para(customer_id=cliente, variante_id=variante_id, plan=BASIC)
+        bloqueo = await segundo_plan_bloqueado(cliente, [variante_id])
+    assert bloqueo is not None and bloqueo["error"] == "ya_tiene_este_plan"
+    assert "sub_link_pago" in bloqueo["hint"]

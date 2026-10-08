@@ -149,4 +149,5 @@ def test_extract_monetary_values_de_suscripciones_y_pagos():
         "dias": 3,
     }
     assert sorted(_extract_monetary_values(resultado)) == [200000.0, 400000.0]
-    assert _extract_monetary_values({"amount": 150000.0, "reference": "OC-1"}) == [150000.0]
+    # `amount` lo pone el LLM en generar_link_pago: no cuenta como verificado.
+    assert _extract_monetary_values({"amount": 150000.0, "reference": "OC-1"}) == []

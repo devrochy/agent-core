@@ -119,6 +119,11 @@ async def _generar_cargos(now: datetime) -> int:
                         continue
                     inicio = sub.proximo_cargo
                     _aplicar_cambio_programado(sub, inicio)
+                    # Un cambio de plan pendiente se calculó sobre el período que termina:
+                    # pagarlo después ya no aplica (auditoría HU-SUB-07).
+                    from pack_subscriptions.capability import _anular_cambios_pendientes
+
+                    await _anular_cambios_pendientes(session, sub)
                     siguiente = sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla)
                     if not Decimal(sub.valor_periodo or 0):
                         sub.periodo_actual_inicio = inicio
