@@ -27,6 +27,7 @@ from core.subscriptions import (
     SubscriptionView,
 )
 from pack_subscriptions.models import Subscription, SubscriptionCharge
+from pack_subscriptions.periodos import PERIODICIDADES, etiqueta_periodo, sumar_periodo
 
 log = get_logger(__name__)
 
@@ -34,12 +35,25 @@ PLUGIN_ID = "pack_subscriptions"
 _ESTADOS_VIGENTES = ("trialing", "activa", "pausada")
 
 
-def _proximo(desde: datetime) -> datetime:
-    return (desde + timedelta(days=30)).replace(second=0, microsecond=0)
+async def _config():  # type: ignore[no-untyped-def]
+    """Config del pack para el negocio actual; defaults si no hay o no carga."""
+    from core.plugin_manager import plugin_manager
+    from pack_subscriptions.config import SubscriptionConfig
+
+    try:
+        config = await plugin_manager.load_config(PLUGIN_ID)
+    except Exception:
+        config = None
+    return config if isinstance(config, SubscriptionConfig) else SubscriptionConfig()
 
 
-def _periodo_actual(ahora: datetime) -> str:
-    return ahora.strftime("%Y-%m")
+def _periodicidad(valor: object, por_defecto: str) -> str:
+    texto = str(valor or "").strip().lower()
+    return texto if texto in PERIODICIDADES else por_defecto
+
+
+def _en_prueba(sub: Subscription, ahora: datetime) -> bool:
+    return sub.estado == "trialing" and sub.trial_termina is not None and sub.trial_termina > ahora
 
 
 def _view(sub: Subscription, cargos: list[SubscriptionCharge] | None = None) -> SubscriptionView:
@@ -81,7 +95,10 @@ async def crear_suscripcion_para(
         if existente is not None:
             return existente
         now = datetime.now(UTC)
+        config = await _config()
         trial_dias = int(plan.get("trial_dias") or 0)
+        periodicidad = _periodicidad(plan.get("periodicidad"), config.periodicidad)
+        trial_termina = (now + timedelta(days=trial_dias)) if trial_dias else None
         sub = Subscription(
             tenant_id=get_current_tenant_id(),
             customer_id=customer_id,
@@ -90,8 +107,14 @@ async def crear_suscripcion_para(
             estado="trialing" if trial_dias else "activa",
             valor_periodo=plan.get("precio") or 0,
             moneda=plan.get("moneda") or "COP",
-            trial_termina=(now + timedelta(days=trial_dias)) if trial_dias else None,
-            proximo_cargo=_proximo(now),
+            periodicidad=periodicidad,
+            dia_ancla=now.day,
+            trial_termina=trial_termina,
+            periodo_actual_inicio=now,
+            # Con prueba, el primer cargo es al terminarla; sin prueba, el período
+            # actual ya está pago (lo activó un pedido pagado) y el siguiente vence
+            # por calendario (HU-SUB-04).
+            proximo_cargo=trial_termina or sumar_periodo(now, periodicidad, now.day),
             fecha_alta=now,
         )
         session.add(sub)
@@ -183,7 +206,7 @@ class SubscriptionCapabilityImpl:
             sub.estado = "activa"
             sub.fecha_cancelacion = None
             if sub.proximo_cargo is None:
-                sub.proximo_cargo = _proximo(datetime.now(UTC))
+                sub.proximo_cargo = sumar_periodo(datetime.now(UTC), sub.periodicidad, sub.dia_ancla)
             await session.flush()
             return _view(sub)
 
@@ -217,6 +240,7 @@ class SubscriptionCapabilityImpl:
             if plan.get("precio") is not None:
                 sub.valor_periodo = plan["precio"]
             sub.moneda = plan.get("moneda") or sub.moneda
+            sub.periodicidad = _periodicidad(plan.get("periodicidad"), sub.periodicidad)
             await session.flush()
             return _view(sub)
 
@@ -226,30 +250,48 @@ class SubscriptionCapabilityImpl:
         async with get_session() as session:
             sub = await self._sub_vigente(session, subscription_id)
             ahora = datetime.now(UTC)
-            periodo = period or _periodo_actual(ahora)
-            if periodo > _periodo_actual(ahora):
+            if _en_prueba(sub, ahora):
                 raise SubscriptionError(
-                    "No se cobra un período futuro.", code="periodo_futuro"
+                    "La suscripción está en período de prueba: todavía no hay nada que cobrar.",
+                    code="en_prueba",
                 )
+            inicio_actual = sub.periodo_actual_inicio or ahora
+            actual = etiqueta_periodo(inicio_actual, sub.periodicidad)
+            if period and period > actual:
+                raise SubscriptionError("No se cobra un período futuro.", code="periodo_futuro")
+            filtro = [
+                SubscriptionCharge.tenant_id == get_current_tenant_id(),
+                SubscriptionCharge.subscription_id == subscription_id,
+                SubscriptionCharge.deleted_at.is_(None),
+            ]
+            if period:
+                filtro.append(SubscriptionCharge.periodo == period)
+            # El cargo vencido más viejo, o el del período en curso: nunca uno futuro.
             cargo = (
                 await session.execute(
                     select(SubscriptionCharge)
-                    .where(
-                        SubscriptionCharge.tenant_id == get_current_tenant_id(),
-                        SubscriptionCharge.subscription_id == subscription_id,
-                        SubscriptionCharge.periodo == periodo,
-                        SubscriptionCharge.estado == "pendiente",
-                        SubscriptionCharge.deleted_at.is_(None),
-                    )
+                    .where(*filtro, SubscriptionCharge.estado == "pendiente")
+                    .order_by(SubscriptionCharge.fecha_vencimiento.asc().nulls_last())
                 )
             ).scalars().first()
+            periodo = cargo.periodo if cargo is not None else (period or actual)
             if cargo is None:
+                pagado = (
+                    await session.execute(
+                        select(SubscriptionCharge.id).where(
+                            *filtro, SubscriptionCharge.periodo == periodo, SubscriptionCharge.estado == "pagado"
+                        )
+                    )
+                ).first()
+                if pagado is not None:
+                    raise SubscriptionError("Ese período ya está pago.", code="ya_pagado")
                 cargo = SubscriptionCharge(
                     tenant_id=get_current_tenant_id(),
                     subscription_id=subscription_id,
                     periodo=periodo,
                     monto=sub.valor_periodo or 0,
                     estado="pendiente",
+                    fecha_vencimiento=inicio_actual,
                 )
                 session.add(cargo)
                 await session.flush()

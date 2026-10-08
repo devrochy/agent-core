@@ -49,6 +49,13 @@ def register_cron(plugin_id: str, cron_expression: str) -> Callable[[AsyncJob], 
         def _celery_task() -> None:
             from core.plugin_manager import plugin_manager
 
+            # El worker no pasa por el lifespan de la API: sin esto `_active` está
+            # vacío en el proceso y TODO cron de pack se salteaba (visto al hacer
+            # HU-SUB-04; mismo origen que el arreglo del outbox, ADR-0107).
+            try:
+                run_async(plugin_manager.ensure_process_activation())
+            except Exception:
+                log.exception("cron_activation_failed", plugin=plugin_id, task=task_name)
             if not plugin_manager.is_active(plugin_id):
                 log.info("cron_skipped_plugin_inactive", plugin=plugin_id, task=task_name)
                 return

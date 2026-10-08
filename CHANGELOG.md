@@ -1,5 +1,19 @@
 # Changelog
 
+## Sin versión — Ciclo de vida correcto de la suscripción (2026-10-08)
+
+- HU-SUB-04. El período sale del calendario (`periodicidad` mensual/trimestral/anual + `dia_ancla`, migración
+  `pack_subscriptions_0004`), no `+30 días`: un anual del 2026-10-15 vence el 2027-10-15 y un mensual del 31 de enero
+  el último día de febrero.
+- `generar_cargos` ya no pone `activa` sin pago, no cobra durante la prueba ni planes en $0 y no acumula cargos de una
+  `vencida`. Nuevo cron `marcar_vencidas`: tras `SubscriptionConfig.dias_gracia` (5 por defecto) pasa a `vencida` y
+  emite `subscription.past_due` por el outbox.
+- `payment.confirmed` valida el monto contra el cargo (si difiere: no se marca pagado, push a los dueños y
+  `audit_log`) y reactiva una `vencida` calculando el período siguiente desde el pagado.
+- `sub_link_pago` no cobra un período futuro ni durante una prueba (`en_prueba`, `ya_pagado`).
+- **Todos los crons de packs se salteaban en el worker** (`_active` vacío: solo la API activaba packs). Ahora
+  `register_cron` llama `ensure_process_activation()` antes de chequear.
+
 ## Sin versión — Presets de negocio (2026-10-08)
 
 - HU-FWK-03 / ADR-0110. `core/presets/` con los manifiestos `comercio`, `restaurante` y `cobranza`, y

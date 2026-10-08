@@ -41,6 +41,10 @@ ON_PAYMENT_REJECTED = "payment.rejected"          # payload: reference, provider
 # payload: charge_id, subscription_id, customer_id, concepto, monto, moneda,
 #          periodo, fecha_vencimiento, referencia, link
 ON_SUBSCRIPTION_CHARGE_CREATED = "subscription.charge_created"
+# HU-SUB-04: cargo impago más allá de los días de gracia → suscripción `vencida`.
+# payload: charge_id, subscription_id, customer_id, concepto, monto, moneda,
+#          periodo, fecha_vencimiento, dias_gracia
+ON_SUBSCRIPTION_PAST_DUE = "subscription.past_due"
 
 
 class EventBus:
