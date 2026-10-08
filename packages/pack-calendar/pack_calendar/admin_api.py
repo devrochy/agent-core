@@ -68,12 +68,40 @@ class TypeOut(BaseModel):
     duration_minutes: int
     description: str
     active: bool
+    # HU-SH-02: colaborador que recibe los avisos de este tipo y enlace de la reunión.
+    responsable_admin_id: uuid.UUID | None = None
+    enlace_reunion: str | None = None
 
 
 class TypeSave(BaseModel):
     name: str
     duration_minutes: int = 60
     description: str = ""
+    responsable_admin_id: uuid.UUID | None = None
+    enlace_reunion: str = ""
+
+
+async def _validar_responsable(tenant_id: uuid.UUID, admin_id: uuid.UUID | None) -> None:
+    """El responsable tiene que ser colaborador de ESTE negocio."""
+    if admin_id is None:
+        return
+    from core.db.models import TenantUser
+
+    async with get_session() as session:
+        miembro = (
+            await session.execute(
+                select(TenantUser.id).where(TenantUser.tenant_id == tenant_id, TenantUser.admin_id == admin_id)
+            )
+        ).first()
+    if miembro is None:
+        raise ApiError.bad_request("El responsable no es colaborador de este negocio.", "responsable_invalido")
+
+
+def _enlace(valor: str) -> str | None:
+    enlace = (valor or "").strip()
+    if enlace and not enlace.startswith(("https://", "http://")):
+        raise ApiError.bad_request("El enlace de la reunión tiene que empezar con https://.", "enlace_invalido")
+    return enlace or None
 
 
 @router.get("/types", response_model=list[TypeOut])
@@ -102,6 +130,8 @@ async def list_types(
             duration_minutes=t.duration_minutes,
             description=t.description or "",
             active=bool(t.active),
+            responsable_admin_id=t.responsable_admin_id,
+            enlace_reunion=t.enlace_reunion,
         )
         for t in rows
     ]
@@ -117,6 +147,7 @@ async def create_type(
         raise ApiError.bad_request("El nombre es obligatorio.", "missing_name")
     if principal.tenant_id is None:
         raise ApiError.bad_request("Sin negocio activo.", "no_tenant")
+    await _validar_responsable(principal.tenant_id, payload.responsable_admin_id)
     async with get_session() as session:
         session.add(
             AppointmentType(
@@ -124,8 +155,35 @@ async def create_type(
                 name=name,
                 duration_minutes=max(5, payload.duration_minutes),
                 description=payload.description,
+                responsable_admin_id=payload.responsable_admin_id,
+                enlace_reunion=_enlace(payload.enlace_reunion),
             )
         )
+    return Response(status_code=204)
+
+
+@router.put("/types/{type_id}", status_code=204)
+async def update_type(
+    type_id: uuid.UUID,
+    payload: TypeSave,
+    principal: Annotated[Principal, Depends(require("pack_calendar:tipos", write=True))],
+) -> Response:
+    """Edita un tipo de cita (HU-SH-02: responsable y enlace de la reunión)."""
+    name = payload.name.strip()
+    if not name:
+        raise ApiError.bad_request("El nombre es obligatorio.", "missing_name")
+    if principal.tenant_id is None:
+        raise ApiError.bad_request("Sin negocio activo.", "no_tenant")
+    await _validar_responsable(principal.tenant_id, payload.responsable_admin_id)
+    async with get_session() as session:
+        tipo = await get_owned(session, AppointmentType, type_id, principal.tenant_id)
+        if tipo is None or tipo.deleted_at is not None:
+            raise ApiError.not_found("Tipo de cita no encontrado.")
+        tipo.name = name
+        tipo.duration_minutes = max(5, payload.duration_minutes)
+        tipo.description = payload.description
+        tipo.responsable_admin_id = payload.responsable_admin_id
+        tipo.enlace_reunion = _enlace(payload.enlace_reunion)
     return Response(status_code=204)
 
 
@@ -227,6 +285,8 @@ class AppointmentOut(BaseModel):
     timezone: str
     # Resultado del aviso al cliente al mover desde el panel; None si no se avisó.
     notification: NotificationOut | None = None
+    customer_id: uuid.UUID | None = None  # HU-SH-02
+    asignado_admin_id: uuid.UUID | None = None
 
 
 @router.get("/appointments", response_model=list[AppointmentOut])
@@ -363,6 +423,8 @@ class AppointmentIn(BaseModel):
     attendee_email: str = ""
     notes: str = ""
     appointment_type_id: uuid.UUID | None = None
+    # HU-SH-02: cliente del negocio al que se le avisa por WhatsApp (opcional).
+    customer_id: uuid.UUID | None = None
 
 
 @router.post("/appointments", response_model=AppointmentOut, status_code=201)
@@ -410,34 +472,89 @@ async def create_appointment(
                 "Google Calendar rechazó la creación (revisá la conexión).", "google_rejected"
             ) from exc
 
+    from core.db.models import Customer
+    from pack_calendar.demo import es_solape
+
+    tipo = None
     async with get_session() as session:
-        cita = Appointment(
-            tenant_id=principal.tenant_id,
-            appointment_type_id=payload.appointment_type_id,
-            title=titulo,
-            attendee_email=attendee,
-            start_at=payload.start_at,
-            end_at=payload.end_at,
-            status="scheduled",
-            notes=notas,
-            google_event_id=google_event_id,
-            created_by="panel",
-            timezone=await _timezone_name(),
-        )
-        session.add(cita)
-        await session.flush()
-        return AppointmentOut(
-            id=cita.id,
-            title=cita.title,
-            attendee_email=cita.attendee_email,
-            start_at=cita.start_at,
-            end_at=cita.end_at,
-            status=cita.status,
-            notes=cita.notes,
-            google_event_id=cita.google_event_id,
-            appointment_type_id=cita.appointment_type_id,
-            created_by=cita.created_by,
-            timezone=cita.timezone,
+        if payload.appointment_type_id is not None:
+            tipo = await get_owned(session, AppointmentType, payload.appointment_type_id, principal.tenant_id)
+        if payload.customer_id is not None:
+            cliente = await session.get(Customer, payload.customer_id)
+            if cliente is None or cliente.tenant_id != principal.tenant_id:
+                raise ApiError.bad_request("El cliente no es de este negocio.", "cliente_invalido")
+    zona = await _timezone_name()
+    try:
+        async with get_session() as session:
+            cita = Appointment(
+                tenant_id=principal.tenant_id,
+                appointment_type_id=payload.appointment_type_id,
+                customer_id=payload.customer_id,
+                title=titulo,
+                attendee_email=attendee,
+                start_at=payload.start_at,
+                end_at=payload.end_at,
+                status="scheduled",
+                notes=notas,
+                google_event_id=google_event_id,
+                created_by="panel",
+                timezone=zona,
+                asignado_admin_id=getattr(tipo, "responsable_admin_id", None),
+            )
+            session.add(cita)
+            await session.flush()
+            out = AppointmentOut(
+                id=cita.id,
+                title=cita.title,
+                attendee_email=cita.attendee_email,
+                start_at=cita.start_at,
+                end_at=cita.end_at,
+                status=cita.status,
+                notes=cita.notes,
+                google_event_id=cita.google_event_id,
+                appointment_type_id=cita.appointment_type_id,
+                created_by=cita.created_by,
+                timezone=cita.timezone,
+                customer_id=cita.customer_id,
+                asignado_admin_id=cita.asignado_admin_id,
+            )
+    except Exception as exc:
+        if es_solape(exc):
+            raise ApiError.bad_request("Ese horario ya está ocupado por otra cita.", "horario_ocupado") from exc
+        raise
+    await _avisar_cita_desde_panel(out, tipo, config)
+    return out
+
+
+async def _avisar_cita_desde_panel(out: AppointmentOut, tipo: Any, config: Any) -> None:
+    """Historial + aviso al equipo y, si la cita tiene cliente, aviso al cliente (HU-SH-02)."""
+    from core.events.outbox import emit_domain
+    from core.shared.events import ON_APPOINTMENT_CONFIRMED
+    from core.shared.tenant import get_current_tenant_id
+    from pack_calendar.config import CalendarConfig
+    from pack_calendar.demo import datos_de_cita, enlace_de
+    from pack_calendar.skills import CalendarSkill
+
+    await CalendarSkill()._record_event(
+        action="programada", title=out.title, appointment_id=out.id, new_start=out.start_at, actor="panel"
+    )
+    tenant_id = get_current_tenant_id()
+    if out.customer_id is None or tenant_id is None:
+        return
+    config = config if isinstance(config, CalendarConfig) else CalendarConfig()
+    datos = datos_de_cita(out.title, out.start_at, out.timezone, enlace_de(tipo, config))
+    async with get_session() as session:
+        await emit_domain(
+            session,
+            tenant_id=tenant_id,
+            topic=ON_APPOINTMENT_CONFIRMED,
+            dedupe_key=f"{ON_APPOINTMENT_CONFIRMED}:{out.id}",
+            payload={
+                "appointment_id": str(out.id),
+                "customer_id": str(out.customer_id),
+                **datos,
+                "texto": config.cita_desde_panel_texto,
+            },
         )
 
 
@@ -811,28 +928,35 @@ async def patch_appointment(
                 conflict,
             )
 
-    async with get_session() as session:
-        row = await get_owned(session, Appointment, appointment_id, principal.tenant_id)
-        if row is None:
-            raise ApiError.not_found("Cita no encontrada.")
-        if payload.title is not None:
-            row.title = payload.title.strip() or row.title
-        if payload.attendee_email is not None:
-            row.attendee_email = payload.attendee_email.strip() or None
-        if payload.notes is not None:
-            row.notes = payload.notes.strip()
-        if payload.appointment_type_id is not None:
-            row.appointment_type_id = payload.appointment_type_id
-        row.start_at = new_start
-        row.end_at = new_end
-        row.updated_at = utcnow()
-        conversation_id = row.conversation_id
-        out = AppointmentOut(
-            id=row.id, title=row.title, attendee_email=row.attendee_email,
-            start_at=row.start_at, end_at=row.end_at, status=row.status, notes=row.notes,
-            google_event_id=row.google_event_id, appointment_type_id=row.appointment_type_id,
-            created_by=row.created_by, timezone=row.timezone,
-        )
+    from pack_calendar.demo import es_solape
+
+    try:
+        async with get_session() as session:
+            row = await get_owned(session, Appointment, appointment_id, principal.tenant_id)
+            if row is None:
+                raise ApiError.not_found("Cita no encontrada.")
+            if payload.title is not None:
+                row.title = payload.title.strip() or row.title
+            if payload.attendee_email is not None:
+                row.attendee_email = payload.attendee_email.strip() or None
+            if payload.notes is not None:
+                row.notes = payload.notes.strip()
+            if payload.appointment_type_id is not None:
+                row.appointment_type_id = payload.appointment_type_id
+            row.start_at = new_start
+            row.end_at = new_end
+            row.updated_at = utcnow()
+            conversation_id = row.conversation_id
+            out = AppointmentOut(
+                id=row.id, title=row.title, attendee_email=row.attendee_email,
+                start_at=row.start_at, end_at=row.end_at, status=row.status, notes=row.notes,
+                google_event_id=row.google_event_id, appointment_type_id=row.appointment_type_id,
+                created_by=row.created_by, timezone=row.timezone,
+            )
+    except Exception as exc:
+        if es_solape(exc):
+            raise ApiError.bad_request("Ese horario ya está ocupado por otra cita.", "horario_ocupado") from exc
+        raise
 
     if moved:
         from pack_calendar.skills import CalendarSkill as _CS
@@ -1048,3 +1172,64 @@ async def oauth_callback(
         log.exception("calendar_oauth_exchange_failed")
         return volver("error")
     return volver("ok")
+
+
+# ---------------------------------------------------------------- asistencia (HU-SH-02)
+class AsistenciaIn(BaseModel):
+    asistio: bool
+
+
+@router.post("/appointments/{appointment_id}/asistencia", response_model=AppointmentOut)
+async def marcar_asistencia(
+    appointment_id: uuid.UUID,
+    payload: AsistenciaIn,
+    principal: Annotated[Principal, Depends(require("pack_calendar:citas", write=True))],
+) -> AppointmentOut:
+    """Marca una cita pasada `asistio` o `no_asistio`. Al `no_asistio`, el asistente le
+    ofrece reagendar al cliente (plantilla si la ventana está cerrada)."""
+    from core.db.models import utcnow
+    from core.events.outbox import emit_domain
+    from core.plugin_manager import plugin_manager
+    from core.shared.events import ON_APPOINTMENT_NO_SHOW
+    from pack_calendar.admin import PLUGIN_ID
+    from pack_calendar.config import CalendarConfig
+    from pack_calendar.demo import datos_de_cita, enlace_de
+
+    try:
+        config = await plugin_manager.load_config(PLUGIN_ID)
+    except Exception:
+        config = None
+    config = config if isinstance(config, CalendarConfig) else CalendarConfig()
+    async with get_session() as session:
+        row = await get_owned(session, Appointment, appointment_id, principal.tenant_id)
+        if row is None or row.deleted_at is not None:
+            raise ApiError.not_found("Cita no encontrada.")
+        if row.status not in ("scheduled", "asistio", "no_asistio"):
+            raise ApiError.bad_request("La cita no está programada.", "cita_no_programada")
+        if row.start_at > utcnow():
+            raise ApiError.bad_request("La asistencia se marca después de la hora de la cita.", "cita_futura")
+        nuevo = "asistio" if payload.asistio else "no_asistio"
+        cambio = row.status != nuevo
+        row.status = nuevo
+        row.updated_at = utcnow()
+        if cambio and nuevo == "no_asistio" and row.customer_id is not None:
+            tipo = await session.get(AppointmentType, row.appointment_type_id) if row.appointment_type_id else None
+            await emit_domain(
+                session,
+                tenant_id=row.tenant_id,
+                topic=ON_APPOINTMENT_NO_SHOW,
+                dedupe_key=f"{ON_APPOINTMENT_NO_SHOW}:{row.id}",
+                payload={
+                    "appointment_id": str(row.id),
+                    "customer_id": str(row.customer_id),
+                    **datos_de_cita(row.title, row.start_at, row.timezone, enlace_de(tipo, config)),
+                    "texto": config.no_asistio_texto,
+                },
+            )
+        return AppointmentOut(
+            id=row.id, title=row.title, attendee_email=row.attendee_email,
+            start_at=row.start_at, end_at=row.end_at, status=row.status, notes=row.notes,
+            google_event_id=row.google_event_id, appointment_type_id=row.appointment_type_id,
+            created_by=row.created_by, timezone=row.timezone,
+            customer_id=row.customer_id, asignado_admin_id=row.asignado_admin_id,
+        )

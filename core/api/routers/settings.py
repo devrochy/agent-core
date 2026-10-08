@@ -664,6 +664,9 @@ EVENTO_LABEL = {
     "subscription.charge_reminder": "Recordatorio de pago",
     "subscription.paused": "Suscripción pausada por mora",
     "subscription.trial_ending": "Fin de la prueba gratis",
+    "appointment.confirmed": "Cita agendada desde el panel",
+    "appointment.reminder": "Recordatorio de cita",
+    "appointment.no_show": "Cita perdida: oferta de reagendar",
 }
 
 class EventTemplateEntry(BaseModel):

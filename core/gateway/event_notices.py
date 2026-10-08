@@ -44,6 +44,15 @@ _VARIABLES_CARGO = {
     "cargo.link": "Link de pago",
 }
 
+_VARIABLES_CITA = {
+    "cliente.nombre": "Nombre del cliente",
+    "cita.titulo": "Tipo o título de la cita",
+    "cita.fecha": "Fecha de la cita",
+    "cita.hora": "Hora de la cita",
+    "cita.zona": "Zona horaria",
+    "cita.enlace": "Enlace de la reunión",
+}
+
 EVENTOS: dict[str, dict[str, str]] = {
     "subscription.charge_created": dict(_VARIABLES_CARGO),
     # HU-SUB-05: recordatorios y pausa por mora.
@@ -59,6 +68,10 @@ EVENTOS: dict[str, dict[str, str]] = {
         "cargo.link": "Link de pago",
         "mora.dias": "Días de mora",
     },
+    # HU-SH-02: citas (al cliente).
+    "appointment.confirmed": dict(_VARIABLES_CITA),
+    "appointment.reminder": dict(_VARIABLES_CITA),
+    "appointment.no_show": dict(_VARIABLES_CITA),
     # HU-SUB-06: oferta de un plan pago antes de que termine la prueba de Free.
     "subscription.trial_ending": {
         "cliente.nombre": "Nombre del cliente",

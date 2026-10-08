@@ -53,6 +53,13 @@ ON_SUBSCRIPTION_PAUSED = "subscription.paused"
 # HU-SUB-06: suscripción activada (alta o cambio de plan) y fin de la prueba de Free
 # (oferta de un plan pago). payload: subscription_id, customer_id, concepto…
 ON_SUBSCRIPTION_ACTIVATED = "subscription.activated"
+# HU-SH-02: citas. Al cliente: confirmación de una cita creada desde el panel,
+# recordatorios y oferta de reagendar si no asistió. Al equipo: creada/reagendada/cancelada.
+# payload: appointment_id, customer_id, titulo, fecha, hora, zona, enlace, texto…
+ON_APPOINTMENT_CONFIRMED = "appointment.confirmed"
+ON_APPOINTMENT_REMINDER = "appointment.reminder"
+ON_APPOINTMENT_NO_SHOW = "appointment.no_show"
+ON_APPOINTMENT_CHANGED = "appointment.changed"
 ON_SUBSCRIPTION_TRIAL_ENDING = "subscription.trial_ending"
 
 

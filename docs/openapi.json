@@ -11342,6 +11342,69 @@
         }
       }
     },
+    "/api/v1/pack/calendar/types/{type_id}": {
+      "put": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Update Type",
+        "description": "Edita un tipo de cita (HU-SH-02: responsable y enlace de la reunión).",
+        "operationId": "update_type_api_v1_pack_calendar_types__type_id__put",
+        "parameters": [
+          {
+            "name": "type_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Type Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TypeSave"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/calendar/types/{type_id}/delete": {
       "post": {
         "tags": [
@@ -12277,6 +12340,76 @@
           }
         }
       }
+    },
+    "/api/v1/pack/calendar/appointments/{appointment_id}/asistencia": {
+      "post": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Marcar Asistencia",
+        "description": "Marca una cita pasada `asistio` o `no_asistio`. Al `no_asistio`, el asistente le\nofrece reagendar al cliente (plantilla si la ventana está cerrada).",
+        "operationId": "marcar_asistencia_api_v1_pack_calendar_appointments__appointment_id__asistencia_post",
+        "parameters": [
+          {
+            "name": "appointment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Appointment Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AsistenciaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppointmentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -12537,6 +12670,18 @@
               }
             ],
             "title": "Appointment Type Id"
+          },
+          "customer_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Customer Id"
           }
         },
         "type": "object",
@@ -12627,6 +12772,30 @@
                 "type": "null"
               }
             ]
+          },
+          "customer_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Customer Id"
+          },
+          "asignado_admin_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asignado Admin Id"
           }
         },
         "type": "object",
@@ -12775,6 +12944,19 @@
         ],
         "title": "ApprovedTemplate",
         "description": "Plantilla aprobada de la conexión de la conversación (HU-ARCH-13)."
+      },
+      "AsistenciaIn": {
+        "properties": {
+          "asistio": {
+            "type": "boolean",
+            "title": "Asistio"
+          }
+        },
+        "type": "object",
+        "required": [
+          "asistio"
+        ],
+        "title": "AsistenciaIn"
       },
       "AttemptRow": {
         "properties": {
@@ -20899,6 +21081,29 @@
           "active": {
             "type": "boolean",
             "title": "Active"
+          },
+          "responsable_admin_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Responsable Admin Id"
+          },
+          "enlace_reunion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enlace Reunion"
           }
         },
         "type": "object",
@@ -20925,6 +21130,23 @@
           "description": {
             "type": "string",
             "title": "Description",
+            "default": ""
+          },
+          "responsable_admin_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Responsable Admin Id"
+          },
+          "enlace_reunion": {
+            "type": "string",
+            "title": "Enlace Reunion",
             "default": ""
           }
         },

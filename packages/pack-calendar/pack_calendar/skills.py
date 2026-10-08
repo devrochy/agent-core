@@ -685,15 +685,29 @@ class CalendarSkill(BaseSkill):
             google_event_id = event.get("id")
             link = event.get("htmlLink", "") or calendar_link
 
-        appt_id = await self._mirror_appointment(
-            arguments,
-            context,
-            start,
-            end,
-            google_event_id=google_event_id,
-            appointment_type_id=getattr(appt_type, "id", None),
-            title=title,
-        )
+        from pack_calendar.demo import HorarioOcupado, datos_de_cita, enlace_de, texto_confirmacion
+
+        try:
+            appt_id = await self._mirror_appointment(
+                arguments,
+                context,
+                start,
+                end,
+                google_event_id=google_event_id,
+                appointment_type_id=getattr(appt_type, "id", None),
+                title=title,
+                asignado_admin_id=getattr(appt_type, "responsable_admin_id", None),
+            )
+        except HorarioOcupado:
+            # HU-SH-02: dos prospectos eligieron el mismo horario a la vez; este perdió.
+            dia = start.astimezone(tz).date().isoformat()
+            alternativas = await self.check_availability({"date": dia, "duration_minutes": duration}, context)
+            return {
+                "status": "rejected",
+                "reason": "occupied",
+                "message": "Ese horario acaba de ocuparse. Ofrecé uno de free_slots.",
+                "free_slots": alternativas.get("free_slots", []),
+            }
         await self._record_event(
             action="programada",
             title=title,
@@ -717,9 +731,13 @@ class CalendarSkill(BaseSkill):
             **_local_when(start, tz),
             "email_sent": email_sent,
             "email_reason": email_reason,
-            # SafeRenderer: el link exacto lo adjunta el core; no se expone `link`
-            # como clave para que el modelo no lo copie a mano (lo duplicaría).
-            "_safe_append": f"📅 Tu cita quedó agendada: {link}" if link else "📅 Tu cita quedó agendada.",
+            # SafeRenderer: la confirmación exacta (fecha, hora, zona y enlace de la reunión,
+            # HU-SH-02) la adjunta el core; el modelo no la redacta.
+            "_safe_append": texto_confirmacion(
+                config.confirmacion_texto,
+                datos_de_cita(title, start, config.timezone, enlace_de(appt_type, config)),
+            )
+            + (f"\n🗓️ Agregala a tu calendario: {link}" if link else ""),
         }
 
     async def _mirror_appointment(
@@ -732,6 +750,7 @@ class CalendarSkill(BaseSkill):
         google_event_id: str | None = None,
         appointment_type_id: uuid.UUID | None = None,
         title: str = "",
+        asignado_admin_id: uuid.UUID | None = None,
     ) -> uuid.UUID | None:
         """Espeja la cita en la tabla del pack (fuente de verdad en modo interno).
 
@@ -765,11 +784,17 @@ class CalendarSkill(BaseSkill):
                     status="scheduled",
                     created_by="assistant",
                     timezone=await self._timezone_name(),
+                    asignado_admin_id=asignado_admin_id,
                 )
                 session.add(row)
                 await session.flush()
                 return row.id
-        except Exception:  # nunca tumbar el agendamiento real por el espejo
+        except Exception as exc:  # nunca tumbar el agendamiento real por el espejo
+            from pack_calendar.demo import HorarioOcupado, es_solape
+
+            if es_solape(exc):
+                # En modo interno la fila ES la cita: otra reserva ganó el horario.
+                raise HorarioOcupado from exc
             from core.shared.logger import get_logger
 
             get_logger(__name__).warning("calendar_mirror_failed", exc_info=True)
@@ -796,18 +821,30 @@ class CalendarSkill(BaseSkill):
             from core.db.session import get_session
 
             async with get_session() as session:
-                session.add(
-                    AppointmentEvent(
-                        tenant_id=tenant_id,
-                        appointment_id=appointment_id,
-                        action=action,
-                        title=title,
-                        old_start_at=old_start,
-                        new_start_at=new_start,
-                        actor=actor,
-                        conversation_id=_as_uuid(conversation_id),
-                    )
+                evento = AppointmentEvent(
+                    tenant_id=tenant_id,
+                    appointment_id=appointment_id,
+                    action=action,
+                    title=title,
+                    old_start_at=old_start,
+                    new_start_at=new_start,
+                    actor=actor,
+                    conversation_id=_as_uuid(conversation_id),
                 )
+                session.add(evento)
+                await session.flush()
+                if appointment_id is not None and action in ("programada", "reprogramada", "cancelada"):
+                    # HU-SH-02: el equipo se entera de cada cita nueva, reagendada o cancelada.
+                    from pack_calendar.demo import emitir_cambio
+
+                    await emitir_cambio(
+                        session,
+                        appointment_id=appointment_id,
+                        accion=action,
+                        titulo=title,
+                        inicio=new_start,
+                        evento_id=evento.id,
+                    )
         except Exception:
             from core.shared.logger import get_logger
 
@@ -1056,12 +1093,23 @@ class CalendarSkill(BaseSkill):
         from pack_calendar.models import Appointment
 
         old_start = appt.start_at
-        async with get_session() as session:
-            row = await get_owned(session, Appointment, appt.id, get_current_tenant_id())
-            if row is not None:
-                row.start_at = start
-                row.end_at = end
-                row.updated_at = utcnow()
+        from pack_calendar.demo import es_solape
+
+        try:
+            async with get_session() as session:
+                row = await get_owned(session, Appointment, appt.id, get_current_tenant_id())
+                if row is not None:
+                    row.start_at = start
+                    row.end_at = end
+                    row.updated_at = utcnow()
+        except Exception as exc:
+            if not es_solape(exc):
+                raise
+            return {
+                "status": "rejected",
+                "reason": "occupied",
+                "message": "Ese horario acaba de ocuparse. Ofrecé otro de check_availability.",
+            }
 
         await self._record_event(
             action="reprogramada",
