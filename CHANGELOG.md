@@ -1,5 +1,11 @@
 # Changelog
 
+## Sin versión — La sincronización de plantillas acepta `quality_score` de Graph v26 (2026-10-08)
+
+- Graph v26 devuelve `quality_score` como objeto (`{"score", "date"}`) y `sync_templates` lo insertaba en una columna de
+  texto: el INSERT fallaba y ninguna plantilla se sincronizaba (visto en test al preparar la verificación de
+  HU-ARCH-13). Ahora se guarda el `score`.
+
 ## Sin versión — Plantillas de WhatsApp por evento fuera de la ventana de 24 h (2026-10-08)
 
 - HU-ARCH-13 / ADR-0108. Cada negocio mapea evento → plantilla aprobada (`app_settings.message_templates_map`,
