@@ -1,0 +1,33 @@
+{
+  "id": "cobranza",
+  "version": 1,
+  "nombre": "Cobranza",
+  "descripcion": "Cartera de créditos: saldo, estado de cuenta, negociación y promesas de pago.",
+  "plan_minimo": "premium",
+  "packs": [
+    "pack_cobranza"
+  ],
+  "playbooks": [
+    "cobranza",
+    "seguimiento-cobranza"
+  ],
+  "persona": {
+    "tone": "formal",
+    "warmth": 3,
+    "emojis": "none"
+  },
+  "app_settings": {
+    "split_style": "un_mensaje",
+    "language": "es",
+    "currency": "COP"
+  },
+  "conexiones_requeridas": [
+    "whatsapp"
+  ],
+  "pasos_de_activacion": [
+    "conectar_whatsapp",
+    "cargar_cartera",
+    "invitar_gestores"
+  ],
+  "golden_set": "cobranza-base"
+}

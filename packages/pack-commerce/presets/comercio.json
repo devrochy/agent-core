@@ -1,0 +1,30 @@
+{
+  "config": {
+    "order_prefix": "OC",
+    "scoring_mode": "auto"
+  },
+  "seed": {
+    "category_paths": [
+      [
+        "Productos"
+      ]
+    ],
+    "products": [
+      {
+        "name": "Producto de ejemplo",
+        "description": "Reemplázalo por tu catálogo real.",
+        "category_path": [
+          "Productos"
+        ],
+        "variants": [
+          {
+            "sku": "EJEMPLO-001",
+            "price": 50000,
+            "stock": 10,
+            "attributes": {}
+          }
+        ]
+      }
+    ]
+  }
+}

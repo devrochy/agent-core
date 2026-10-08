@@ -1078,6 +1078,12 @@ class CRMModule(BaseModule):
         """API pública del pack (ADR-0057): intake de leads desde landings."""
         return [leads_router]
 
+    async def seed_data(self, tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
+        """Catálogo de ejemplo o del negocio (ADR-0083, ADR-0110). Idempotente."""
+        from pack_commerce.seed import seed_catalog
+
+        return await seed_catalog(tenant_id, data)
+
     def on_activate(self, host: MCPHost) -> None:
         host.register_skill(LeadSkill())
         host.register_skill(CatalogSkill())

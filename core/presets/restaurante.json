@@ -1,0 +1,34 @@
+{
+  "id": "restaurante",
+  "version": 1,
+  "nombre": "Restaurante",
+  "descripcion": "Restaurante o domicilios: menú, pedido para domicilio o para recoger y pago en línea.",
+  "plan_minimo": "basic",
+  "packs": [
+    "pack_commerce",
+    "pack_payments"
+  ],
+  "playbooks": [
+    "ventas",
+    "pagos"
+  ],
+  "persona": {
+    "tone": "cercano",
+    "warmth": 5,
+    "emojis": "sparse"
+  },
+  "app_settings": {
+    "split_style": "un_mensaje",
+    "language": "es",
+    "currency": "COP"
+  },
+  "conexiones_requeridas": [
+    "whatsapp"
+  ],
+  "pasos_de_activacion": [
+    "conectar_whatsapp",
+    "cargar_menu",
+    "configurar_pagos"
+  ],
+  "golden_set": "restaurante-base"
+}

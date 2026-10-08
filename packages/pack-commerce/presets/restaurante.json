@@ -1,0 +1,80 @@
+{
+  "config": {
+    "order_prefix": "PED",
+    "checkout_fields": {
+      "domicilio": [
+        "full_name",
+        "address",
+        "city",
+        "phone"
+      ],
+      "recoger_en_tienda": [
+        "full_name",
+        "phone"
+      ],
+      "plan": [
+        "full_name",
+        "phone",
+        "email"
+      ]
+    }
+  },
+  "seed": {
+    "category_paths": [
+      [
+        "Menú",
+        "Platos fuertes"
+      ],
+      [
+        "Menú",
+        "Bebidas"
+      ]
+    ],
+    "products": [
+      {
+        "name": "Plato del día",
+        "description": "Ejemplo: reemplázalo por tu menú.",
+        "category_path": [
+          "Menú",
+          "Platos fuertes"
+        ],
+        "variants": [
+          {
+            "sku": "MENU-PLATO-DIA",
+            "price": 25000,
+            "stock": 50,
+            "attributes": {}
+          }
+        ]
+      },
+      {
+        "name": "Limonada natural",
+        "description": "Ejemplo de bebida.",
+        "category_path": [
+          "Menú",
+          "Bebidas"
+        ],
+        "variants": [
+          {
+            "sku": "MENU-LIMONADA",
+            "price": 8000,
+            "stock": 50,
+            "attributes": {}
+          }
+        ]
+      }
+    ],
+    "complement_pairs": [
+      [
+        [
+          "Menú",
+          "Platos fuertes"
+        ],
+        [
+          "Menú",
+          "Bebidas"
+        ]
+      ]
+    ]
+  }
+}
