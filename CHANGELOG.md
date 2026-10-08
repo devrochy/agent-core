@@ -1,5 +1,13 @@
 # Changelog
 
+## Sin versión — El beat agenda los crons de los packs (2026-10-08)
+
+- Ningún cron de pack se despachaba: Celery crea el planificador del beat (copiando `beat_schedule`) antes de emitir
+  `beat_init`, que es donde se cargan los packs y corren sus `@register_cron`. El handler ahora vuelve a pasarle el
+  `beat_schedule` al planificador. Afectaba a suscripciones (`generar_cargos`, `marcar_vencidas`, `avisos_de_cobro`),
+  cobranza (`marcar_mora`, `cierre_diario`, `generar_cargos_suscripcion`) y commerce (follow-ups,
+  `reintentar_activaciones`). Visto al verificar HU-SUB-09 en test.
+
 ## Sin versión — La respuesta sale por donde escribió el cliente (2026-10-08)
 
 - Un cliente que había escrito por WhatsApp Web (QR) le escribió al número de Meta del mismo negocio: el mensaje

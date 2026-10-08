@@ -253,8 +253,19 @@ def _load_plugins_on_worker_start(**_kwargs: object) -> None:
 
 
 @beat_init.connect
-def _load_plugins_on_beat_start(**_kwargs: object) -> None:
+def _load_plugins_on_beat_start(sender: object = None, **_kwargs: object) -> None:
     """El beat NO ejecuta `worker_init`: sin este escaneo, los `@register_cron`
     de los packs nunca entran al `beat_schedule` y sus crons (p. ej. los
-    follow-ups de pack-commerce) no se programan."""
+    follow-ups de pack-commerce) no se programan.
+
+    Celery crea el planificador (y le copia `beat_schedule`) ANTES de emitir
+    `beat_init`, así que lo que registran los packs aquí hay que volver a
+    pasárselo al planificador ya creado. Sin eso, ningún cron de pack se
+    despachaba (visto al verificar HU-SUB-09 en test: el beat arrancaba a las
+    16:09:23 y los crons se registraban 16:09:24, sin un solo envío después).
+    """
     _load_plugins()
+    scheduler = getattr(sender, "scheduler", None)
+    if scheduler is not None:
+        scheduler.merge_inplace(celery.conf.beat_schedule)
+        log.info("beat_schedule_cargado", tareas=sorted(scheduler.schedule))
