@@ -16,6 +16,7 @@ from core.gateway.meta_health import (
     check_token_valid,
     check_webhook_override,
     check_webhook_subscribed,
+    checks_de_salud,
     decide_status,
     merge_health,
     next_status,
@@ -319,6 +320,38 @@ def test_merge_health_conserva_lo_que_no_es_un_check():
 def test_merge_health_sin_previo_son_los_checks():
     checks = {"token_valid": {"ok": True}}
     assert merge_health(None, checks) == checks
+
+
+def test_checks_de_salud_lista_solo_los_checks_en_orden():
+    """HU-CONN-04: el panel listaba como chequeos los datos del alta (`coexistence`...)."""
+    health = {
+        "templates": {"ok": True, "detail": "7 plantillas"},
+        "coexistence": True,
+        "token_scope_check": {"ok": True, "has_whatsapp_scope": True},
+        "webhook_subscription_active": True,
+        "billing": {"ok": None, "detail": "Estado manual: al_dia", "manual_status": "al_dia"},
+        "number_registered:222": {"ok": True},
+        "number_registered:111": {"ok": False, "detail": "status=BANNED"},
+        "token_valid": {"ok": False, "detail": "Token inválido", "repair_action": "reauthorize",
+                        "checked_at": "2026-10-08T18:00:00+00:00"},
+        "algo_nuevo": {"ok": True},
+        "sin_ok": {"detail": "no es un check"},
+    }
+
+    checks = checks_de_salud(health)
+
+    assert [c["key"] for c in checks] == [
+        "token_valid", "number_registered:111", "number_registered:222", "templates", "billing", "algo_nuevo",
+    ]
+    assert checks[0] == {
+        "key": "token_valid", "ok": False, "detail": "Token inválido", "repair_action": "reauthorize",
+        "checked_at": "2026-10-08T18:00:00+00:00",
+    }
+
+
+def test_checks_de_salud_sin_salud_es_vacio():
+    assert checks_de_salud(None) == []
+    assert checks_de_salud({}) == []
 
 
 class _Result:

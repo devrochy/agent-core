@@ -60,6 +60,17 @@ if TYPE_CHECKING:
 router = APIRouter(prefix="/admin/meta", tags=["admin · meta"])
 
 
+class HealthCheck(BaseModel):
+    """Un check del último diagnóstico. `ok`: `None` = no se pudo evaluar.
+    `repair_action`: id corto que la UI traduce a un botón o a una ruta."""
+
+    key: str
+    ok: bool | None
+    detail: str | None = None
+    repair_action: str | None = None
+    checked_at: datetime | None = None
+
+
 class HealthConnection(BaseModel):
     id: uuid.UUID
     channel: str
@@ -67,7 +78,10 @@ class HealthConnection(BaseModel):
     status: str
     status_reason: str | None
     last_health_check_at: datetime | None
+    # `health` crudo: incluye datos del alta que no son checks. Para mostrar, `checks`.
     health: dict[str, Any]
+    checks: list[HealthCheck] = []
+    billing_manual_status: str | None = None
     business_id: str | None
     meta_app_id: str
     token_expires_at: datetime | None = None
