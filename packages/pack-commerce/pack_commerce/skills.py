@@ -293,8 +293,10 @@ def _campos_requeridos(config, es_plan: bool, delivery_method: str) -> list[str]
     retiro en tienda la lista `recoger_en_tienda`; el resto, la de `domicilio`.
     """
     campos = getattr(config, "checkout_fields", None) or {}
-    if es_plan and "plan" in campos:
-        return list(campos["plan"])
+    if es_plan:
+        # Un plan nunca pide dirección, aunque la config guardada del negocio sea anterior
+        # a la clave `plan` (antes caía en la lista de domicilio).
+        return list(campos.get("plan") or ["full_name", "id_document"])
     if delivery_method in campos:
         return list(campos[delivery_method])
     return list(campos.get("domicilio", ["full_name", "id_document", "address", "municipality", "city"]))
@@ -823,6 +825,10 @@ class OrderSkill(BaseSkill):
                         "delivery_method": {
                             "type": "string",
                             "enum": ["domicilio", "recoger_en_tienda"],
+                            "description": (
+                                "Cómo recibe el pedido. No aplica a planes o suscripciones (son un "
+                                "servicio): en ese caso omitilo y no se lo preguntes al cliente."
+                            ),
                         },
                         "customer_data": {
                             "type": "object",
@@ -850,7 +856,7 @@ class OrderSkill(BaseSkill):
                             ),
                         },
                     },
-                    "required": ["quote_id", "payment_method", "delivery_method", "customer_data"],
+                    "required": ["quote_id", "payment_method", "customer_data"],
                 },
                 handler=self.crear_pedido,
             ),
@@ -1222,7 +1228,7 @@ class OrderSkill(BaseSkill):
             return {
                 "error": "Método de pago no válido. Usa 'efectivo_contraentrega', 'transferencia' o 'pago_en_linea'."
             }
-        if delivery_method not in DELIVERY_METHODS:
+        if delivery_method and delivery_method not in DELIVERY_METHODS:
             return {"error": "Método de entrega no válido. Usa 'domicilio' o 'recoger_en_tienda'."}
         if _parse_uuid(quote_id) is None:
             return {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
@@ -1274,6 +1280,11 @@ class OrderSkill(BaseSkill):
                 return {"error": "La cotización no tiene productos."}
 
             es_plan = await _es_pedido_de_plan(session, [i.variant_id for i in items])
+            if not delivery_method:
+                if not es_plan:
+                    return {"error": "Falta el método de entrega: 'domicilio' o 'recoger_en_tienda'."}
+                # Un plan es un servicio: no se pregunta cómo se entrega (journeys HU-SUB-12).
+                delivery_method = "recoger_en_tienda"
             if es_plan and _float(quote.total) > 0:
                 bloqueo = await segundo_plan_bloqueado(context.customer_id, [i.variant_id for i in items])
                 if bloqueo:
@@ -1421,6 +1432,10 @@ class OrderSkill(BaseSkill):
             "delivery_method": delivery_method,
             "entregado_en": f"{customer_data.get('address')}, {customer_data.get('municipality')}, {customer_data.get('city')}",
         }
+        if es_plan:
+            # Un plan no se entrega: sin "None, None, None" ni método de entrega en la respuesta.
+            result.pop("entregado_en")
+            result.pop("delivery_method")
         if payment_method == "transferencia":
             transfer_block = await _transfer_safe_append()
             template = getattr(config, "order_confirmed_transfer_message", "") or ""
