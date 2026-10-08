@@ -497,3 +497,62 @@ async def test_un_reintento_que_falla_al_suscribir_deja_la_waba_sin_suscribir(mo
     assert len(wabas) == (1 if misma_waba else 2)
     assert not any(waba.subscribed for waba in wabas)
     assert (await _fila(tid, cid)).status == "error"
+
+
+async def test_diagnosticar_con_el_token_invalido_pasa_a_error_y_dice_por_que(monkeypatch) -> None:
+    """HU-CONN-04 · sin verde falso: una conexión `connected` cuyo token Meta ya no acepta."""
+    from core.admin.meta_health_service import diagnose_connection, health_overview
+    from core.shared.tenant import tenant_scope
+
+    tid = await _tenant()
+    cid, _ = await _conexion(tid, "connected", health={"coexistence": True})
+    token_invalido = {
+        "ok": False, "detail": "Meta reporta el token como inválido -- requiere reautorización.",
+        "repair_action": "reauthorize",
+    }
+    _checks_falsos(monkeypatch, {**VERIFICADO, "token_valid": token_invalido})
+
+    async with tenant_scope(tid):
+        assert await diagnose_connection(tid, str(cid)) is None
+        fila = await _fila(tid, cid)
+        assert fila.status == "error"
+        assert "token_valid" in (fila.status_reason or "")
+
+        (conexion,) = [c for c in await health_overview(tid) if c["id"] == cid]
+    claves = [c["key"] for c in conexion["checks"]]
+    assert claves[0] == "token_valid" and "coexistence" not in claves
+    assert conexion["checks"][0]["repair_action"] == "reauthorize"
+    assert conexion["checks"][0]["detail"] == token_invalido["detail"]
+
+
+async def test_marcar_la_facturacion_deja_el_check_con_el_estado_nuevo() -> None:
+    """Guardar solo `manual_status` sacaba `billing` de la lista hasta el próximo diagnóstico."""
+    from core.admin.meta_health_service import health_overview, set_billing_status
+    from core.shared.tenant import tenant_scope
+
+    tid = await _tenant()
+    cid, _ = await _conexion(tid, "connected")
+
+    async with tenant_scope(tid):
+        assert await set_billing_status(tid, str(cid), "ok") is None
+        (conexion,) = [c for c in await health_overview(tid) if c["id"] == cid]
+    (billing,) = [c for c in conexion["checks"] if c["key"] == "billing"]
+    assert billing["ok"] is None
+    assert "ok" in billing["detail"] and billing["repair_action"] == "configure_billing"
+    assert conexion["billing_manual_status"] == "ok"
+
+
+async def test_la_salud_no_lista_las_conexiones_eliminadas() -> None:
+    from core.admin.meta_health_service import health_overview
+    from core.db.models import MetaConnection, utcnow
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid = await _tenant()
+    viva, _ = await _conexion(tid, "connected")
+    borrada, _ = await _conexion(tid, "revoked")
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            (await session.get(MetaConnection, borrada)).deleted_at = utcnow()
+        ids = {c["id"] for c in await health_overview(tid)}
+    assert viva in ids and borrada not in ids

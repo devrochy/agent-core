@@ -528,6 +528,47 @@ def misma_conexion(snapshot: MetaConnection, locked: MetaConnection) -> bool:
 _NO_SON_CHECKS = ("coexistence", "token_scope_check", "webhook_subscription_active")
 
 
+# Orden en que se muestran los checks: primero los que cortan la conexión. Postgres no
+# conserva el orden de las claves de un `jsonb`.
+_ORDEN_DE_CHECKS = (
+    "token_valid",
+    "app_subscription_active",
+    OWN_APP_SUBSCRIBED,
+    "webhook_subscribed",
+    "number_registered",
+    "webhook_override",
+    "templates",
+    "billing",
+)
+
+
+def _orden(key: str) -> tuple[int, str]:
+    base = key.split(":", 1)[0]  # `number_registered:<phone_number_id>` con varios números
+    return (_ORDEN_DE_CHECKS.index(base) if base in _ORDEN_DE_CHECKS else len(_ORDEN_DE_CHECKS), key)
+
+
+def checks_de_salud(health: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Los checks de `health`, en orden y sin lo que no es un check (HU-CONN-04).
+
+    `health` guarda también datos del alta (`_NO_SON_CHECKS`), y el panel los listaba como
+    chequeos. Un check es un objeto con `ok`; `billing` lleva además el `manual_status`."""
+    checks = []
+    for key in sorted((health or {}).keys(), key=_orden):
+        value = (health or {})[key]
+        if key in _NO_SON_CHECKS or not isinstance(value, dict) or "ok" not in value:
+            continue
+        checks.append(
+            {
+                "key": key,
+                "ok": value.get("ok"),
+                "detail": value.get("detail"),
+                "repair_action": value.get("repair_action"),
+                "checked_at": value.get("checked_at"),
+            }
+        )
+    return checks
+
+
 def merge_health(previous: dict[str, Any] | None, checks: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """`health` nuevo: los checks del diagnóstico más lo que no es un check.
 

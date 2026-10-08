@@ -21,12 +21,16 @@ from core.db.session import get_owned, get_session
 
 async def health_overview(tenant_id: uuid.UUID) -> list[dict[str, Any]]:
     from core.gateway.meta_credentials import access_token_expires_at
+    from core.gateway.meta_health import checks_de_salud
 
     async with get_session() as session:
         rows = (
             (
                 await session.execute(
-                    select(MetaConnection).where(MetaConnection.tenant_id == tenant_id)
+                    # Una conexión eliminada no tiene salud que mostrar.
+                    select(MetaConnection).where(
+                        MetaConnection.tenant_id == tenant_id, MetaConnection.deleted_at.is_(None)
+                    )
                 )
             )
             .scalars()
@@ -44,6 +48,8 @@ async def health_overview(tenant_id: uuid.UUID) -> list[dict[str, Any]]:
                 "status_reason": c.status_reason,
                 "last_health_check_at": c.last_health_check_at,
                 "health": dict(c.health or {}),
+                "checks": checks_de_salud(c.health),
+                "billing_manual_status": ((c.health or {}).get("billing") or {}).get("manual_status"),
                 "business_id": c.business_id,
                 "meta_app_id": c.meta_app_id,
                 "token_expires_at": exp,
@@ -145,9 +151,13 @@ async def set_billing_status(
         connection = await get_owned(session, MetaConnection, cid, tenant_id)
         if connection is None:
             return "Conexión no encontrada"
-        health = dict(connection.health or {})
-        health["billing"] = {"manual_status": manual_status}
-        connection.health = health
+        from core.gateway.meta_health import check_billing
+
+        # El check se rearma con el estado nuevo: guardar solo `manual_status` lo sacaba de
+        # la lista de checks hasta el próximo diagnóstico, y el detalle quedaba viejo.
+        connection.health = {**(connection.health or {}), "billing": {"manual_status": manual_status}}
+        billing = check_billing(connection).model_dump(mode="json")
+        connection.health = {**connection.health, "billing": {**billing, "manual_status": manual_status}}
     return None
 
 

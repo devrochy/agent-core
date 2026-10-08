@@ -15438,6 +15438,66 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "HealthCheck": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "repair_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repair Action"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "ok"
+        ],
+        "title": "HealthCheck",
+        "description": "Un check del último diagnóstico. `ok`: `None` = no se pudo evaluar.\n`repair_action`: id corto que la UI traduce a un botón o a una ruta."
+      },
       "HealthConnection": {
         "properties": {
           "id": {
@@ -15484,6 +15544,25 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Health"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/HealthCheck"
+            },
+            "type": "array",
+            "title": "Checks",
+            "default": []
+          },
+          "billing_manual_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billing Manual Status"
           },
           "business_id": {
             "anyOf": [
