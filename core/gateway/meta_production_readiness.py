@@ -14,8 +14,8 @@ este stack (ver docs/adr para el ADR completo):
 - `service_role` key / "exposed schemas" (PostgREST) -> no hay Supabase.
   El análogo real es RLS con FORCE (migración 0029) + grants de Postgres
   sobre el schema `meta_private`.
-- pgTap -> se reusan los tests pytest de aislamiento multi-tenant ya
-  existentes, corridos por subprocess.
+- pgTap -> los tests pytest de aislamiento multi-tenant corren en CI; el check
+  `rls_tests_pass` solo informa el commit desplegado (no corre tests en el servidor).
 - `NEXT_PUBLIC_*` -> no hay bundler ni env vars expuestas al cliente en
   este panel Jinja2 server-rendered. Se reinterpreta como: ningún template
   interpola un campo cuyo nombre contenga SECRET/SERVICE_ROLE/TOKEN.
@@ -27,8 +27,6 @@ import base64
 import hashlib
 import json
 import re
-import subprocess
-import sys
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -220,21 +218,26 @@ async def check_rls_forced() -> PreflightCheck:
 
 
 def check_rls_tests_pass() -> PreflightCheck:
-    """Traduce "correr los tests pgTap de RLS" -- no existe pgTap acá, se
-    reusan los tests pytest de aislamiento multi-tenant ya existentes."""
-    now = datetime.now(UTC)
+    """Informa dónde se verifican los tests de aislamiento multi-tenant: en CI.
+
+    Antes corría `pytest tests/integration` en el proceso, pero la imagen desplegada no
+    trae pytest ni `tests/` (siempre daba exit=1) y, si los trajera, esos tests crean
+    negocios en la base configurada: en un entorno real ensuciarían datos. El CI los
+    corre con su propia base en cada PR (job build-and-test). `ok=None` = no concluyente
+    desde aquí; el aislamiento en runtime lo cubre `rls_forced`.
+    """
     import os
 
-    env = {**os.environ, "AGENT_CORE_INTEGRATION": "1"}
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest", "tests/integration", "-k", "tenant or rls or aislad or aislamiento", "-q"],
-        cwd=ROOT, env=env, capture_output=True, text=True, timeout=180,
+    now = datetime.now(UTC)
+    commit = (os.environ.get("SOURCE_COMMIT") or "")[:7]
+    rama = os.environ.get("COOLIFY_BRANCH") or ""
+    desplegado = f"commit desplegado {commit}" + (f" ({rama})" if rama else "") if commit else "commit desplegado desconocido"
+    return PreflightCheck(
+        key="rls_tests_pass",
+        ok=None,
+        detail=f"Los tests de aislamiento multi-tenant corren en CI (build-and-test), no en el servidor; {desplegado}.",
+        checked_at=now,
     )
-    if result.returncode != 0:
-        return PreflightCheck(
-            key="rls_tests_pass", ok=False, detail=f"pytest exit={result.returncode}: {result.stdout[-300:]}", checked_at=now
-        )
-    return PreflightCheck(key="rls_tests_pass", ok=True, detail="Tests de aislamiento multi-tenant en verde", checked_at=now)
 
 
 def _looks_like_secret_field(dotted_name: str) -> bool:
