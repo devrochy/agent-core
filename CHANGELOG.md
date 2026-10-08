@@ -1,5 +1,12 @@
 # Changelog
 
+## Sin versión — `crm_0009` no trunca el número de pedido al migrar (2026-10-08)
+
+- El backfill de `public_order_number` repetía `'OC-' || lpad(order_seq::text, 4, '0')`, y `lpad` **trunca** en
+  Postgres: los pedidos 83790..83799 quedaban todos `OC-8379` y el índice único `(tenant_id, public_order_number)`
+  abortaba la migración (visto en la base local: seq 837966..837971). Ahora rellena hasta 4 dígitos sin cortar
+  (`OC-0042`, `OC-837966`). Donde `crm_0009` ya corrió sin pedidos ≥ 10.000 (test) el resultado es el mismo.
+
 ## Sin versión — La sincronización de plantillas acepta `quality_score` de Graph v26 (2026-10-08)
 
 - Graph v26 devuelve `quality_score` como objeto (`{"score", "date"}`) y `sync_templates` lo insertaba en una columna de
