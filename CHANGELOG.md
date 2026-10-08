@@ -1,5 +1,11 @@
 # Changelog
 
+## Sin versión — Los push de la app usan el canal de Android de la app (2026-10-08)
+
+- Los mensajes a Expo no llevaban `channelId`, así que Android los mostraba por el canal de respaldo de FCM
+  (`fcm_fallback_notification_channel`), sin la importancia ni el sonido que configura la app. Visto al verificar
+  HU-APP-05 en el OPPO. Ahora van con `channelId: "solvershub-general"` (`CANAL_DEFAULT` de la app).
+
 ## Sin versión — Ciclo de vida correcto de la suscripción (2026-10-08)
 
 - HU-SUB-04. El período sale del calendario (`periodicidad` mensual/trimestral/anual + `dia_ancla`, migración
