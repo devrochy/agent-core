@@ -1,5 +1,14 @@
 # Changelog
 
+## Sin versión — Una tool que pide relevo humano escala (2026-10-08)
+
+- `pack_commerce` devolvía `{"error": ..., "escalate": True}` con un pedido por encima de `monto_alto_threshold`, pero
+  ningún punto del core leía la clave: el pedido no pasaba a un humano y el LLM veía un error genérico. Ahora el loop,
+  ante un resultado de tool con `"escalate": True` (o un `BusinessError(escalate=True)`), escala con el mecanismo
+  nativo (`plugin:<tool>`, con el error como resumen: pausa el bot, push a los dueños), no ejecuta el resto del lote y
+  cierra el turno con la respuesta de escalamiento. Solo cuenta `True` literal, y solo de tools registradas (pack/core):
+  una tool declarativa devuelve datos de una API externa y su `escalate` se descarta (invariante 7).
+
 ## Sin versión — Un reintento BYOK fallido no se queda con el número (2026-10-08)
 
 - `save_byok_connection` reasignaba el número a la conexión del intento antes de guardar tokens y suscribir; si eso
