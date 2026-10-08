@@ -133,6 +133,35 @@ async def test_number_registered_no_verificado_falla(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_number_registered_conectado_sin_codigo_pasa(monkeypatch):
+    """Número de prueba de Meta (o registrado sin código SMS): `status=CONNECTED` y
+    `code_verification_status=NOT_VERIFIED`. Envía de verdad (verificado en test el
+    2026-10-08), así que no es un fallo de salud."""
+
+    async def _fake_graph_fetch(*a, **k):
+        return {"status": "CONNECTED", "quality_rating": "GREEN", "code_verification_status": "NOT_VERIFIED"}
+
+    monkeypatch.setattr(health_mod, "graph_fetch", _fake_graph_fetch)
+
+    check = await check_number_registered("phone-1", "tok", "secret", "v21.0", uuid.uuid4())
+    assert check.ok is True
+    assert "NOT_VERIFIED" in check.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("estado", ["DISCONNECTED", "PENDING", "BANNED", "RESTRICTED", "FLAGGED"])
+async def test_number_registered_no_conectado_falla_aunque_este_verificado(monkeypatch, estado):
+    async def _fake_graph_fetch(*a, **k):
+        return {"status": estado, "quality_rating": "GREEN", "code_verification_status": "VERIFIED"}
+
+    monkeypatch.setattr(health_mod, "graph_fetch", _fake_graph_fetch)
+
+    check = await check_number_registered("phone-1", "tok", "secret", "v21.0", uuid.uuid4())
+    assert check.ok is False
+    assert estado in check.detail
+
+
+@pytest.mark.asyncio
 async def test_number_registered_quality_red_dispara_alerta(monkeypatch):
     alerts = []
 
