@@ -207,3 +207,25 @@ async def _reintentar_activaciones() -> int:
     if total:
         log.info("planes_activados_al_reintentar", total=total)
     return total
+
+
+@register_cron(PACK_ID, "5 * * * *")
+async def sincronizar_precios_de_plan() -> None:
+    """Precio de los planes de la plataforma desde core/billing (HU-SH-01)."""
+    await _sincronizar_precios_de_plan()
+
+
+async def _sincronizar_precios_de_plan() -> int:
+    from pack_commerce.precios_de_plan import sincronizar
+
+    total = 0
+    for tenant_id in await _tenant_ids():
+        try:
+            async with tenant_scope(tenant_id):
+                async with get_session() as session:
+                    total += await sincronizar(session, tenant_id)
+        except Exception:
+            log.exception("precios_de_plan_fallido", tenant_id=str(tenant_id))
+    if total:
+        log.info("precios_de_plan_sincronizados", total=total)
+    return total

@@ -184,6 +184,8 @@ async def apply_preset(tenant_id: uuid.UUID, preset_id: str) -> PresetResult:
     from core.plugin_manager import plugin_manager
 
     manifest = load_preset(preset_id)
+    if manifest.proveedor_suscripciones and manifest.proveedor_suscripciones not in manifest.packs:
+        raise PresetError(f"El preset {preset_id} fija un proveedor que no está entre sus packs")
     plugin_manager.scan()
     modules = {}
     for pack_id in manifest.packs:
@@ -207,6 +209,11 @@ async def apply_preset(tenant_id: uuid.UUID, preset_id: str) -> PresetResult:
 
         resultado.spec_version = await _actualizar_spec(manifest, resultado.habilitados, tenant_id)
         await _actualizar_app_settings(manifest, tenant_id)
+        if manifest.proveedor_suscripciones in resultado.habilitados:
+            from core.subscriptions import guardar_proveedor
+
+            await guardar_proveedor(tenant_id, manifest.proveedor_suscripciones)
+            resultado.pasos.append(f"proveedor de suscripciones: {manifest.proveedor_suscripciones}")
 
         for pack_id in resultado.habilitados:
             fragmento = load_fragment(pack_id, preset_id, modules[pack_id].config_schema)

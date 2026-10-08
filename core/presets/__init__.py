@@ -61,6 +61,9 @@ class PresetManifest(BaseModel):
     conexiones_requeridas: list[str] = Field(default_factory=list)
     pasos_de_activacion: list[str] = Field(default_factory=list)
     golden_set: str | None = None
+    # HU-SH-01: proveedor de suscripciones que fija el preset (HU-SUB-09); debe ser
+    # uno de sus packs. Solo se guarda si queda habilitado.
+    proveedor_suscripciones: str | None = None
 
 
 @dataclass(frozen=True)

@@ -387,10 +387,13 @@ async def onboard_tenant(
     return tenant_id, steps
 
 
-async def ensure_brand_voice(tenant_id: uuid.UUID, slug: str) -> bool:
+async def ensure_brand_voice(tenant_id: uuid.UUID, slug: str, *, sobrescribir: bool = False) -> bool:
     """Siembra `AppSettings.brand_voice` desde `TENANTS_ROOT/<slug>/docs/voz-de-marca.md`
-    si está vacío (#158). La voz de marca es la fuente de verdad de precios/políticas;
-    un asistente sin ella alucina. Devuelve True si la sembró.
+    si está vacío (#158). La voz de marca es la fuente de verdad de políticas; un
+    asistente sin ella alucina. Devuelve True si la sembró.
+
+    `sobrescribir=True` (HU-SH-01) la reemplaza aunque ya tenga texto: el archivo
+    versionado del negocio manda y el runbook lo reaplica tras corregirlo.
     """
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -416,6 +419,7 @@ async def ensure_brand_voice(tenant_id: uuid.UUID, slug: str) -> bool:
                 session.add(settings)
                 await session.flush()
             if settings.brand_voice and settings.brand_voice.strip():
-                return False
+                if not sobrescribir or settings.brand_voice.strip() == content:
+                    return False
             settings.brand_voice = content
     return True

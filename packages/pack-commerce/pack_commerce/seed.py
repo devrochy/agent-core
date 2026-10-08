@@ -21,6 +21,7 @@ from pack_commerce.models import (
     Product,
     ProductVariant,
 )
+from pack_commerce.precios_de_plan import ATRIBUTO, precio_de_plan
 
 
 async def seed_catalog(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
@@ -98,12 +99,16 @@ async def seed_catalog(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
                         ),
                         "entitlements": attrs.get("limites") or attrs.get("entitlements"),
                     }
+                    # HU-SH-01: un plan de la plataforma toma su precio de core/billing.
+                    precio = precio_de_plan(attrs)
+                    if precio is None:
+                        precio = variante["price"]
                     if variant is None:
                         variant = ProductVariant(
                             product_id=product.id,
                             sku=variante["sku"],
                             attributes=attrs,
-                            price=variante["price"],
+                            price=precio,
                             active=True,
                             billing_period=plan_meta["billing_period"],
                             trial_days=int(plan_meta["trial_days"]) if plan_meta["trial_days"] is not None else None,
@@ -113,6 +118,8 @@ async def seed_catalog(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
                         await session.flush()
                     else:
                         variant.attributes = attrs
+                        if attrs.get(ATRIBUTO):
+                            variant.price = precio
                         if plan_meta["billing_period"]:
                             variant.billing_period = plan_meta["billing_period"]
                         if plan_meta["trial_days"] is not None:
