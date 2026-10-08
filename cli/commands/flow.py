@@ -45,11 +45,13 @@ async def _load_spec_and_slug(slug: str):  # type: ignore[no-untyped-def]
     return spec, slug
 
 
-def _available_tool_names(spec) -> set[str]:  # type: ignore[no-untyped-def]
+def _available_tool_names(spec, provider_ids: frozenset[str] = frozenset()) -> set[str]:  # type: ignore[no-untyped-def]
     """Tools disponibles PARA ESTE TENANT: packs habilitados + core + declarativas.
 
     Mismo criterio que el runtime (`loop.py`): solo los packs de `spec.packs`; así
     `flow validate` no da ✓ a una tool que en producción `_tool_denial` denegaría.
+    Las `sub_*` del core (HU-SUB-01) cuentan si el negocio tiene habilitado un pack
+    proveedor de suscripciones (`provider_ids`), igual que su predicado en runtime.
     """
     from core.agents.spec import enabled_packs
     from core.plugin_manager import plugin_manager
@@ -70,6 +72,11 @@ def _available_tool_names(spec) -> set[str]:  # type: ignore[no-untyped-def]
 
         for tool in CoreSkill().get_tools():
             names.add(tool.name)
+        if enabled & provider_ids:
+            from core.subscriptions.tools import SubscriptionSkill
+
+            for tool in SubscriptionSkill().get_tools():
+                names.add(tool.name)
     except Exception:
         log.warning("flow_cli_core_skill_read_failed", exc_info=True)
     from core.mcp.declarative import tools_for_spec
@@ -110,8 +117,14 @@ def validate(slug: str = typer.Argument(..., help="Slug del tenant")) -> None:
     from core.agents.flow import resolve_flow
 
     async def _run() -> None:
+        from core.plugin_manager import plugin_manager
+        from core.subscriptions import subscription_registry
+
         spec, _ = await _load_spec_and_slug(slug)
-        available = _available_tool_names(spec)
+        # Registra los proveedores (p. ej. de suscripciones) como en el runtime.
+        await plugin_manager.ensure_process_activation()
+        providers = frozenset(subscription_registry.registered_provider_ids())
+        available = _available_tool_names(spec, providers)
         flow = await resolve_flow(spec, slug=slug, available=available)
         if flow is None:
             console.print(f"[yellow]Sin flujo para {slug}[/yellow]")
