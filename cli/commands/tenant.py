@@ -307,8 +307,47 @@ def presets() -> None:
     console.print(table)
 
 
+@app.command("aplicar-preset")
+def aplicar_preset(
+    slug: str = typer.Argument(..., help="Slug del tenant"),
+    preset: str = typer.Argument(..., help="Id del preset (ver `tenant presets`)"),
+) -> None:
+    """Aplica un preset a un negocio que ya existe (HU-SH-01). Idempotente: no pisa
+    la config ni la persona que el negocio ya cambió (ADR-0110)."""
+    from core.db.models import Tenant
+    from core.db.session import get_session
+    from core.presets import PresetError
+    from core.presets.apply import apply_preset
+
+    async def _run() -> None:
+        async with get_session() as session:
+            tenant = (
+                await session.execute(select(Tenant).where(Tenant.slug == slug, Tenant.deleted_at.is_(None)))
+            ).scalar_one_or_none()
+        if tenant is None:
+            raise typer.BadParameter(f"Tenant no existe: {slug}")
+        try:
+            resultado = await apply_preset(tenant.id, preset)
+        except PresetError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+        for paso in resultado.pasos:
+            console.print(f"  · {paso}")
+        for pendiente in resultado.pendientes:
+            console.print(f"  [yellow]pendiente[/yellow] {pendiente['pack']}: {pendiente['detalle']}")
+
+    asyncio.run(_run())
+
+
 @app.command()
-def seed(slug: str = typer.Argument(..., help="Slug del tenant (ej: formoto)")) -> None:
+def seed(
+    slug: str = typer.Argument(..., help="Slug del tenant (ej: formoto)"),
+    voz_de_marca: bool = typer.Option(
+        False,
+        "--voz-de-marca",
+        help="Reemplaza la voz de marca guardada por docs/voz-de-marca.md (HU-SH-01).",
+    ),
+) -> None:
     """Importa TENANTS_ROOT/<slug>/catalog.json a la BD del tenant."""
     from core.db.models import Tenant
     from core.db.session import get_session
@@ -335,7 +374,7 @@ def seed(slug: str = typer.Argument(..., help="Slug del tenant (ej: formoto)")) 
             console.print(f"  · {s}")
         from core.onboarding import ensure_brand_voice
 
-        if await ensure_brand_voice(tenant.id, slug):
+        if await ensure_brand_voice(tenant.id, slug, sobrescribir=voz_de_marca):
             console.print("  · brand_voice sembrada desde docs/voz-de-marca.md")
 
     asyncio.run(_run())

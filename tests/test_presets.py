@@ -69,7 +69,7 @@ def test_sin_fragmento_se_usan_los_defaults_del_pack() -> None:
 def test_fragmentos_reales_de_commerce_son_validos() -> None:
     from pack_commerce.config import CRMConfig
 
-    for vertical in ("comercio", "restaurante"):
+    for vertical in ("comercio", "restaurante", "suscripciones"):
         fragmento = load_fragment("pack_commerce", vertical, CRMConfig)
         CRMConfig.model_validate(fragmento.config)
         assert fragmento.seed.get("products")
@@ -104,3 +104,27 @@ def test_el_cli_de_tenant_no_importa_packs() -> None:
         for a in (n.names if isinstance(n, ast.Import) else [n])
     ]
     assert not [m for m in modulos if m and m.split(".")[0].startswith("pack_")]
+
+
+def test_preset_suscripciones_fija_su_proveedor_y_agenda_interna() -> None:
+    """HU-SH-01: preset genérico de planes recurrentes (base del asistente de SolversHub)."""
+    from pack_calendar.config import CalendarConfig
+
+    preset = load_preset("suscripciones")
+    assert set(preset.packs) == {"pack_commerce", "pack_calendar", "pack_payments", "pack_subscriptions"}
+    assert preset.proveedor_suscripciones == "pack_subscriptions"
+    assert preset.proveedor_suscripciones in preset.packs
+    assert preset.plan_minimo == "premium"  # 4 habilidades: basic permite 3
+    agenda = load_fragment("pack_calendar", "suscripciones", CalendarConfig)
+    assert CalendarConfig.model_validate(agenda.config).source == "interno"
+
+
+def test_seed_de_suscripciones_respeta_d16() -> None:
+    """Solo el plan de $0 trae prueba en los datos de ejemplo (D-16)."""
+    from pack_commerce.config import CRMConfig
+
+    fragmento = load_fragment("pack_commerce", "suscripciones", CRMConfig)
+    for producto in fragmento.seed["products"]:
+        for variante in producto["variants"]:
+            prueba = variante["attributes"].get("trial_dias", 0)
+            assert prueba == 0 or variante["price"] == 0, variante["sku"]

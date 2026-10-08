@@ -1,5 +1,15 @@
 # Changelog
 
+## Sin versión — Asistente de SolversHub reproducible (2026-10-08)
+
+- HU-SH-01. Preset genérico `suscripciones` (commerce + calendar con agenda interna + payments + subscriptions,
+  plan mínimo premium) para negocios que venden planes recurrentes. El manifiesto acepta `proveedor_suscripciones`
+  y `apply_preset` lo guarda (HU-SUB-09).
+- Una sola fuente de precios: una variante con `attributes.precio_de_plan` toma su precio de `core/billing/plans.py`
+  al sembrar, y el cron `sincronizar_precios_de_plan` (cada hora) lo alinea tras un deploy con precios nuevos.
+- CLI: `agent-core tenant aplicar-preset <slug> <preset>` para negocios existentes y
+  `agent-core tenant seed <slug> --voz-de-marca` para reemplazar la voz de marca por la del archivo.
+
 ## Sin versión — Los logs ya no muestran URLs con secretos (2026-10-08)
 
 - **Seguridad.** `httpx` registra cada petición a nivel INFO con la URL completa, y el intercambio `client_credentials`

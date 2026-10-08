@@ -1,0 +1,51 @@
+{
+  "config": {
+    "order_prefix": "OC",
+    "scoring_mode": "auto"
+  },
+  "seed": {
+    "category_paths": [
+      [
+        "Planes"
+      ]
+    ],
+    "products": [
+      {
+        "name": "Plan Free",
+        "description": "Plan de entrada sin costo. Reemplázalo por tus planes reales.",
+        "category_path": [
+          "Planes"
+        ],
+        "variants": [
+          {
+            "sku": "PLAN-FREE",
+            "price": 0,
+            "stock": 0,
+            "attributes": {
+              "periodicidad": "mensual",
+              "trial_dias": 30
+            }
+          }
+        ]
+      },
+      {
+        "name": "Plan mensual",
+        "description": "Plan pago de ejemplo: se cobra desde el primer día (D-16).",
+        "category_path": [
+          "Planes"
+        ],
+        "variants": [
+          {
+            "sku": "PLAN-MENSUAL",
+            "price": 100000,
+            "stock": 0,
+            "attributes": {
+              "periodicidad": "mensual",
+              "trial_dias": 0
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
