@@ -10,6 +10,10 @@ python evals/journeys.py 03,05 --detalle      # algunos, con la conversación y 
 python evals/journeys.py --set otro --umbral 0.95 --reporte evals/reportes/journeys.json
 ```
 
+**Solo en bases de prueba** (CI, nightly o un stack efímero local): cada corrida deja un negocio
+`journeys-*` y reemplaza la pasarela dentro del proceso. Con `APP_ENV=production` no arranca. Los
+jobs corren **solo sobre el negocio del journey**, nunca sobre otros negocios de la base.
+
 Cada corrida crea **un negocio de prueba** (`negocio.json` del set) y **un cliente nuevo por
 journey**. Los turnos usan el canal `test`: nada sale por WhatsApp. La corrida se guarda en
 `eval_runs` del negocio (`journeys:<set>@<versión del spec>`) y, con `--reporte`, en un JSON.

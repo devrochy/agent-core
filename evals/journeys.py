@@ -316,13 +316,26 @@ async def paso_job(ctx: Contexto, paso: dict[str, Any], registro: list[str]) -> 
     import importlib
 
     pack, _, nombre = str(paso["job"]).partition(".")
-    if not (_IDENT.match(pack) and _IDENT.match(nombre)):
-        raise FallaJourney(f"job inválido: {paso['job']!r}")
+    if not (pack.startswith("pack_") and _IDENT.match(pack) and _IDENT.match(nombre)):
+        raise FallaJourney(f"job inválido: {paso['job']!r} (formato pack_x.nombre)")
     modulo = importlib.import_module(f"{pack}.jobs")
     funcion = getattr(modulo, f"_{nombre}", None)
     if funcion is None:
         raise FallaJourney(f"{pack}.jobs no tiene _{nombre}(now)")
-    resultado = await funcion(ctx.ahora)
+    # El job recorre los negocios de `_tenant_ids()`: acá SOLO el del journey, para no
+    # tocar otros negocios con el reloj adelantado y la pasarela simulada (auditoría).
+    original = getattr(modulo, "_tenant_ids", None)
+
+    async def _solo_este_negocio() -> list[uuid.UUID]:
+        return [ctx.tenant_id]
+
+    if original is not None:
+        modulo._tenant_ids = _solo_este_negocio  # type: ignore[attr-defined]
+    try:
+        resultado = await funcion(ctx.ahora)
+    finally:
+        if original is not None:
+            modulo._tenant_ids = original  # type: ignore[attr-defined]
     registro.append(f"    job {paso['job']} @ {ctx.ahora:%Y-%m-%d}: {resultado}")
 
 
@@ -353,7 +366,12 @@ async def paso_verifica(ctx: Contexto, paso: dict[str, Any], registro: list[str]
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
-    datos = ctx.render(paso["verifica"])
+    crudo = paso["verifica"]
+    # `tabla` y `orden` salen del JSON versionado, nunca de una plantilla (una salida de
+    # tool no puede elegir la tabla).
+    datos = {**ctx.render({k: v for k, v in crudo.items() if k not in ("tabla", "orden")}), "tabla": crudo["tabla"]}
+    if "orden" in crudo:
+        datos["orden"] = crudo["orden"]
     tabla = datos["tabla"]
     if not _IDENT.match(tabla):
         raise FallaJourney(f"tabla inválida: {tabla!r}")
@@ -497,6 +515,7 @@ async def main(argv: list[str] | None = None) -> int:
         print(f"No hay journeys que matcheen '{args.patron}' en evals/journeys/{args.set}/")
         return 1
 
+    _solo_bases_de_prueba()
     await _preparar_proceso()
     pagos = PagoSimulado(monto_minimo=float((negocio.get("pagos_simulados") or {}).get("monto_minimo", 0)))
     tenant_id = await preparar_negocio(negocio, pagos)
@@ -537,6 +556,16 @@ async def main(argv: list[str] | None = None) -> int:
             encoding="utf-8",
         )
     return 0 if tasa >= args.umbral else 1
+
+
+def _solo_bases_de_prueba() -> None:
+    """Los journeys crean negocios y reemplazan la pasarela en el proceso: nunca contra
+    producción. Se corren en bases efímeras (CI, nightly, stack local de prueba)."""
+    from core.config import get_settings
+
+    entorno = (get_settings().app_env or "").lower()
+    if entorno not in ("development", "ci", "test"):
+        raise SystemExit(f"Los journeys no corren con APP_ENV={entorno!r}: solo en bases de prueba.")
 
 
 async def _guardar(tenant_id: uuid.UUID, set_id: str, resultados: list[Resultado]) -> None:
