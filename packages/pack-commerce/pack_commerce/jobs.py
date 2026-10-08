@@ -182,19 +182,28 @@ async def _reintentar_activaciones() -> int:
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
             async with get_session() as session:
-                pedidos = (
+                ids = (
                     await session.execute(
-                        select(Order).where(
+                        select(Order.id).where(
                             Order.tenant_id == tenant_id,
                             Order.payment_status == "pagado",
                             Order.plan_activation_status == "pendiente",
                         )
                     )
                 ).scalars().all()
-                for order in pedidos:
-                    await activar_planes_del_pedido(session, order)
-                    if order.plan_activation_status == "activada":
-                        total += 1
+            # Un pedido (o un negocio) que falla no frena a los demás: cada pedido va
+            # en su propia transacción.
+            for order_id in ids:
+                try:
+                    async with get_session() as session:
+                        order = await session.get(Order, order_id)
+                        if order is None:
+                            continue
+                        await activar_planes_del_pedido(session, order)
+                        if order.plan_activation_status == "activada":
+                            total += 1
+                except Exception:
+                    log.exception("reintento_activacion_fallido", tenant_id=str(tenant_id), order_id=str(order_id))
     if total:
         log.info("planes_activados_al_reintentar", total=total)
     return total

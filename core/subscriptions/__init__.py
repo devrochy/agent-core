@@ -198,7 +198,11 @@ SETTINGS_KEY = "subscriptions"
 
 
 async def proveedor_configurado(tenant_id: uuid.UUID) -> str | None:
-    """Proveedor elegido por el negocio (`tenants.settings.subscriptions.provider`)."""
+    """Proveedor elegido por el negocio (`tenants.settings.subscriptions.provider`).
+
+    `tenants` es tabla de sistema (sin RLS): el `tenant_id` debe venir del principal o
+    del contexto (`get_current_tenant_id()`), nunca del cuerpo de una petición ni del LLM.
+    """
     from core.db.models import Tenant
     from core.db.session import get_session
 
@@ -211,7 +215,10 @@ async def proveedor_configurado(tenant_id: uuid.UUID) -> str | None:
 
 
 async def guardar_proveedor(tenant_id: uuid.UUID, provider: str | None) -> None:
-    """Guarda (o borra con None) la elección. Quien llama valida que esté habilitado."""
+    """Guarda (o borra con None) la elección. Quien llama valida que esté habilitado.
+
+    Igual que `proveedor_configurado`: el `tenant_id` sale del principal, nunca del body.
+    """
     from core.db.models import Tenant
     from core.db.session import get_session
 
