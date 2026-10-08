@@ -69,6 +69,14 @@ class Settings(BaseSettings):
     # el dueño. Vacío = usa DATABASE_URL.
     migrations_database_url: str = Field(default="", alias="MIGRATIONS_DATABASE_URL")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
+    # Proxies de confianza (CIDR, separados por coma): solo si la conexión llega
+    # desde uno de estos se leen `X-Forwarded-For`/`CF-Connecting-IP` para saber la
+    # IP del cliente (bloqueo de login, HU-ARCH-04). Por defecto, las redes privadas
+    # y loopback: Traefik de Coolify, cloudflared y el BFF del panel viven ahí.
+    trusted_proxy_cidrs: str = Field(
+        default="127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,::1/128,fc00::/7",
+        alias="TRUSTED_PROXY_CIDRS",
+    )
 
     # --- Cifrado ---
     # MASTER_ENCRYPTION_KEY: clave Fernet legada -- SecretBox ya no la usa para
