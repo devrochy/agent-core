@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from sqlalchemy import select
@@ -30,6 +31,7 @@ from pack_subscriptions.capability import (
 )
 from pack_subscriptions.config import SubscriptionConfig
 from pack_subscriptions.models import Subscription, SubscriptionCharge
+from pack_subscriptions.periodos import sumar_periodo
 
 if TYPE_CHECKING:
     from core.mcp.host import MCPHost
@@ -78,7 +80,14 @@ class SubscriptionsModule(BaseModule):
         return [subscriptions_admin_api_router]
 
     async def _on_payment_confirmed(self, reference: str, provider: str, provider_reference: str, amount: float) -> None:
-        """Marca pagado el cargo del período cuyo `referencia` es `sub-<charge.id>`."""
+        """Marca pagado el cargo `sub-<charge.id>` (HU-SUB-04, defecto 6).
+
+        - El monto tiene que coincidir con el del cargo: si no, no se marca pagado y se
+          avisa al negocio (push a los dueños + `audit_log`).
+        - Reactiva: una `vencida` (o una prueba) pagada vuelve a `activa`, y el período
+          siguiente se calcula desde el período pagado.
+        - Idempotente: un cargo ya pagado no se vuelve a tocar (el outbox reintenta).
+        """
         if not reference or not reference.startswith("sub-"):
             return
         try:
@@ -96,12 +105,27 @@ class SubscriptionsModule(BaseModule):
                         )
                     )
                 ).scalar_one_or_none()
-                if cargo is None:
+                if cargo is None or cargo.estado == "pagado":
+                    return
+                if abs(Decimal(str(amount)) - Decimal(cargo.monto or 0)) > Decimal("0.01"):
+                    log.error(
+                        "subs_pago_monto_distinto",
+                        reference=reference,
+                        esperado=str(cargo.monto),
+                        recibido=str(amount),
+                    )
+                    await _alertar_monto_distinto(tenant_id, cargo, amount, provider_reference)
                     return
                 cargo.estado = "pagado"
                 sub = await session.get(Subscription, cargo.subscription_id)
-                if sub is not None and sub.estado == "trialing" and sub.trial_termina and sub.trial_termina <= datetime.now(UTC):
+                if sub is not None and sub.estado in ("vencida", "trialing", "activa"):
                     sub.estado = "activa"
+                    inicio = cargo.fecha_vencimiento or datetime.now(UTC)
+                    siguiente = sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla)
+                    if sub.periodo_actual_inicio is None or sub.periodo_actual_inicio < inicio:
+                        sub.periodo_actual_inicio = inicio
+                    if sub.proximo_cargo is None or sub.proximo_cargo < siguiente:
+                        sub.proximo_cargo = siguiente
         log.info("subs_charge_pagado", reference=reference)
 
     async def _completion_guardrail(
@@ -125,3 +149,36 @@ class SubscriptionsModule(BaseModule):
                     ),
                 )
         return GuardrailResult(passed=True)
+
+
+async def _alertar_monto_distinto(
+    tenant_id: uuid.UUID | None, cargo: SubscriptionCharge, recibido: float, provider_reference: str
+) -> None:
+    """Pago con monto distinto al del cargo: no se marca pagado y se avisa al negocio."""
+    from core.shared.audit import record_audit
+
+    await record_audit(
+        actor=f"plugin:{PLUGIN_ID}",
+        action="subs_pago_monto_distinto",
+        output_data={
+            "charge_id": str(cargo.id),
+            "periodo": cargo.periodo,
+            "esperado": str(cargo.monto),
+            "recibido": str(recibido),
+            "provider_reference": provider_reference,
+        },
+    )
+    if tenant_id is None:
+        return
+    try:
+        from core.tasks.push_tasks import notify_owners_push
+
+        notify_owners_push.delay(
+            str(tenant_id),
+            "Pago de suscripción con monto distinto",
+            f"Llegó un pago de {recibido} para el período {cargo.periodo}, pero el cargo es de "
+            f"{cargo.monto}. No se marcó como pagado: revísalo.",
+            {"kind": "subs_pago_monto_distinto", "charge_id": str(cargo.id)},
+        )
+    except Exception:
+        log.warning("subs_alerta_push_fallida", charge_id=str(cargo.id), exc_info=True)

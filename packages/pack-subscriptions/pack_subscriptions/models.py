@@ -15,7 +15,7 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Index, Numeric, Text
+from sqlalchemy import DateTime, Index, Numeric, SmallInteger, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -54,6 +54,9 @@ class Subscription(Base):
     estado: Mapped[str] = mapped_column(Text, nullable=False, default="trialing")  # trialing|activa|pausada|cancelada|vencida
     valor_periodo: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
     moneda: Mapped[str] = mapped_column(Text, nullable=False, default="COP")
+    # HU-SUB-04 (migración 0004): período por calendario, no +30 días.
+    periodicidad: Mapped[str] = mapped_column(Text, nullable=False, default="mensual")  # mensual|trimestral|anual
+    dia_ancla: Mapped[int | None] = mapped_column(SmallInteger)  # día del mes en que empezó
     periodo_actual_inicio: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     periodo_actual_fin: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     proximo_cargo: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

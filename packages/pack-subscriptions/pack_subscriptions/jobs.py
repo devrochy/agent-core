@@ -17,11 +17,12 @@ from sqlalchemy import select, text
 
 from core.db.session import get_session
 from core.events.outbox import emit_domain
-from core.shared.events import ON_SUBSCRIPTION_CHARGE_CREATED
+from core.shared.events import ON_SUBSCRIPTION_CHARGE_CREATED, ON_SUBSCRIPTION_PAST_DUE
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from core.tasks.decorators import register_cron
 from pack_subscriptions.models import Subscription, SubscriptionCharge
+from pack_subscriptions.periodos import etiqueta_periodo, sumar_periodo
 
 log = get_logger(__name__)
 
@@ -50,20 +51,34 @@ async def _tenant_ids() -> list[uuid.UUID]:
     return result
 
 
-def _proximo(desde: datetime) -> datetime:
-    return (desde + timedelta(days=30)).replace(second=0, microsecond=0)
+async def _config_del_negocio():  # type: ignore[no-untyped-def]
+    from core.plugin_manager import plugin_manager
+    from pack_subscriptions.config import SubscriptionConfig
+
+    try:
+        config = await plugin_manager.load_config(PACK_ID)
+    except Exception:
+        config = None
+    return config if isinstance(config, SubscriptionConfig) else SubscriptionConfig()
 
 
 @register_cron(PACK_ID, "15 3 * * *")
 async def generar_cargos() -> None:
-    """Cargo del período de cada suscripción vencida (ADR-0083, #156).
+    await _generar_cargos(datetime.now(UTC))
 
-    Crea un `SubscriptionCharge` pendiente por el valor del período y avanza
-    `proximo_cargo` al siguiente ciclo. Si hay pasarela (`pack_payments`
-    habilitado), genera además el link de pago (referencia `sub-<cargo.id>`,
-    que `payment.confirmed` marca pagado). Idempotente por período.
+
+async def _generar_cargos(now: datetime) -> int:
+    """Cargo del período de cada suscripción que llegó a su `proximo_cargo`
+    (ADR-0083, HU-SUB-04). Idempotente por período.
+
+    - El período sale del calendario (`periodicidad` + `dia_ancla`), no `+30 días`.
+    - No cambia el estado: antes ponía `activa` aunque nadie pagara (defecto 2).
+    - No cobra durante una prueba ni planes en $0 (Free, HU-SUB-06).
+    - Las `vencida` no acumulan cargos: al pagar, el período siguiente se calcula
+      desde el pagado (`_on_payment_confirmed`).
+    Si hay pasarela, genera el link (`sub-<cargo.id>`) y avisa al cliente por el outbox.
     """
-    now = datetime.now(UTC)
+    total = 0
     for tenant_id in await _tenant_ids():
         from core.agents.spec import enabled_packs, load_active_spec
         from core.payments import payment_registry
@@ -83,8 +98,17 @@ async def generar_cargos() -> None:
                         )
                     )
                 ).scalars().all()
+                generadas = 0
                 for sub in subs:
-                    periodo = sub.proximo_cargo.strftime("%Y-%m")
+                    if sub.trial_termina is not None and sub.trial_termina > now:
+                        continue
+                    inicio = sub.proximo_cargo
+                    siguiente = sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla)
+                    if not Decimal(sub.valor_periodo or 0):
+                        sub.periodo_actual_inicio = inicio
+                        sub.proximo_cargo = siguiente
+                        continue
+                    periodo = etiqueta_periodo(inicio, sub.periodicidad)
                     existe = (
                         await session.execute(
                             select(SubscriptionCharge).where(
@@ -95,6 +119,8 @@ async def generar_cargos() -> None:
                             )
                         )
                     ).scalars().first()
+                    sub.periodo_actual_inicio = inicio
+                    sub.proximo_cargo = siguiente
                     if existe is not None:
                         continue
                     cargo = SubscriptionCharge(
@@ -103,11 +129,11 @@ async def generar_cargos() -> None:
                         periodo=periodo,
                         monto=Decimal(sub.valor_periodo or 0),
                         estado="pendiente",
-                        fecha_vencimiento=sub.proximo_cargo,
+                        fecha_vencimiento=inicio,
                     )
                     session.add(cargo)
                     await session.flush()
-                    sub.estado = "activa"
+                    generadas += 1
                     link_url: str | None = None
                     if cap is not None:
                         try:
@@ -136,12 +162,72 @@ async def generar_cargos() -> None:
                             "monto": str(cargo.monto),
                             "moneda": sub.moneda,
                             "periodo": periodo,
-                            "fecha_vencimiento": cargo.fecha_vencimiento.date().isoformat()
-                            if cargo.fecha_vencimiento
-                            else None,
+                            "fecha_vencimiento": inicio.date().isoformat(),
                             "referencia": cargo.referencia,
                             "link": link_url,
                         },
                     )
-                    sub.proximo_cargo = _proximo(sub.proximo_cargo)
-        log.info("subs_cargos_generados", tenant_id=str(tenant_id), generadas=len(subs))
+        total += generadas
+        log.info("subs_cargos_generados", tenant_id=str(tenant_id), generadas=generadas)
+    return total
+
+
+@register_cron(PACK_ID, "45 3 * * *")
+async def marcar_vencidas() -> None:
+    await _marcar_vencidas(datetime.now(UTC))
+
+
+async def _marcar_vencidas(now: datetime) -> int:
+    """Pasa a `vencida` la suscripción con un cargo impago más allá de los días de
+    gracia del negocio (D-SPEC-06-3, `SubscriptionConfig.dias_gracia`) y emite
+    `subscription.past_due` por el outbox (HU-SUB-04; los avisos son HU-SUB-05)."""
+    total = 0
+    for tenant_id in await _tenant_ids():
+        async with tenant_scope(tenant_id):
+            config = await _config_del_negocio()
+            limite = now - timedelta(days=config.dias_gracia)
+            async with get_session() as session:
+                filas = (
+                    await session.execute(
+                        select(SubscriptionCharge, Subscription)
+                        .join(Subscription, Subscription.id == SubscriptionCharge.subscription_id)
+                        .where(
+                            SubscriptionCharge.tenant_id == tenant_id,
+                            Subscription.tenant_id == tenant_id,
+                            SubscriptionCharge.estado == "pendiente",
+                            SubscriptionCharge.deleted_at.is_(None),
+                            SubscriptionCharge.fecha_vencimiento.isnot(None),
+                            SubscriptionCharge.fecha_vencimiento <= limite,
+                            Subscription.estado.in_(("activa", "trialing")),
+                            Subscription.deleted_at.is_(None),
+                        )
+                        .order_by(SubscriptionCharge.fecha_vencimiento)
+                    )
+                ).all()
+                vistas: set[uuid.UUID] = set()
+                for cargo, sub in filas:
+                    if sub.id in vistas:
+                        continue
+                    vistas.add(sub.id)
+                    sub.estado = "vencida"
+                    await emit_domain(
+                        session,
+                        tenant_id=tenant_id,
+                        topic=ON_SUBSCRIPTION_PAST_DUE,
+                        dedupe_key=f"sub_past_due:{cargo.id}",
+                        payload={
+                            "charge_id": str(cargo.id),
+                            "subscription_id": str(sub.id),
+                            "customer_id": str(sub.customer_id),
+                            "concepto": sub.concepto,
+                            "monto": str(cargo.monto),
+                            "moneda": sub.moneda,
+                            "periodo": cargo.periodo,
+                            "fecha_vencimiento": cargo.fecha_vencimiento.date().isoformat(),
+                            "dias_gracia": config.dias_gracia,
+                        },
+                    )
+            total += len(vistas)
+            if vistas:
+                log.info("subs_vencidas", tenant_id=str(tenant_id), total=len(vistas))
+    return total
