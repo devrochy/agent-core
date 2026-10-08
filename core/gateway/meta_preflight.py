@@ -59,7 +59,13 @@ async def resolve_app_credentials(tenant_id, channel: str = "whatsapp") -> AppCr
         connection = (
             await session.execute(
                 select(MetaConnection)
-                .where(MetaConnection.tenant_id == tenant_id, MetaConnection.channel == channel)
+                .where(
+                    MetaConnection.tenant_id == tenant_id,
+                    MetaConnection.channel == channel,
+                    # Una conexión borrada (p. ej. un alta BYOK fallida, `_rollback_failed_alta`)
+                    # no presta su secreto.
+                    MetaConnection.deleted_at.is_(None),
+                )
                 .order_by((MetaConnection.status != "connected"), MetaConnection.created_at.desc())
             )
         ).scalars().first()

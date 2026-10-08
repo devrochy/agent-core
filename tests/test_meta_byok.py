@@ -540,7 +540,7 @@ async def test_reentrante_actualiza_conexion_existente_en_vez_de_duplicar(monkey
     tenant_id = uuid.uuid4()
     existing = SimpleNamespace(
         id=uuid.uuid4(), tenant_id=tenant_id, channel="whatsapp", environment="sandbox", meta_app_id="app-1",
-        status="draft", status_reason="algo viejo", connected_by=None, connected_at=None,
+        status="draft", status_reason="algo viejo", connected_by=None, connected_at=None, origin="manual",
     )
     added: list = []
     monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added, existing_connection=existing))

@@ -34,20 +34,6 @@ producción que no es el de la app de un cliente concreto (heredado del monolito
 `META_APP_SECRET`: si los dos están definidos y son distintos, sus entregas al genérico dan 401. Decidir si la
 plataforma es solo `META_APP_SECRET` (ADR-0094) y `WHATSAPP_APP_SECRET` queda como respaldo del endpoint por slug.
 
-**Un reintento BYOK fallido se queda con el número y puede quitarle el secreto a la conexión sana**
-`meta_byok.save_byok_connection` crea una fila nueva al reintentar el wizard con otra app y, en su primera transacción,
-le pasa el número y un `connected_at` más nuevo (`meta_byok.py:123-212`). Si después falla al guardar los tokens o al
-suscribir, solo la marca `error` (`:294-296`): se queda con el número y presta su secreto. ADR-0102 acota el daño: el
-reintento no sube de estado sin su WABA suscrita a su app, y si ya estaba en `connected` baja a `error`, detrás de la
-sana. Quedan dos huecos:
-- Si la sana también cae a `error` (un token a 7 días de vencer), las dos quedan en el mismo nivel, gana la más nueva y
-  todo el inbound del negocio da 401 hasta que se renueve el token de la sana.
-- Un reintento que sí suscribió la WABA pero falló al suscribir la app tiene `own_app_subscribed` en verdadero; solo lo
-  frena `app_subscription_active`, que no compara el `callback_url` (ver abajo).
-
-Arreglo: si el alta creó una fila nueva y falla, devolver el número a la conexión anterior y dejar de prestar secreto
-(p. ej. borrado lógico de la fila nueva), en `meta_byok.py` (ADR-0101/0036). Hallazgo del `arquitecto`, 2026-10-06.
-
 **El pedido de monto alto nunca escala**
 `plugins/pack_commerce/pack_commerce/skills.py:989` devuelve `{"escalate": True}`
 cuando el monto supera `monto_alto_threshold`. Ningún punto de `core/` lee esa clave:
@@ -71,10 +57,10 @@ migración nueva si `crm_0009` ya corrió en algún entorno). Visto el 2026-10-0
   conexión `degraded`/`error` que recibe y responde aparece como inactiva.
 - `core/admin/meta_health_service.py:144`: las conexiones `degraded`/`error` desaparecen de la tabla de suscripciones,
   justo cuando la suscripción es el problema.
-- `core/gateway/meta_preflight.py::resolve_app_credentials` no filtra por estado ni por `deleted_at`, no prefiere
-  `origin = 'byok'` y ordena por `created_at`: puede devolver el `app_access` de una conexión `revoked` o borrada, y
-  elegir una conexión distinta de la que elige `_resolve_byok_token` (auditor-multitenant, 2026-10-06). Usar el mismo
-  selector.
+- `core/gateway/meta_preflight.py::resolve_app_credentials` no filtra por estado, no prefiere `origin = 'byok'` y
+  ordena por `created_at`: puede devolver el `app_access` de una conexión `revoked` y elegir una conexión distinta de la
+  que elige `_resolve_byok_token` (auditor-multitenant, 2026-10-06). Usar el mismo selector. (El filtro de
+  `deleted_at` ya está, core #271.)
 - Al tomar una conexión BYOK, el wizard de Embedded Signup (`meta_onboarding.exchange_code`) no revoca su
   `app_access`/`webhook_verify_token` ni desuscribe la app BYOK de la WABA. Meta sigue mandando eventos firmados por
   esa app; ADR-0101 los acepta, pero lo limpio es revocarlos y desuscribir.
