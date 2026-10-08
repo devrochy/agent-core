@@ -16,6 +16,9 @@ from sqlalchemy import select
 from core.db.models import Conversation, Customer
 from core.db.session import get_session
 from core.shared.events import (
+    ON_APPOINTMENT_CONFIRMED,
+    ON_APPOINTMENT_NO_SHOW,
+    ON_APPOINTMENT_REMINDER,
     ON_SUBSCRIPTION_CHARGE_CREATED,
     ON_SUBSCRIPTION_CHARGE_REMINDER,
     ON_SUBSCRIPTION_PAUSED,
@@ -68,11 +71,15 @@ def notice_key_for(topic: str, payload: dict[str, Any]) -> str:
         return f"sub_paused:{payload.get('subscription_id')}:{cargo}"
     if topic == ON_SUBSCRIPTION_TRIAL_ENDING:
         return f"sub_trial_ending:{payload.get('subscription_id')}"
+    if topic == ON_APPOINTMENT_REMINDER:
+        return f"appt_reminder:{payload.get('appointment_id')}:{payload.get('horas')}"
+    if topic in (ON_APPOINTMENT_NO_SHOW, ON_APPOINTMENT_CONFIRMED):
+        return f"{topic}:{payload.get('appointment_id')}"
     return f"sub_charge:{cargo}"
 
 
 async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
-    """Aviso al cliente de un evento de suscripción (plantilla o texto según la ventana).
+    """Aviso al cliente de un evento de suscripción o de cita (plantilla o texto según la ventana).
 
     El texto de respaldo lo manda el pack en `payload["texto"]` (su config, editable
     por el negocio); las variables salen solo del contexto que arma este handler.
@@ -92,6 +99,8 @@ async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
         return
     async with get_session() as session:
         customer = await session.get(Customer, customer_id)
+    if customer is not None and customer.tenant_id != get_current_tenant_id():
+        customer = None  # segundo cinturón además de RLS (auditoría HU-SH-02)
     # `customer.name` lo puede escribir el LLM (`update_customer_profile`): se
     # limpia y se acota antes de que llegue a una plantilla (ADR-0108).
     nombre = clean_param((customer.name if customer else None) or "", 60) or "cliente"
@@ -109,6 +118,13 @@ async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
         "recordatorio": {"dias": _dias_legibles(payload.get("dias"))},
         "mora": {"dias": payload.get("dias_mora")},
         "prueba": {"termina": payload.get("trial_termina")},
+        "cita": {
+            "titulo": payload.get("titulo"),
+            "fecha": payload.get("fecha"),
+            "hora": payload.get("hora"),
+            "zona": payload.get("zona"),
+            "enlace": payload.get("enlace") or "",
+        },
     }
     result = await send_event_notice(
         conversation.id,
@@ -153,11 +169,30 @@ async def on_subscription_trial_ending(**payload: Any) -> None:
     await _avisar_suscripcion(ON_SUBSCRIPTION_TRIAL_ENDING, payload)
 
 
+async def on_appointment_notice(topic: str, payload: dict[str, Any]) -> None:
+    await _avisar_suscripcion(topic, payload)  # mismo camino: plantilla o texto según la ventana
+
+
+async def on_appointment_confirmed(**payload: Any) -> None:
+    await on_appointment_notice(ON_APPOINTMENT_CONFIRMED, payload)
+
+
+async def on_appointment_reminder(**payload: Any) -> None:
+    await on_appointment_notice(ON_APPOINTMENT_REMINDER, payload)
+
+
+async def on_appointment_no_show(**payload: Any) -> None:
+    await on_appointment_notice(ON_APPOINTMENT_NO_SHOW, payload)
+
+
 _HANDLERS = (
     (ON_SUBSCRIPTION_CHARGE_CREATED, on_subscription_charge_created),
     (ON_SUBSCRIPTION_CHARGE_REMINDER, on_subscription_charge_reminder),
     (ON_SUBSCRIPTION_PAUSED, on_subscription_paused),
     (ON_SUBSCRIPTION_TRIAL_ENDING, on_subscription_trial_ending),
+    (ON_APPOINTMENT_CONFIRMED, on_appointment_confirmed),
+    (ON_APPOINTMENT_REMINDER, on_appointment_reminder),
+    (ON_APPOINTMENT_NO_SHOW, on_appointment_no_show),
 )
 
 

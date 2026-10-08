@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from fastapi import APIRouter
 
+import pack_calendar.jobs  # noqa: F401  # registra el @register_cron (HU-SH-02)
 from core.mcp.types import BaseModule, GuardrailResult
 from core.shared.logger import get_logger
 from pack_calendar.admin import router as calendar_admin_router
@@ -355,6 +356,10 @@ class GoogleCalendarModule(BaseModule):
             raise PluginConfigError(PLUGIN_ID, "Config inválida o ausente")
         host.register_skill(CalendarSkill())
         host.register_guardrail("calendar_completion_check", self._completion_guardrail, priority=6)
+        # HU-SH-02: el equipo se entera de cada cita nueva, reagendada o cancelada.
+        from core.shared.events import ON_APPOINTMENT_CHANGED
+
+        host.subscribe(ON_APPOINTMENT_CHANGED, _on_cita_cambiada)
 
     async def _resolved_completion_claims(self) -> dict[str, tuple[re.Pattern[str], set[str]]]:
         """Combina `_COMPLETION_CLAIMS` (incorporados) con la config de ESTE
@@ -427,3 +432,15 @@ class GoogleCalendarModule(BaseModule):
     def extra_admin_routers(self) -> list[APIRouter]:
         """Router OAuth con la URL vieja (redirect URI de Google Console)."""
         return []
+
+
+async def _on_cita_cambiada(**payload: Any) -> None:
+    """Outbox → push al asignado de la cita (o a los dueños)."""
+    from pack_calendar.demo import avisar_al_equipo
+
+    await avisar_al_equipo(
+        str(payload.get("appointment_id")),
+        str(payload.get("accion") or ""),
+        str(payload.get("titulo") or ""),
+        payload.get("inicio"),
+    )

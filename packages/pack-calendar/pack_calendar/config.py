@@ -148,6 +148,53 @@ class CalendarConfig(BasePluginConfig):
         description="Cuerpo del correo de cancelación. Mismos placeholders.",
         json_schema_extra={"format": "textarea"},
     )
+    # ---------------------------------------------------------- demo de punta a punta (HU-SH-02)
+    enlace_reunion: str = Field(
+        default="",
+        max_length=500,
+        description=(
+            "Enlace general de la reunión (Meet, Zoom…). Un tipo de cita puede tener el suyo; "
+            "si no, se usa este. Va en la confirmación y en los recordatorios."
+        ),
+    )
+    confirmacion_texto: str = Field(
+        default="📅 Tu cita «{titulo}» quedó agendada para el {fecha} a las {hora} ({zona}).{enlace}",
+        max_length=1000,
+        json_schema_extra={"format": "textarea"},
+        description="Confirmación al cliente. Placeholders: {titulo}, {fecha}, {hora}, {zona}, {enlace}",
+    )
+    recordatorios_horas: list[int] = Field(
+        default_factory=lambda: [24, 1],
+        description="Horas antes de la cita en que se le recuerda al cliente (cada una se envía una vez).",
+    )
+    recordatorio_texto: str = Field(
+        default=(
+            "Hola {cliente.nombre}, te recordamos tu cita «{cita.titulo}» el {cita.fecha} a las "
+            "{cita.hora} ({cita.zona}). {cita.enlace}"
+        ),
+        max_length=1000,
+        json_schema_extra={"format": "textarea"},
+        description="Recordatorio al cliente dentro de las 24 h (fuera de la ventana, la plantilla mapeada).",
+    )
+    no_asistio_texto: str = Field(
+        default=(
+            "Hola {cliente.nombre}, te esperábamos en tu cita «{cita.titulo}» del {cita.fecha}. "
+            "¿Querés que la reagendemos? Decime qué día te queda bien."
+        ),
+        max_length=1000,
+        json_schema_extra={"format": "textarea"},
+        description="Mensaje al cliente cuando el equipo marca que no asistió (ofrece reagendar).",
+    )
+    cita_desde_panel_texto: str = Field(
+        default=(
+            "Hola {cliente.nombre}, te agendamos la cita «{cita.titulo}» para el {cita.fecha} a las "
+            "{cita.hora} ({cita.zona}). {cita.enlace}"
+        ),
+        max_length=1000,
+        json_schema_extra={"format": "textarea"},
+        description="Aviso al cliente cuando el equipo crea la cita desde el panel.",
+    )
+
     # ---------------------------------------------------------- completion_claims (ADR-0025/#157)
     completion_claims_disabled: str = Field(
         default="",
