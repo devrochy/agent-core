@@ -7,6 +7,13 @@
   `apply_preset(..., sembrar_ejemplos=False)` no los carga; `tenant aplicar-preset` no los carga por defecto
   (`--con-ejemplos` para pedirlos) y `tenant create --sin-ejemplos` permite crear un negocio que trae su catálogo.
 
+## Sin versión — El sync de precios guarda lo que devuelve Meta (2026-10-08)
+
+- `pricing_daily` nunca se llenaba: Meta agrupa los puntos de `pricing_analytics` en `data[].data_points[]`, y
+  `fetch_pricing_analytics` validaba cada grupo como si fuera un punto, así que los descartaba todos como
+  `pricing_analytics_data_point_invalido`. Ahora aplana `data_points` (un elemento sin `data_points` se sigue
+  tomando como punto). Visto en test al verificar HU-CONN-01 (2 SERVICE y 3 UTILITY en CO, descartados).
+
 ## Sin versión — La salud del número usa su estado de conexión (2026-10-08)
 
 - `number_registered` fallaba con `code_verification_status = NOT_VERIFIED`, así que un número de prueba de Meta (o

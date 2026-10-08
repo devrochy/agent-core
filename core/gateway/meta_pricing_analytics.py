@@ -54,6 +54,19 @@ class PricingAnalyticsPoint(BaseModel):
     cost: float
 
 
+def _data_points(grupos: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Meta agrupa los puntos: `pricing_analytics.data` es una lista de grupos y cada uno
+    trae los suyos en `data_points` (verificado en test el 2026-10-08). Un elemento sin
+    `data_points` se toma como punto suelto."""
+    points: list[dict[str, Any]] = []
+    for grupo in grupos:
+        if isinstance(grupo, dict) and isinstance(grupo.get("data_points"), list):
+            points.extend(grupo["data_points"])
+        else:
+            points.append(grupo)
+    return points
+
+
 async def fetch_pricing_analytics(
     waba_id: str, start_unix: int, end_unix: int, token: str, app_secret: str, version: str,
     connection_id: uuid.UUID,
@@ -66,9 +79,9 @@ async def fetch_pricing_analytics(
         f"/{waba_id}", token=token, app_secret=app_secret, query={"fields": fields},
         version=version, connection_id=connection_id,
     )
-    raw_points: list[dict[str, Any]] = ((data or {}).get("pricing_analytics") or {}).get("data") or []
+    grupos: list[dict[str, Any]] = ((data or {}).get("pricing_analytics") or {}).get("data") or []
     points: list[PricingAnalyticsPoint] = []
-    for raw in raw_points:
+    for raw in _data_points(grupos):
         try:
             points.append(PricingAnalyticsPoint.model_validate(raw))
         except Exception:
