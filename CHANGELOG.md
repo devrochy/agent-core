@@ -1,5 +1,13 @@
 # Changelog
 
+## Sin versión — `flow validate` y los evals ven las tools del core como el runtime (2026-10-08)
+
+- `agent-core flow validate` daba falso negativo con las `sub_*` del core (HU-SUB-01): ahora las cuenta si el negocio
+  tiene habilitado un pack proveedor de suscripciones, igual que su predicado en runtime.
+- El runner de evals no registraba las skills del core (solo lo hace `core/main.py` al importar), así que los golden
+  sets corrían sin `escalate_to_human`, memoria ni `sub_*`. Ahora las registra y, como el loop (ADR-0109), suma las
+  `always_available` cuyo predicado pasa. Gate del CI 9/9 y golden de `solvershub` 12/12 en local.
+
 ## Sin versión — `crm_0009` no trunca el número de pedido al migrar (2026-10-08)
 
 - El backfill de `public_order_number` repetía `'OC-' || lpad(order_seq::text, 4, '0')`, y `lpad` **trunca** en

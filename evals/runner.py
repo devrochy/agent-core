@@ -144,6 +144,19 @@ def _build_messages(conversation: list[dict]) -> list[LLMMessage]:
     return messages
 
 
+async def _predicado_ok(tool, tenant_id: uuid.UUID) -> bool:  # type: ignore[no-untyped-def]
+    """`connection_predicate` de la tool dentro del `tenant_scope` del negocio."""
+    if tool.connection_predicate is None:
+        return True
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            return bool(await tool.connection_predicate(set()))
+    except Exception:
+        return False
+
+
 async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tuple[str, bool, str]:
     scenario = json.loads(path.read_text())
     name = scenario["name"]
@@ -202,6 +215,14 @@ async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tup
         by_name = {t.name: t for t in candidate}
         active = [by_name[name] for name in flow.tool_names if name in by_name]
         ctx.flow_summary = render_flow(flow)  # mismo bloque que el loop real (ADR-0054)
+        # Igual que el loop (ADR-0109): las tools del core se ofrecen aunque el flujo
+        # no las nombre, si su predicado lo permite (las `sub_*` solo con proveedor).
+        en_flujo = {t.name for t in active}
+        active += [
+            t
+            for t in candidate
+            if t.always_available and t.name not in en_flujo and await _predicado_ok(t, tenant_id)
+        ]
     else:
         active = candidate
     tools = to_llm_schemas(active)
@@ -264,6 +285,12 @@ async def main() -> int:
     plugin_manager.scan()
     await plugin_manager.sync_registry()
     await plugin_manager.activate_all_configured()
+    # Tools del core (escalamiento, memoria, `sub_*`…): el loop real las tiene porque
+    # `core/main.py` las registra al importar; el runner no importa `core.main`.
+    from core.mcp.host import mcp_host as _host
+    from core.tools.core_skill import register_core_skills
+
+    register_core_skills(_host)
 
     spec = _load_spec(args.tenant)
     paths = _scenario_paths(args.tenant, patterns)
