@@ -189,6 +189,7 @@ async def onboard_tenant(
     tenant_id: uuid.UUID | None = None,
     preset: str | None = None,
     plan: str | None = None,
+    sembrar_ejemplos: bool = True,
 ) -> tuple[uuid.UUID, list[str]]:
     """Da de alta un tenant con su asistente. Idempotente.
 
@@ -370,7 +371,7 @@ async def onboard_tenant(
     if preset:
         from core.presets.apply import apply_preset
 
-        resultado = await apply_preset(tenant_id, preset)
+        resultado = await apply_preset(tenant_id, preset, sembrar_ejemplos=sembrar_ejemplos)
         steps.extend(resultado.pasos)
 
     # Flujo de atención (ADR-0054, ADR-0109): el flujo de los packs se compone en

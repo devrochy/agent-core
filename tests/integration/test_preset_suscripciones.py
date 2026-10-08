@@ -122,3 +122,44 @@ async def test_voz_de_marca_se_reemplaza_solo_si_se_pide(tmp_path, monkeypatch) 
     assert await _voz() == "Versión 1"
     assert await ensure_brand_voice(tid, slug, sobrescribir=True) is True
     assert await _voz() == "Versión 2: Free tiene 30 días de prueba"
+
+
+async def test_aplicar_preset_a_un_negocio_existente_no_mezcla_ejemplos() -> None:
+    """Un negocio con catálogo propio no recibe los productos de ejemplo del preset
+    ni le pisan los atributos de un SKU que coincida (visto al aplicar HU-SH-01 en test)."""
+    from pack_commerce.models import ProductVariant
+    from pack_commerce.seed import seed_catalog
+
+    from core.db.session import get_session
+    from core.onboarding import onboard_tenant
+    from core.presets.apply import apply_preset
+    from core.shared.tenant import tenant_scope
+
+    tid, _ = await onboard_tenant(name="Agencia", slug=uniq("exis"), packs=["pack_commerce"], plan="premium")
+    catalogo = {
+        **CATALOGO,
+        "products": [
+            {
+                **CATALOGO["products"][0],
+                "name": "Plan Free",
+                "variants": [
+                    {
+                        "sku": "PLAN-FREE",
+                        "price": 0,
+                        "stock": 0,
+                        "attributes": {"periodicidad": "mensual", "trial_dias": 30, "precio_de_plan": "free"},
+                    }
+                ],
+            }
+        ],
+    }
+    await seed_catalog(tid, catalogo)
+    await apply_preset(tid, "suscripciones", sembrar_ejemplos=False)
+
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            variantes = (
+                await s.execute(select(ProductVariant).where(ProductVariant.tenant_id == tid))
+            ).scalars().all()
+    assert [v.sku for v in variantes] == ["PLAN-FREE"]
+    assert variantes[0].attributes.get("precio_de_plan") == "free"

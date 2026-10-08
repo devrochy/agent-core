@@ -178,9 +178,14 @@ async def _registrar(tenant_id: uuid.UUID, resultado: PresetResult) -> None:
 
 
 # ------------------------------------------------------------------ entrada
-async def apply_preset(tenant_id: uuid.UUID, preset_id: str) -> PresetResult:
+async def apply_preset(tenant_id: uuid.UUID, preset_id: str, *, sembrar_ejemplos: bool = True) -> PresetResult:
     """Aplica `preset_id` al negocio (ver ADR-0110 § 3). Lanza `PresetError` sin
-    cambiar nada si el preset no es válido o el plan no alcanza."""
+    cambiar nada si el preset no es válido o el plan no alcanza.
+
+    `sembrar_ejemplos=False` no carga los datos de ejemplo de los fragmentos: es lo
+    que corresponde a un negocio que ya tiene su catálogo (si no, el ejemplo se suma
+    a lo real y pisa los atributos de un SKU que coincida; visto en HU-SH-01).
+    """
     from core.plugin_manager import plugin_manager
 
     manifest = load_preset(preset_id)
@@ -215,7 +220,7 @@ async def apply_preset(tenant_id: uuid.UUID, preset_id: str) -> PresetResult:
             await guardar_proveedor(tenant_id, manifest.proveedor_suscripciones)
             resultado.pasos.append(f"proveedor de suscripciones: {manifest.proveedor_suscripciones}")
 
-        for pack_id in resultado.habilitados:
+        for pack_id in resultado.habilitados if sembrar_ejemplos else []:
             fragmento = load_fragment(pack_id, preset_id, modules[pack_id].config_schema)
             if fragmento.seed:
                 resultado.pasos.extend(await modules[pack_id].seed_data(tenant_id, fragmento.seed))

@@ -1,5 +1,12 @@
 # Changelog
 
+## Sin versión — Un preset no mezcla sus ejemplos con un catálogo real (2026-10-08)
+
+- Al aplicar el preset `suscripciones` al negocio `solvershub` de test (HU-SH-01), `aplicar-preset` sembró los
+  productos de ejemplo del fragmento: creó «Plan mensual» y le pisó los atributos a `PLAN-FREE`. Ahora
+  `apply_preset(..., sembrar_ejemplos=False)` no los carga; `tenant aplicar-preset` no los carga por defecto
+  (`--con-ejemplos` para pedirlos) y `tenant create --sin-ejemplos` permite crear un negocio que trae su catálogo.
+
 ## Sin versión — La salud del número usa su estado de conexión (2026-10-08)
 
 - `number_registered` fallaba con `code_verification_status = NOT_VERIFIED`, así que un número de prueba de Meta (o
