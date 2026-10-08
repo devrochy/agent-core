@@ -62,7 +62,7 @@ async def test_alta_con_preset_restaurante() -> None:
     assert {"MENU-PLATO-DIA", "MENU-LIMONADA"} <= skus and productos == 2
     assert config.order_prefix == "PED"
     assert versiones >= 2  # versión nueva del AgentSpec
-    assert {p.name for p in spec.playbooks} >= {"ventas"}
+    assert "ventas" in {p["name"] if isinstance(p, dict) else p.name for p in spec.playbooks}
     assert any("pendiente de configurar" in p for p in pasos)
 
 
