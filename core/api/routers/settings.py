@@ -659,6 +659,8 @@ async def save_raw_spec(
 
 
 # ---------------------------------------------------------------- plantillas por evento
+EVENTO_LABEL = {"subscription.charge_created": "Cargo de suscripción"}
+
 class EventTemplateEntry(BaseModel):
     """Evento → plantilla aprobada (HU-ARCH-13, ADR-0108)."""
 
@@ -674,9 +676,21 @@ class EventCatalogItem(BaseModel):
     variables: dict[str, str]  # ruta permitida → descripción
 
 
+class TenantTemplateItem(BaseModel):
+    """Plantilla APROBADA de alguna WABA del negocio, con los placeholders del cuerpo."""
+
+    name: str
+    language: str
+    category: str | None
+    body: str
+    variables: list[str]
+    named: bool
+
+
 class MessageTemplatesSettings(BaseModel):
     events: list[EventCatalogItem]
     mapping: dict[str, EventTemplateEntry]
+    templates: list[TenantTemplateItem] = []
 
 
 class MessageTemplatesUpdate(BaseModel):
@@ -695,13 +709,45 @@ class MissingTemplates(BaseModel):
 
 
 async def _message_templates_out(tenant_id) -> MessageTemplatesSettings:
-    from core.gateway.event_notices import EVENTOS
+    from core.db.models import MessageTemplate
+    from core.gateway.event_notices import (
+        EVENTOS,
+        render_body,
+        template_has_non_body_variables,
+        template_placeholders,
+    )
 
     app_settings = await _load_app_settings(tenant_id)
     raw = dict((app_settings.message_templates_map if app_settings else None) or {})
+    async with get_session() as session:
+        plantillas = (
+            await session.execute(
+                select(MessageTemplate)
+                .where(MessageTemplate.tenant_id == tenant_id, MessageTemplate.status == "APPROVED")
+                .order_by(MessageTemplate.name, MessageTemplate.language)
+            )
+        ).scalars().all()
+    vistas: set[tuple[str, str]] = set()
+    templates: list[TenantTemplateItem] = []
+    for t in plantillas:
+        # La misma plantilla puede estar en varias WABA del negocio: una sola entrada.
+        if (t.name, t.language) in vistas or template_has_non_body_variables(t.components):
+            continue
+        vistas.add((t.name, t.language))
+        templates.append(
+            TenantTemplateItem(
+                name=t.name,
+                language=t.language,
+                category=t.category,
+                body=render_body(t, {}),
+                variables=template_placeholders(t.components),
+                named=(t.parameter_format or "").upper() == "NAMED",
+            )
+        )
     return MessageTemplatesSettings(
         events=[EventCatalogItem(event=k, variables=v) for k, v in EVENTOS.items()],
         mapping={k: EventTemplateEntry.model_validate(v) for k, v in raw.items() if k in EVENTOS},
+        templates=templates,
     )
 
 
@@ -776,7 +822,10 @@ async def save_message_templates(
             "fallback_text": fallback,
         }
     if errores:
-        raise ApiError.bad_request("Revisa el mapeo de plantillas.", "message_templates_invalid", fields=errores)
+        detalle = " ".join(f"{EVENTO_LABEL.get(k, k)}: {v}" for k, v in errores.items())
+        raise ApiError.bad_request(
+            f"Revisa el mapeo de plantillas. {detalle}", "message_templates_invalid", fields=errores
+        )
 
     async with get_session() as session:
         app_settings = (

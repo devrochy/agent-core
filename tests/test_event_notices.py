@@ -377,3 +377,92 @@ async def test_send_to_conversation_relanza_solo_si_se_pide(monkeypatch) -> None
             )
     # En los dos casos el mensaje fallido queda guardado.
     assert [m.status for m in guardados] == ["failed", "failed"]
+
+
+# ---------------------------------------------------------------- config (PUT)
+@pytest.mark.asyncio
+async def test_guardar_mapa_rechaza_evento_y_rutas_no_permitidas() -> None:
+    """El mapa se valida antes de tocar la base: evento desconocido o una ruta que
+    no está en el catálogo del evento (p. ej. texto libre) se rechazan por campo."""
+    from core.api.errors import ApiError
+    from core.api.routers import settings as settings_router
+
+    payload = settings_router.MessageTemplatesUpdate(
+        mapping={
+            "evento.inventado": settings_router.EventTemplateEntry(template="x"),
+            EVENTO: settings_router.EventTemplateEntry(template="aviso_cobro", variables=["llm.texto"]),
+        }
+    )
+    with pytest.raises(ApiError) as exc:
+        await settings_router.save_message_templates(payload, SimpleNamespace(tenant_id=TENANT))
+    assert exc.value.code == "message_templates_invalid"
+    assert set(exc.value.fields) == {"evento.inventado", EVENTO}
+    assert "llm.texto" in exc.value.fields[EVENTO]
+
+
+# ---------------------------------------------------------------- revisión de seguridad
+@pytest.mark.asyncio
+async def test_ventana_desconocida_cuenta_como_cerrada(entorno) -> None:
+    """Sin `service_window_expires_at` no se manda texto libre (Meta lo rechazaría
+    en silencio): sale la plantilla."""
+    conversacion = _conversacion(30)
+    conversacion.service_window_expires_at = None
+    entorno["con"](conversacion)
+    async with tenant_scope(TENANT):
+        r = await notices.send_event_notice(uuid.uuid4(), EVENTO, CONTEXTO, notice_key="sub_charge:7")
+    assert r.modo == "plantilla"
+
+
+@pytest.mark.asyncio
+async def test_aviso_no_encolado_se_reintenta(entorno, monkeypatch) -> None:
+    """Pausa por uso: el aviso no se pierde en silencio, el outbox lo reintenta."""
+
+    async def _pausado(conversation_id, **kw):
+        return False
+
+    monkeypatch.setattr(sender_mod, "send_template_to_conversation", _pausado)
+    entorno["con"](_conversacion(30))
+    async with tenant_scope(TENANT):
+        with pytest.raises(notices.NoticeNotSentError):
+            await notices.send_event_notice(uuid.uuid4(), EVENTO, CONTEXTO, notice_key="sub_charge:8")
+
+
+def test_clean_param_quita_saltos_y_acota() -> None:
+    assert notices.clean_param("Ana\n\nPérez\t   de  la Cruz") == "Ana Pérez de la Cruz"
+    assert len(notices.clean_param("x" * 5000)) == notices.MAX_PARAM
+    assert notices.clean_param("  Ana  ", 2) == "An"
+
+
+def test_build_components_limpia_valores_del_operador() -> None:
+    plantilla = _plantilla(components=[{"type": "BODY", "text": "Hola {{1}}"}])
+    componentes = notices.build_components(plantilla, {"1": "Ana\n    pagá en http://x"})
+    assert componentes[0]["parameters"][0]["text"] == "Ana pagá en http://x"
+
+
+@pytest.mark.asyncio
+async def test_plantilla_sin_credenciales_propias_no_usa_el_numero_de_la_plataforma(monkeypatch) -> None:
+    """Una plantilla no depende de la ventana: con el `.env` le llegaría al cliente
+    del negocio un aviso desde el número de SolversHub."""
+    from core.config import get_settings
+
+    class _Vacia:
+        async def get(self, *a):
+            return None
+
+        async def execute(self, *a, **k):
+            return SimpleNamespace(scalars=lambda: SimpleNamespace(first=lambda: None))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(sender_mod, "get_session", lambda: _Vacia())
+    monkeypatch.setattr(get_settings(), "whatsapp_phone_number_id", "pn-plataforma")
+    monkeypatch.setattr(get_settings(), "whatsapp_access_token", "tok-plataforma")
+    async with tenant_scope(TENANT):
+        _p, con_fallback = await sender_mod.resolve_credentials(None)
+        _p, sin_fallback = await sender_mod.resolve_credentials(None, allow_env_fallback=False)
+    assert con_fallback["phone_number_id"] == "pn-plataforma"
+    assert sin_fallback == {}

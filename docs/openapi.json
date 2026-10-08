@@ -16493,6 +16493,14 @@
             },
             "type": "object",
             "title": "Mapping"
+          },
+          "templates": {
+            "items": {
+              "$ref": "#/components/schemas/TenantTemplateItem"
+            },
+            "type": "array",
+            "title": "Templates",
+            "default": []
           }
         },
         "type": "object",
@@ -20182,6 +20190,55 @@
           "plan_id"
         ],
         "title": "TenantPlanUpdate"
+      },
+      "TenantTemplateItem": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          },
+          "variables": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Variables"
+          },
+          "named": {
+            "type": "boolean",
+            "title": "Named"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "language",
+          "category",
+          "body",
+          "variables",
+          "named"
+        ],
+        "title": "TenantTemplateItem",
+        "description": "Plantilla APROBADA de alguna WABA del negocio, con los placeholders del cuerpo."
       },
       "TokenConnectionRequest": {
         "properties": {

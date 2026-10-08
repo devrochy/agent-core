@@ -53,6 +53,23 @@ class NoticeConfigError(ValueError):
     """La configuración de un evento no es válida (ruta, plantilla o variables)."""
 
 
+class NoticeNotSentError(RuntimeError):
+    """El aviso no se pudo encolar (pausa por uso, carrera con la ventana): se
+    lanza para que el outbox reintente el evento con backoff (ADR-0107)."""
+
+
+MAX_PARAM = 1024
+
+
+def clean_param(valor: str, limite: int = MAX_PARAM) -> str:
+    """Parámetro apto para Meta: sin saltos ni tabulaciones, sin más de un espacio
+    seguido y con largo acotado (Meta rechaza el parámetro, 132000/132018). Se
+    aplica a todo valor, venga del evento o de la persona del equipo."""
+    texto = re.sub(r"[\r\n\t]+", " ", str(valor))
+    texto = re.sub(r" {2,}", " ", texto).strip()
+    return texto[:limite].rstrip()
+
+
 @dataclass(frozen=True)
 class NoticeResult:
     modo: str  # "texto" | "plantilla" | "sin_plantilla" | "duplicado" | "no_enviado"
@@ -98,7 +115,7 @@ def build_components(template: MessageTemplate, values: dict[str, str]) -> list[
     named = (template.parameter_format or "").upper() == "NAMED"
     parametros = []
     for nombre in placeholders:
-        parametro: dict[str, Any] = {"type": "text", "text": values[nombre]}
+        parametro: dict[str, Any] = {"type": "text", "text": clean_param(values[nombre])}
         if named:
             parametro["parameter_name"] = nombre
         parametros.append(parametro)
@@ -120,7 +137,7 @@ def _lookup(context: dict[str, Any], ruta: str) -> str | None:
         actual = actual[parte]
     if actual is None or isinstance(actual, dict | list):
         return None
-    texto = str(actual).strip()
+    texto = clean_param(str(actual))
     return texto or None
 
 
@@ -190,6 +207,7 @@ async def approved_template_for(
                 .join(WabaAccount, WabaAccount.id == MessageTemplate.waba_account_id)
                 .where(
                     WabaAccount.connection_id == conversation.meta_connection_id,
+                    WabaAccount.tenant_id == conversation.tenant_id,
                     MessageTemplate.tenant_id == conversation.tenant_id,
                     MessageTemplate.name == name,
                     MessageTemplate.language == language,
@@ -210,6 +228,7 @@ async def approved_templates_for_conversation(conversation: Conversation) -> lis
                     .join(WabaAccount, WabaAccount.id == MessageTemplate.waba_account_id)
                     .where(
                         WabaAccount.connection_id == conversation.meta_connection_id,
+                        WabaAccount.tenant_id == conversation.tenant_id,
                         MessageTemplate.tenant_id == conversation.tenant_id,
                         MessageTemplate.status == "APPROVED",
                     )
@@ -271,11 +290,8 @@ async def send_event_notice(
     `notice_key` es estable por aviso (p. ej. `sub_charge:<cargo>`): un reintento
     del evento no duplica el mensaje. Corre dentro del `tenant_scope` del evento.
     """
-    from core.gateway.sender import (
-        send_template_to_conversation,
-        send_to_conversation,
-        validate_service_window,
-    )
+    from core.db.models import utcnow
+    from core.gateway.sender import send_template_to_conversation, send_to_conversation
 
     if await _ya_enviado(notice_key):
         return NoticeResult("duplicado")
@@ -287,21 +303,26 @@ async def send_event_notice(
     entrada = (await load_templates_map(conversation.tenant_id)).get(event_key) or {}
     fallback = str(entrada.get("fallback_text") or default_fallback_text).strip()
 
-    try:
-        validate_service_window(conversation, is_template=False)
-        ventana_abierta = True
-    except OutboundWindowExpiredError:
-        ventana_abierta = False
+    # Ventana desconocida (sin `service_window_expires_at`: filas viejas o una
+    # conversación que no abrió un mensaje entrante) cuenta como CERRADA: un texto
+    # libre ahí lo rechaza Meta (131047) sin dejar rastro de `sin_plantilla`.
+    expira = conversation.service_window_expires_at
+    ventana_abierta = expira is not None and expira >= utcnow()
 
     if ventana_abierta:
         if not fallback:
             return NoticeResult("no_enviado", "sin texto de respaldo")
-        enviado = await send_to_conversation(
-            conversation_id,
-            render_fallback(fallback, context, event_key),
-            client_message_id_prefix=notice_key,
-        )
-        return NoticeResult("texto" if enviado else "no_enviado")
+        try:
+            enviado = await send_to_conversation(
+                conversation_id,
+                render_fallback(fallback, context, event_key),
+                client_message_id_prefix=notice_key,
+            )
+        except OutboundWindowExpiredError:
+            enviado = False
+        if not enviado:
+            raise NoticeNotSentError(f"Aviso {event_key} sin encolar (pausa o ventana cerrada)")
+        return NoticeResult("texto")
 
     nombre = str(entrada.get("template") or "").strip()
     idioma = str(entrada.get("language") or "es").strip()
@@ -332,4 +353,6 @@ async def send_event_notice(
         preview_text=render_body(plantilla, valores),
         client_message_id=notice_key,
     )
-    return NoticeResult("plantilla" if enviado else "no_enviado")
+    if not enviado:
+        raise NoticeNotSentError(f"Aviso {event_key} sin encolar (pausa por uso de la API)")
+    return NoticeResult("plantilla")

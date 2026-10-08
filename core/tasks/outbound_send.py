@@ -223,7 +223,11 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
             return None
 
         provider, credentials = await resolve_credentials(
-            conversation.connection_id, conversation.meta_connection_id, expected_tenant_id=tenant_id
+            conversation.connection_id,
+            conversation.meta_connection_id,
+            expected_tenant_id=tenant_id,
+            # Una plantilla nunca sale por el número de la plataforma (ADR-0108).
+            allow_env_fallback=not message.template_name,
         )
         # Canal `web` (HU-CHAN-02): sin proveedor externo; el adaptador solo
         # marca el mensaje como enviado y el widget lo lee por polling.

@@ -1,5 +1,16 @@
 # Changelog
 
+## Sin versión — Plantillas de WhatsApp por evento fuera de la ventana de 24 h (2026-10-08)
+
+- HU-ARCH-13 / ADR-0108. Cada negocio mapea evento → plantilla aprobada (`app_settings.message_templates_map`,
+  migración `0057`). Con la ventana abierta sale el texto de respaldo; cerrada, la plantilla aprobada de la WABA de la
+  conexión (`send_template`); sin plantilla, el mensaje queda `failed` con `sin_plantilla` y el panel lo ve
+  (`/admin/settings/message-templates/missing`). Variables solo de rutas permitidas del evento, nunca del LLM.
+- `subscription.charge_created` sale por el outbox desde `generar_cargos` y lo envía un handler del core.
+- El 409 `window_expired` del operador vuelve a salir (el sender se tragaba el error y el router respondía 204), con
+  `GET .../templates` y `POST .../template-messages` para responder con una plantilla.
+- Una plantilla nunca usa el número de la plataforma (`.env`) y sus parámetros se limpian (`clean_param`).
+
 ## Sin versión — El bloqueo de login usa la IP real del cliente (2026-10-08)
 
 - `client_ip` confiaba en cualquier `X-Forwarded-For`: un cliente que hablara directo con la API podía mandar una IP

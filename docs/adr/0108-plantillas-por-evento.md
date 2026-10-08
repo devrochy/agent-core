@@ -48,6 +48,15 @@ Detalle:
   `POST /admin/conversations/{id}/messages` responde 409 `window_expired`. El panel ofrece
   `GET .../templates` (plantillas aprobadas de la conexión) y envía con `POST .../template-messages`; esas
   variables las escribe la persona del equipo.
+- **Reglas de seguridad (revisión del 2026-10-08):**
+  - una plantilla **nunca** sale por el número de la plataforma (`.env`): `resolve_credentials(...,
+    allow_env_fallback=False)`; sin credenciales propias, el envío falla;
+  - todo parámetro se limpia (`clean_param`: sin saltos ni tabulaciones, espacios colapsados, máx. 1024).
+    `cliente.nombre` se acota a 60 porque `customer.name` lo puede escribir el LLM con
+    `update_customer_profile`;
+  - una ventana desconocida (`service_window_expires_at` nulo) cuenta como **cerrada**;
+  - un aviso que no se pudo encolar (pausa por uso, carrera con la ventana) lanza `NoticeNotSentError`
+    para que el outbox lo reintente; no se marca entregado en silencio.
 - **Canales:** `send_template` no es abstracto. Solo WhatsApp Cloud lo implementa; los demás canales lanzan
   `ChannelError`, porque no tienen ventana de 24 h.
 

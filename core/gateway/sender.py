@@ -97,10 +97,17 @@ async def resolve_credentials(
     connection_id: uuid.UUID | None,
     meta_connection_id: uuid.UUID | None = None,
     expected_tenant_id: uuid.UUID | None = None,
+    *,
+    allow_env_fallback: bool = True,
 ) -> tuple[str, dict[str, str]]:
     """Devuelve (provider, credentials). Orden: `ChannelConnection` (conexión
     manual) -> `MetaConnection`+`meta_token_store` (wizard de Embedded
     Signup, ADR-0030) -> conexión primaria en BD -> `.env`.
+
+    `allow_env_fallback=False` para plantillas (ADR-0108): una plantilla no
+    depende de la ventana, así que con el número de la plataforma (`.env`) le
+    llegaría al cliente de un negocio un aviso desde el número de SolversHub.
+    Sin credenciales propias devuelve `{}` y el envío falla con un error claro.
 
     `expected_tenant_id`: el tenant de la conversación que se está
     despachando -- se verifica contra `MetaConnection.tenant_id` antes de
@@ -152,6 +159,14 @@ async def resolve_credentials(
     if primary and primary.credentials_encrypted:
         creds = get_secret_box().decrypt_json(primary.credentials_encrypted)
         return primary.provider, {str(k): str(v) for k, v in creds.items()}
+
+    if not allow_env_fallback:
+        log.warning(
+            "credenciales_sin_fallback_de_plataforma",
+            connection_id=str(connection_id) if connection_id else None,
+            meta_connection_id=str(meta_connection_id) if meta_connection_id else None,
+        )
+        return "meta", {}
 
     # Último fallback: .env
     return "meta", {
@@ -317,7 +332,10 @@ async def send_template_to_conversation(
             return False
 
     _provider, credentials = await resolve_credentials(
-        conversation.connection_id, conversation.meta_connection_id, expected_tenant_id=conversation.tenant_id
+        conversation.connection_id,
+        conversation.meta_connection_id,
+        expected_tenant_id=conversation.tenant_id,
+        allow_env_fallback=False,
     )
     from core.gateway.meta_usage import connection_id_for_phone_number, is_paused
 
@@ -326,6 +344,10 @@ async def send_template_to_conversation(
         credentials.get("phone_number_id", ""), current_tenant_id
     )
     paused = await is_paused(current_tenant_id, meta_connection_id)
+    if paused:
+        # No se usa el `client_message_id` estable del aviso: así un reintento del
+        # evento (cuando pase la pausa) puede volver a intentarlo (ADR-0108).
+        client_message_id = None
     async with get_session() as session:
         message = Message(
             tenant_id=current_tenant_id,
