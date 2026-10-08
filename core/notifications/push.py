@@ -74,7 +74,7 @@ async def enviar_push(
             "push_disabled",
             tenant_id=str(tenant_id),
             admin_ids=[str(a) for a in admin_ids],
-            title=title[:80],
+            kind=str((data or {}).get("kind", "")),  # sin el título: puede llevar datos del cliente
         )
         return
 

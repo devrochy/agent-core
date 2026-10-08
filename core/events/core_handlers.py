@@ -99,6 +99,8 @@ async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
         return
     async with get_session() as session:
         customer = await session.get(Customer, customer_id)
+    if customer is not None and customer.tenant_id != get_current_tenant_id():
+        customer = None  # segundo cinturón además de RLS (auditoría HU-SH-02)
     # `customer.name` lo puede escribir el LLM (`update_customer_profile`): se
     # limpia y se acota antes de que llegue a una plantilla (ADR-0108).
     nombre = clean_param((customer.name if customer else None) or "", 60) or "cliente"

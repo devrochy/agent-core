@@ -479,9 +479,11 @@ async def create_appointment(
     async with get_session() as session:
         if payload.appointment_type_id is not None:
             tipo = await get_owned(session, AppointmentType, payload.appointment_type_id, principal.tenant_id)
+            if tipo is None:
+                raise ApiError.bad_request("El tipo de cita no es de este negocio.", "tipo_invalido")
         if payload.customer_id is not None:
             cliente = await session.get(Customer, payload.customer_id)
-            if cliente is None or cliente.tenant_id != principal.tenant_id:
+            if cliente is None or cliente.tenant_id != principal.tenant_id or cliente.deleted_at is not None:
                 raise ApiError.bad_request("El cliente no es de este negocio.", "cliente_invalido")
     zona = await _timezone_name()
     try:
@@ -942,6 +944,8 @@ async def patch_appointment(
             if payload.notes is not None:
                 row.notes = payload.notes.strip()
             if payload.appointment_type_id is not None:
+                if await get_owned(session, AppointmentType, payload.appointment_type_id, principal.tenant_id) is None:
+                    raise ApiError.bad_request("El tipo de cita no es de este negocio.", "tipo_invalido")
                 row.appointment_type_id = payload.appointment_type_id
             row.start_at = new_start
             row.end_at = new_end
@@ -1213,7 +1217,11 @@ async def marcar_asistencia(
         row.status = nuevo
         row.updated_at = utcnow()
         if cambio and nuevo == "no_asistio" and row.customer_id is not None:
-            tipo = await session.get(AppointmentType, row.appointment_type_id) if row.appointment_type_id else None
+            tipo = (
+                await get_owned(session, AppointmentType, row.appointment_type_id, row.tenant_id)
+                if row.appointment_type_id
+                else None
+            )
             await emit_domain(
                 session,
                 tenant_id=row.tenant_id,

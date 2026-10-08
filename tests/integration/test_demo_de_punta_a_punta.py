@@ -164,7 +164,7 @@ async def test_avisar_al_equipo_va_al_asignado_o_a_los_duenos(monkeypatch) -> No
     monkeypatch.setattr(push.send_push_batch, "delay", lambda *a, **k: enviados.append(("asignado", a[1])))
     monkeypatch.setattr(push.notify_owners_push, "delay", lambda *a, **k: enviados.append(("duenos", None)))
     tid = await _tenant_calendario()
-    asignado = uuid.uuid4()
+    asignado = await _admin_del_negocio(tid)  # colaborador real del negocio
     inicio = datetime(2027, 3, 17, 15, tzinfo=UTC)
     async with tenant_scope(tid):
         async with get_session() as s:
@@ -276,3 +276,53 @@ async def test_cita_desde_el_panel_en_modo_interno_avisa_al_cliente() -> None:
     avisos = await _eventos(tid, "appointment.confirmed")
     assert [e.payload["customer_id"] for e in avisos] == [str(cliente_id)]
     assert [e.payload["accion"] for e in await _eventos(tid, "appointment.changed")] == ["programada"]
+
+
+# ------------------------------------------------------------- auditoría HU-SH-02
+async def test_el_asistente_no_ve_ni_toca_citas_de_otro_cliente() -> None:
+    from pack_calendar.skills import CalendarSkill
+
+    from core.shared.tenant import tenant_scope
+
+    tid = await _tenant_calendario()
+    await _configurar(tid)
+    ctx_ana, ctx_otro = _contexto(), _contexto()
+    await _seed_email(tid, ctx_ana.conversation_id, "ana@ejemplo.com")
+    skill = CalendarSkill()
+    async with tenant_scope(tid):
+        creada = await skill.create_event(
+            {"title": "Demo con Ana Pérez", "start_datetime": f"{FECHA}T14:00:00", "attendee_email": "ana@ejemplo.com"},
+            ctx_ana,
+        )
+        assert creada["status"] == "created"
+        ajenas = await skill.list_appointments({"title": "Ana"}, ctx_otro)
+        cancelar = await skill.cancel_event({"title": "Demo con Ana", "attendee_email": "ana@ejemplo.com"}, ctx_otro)
+        propias = await skill.list_appointments({}, ctx_ana)
+        ocupados = await skill.check_availability({"date": FECHA}, ctx_otro)
+    assert ajenas["total"] == 0
+    assert cancelar.get("status") != "cancelled"
+    assert propias["total"] == 1
+    assert all("Ana" not in str(b.get("summary")) for b in ocupados.get("busy_slots", []))
+
+
+async def test_un_ex_colaborador_no_recibe_el_aviso(monkeypatch) -> None:
+    from pack_calendar.demo import avisar_al_equipo
+    from pack_calendar.models import Appointment
+
+    import core.tasks.push_tasks as push
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    enviados: list[str] = []
+    monkeypatch.setattr(push.send_push_batch, "delay", lambda *a, **k: enviados.append("asignado"))
+    monkeypatch.setattr(push.notify_owners_push, "delay", lambda *a, **k: enviados.append("duenos"))
+    tid = await _tenant_calendario()
+    inicio = datetime(2027, 3, 19, 15, tzinfo=UTC)
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            cita = Appointment(tenant_id=tid, title="Demo", start_at=inicio, end_at=inicio + timedelta(hours=1), asignado_admin_id=uuid.uuid4())
+            s.add(cita)
+            await s.flush()
+            cita_id = str(cita.id)
+        await avisar_al_equipo(cita_id, "programada", "Demo", inicio.isoformat())
+    assert enviados == ["duenos"]

@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, text
 
-from core.db.session import get_session
+from core.db.session import get_owned, get_session
 from core.events.outbox import emit_domain
 from core.shared.events import ON_APPOINTMENT_REMINDER
 from core.shared.logger import get_logger
@@ -105,7 +105,7 @@ async def _recordatorios_de_citas(now: datetime) -> int:
                     if h is None:
                         continue
                     tipo = (
-                        await session.get(AppointmentType, cita.appointment_type_id)
+                        await get_owned(session, AppointmentType, cita.appointment_type_id, tenant_id)
                         if cita.appointment_type_id
                         else None
                     )

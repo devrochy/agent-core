@@ -855,9 +855,10 @@ class CalendarSkill(BaseSkill):
     ) -> list[Any]:
         """Citas `scheduled` del cliente (tenant actual), ordenadas por fecha.
 
-        Match: si `event_id` viene, coincide con el `google_event_id` o con el `id`
-        local (modo interno); si no, por conversación del contexto y/o título y/o
-        `attendee_email` (OR). Con `upcoming_only`, solo las futuras.
+        SIEMPRE acotado al cliente o a la conversación del contexto (auditoría HU-SH-02):
+        antes, un título o email del LLM podía traer citas de OTROS clientes del negocio
+        y reagendarlas o cancelarlas. Dentro de ese conjunto, `event_id` (google o id
+        local), `attendee_email` y título afinan. Con `upcoming_only`, solo las futuras.
         """
         from sqlalchemy import or_, select
 
@@ -869,6 +870,14 @@ class CalendarSkill(BaseSkill):
             return []
         event_id = str(arguments.get("event_id") or "").strip()
         conv_id = _as_uuid(context.conversation_id) if getattr(context, "conversation_id", None) else None
+        cliente_id = _as_uuid(context.customer_id) if getattr(context, "customer_id", None) else None
+        propias: list[Any] = []
+        if cliente_id is not None:
+            propias.append(Appointment.customer_id == cliente_id)
+        if conv_id is not None:
+            propias.append(Appointment.conversation_id == conv_id)
+        if not propias:
+            return []
         title = str(arguments.get("title") or "").strip()
         email = str(arguments.get("attendee_email") or "").strip()
         async with get_session() as session:
@@ -876,6 +885,7 @@ class CalendarSkill(BaseSkill):
                 Appointment.tenant_id == tenant_id,
                 Appointment.deleted_at.is_(None),
                 Appointment.status == "scheduled",
+                or_(*propias),
             )
             if upcoming_only:
                 q = q.where(Appointment.start_at >= datetime.now(UTC))
@@ -886,16 +896,10 @@ class CalendarSkill(BaseSkill):
                     cond = or_(cond, Appointment.id == eid)
                 q = q.where(cond)
             else:
-                filters: list[Any] = []
                 if email:
-                    filters.append(Appointment.attendee_email == email)
-                if conv_id is not None:
-                    filters.append(Appointment.conversation_id == conv_id)
+                    q = q.where(Appointment.attendee_email == email)
                 if title:
-                    filters.append(Appointment.title.ilike(f"%{title}%"))
-                if not filters:
-                    return []
-                q = q.where(or_(*filters))
+                    q = q.where(Appointment.title.ilike(f"%{title}%"))
             rows = list((await session.execute(q.order_by(Appointment.start_at.asc()))).scalars().all())
         return rows
 
@@ -1328,7 +1332,8 @@ class CalendarSkill(BaseSkill):
                 {
                     "start": a.start_at.astimezone(tz).isoformat(),
                     "end": a.end_at.astimezone(tz).isoformat(),
-                    "summary": a.title or "(ocupado)",
+                    # Sin el título: puede llevar el nombre de OTRO cliente (auditoría HU-SH-02).
+                    "summary": "(ocupado)",
                 }
             )
             intervals.append((a.start_at, a.end_at))

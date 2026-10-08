@@ -78,10 +78,24 @@ async def avisar_al_equipo(appointment_id: str, accion: str, titulo: str, inicio
     tenant_id = get_current_tenant_id()
     if tenant_id is None:
         return
+    from sqlalchemy import select
+
+    from core.db.models import TenantUser
+
     async with get_session() as session:
         cita = await session.get(Appointment, uuid.UUID(appointment_id))
-    if cita is None or cita.tenant_id != tenant_id:
-        return
+        if cita is None or cita.tenant_id != tenant_id:
+            return
+        asignado = cita.asignado_admin_id
+        if asignado is not None:
+            # Si ya no es colaborador del negocio, el aviso va a los dueños (auditoría).
+            sigue = (
+                await session.execute(
+                    select(TenantUser.id).where(TenantUser.tenant_id == tenant_id, TenantUser.admin_id == asignado)
+                )
+            ).first()
+            if sigue is None:
+                asignado = None
     cuando = ""
     if inicio:
         local = datetime.fromisoformat(inicio).astimezone(ZoneInfo(cita.timezone or "America/Bogota"))
@@ -93,8 +107,8 @@ async def avisar_al_equipo(appointment_id: str, accion: str, titulo: str, inicio
     try:
         from core.tasks.push_tasks import notify_owners_push, send_push_batch
 
-        if cita.asignado_admin_id:
-            send_push_batch.delay(str(tenant_id), [str(cita.asignado_admin_id)], titulo_push, cuerpo, data)
+        if asignado:
+            send_push_batch.delay(str(tenant_id), [str(asignado)], titulo_push, cuerpo, data)
         else:
             notify_owners_push.delay(str(tenant_id), titulo_push, cuerpo, data)
     except Exception:
