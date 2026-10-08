@@ -170,3 +170,41 @@ async def test_callback_valido_guarda_la_conexion_solo_en_su_negocio(app_client,
     assert conn_a is not None and conn_a.external_id == "dueno@ejemplo.com"
     async with tenant_scope(tenant_b):
         assert await get_active_connection("google_calendar", tenant_b) is None
+
+
+async def test_callback_en_otro_negocio_no_guarda_la_conexion(app_client, monkeypatch) -> None:
+    """El `state` lleva el negocio que inició el flujo: si el callback llega con la
+    sesión en otro negocio (cambió de negocio en otra pestaña, o la app abrió el panel
+    en el negocio equivocado), no se intercambia nada ni se guarda la cuenta."""
+    from _api_helpers import api_headers
+    from pack_calendar import oauth
+
+    from core.gateway.connections import get_active_connection
+    from core.shared.tenant import tenant_scope
+
+    llamadas: list[str] = []
+
+    async def _no_deberia(*args, **kwargs):
+        llamadas.append("exchange")
+        return {}
+
+    monkeypatch.setattr(oauth, "exchange_code", _no_deberia)
+    tenant_a = await _tenant_con_google()
+    tenant_b = await _tenant_con_google()
+    _location, state = await _start(app_client, await api_headers(app_client, tenant_a))
+    assert state.startswith(f"{tenant_a}.")
+
+    r = await app_client.get(
+        CALLBACK,
+        headers={
+            **(await api_headers(app_client, tenant_b)),
+            "Cookie": f"oauth_state={state}; oauth_next=/calendario",
+        },
+        params={"code": "codigo-google", "state": state},
+        follow_redirects=False,
+    )
+    assert r.status_code == 302, r.text
+    assert r.headers["location"].endswith("/calendario?google=otro_negocio")
+    assert llamadas == []
+    async with tenant_scope(tenant_b):
+        assert await get_active_connection("google_calendar", tenant_b) is None

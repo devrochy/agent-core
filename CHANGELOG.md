@@ -1,5 +1,12 @@
 # Changelog
 
+## Sin versión — Google Calendar se conecta solo al negocio que inició el flujo (2026-10-08)
+
+- El `state` del OAuth de Google Calendar ahora lleva el negocio que lo inició (`<tenant_id>.<aleatorio>`). El callback
+  guardaba la cuenta en el negocio de la sesión al volver, que puede ser otro: el usuario cambió de negocio en otra
+  pestaña mientras estaba en Google, o la app abrió el panel con la sesión del navegador en otro negocio (smoke de la
+  APK, 2026-10-07). Si no coincide, no se intercambia el código y se vuelve con `?google=otro_negocio`.
+
 ## Sin versión — Una tool que pide relevo humano escala (2026-10-08)
 
 - `pack_commerce` devolvía `{"error": ..., "escalate": True}` con un pedido por encima de `monto_alto_threshold`, pero
