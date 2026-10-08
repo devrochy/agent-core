@@ -1,0 +1,117 @@
+"""Handlers del core para eventos de dominio del outbox (ADR-0107, ADR-0108).
+
+Los eventos de dominio solo los entrega el despachador del worker, así que estos
+handlers se registran ahí (`ensure_core_handlers`, una vez por proceso).
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+from decimal import Decimal, InvalidOperation
+from typing import Any
+
+from sqlalchemy import select
+
+from core.db.models import Conversation, Customer
+from core.db.session import get_session
+from core.shared.events import ON_SUBSCRIPTION_CHARGE_CREATED, event_bus
+from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
+
+log = get_logger(__name__)
+
+_registered_pid: int | None = None
+
+
+def format_amount(monto: Any, moneda: str | None) -> str:
+    """`200000.00` + COP → `$200.000`; otras monedas con dos decimales y su código."""
+    try:
+        valor = Decimal(str(monto))
+    except (InvalidOperation, ValueError):
+        return str(monto or "")
+    if (moneda or "COP").upper() == "COP":
+        return "$" + f"{int(valor.quantize(Decimal('1'))):,}".replace(",", ".")
+    return f"{valor:,.2f} {(moneda or '').upper()}".strip()
+
+
+async def _whatsapp_conversation_for(customer_id: uuid.UUID) -> Conversation | None:
+    """Conversación de WhatsApp más reciente del cliente (la de su número)."""
+    async with get_session() as session:
+        return (
+            await session.execute(
+                select(Conversation)
+                .where(
+                    Conversation.tenant_id == get_current_tenant_id(),
+                    Conversation.customer_id == customer_id,
+                    Conversation.channel == "whatsapp",
+                    Conversation.deleted_at.is_(None),
+                )
+                .order_by(Conversation.started_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+
+async def on_subscription_charge_created(**payload: Any) -> None:
+    """Avisa al cliente del cargo del período (plantilla o texto según la ventana)."""
+    from core.gateway.event_notices import send_event_notice
+
+    try:
+        customer_id = uuid.UUID(str(payload.get("customer_id")))
+    except ValueError:
+        log.warning("event_notice_payload_invalido", topic=ON_SUBSCRIPTION_CHARGE_CREATED)
+        return
+    conversation = await _whatsapp_conversation_for(customer_id)
+    if conversation is None:
+        # Sin conversación de WhatsApp no hay a quién escribir: no es un fallo
+        # que valga reintentar.
+        log.info(
+            "event_notice_sin_conversacion",
+            topic=ON_SUBSCRIPTION_CHARGE_CREATED,
+            customer_id=str(customer_id),
+        )
+        return
+    async with get_session() as session:
+        customer = await session.get(Customer, customer_id)
+    from core.gateway.event_notices import clean_param
+
+    # `customer.name` lo puede escribir el LLM (`update_customer_profile`): se
+    # limpia y se acota antes de que llegue a una plantilla (ADR-0108).
+    nombre = clean_param((customer.name if customer else None) or "", 60) or "cliente"
+    context = {
+        "cliente": {"nombre": nombre},
+        "suscripcion": {"concepto": payload.get("concepto")},
+        "cargo": {
+            "monto": format_amount(payload.get("monto"), payload.get("moneda")),
+            "moneda": payload.get("moneda"),
+            "periodo": payload.get("periodo"),
+            "fecha_vencimiento": payload.get("fecha_vencimiento"),
+            "referencia": payload.get("referencia"),
+            "link": payload.get("link"),
+        },
+    }
+    result = await send_event_notice(
+        conversation.id,
+        ON_SUBSCRIPTION_CHARGE_CREATED,
+        context,
+        notice_key=f"sub_charge:{payload.get('charge_id')}",
+    )
+    log.info(
+        "event_notice_resultado",
+        topic=ON_SUBSCRIPTION_CHARGE_CREATED,
+        conversation_id=str(conversation.id),
+        modo=result.modo,
+        detalle=result.detalle,
+    )
+
+
+def ensure_core_handlers() -> None:
+    """Suscribe los handlers del core una vez por proceso (después del fork)."""
+    global _registered_pid
+    pid = os.getpid()
+    if _registered_pid == pid:
+        return
+    event_bus.unsubscribe_all([on_subscription_charge_created])
+    event_bus.subscribe(ON_SUBSCRIPTION_CHARGE_CREATED, on_subscription_charge_created)
+    _registered_pid = pid

@@ -104,6 +104,7 @@ def _send_one_fixture(monkeypatch, *, earliest=True, claim=True, adapter=None):
         id=uuid.uuid4(), tenant_id=tenant_id, status="queued",
         conversation_id=uuid.uuid4(), created_at=datetime.now(UTC),
         media_type=None, media_url=None, content="hola",
+        template_name=None, template_language=None, template_components=None,
     )
     conv = SimpleNamespace(
         connection_id=None, meta_connection_id=None, customer_id=uuid.uuid4(), channel="whatsapp"
@@ -383,3 +384,34 @@ async def test_handle_policy_defer_agotado_audita_y_no_reprograma(monkeypatch):
 
     assert reprogramados == []
     assert auditorias[0]["action"] == "outbound_bloqueado_por_politica"
+
+
+@pytest.mark.asyncio
+async def test_send_one_plantilla_usa_send_template(monkeypatch):
+    """HU-ARCH-13: un outbound con `template_name` sale por `send_template` con
+    el payload ya resuelto, no como texto."""
+    from types import SimpleNamespace
+
+    from core.tasks.outbound_send import _send_one
+
+    enviados: list = []
+
+    async def _template(credentials, external_id, name, language, components):
+        enviados.append((external_id, name, language, components))
+        return "wamid-plantilla"
+
+    async def _no_texto(*a, **k):
+        raise AssertionError("una plantilla no sale como texto")
+
+    adapter = SimpleNamespace(send_text=_no_texto, send_image=_no_texto, send_template=_template)
+    msg, tenant_id, _calls = _send_one_fixture(monkeypatch, adapter=adapter)
+    msg.template_name = "aviso_cobro"
+    msg.template_language = "es"
+    msg.template_components = [{"type": "body", "parameters": [{"type": "text", "text": "Ana"}]}]
+
+    assert await _send_one(msg.id, tenant_id) is None
+    assert msg.status == "sent"
+    assert msg.external_message_id == "wamid-plantilla"
+    assert enviados == [
+        ("whatsapp:+573001234567", "aviso_cobro", "es", msg.template_components)
+    ]

@@ -223,7 +223,11 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
             return None
 
         provider, credentials = await resolve_credentials(
-            conversation.connection_id, conversation.meta_connection_id, expected_tenant_id=tenant_id
+            conversation.connection_id,
+            conversation.meta_connection_id,
+            expected_tenant_id=tenant_id,
+            # Una plantilla nunca sale por el número de la plataforma (ADR-0108).
+            allow_env_fallback=not message.template_name,
         )
         # Canal `web` (HU-CHAN-02): sin proveedor externo; el adaptador solo
         # marca el mensaje como enviado y el widget lo lee por polling.
@@ -232,7 +236,15 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
         adapter = outbound_adapter_for(provider)
 
         try:
-            if message.media_type == "image" and message.media_url:
+            if message.template_name:
+                wamid = await adapter.send_template(
+                    credentials,
+                    customer.external_id,
+                    message.template_name,
+                    message.template_language or "es",
+                    list(message.template_components or []),
+                )
+            elif message.media_type == "image" and message.media_url:
                 wamid = await adapter.send_image(credentials, customer.external_id, message.media_url, message.content)
             else:
                 wamid = await adapter.send_text(credentials, customer.external_id, message.content)

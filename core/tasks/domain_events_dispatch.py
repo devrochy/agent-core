@@ -110,10 +110,12 @@ async def dispatch_due_events(limit: int = BATCH) -> int:
 
 
 async def _run_dispatch() -> None:
+    from core.events.core_handlers import ensure_core_handlers
     from core.plugin_manager import plugin_manager
 
     # Sin esto, el worker no tiene suscriptores (solo la API activaba packs).
     await plugin_manager.ensure_process_activation()
+    ensure_core_handlers()
     procesados = await dispatch_due_events()
     if procesados:
         log.info("domain_events_dispatched", total=procesados)
