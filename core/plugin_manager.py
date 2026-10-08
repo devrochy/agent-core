@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import importlib.metadata
+import os
 import sys
 import uuid
 from datetime import UTC, datetime
@@ -50,6 +51,10 @@ class PluginManager:
         self._modules: dict[str, BaseModule] = {}   # instancias detectadas
         self._active: set[str] = set()
         self._activation_locks: dict[str, asyncio.Lock] = {}
+        # Activación por proceso fuera de la API (worker): ver `ensure_process_activation`.
+        self._process_activated_pid: int | None = None
+        self._process_activation_lock: asyncio.Lock | None = None
+        self._process_activation_lock_pid: int | None = None
 
     def _activation_lock(self, plugin_id: str) -> asyncio.Lock:
         """Un lock por plugin_id (no por tenant): serializa la PRIMERA
@@ -184,9 +189,15 @@ class PluginManager:
         return module.config_schema.model_validate(values)
 
     # ------------------------------------------------------------ activación
-    async def activate(self, plugin_id: str) -> None:
+    async def activate(self, plugin_id: str, *, register_only: bool = False) -> None:
         """Registra las tools/skills del plugin en `mcp_host` (una sola vez por
         proceso) y valida la config del tenant actual.
+
+        `register_only=True` es para procesos que no son la API (el worker de
+        Celery): solo corre `on_activate` para que el proceso tenga las tools y
+        los suscriptores de eventos (`host.subscribe`). No aplica migraciones
+        del plugin, no escribe `PluginRecord.status` ni emite
+        `ON_PLUGIN_ACTIVATED` -- eso es de la API, que es la dueña del estado.
 
         `mcp_host` es un registro GLOBAL al proceso (`register_skill` revienta
         con "Skill duplicada" si se llama dos veces para el mismo plugin) — el
@@ -210,6 +221,8 @@ class PluginManager:
         module = self._require(plugin_id)
         async with self._activation_lock(plugin_id):
             if plugin_id in self._active:
+                if register_only:
+                    return
                 # ya registrado en mcp_host para otro tenant; acá solo se
                 # valida la config de ESTE tenant, sin tocar el status
                 # global del plugin ni mcp_host -- un error de config de B
@@ -222,19 +235,24 @@ class PluginManager:
                 return
             try:
                 module.config = await self.load_config(plugin_id)
-                self._run_plugin_migrations(plugin_id)
+                if not register_only:
+                    self._run_plugin_migrations(plugin_id)
                 mcp_host.begin_activation(plugin_id)
                 try:
                     module.on_activate(mcp_host)
                 finally:
                     mcp_host.end_activation()
                 self._active.add(plugin_id)
+                if register_only:
+                    log.info("plugin_registered_in_process", plugin=plugin_id)
+                    return
                 await self._set_status(plugin_id, "active", activated=True)
                 await event_bus.emit(ON_PLUGIN_ACTIVATED, plugin_id=plugin_id)
                 log.info("plugin_activated", plugin=plugin_id)
             except Exception as exc:
                 mcp_host.remove_plugin(plugin_id)
-                await self._set_status(plugin_id, "error", error=str(exc))
+                if not register_only:
+                    await self._set_status(plugin_id, "error", error=str(exc))
                 log.exception("plugin_activation_failed", plugin=plugin_id)
                 raise PluginError(plugin_id, f"Activación falló: {exc}") from exc
 
@@ -359,8 +377,9 @@ class PluginManager:
                 row.deleted_at = datetime.now(UTC)
         log.info("plugin_reactivated_for_tenant", plugin=plugin_id, tenant_id=str(tenant_id))
 
-    async def activate_all_configured(self) -> None:
+    async def activate_all_configured(self, *, register_only: bool = False) -> None:
         """Al arrancar: activa todo plugin con estado configured/active en BD.
+        `register_only` se pasa a `activate()` (ver ahí; lo usa el worker).
 
         El registro de tools en `mcp_host` es una acción GLOBAL de una sola vez
         por proceso (ver docstring de `activate()`) -- qué tenant se use para esa
@@ -396,9 +415,41 @@ class PluginManager:
                 continue
             async with tenant_scope(tenant_id):
                 try:
-                    await self.activate(record.id)
+                    await self.activate(record.id, register_only=register_only)
                 except PluginError:
                     pass  # ya quedó en estado error; el asistente sigue
+
+    async def ensure_process_activation(self) -> None:
+        """Registra los plugins configurados en ESTE proceso, una vez por PID.
+
+        La API lo hace en su lifespan (`core/main.py`). El worker de Celery solo
+        hacía `scan()`, así que el despachador del outbox (ADR-0107) corría
+        `emit_strict` sin suscriptores y marcaba `entregado` sin ejecutar ningún
+        handler. Se llama desde el despachador (y no en `worker_init`) para que
+        corra en cada proceso hijo del pool prefork, después del fork, con su
+        propio engine y loop. El PID detecta un fork posterior a la activación.
+        """
+        pid = os.getpid()
+        if self._process_activated_pid == pid:
+            return
+        async with self._process_activation_lock_for(pid):
+            if self._process_activated_pid == pid:
+                return
+            if self._process_activated_pid is not None:
+                # Proceso hijo de uno ya activado: hereda `mcp_host`/`event_bus`
+                # del padre; se limpia para no duplicar suscriptores.
+                for plugin_id in list(self._active):
+                    mcp_host.remove_plugin(plugin_id)
+                self._active.clear()
+            await self.activate_all_configured(register_only=True)
+            self._process_activated_pid = pid
+            log.info("plugins_activated_in_process", pid=pid, plugins=sorted(self._active))
+
+    def _process_activation_lock_for(self, pid: int) -> asyncio.Lock:
+        if self._process_activation_lock is None or self._process_activation_lock_pid != pid:
+            self._process_activation_lock = asyncio.Lock()
+            self._process_activation_lock_pid = pid
+        return self._process_activation_lock
 
     async def _tenant_with_config(self, plugin_id: str) -> uuid.UUID | None:
         """Un tenant real con config guardada para este plugin, para el arranque.

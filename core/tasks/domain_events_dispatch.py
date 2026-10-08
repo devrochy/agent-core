@@ -71,6 +71,16 @@ async def dispatch_due_events(limit: int = BATCH) -> int:
                     evento = await session.get(DomainEvent, event_id)
                     if evento is None or evento.status != "pendiente":
                         continue
+                    if not event_bus.has_subscribers(evento.topic):
+                        # No es un fallo (un topic puede no tener handlers),
+                        # pero se deja rastro: así se vio que el worker no
+                        # tenía los packs activados.
+                        log.warning(
+                            "domain_event_sin_handlers",
+                            event_id=str(event_id),
+                            tenant_id=str(tenant_id),
+                            topic=evento.topic,
+                        )
                     try:
                         await event_bus.emit_strict(
                             evento.topic, **payload_para_handlers(evento.payload)
@@ -100,6 +110,10 @@ async def dispatch_due_events(limit: int = BATCH) -> int:
 
 
 async def _run_dispatch() -> None:
+    from core.plugin_manager import plugin_manager
+
+    # Sin esto, el worker no tiene suscriptores (solo la API activaba packs).
+    await plugin_manager.ensure_process_activation()
     procesados = await dispatch_due_events()
     if procesados:
         log.info("domain_events_dispatched", total=procesados)
