@@ -48,6 +48,9 @@ def create(
     packs: str = typer.Option("", "--packs", help="Coma-separado, ej: pack_commerce"),
     preset: str = typer.Option("", "--preset", help="Preset de negocio (ver `tenant presets`), ej: restaurante"),
     plan: str = typer.Option("", "--plan", help="Plan inicial (free, basic, premium, empresarial)"),
+    sin_ejemplos: bool = typer.Option(
+        False, "--sin-ejemplos", help="No cargar los datos de ejemplo del preset (el negocio trae su catálogo)"
+    ),
     escalation_triggers: str = typer.Option("", "--escalation-triggers",
                                             help="Coma-separado (default: asesor, humano, persona real, reclamo, queja)"),
     admin_email: str = typer.Option("", "--admin-email", help="Email del admin del tenant (opcional)"),
@@ -78,6 +81,7 @@ def create(
             "packs": [p.strip() for p in packs.split(",") if p.strip()],
             "preset": preset.strip() or None,
             "plan": plan.strip() or None,
+            "sembrar_ejemplos": not sin_ejemplos,
             "escalation_triggers": [t.strip() for t in escalation_triggers.split(",") if t.strip()],
             "admin_email": admin_email,
             "admin_password": admin_password,
@@ -219,6 +223,7 @@ async def _onboard(answers: dict) -> tuple[uuid.UUID, list[str]]:
         whatsapp=answers["whatsapp"],
         preset=answers.get("preset"),
         plan=answers.get("plan"),
+        sembrar_ejemplos=answers.get("sembrar_ejemplos", True),
     )
     if generated:
         console.print(
@@ -311,9 +316,13 @@ def presets() -> None:
 def aplicar_preset(
     slug: str = typer.Argument(..., help="Slug del tenant"),
     preset: str = typer.Argument(..., help="Id del preset (ver `tenant presets`)"),
+    con_ejemplos: bool = typer.Option(
+        False, "--con-ejemplos", help="Cargar también los datos de ejemplo del preset (por defecto no)"
+    ),
 ) -> None:
     """Aplica un preset a un negocio que ya existe (HU-SH-01). Idempotente: no pisa
-    la config ni la persona que el negocio ya cambió (ADR-0110)."""
+    la config ni la persona que el negocio ya cambió (ADR-0110). Por defecto NO carga
+    los datos de ejemplo: un negocio existente ya tiene su catálogo."""
     from core.db.models import Tenant
     from core.db.session import get_session
     from core.presets import PresetError
@@ -327,7 +336,7 @@ def aplicar_preset(
         if tenant is None:
             raise typer.BadParameter(f"Tenant no existe: {slug}")
         try:
-            resultado = await apply_preset(tenant.id, preset)
+            resultado = await apply_preset(tenant.id, preset, sembrar_ejemplos=con_ejemplos)
         except PresetError as exc:
             console.print(f"[red]{exc}[/red]")
             raise typer.Exit(1) from exc
