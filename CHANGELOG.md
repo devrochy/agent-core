@@ -1,5 +1,21 @@
 # Changelog
 
+## Sin versión — El bloqueo de login usa la IP real del cliente (2026-10-08)
+
+- `client_ip` confiaba en cualquier `X-Forwarded-For`: un cliente que hablara directo con la API podía mandar una IP
+  distinta por intento (esquivar el bloqueo por IP) o la de otro (bloquearlo). Ahora las cabeceras de proxy solo cuentan
+  si la conexión llega desde `TRUSTED_PROXY_CIDRS` (por defecto, redes privadas y loopback) y la IP es la primera no
+  confiable de `X-Forwarded-For` leída de derecha a izquierda, con `CF-Connecting-IP` como respaldo.
+- El BFF del panel llamaba a la API sin la IP del usuario, así que 5 fallos de cualquiera bloqueaban el login del panel
+  para todos durante 15 minutos (visto en test el 2026-10-08). El panel ahora reenvía la cadena (solvershub-panel).
+
+## Sin versión — El worker registra los suscriptores de los packs (2026-10-08)
+
+- El despachador del outbox (ADR-0107) corre en el worker, que solo hacía `plugin_manager.scan()`: `emit_strict` corría
+  sin handlers y el evento quedaba `entregado` sin efecto. Ahora `ensure_process_activation()` corre `on_activate`
+  (`activate(register_only=True)`: sin migraciones ni escrituras de estado) una vez por proceso hijo, y el despachador
+  avisa `domain_event_sin_handlers`. Verificado en test: un `payment.confirmed` dejó el pedido `pagado` (#275).
+
 ## Sin versión — `rls_tests_pass` deja de correr tests en el servidor (2026-10-08)
 
 - El check de producción de Meta `rls_tests_pass` corría `pytest tests/integration` dentro del proceso. La imagen

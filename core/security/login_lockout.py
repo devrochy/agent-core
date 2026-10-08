@@ -19,6 +19,8 @@ nunca bloquean el mismo usuario en otro (aislamiento por negocio).
 
 from __future__ import annotations
 
+import ipaddress
+
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
@@ -124,16 +126,61 @@ async def register_success(scope: str, identifier: str | None, ip: str | None) -
         log.warning("login_lockout_redis_error", scope=scope, op="register_success", exc_info=True)
 
 
-def client_ip(request) -> str:
-    """IP del cliente detrás del proxy (Cloudflare/BFF), o la del socket."""
+def _trusted_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    from core.config import get_settings
+
+    redes = []
+    for cidr in (get_settings().trusted_proxy_cidrs or "").split(","):
+        cidr = cidr.strip()
+        if not cidr:
+            continue
+        try:
+            redes.append(ipaddress.ip_network(cidr, strict=False))
+        except ValueError:
+            log.warning("trusted_proxy_cidr_invalido", cidr=cidr)
+    return redes
+
+
+def _parse_ip(value: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     try:
-        xff = request.headers.get("x-forwarded-for")
-        if xff:
-            return str(xff.split(",")[0]).strip() or "desconocida"
-        cf = request.headers.get("cf-connecting-ip")
-        if cf:
-            return str(cf).strip()
-        host = request.client.host if request.client else None
-        return str(host or "desconocida")
+        return ipaddress.ip_address((value or "").strip())
+    except ValueError:
+        return None
+
+
+def _is_trusted(ip: ipaddress.IPv4Address | ipaddress.IPv6Address, redes) -> bool:
+    return any(ip in red for red in redes)
+
+
+def client_ip(request) -> str:
+    """IP del cliente para el bloqueo de login.
+
+    Las cabeceras de proxy solo cuentan si la conexión llega desde un proxy de
+    confianza (`TRUSTED_PROXY_CIDRS`): si no, cualquiera podría mandar su propio
+    `X-Forwarded-For` para esquivar el bloqueo o bloquear la IP de otro. Detrás de
+    proxies, la IP del cliente es la primera NO confiable leyendo `X-Forwarded-For`
+    de derecha a izquierda (cada proxy agrega a la derecha lo que vio; lo de la
+    izquierda lo pudo escribir el cliente). El BFF del panel reenvía la cadena que
+    recibió, para que la API no vea a todos los usuarios con la IP del panel.
+    """
+    try:
+        peer_raw = request.client.host if request.client else None
+        peer = _parse_ip(peer_raw)
+        if peer is None:
+            return str(peer_raw or "desconocida")
+        redes = _trusted_networks()
+        if not _is_trusted(peer, redes):
+            return str(peer)
+        xff = request.headers.get("x-forwarded-for") or ""
+        for parte in reversed([p for p in xff.split(",") if p.strip()]):
+            ip = _parse_ip(parte)
+            if ip is None:
+                break  # cadena rota: no se sigue leyendo lo que escribió el cliente
+            if not _is_trusted(ip, redes):
+                return str(ip)
+        cf = _parse_ip(request.headers.get("cf-connecting-ip"))
+        if cf is not None:
+            return str(cf)
+        return str(peer)
     except Exception:
         return "desconocida"

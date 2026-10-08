@@ -94,18 +94,49 @@ async def test_redis_caido_no_bloquea_el_login(monkeypatch) -> None:
     assert await lockout.is_blocked("admin", "ana@x.com", "1.1.1.1") is False
 
 
-def test_client_ip_prefiere_el_proxy() -> None:
-    class FakeRequest:
-        def __init__(self, headers: dict[str, str], host: str = "10.0.0.9") -> None:
-            self.headers = headers
-            self.client = SimpleNamespace(host=host)
+class _FakeRequest:
+    def __init__(self, headers: dict[str, str], host: str | None = "10.0.0.9") -> None:
+        self.headers = headers
+        self.client = SimpleNamespace(host=host) if host is not None else None
 
+
+def test_client_ip_detras_de_un_proxy_de_confianza() -> None:
+    # Traefik (10.0.0.9) agregó la IP que vio; lo de la izquierda lo escribió el cliente.
+    assert lockout.client_ip(_FakeRequest({"x-forwarded-for": "6.6.6.6, 181.1.2.3"})) == "181.1.2.3"
+    # Saltea los saltos de confianza (cloudflared, BFF) hasta la primera IP pública.
     assert (
-        lockout.client_ip(FakeRequest({"x-forwarded-for": "181.1.2.3, 10.0.0.2"}))
+        lockout.client_ip(_FakeRequest({"x-forwarded-for": "181.1.2.3, 172.18.0.4, 10.0.1.1"}))
         == "181.1.2.3"
     )
-    assert lockout.client_ip(FakeRequest({"cf-connecting-ip": "190.5.5.5"})) == "190.5.5.5"
-    assert lockout.client_ip(FakeRequest({})) == "10.0.0.9"
+    assert lockout.client_ip(_FakeRequest({"cf-connecting-ip": "190.5.5.5"})) == "190.5.5.5"
+    assert lockout.client_ip(_FakeRequest({})) == "10.0.0.9"
+
+
+def test_client_ip_ignora_cabeceras_de_una_conexion_directa() -> None:
+    """Sin proxy de confianza delante, las cabeceras las escribe el cliente: con
+    ellas podría esquivar el bloqueo (otra IP por intento) o bloquear a otro."""
+    req = _FakeRequest(
+        {"x-forwarded-for": "181.1.2.3", "cf-connecting-ip": "190.5.5.5"}, host="200.7.7.7"
+    )
+    assert lockout.client_ip(req) == "200.7.7.7"
+
+
+def test_client_ip_cadena_rota_no_sigue_leyendo_lo_del_cliente() -> None:
+    req = _FakeRequest({"x-forwarded-for": "181.1.2.3, basura, 10.0.0.5"})
+    assert lockout.client_ip(req) == "10.0.0.9"
+
+
+def test_client_ip_respeta_trusted_proxy_cidrs(monkeypatch) -> None:
+    from core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "trusted_proxy_cidrs", "10.0.0.9/32")
+    # 10.0.0.5 ya no es de confianza: es el cliente.
+    req = _FakeRequest({"x-forwarded-for": "181.1.2.3, 10.0.0.5"})
+    assert lockout.client_ip(req) == "10.0.0.5"
+
+
+def test_client_ip_sin_socket() -> None:
+    assert lockout.client_ip(_FakeRequest({}, host=None)) == "desconocida"
 
 
 # ---------------------------------------------------------------- router /api/v1
