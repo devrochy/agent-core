@@ -13,6 +13,7 @@ resultado tipado (no se lanzan al runtime).
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from typing import Any, ClassVar
 
 from sqlalchemy import func, select
@@ -145,6 +146,10 @@ class CoreSkill(BaseSkill):
 
     # ------------------------------------------------------------ definición
     def get_tools(self) -> list[MCPTool]:
+        """Tools del core: siempre disponibles, fuera del flujo (HU-FWK-01, ADR-0109)."""
+        return [replace(t, always_available=True) for t in self._build_tools()]
+
+    def _build_tools(self) -> list[MCPTool]:
         return [
             MCPTool(
                 name="escalate_to_human",

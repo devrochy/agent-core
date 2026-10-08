@@ -1,5 +1,17 @@
 # Changelog
 
+## Sin versión — Composición de flujos multi-pack (2026-10-08)
+
+- HU-FWK-01 / ADR-0109 (enmienda ADR-0054). El flujo efectivo se compone en cada turno: `core/flow.json`
+  (`core:saludo`, `core:escalamiento`) + las secciones de todos los packs habilitados (`pack_x:id`) + las secciones
+  propias del negocio. El `flow.json` del negocio deja de ser autoritativo y el alta ya no copia secciones de packs.
+- Las tools del core (`CoreSkill` y las `sub_*`) son `always_available`: el loop las ofrece aunque el flujo no las
+  nombre. Antes, con flujo declarado, quedaban ocultas memoria, perfil, correo y suscripciones.
+- `saludo` de commerce y cobranza ya no chocan (pasan a `descubrimiento` y `verificacion`); antes un negocio con
+  ambos perdía `crear_lead`, `consultar_inventario`…
+- `agent-core flow migrate <slug> [--apply]`: quita copias viejas, convierte en propias las secciones que su pack no
+  declara y avisa de tools que ningún flujo declara.
+
 ## Sin versión — La sincronización de plantillas acepta `quality_score` de Graph v26 (2026-10-08)
 
 - Graph v26 devuelve `quality_score` como objeto (`{"score", "date"}`) y `sync_templates` lo insertaba en una columna de

@@ -347,9 +347,9 @@ async def onboard_tenant(
             await plugin_manager.activate(pack)
         steps.append(f"pack {pack} configurado y activo")
 
-    # Flujo de atención del pack (ADR-0054): al habilitar un pack, el tenant recibe
-    # una base de flujo editable en TENANTS_ROOT/<slug>/flow.json. Best-effort: un
-    # fallo de filesystem no puede tumbar el alta (el runtime cae al default del pack).
+    # Flujo de atención (ADR-0054, ADR-0109): el flujo de los packs se compone en
+    # runtime; ya no se copia al flow.json del negocio. Esto solo normaliza un
+    # archivo existente (quita copias viejas). Best-effort: no tumba el alta.
     if packs:
         try:
             steps.extend(seed_tenant_flow(slug, list(packs)))

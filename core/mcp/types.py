@@ -150,6 +150,10 @@ class MCPTool:
     # modo `interno` no necesita Google; en modo `google` sí). Tiene prioridad
     # sobre `requires_connection_types`.
     connection_predicate: Callable[[set[str]], Awaitable[bool]] | None = None
+    # Tools del core que se ofrecen aunque ninguna sección del flujo las nombre
+    # (memoria, perfil, escalamiento, correo, suscripciones; HU-FWK-01, ADR-0109).
+    # Siguen sujetas a `requires_connection_types`/`connection_predicate`.
+    always_available: bool = False
 
 
 @dataclass
