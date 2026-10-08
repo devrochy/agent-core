@@ -34,14 +34,6 @@ producción que no es el de la app de un cliente concreto (heredado del monolito
 `META_APP_SECRET`: si los dos están definidos y son distintos, sus entregas al genérico dan 401. Decidir si la
 plataforma es solo `META_APP_SECRET` (ADR-0094) y `WHATSAPP_APP_SECRET` queda como respaldo del endpoint por slug.
 
-**El pedido de monto alto nunca escala**
-`plugins/pack_commerce/pack_commerce/skills.py:989` devuelve `{"escalate": True}`
-cuando el monto supera `monto_alto_threshold`. Ningún punto de `core/` lee esa clave:
-`core/orchestrator/safe_renderer.py` solo interpreta `_safe_append` e `_image_url`.
-La señal se pierde y el LLM solo ve un error genérico.
-
-## Media
-
 **La migración `crm_0009` falla con un negocio de 10.000 pedidos o más**
 El backfill de `packages/pack-commerce/alembic/versions/0009_orders_numero_publico.py` arma
 `'OC-' || lpad(order_seq::text, 4, '0')`, y `lpad` **trunca** a 4 caracteres: el pedido 10000 queda `OC-1000`, igual

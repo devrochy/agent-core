@@ -468,6 +468,19 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                         content=mcp_host.serialize_result(strip_reserved_keys(result)),
                     )
                 )
+                # Una tool (o un `BusinessError(escalate=True)`) pide relevo humano: p. ej. un
+                # pedido por encima de `monto_alto_threshold` en pack_commerce. Se escala con el
+                # mecanismo nativo y se corta el lote: con el bot pausado no corren más acciones.
+                if isinstance(result, dict) and result.get("escalate") is True:
+                    await escalate(
+                        conversation_id,
+                        reason=f"plugin:{tool_call.name}",
+                        summary=str(result.get("error") or "")[:200],
+                    )
+                    usage.escalated = True
+                    await _write_usage_ledger(conversation_id, spec, usage, turn_span)
+                    escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
+                    return TurnResult(text=escalation_text, escalated=True)
             continue
 
         # ---- refusal

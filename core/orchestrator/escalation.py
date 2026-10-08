@@ -4,7 +4,9 @@ Reglas (los plugins pueden disparar más vía MCPHost.trigger_escalation):
 - keyword: el cliente pide un humano o usa palabras configuradas.
 - guardrail: una validación bloqueó la respuesta dos veces.
 - llm_refusal: el modelo se negó a responder.
-- plugin:<razon>: disparada por un plugin.
+- plugin:<razon>: disparada por un plugin (`MCPHost.trigger_escalation`), o por una tool
+  cuyo resultado trae `"escalate": True` (o un `BusinessError(escalate=True)`): el loop
+  escala con `plugin:<tool>` y cierra el turno con la respuesta de escalamiento.
 
 Al escalar SIEMPRE se pausa el bot para esa conversación
 (lección de la Fase 18 de agent-sale: el bot seguía respondiendo tras escalar).
