@@ -218,12 +218,25 @@ async def check_number_registered(
             severity="critical",
         )
 
+    # `status` (registro en la Cloud API) es lo que decide si el número puede enviar.
+    # `code_verification_status` solo dice si se validó con código SMS/voz: un número de
+    # prueba de Meta, o uno registrado sin código, queda NOT_VERIFIED y envía igual
+    # (verificado en test el 2026-10-08). Sin `status` (respuestas viejas) se usa la
+    # regla anterior.
+    status = (data or {}).get("status")
+    detail = f"quality_rating={quality or 'desconocida'}, code_verification_status={verification or 'desconocido'}"
+    if status is not None:
+        if status != "CONNECTED":
+            return PreflightCheck(
+                key="number_registered", ok=False,
+                detail=f"status={status!r} -- el número no está conectado a la Cloud API.", checked_at=now,
+            )
+        return PreflightCheck(key="number_registered", ok=True, detail=f"status=CONNECTED, {detail}", checked_at=now)
     if verification not in ("VERIFIED", None):
         return PreflightCheck(
             key="number_registered", ok=False,
             detail=f"code_verification_status={verification!r} -- el número no está verificado.", checked_at=now,
         )
-    detail = f"quality_rating={quality or 'desconocida'}"
     return PreflightCheck(key="number_registered", ok=True, detail=detail, checked_at=now)
 
 

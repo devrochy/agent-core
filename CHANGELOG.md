@@ -1,5 +1,12 @@
 # Changelog
 
+## Sin versión — La salud del número usa su estado de conexión (2026-10-08)
+
+- `number_registered` fallaba con `code_verification_status = NOT_VERIFIED`, así que un número de prueba de Meta (o
+  uno registrado sin código SMS) dejaba la conexión en `degraded` aunque enviara bien (verificado en test con
+  `+1 555-191-6775`). Ahora decide el `status` del número en la Cloud API: `CONNECTED` pasa; cualquier otro
+  (`DISCONNECTED`, `BANNED`, `RESTRICTED`, `FLAGGED`…) falla. Sin `status` se mantiene la regla anterior.
+
 ## Sin versión — Asistente de SolversHub reproducible (2026-10-08)
 
 - HU-SH-01. Preset genérico `suscripciones` (commerce + calendar con agenda interna + payments + subscriptions,
