@@ -48,6 +48,9 @@ class EventBus:
     def subscribe(self, event: str, handler: EventHandler) -> None:
         self._subscribers[event].append(handler)
 
+    def has_subscribers(self, event: str) -> bool:
+        return bool(self._subscribers.get(event))
+
     def unsubscribe_all(self, handlers: list[EventHandler]) -> None:
         """Retira todos los handlers dados (usado al desactivar un plugin)."""
         for event_handlers in self._subscribers.values():
