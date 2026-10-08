@@ -369,6 +369,10 @@ async def test_events_activities_y_patch_api(app_client) -> None:
     headers = await api_headers(app_client, tid)
     tz = ZoneInfo("America/Bogota")
     base = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=3)
+    # Día hábil: con "hoy + 3" un jueves caía en domingo y el PATCH a las 11:00 daba
+    # `outside_hours` (falló en CI el 2026-10-08).
+    while base.weekday() >= 5:
+        base += timedelta(days=1)
     fecha = base.strftime("%Y-%m-%d")
     fin = (base + timedelta(days=1)).strftime("%Y-%m-%d")
 
