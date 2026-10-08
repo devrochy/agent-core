@@ -171,7 +171,18 @@ class SubscriptionSkill(BaseSkill):
         if sub is None:
             return {"encontrado": False, "mensaje": "No tenés una suscripción activa."}
         link = await cap.charge_link(uuid.UUID(sub["subscription_id"]))
-        return {"encontrado": True, "plan": sub.get("plan"), **link}
+        resultado: dict[str, Any] = {"encontrado": True, "plan": sub.get("plan"), **link}
+        if link.get("url"):
+            # El link exacto lo adjunta el core (SafeRenderer), igual que el de un pedido:
+            # si el modelo no copia la URL, el cliente igual la recibe (antes se quedaba
+            # sin link; visto con los journeys de HU-SUB-12).
+            from core.events.core_handlers import format_amount
+
+            monto = format_amount(link.get("monto"), sub.get("moneda"))
+            resultado["_safe_append"] = (
+                f"💳 Podés pagar {sub.get('plan') or 'tu suscripción'} ({link.get('periodo')}, {monto}) aquí: {link['url']}"
+            )
+        return resultado
 
     async def pausar(self, arguments: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         cap = await _capability(ctx)

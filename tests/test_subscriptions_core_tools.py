@@ -105,6 +105,9 @@ async def test_sub_link_pago_despacha(fake_cap) -> None:
     resultado = await tools_mod.SubscriptionSkill().link_pago({}, _ctx())
     assert resultado["url"] == "https://x"
     assert resultado["referencia"] == "ref-1"
+    # El core adjunta el link exacto aunque el modelo no lo copie (journeys HU-SUB-12).
+    assert "https://x" in resultado["_safe_append"]
+    assert "2026-10" in resultado["_safe_append"]
 
 
 @pytest.mark.asyncio
