@@ -1290,69 +1290,10 @@ class CRMModule(BaseModule):
                 await self._activate_plans_for_order(session, order)
 
     async def _activate_plans_for_order(self, session, order: Order) -> None:
-        """Plan como producto (ADR-0083): si el pedido pagado incluye variantes con
-        recurrencia (`billing_period`), activa la suscripción del Customer vía el
-        registry del core (sin importar el pack, invariante nº5). Commerce lee SU
-        propia variante y entrega el snapshot del plan; idempotente en el pack.
-        """
-        items = (
-            await session.execute(
-                select(OrderItem).where(
-                    OrderItem.tenant_id == get_current_tenant_id(),
-                    OrderItem.order_id == order.id,
-                )
-            )
-        ).scalars().all()
-        if not items:
-            return
+        """Plan como producto (ADR-0083, D-16): ver `pack_commerce.planes`."""
+        from pack_commerce.planes import activar_planes_del_pedido
 
-        from core.agents.spec import enabled_packs, load_active_spec
-        from core.subscriptions import SubscriptionError, subscription_registry
-
-        spec = await load_active_spec(get_current_tenant_id())
-        enabled = enabled_packs(spec)
-        if "pack_subscriptions" not in enabled:
-            return
-
-        capability = await subscription_registry.capability_for_tenant(get_current_tenant_id())
-        if capability is None:
-            log.warning(
-                "subscription_provider_missing",
-                tenant_id=str(get_current_tenant_id()),
-            )
-            return
-
-        for item in items:
-            variant = (
-                await session.execute(
-                    select(ProductVariant).where(
-                        ProductVariant.tenant_id == get_current_tenant_id(),
-                        ProductVariant.id == item.variant_id,
-                    )
-                )
-            ).scalars().first()
-            if variant is None or not variant.billing_period:
-                continue
-            product = await session.get(Product, variant.product_id)
-            plan = {
-                "plan_code": variant.sku,
-                "nombre": product.name if product else variant.sku,
-                "precio": float(variant.price or 0),
-                "moneda": "COP",
-                "periodicidad": variant.billing_period,
-                "trial_dias": variant.trial_days or 0,
-            }
-            try:
-                await capability.activate(
-                    customer_id=order.customer_id,
-                    variant_id=str(item.variant_id),
-                    plan=plan,
-                    reference=order.public_order_number,
-                )
-            except SubscriptionError:
-                log.exception("order_activate_subscription_failed", order_id=str(order.id))
-                continue
-            log.info("order_activates_subscription", order_id=str(order.id), plan=plan["nombre"])
+        await activar_planes_del_pedido(session, order)
 
     # ------------------------------------------------------------ guardrail
     async def _amount_guardrail(

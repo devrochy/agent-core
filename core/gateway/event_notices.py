@@ -59,6 +59,12 @@ EVENTOS: dict[str, dict[str, str]] = {
         "cargo.link": "Link de pago",
         "mora.dias": "Días de mora",
     },
+    # HU-SUB-06: oferta de un plan pago antes de que termine la prueba de Free.
+    "subscription.trial_ending": {
+        "cliente.nombre": "Nombre del cliente",
+        "suscripcion.concepto": "Plan o concepto de la suscripción",
+        "prueba.termina": "Fecha en que termina la prueba",
+    },
 }
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")

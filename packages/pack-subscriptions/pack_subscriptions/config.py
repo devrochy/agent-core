@@ -23,7 +23,10 @@ class SubscriptionConfig(BasePluginConfig):
         default="mensual",
         description="Periodicidad por defecto si el plan no la trae (mensual, trimestral o anual).",
     )
-    trial_dias: int = Field(default=30, description="Días de prueba por defecto de un plan.")
+    trial_dias: int = Field(
+        default=30,
+        description="Días de prueba por defecto del plan Free. Solo un plan de $0 tiene prueba (D-16).",
+    )
     dias_gracia: int = Field(
         default=5,
         ge=0,
@@ -74,6 +77,21 @@ class SubscriptionConfig(BasePluginConfig):
             "{cargo.link}"
         ),
         description="Texto del aviso de pausa por mora (dentro de las 24 h).",
+    )
+
+    # ------------------------------------------------------ fin de la prueba (HU-SUB-06)
+    dias_aviso_fin_prueba: int = Field(
+        default=3,
+        ge=0,
+        le=30,
+        description="Días antes del fin de la prueba de Free en que se ofrece un plan pago (0 = no avisar).",
+    )
+    aviso_fin_prueba_texto: str = Field(
+        default=(
+            "Hola {cliente.nombre}, tu prueba gratis de {suscripcion.concepto} termina el "
+            "{prueba.termina}. Si quieres seguir, respóndenos y te ayudamos a elegir un plan."
+        ),
+        description="Texto del aviso de fin de la prueba (dentro de las 24 h).",
     )
 
     @field_validator("recordatorios_dias")

@@ -50,6 +50,10 @@ ON_SUBSCRIPTION_PAST_DUE = "subscription.past_due"
 # (pausa) y `texto` (respaldo del pack, editable por el negocio).
 ON_SUBSCRIPTION_CHARGE_REMINDER = "subscription.charge_reminder"
 ON_SUBSCRIPTION_PAUSED = "subscription.paused"
+# HU-SUB-06: suscripción activada (alta o cambio de plan) y fin de la prueba de Free
+# (oferta de un plan pago). payload: subscription_id, customer_id, concepto…
+ON_SUBSCRIPTION_ACTIVATED = "subscription.activated"
+ON_SUBSCRIPTION_TRIAL_ENDING = "subscription.trial_ending"
 
 
 class EventBus:

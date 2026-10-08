@@ -36,6 +36,7 @@ from pack_commerce.models import (
     Quote,
     QuoteItem,
 )
+from pack_commerce.planes import activar_planes_del_pedido, estado_pago_inicial
 
 CUSTOMER_SEGMENTS = ("nuevo", "ocasional", "frecuente", "fiel", "inactivo")
 
@@ -1264,8 +1265,11 @@ class OrderSkill(BaseSkill):
                     "escalate": True,
                 }
 
+            # Free (D-16, HU-SUB-06): un pedido de planes en $0 no se cobra, así que
+            # el mínimo del pago en línea no aplica.
+            es_gratis = es_plan and _float(quote.total) == 0
             min_online = getattr(config, "pago_en_linea_monto_minimo", 150_000) or 150_000
-            if payment_method == "pago_en_linea" and _float(quote.total) < min_online:
+            if not es_gratis and payment_method == "pago_en_linea" and _float(quote.total) < min_online:
                 # Incidente real (tenant yopoldo, 2026-09-12): un pedido de
                 # $54.000 con pago_en_linea nunca iba a poder completarse (el
                 # mínimo real de la pasarela es $150.000, MIN_AMOUNT_COP en
@@ -1350,8 +1354,9 @@ class OrderSkill(BaseSkill):
                 delivery_city=customer_data.get("city"),
                 status="abierto",
                 # transferencia/pago_en_linea se confirman después (comprobante manual o
-                # webhook de pack-payments); contraentrega se da por pagado al entregar.
-                payment_status="pendiente" if payment_method in ("transferencia", "pago_en_linea") else "pagado",
+                # webhook de pack-payments); contraentrega de un producto se da por pagado
+                # al entregar, la de un plan espera el pago real; Free no se cobra (D-16).
+                payment_status=estado_pago_inicial(payment_method, es_plan, quote.total),
             )
             session.add(order)
             await session.flush()
@@ -1368,6 +1373,11 @@ class OrderSkill(BaseSkill):
             quote.status = "convertida"
             order_id = str(order.id)
             public_order_number = order.public_order_number
+            if es_plan and order.payment_status == "pagado":
+                # Free: no hay pago que espere `payment.confirmed`; la suscripción se
+                # activa ya, en `trialing` (HU-SUB-06).
+                await session.flush()
+                await activar_planes_del_pedido(session, order)
 
             if quote.applied_promotion_id is not None:
                 promo = await get_owned(

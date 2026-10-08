@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -80,7 +81,14 @@ async def crear_suscripcion_para(
 
     `plan` es el snapshot aportado por commerce/admin: nombre, precio, moneda,
     periodicidad, trial_dias. Este pack NO guarda ni lee el catálogo.
+
+    HU-SUB-06 (D-16): solo un plan de $0 tiene prueba. Si el cliente ya tiene una
+    suscripción vigente a OTRO plan (p. ej. Free y compra Basic), se cambia a ese plan
+    y nace `activa` con el período en curso pagado; antes se devolvía la Free sin tocar.
+    Cada activación emite `subscription.activated` por el outbox.
     """
+    precio = Decimal(str(plan.get("precio") or 0))
+    trial_dias = int(plan.get("trial_dias") or 0) if precio == 0 else 0
     async with get_session() as session:
         existente = (
             await session.execute(
@@ -92,12 +100,32 @@ async def crear_suscripcion_para(
                 )
             )
         ).scalars().first()
-        if existente is not None:
-            return existente
         now = datetime.now(UTC)
         config = await _config()
-        trial_dias = int(plan.get("trial_dias") or 0)
         periodicidad = _periodicidad(plan.get("periodicidad"), config.periodicidad)
+        if existente is not None:
+            otra_variante = (
+                variante_id is not None
+                and existente.variante_id is not None
+                and existente.variante_id != variante_id
+            )
+            if not otra_variante and Decimal(existente.valor_periodo or 0) == precio:
+                return existente  # mismo plan: idempotente
+            # Cambio de plan al comprar otro (Free → pago): activa con el período pagado.
+            existente.variante_id = variante_id
+            existente.concepto = plan.get("nombre") or existente.concepto
+            existente.valor_periodo = precio
+            existente.moneda = plan.get("moneda") or existente.moneda
+            existente.periodicidad = periodicidad
+            existente.estado = "trialing" if trial_dias else "activa"
+            existente.trial_termina = (now + timedelta(days=trial_dias)) if trial_dias else None
+            existente.dia_ancla = now.day
+            existente.periodo_actual_inicio = now
+            existente.proximo_cargo = existente.trial_termina or sumar_periodo(now, periodicidad, now.day)
+            existente.motivo_pausa = None
+            await session.flush()
+            await _emitir_activada(session, existente, reference, cambio=True)
+            return existente
         trial_termina = (now + timedelta(days=trial_dias)) if trial_dias else None
         sub = Subscription(
             tenant_id=get_current_tenant_id(),
@@ -105,7 +133,7 @@ async def crear_suscripcion_para(
             variante_id=variante_id,
             concepto=plan.get("nombre") or "Plan",
             estado="trialing" if trial_dias else "activa",
-            valor_periodo=plan.get("precio") or 0,
+            valor_periodo=precio,
             moneda=plan.get("moneda") or "COP",
             periodicidad=periodicidad,
             dia_ancla=now.day,
@@ -119,7 +147,31 @@ async def crear_suscripcion_para(
         )
         session.add(sub)
         await session.flush()
+        await _emitir_activada(session, sub, reference, cambio=False)
         return sub
+
+
+async def _emitir_activada(session, sub: Subscription, reference: str, *, cambio: bool) -> None:
+    from core.events.outbox import emit_domain
+    from core.shared.events import ON_SUBSCRIPTION_ACTIVATED
+
+    await emit_domain(
+        session,
+        tenant_id=sub.tenant_id,
+        topic=ON_SUBSCRIPTION_ACTIVATED,
+        dedupe_key=f"sub_activated:{sub.id}:{sub.variante_id or sub.concepto}",
+        payload={
+            "subscription_id": str(sub.id),
+            "customer_id": str(sub.customer_id),
+            "concepto": sub.concepto,
+            "estado": sub.estado,
+            "valor_periodo": str(sub.valor_periodo),
+            "periodicidad": sub.periodicidad,
+            "trial_termina": sub.trial_termina.isoformat() if sub.trial_termina else None,
+            "referencia": reference,
+            "cambio_de_plan": cambio,
+        },
+    )
 
 
 class SubscriptionCapabilityImpl:
