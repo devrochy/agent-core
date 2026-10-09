@@ -11,6 +11,7 @@ Uso:
   python evals/journeys.py 03,05                    # solo los que matcheen
   python evals/journeys.py --set comercio           # otro set de evals/journeys/<set>/
   python evals/journeys.py --umbral 0.95 --reporte evals/reportes/journeys.json
+  python evals/journeys.py --tenant solvershub      # set de un negocio: TENANTS_ROOT/<slug>/evals/journeys/
 
 Requiere LLM_API_KEY y la base migrada (crea un negocio de prueba por corrida). El
 formato de los journeys está en `evals/journeys/README.md`.
@@ -21,8 +22,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
+import shutil
 import sys
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -35,6 +39,7 @@ JOURNEYS_DIR = EVALS_DIR / "journeys"
 _IDENT = re.compile(r"^[a-z_][a-z0-9_]*$")
 _PLANTILLA = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_.]*)\}")
 _SALTO = re.compile(r"^\+(\d+)([dhm])$")
+_SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
 
 class FallaJourney(AssertionError):
@@ -120,6 +125,7 @@ class Contexto:
             "cliente": {"id": str(self.customer_id)},
             "ahora": self.ahora.isoformat(),
             "pagos": {"ultimo": self.pagos.links[-1] if self.pagos.links else {}},
+            "correos": {"ultimo": CORREOS.enviados[-1] if CORREOS.enviados else {}},
         }
         for parte in partes:
             if isinstance(actual, dict) and parte in actual:
@@ -144,15 +150,63 @@ class Contexto:
         return dato
 
 
+@dataclass
+class CorreosSimulados:
+    """Reemplaza el correo de sistema (invitaciones del alta, avisos): nada sale del proceso
+    y el journey puede leer lo enviado como `{correos.ultimo.para}`."""
+
+    enviados: list[dict[str, Any]] = field(default_factory=list)
+
+    def instalar(self) -> None:
+        import core.gateway.system_email as correo
+
+        async def enviar(to: str, subject: str, body: str) -> str:
+            self.enviados.append({"para": to, "asunto": subject, "cuerpo": body})
+            return f"<journeys-{uuid.uuid4().hex}@example.com>"
+
+        correo.send_system_email = enviar  # type: ignore[assignment]
+
+
+CORREOS = CorreosSimulados()
+
+
+# ------------------------------------------------------------------ réplica de un negocio
+def preparar_replica(origen: Path) -> tuple[str, Path]:
+    """Réplica de los artefactos de un negocio (HU-SH-08): copia `TENANTS_ROOT/<slug>/`
+    (sin `evals/`) a un `TENANTS_ROOT` temporal, con el slug del negocio de la corrida, y
+    apunta el proceso ahí. El negocio real y su directorio no se tocan; los overrides por
+    slug (ADR-0026) leen la copia. Devuelve el slug de la corrida y la raíz temporal."""
+    from core.config import get_settings
+
+    slug = f"journeys-{uuid.uuid4().hex[:8]}"
+    raiz = Path(tempfile.mkdtemp(prefix="journeys-tenants-"))
+    shutil.copytree(origen, raiz / slug, ignore=shutil.ignore_patterns("evals", "*.tgz"))
+    os.environ["TENANTS_ROOT"] = str(raiz)
+    get_settings.cache_clear()
+    return slug, raiz
+
+
+def _como_vendedor(tenant_id: uuid.UUID) -> None:
+    """El negocio de la corrida vende negocios (alta automática, ADR-0121) SOLO en este
+    proceso: la allowlist real (`PROVISIONING_SELLER_TENANTS`) no se lee ni se toca."""
+    import core.provisioning.vendedores as vendedores
+
+    vendedores.vendedores_configurados = lambda: frozenset({tenant_id})  # type: ignore[assignment]
+
+
 # ------------------------------------------------------------------ negocio y cliente
-async def preparar_negocio(definicion: dict[str, Any], pagos: PagoSimulado) -> uuid.UUID:
-    """Negocio de prueba de la corrida: preset, plan, catálogo y config de packs."""
+async def preparar_negocio(
+    definicion: dict[str, Any], pagos: PagoSimulado, *, slug: str | None = None, replica: bool = False
+) -> uuid.UUID:
+    """Negocio de prueba de la corrida: preset, plan, catálogo y config de packs. Con
+    `replica`, además los artefactos del negocio copiados a su directorio (catálogo, seed de
+    packs y voz de marca, como `agent-core tenant seed --voz-de-marca`) y sin ejemplos."""
     from core.admin.views import set_pack_for_tenant
     from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
 
-    slug = f"journeys-{uuid.uuid4().hex[:8]}"
+    slug = slug or f"journeys-{uuid.uuid4().hex[:8]}"
     tenant_id, _ = await onboard_tenant(
         name=definicion.get("nombre", "Negocio de journeys"),
         slug=slug,
@@ -160,7 +214,7 @@ async def preparar_negocio(definicion: dict[str, Any], pagos: PagoSimulado) -> u
         packs=list(definicion.get("packs", [])),
         preset=definicion.get("preset"),
         plan=definicion.get("plan", "premium"),
-        sembrar_ejemplos=not definicion.get("catalogo"),
+        sembrar_ejemplos=not definicion.get("catalogo") and not replica,
     )
     async with tenant_scope(tenant_id):
         for pack_id, config in (definicion.get("config") or {}).items():
@@ -168,10 +222,16 @@ async def preparar_negocio(definicion: dict[str, Any], pagos: PagoSimulado) -> u
             error = await set_pack_for_tenant(pack_id, True)
             if error:
                 raise RuntimeError(f"No se pudo habilitar {pack_id}: {error}")
+    if replica:
+        from core.onboarding import sembrar_artefactos
+
+        await sembrar_artefactos(tenant_id, slug, voz_de_marca=True)
     if definicion.get("catalogo"):
         from pack_commerce.seed import seed_catalog  # el set declara su catálogo de commerce
 
         await seed_catalog(tenant_id, definicion["catalogo"])
+    if definicion.get("vendedor"):
+        _como_vendedor(tenant_id)
     pagos.instalar()
     return tenant_id
 
@@ -344,6 +404,48 @@ async def paso_job(ctx: Contexto, paso: dict[str, Any], registro: list[str]) -> 
         if original is not None:
             modulo._tenant_ids = original  # type: ignore[attr-defined]
     registro.append(f"    job {paso['job']} @ {ctx.ahora:%Y-%m-%d}: {resultado}")
+
+
+async def paso_outbox(ctx: Contexto, paso: dict[str, Any], registro: list[str]) -> None:
+    """Entrega los eventos del outbox (ADR-0107) pendientes del negocio del journey, como el
+    despachador del worker (`entregar_evento`), hasta `rondas` vueltas: un evento puede
+    generar otro (`payment.confirmed` → activación → `subscription.activated` → alta). Los
+    lee con RLS y `tenant_id`: nunca entrega eventos de otros negocios de la base."""
+    from sqlalchemy import select
+
+    from core.db.models import DomainEvent
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+    from core.tasks.domain_events_dispatch import entregar_evento
+
+    async def pendientes() -> list[DomainEvent]:
+        async with tenant_scope(ctx.tenant_id):
+            async with get_session() as session:
+                return list(
+                    (
+                        await session.execute(
+                            select(DomainEvent)
+                            .where(DomainEvent.tenant_id == ctx.tenant_id, DomainEvent.status == "pendiente")
+                            .order_by(DomainEvent.created_at)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+
+    entregados: list[str] = []
+    for _ronda in range(max(1, int(paso.get("rondas", 5)))):
+        eventos = [e for e in await pendientes() if e.attempts == 0]
+        if not eventos:
+            break
+        for evento in eventos:
+            if await entregar_evento(evento.id, ctx.tenant_id, datetime.now(UTC)):
+                entregados.append(evento.topic)
+    registro.append(f"    outbox: {entregados or 'sin eventos'}")
+    con_error = [e for e in await pendientes() if e.attempts > 0]
+    if con_error:
+        detalle = "; ".join(f"{e.topic}: {(e.last_error or '')[:200]}" for e in con_error)
+        raise FallaJourney(f"eventos del outbox con error: {detalle}")
 
 
 def _json(valor: Any) -> Any:
@@ -554,6 +656,8 @@ async def correr_journey(ruta: Path, tenant_id: uuid.UUID, pagos: PagoSimulado, 
                 await paso_accion(ctx, paso, registro)
             elif "simulado" in paso:
                 await paso_simulado(ctx, paso, registro)
+            elif "outbox" in paso:
+                await paso_outbox(ctx, paso, registro)
             else:
                 raise FallaJourney(f"paso sin tipo conocido: {sorted(paso)}")
         except FallaJourney as exc:
@@ -566,10 +670,23 @@ async def correr_journey(ruta: Path, tenant_id: uuid.UUID, pagos: PagoSimulado, 
     return Resultado(nombre, True, "", time.monotonic() - inicio, registro, ctx)
 
 
-def rutas_del_set(set_id: str, patrones: list[str]) -> tuple[dict[str, Any], list[Path]]:
-    if not _IDENT.match(set_id.replace("-", "_")):
-        raise SystemExit(f"Set inválido: {set_id!r}")
-    carpeta = JOURNEYS_DIR / set_id
+def carpeta_del_negocio(slug: str) -> Path:
+    """Set de journeys de un negocio: `TENANTS_ROOT/<slug>/evals/journeys/`. Los escenarios
+    de un cliente viven con sus artefactos, nunca en el framework (regla de separación)."""
+    from core.onboarding import tenants_root
+
+    if not _SLUG.match(slug):
+        raise SystemExit(f"Slug inválido: {slug!r}")
+    return tenants_root() / slug / "evals" / "journeys"
+
+
+def rutas_del_set(set_id: str, patrones: list[str], carpeta: Path | None = None) -> tuple[dict[str, Any], list[Path]]:
+    if carpeta is None:
+        if not _IDENT.match(set_id.replace("-", "_")):
+            raise SystemExit(f"Set inválido: {set_id!r}")
+        carpeta = JOURNEYS_DIR / set_id
+    if not (carpeta / "negocio.json").exists():
+        raise SystemExit(f"No hay negocio.json en {carpeta}")
     negocio = json.loads((carpeta / "negocio.json").read_text(encoding="utf-8"))
     rutas = sorted(p for p in carpeta.glob("*.json") if p.name != "negocio.json")
     if patrones != [""]:
@@ -579,6 +696,7 @@ def rutas_del_set(set_id: str, patrones: list[str]) -> tuple[dict[str, Any], lis
 
 async def _preparar_proceso() -> None:
     """Igual que el runner del golden set: packs activos y tools del core registradas."""
+    from core.events.core_handlers import ensure_core_handlers
     from core.mcp.host import mcp_host
     from core.plugin_manager import plugin_manager
     from core.tools.core_skill import register_core_skills
@@ -588,17 +706,49 @@ async def _preparar_proceso() -> None:
     await plugin_manager.activate_all_configured()
     await plugin_manager.ensure_process_activation()
     register_core_skills(mcp_host)
+    # Handlers del core del outbox (alta automática, cobro de plataforma): el paso
+    # `outbox` los necesita como el despachador del worker.
+    ensure_core_handlers()
 
 
 async def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Runner de journeys (HU-SUB-12) con pass^k (HU-ARCH-28)")
     parser.add_argument("patron", nargs="?", default="", help="Subconjunto por nombre (ej: 03,05)")
     parser.add_argument("--set", default="suscripciones", help="Carpeta de evals/journeys/")
+    parser.add_argument(
+        "--tenant",
+        default="",
+        help="Slug de un negocio: corre TENANTS_ROOT/<slug>/evals/journeys/ contra una réplica de sus artefactos",
+    )
     parser.add_argument("--k", type=int, default=1, help="Intentos por journey (4 en el nightly, 8 antes de una release)")
     parser.add_argument("--umbral", type=float, default=1.0, help="pass@1 mínimo (0..1) para salir con 0")
     parser.add_argument("--reporte", default="", help="Ruta del reporte JSON (opcional)")
     parser.add_argument("--detalle", action="store_true", help="Imprimir la conversación de cada intento")
     args = parser.parse_args(argv)
+
+    patrones = [p.strip() for p in args.patron.split(",") if p.strip()] or [""]
+    carpeta = carpeta_del_negocio(args.tenant) if args.tenant else None
+    set_id = f"tenant:{args.tenant}" if args.tenant else args.set
+    negocio, rutas = rutas_del_set(args.set, patrones, carpeta)
+    if not rutas:
+        print(f"No hay journeys que matcheen '{args.patron}' en {carpeta or JOURNEYS_DIR / args.set}")
+        return 1
+    k = max(1, args.k)
+
+    _solo_bases_de_prueba()
+    slug, raiz = preparar_replica(carpeta.parent.parent) if carpeta else (None, None)
+    try:
+        await _preparar_proceso()
+        pagos = PagoSimulado(monto_minimo=float((negocio.get("pagos_simulados") or {}).get("monto_minimo", 0)))
+        CORREOS.instalar()
+        tenant_id = await preparar_negocio(negocio, pagos, slug=slug, replica=carpeta is not None)
+        return await _correr_set(args, set_id, rutas, k, tenant_id, pagos)
+    finally:
+        if raiz is not None:
+            shutil.rmtree(raiz, ignore_errors=True)
+
+
+async def _correr_set(args: argparse.Namespace, set_id: str, rutas: list[Path], k: int, tenant_id: uuid.UUID, pagos: PagoSimulado) -> int:
     sys.path.insert(0, str(EVALS_DIR))
     from consistencia import (
         ResultadoEscenario,
@@ -609,18 +759,7 @@ async def main(argv: list[str] | None = None) -> int:
         texto_resumen,
     )
 
-    patrones = [p.strip() for p in args.patron.split(",") if p.strip()] or [""]
-    negocio, rutas = rutas_del_set(args.set, patrones)
-    if not rutas:
-        print(f"No hay journeys que matcheen '{args.patron}' en evals/journeys/{args.set}/")
-        return 1
-    k = max(1, args.k)
-
-    _solo_bases_de_prueba()
-    await _preparar_proceso()
-    pagos = PagoSimulado(monto_minimo=float((negocio.get("pagos_simulados") or {}).get("monto_minimo", 0)))
-    tenant_id = await preparar_negocio(negocio, pagos)
-    print(f"Corriendo {len(rutas)} journeys del set {args.set} con k={k} (negocio {tenant_id})...\n")
+    print(f"Corriendo {len(rutas)} journeys del set {set_id} con k={k} (negocio {tenant_id})...\n")
 
     resultados: list[ResultadoEscenario] = []
     for ruta in rutas:
@@ -636,11 +775,11 @@ async def main(argv: list[str] | None = None) -> int:
         print(linea(escenario))
 
     resumen = resumir(resultados, k)
-    print("\n" + texto_resumen(f"Journeys {args.set}", resumen, args.umbral))
+    print("\n" + texto_resumen(f"Journeys {set_id}", resumen, args.umbral))
     simulador = {"k": k, "semillas": list(range(k))}
-    await _guardar(tenant_id, args.set, resultados, k, simulador)
+    await _guardar(tenant_id, set_id, resultados, k, simulador)
     if args.reporte:
-        escribir_reporte(args.reporte, reporte(args.set, resultados, k, simulador))
+        escribir_reporte(args.reporte, reporte(set_id, resultados, k, simulador))
     # El gate del 0A no cambia (ADR-0119): se mide sobre pass@1; pass^k se reporta.
     return 0 if resumen.pass_1 >= args.umbral else 1
 

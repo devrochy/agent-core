@@ -101,3 +101,61 @@ def test_el_pago_simulado_tiene_la_firma_de_build_provider() -> None:
     real = list(inspect.signature(build_provider).parameters)
     simulado = list(inspect.signature(journeys.PagoSimulado()._proveedor).parameters)
     assert simulado == real  # mismos nombres: la tool llama con `http=` por nombre
+
+
+# ---------------------------------------------------------------- set de un negocio (HU-SH-08)
+def test_el_set_de_un_negocio_vive_en_su_tenants_root(monkeypatch, tmp_path) -> None:
+    from core.config import get_settings
+
+    monkeypatch.setenv("TENANTS_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    try:
+        assert journeys.carpeta_del_negocio("solvershub") == tmp_path / "solvershub" / "evals" / "journeys"
+        for slug in ("../otro", "Solvers", "a/b", ""):
+            with pytest.raises(SystemExit):
+                journeys.carpeta_del_negocio(slug)
+    finally:
+        get_settings.cache_clear()
+
+
+def test_la_replica_copia_los_artefactos_sin_evals_y_apunta_el_proceso(monkeypatch, tmp_path) -> None:
+    from core.config import get_settings
+    from core.onboarding import tenant_dir
+
+    origen = tmp_path / "solvershub"
+    (origen / "playbooks").mkdir(parents=True)
+    (origen / "evals" / "journeys").mkdir(parents=True)
+    (origen / "flow.json").write_text("{}", encoding="utf-8")
+    (origen / "playbooks" / "ventas.md").write_text("# ventas", encoding="utf-8")
+    (origen / "evals" / "journeys" / "negocio.json").write_text("{}", encoding="utf-8")
+    (origen / "solvershub-respaldo-1.tgz").write_text("x", encoding="utf-8")
+    monkeypatch.setenv("TENANTS_ROOT", str(tmp_path))
+    try:
+        slug, raiz = journeys.preparar_replica(origen)
+        assert slug.startswith("journeys-") and raiz != tmp_path
+        assert tenant_dir(slug) == raiz / slug
+        copia = sorted(p.relative_to(raiz / slug).as_posix() for p in (raiz / slug).rglob("*"))
+        assert copia == ["flow.json", "playbooks", "playbooks/ventas.md"]
+        assert (origen / "evals" / "journeys" / "negocio.json").exists(), "el negocio real no se toca"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_el_vendedor_solo_vale_en_el_proceso_y_para_el_negocio_de_la_corrida(monkeypatch) -> None:
+    import core.provisioning.vendedores as vendedores
+
+    monkeypatch.setattr(vendedores, "vendedores_configurados", vendedores.vendedores_configurados)
+    negocio = uuid.uuid4()
+    journeys._como_vendedor(negocio)
+    assert vendedores.vendedores_configurados() == frozenset({negocio})
+
+
+@pytest.mark.asyncio
+async def test_los_correos_de_sistema_no_salen(monkeypatch) -> None:
+    import core.gateway.system_email as correo
+
+    monkeypatch.setattr(correo, "send_system_email", correo.send_system_email)
+    correos = journeys.CorreosSimulados()
+    correos.instalar()
+    message_id = await correo.send_system_email("ana+1@example.com", "Tu acceso", "enlace")
+    assert message_id and correos.enviados == [{"para": "ana+1@example.com", "asunto": "Tu acceso", "cuerpo": "enlace"}]

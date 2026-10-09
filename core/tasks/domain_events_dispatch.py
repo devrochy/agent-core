@@ -11,7 +11,7 @@ con `last_error` (visible en la Bandeja de fallos y reintentable a mano).
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from core.db.admin_enum import admin_domain_events_due
 from core.db.models import DomainEvent, utcnow
@@ -58,54 +58,63 @@ async def _release(event_id: uuid.UUID) -> None:
         pass
 
 
+async def entregar_evento(event_id: uuid.UUID, tenant_id: uuid.UUID, ahora: datetime) -> bool:
+    """Entrega UN evento pendiente bajo el `tenant_scope` de su negocio. Devuelve True si lo
+    intentó (entregado o con el fallo anotado) y False si otro proceso lo tiene reclamado o
+    ya no está pendiente. La usan el despachador y el runner de journeys, que
+    solo entrega los eventos de su negocio de prueba (HU-SH-08)."""
+    if not await _claim(event_id):
+        return False
+    try:
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                evento = await session.get(DomainEvent, event_id)
+                if evento is None or evento.status != "pendiente":
+                    return False
+                if not event_bus.has_subscribers(evento.topic):
+                    # No es un fallo (un topic puede no tener handlers),
+                    # pero se deja rastro: así se vio que el worker no
+                    # tenía los packs activados.
+                    log.warning(
+                        "domain_event_sin_handlers",
+                        event_id=str(event_id),
+                        tenant_id=str(tenant_id),
+                        topic=evento.topic,
+                    )
+                try:
+                    await event_bus.emit_strict(
+                        evento.topic, **payload_para_handlers(evento.payload)
+                    )
+                    evento.status = "entregado"
+                    evento.last_error = None
+                except Exception as exc:
+                    evento.attempts += 1
+                    evento.last_error = str(exc)[:2000]
+                    if evento.attempts >= MAX_ATTEMPTS:
+                        evento.status = "fallido"
+                        log.error(
+                            "domain_event_failed",
+                            event_id=str(event_id),
+                            tenant_id=str(tenant_id),
+                            topic=evento.topic,
+                            attempts=evento.attempts,
+                        )
+                    else:
+                        evento.next_attempt_at = ahora + timedelta(
+                            seconds=backoff_seconds(evento.attempts - 1)
+                        )
+        return True
+    finally:
+        await _release(event_id)
+
+
 async def dispatch_due_events(limit: int = BATCH) -> int:
     """Entrega los eventos pendientes vencidos. Devuelve cuántos procesó."""
     procesados = 0
     ahora = utcnow()
     for event_id, tenant_id in await admin_domain_events_due(limit, ahora):
-        if not await _claim(event_id):
-            continue
-        try:
-            async with tenant_scope(tenant_id):
-                async with get_session() as session:
-                    evento = await session.get(DomainEvent, event_id)
-                    if evento is None or evento.status != "pendiente":
-                        continue
-                    if not event_bus.has_subscribers(evento.topic):
-                        # No es un fallo (un topic puede no tener handlers),
-                        # pero se deja rastro: así se vio que el worker no
-                        # tenía los packs activados.
-                        log.warning(
-                            "domain_event_sin_handlers",
-                            event_id=str(event_id),
-                            tenant_id=str(tenant_id),
-                            topic=evento.topic,
-                        )
-                    try:
-                        await event_bus.emit_strict(
-                            evento.topic, **payload_para_handlers(evento.payload)
-                        )
-                        evento.status = "entregado"
-                        evento.last_error = None
-                    except Exception as exc:
-                        evento.attempts += 1
-                        evento.last_error = str(exc)[:2000]
-                        if evento.attempts >= MAX_ATTEMPTS:
-                            evento.status = "fallido"
-                            log.error(
-                                "domain_event_failed",
-                                event_id=str(event_id),
-                                tenant_id=str(tenant_id),
-                                topic=evento.topic,
-                                attempts=evento.attempts,
-                            )
-                        else:
-                            evento.next_attempt_at = ahora + timedelta(
-                                seconds=backoff_seconds(evento.attempts - 1)
-                            )
+        if await entregar_evento(event_id, tenant_id, ahora):
             procesados += 1
-        finally:
-            await _release(event_id)
     return procesados
 
 
