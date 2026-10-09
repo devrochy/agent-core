@@ -117,6 +117,8 @@ Cada valor va al gestor de contraseñas. Los nombres de las variables están en
 - [ ] Meta: app de producción, distinta de la de test (HU-ARCH-02).
 - [ ] Wompi: llaves de producción del cobro de la plataforma, si `BILLING_PROVIDER=wompi`.
 - [ ] SMTP del correo de sistema.
+- [ ] GitHub: un token *classic* con **solo** `read:packages` (y vencimiento) para que `prod-data`
+      baje la imagen de Postgres de GHCR (4.1), salvo que el dueño haga público ese paquete.
 - [ ] Copia de las variables de la heredada que se reutilizan (origen **heredada** en la tabla):
       se leen en el Coolify local, en la app `ggzjdyc7zsemt6kzafx5rg7m`.
 - [ ] Secretos nuevos: `APP_SECRET_KEY` (`openssl rand -hex 32`) y una clave nueva para
@@ -181,22 +183,28 @@ pasa por él, y eso es lo esperado.
 
 ### 4.1 Imagen de Postgres
 
-Coolify hace `pull` de la imagen en cada arranque: tiene que estar en un registry. En `prod-data`:
+Coolify hace `pull` de la imagen en cada arranque: tiene que estar en un registry. La imagen es
+`ghcr.io/devrochy/solvershub-postgres:pg17-postgis`, la que publica `ci-postgres-image.yml` desde
+`docker/postgres/Dockerfile` y usa el CI (ADR-0120): producción corre lo mismo que se prueba. En
+`prod-data`, como `root` (Coolify ejecuta Docker como `root`):
 
 ```bash
-docker run -d --name solvershub-registry --restart always -p 127.0.0.1:5000:5000 registry:2
-mkdir -p /root/solvershub-postgres
-# desde la máquina del operador, en el checkout del repo:
-#   scp docker/postgres/Dockerfile root@<ip-publica-data>:/root/solvershub-postgres/Dockerfile
-docker build -t 127.0.0.1:5000/solvershub-postgres:pg17-postgis /root/solvershub-postgres
-docker push 127.0.0.1:5000/solvershub-postgres:pg17-postgis
+read -rs GHCR_TOKEN   # el token read:packages de 1.5; no se ve ni queda en el historial
+printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u devrochy --password-stdin && unset GHCR_TOKEN
+docker pull ghcr.io/devrochy/solvershub-postgres:pg17-postgis
 ```
+
+El token queda en `/root/.docker/config.json`: por eso solo `read:packages` y con vencimiento.
+Cuando vence, el `pull` falla y Coolify no puede reiniciar la base (la imagen tiene que ser
+"pullable"): renovarlo antes y anotar la fecha. Si el paquete es público, no hace falta el `login`. Alternativa sin GHCR (la de test): construir
+la imagen en `prod-data` y servirla desde un registry local, como en
+`docs/despliegue-coolify.md` (Gotchas, PostGIS).
 
 ### 4.2 Recurso Postgres
 
 + New → Database → PostgreSQL, en el servidor `prod-data`:
 
-- Nombre `agent-core-postgres`; imagen `127.0.0.1:5000/solvershub-postgres:pg17-postgis`.
+- Nombre `agent-core-postgres`; imagen `ghcr.io/devrochy/solvershub-postgres:pg17-postgis`.
 - Usuario `postgres`, base inicial `agent_core`, contraseña generada por Coolify (al gestor de
   contraseñas).
 - Ports Mappings: `<ip-privada-data>:5432:5432`. Si Coolify no acepta la IP, `5432:5432`: el
@@ -665,19 +673,21 @@ Con el corte hecho. Test se cae mientras dure (vive en la máquina de desarrollo
 - [ ] `docs/despliegue-coolify.md`: los UUID reales en lugar de `<uuid-…>`, el UUID del túnel
       `solvershub-prod`, el estado de la producción, y quitar la sección "Producción heredada" al
       terminar el periodo de vuelta atrás.
-- [ ] `.claude/hooks/guards.py`: `PROD_RESOURCES` (hoy `:38-44`) con los UUID nuevos de API,
-      worker, beat, panel, landing, Postgres y Redis; `PROD_DB_PORTS` (`:45`) con el puerto local
-      del túnel a la base de producción (`55499`, el de 8.8) en lugar de `5439`/`6381`;
-      `PROD_HOST` (`:46`) sigue siendo `app.solvershub.site`, y conviene cubrir también
-      `api.solvershub.site`. Actualizar el comentario de `:35-37` (la producción ya no se llama
-      `agent-core-test`).
-- [ ] `tests/test_guards_hook.py`: los casos con los UUID y puertos heredados (`:55-69`).
-- [ ] Skill `desplegar-test-agent-core` (`.claude/skills/desplegar-test-agent-core/SKILL.md:19-26`):
-      la advertencia sobre los UUID de producción pasa a decir que producción vive en otro
-      Coolify (el de `prod-app`) y con qué UUID.
-- [ ] Skill `release` (`.claude/skills/release/SKILL.md`): backup (`:57-59`), despliegue
-      (`:75-78`) y verificación (`:79-84`) con los UUID nuevos, la API de Coolify por el túnel SSH
-      (`127.0.0.1:8100`) y los `docker` por SSH a `prod-app` y `prod-data`.
+- [ ] `.claude/hooks/guards.py`: `PROD_RESOURCES` con los UUID nuevos de API, worker, beat,
+      panel, landing, Postgres y Redis; `PROD_DB_PORTS` con el puerto local del túnel a la base de
+      producción (`55499`, el de 8.8) en lugar de `5439` y `6381`; `PROD_HOST` sigue siendo
+      `app.solvershub.site`, y conviene cubrir también `api.solvershub.site`. Actualizar el
+      comentario de arriba de `PROD_RESOURCES` (dice que la app de producción se llama
+      `agent-core-test` en Coolify).
+- [ ] `tests/test_guards_hook.py`: los casos con los UUID y los puertos heredados.
+- [ ] Skill `desplegar-test-agent-core`: la advertencia "Producción no se toca desde esta skill"
+      pasa a decir que producción vive en otro Coolify (el de `prod-app`) y con qué UUID.
+- [ ] Skill `release`: el punto 9 del checklist (backup) y los pasos 3 y 4 de "Despliegue" con los
+      UUID nuevos, la API de Coolify por el túnel SSH (`127.0.0.1:8100`) y los `docker` por SSH a
+      `prod-app` y `prod-data`.
+- [ ] Que no quede ninguna referencia operativa a la heredada:
+      `grep -rn -E 'ggzjdyc|huvhzax|hwh7s5|wv6kyc|gk9bag|442da5f7' .claude docs tests`
+      (los planes viejos de `docs/plans/` pueden quedar como historia).
 - [ ] Fragmento en `changelog.d/`.
 
 ### 11.2 Panel y landing

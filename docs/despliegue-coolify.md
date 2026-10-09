@@ -71,7 +71,7 @@ crearlos.
 | `agent-core-beat` | prod-app | ídem | `--entrypoint /app/scripts/entrypoint-beat.sh` | sin puertos | igual que el worker | el mismo volumen | `<uuid-beat>` |
 | `panel-web` | prod-app | `devrochy/solvershub-panel` · `main` · base `/apps/panel-web` · Dockerfile `/Dockerfile` | `CMD` de la imagen (`node server.js`) | `127.0.0.1:3004:3000` | HTTP `/login` (la imagen trae `curl`) | — | `<uuid-panel>` |
 | `landing` | prod-app | `devrochy/solvershub-landing` · `main` · `Dockerfile` | `CMD` de la imagen | `127.0.0.1:3005:3000` | `HEALTHCHECK` de la imagen (`node` contra `/api/health`); el de Coolify, **desactivado** (la imagen no trae `curl` ni `wget`) | — | `<uuid-landing>` |
-| `agent-core-postgres` | prod-data | imagen propia de `docker/postgres/Dockerfile` (PG 17 + pgvector + PostGIS, ADR-0058) servida por un registry local de `prod-data` | la de Coolify; superusuario `postgres`, base `agent_core` | `<ip-privada-data>:5432` | la de Coolify | volumen de Coolify | `<uuid-postgres>` |
+| `agent-core-postgres` | prod-data | `ghcr.io/devrochy/solvershub-postgres:pg17-postgis`: la imagen de `docker/postgres/Dockerfile` (PG 17 + pgvector + PostGIS, ADR-0058), la misma del CI (ADR-0120) | la de Coolify; superusuario `postgres`, base `agent_core` | `<ip-privada-data>:5432` | la de Coolify | volumen de Coolify | `<uuid-postgres>` |
 | `agent-core-redis` | prod-data | `redis:7.2` (la misma que la producción heredada) | con contraseña; AOF activo | `<ip-privada-data>:6379` | la de Coolify | volumen de Coolify | `<uuid-redis>` |
 | `cloudflared` | prod-app | paquete oficial, servicio **systemd** (fuera de Coolify, para que el túnel no dependa del panel de Coolify) | `cloudflared service install <token>` | solo saliente | estado del conector en Zero Trust | — | túnel `<uuid-túnel-prod>` |
 
@@ -340,6 +340,10 @@ Entorno `production` (`mihlppg36bf846gpu7zfu2h3`):
 | Beat | agent-core-beat | `hwh7s5gscnn1k3yqf88xceja` | Celery beat |
 | Worker | agent-core-worker | `wv6kycjeae0lmfj11dprkasq` | Celery worker |
 
+En Coolify la app, el worker y el beat de la heredada figuran como `agent-core-test`,
+`agent-core-test-worker` y `agent-core-test-beat` (por herencia): guiarse siempre por el UUID y la
+etiqueta `coolify.environmentName`.
+
 - Túnel **`solvershub`** (`442da5f7-a3fa-4226-9450-2951be30b9d3`): token, configuración remota
   (dashboard): `app.solvershub.site → http://localhost:3003` (todo el hostname a la API, incluido
   el panel clásico `/admin`). El conector corre con `~/.cloudflared/run-solvershub.sh` (crontab
@@ -544,7 +548,8 @@ docker exec 48h2r2laml64eyrggfg6eqld psql -U postgres -d agent_core -tAc "SELECT
 
   Docker trata `127.0.0.1` como registry inseguro permitido (no hace falta tocar
   `daemon.json`). **Dependencia:** el registry debe estar arriba para reiniciar la
-  DB; corre con `--restart always`.
+  DB; corre con `--restart always`. En el VPS se usa la imagen de GHCR que publica
+  `ci-postgres-image.yml` (la misma del CI, ADR-0120); el registry local queda como alternativa.
 - **`vector` y `postgis` exigen superusuario para `CREATE EXTENSION`; `btree_gist` no.** Si el
   dueño de las migraciones no es superusuario, el superusuario crea las extensiones antes de la
   primera migración (las migraciones usan `IF NOT EXISTS`). Comprobado el 2026-10-09: todas las

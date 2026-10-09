@@ -260,6 +260,7 @@ async def test_vaciar_base_nueva_solo_vacia_la_base_marcada(admin: Admin) -> Non
 # ------------------------------------------------------------------ verificar_aislamiento.py
 
 
+@pytest.mark.aislamiento  # subconjunto de las PRs a develop (ADR-0120)
 async def test_el_runtime_de_la_base_migrada_no_es_dueno_y_rls_forced_pasa(capsys) -> None:
     """Con la `DATABASE_URL` del CI (rol `app_runtime` sobre la base migrada)."""
     if not os.environ.get("DATABASE_URL"):
@@ -274,6 +275,7 @@ async def test_el_runtime_de_la_base_migrada_no_es_dueno_y_rls_forced_pasa(capsy
     assert "[OK] rol_esperado: Conecta como app_runtime" in salida
 
 
+@pytest.mark.aislamiento  # subconjunto de las PRs a develop (ADR-0120)
 async def test_verificar_aislamiento_detecta_dueno_miembro_superusuario_y_rls_sin_force(
     admin: Admin,
 ) -> None:
