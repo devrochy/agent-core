@@ -78,7 +78,7 @@ EVENTOS: dict[str, dict[str, str]] = {
         "suscripcion.concepto": "Plan o concepto de la suscripción",
         "prueba.termina": "Fecha en que termina la prueba",
     },
-    # HU-SH-03 (ADR-0120): el negocio del cliente se creó solo; invitación al dueño.
+    # HU-SH-03 (ADR-0121): el negocio del cliente se creó solo; invitación al dueño.
     "provisioning.invitation": {
         "cliente.nombre": "Nombre del cliente",
         "negocio.nombre": "Nombre del negocio creado",

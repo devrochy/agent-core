@@ -360,7 +360,7 @@ de artefactos de tenant).
   proveedor use la sesión del llamador o que commerce active después del commit. Visto en HU-SH-03
   (2026-10-09). [Media]
 - **Un cambio de plan desde el asistente no cambia el plan del negocio aprovisionado** — Free →
-  Premium cambia la suscripción en `solvershub`, pero el consumidor de ADR-0120 solo lo audita
+  Premium cambia la suscripción en `solvershub`, pero el consumidor de ADR-0121 solo lo audita
   (`aprovisionamiento_cambio_de_plan`): el negocio sigue en Free y vence a los 30 días. → HU-SH-04
   (fuente única del cobro de plataforma). [Alta]
 

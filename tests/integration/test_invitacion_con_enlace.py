@@ -1,4 +1,4 @@
-"""Enlace de un solo uso de la invitación al owner (HU-SH-03, ADR-0120 § 3.8).
+"""Enlace de un solo uso de la invitación al owner (HU-SH-03, ADR-0121 § 3.8).
 
 `POST /api/v1/auth/accept-invitation`: el owner de un negocio creado por el alta
 automática define su contraseña y queda como miembro. Uso único, vencimiento, firma y

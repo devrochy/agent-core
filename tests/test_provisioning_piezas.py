@@ -1,4 +1,4 @@
-"""HU-SH-03 (ADR-0120): piezas puras del aprovisionamiento automático, sin BD.
+"""HU-SH-03 (ADR-0121): piezas puras del aprovisionamiento automático, sin BD.
 
 La allowlist de vendedores, la identidad determinista del negocio (id y slug), la
 limpieza de los datos del pedido, el enlace de un solo uso de la invitación y los campos

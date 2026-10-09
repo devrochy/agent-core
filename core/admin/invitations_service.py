@@ -5,7 +5,7 @@ Fuente única para el panel (API `/api/v1/admin/invitations`) y la API de campo
 (`admin_id`); los usuarios nuevos se vinculan directo (ver
 `create_collaborator`/`create_collector`).
 
-Enlace de un solo uso (ADR-0120): el aprovisionamiento automático invita al owner de un
+Enlace de un solo uso (ADR-0121): el aprovisionamiento automático invita al owner de un
 negocio nuevo. Si la cuenta se creó sin contraseña (`SIN_CONTRASENA`), la invitación lleva
 un enlace con el que el owner define su contraseña y entra; el token se deriva del id de
 la invitación y de un nonce con `APP_SECRET_KEY`, y la base solo guarda el nonce.
@@ -34,7 +34,7 @@ log = get_logger(__name__)
 
 VALID_ROLES = ("owner", "colaborador")
 
-# Hash de una cuenta creada sin contraseña (ADR-0120): no es un hash bcrypt, así que
+# Hash de una cuenta creada sin contraseña (ADR-0121): no es un hash bcrypt, así que
 # `verify_password` lo rechaza siempre y nadie puede entrar hasta que el owner la defina.
 SIN_CONTRASENA = "!sin-contrasena:invitacion"
 YA_PERTENECE = "el usuario ya pertenece a este negocio"
@@ -190,7 +190,7 @@ async def aceptar_invitacion(*, invitation_id: uuid.UUID, admin_id: uuid.UUID) -
             return "invitación no encontrada o ya resuelta"
         invitacion.estado = "aceptada"
         invitacion.responded_at = datetime.now(UTC)
-        invitacion.token_nonce = None  # el enlace (ADR-0120) deja de valer
+        invitacion.token_nonce = None  # el enlace (ADR-0121) deja de valer
         tenant_id = invitacion.tenant_id
         role = invitacion.role
         pack_roles = list(invitacion.pack_roles or [])
@@ -250,7 +250,7 @@ async def revocar_invitacion(
     return None
 
 
-# ------------------------------------------------------------------ enlace de un solo uso (ADR-0120)
+# ------------------------------------------------------------------ enlace de un solo uso (ADR-0121)
 def _firma(invitation_id: uuid.UUID, nonce: str) -> str:
     from core.config import get_settings
 
@@ -300,7 +300,7 @@ async def crear_invitacion_owner(
     con_enlace: bool,
     vigencia: timedelta,
 ) -> tuple[TenantInvitation | None, str | None]:
-    """Invitación `owner` del aprovisionamiento automático (ADR-0120). Idempotente por
+    """Invitación `owner` del aprovisionamiento automático (ADR-0121). Idempotente por
     (tenant, admin): un reintento reusa la pendiente y no cambia su nonce.
 
     `con_enlace` solo para una cuenta sin contraseña: el enlace la define. Devuelve
@@ -353,7 +353,7 @@ async def crear_invitacion_owner(
 
 
 async def canjear_invitacion(token: str, new_password: str) -> str | None:
-    """Canjea el enlace de un solo uso (ADR-0120): define la contraseña de una cuenta creada
+    """Canjea el enlace de un solo uso (ADR-0121): define la contraseña de una cuenta creada
     sin ella y acepta la invitación (`TenantUser`). Devuelve un error (str) o None.
 
     Solo vale mientras la cuenta no tenga contraseña: un enlace que llegó por WhatsApp no

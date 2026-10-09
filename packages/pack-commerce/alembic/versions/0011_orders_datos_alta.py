@@ -1,4 +1,4 @@
-"""Datos de alta del servicio en los pedidos de planes (HU-SH-03, ADR-0120).
+"""Datos de alta del servicio en los pedidos de planes (HU-SH-03, ADR-0121).
 
 Un pedido de un plan guarda lo que el checkout pidió para dar de alta el servicio y que
 hoy se validaba pero se perdía: correo y teléfono del comprador y, si el negocio los pide

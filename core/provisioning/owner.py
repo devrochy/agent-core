@@ -1,4 +1,4 @@
-"""Owner del negocio nuevo: cuenta, invitación y entrega del enlace (HU-SH-03, ADR-0120 § 3.8).
+"""Owner del negocio nuevo: cuenta, invitación y entrega del enlace (HU-SH-03, ADR-0121 § 3.8).
 
 - Correo sin cuenta → `Admin` sin contraseña (`SIN_CONTRASENA`) e invitación `owner` con
   enlace de un solo uso: al abrirlo, el owner define su contraseña (D-SPEC-07-2).

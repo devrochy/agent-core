@@ -1,4 +1,4 @@
-"""HU-SH-03 · Gherkin «Sin el LLM» (ADR-0120 § 4).
+"""HU-SH-03 · Gherkin «Sin el LLM» (ADR-0121 § 4).
 
 Dado cualquier conversación, cuando el asistente intenta crear un negocio, entonces no
 tiene ninguna tool ni token para hacerlo. Se recorren TODAS las tools que el core y los

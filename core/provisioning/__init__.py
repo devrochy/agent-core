@@ -1,4 +1,4 @@
-"""Aprovisionamiento automático de negocios (HU-SH-03, ADR-0120).
+"""Aprovisionamiento automático de negocios (HU-SH-03, ADR-0121).
 
 Un negocio VENDEDOR (allowlist `PROVISIONING_SELLER_TENANTS`, hoy `solvershub`) vende un
 plan de la plataforma. Cuando su suscripción se activa (`subscription.activated` del

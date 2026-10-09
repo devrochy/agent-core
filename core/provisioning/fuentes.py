@@ -1,4 +1,4 @@
-"""Contrato de los datos de un alta y registro de fuentes (HU-SH-03, ADR-0120 § 3.4).
+"""Contrato de los datos de un alta y registro de fuentes (HU-SH-03, ADR-0121 § 3.4).
 
 El core no lee tablas de los packs. Un pack que vende planes de la plataforma (hoy
 `pack_commerce`) registra una `FuenteDeAltas`: dada la referencia de SU pedido, devuelve

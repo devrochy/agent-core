@@ -249,7 +249,7 @@ class Order(TenantMixin, Base):
     # HU-SUB-09: activación del plan del pedido (NULL si no lleva planes).
     plan_activation_status: Mapped[str | None] = mapped_column(Text, default=None)  # pendiente|activada
     plan_activation_error: Mapped[str | None] = mapped_column(Text, default=None)
-    # HU-SH-03 (ADR-0120): datos del checkout de un plan para dar de alta el servicio
+    # HU-SH-03 (ADR-0121): datos del checkout de un plan para dar de alta el servicio
     # ({"email", "telefono", "negocio", "vertical"}); NULL si el pedido no lleva planes.
     datos_alta: Mapped[dict | None] = mapped_column(JSONB, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

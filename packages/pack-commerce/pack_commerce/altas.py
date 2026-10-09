@@ -1,4 +1,4 @@
-"""Fuente de los datos del alta automática de un negocio (HU-SH-03, ADR-0120).
+"""Fuente de los datos del alta automática de un negocio (HU-SH-03, ADR-0121).
 
 El core da de alta el negocio del comprador cuando un negocio vendedor (allowlist del core)
 activa la suscripción de un plan de la plataforma. Commerce es dueño del pedido: esta fuente

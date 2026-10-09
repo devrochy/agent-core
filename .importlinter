@@ -52,7 +52,7 @@ forbidden_modules =
     pack_payments
     pack_subscriptions
 
-# ADR-0120 (HU-SH-03, «Sin el LLM»): crear negocios es solo del consumidor del core sobre
+# ADR-0121 (HU-SH-03, «Sin el LLM»): crear negocios es solo del consumidor del core sobre
 # `subscription.activated`. Ninguna tool (core o pack), ni el host MCP, ni el loop del LLM
 # importan el alta. Los packs solo pueden usar el contrato `core.provisioning.fuentes`.
 # `core.onboarding` no se prohíbe entero (sus utilidades, como `tenant_dir`, las usan los

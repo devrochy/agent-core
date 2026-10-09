@@ -1,4 +1,4 @@
-"""HU-SH-03 · Alta automática de negocios (ADR-0120), contra la BD real.
+"""HU-SH-03 · Alta automática de negocios (ADR-0121), contra la BD real.
 
 Gherkin de la HU:
 - Alta automática: `subscription.activated` de un vendedor con plan Premium → negocio con

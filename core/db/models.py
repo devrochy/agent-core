@@ -618,13 +618,13 @@ class TenantInvitation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
-    # Nonce del enlace de un solo uso (ADR-0120): el token se deriva de él y del id con
+    # Nonce del enlace de un solo uso (ADR-0121): el token se deriva de él y del id con
     # APP_SECRET_KEY; la base nunca guarda el token. NULL = invitación sin enlace (ADR-0081).
     token_nonce: Mapped[str | None] = mapped_column(Text, default=None)
 
 
 class ProvisioningRequest(Base):
-    """Alta automática de un negocio pedida por un negocio vendedor (HU-SH-03, ADR-0120).
+    """Alta automática de un negocio pedida por un negocio vendedor (HU-SH-03, ADR-0121).
 
     Tabla de NEGOCIO del vendedor (`tenant_id`, RLS forzada): una fila por alta, única por
     `(tenant_id, referencia)` y por `(tenant_id, subscription_id)`. `estado`:

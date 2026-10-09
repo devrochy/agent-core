@@ -1108,7 +1108,7 @@ class CRMModule(BaseModule):
         from pack_commerce.planes import CatalogoDePlanes
 
         plan_catalog_registry.register("pack_commerce", CatalogoDePlanes())
-        # Datos del pedido para el alta automática de negocios (HU-SH-03, ADR-0120).
+        # Datos del pedido para el alta automática de negocios (HU-SH-03, ADR-0121).
         from core.provisioning.fuentes import fuentes_de_alta
         from pack_commerce.altas import DatosDeAltaDelPedido
 

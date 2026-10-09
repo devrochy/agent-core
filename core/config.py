@@ -220,7 +220,7 @@ class Settings(BaseSettings):
     # habilita explícitamente.
     wompi_billing_sandbox: bool = Field(default=True, alias="WOMPI_BILLING_SANDBOX")
 
-    # --- Aprovisionamiento automático de negocios (HU-SH-03, ADR-0120) ---
+    # --- Aprovisionamiento automático de negocios (HU-SH-03, ADR-0121) ---
     # Negocios VENDEDORES (slugs o UUID separados por coma, p. ej. `solvershub`): solo
     # un `subscription.activated` de uno de ellos crea un negocio nuevo. Vacío = apagado.
     # Va en el worker (ahí corre el despachador del outbox). No hay token de servicio.

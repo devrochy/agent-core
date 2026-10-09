@@ -9,7 +9,7 @@ La recuperación de contraseña (ADR-0098) usa un código de un solo uso enviado
 por el correo de sistema; `forgot-password` responde siempre 202 sin filtrar si
 la cuenta existe.
 
-`accept-invitation` (ADR-0120) canjea el enlace de un solo uso con el que el dueño
+`accept-invitation` (ADR-0121) canjea el enlace de un solo uso con el que el dueño
 de un negocio creado por el alta automática define su contraseña y entra.
 """
 
@@ -115,7 +115,7 @@ async def post_reset_password(payload: ResetPasswordRequest) -> Response:
 
 @router.post("/accept-invitation", status_code=204)
 async def post_accept_invitation(payload: AcceptInvitationRequest) -> Response:
-    """Canjea el enlace de un solo uso de una invitación (ADR-0120): define la contraseña de
+    """Canjea el enlace de un solo uso de una invitación (ADR-0121): define la contraseña de
     una cuenta creada sin ella y la deja como miembro del negocio. Luego se entra con
     `/auth/login`. Un enlace inválido, usado o vencido da 400 sin decir cuál de los tres;
     una cuenta que ya tiene contraseña da 409 (entra y acepta la invitación en la app)."""

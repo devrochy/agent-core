@@ -368,7 +368,7 @@ def _verticales() -> list[dict[str, str]]:
 def _vertical_invalido(valor: Any) -> dict[str, Any] | None:
     """Rechazo de un `vertical` que no es un preset, con las opciones; None si es válido o
     no vino (solo es obligatorio si el negocio lo pide en `checkout_fields`). Así el tipo de
-    negocio llega al pedido como dato de una lista, no como texto libre (ADR-0120)."""
+    negocio llega al pedido como dato de una lista, no como texto libre (ADR-0121)."""
     texto = str(valor or "").strip()
     if not texto:
         return None
@@ -385,7 +385,7 @@ def _vertical_invalido(valor: Any) -> dict[str, Any] | None:
 
 
 def _datos_alta(customer_data: dict[str, Any]) -> dict[str, str] | None:
-    """Lo que el alta del servicio de un plan necesita del checkout (ADR-0120): se guarda
+    """Lo que el alta del servicio de un plan necesita del checkout (ADR-0121): se guarda
     en el pedido; el perfil del cliente solo se toca con su consentimiento (D17)."""
     datos = {
         "email": str(customer_data.get("email") or "").strip().lower()[:254],
@@ -827,7 +827,7 @@ class OrderSkill(BaseSkill):
     ]
 
     def get_tools(self) -> list[MCPTool]:
-        # Tipo de negocio del cliente: id de un preset, de la lista (ADR-0120).
+        # Tipo de negocio del cliente: id de un preset, de la lista (ADR-0121).
         opciones = [o["id"] for o in _verticales()]
         vertical: dict[str, Any] = {
             "type": "string",
@@ -1435,7 +1435,7 @@ class OrderSkill(BaseSkill):
                 "hint": "Pide los datos que faltan uno a uno, sin repetir los que ya tenés.",
             }
         if es_plan and customer_data.get("vertical"):
-            # El tipo de negocio es un id de preset (ADR-0120). Si el negocio lo pide y no es
+            # El tipo de negocio es un id de preset (ADR-0121). Si el negocio lo pide y no es
             # de la lista, se rechaza con las opciones; si no lo pide, un valor que no sirve
             # se descarta y el pedido sigue (la tool es la misma para todos los negocios).
             rechazo_vertical = _vertical_invalido(customer_data.get("vertical"))
@@ -1484,7 +1484,7 @@ class OrderSkill(BaseSkill):
                 delivery_address=customer_data.get("address"),
                 delivery_municipality=customer_data.get("municipality"),
                 delivery_city=customer_data.get("city"),
-                # HU-SH-03: datos del alta del servicio que vende el plan (ADR-0120).
+                # HU-SH-03: datos del alta del servicio que vende el plan (ADR-0121).
                 datos_alta=_datos_alta(customer_data) if es_plan else None,
                 status="abierto",
                 # transferencia/pago_en_linea se confirman después (comprobante manual o

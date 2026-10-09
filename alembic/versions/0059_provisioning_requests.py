@@ -1,4 +1,4 @@
-"""Aprovisionamiento automático de negocios (HU-SH-03, ADR-0120).
+"""Aprovisionamiento automático de negocios (HU-SH-03, ADR-0121).
 
 - `provisioning_requests`: una fila por alta automática, en el negocio VENDEDOR (`tenant_id`),
   con RLS habilitada y forzada. Es la llave de idempotencia del consumidor de
@@ -7,7 +7,7 @@
   negocio creado (`ON DELETE SET NULL`: purgar ese negocio no rompe el historial del
   vendedor, que conserva el slug).
 - `tenant_invitations.token_nonce`: nonce del enlace de un solo uso de la invitación
-  (ADR-0120 § 3.8). NULL = invitación sin enlace, la de siempre (ADR-0081).
+  (ADR-0121 § 3.8). NULL = invitación sin enlace, la de siempre (ADR-0081).
 
 Tabla nueva y vacía, columna nullable sin default: sin reescritura ni bloqueo largo.
 

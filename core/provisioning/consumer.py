@@ -1,4 +1,4 @@
-"""Consumidor de `subscription.activated` que da de alta negocios (HU-SH-03, ADR-0120 § 3).
+"""Consumidor de `subscription.activated` que da de alta negocios (HU-SH-03, ADR-0121 § 3).
 
 Corre en el worker, dentro del despachador del outbox (ADR-0107), bajo el `tenant_scope`
 del negocio VENDEDOR. Pasos:

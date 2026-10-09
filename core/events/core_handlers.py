@@ -195,7 +195,7 @@ _HANDLERS = (
     (ON_APPOINTMENT_CONFIRMED, on_appointment_confirmed),
     (ON_APPOINTMENT_REMINDER, on_appointment_reminder),
     (ON_APPOINTMENT_NO_SHOW, on_appointment_no_show),
-    # HU-SH-03 (ADR-0120): alta automática del negocio de quien compra un plan a un
+    # HU-SH-03 (ADR-0121): alta automática del negocio de quien compra un plan a un
     # negocio vendedor (allowlist). Para el resto de los negocios no hace nada.
     (ON_SUBSCRIPTION_ACTIVATED, on_subscription_activated),
 )

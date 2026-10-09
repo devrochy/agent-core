@@ -133,7 +133,7 @@ Notas:
   inyectan también en el build).
 - Los pares no listados (`MASTER_ENCRYPTION_KEY`, `APP_SECRET_KEY`, `LLM_*`,
   `TOKEN_*`, `WOMPI_*`) son **propios de cada entorno**.
-- **`PROVISIONING_SELLER_TENANTS`** (ADR-0120): slugs o UUID, separados por coma, de los
+- **`PROVISIONING_SELLER_TENANTS`** (ADR-0121): slugs o UUID, separados por coma, de los
   negocios que venden negocios. Solo un `subscription.activated` de uno de ellos crea un
   negocio nuevo; vacía, el alta automática está apagada. Tiene que estar en el **worker**
   (ahí corre el despachador del outbox); en la app no hace daño. No hay token de servicio

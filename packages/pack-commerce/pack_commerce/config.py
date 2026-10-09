@@ -10,7 +10,7 @@ from pydantic import Field, SecretStr, field_validator
 from core.mcp.types import BasePluginConfig
 
 _PREFIJO = re.compile(r"^[A-Za-z0-9]{1,8}$")
-# `business_name` y `vertical` (HU-SH-03, ADR-0120): datos del alta del servicio que vende
+# `business_name` y `vertical` (HU-SH-03, ADR-0121): datos del alta del servicio que vende
 # un plan de la plataforma; `vertical` es un id de preset validado, no texto libre.
 _CAMPOS_VALIDOS = {
     "full_name", "id_document", "address", "municipality", "city", "phone", "email",

@@ -1,4 +1,4 @@
-"""Datos del alta en el pedido de un plan (HU-SH-03, ADR-0120).
+"""Datos del alta en el pedido de un plan (HU-SH-03, ADR-0121).
 
 El checkout de un plan guarda en el pedido lo que el alta automática necesita: correo y
 teléfono del comprador, nombre de su negocio y su tipo de negocio. El tipo de negocio es un

@@ -1,4 +1,4 @@
-"""Allowlist de negocios vendedores (HU-SH-03, ADR-0120 § 2).
+"""Allowlist de negocios vendedores (HU-SH-03, ADR-0121 § 2).
 
 `PROVISIONING_SELLER_TENANTS`: slugs o UUID separados por coma. Vacía = el alta automática
 está apagada (fail-closed). Es una variable de entorno y no una opción del panel: ningún

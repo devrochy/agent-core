@@ -1,6 +1,6 @@
 ## El negocio de quien compra un plan se crea solo (2026-10-09)
 
-- HU-SH-03 (ADR-0120). Cuando un negocio vendedor (`PROVISIONING_SELLER_TENANTS`, en el worker; vacía
+- HU-SH-03 (ADR-0121). Cuando un negocio vendedor (`PROVISIONING_SELLER_TENANTS`, en el worker; vacía
   = apagado) activa la suscripción de un plan de la plataforma, el core crea el negocio del comprador:
   plan comprado (Premium activo con el período pagado; Free en prueba de 30 días), preset de su tipo de
   negocio sin datos de ejemplo e invitación al owner por correo y WhatsApp. Sin tokens ni tools para el

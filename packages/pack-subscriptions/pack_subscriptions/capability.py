@@ -205,7 +205,7 @@ async def _emitir_activada(
 ) -> None:
     """`subscription.activated` por el outbox. `plan_code` (SKU del snapshot) y `variant_id`
     dicen qué línea del pedido se activó: el alta automática de un negocio (HU-SH-03,
-    ADR-0120) los usa para leer el plan de la plataforma de esa línea."""
+    ADR-0121) los usa para leer el plan de la plataforma de esa línea."""
     from core.events.outbox import emit_domain
     from core.shared.events import ON_SUBSCRIPTION_ACTIVATED
 
