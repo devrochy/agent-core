@@ -8,6 +8,9 @@ guardan en almacenamiento seguro y lo envían como `Authorization: Bearer`.
 La recuperación de contraseña (ADR-0098) usa un código de un solo uso enviado
 por el correo de sistema; `forgot-password` responde siempre 202 sin filtrar si
 la cuenta existe.
+
+`accept-invitation` (ADR-0120) canjea el enlace de un solo uso con el que el dueño
+de un negocio creado por el alta automática define su contraseña y entra.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from fastapi.background import BackgroundTasks
 from pydantic import BaseModel, Field
 
 from core.admin.auth import SESSION_TTL_HOURS, admin_from_token, login, logout
+from core.admin.invitations_service import CUENTA_CON_CONTRASENA, canjear_invitacion
 from core.admin.password_reset_service import aplicar_reset, solicitar_reset
 from core.api.deps import Principal, get_principal
 from core.api.errors import ApiError
@@ -45,6 +49,14 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str = Field(description="Código de recuperación recibido por correo.")
     new_password: str = Field(min_length=8)
+
+
+class AcceptInvitationRequest(BaseModel):
+    token: str = Field(
+        max_length=200,
+        description="Token del enlace de la invitación: lo que va después de `#` en `/invitacion#…`.",
+    )
+    new_password: str = Field(min_length=8, description="Contraseña nueva de la cuenta (8+).")
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -96,6 +108,20 @@ async def post_forgot_password(payload: ForgotPasswordRequest, background: Backg
 @router.post("/reset-password", status_code=204)
 async def post_reset_password(payload: ResetPasswordRequest) -> Response:
     error = await aplicar_reset(payload.token, payload.new_password)
+    if error is not None:
+        raise ApiError(400, "invalid_token", error)
+    return Response(status_code=204)
+
+
+@router.post("/accept-invitation", status_code=204)
+async def post_accept_invitation(payload: AcceptInvitationRequest) -> Response:
+    """Canjea el enlace de un solo uso de una invitación (ADR-0120): define la contraseña de
+    una cuenta creada sin ella y la deja como miembro del negocio. Luego se entra con
+    `/auth/login`. Un enlace inválido, usado o vencido da 400 sin decir cuál de los tres;
+    una cuenta que ya tiene contraseña da 409 (entra y acepta la invitación en la app)."""
+    error = await canjear_invitacion(payload.token, payload.new_password)
+    if error == CUENTA_CON_CONTRASENA:
+        raise ApiError(409, "account_has_password", error)
     if error is not None:
         raise ApiError(400, "invalid_token", error)
     return Response(status_code=204)

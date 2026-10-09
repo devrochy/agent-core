@@ -166,6 +166,42 @@
         }
       }
     },
+    "/api/v1/auth/accept-invitation": {
+      "post": {
+        "tags": [
+          "api",
+          "auth"
+        ],
+        "summary": "Post Accept Invitation",
+        "description": "Canjea el enlace de un solo uso de una invitación (ADR-0120): define la contraseña de\nuna cuenta creada sin ella y la deja como miembro del negocio. Luego se entra con\n`/auth/login`. Un enlace inválido, usado o vencido da 400 sin decir cuál de los tres;\nuna cuenta que ya tiene contraseña da 409 (entra y acepta la invitación en la app).",
+        "operationId": "post_accept_invitation_api_v1_auth_accept_invitation_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptInvitationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/me": {
       "get": {
         "tags": [
@@ -12414,6 +12450,28 @@
   },
   "components": {
     "schemas": {
+      "AcceptInvitationRequest": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Token",
+            "description": "Token del enlace de la invitación: lo que va después de `#` en `/invitacion#…`."
+          },
+          "new_password": {
+            "type": "string",
+            "minLength": 8,
+            "title": "New Password",
+            "description": "Contraseña nueva de la cuenta (8+)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "token",
+          "new_password"
+        ],
+        "title": "AcceptInvitationRequest"
+      },
       "AccessAttempt": {
         "properties": {
           "fecha": {
