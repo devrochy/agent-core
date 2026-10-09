@@ -18,9 +18,11 @@ from pydantic import BaseModel, SecretStr
 from sqlalchemy import select
 
 from core.admin.meta_health_service import (
+    WebhookRegistroError,
     diagnose_connection,
     health_overview,
     register_channel_subscription,
+    register_connection_webhook,
     resubscribe_waba,
     set_billing_status,
     set_connection_status,
@@ -96,6 +98,13 @@ class BillingRequest(BaseModel):
 
 
 class SubscriptionItem(BaseModel):
+    """Suscripción de la APP que usa una conexión (HU-CONN-05). Con la app de la
+    plataforma y sin ser master, `callback_url` y `last_error` vienen vacíos."""
+
+    connection_id: uuid.UUID
+    origin: str
+    uses_platform_app: bool
+    can_register: bool
     channel: str
     object: str
     meta_app_id: str
@@ -110,17 +119,33 @@ class WebhooksResponse(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    channel: str
+    """Ruta vieja: mejor `POST /connections/{id}/webhook/register`. Con `connection_id`
+    registra esa conexión; con solo `channel`, la única conexión viva del canal."""
+
+    channel: str = ""
+    connection_id: uuid.UUID | None = None
+
+
+def _es_owner_o_master(principal: Principal) -> bool:
+    if principal.admin.role == "master":
+        return True
+    role = next((role for (tid, _name, role) in principal.tenants if tid == principal.tenant_id), None)
+    return role == "owner"
 
 
 def _require_owner_or_master(principal: Principal) -> None:
-    if principal.admin.role == "master":
-        return
-    role = next((role for (tid, _name, role) in principal.tenants if tid == principal.tenant_id), None)
-    if role != "owner":
+    if not _es_owner_o_master(principal):
         raise ApiError.forbidden(
             "Se requiere ser propietario del negocio o admin de plataforma."
         )
+
+
+def _api_error(exc: WebhookRegistroError) -> ApiError:
+    if exc.status == 404:
+        return ApiError.not_found(exc.message)
+    if exc.status == 403:
+        return ApiError(403, exc.code, exc.message)
+    return ApiError.bad_request(exc.message, exc.code)
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -171,19 +196,46 @@ async def billing(
 async def get_webhooks(
     principal: Annotated[Principal, Depends(require("connections"))],
 ) -> WebhooksResponse:
-    rows = await webhook_subscriptions_status(principal.tenant_id)
+    rows = await webhook_subscriptions_status(
+        principal.tenant_id,
+        es_master=principal.admin.role == "master",
+        puede_registrar=_es_owner_o_master(principal),
+    )
     return WebhooksResponse(subscriptions=[SubscriptionItem(**row) for row in rows])
 
 
-@router.post("/webhooks/register", status_code=204)
+@router.post("/connections/{connection_id}/webhook/register", status_code=204)
+async def register_connection_webhook_route(
+    connection_id: str,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> Response:
+    """Registra la suscripción de la app de ESA conexión (HU-CONN-05): BYOK en su propia
+    app (dueño o master); la app de la plataforma (Embedded Signup), solo el master."""
+    _require_owner_or_master(principal)
+    try:
+        await register_connection_webhook(
+            principal.tenant_id, connection_id, es_master=principal.admin.role == "master"
+        )
+    except WebhookRegistroError as exc:
+        raise _api_error(exc) from exc
+    return Response(status_code=204)
+
+
+@router.post("/webhooks/register", status_code=204, deprecated=True)
 async def register_webhook(
     payload: RegisterRequest,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> Response:
+    """Obsoleta: usa `POST /connections/{connection_id}/webhook/register`."""
     _require_owner_or_master(principal)
-    error = await register_channel_subscription(principal.tenant_id, payload.channel)
-    if error is not None:
-        raise ApiError.bad_request(error, "register_failed")
+    es_master = principal.admin.role == "master"
+    try:
+        if payload.connection_id is not None:
+            await register_connection_webhook(principal.tenant_id, str(payload.connection_id), es_master=es_master)
+        else:
+            await register_channel_subscription(principal.tenant_id, payload.channel, es_master=es_master)
+    except WebhookRegistroError as exc:
+        raise _api_error(exc) from exc
     return Response(status_code=204)
 
 

@@ -115,8 +115,7 @@ async def _reintentar(tid, app_id, phone_id, waba):
 async def test_un_reintento_con_otra_app_que_falla_devuelve_el_numero_y_se_da_de_baja(
     app_client, monkeypatch, suscribe_waba, falla_app
 ) -> None:
-    from core.gateway.meta_byok import resolve_byok_app_secret
-    from core.shared.tenant import tenant_scope
+    from core.gateway.webhook_secrets import secretos_del_grupo
 
     tid, sana_id, _app_a, waba, phone_id = await _negocio_con_conexion_sana()
     _meta_falso(monkeypatch, suscribe_waba=suscribe_waba, falla_app=falla_app)
@@ -131,8 +130,10 @@ async def test_un_reintento_con_otra_app_que_falla_devuelve_el_numero_y_se_da_de
     assert intento.status == "error" and "Fallo" in (intento.status_reason or "")
     # Borrado lógico (ADR-0122): la WABA del intento queda con `deleted_at`, no se borra.
     assert wabas_intento and all(w.deleted_at is not None for w in wabas_intento)
-    async with tenant_scope(tid):
-        assert await resolve_byok_app_secret(tid) == "secreto-a"
+    # Los mensajes de ese número se siguen verificando con el secreto de la sana (ADR-0126).
+    assert await secretos_del_grupo(
+        tid, object_type="whatsapp_business_account", entry_id=waba, sub_id=phone_id
+    ) == ("secreto-a",)
 
 
 async def test_un_reintento_con_la_misma_app_devuelve_el_numero_pero_no_borra_la_conexion(

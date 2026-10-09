@@ -5,7 +5,9 @@
 - `resubscribe_waba`: reencola SOLO la suscripción de la WABA (nunca el OAuth).
 - `set_billing_status`: persiste el estado que un admin marcó a mano (billing no
   tiene API en Meta).
-- `webhook_subscriptions_status`: estado de la suscripción de APP por canal.
+- `webhook_subscriptions_status`: estado de la suscripción de APP por conexión.
+- `register_connection_webhook`: registra la suscripción de la app de UNA conexión
+  (HU-CONN-05; la app de la plataforma, solo el master).
 """
 
 from __future__ import annotations
@@ -165,23 +167,47 @@ async def set_billing_status(
     return None
 
 
-async def webhook_subscriptions_status(tid: uuid.UUID | None) -> list[dict[str, Any]]:
-    """Una fila por canal conectado, con el estado de su suscripción de APP."""
+# Estados en que tiene sentido mirar y re-registrar la suscripción de la app de una conexión.
+_ESTADOS_CON_WEBHOOK = ("connected", "degraded", "error")
+
+
+async def webhook_subscriptions_status(
+    tid: uuid.UUID | None, *, es_master: bool = False, puede_registrar: bool = False
+) -> list[dict[str, Any]]:
+    """Una fila por conexión viva, con el estado de la suscripción de la APP que usa.
+
+    `can_register` dice si quien mira puede re-registrarla (HU-CONN-05): la app propia de
+    una conexión BYOK, el dueño del negocio o el master (`puede_registrar`); la app de la
+    plataforma (Embedded Signup, carga manual), solo el master. A quien no es master no se
+    le muestran la URL ni el último error de la app de la plataforma: es de todos los
+    negocios (mismo criterio que el checklist, HU-CONN-07)."""
+    from core.config import get_settings
+    from core.db.models import Tenant
+    from core.gateway.meta_credentials import uses_platform_app
     from core.gateway.meta_subscriptions import OBJECT_TO_CHANNEL, list_app_subscriptions
+    from core.tenants import tenant_webhook_url
 
     if tid is None:
         return []
+    settings = get_settings()
     channel_to_object = {v: k for k, v in OBJECT_TO_CHANNEL.items()}
+    async with get_session() as session:
+        tenant = await session.get(Tenant, tid)
+    urls_propias = {f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"}
+    if tenant is not None:
+        urls_propias.add(tenant_webhook_url(tenant.slug))
 
     async with get_session() as session:
         connections = (
             (
                 await session.execute(
-                    select(MetaConnection).where(
+                    select(MetaConnection)
+                    .where(
                         MetaConnection.tenant_id == tid,
-                        MetaConnection.status == "connected",
+                        MetaConnection.status.in_(_ESTADOS_CON_WEBHOOK),
                         MetaConnection.deleted_at.is_(None),
                     )
+                    .order_by(MetaConnection.created_at)
                 )
             )
             .scalars()
@@ -193,56 +219,178 @@ async def webhook_subscriptions_status(tid: uuid.UUID | None) -> list[dict[str, 
         object_ = channel_to_object.get(connection.channel)
         if object_ is None:
             continue
-        subs = await list_app_subscriptions(connection.meta_app_id)
+        de_plataforma = uses_platform_app(connection)
+        # Una BYOK tomada por Embedded Signup conserva el `meta_app_id` de su app vieja: la
+        # suscripción que manda es la de la app que usa hoy (ADR-0094).
+        app_id = settings.meta_app_id if de_plataforma else connection.meta_app_id
+        subs = await list_app_subscriptions(app_id)
         sub = next((s for s in subs if s.object == object_), None)
+        # La app de la plataforma es de todos los negocios: su URL y su error, solo el master.
+        # Una app BYOK compartida con otro negocio (el estado de suscripción de la app no tiene negocio)
+        # puede apuntar al slug ajeno: solo se muestra si es la URL de este negocio o la genérica.
+        if de_plataforma:
+            ocultar = not es_master
+        else:
+            callback = sub.callback_url if sub else None
+            ocultar = bool(callback) and callback not in urls_propias
         rows.append(
             {
+                "connection_id": connection.id,
+                "origin": connection.origin,
+                "uses_platform_app": de_plataforma,
+                "can_register": es_master if de_plataforma else puede_registrar,
                 "channel": connection.channel,
                 "object": object_,
-                "meta_app_id": connection.meta_app_id,
-                "callback_url": sub.callback_url if sub else None,
+                "meta_app_id": app_id,
+                "callback_url": None if ocultar or not sub else sub.callback_url,
                 "active": sub.active if sub else None,
                 "fields": sub.fields if sub else [],
-                "last_error": sub.last_error if sub else None,
+                "last_error": None if ocultar or not sub else sub.last_error,
             }
         )
     return rows
 
 
-async def register_channel_subscription(tid: uuid.UUID, channel: str) -> str | None:
-    """Registra la suscripción de APP para un canal (owner/master). Error o None."""
+class WebhookRegistroError(Exception):
+    """No se pudo registrar el webhook de una conexión. `code` es un slug estable para la
+    API; `status` el HTTP (404 conexión ajena o inexistente, 403 solo el master, 400 el
+    resto). `message` es legible y nunca lleva secretos."""
+
+    def __init__(self, message: str, *, code: str, status: int = 400) -> None:
+        super().__init__(message)
+        self.message = message
+        self.code = code
+        self.status = status
+
+
+async def verify_token_de_registro(connection: MetaConnection) -> str:
+    """`verify_token` con el que se registra la app propia de una conexión: el suyo (wizard
+    BYOK) o el global. Es uno de los que acepta el handshake por slug
+    (`webhook_secrets.verify_tokens_aceptados`). Necesita el `tenant_scope` del negocio."""
     from core.config import get_settings
-    from core.gateway.meta_preflight import resolve_app_credentials
+    from core.gateway.meta_credentials import stored_verify_token
+
+    return await stored_verify_token(connection) or get_settings().whatsapp_verify_token or ""
+
+
+async def register_connection_webhook(tid: uuid.UUID, connection_id: str, *, es_master: bool) -> None:
+    """Registra (o re-registra) la suscripción de APP de UNA conexión (HU-CONN-05).
+
+    - **BYOK:** en la app de esa conexión, con su App Secret, la URL por slug del negocio y
+      su `verify_token`. Nunca cae a la app de la plataforma: sin secreto guardado, error.
+    - **App de la plataforma** (Embedded Signup, carga manual): solo el master, con la URL
+      genérica y el token global, los mismos que usa el alta de Embedded Signup.
+
+    Qué app y qué secreto usa la conexión lo decide `meta_credentials.app_credentials_for`
+    (ADR-0094). Solo conexiones vivas en `connected`, `degraded` o `error`. El permiso de
+    dueño/master para la app propia lo exige la ruta. Lanza `WebhookRegistroError`."""
+    from core.config import get_settings
+    from core.db.models import Tenant
+    from core.gateway.meta_credentials import (
+        CredentialsUnavailable,
+        app_credentials_for,
+        uses_platform_app,
+    )
+    from core.gateway.meta_errors import GraphError
+    from core.gateway.meta_preflight import AppCredentials
     from core.gateway.meta_subscriptions import (
         OBJECT_TO_CHANNEL,
         SubscriptionError,
         humanize_subscription_error,
         upsert_app_subscription,
     )
-    from core.shared.exceptions import AgentCoreError
     from core.shared.tenant import tenant_scope
+    from core.tenants import tenant_webhook_url
 
-    channel_to_object = {v: k for k, v in OBJECT_TO_CHANNEL.items()}
-    object_ = channel_to_object.get(channel)
-    if object_ is None:
-        return f"Canal desconocido: {channel}"
-
-    config = await resolve_app_credentials(tid, channel)
-    if config is None:
-        return "No hay app de Meta configurada para este canal"
+    try:
+        cid = uuid.UUID(str(connection_id))
+    except ValueError as exc:
+        raise WebhookRegistroError("La conexión no existe.", code="not_found", status=404) from exc
 
     settings = get_settings()
-    callback_url = f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"
-    try:
-        async with tenant_scope(tid):
-            await upsert_app_subscription(
-                config, object_, callback_url=callback_url, verify_token=settings.whatsapp_verify_token
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            connection = await get_live_meta_connection(session, cid, tid)
+            tenant = await session.get(Tenant, tid) if connection is not None else None
+        if connection is None or tenant is None:
+            raise WebhookRegistroError("La conexión no existe.", code="not_found", status=404)
+        object_ = {v: k for k, v in OBJECT_TO_CHANNEL.items()}.get(connection.channel)
+        if object_ is None:
+            raise WebhookRegistroError(f"Canal desconocido: {connection.channel}", code="unknown_channel")
+        de_plataforma = uses_platform_app(connection)
+        if de_plataforma and not es_master:
+            # Antes que cualquier otra validación: al dueño no se le dice nada más de esa app.
+            raise WebhookRegistroError(
+                "Esta conexión usa la app de Meta de la plataforma: solo un admin de plataforma "
+                "puede re-registrar su webhook.",
+                code="platform_app_master_only",
+                status=403,
             )
-    except SubscriptionError as exc:
-        return str(exc)[:140]
-    except AgentCoreError as exc:  # GraphError
-        return humanize_subscription_error(exc)[:140]
-    return None
+        if connection.status not in _ESTADOS_CON_WEBHOOK:
+            raise WebhookRegistroError(
+                "La conexión no está activa: actívala o termina el alta antes de registrar el webhook.",
+                code="invalid_state",
+            )
+        try:
+            app = await app_credentials_for(connection)
+        except CredentialsUnavailable as exc:
+            mensaje = (
+                "La conexión no tiene App Secret guardado: vuelve a conectar tu app de Meta."
+                if exc.reason == "missing_app_secret"
+                else exc.message
+            )
+            raise WebhookRegistroError(mensaje, code=exc.reason) from exc
+
+        config = AppCredentials(
+            app_id=app.app_id,
+            app_secret=app.app_secret,
+            config_id=settings.meta_config_id if de_plataforma else (connection.meta_config_id or ""),
+            graph_api_version=connection.graph_api_version,
+            connection_id=connection.id,
+        )
+        if de_plataforma:
+            callback_url = f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"
+            verify_token = settings.whatsapp_verify_token
+        else:
+            callback_url = tenant_webhook_url(tenant.slug)
+            verify_token = await verify_token_de_registro(connection)
+
+        try:
+            await upsert_app_subscription(config, object_, callback_url=callback_url, verify_token=verify_token)
+        except SubscriptionError as exc:
+            raise WebhookRegistroError(str(exc)[:200], code="register_failed") from exc
+        except GraphError as exc:
+            raise WebhookRegistroError(humanize_subscription_error(exc)[:200], code="register_failed") from exc
+    log.info("webhook_registrado", tenant_id=str(tid), connection_id=str(cid), app_de_plataforma=de_plataforma)
+
+
+async def register_channel_subscription(tid: uuid.UUID, channel: str, *, es_master: bool) -> None:
+    """Ruta vieja "registrar por canal": se mantiene para clientes que no mandan la conexión.
+    Registra la única conexión viva del canal; con varias, pide elegir (antes registraba
+    "la" app del negocio, o la de la plataforma si no tenía propia, HU-CONN-05)."""
+    async with get_session() as session:
+        ids = (
+            (
+                await session.execute(
+                    select(MetaConnection.id).where(
+                        MetaConnection.tenant_id == tid,
+                        MetaConnection.channel == channel,
+                        MetaConnection.status.in_(_ESTADOS_CON_WEBHOOK),
+                        MetaConnection.deleted_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    if not ids:
+        raise WebhookRegistroError("No hay una conexión de este canal.", code="no_connection")
+    if len(ids) > 1:
+        raise WebhookRegistroError(
+            "El negocio tiene varias conexiones de este canal: indica cuál (connection_id).",
+            code="connection_required",
+        )
+    await register_connection_webhook(tid, str(ids[0]), es_master=es_master)
 
 
 # "Activar" diagnostica en el request (como "Diagnosticar"): 2 + 2N llamadas a Graph de 15 s

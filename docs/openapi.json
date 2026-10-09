@@ -2481,6 +2481,59 @@
         }
       }
     },
+    "/api/v1/admin/meta/connections/{connection_id}/webhook/register": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Register Connection Webhook Route",
+        "description": "Registra la suscripción de la app de ESA conexión (HU-CONN-05): BYOK en su propia\napp (dueño o master); la app de la plataforma (Embedded Signup), solo el master.",
+        "operationId": "register_connection_webhook_route_api_v1_admin_meta_connections__connection_id__webhook_register_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/meta/webhooks/register": {
       "post": {
         "tags": [
@@ -2488,7 +2541,9 @@
           "admin · meta"
         ],
         "summary": "Register Webhook",
+        "description": "Obsoleta: usa `POST /connections/{connection_id}/webhook/register`.",
         "operationId": "register_webhook_api_v1_admin_meta_webhooks_register_post",
+        "deprecated": true,
         "parameters": [
           {
             "name": "X-Tenant-Id",
@@ -20617,14 +20672,25 @@
         "properties": {
           "channel": {
             "type": "string",
-            "title": "Channel"
+            "title": "Channel",
+            "default": ""
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
           }
         },
         "type": "object",
-        "required": [
-          "channel"
-        ],
-        "title": "RegisterRequest"
+        "title": "RegisterRequest",
+        "description": "Ruta vieja: mejor `POST /connections/{id}/webhook/register`. Con `connection_id`\nregistra esa conexión; con solo `channel`, la única conexión viva del canal."
       },
       "ReportRow": {
         "properties": {
@@ -21199,6 +21265,23 @@
       },
       "SubscriptionItem": {
         "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "origin": {
+            "type": "string",
+            "title": "Origin"
+          },
+          "uses_platform_app": {
+            "type": "boolean",
+            "title": "Uses Platform App"
+          },
+          "can_register": {
+            "type": "boolean",
+            "title": "Can Register"
+          },
           "channel": {
             "type": "string",
             "title": "Channel"
@@ -21254,6 +21337,10 @@
         },
         "type": "object",
         "required": [
+          "connection_id",
+          "origin",
+          "uses_platform_app",
+          "can_register",
           "channel",
           "object",
           "meta_app_id",
@@ -21262,7 +21349,8 @@
           "fields",
           "last_error"
         ],
-        "title": "SubscriptionItem"
+        "title": "SubscriptionItem",
+        "description": "Suscripción de la APP que usa una conexión (HU-CONN-05). Con la app de la\nplataforma y sin ser master, `callback_url` y `last_error` vienen vacíos."
       },
       "SubscriptionProviderSettings": {
         "properties": {

@@ -105,12 +105,13 @@ async def test_firma_invalida_401(app_client) -> None:
 
 
 async def test_firma_valida_procesa(app_client) -> None:
-    """Con la firma correcta del app_secret del tenant, se procesa."""
+    """Con la firma correcta del app_secret de la conexión dueña del número, se procesa."""
     slug = f"fc-{uuid.uuid4().hex[:6]}"
     secret = "secreto-propio-del-tenant"
-    await _onboard(slug, f"5555{uuid.uuid4().hex[:6]}", app_secret=secret)
+    phone = f"5555{uuid.uuid4().hex[:6]}"
+    await _onboard(slug, phone, app_secret=secret)
 
-    body = json.dumps(_meta_payload("cualquiera", "wa-fc", f"wamid.fc.{uuid.uuid4().hex[:6]}", "hola")).encode()
+    body = json.dumps(_meta_payload(phone, "wa-fc", f"wamid.fc.{uuid.uuid4().hex[:6]}", "hola")).encode()
     r = await app_client.post(f"/webhooks/whatsapp/{slug}", content=body, headers=_sign(body, secret))
 
     assert r.status_code == 200, r.text

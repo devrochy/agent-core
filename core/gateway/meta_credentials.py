@@ -34,7 +34,11 @@ from core.config import get_settings
 from core.db.models import MetaConnection, WabaAccount
 from core.db.session import get_session
 from core.gateway import meta_token_store
-from core.gateway.meta_byok import APP_SECRET_KIND, CLOUD_API_ACCESS_TOKEN_KIND
+from core.gateway.meta_byok import (
+    APP_SECRET_KIND,
+    CLOUD_API_ACCESS_TOKEN_KIND,
+    WEBHOOK_VERIFY_TOKEN_KIND,
+)
 from core.gateway.meta_onboarding import TOKEN_KIND
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
@@ -100,6 +104,67 @@ async def _waba_id_of(connection: MetaConnection) -> str | None:
                 .limit(1)
             )
         ).scalar_one_or_none()
+
+
+def uses_platform_app(connection: MetaConnection) -> bool:
+    """¿La conexión usa la app de Meta de la plataforma? Embedded Signup y la carga manual,
+    sí (ADR-0094). Decide quién puede tocar la suscripción de webhook de su app: la de la
+    plataforma la comparten todos los negocios y solo la toca el master (HU-CONN-05).
+
+    Excepción deliberada a ADR-0094 §1 (ADR-0126): también una "BYOK" cuyo `meta_app_id` es
+    el de la plataforma. El wizard BYOK no lo impide, y sin esta guarda su dueño movería el
+    callback de la app compartida a su slug y cortaría el webhook genérico a todos."""
+    if connection.origin != "byok":
+        return True
+    platform_app_id = get_settings().meta_app_id
+    return bool(platform_app_id) and connection.meta_app_id == platform_app_id
+
+
+async def stored_app_secret(connection: MetaConnection) -> str | None:
+    """App Secret guardado de la app propia de la conexión (`app_access`, `subject_id =
+    meta_app_id`), **sea cual sea su origen**, o `None`.
+
+    Es la única regla de dónde vive ese secreto. No es `credentials_for`: ese decide con qué
+    app se LLAMA a Graph según el origen vigente, y para una BYOK tomada por Embedded Signup
+    da el de la plataforma. El webhook necesita saber con qué secretos puede VENIR firmada
+    una conexión, y esa conserva el de su app vieja (ADR-0101, ADR-0126)."""
+    return await meta_token_store.get_token(
+        connection.id, APP_SECRET_KIND, connection.meta_app_id, tenant_id=connection.tenant_id
+    )
+
+
+async def stored_verify_token(connection: MetaConnection) -> str | None:
+    """`verify_token` propio guardado por el wizard BYOK para la conexión, o `None`."""
+    return await meta_token_store.get_token(
+        connection.id, WEBHOOK_VERIFY_TOKEN_KIND, connection.meta_app_id, tenant_id=connection.tenant_id
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AppCredentialsOf:
+    """App de Meta que usa una conexión (sin token de acceso). `repr` oculta el secreto."""
+
+    app_id: str
+    app_secret: str = field(repr=False)
+    uses_platform_app: bool = False
+
+
+async def app_credentials_for(connection: MetaConnection) -> AppCredentialsOf:
+    """App ID y App Secret de la app que usa la conexión según su origen (ADR-0094), sin
+    exigir token de acceso: lo que hace falta para la suscripción de la app. La de la
+    plataforma, de la configuración; la BYOK, su secreto guardado (nunca cae a la de la
+    plataforma). `CredentialsUnavailable` si falta."""
+    if uses_platform_app(connection):
+        settings = get_settings()
+        if not settings.meta_app_id or not settings.meta_app_secret:
+            raise _unavailable(
+                connection, "platform_app_not_configured", "La app de Meta de la plataforma no está configurada"
+            )
+        return AppCredentialsOf(settings.meta_app_id, settings.meta_app_secret, uses_platform_app=True)
+    app_secret = await stored_app_secret(connection)
+    if not app_secret:
+        raise _unavailable(connection, "missing_app_secret", "No hay App Secret guardado para esta conexión")
+    return AppCredentialsOf(connection.meta_app_id, app_secret)
 
 
 def origin_label(origin: str) -> str:
@@ -170,9 +235,7 @@ async def credentials_for(connection: MetaConnection, *, waba_id: str | None = N
     origin = connection.origin
     if origin == "byok":
         app_id = connection.meta_app_id
-        app_secret = await meta_token_store.get_token(
-            connection.id, APP_SECRET_KIND, connection.meta_app_id, tenant_id=connection.tenant_id
-        )
+        app_secret = await stored_app_secret(connection)
     elif origin in ("embedded_signup", "manual"):
         settings = get_settings()
         if not settings.meta_app_id or not settings.meta_app_secret:
