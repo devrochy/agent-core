@@ -621,6 +621,19 @@ async def test_alta_manual_con_un_numero_que_no_es_de_la_waba_se_rechaza(app_cli
     assert await _rows_for(tid, waba_id=waba_id, phone_number_id=phone) == (0, 0)
 
 
+def _num() -> str:
+    return str(uuid.uuid4().int)[:15]
+
+
+async def _admin_local_id() -> uuid.UUID:
+    """Id del admin con el que inician sesión los tests: el intento del popup va atado a él."""
+    from core.db.models import Admin
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        return (await session.execute(select(Admin.id).where(Admin.email == "admin@local"))).scalar_one()
+
+
 async def test_canje_con_code_invalido_no_deja_filas(app_client, monkeypatch, platform_app) -> None:
     """El endpoint `/wizard/exchange` guardaba la WABA y el número del popup ANTES del
     canje: un `code` inventado dejaba filas que ocupaban los activos de otro negocio.
@@ -638,12 +651,13 @@ async def test_canje_con_code_invalido_no_deja_filas(app_client, monkeypatch, pl
     tid = await _new_tenant("es-code")
     async with tenant_scope(tid):
         wizard = await onboarding.start_or_resume_wizard(tid)
+        attempt = await onboarding.issue_attempt(wizard.id, await _admin_local_id())
 
-    waba_id, phone = uniq("waba-es"), uniq("phone-es")
+    waba_id, phone = _num(), _num()  # los IDs del popup son numéricos (ADR-0128)
     r = await app_client.post(
         "/api/v1/admin/meta/wizard/exchange", headers=await api_headers(app_client, tid),
-        json={"wizard_id": str(wizard.id), "code": "code-inventado", "waba_id": waba_id,
-              "phone_number_id": phone, "business_id": uniq("biz")},
+        json={"wizard_id": str(wizard.id), "code": "code-inventado", "attempt": attempt, "waba_id": waba_id,
+              "phone_number_id": phone, "business_id": _num()},
     )
 
     assert r.status_code == 400, r.text
@@ -664,17 +678,18 @@ async def test_canje_valido_de_una_waba_ajena_se_rechaza_por_el_endpoint(app_cli
     monkeypatch.setattr(onboarding, "_fetch_exchange_token", code_ok)
     stub_meta_pair_ok(monkeypatch)
 
-    waba_id = uniq("waba-es-ajena")
+    waba_id = _num()
     duena, intrusa = await _new_tenant("es-a"), await _new_tenant("es-b")
     await _seed_meta_assets(duena, waba_id=waba_id)
     async with tenant_scope(intrusa):
         wizard = await onboarding.start_or_resume_wizard(intrusa)
+        attempt = await onboarding.issue_attempt(wizard.id, await _admin_local_id())
 
-    phone = uniq("phone-es-ajena")
+    phone = _num()
     r = await app_client.post(
         "/api/v1/admin/meta/wizard/exchange", headers=await api_headers(app_client, intrusa),
-        json={"wizard_id": str(wizard.id), "code": "code-real", "waba_id": waba_id, "phone_number_id": phone,
-              "business_id": uniq("biz")},
+        json={"wizard_id": str(wizard.id), "code": "code-real", "attempt": attempt, "waba_id": waba_id,
+              "phone_number_id": phone, "business_id": _num()},
     )
 
     assert r.status_code == 400, r.text
@@ -698,19 +713,26 @@ async def test_canje_valido_guarda_la_waba_y_el_numero_verificados(app_client, m
     monkeypatch.setattr(onboarding, "_fetch_exchange_token", code_ok)
     stub_meta_pair_ok(monkeypatch)
 
+    # Este test mira el canje; la cadena que sigue (HU-SH-05) la cubre test_embedded_signup.py.
+    async def sin_cadena(wizard_id, *, pin=None):
+        return await onboarding.get_wizard(wizard_id)
+
+    monkeypatch.setattr(onboarding, "complete_signup", sin_cadena)
+
     tid = await _new_tenant("es-ok")
     async with tenant_scope(tid):
         wizard = await onboarding.start_or_resume_wizard(tid)
+        attempt = await onboarding.issue_attempt(wizard.id, await _admin_local_id())
 
-    waba_id, phone = uniq("waba-es-ok"), uniq("phone-es-ok")
+    waba_id, phone = _num(), _num()
     r = await app_client.post(
         "/api/v1/admin/meta/wizard/exchange", headers=await api_headers(app_client, tid),
-        json={"wizard_id": str(wizard.id), "code": "code-real", "waba_id": waba_id, "phone_number_id": phone,
-              "business_id": uniq("biz")},
+        json={"wizard_id": str(wizard.id), "code": "code-real", "attempt": attempt, "waba_id": waba_id,
+              "phone_number_id": phone, "business_id": _num()},
     )
 
     assert r.status_code == 200, r.text
-    assert r.json()["nextStep"] == "discover_assets"
+    assert r.json()["step"] == "discover_assets"
     async with tenant_scope(tid):
         async with get_session() as session:
             waba = (await session.execute(select(WabaAccount).where(WabaAccount.waba_id == waba_id))).scalar_one()

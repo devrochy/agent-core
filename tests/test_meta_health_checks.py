@@ -250,13 +250,16 @@ def _checks(token=OK, app=OK, waba=OK, **otros):
         ("error", "manual", _checks(token=None), "error"),
         ("degraded", "embedded_signup", _checks(token=SIN_DATO), "degraded"),
         # BYOK además necesita SU app suscrita: la suscripción de la app confirmada y la WABA
-        # suscrita a esa app. Embedded Signup y manual no.
+        # suscrita a esa app (Embedded Signup y manual, no la WABA).
         ("error", "byok", _checks(app=SIN_DATO), "error"),
         ("degraded", "byok", _checks(app=SIN_DATO), "degraded"),
         ("error", "byok", _checks(waba=SIN_DATO), "error"),
         ("error", "byok", _checks(waba=None), "error"),
         ("degraded", "byok", _checks(waba=SIN_DATO), "degraded"),
-        ("error", "embedded_signup", _checks(app=SIN_DATO), "connected"),
+        # Embedded Signup necesita la suscripción de la app de la plataforma confirmada (ADR-0128):
+        # sin dato no mejora. Manual todavía no (BACKLOG).
+        ("error", "embedded_signup", _checks(app=SIN_DATO), "error"),
+        ("pending", "embedded_signup", _checks(app=SIN_DATO), "pending"),
         ("error", "manual", _checks(app=SIN_DATO), "connected"),
         ("error", "embedded_signup", _checks(waba=None), "connected"),
         # Empeorar siempre se puede, verificado o no.

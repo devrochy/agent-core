@@ -1127,6 +1127,24 @@ class ConnectionWizard(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class PlatformMetaAppRequirement(Base):
+    """Requisito de Meta de la app de la PLATAFORMA para Embedded Signup que el master confirma
+    a mano (verificación del negocio, App Review, Tech Provider, configuración, modo Live), con
+    quién y cuándo (HU-SH-05, migración 0066).
+
+    Tabla de SISTEMA (sin RLS, sin `tenant_id`): es de la app compartida por todos los negocios,
+    no de un negocio. Solo la toca `core/admin/platform_meta_es.py`, que exige master."""
+
+    __tablename__ = "platform_meta_app_requirements"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    done: Mapped[bool] = mapped_column(Boolean, default=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class WabaAccount(Base):
     """Cuenta de WhatsApp Business sincronizada desde Graph API para una `MetaConnection`."""
 

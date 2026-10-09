@@ -204,8 +204,8 @@ scrubber por clave no tapa. Arreglo: `except httpx.TransportError` → `GraphErr
   ~~generar un `verify_token` propio por conexión BYOK~~ (resueltos en HU-CONN-06, ADR-0127). Quitar la guarda por
   `meta_app_id` de `uses_platform_app` cuando la consulta previa al despliegue confirme que no hay filas BYOK con
   ese App ID. Siguen: revisar los `subscribed_apps` de la WABA al reclamarla (pendiente de ADR-0122); dos negocios
-  con la misma app BYOK se pisan el callback al registrar; mover al master el re-registro de la app de la
-  plataforma que hace el alta de Embedded Signup.
+  con la misma app BYOK se pisan el callback al registrar. (Mover al master el re-registro de la app de la
+  plataforma que hacía el alta de Embedded Signup: resuelto en HU-SH-05, ADR-0128.)
 - Seguimientos de HU-CONN-06 (ADR-0127): alta BYOK de producción contra Meta real documentada por el dueño en test
   (app en modo Live, token de System User, número real con PIN, "Pasar a producción"); cuando entre HU-CONN-07
   (#354), `terminar_promocion` consume su checklist por conexión (sumándole `own_app` y "WABA suscrita a su app") y
@@ -219,7 +219,8 @@ scrubber por clave no tapa. Arreglo: `except httpx.TransportError` → `GraphErr
   Queda `meta_preflight.resolve_app_credentials` (preflight y checklist viejos), que sigue eligiendo una
   conexión por negocio.
 - Tras una toma por el wizard de ES, `meta_connections.meta_app_id` sigue siendo el de la app BYOK anterior
-  (ningún consumidor deduce el origen de él desde ADR-0094). HU-CONN-05 no lo alineó a propósito: es el
+  (ningún consumidor deduce el origen de él desde ADR-0094; desde HU-SH-05 tampoco `check_app_subscription`, que
+  mira la app de la plataforma). HU-CONN-05 no lo alineó a propósito: es el
   `subject_id` con el que se guardó el App Secret de esa app, y el webhook lo sigue aceptando (ADR-0101,
   ADR-0126). Si se alinea, hay que mover también el secreto o dejar de aceptarlo, y revisar el índice único
   `uq_meta_connections_tenant_app`.
@@ -236,6 +237,31 @@ scrubber por clave no tapa. Arreglo: `except httpx.TransportError` → `GraphErr
   saltar RLS (sus funciones `SECURITY DEFINER` lo necesitan, ADR-0095).
 - `tests/test_meta_byok.py` (7) y `tests/integration/test_api_meta_wizard.py::test_byok_*` /
   `test_meta_byok_reconnect.py` no stubbean `_token_expiry` → hacen una llamada real a Graph y fallan sin red.
+
+**Pendientes tras HU-SH-05 (Embedded Signup real, ADR-0128)**
+- **Verificación real (la hace el dueño):** aprobar la app de la plataforma en Meta (verificación del negocio, acceso
+  de Tech Provider, App Review de `whatsapp_business_management` y `whatsapp_business_messaging`, app en modo Live),
+  crear la configuración de Embedded Signup y poner `META_APP_ID`, `META_APP_SECRET` y `META_CONFIG_ID` en test;
+  agregar el dominio del panel en "Allowed domains for the JavaScript SDK"; registrar el webhook de la app como
+  master; y hacer un alta real de un número de prueba de punta a punta con video o capturas (criterio de la HU y el
+  de Embedded Signup de HU-CONN-01). Marcar los requisitos en "Plataforma → App de Meta".
+- HU-CONN-07 (#354) ya está en `develop`: al rebasar esta rama, enlazar los requisitos de Embedded Signup
+  (`/admin/platform/meta-app/embedded-signup`) desde su página "Plataforma → App de Meta" y sacar de aquí los tres
+  datos del servidor que su revisión de plataforma ya corre (variables, HTTPS, webhook), para que `ready` no dé
+  verde con su checklist en rojo. Re-encadenar la migración 0066 después de 0064/0065.
+- La cadena del alta corre en el request (varias llamadas a Graph después del canje). Si la latencia molesta con
+  Meta real, pasarla a un job de Celery: el estado ya está en `connection_wizards` y el panel puede consultar
+  `GET /wizard/session`.
+- `complete_signup` atrapa `GraphError` y `WizardError`; un error de transporte de httpx que `graph_fetch` deje
+  escapar (ver "`graph_fetch` deja escapar errores de transporte de httpx") daría 500 a mitad de la cadena. El
+  paso queda guardado y "Reintentar" lo retoma.
+- Desde ADR-0128 el wizard ya no toma conexiones BYOK; las que se tomaron antes (si hubiera) siguen con su
+  `app_access` y `meta_app_id` viejos (ADR-0126 §8). Una consulta antes de desplegar lo confirma.
+- `next_status` exige la suscripción de la app de la plataforma solo para `embedded_signup`, no para `manual` (usan
+  la misma app); evaluar extenderlo.
+- La respuesta 422 de FastAPI devuelve el `input` del campo inválido: un `pin` o `code` mal tipado volvería en el
+  error. Un handler de `RequestValidationError` que quite `input` en `/api/v1` (security-reviewer, 2026-10-09).
+- `meta_app_secret` es `str` en `Settings`: pasarlo a `SecretStr` para que no salga en un repr.
 
 **Pendientes tras ADR-0095 (un número o una WABA de un solo negocio)**
 - Antes de desplegar la `0052` en producción: confirmar que `agent_core_migrations` (el `MIGRATIONS_DATABASE_URL`

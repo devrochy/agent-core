@@ -93,6 +93,30 @@ def _patch_common(monkeypatch, oauth_handler, *, wizard, connection):
     monkeypatch.setattr(onboarding_mod, "get_owned", _fake_get_owned)
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient(oauth_handler))
 
+    # La conexión ya tiene su WABA (reautorización sin WABA en el popup): el token nuevo se
+    # verifica contra ella antes de guardarse.
+    async def _fake_activos(connection_id, tenant_id):
+        return {"waba-1"}, set()
+
+    async def _fake_live(session, connection_id, tenant_id, for_update=False):
+        return connection
+
+    verificados = []
+
+    async def _fake_verify(**kwargs):
+        verificados.append(kwargs["token"])
+        return {}
+
+    import core.gateway.meta_asset_claims as claims_mod
+
+    for attr in ("id", "health", "origin"):
+        if not hasattr(connection, attr):
+            setattr(connection, attr, {} if attr == "health" else (uuid.uuid4() if attr == "id" else "embedded_signup"))
+    monkeypatch.setattr(onboarding_mod, "_activos_vivos", _fake_activos)
+    monkeypatch.setattr(onboarding_mod, "get_live_meta_connection", _fake_live)
+    monkeypatch.setattr(claims_mod, "verify_waba_and_phone", _fake_verify)
+    return verificados
+
 
 def _fake_get_wizard(wizard):
     async def _inner(wizard_id, tenant_id=None):
@@ -124,6 +148,7 @@ async def test_canje_sin_redirect_uri_primero(monkeypatch):
 
     assert "redirect_uri" not in captured["params"]
     assert put_calls == [(wizard.connection_id, "business_integration_system_user", "biz-1", "tok-real-no-debe-salir")]
+    assert connection.status == "pending"
     assert result.current_step == "discover_assets"
     # el token nunca aparece en la vista devuelta
     assert "tok-real-no-debe-salir" not in str(vars(result))
@@ -203,3 +228,62 @@ async def test_despacho_de_la_llamada_a_meta_ocurre_en_menos_de_5_segundos(monke
 
 async def _noop_put_token(connection_id, kind, subject_id, token, **kwargs):
     return None
+
+
+@pytest.mark.asyncio
+async def test_si_el_token_nuevo_no_ve_la_waba_no_se_guarda(monkeypatch):
+    """Revisión de seguridad (HU-SH-05): primero se verifica con el token en memoria; un canje
+    que no verifica no reemplaza el token de una conexión que funciona."""
+    import core.gateway.meta_asset_claims as claims_mod
+    from core.gateway.meta_asset_claims import MetaAssetError
+    from core.gateway.meta_onboarding import WizardError
+
+    wizard = _fake_wizard(uuid.uuid4())
+    connection = SimpleNamespace(business_id="biz-5", status="connected")
+
+    def handler(url, params):
+        return FakeResponse(json_data={"access_token": "tok-que-no-ve-la-waba"})
+
+    _patch_common(monkeypatch, handler, wizard=wizard, connection=connection)
+    put_calls = []
+
+    async def _fake_put_token(*args, **kwargs):
+        put_calls.append(args)
+
+    async def _no_la_ve(**kwargs):
+        raise MetaAssetError("El token no ve esa WABA.", code="waba_not_visible")
+
+    monkeypatch.setattr(onboarding_mod.meta_token_store, "put_token", _fake_put_token)
+    monkeypatch.setattr(claims_mod, "verify_waba_and_phone", _no_la_ve)
+
+    with pytest.raises(WizardError):
+        await onboarding_mod.exchange_code(wizard.id, "code-z")
+
+    assert put_calls == []
+    assert connection.status == "connected"
+
+
+@pytest.mark.asyncio
+async def test_reautorizar_con_otro_numero_se_rechaza_sin_llamar_a_meta(monkeypatch):
+    from core.gateway.meta_onboarding import WizardError
+
+    wizard = _fake_wizard(uuid.uuid4())
+    connection = SimpleNamespace(business_id="biz-6", status="connected")
+    llamadas = []
+
+    def handler(url, params):
+        llamadas.append(params)
+        return FakeResponse(json_data={"access_token": "tok"})
+
+    _patch_common(monkeypatch, handler, wizard=wizard, connection=connection)
+
+    async def _con_numero(connection_id, tenant_id):
+        return {"waba-1"}, {"numero-viejo"}
+
+    monkeypatch.setattr(onboarding_mod, "_activos_vivos", _con_numero)
+
+    with pytest.raises(WizardError) as exc_info:
+        await onboarding_mod.exchange_code(wizard.id, "code-w", waba_id="waba-1", phone_number_id="numero-nuevo")
+
+    assert exc_info.value.code == "different_number"
+    assert llamadas == []

@@ -278,9 +278,78 @@ async def _check_group(group: _AppGroup) -> None:
             await _degrade_connections_for_object(group.connections, object_)
 
 
+async def refrescar_app_de_la_plataforma(
+    *, tenant_id: uuid.UUID | None = None, connection_id: uuid.UUID | None = None
+) -> bool | None:
+    """Lee (sin registrar nada) la suscripción de la app de Meta de la PLATAFORMA con
+    `META_APP_ID`/`META_APP_SECRET` del entorno y la guarda en `meta_app_subscriptions`
+    (HU-SH-05, ADR-0128; enmienda ADR-0102 §5).
+
+    Antes la refrescaba cada alta de Embedded Signup al re-registrarla; ahora el registro es
+    solo del master, y sin esto nadie la mantenía al día. El reparo de ADR-0102 §5 era usar un
+    secreto guardado por un negocio que dice ser de la plataforma: este es el del entorno.
+
+    No degrada conexiones una por una: si Meta la desactivó, una sola alerta de plataforma
+    (el diagnóstico de cada conexión lo ve en `app_subscription_active`). Devuelve el `active`
+    de `whatsapp_business_account` o `None` si no se pudo leer. Nunca levanta."""
+    from core.shared.alerts import send_alert_once
+
+    settings = get_settings()
+    app_id, app_secret = settings.meta_app_id, settings.meta_app_secret
+    if not app_id or not app_secret:
+        return None
+    try:
+        token = await fetch_app_access_token(app_id, app_secret, settings.graph_api_version)
+        data = await graph_fetch(
+            f"/{app_id}/subscriptions",
+            token=token,
+            app_secret=app_secret,
+            version=settings.graph_api_version,
+            tenant_id=tenant_id,
+            connection_id=connection_id,
+        )
+    except (GraphError, SubscriptionError) as exc:
+        detail = humanize_subscription_error(exc) if isinstance(exc, GraphError) else str(exc)
+        log.warning("meta_subscriptions_plataforma_sin_dato", detail=detail[:200])
+        return None
+    except Exception:
+        log.exception("meta_subscriptions_plataforma_error_inesperado")
+        return None
+
+    activo: bool | None = None
+    vistos: set[str] = set()
+    for item in (data or {}).get("data", []):
+        object_ = item.get("object", "")
+        vistos.add(object_)
+        active = bool(item.get("active", False))
+        await persist_subscription_state(
+            app_id, object_, callback_url=item.get("callback_url"), active=active,
+            fields=_normalize_fields(item.get("fields", [])), last_error=None,
+        )
+        if object_ == "whatsapp_business_account":
+            activo = active
+    if "whatsapp_business_account" not in vistos:
+        # Meta no la lista: no hay suscripción (nunca se registró o se borró).
+        await persist_subscription_state(
+            app_id, "whatsapp_business_account", callback_url=None, active=False, fields=[],
+            last_error="La app de la plataforma no tiene suscripción al webhook de WhatsApp: regístrala como master.",
+        )
+        activo = False
+    if activo is False:
+        await send_alert_once(
+            "meta_app_plataforma_sin_webhook",
+            "Webhook de la app de Meta de la plataforma inactivo",
+            "La app de la plataforma no tiene activa la suscripción a whatsapp_business_account: ningún "
+            "negocio conectado con Facebook recibe mensajes. Regístrala en «Salud de Meta» como master.",
+            severity="critical",
+        )
+    return activo
+
+
 async def check_all_subscriptions_health() -> None:
     """Nunca levanta excepción: una app caída no debe interrumpir el chequeo
     de las demás (mismo criterio que `meta_preflight.run_preflight`)."""
+    await refrescar_app_de_la_plataforma()
     groups = await _group_connected_apps()
     for group in groups:
         try:

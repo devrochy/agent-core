@@ -246,36 +246,21 @@ async def test_wizard_de_embedded_signup_crea_la_conexion_con_su_origen(platform
     assert connection.meta_app_id == PLATFORM_APP_ID
 
 
-async def test_el_wizard_de_es_toma_una_conexion_viva_de_otro_origen(platform_app) -> None:
-    """El wizard reutiliza una conexión viva; al guardar el token del system user pasa a ES."""
+async def test_el_wizard_de_es_no_toma_una_conexion_byok(platform_app) -> None:
+    """Desde ADR-0128 el wizard ya no toma una conexión BYOK viva (dejaba su app suscrita a la
+    WABA y `meta_app_id` desalineado): responde 409 y no toca la conexión."""
     import core.gateway.meta_onboarding as onboarding
-    from core.db.models import ConnectionWizard
-    from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
-    tid = await _new_tenant("es-reusa")
+    tid = await _new_tenant("es-no-toma")
     conn_id, _ = await _seed_connection(tid, origin="byok", app_id=uniq("app-byok"), tokens={}, with_waba=False)
 
     async with tenant_scope(tid):
-        wizard = await onboarding.start_or_resume_wizard(tid)
-    assert wizard.connection_id == conn_id  # reutilizó la conexión BYOK viva
+        with pytest.raises(onboarding.WizardError) as exc_info:
+            await onboarding.start_or_resume_wizard(tid)
 
-    # El canje del code contra Meta se falsea: devuelve un token del system user.
-    async def fake_exchange(version, params, settings):
-        return "tok-system-user-nuevo", False
-
-    original = onboarding._fetch_exchange_token
-    onboarding._fetch_exchange_token = fake_exchange
-    try:
-        async with tenant_scope(tid):
-            await onboarding.exchange_code(wizard.id, "code-de-un-solo-uso")
-    finally:
-        onboarding._fetch_exchange_token = original
-
-    assert (await _load(tid, conn_id)).origin == "embedded_signup"
-    async with tenant_scope(tid):
-        async with get_session() as session:
-            assert await session.get(ConnectionWizard, wizard.id) is not None
+    assert exc_info.value.code == "byok_connection_exists" and exc_info.value.status == 409
+    assert (await _load(tid, conn_id)).origin == "byok"
 
 
 async def test_alta_manual_guarda_origen_y_resuelve_con_la_plataforma(app_client, monkeypatch, platform_app) -> None:
