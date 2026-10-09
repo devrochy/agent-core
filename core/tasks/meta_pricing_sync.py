@@ -40,7 +40,7 @@ async def _connected_wabas() -> list[tuple[WabaAccount, MetaConnection]]:
         async with tenant_scope(tenant_id):
             async with get_session() as session:
                 waba = await session.get(WabaAccount, waba_id)
-                if waba is None or waba.tenant_id != tenant_id:
+                if waba is None or waba.tenant_id != tenant_id or waba.deleted_at is not None:
                     continue
                 connection = await session.get(MetaConnection, waba.connection_id)
                 # Los tres tenants deben coincidir: el del enumerador, el de la WABA y el
@@ -49,6 +49,7 @@ async def _connected_wabas() -> list[tuple[WabaAccount, MetaConnection]]:
                     connection is not None
                     and connection.tenant_id == tenant_id
                     and connection.status == "connected"
+                    and connection.deleted_at is None
                 ):
                     out.append((waba, connection))
     return out

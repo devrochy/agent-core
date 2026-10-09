@@ -96,7 +96,7 @@ async def test_lista_muestra_conexion_manual_y_meta_con_su_origen(app_client, mo
     assert 'href="/admin/conexiones/salud"' in r2.text
 
 
-async def test_activar_desactivar_y_eliminar_conexion_meta(app_client):
+async def test_activar_desactivar_y_eliminar_conexion_meta(app_client, monkeypatch):
     from core.db.models import MetaConnection
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -124,6 +124,18 @@ async def test_activar_desactivar_y_eliminar_conexion_meta(app_client):
             row = await session.get(MetaConnection, connection_id)
     assert row.status == "revoked"
 
+    # Activar diagnostica en el acto (ADR-0122): sin Graph en los tests, un diagnóstico
+    # verificado de mentira.
+    verificado = {k: {"ok": True} for k in ("token_valid", "app_subscription_active", "own_app_subscribed")}
+
+    async def _checks(_connection, _tenant_id):
+        return verificado
+
+    async def _sin_refresco(_connection):
+        return None
+
+    monkeypatch.setattr("core.gateway.meta_health.run_health_checks", _checks)
+    monkeypatch.setattr("core.tasks.meta_subscriptions_health.refrescar_suscripcion_de_conexion", _sin_refresco)
     r2 = await app_client.post(
         f"/admin/conexiones/meta/{connection_id}/activar", headers={"Cookie": cookie},
     )

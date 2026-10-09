@@ -129,7 +129,8 @@ async def test_un_reintento_con_otra_app_que_falla_devuelve_el_numero_y_se_da_de
     assert intento is not None
     assert intento.deleted_at is not None
     assert intento.status == "error" and "Fallo" in (intento.status_reason or "")
-    assert wabas_intento == []
+    # Borrado lógico (ADR-0122): la WABA del intento queda con `deleted_at`, no se borra.
+    assert wabas_intento and all(w.deleted_at is not None for w in wabas_intento)
     async with tenant_scope(tid):
         assert await resolve_byok_app_secret(tid) == "secreto-a"
 
@@ -175,8 +176,9 @@ async def test_si_la_conexion_anterior_esta_borrada_el_numero_no_vuelve_y_la_nue
 
     phone, intento, _ = await _estado(tid, phone_id, app_b)
     assert intento.deleted_at is not None
-    # El número no se le devuelve a una conexión borrada: se libera con la del intento.
-    assert phone is None
+    # El número no se le devuelve a una conexión borrada: queda eliminado con la del intento
+    # (borrado lógico, ADR-0122), libre para que otro negocio lo reclame.
+    assert phone is not None and phone.deleted_at is not None
 
 
 async def test_el_alta_que_sale_bien_se_queda_con_el_numero(app_client, monkeypatch) -> None:

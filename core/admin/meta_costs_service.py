@@ -16,7 +16,8 @@ from sqlalchemy import func, select
 
 from core.config import get_settings
 from core.db.models import MessageCost, MetaConnection, PricingDaily, WabaAccount
-from core.db.session import get_owned, get_session
+from core.db.session import get_session
+from core.gateway.meta_connection_state import get_live_meta_connection
 
 # Ventana del sync manual (misma que el cron).
 SYNC_WINDOW_DAYS = 7
@@ -84,6 +85,7 @@ async def list_credit_connections(tenant_id: uuid.UUID) -> list[MetaConnection]:
                     select(MetaConnection).where(
                         MetaConnection.tenant_id == tenant_id,
                         MetaConnection.business_id.is_not(None),
+                        MetaConnection.deleted_at.is_(None),
                     )
                 )
             )
@@ -106,7 +108,7 @@ async def verify_credits(
         return [], "Conexión inválida"
 
     async with get_session() as session:
-        connection = await get_owned(session, MetaConnection, cid, tenant_id)
+        connection = await get_live_meta_connection(session, cid, tenant_id)
 
     if connection is None or not connection.business_id:
         return [], "Esta conexión no tiene business_id configurado"

@@ -504,14 +504,14 @@ async def test_post_por_slug_rechaza_firma_de_otro_tenant(app_client) -> None:
 # ------------------------------------------------------------------ ADR-0101: BYOK degradado
 async def _tenant_con_byok(
     prefix: str, *, status: str, app_id: str, app_secret: str | None = None, verify_token: str | None = None,
-    connected_at=None,
+    connected_at=None, origin: str = "byok",
 ) -> tuple[uuid.UUID, str]:
     from core.alta_negocio import onboard_tenant
 
     slug = f"{prefix}-{uuid.uuid4().hex[:6]}"
     tid, _ = await onboard_tenant(name=f"BYOK {slug}", slug=slug, persona={"tone": "cercano"})
     await _agregar_byok(tid, status=status, app_id=app_id, app_secret=app_secret, verify_token=verify_token,
-                        connected_at=connected_at)
+                        connected_at=connected_at, origin=origin)
     return tid, slug
 
 
@@ -561,14 +561,35 @@ async def test_post_por_slug_acepta_la_firma_de_un_byok_degradado(app_client, st
     assert r.status_code == 200, r.text
 
 
-async def test_post_por_slug_no_acepta_la_firma_de_un_byok_revocado(app_client) -> None:
-    """Desactivada a mano o borrada: cortar es intencional, el secreto ya no vale."""
+async def test_post_por_slug_acepta_la_firma_de_un_byok_pausado(app_client) -> None:
+    """Pausada a mano (ADR-0122): la entrada se verifica con su secreto y se guarda sin IA. Antes
+    daba 401: el mensaje se perdía y Meta lo reintentaba."""
     _, slug = await _tenant_con_byok("whrev", status="revoked", app_id="app-rev", app_secret="secreto-rev")
     body = _cuerpo("rev")
 
     r = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-rev"))
 
-    assert r.status_code == 401
+    assert r.status_code == 200, r.text
+
+
+async def test_una_pausada_nunca_le_gana_el_secreto_a_una_viva(app_client) -> None:
+    """Ni a una BYOK tomada por Embedded Signup (origen `embedded_signup`, conserva el secreto de su
+    app, ADR-0101): `revoked` va al final, antes que el origen (ADR-0122)."""
+    from datetime import UTC, datetime, timedelta
+
+    ahora = datetime.now(UTC)
+    tid, slug = await _tenant_con_byok(
+        "whpausa", status="connected", app_id="app-tomada", app_secret="secreto-vivo",
+        connected_at=ahora - timedelta(days=30), origin="embedded_signup",
+    )
+    await _agregar_byok(tid, status="revoked", app_id="app-pausada", app_secret="secreto-pausado", connected_at=ahora)
+    body = _cuerpo("pausa")
+
+    viva = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-vivo"))
+    pausada = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-pausado"))
+
+    assert viva.status_code == 200, viva.text
+    assert pausada.status_code == 401
 
 
 async def test_handshake_por_slug_con_byok_degradado(app_client) -> None:
@@ -603,7 +624,9 @@ async def test_una_conexion_vieja_sana_le_gana_a_una_nueva_en_error(app_client) 
     assert rota.status_code == 401
 
 
-async def test_handshake_por_slug_con_byok_revocado_da_403(app_client) -> None:
+async def test_handshake_por_slug_con_byok_pausado_responde(app_client) -> None:
+    """Una pausada sigue siendo dueña de su número (ADR-0095) y Meta puede re-verificar la
+    suscripción mientras tanto (ADR-0122)."""
     _, slug = await _tenant_con_byok("whrevv", status="revoked", app_id="app-revv", verify_token="token-revv")
 
     r = await app_client.get(
@@ -611,7 +634,7 @@ async def test_handshake_por_slug_con_byok_revocado_da_403(app_client) -> None:
         params={"hub.mode": "subscribe", "hub.verify_token": "token-revv", "hub.challenge": "CHAL-REV"},
     )
 
-    assert r.status_code == 403
+    assert r.status_code == 200 and r.text == "CHAL-REV"
 
 
 async def test_una_conexion_vieja_conectada_le_gana_a_una_nueva_degradada(app_client) -> None:

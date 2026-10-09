@@ -149,3 +149,23 @@ async def revoke_token(
             )
             return
         row.revoked_at = datetime.now(UTC)
+
+
+async def revoke_all_for_connection(connection_id: uuid.UUID, *, tenant_id: uuid.UUID) -> int:
+    """Revoca (`revoked_at`) todos los tokens vigentes de una conexión: el borrado lógico
+    de la conexión (ADR-0122). No borra filas ni descifra nada. Devuelve cuántos revocó."""
+    from datetime import UTC
+
+    from sqlalchemy import update
+
+    async with get_session() as session:
+        result = await session.execute(
+            update(MetaToken)
+            .where(
+                MetaToken.tenant_id == tenant_id,
+                MetaToken.connection_id == connection_id,
+                MetaToken.revoked_at.is_(None),
+            )
+            .values(revoked_at=datetime.now(UTC))
+        )
+    return int(getattr(result, "rowcount", 0) or 0)

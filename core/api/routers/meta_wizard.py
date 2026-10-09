@@ -267,7 +267,7 @@ async def manual_connection(
 async def _create_manual_connection(
     principal: Principal, payload: ManualConnectionIn, app_id: str, waba_id: str, numero: str
 ) -> uuid.UUID:
-    from core.db.models import MetaConnection, PhoneNumber, WabaAccount, utcnow
+    from core.db.models import MetaConnection, utcnow
     from core.gateway.meta_asset_claims import claim_assets
 
     async with get_session() as session:
@@ -284,17 +284,9 @@ async def _create_manual_connection(
         )
         session.add(connection)
         await session.flush()
-        waba = WabaAccount(
-            tenant_id=principal.tenant_id, connection_id=connection.id, waba_id=waba_id
-        )
-        session.add(waba)
-        await session.flush()
-        session.add(
-            PhoneNumber(
-                tenant_id=principal.tenant_id,
-                connection_id=connection.id,
-                waba_account_id=waba.id,
-                phone_number_id=numero,
-            )
-        )
+        # Revive las filas si el negocio ya tuvo este número o esta WABA (ADR-0122).
+        from core.gateway.meta_asset_claims import numero_para_conexion, waba_para_conexion
+
+        waba = await waba_para_conexion(session, principal.tenant_id, connection.id, waba_id)
+        await numero_para_conexion(session, principal.tenant_id, connection.id, numero, waba_account_id=waba.id)
         return connection.id

@@ -287,3 +287,34 @@ async def check_all_subscriptions_health() -> None:
             await _check_group(group)
         except Exception:
             log.exception("meta_subscriptions_health_check_error_inesperado", meta_app_id=group.meta_app_id)
+
+
+async def refrescar_suscripcion_de_conexion(connection: MetaConnection) -> None:
+    """Revisa en el acto la suscripción de la app de UNA conexión BYOK (ADR-0122).
+
+    "Activar" una conexión pausada exige `app_subscription_active` verificado, y el cron de
+    15 min no revisa las apps de las conexiones `revoked`: sin esto, Activar leería un dato
+    viejo. Corre bajo el `tenant_scope` del negocio; el `active=False` no degrada nada (la
+    conexión está pausada). Mejor esfuerzo: si falla, el check queda como estaba."""
+    if connection.origin != "byok":
+        return
+    platform_app_id = get_settings().meta_app_id
+    if platform_app_id and connection.meta_app_id == platform_app_id:
+        # Mismo criterio que el cron: una BYOK con el `app_id` de la plataforma pisaría el estado
+        # que ven todos los negocios de Embedded Signup (auditor-multitenant, ADR-0122).
+        return
+    app_secret = await _app_secret_de(connection.id, connection.tenant_id, connection.meta_app_id)
+    if not app_secret:
+        return
+    group = _AppGroup(
+        meta_app_id=connection.meta_app_id,
+        app_secret=app_secret,
+        graph_api_version=connection.graph_api_version,
+        representative_connection_id=connection.id,
+        representative_tenant_id=connection.tenant_id,
+        connections=[],
+    )
+    try:
+        await _check_group(group)
+    except Exception:
+        log.warning("refrescar_suscripcion_fallo", connection_id=str(connection.id), exc_info=True)
