@@ -1195,3 +1195,52 @@ async def test_r05_un_pago_de_la_plataforma_sigue_aplicandose_en_su_negocio(
     sub = await _suscripcion_de(negocio)
     assert (sub.plan_id, sub.status) == ("basic", "active")
     assert await _eventos(vendedor, "payment.confirmed") == []
+
+
+# ------------------------------------------------------------------ revisión de aislamiento
+@pytest.mark.aislamiento
+async def test_un_pago_del_panel_por_otro_monto_no_se_aplica(vendedores, correos, alertas, pasarela, app_client) -> None:
+    """El monto firmado del webhook tiene que ser el del link (como en `pack_payments`)."""
+    from core.alta_negocio import onboard_tenant
+
+    vendedores()
+    negocio, _ = await onboard_tenant(name="Negocio monto", slug=uniq("monto"))
+    assert await _link_del_panel(negocio, "basic")
+    evento = _evento_wompi(pasarela.links[-1], centavos=20_000_100)
+    r = await app_client.post("/webhooks/billing/wompi", json=evento)
+    assert r.status_code == 200
+    assert (await _suscripcion_de(negocio)).plan_id == "free"
+    [pago] = await _pagos(negocio)
+    assert pago.status == "monto_distinto"
+    assert [a for a in alertas if a["severity"] == "critical" and "monto distinto" in a["title"]]
+
+
+@pytest.mark.aislamiento
+async def test_un_period_paid_sin_pago_aprobado_no_marca_nada_en_el_vendedor(vendedores, correos, alertas) -> None:
+    """La sincronización inversa lee el período del pago aprobado del negocio, no del evento."""
+    from core.billing.canales import on_platform_period_paid
+    from core.shared.tenant import tenant_scope
+
+    esc = await _negocio_aprovisionado(vendedores)
+    inicio = await _acercar_el_vencimiento(esc, fin=datetime.now(UTC) + timedelta(days=3))
+    await _cobrar_periodo(esc, inicio)
+    async with tenant_scope(esc.negocio):
+        await on_platform_period_paid(
+            referencia=_referencia(esc, inicio),
+            periodo_inicio=inicio.isoformat(),
+            periodo_fin=(inicio + timedelta(days=31)).isoformat(),
+            plan_id="premium",
+        )
+    assert (await _cargo(esc, f"{inicio:%Y-%m}")).estado == "pendiente"
+
+
+@pytest.mark.aislamiento
+async def test_r05_no_reenvia_a_un_negocio_que_no_es_vendedor(vendedores, correos, alertas, pasarela, app_client, monkeypatch) -> None:
+    from core.config import get_settings
+
+    vendedores()
+    otro = await _vendedor()
+    monkeypatch.setenv("BILLING_WOMPI_EVENTOS_TENANT", str(otro))
+    get_settings.cache_clear()
+    r = await app_client.post("/webhooks/billing/wompi", json=_evento_wompi("link-ajeno", centavos=100))
+    assert (r.status_code, r.json()["status"]) == (200, "ignored")

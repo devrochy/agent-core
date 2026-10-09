@@ -41,14 +41,16 @@ async def reenviar_al_negocio(payload: dict[str, Any]) -> str:
     plataforma. Devuelve lo que hizo el pack de pagos del negocio, o `ignored`."""
     from core.agents.spec import enabled_packs, load_active_spec
     from core.payments import payment_registry
+    from core.provisioning.vendedores import es_vendedor
     from core.tenants import is_tenant_active
 
     negocio = negocio_con_cuenta_compartida()
     if negocio is None:
         log.info("billing_webhook_sin_pago_de_plataforma")
         return IGNORADO
-    if not await is_tenant_active(negocio):
-        log.warning("billing_webhook_reenvio_negocio_inactivo", tenant_id=str(negocio))
+    # Fail-closed: solo el negocio vendedor (allowlist, activo) comparte la cuenta.
+    if not await is_tenant_active(negocio) or not await es_vendedor(negocio):
+        log.warning("billing_webhook_reenvio_negocio_no_habilitado", tenant_id=str(negocio))
         return IGNORADO
     async with tenant_scope(negocio):
         capacidad = payment_registry.capability_for(enabled_packs(await load_active_spec(negocio)))

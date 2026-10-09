@@ -319,16 +319,33 @@ async def on_platform_period_paid(**payload: Any) -> None:
     sin canal asistente no tiene nada que sincronizar. Si el vendedor no puede registrarlo, el
     evento falla y el outbox reintenta (al agotarse, queda en la Bandeja de fallos y la
     conciliación lo muestra)."""
+    from core.db.models import SubscriptionPayment
     from core.subscriptions import registrar_pago_externo
 
     negocio = get_current_tenant_id()
     if negocio is None:
         return
     referencia = str(payload.get("referencia") or "")
-    inicio, fin = _fecha(payload.get("periodo_inicio")), _fecha(payload.get("periodo_fin"))
-    if not referencia or inicio is None or fin is None:
+    if not referencia:
         log.warning("cobro_plataforma_evento_invalido", tenant_id=str(negocio))
         return
+    # El período sale del pago APROBADO del negocio, no del payload: un evento mal formado o
+    # repetido no puede marcar pagado en el vendedor algo que el negocio no pagó.
+    async with get_session() as session:
+        pago = (
+            await session.execute(
+                select(SubscriptionPayment).where(
+                    SubscriptionPayment.tenant_id == negocio,
+                    SubscriptionPayment.periodo == referencia,
+                    SubscriptionPayment.status == "aprobado",
+                    SubscriptionPayment.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+    if pago is None or pago.period_start is None or pago.period_end is None:
+        log.warning("cobro_plataforma_periodo_sin_pago", tenant_id=str(negocio), referencia=referencia)
+        return
+    inicio, fin = pago.period_start, pago.period_end
     vinculo = await vinculo_asistente(negocio)
     if vinculo is None:
         return

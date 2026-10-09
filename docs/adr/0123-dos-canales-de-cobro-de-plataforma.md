@@ -87,6 +87,12 @@
 - Un link vivo (menos de 20 h) del mismo período se devuelve otra vez: así no hay dos links.
 - **`apply_payment`** (webhook) aplica el período y escribe `platform.period_paid` en el outbox del
   negocio, en la misma transacción.
+  - Solo aplica un intento con link del panel: no el cobro de la renovación ni un pago del
+    asistente.
+  - Si la firma cubre el monto y no es el del link, el pago queda `monto_distinto`, no se aplica y
+    se alerta (como `pack_payments`).
+- **El handler de la sincronización** relee el pago `aprobado` del negocio y usa su período: no usa
+  el del evento.
 - **Sincronización inversa.** El handler llama a la operación `registrar_pago_externo` del proveedor
   del vendedor. El cargo del período queda `pagado`, con `pago_externo` (lo crea si no existía), y
   la suscripción se reactiva. El asistente no lo vuelve a cobrar ni a recordar.

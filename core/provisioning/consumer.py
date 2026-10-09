@@ -777,7 +777,7 @@ async def sincronizar_cambio_de_plan(
         resultado["estado"] = f"sin_negocio ({registro.estado})"
     elif plan is None:
         resultado["estado"] = "plan_desconocido"
-    elif plan.is_free or payload.get("estado") not in ("activa", None):
+    elif plan.is_free or payload.get("estado") != "activa":
         resultado["estado"] = "sin_cambio"  # a Free o sin pagar todavía: nada que aplicar
     else:
         slug = registro.negocio_slug or await _slug_de(negocio)

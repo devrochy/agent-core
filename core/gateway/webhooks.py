@@ -791,6 +791,18 @@ async def _try_process_media(message: Any) -> Any:
 
 
 # ---------------------------------------------------------------- webhook de billing (ADR-0046)
+def _monto_firmado(payload: dict, centavos: object) -> int | None:
+    """`amount_in_cents` solo si la firma lo cubre (ADR-0123, como `pack_payments`): un monto
+    sin firmar no se usa para comparar."""
+    propiedades = (payload.get("signature") or {}).get("properties") or []
+    if "transaction.amount_in_cents" not in propiedades or isinstance(centavos, bool):
+        return None
+    try:
+        return int(str(centavos))
+    except (TypeError, ValueError):
+        return None
+
+
 @router.post("/billing/wompi")
 async def receive_billing_wompi(request: Request) -> Response:
     """Webhook del pago de la SUSCRIPCIÓN de plataforma (Wompi).
@@ -838,7 +850,10 @@ async def receive_billing_wompi(request: Request) -> Response:
                 media_type="application/json",
             )
         updated = await apply_payment(
-            provider_reference=event.provider_reference, status=event.status, tenant_id=tenant_id
+            provider_reference=event.provider_reference,
+            status=event.status,
+            tenant_id=tenant_id,
+            amount_in_cents=_monto_firmado(payload, event.amount_in_cents),
         )
     except Exception:
         log.exception("billing_webhook_apply_failed")

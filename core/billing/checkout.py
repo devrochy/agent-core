@@ -241,12 +241,16 @@ async def apply_payment(
     provider_reference: str,
     status: str,
     tenant_id: uuid.UUID | None = None,
+    amount_in_cents: int | None = None,
 ) -> bool:
     """Aplica un evento de pago (idempotente). True si actualizó algo.
 
     Correlaciona por `provider_reference` (el id del link). Un pago ya `aprobado` o
     `duplicado` no se vuelve a tocar: ni un reintento del webhook ni un rechazo tardío de
-    otro intento del mismo link lo deshacen.
+    otro intento del mismo link lo deshacen. Solo se aplica un intento con link del panel
+    (no el cobro de la renovación ni un pago del asistente), y si el webhook trae el monto,
+    tiene que ser el del link: si no, queda `monto_distinto` y se alerta (como en
+    `pack_payments`).
     """
     if not provider_reference:
         return False
@@ -257,6 +261,8 @@ async def apply_payment(
         from core.shared.events import ON_PLATFORM_PERIOD_PAID
 
         duplicado = None
+        monto_distinto: tuple[str | None, int] | None = None
+        periodo: Periodo | None = None
         async with tenant_scope(tid):
             async with get_session() as session:
                 payment = (
@@ -270,55 +276,74 @@ async def apply_payment(
                         .with_for_update()
                     )
                 ).scalar_one_or_none()
-                if payment is None:
+                if payment is None or not payment.checkout_url or payment.provider in (PROVEEDOR_RENOVACION, "asistente"):
                     return False
-                if payment.status in ("aprobado", DUPLICADO):
-                    return False  # ya aplicado: idempotente
+                if payment.status in ("aprobado", DUPLICADO, "monto_distinto"):
+                    return False  # ya procesado: idempotente
                 if status != "aprobado":
                     if status == "rechazado" and payment.status == "pendiente":
                         payment.status = "rechazado"
                         return True
                     return False
-
-                if payment.periodo and payment.period_start and payment.period_end:
-                    periodo = Periodo(payment.period_start, payment.period_end, payment.periodo)
+                if amount_in_cents is not None and int(amount_in_cents) != round(float(payment.amount_cop) * 100):
+                    payment.status = "monto_distinto"
+                    monto_distinto = (payment.periodo, int(amount_in_cents))
+                    log.error(
+                        "subscription_payment_monto_distinto",
+                        tenant_id=str(tid),
+                        esperado=str(payment.amount_cop),
+                        recibido_centavos=int(amount_in_cents),
+                    )
                 else:
-                    # Pago iniciado antes de ADR-0123: el período se calcula al aplicarlo.
-                    sub = await _suscripcion(session, tid)
-                    periodo = periodo_a_cobrar(
-                        slug=await _slug(session, tid),
-                        plan_id=sub.plan_id,
-                        status=sub.status,
-                        period_end=sub.period_end,
-                        dia_ancla=sub.dia_ancla,
-                        now=datetime.now(UTC),
-                    )
-                resultado = await aplicar_pago_de_periodo(
-                    session,
-                    tid,
-                    plan_id=payment.plan_id,
-                    periodo=periodo,
-                    provider=payment.provider,
-                    provider_reference=provider_reference,
-                    monto=payment.amount_cop,
-                    plan_en_el_acto=True,
-                )
-                if resultado.resultado == APLICADO:
-                    # Sincronización inversa por el outbox, en la MISMA transacción (ADR-0107).
-                    await emit_domain(
+                    if payment.periodo and payment.period_start and payment.period_end:
+                        periodo = Periodo(payment.period_start, payment.period_end, payment.periodo)
+                    else:
+                        # Pago iniciado antes de ADR-0123: el período se calcula al aplicarlo.
+                        sub = await _suscripcion(session, tid)
+                        periodo = periodo_a_cobrar(
+                            slug=await _slug(session, tid),
+                            plan_id=sub.plan_id,
+                            status=sub.status,
+                            period_end=sub.period_end,
+                            dia_ancla=sub.dia_ancla,
+                            now=datetime.now(UTC),
+                        )
+                    resultado = await aplicar_pago_de_periodo(
                         session,
-                        tenant_id=tid,
-                        topic=ON_PLATFORM_PERIOD_PAID,
-                        dedupe_key=f"plat_paid:{periodo.referencia}",
-                        payload={
-                            "referencia": periodo.referencia,
-                            "periodo_inicio": periodo.inicio.isoformat(),
-                            "periodo_fin": periodo.fin.isoformat(),
-                            "plan_id": payment.plan_id,
-                        },
+                        tid,
+                        plan_id=payment.plan_id,
+                        periodo=periodo,
+                        provider=payment.provider,
+                        provider_reference=provider_reference,
+                        monto=payment.amount_cop,
+                        plan_en_el_acto=True,
                     )
-                elif resultado.resultado == DUPLICADO and resultado.nuevo:
-                    duplicado = resultado
+                    if resultado.resultado == APLICADO:
+                        # Sincronización inversa por el outbox, en la MISMA transacción (ADR-0107).
+                        await emit_domain(
+                            session,
+                            tenant_id=tid,
+                            topic=ON_PLATFORM_PERIOD_PAID,
+                            dedupe_key=f"plat_paid:{periodo.referencia}",
+                            payload={
+                                "referencia": periodo.referencia,
+                                "periodo_inicio": periodo.inicio.isoformat(),
+                                "periodo_fin": periodo.fin.isoformat(),
+                                "plan_id": payment.plan_id,
+                            },
+                        )
+                    elif resultado.resultado == DUPLICADO and resultado.nuevo:
+                        duplicado = resultado
+        if monto_distinto is not None:
+            from core.shared.alerts import send_alert
+
+            await send_alert(
+                "Pago del plan con monto distinto",
+                f"Negocio {tid}, período {monto_distinto[0]}: llegaron {monto_distinto[1]} centavos y el link "
+                "era por otro monto. No se aplicó: revisarlo a mano.",
+                severity="critical",
+            )
+            return False
         if duplicado is not None:
             from core.billing.canales import CANAL_PANEL, alertar_pago_duplicado, vinculo_asistente
 
@@ -330,7 +355,7 @@ async def apply_payment(
                 cubierto_por=duplicado.cubierto_por,
                 vendedor=vinculo.vendedor if vinculo else None,
             )
-        log.info("subscription_payment_applied", tenant_id=str(tid), referencia=periodo.referencia)
+        log.info("subscription_payment_applied", tenant_id=str(tid), referencia=periodo.referencia if periodo else None)
         return True
 
     if tenant_id is not None:
