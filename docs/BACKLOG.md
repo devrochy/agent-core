@@ -56,16 +56,14 @@ migración nueva si `crm_0009` ya corrió en algún entorno). Visto el 2026-10-0
 - Al tomar una conexión BYOK, el wizard de Embedded Signup (`meta_onboarding.exchange_code`) no revoca su
   `app_access`/`webhook_verify_token` ni desuscribe la app BYOK de la WABA. Meta sigue mandando eventos firmados por
   esa app; ADR-0101 los acepta, pero lo limpio es revocarlos y desuscribir.
-- `revoked` solo corta la firma BYOK: el ruteo por número y el sender no miran el estado, y `set_connection_status` no
-  libera los números. Una conexión de Embedded Signup o manual desactivada sigue recibiendo y enviando.
-- Si el alta BYOK falla entre guardar `app_access` y `cloud_api_access_token`, la conexión presta secreto pero no tiene
-  token de acceso; el sender cae a la conexión primaria o al `.env` y respondería desde otro número. Que el sender
-  falle cerrado si recibe `meta_connection_id` y no hay token.
+
+- Resueltos por ADR-0122 (HU-CONN-03): `revoked` ya pausa (entrada sin IA, sin envío), el sender falla cerrado con
+  `meta_connection_id` sin credenciales y "Activar" exige el diagnóstico verificado.
+- Fuera de ADR-0122: los mensajes a un número pausado crean clientes y conversaciones que cuentan para la cuota, y
+  pack-commerce marca un seguimiento como hecho aunque `send_to_conversation` devuelva `False` (se consumen durante
+  una pausa).
 
 **Lo que quedó fuera de ADR-0102 (la conexión se recupera sola)**
-- "Activar" (`meta_health_service.set_connection_status`) pasa una conexión de `error` a `connected` sin chequear nada.
-  Es a propósito, lo hace un admin, pero tiene la misma trampa que tenía "Diagnosticar": un alta fallida más nueva le
-  quita el secreto a la BYOK sana. Que avise, o que exija el diagnóstico verificado.
 - `check_webhook_subscribed` solo pide que la WABA tenga alguna app suscrita, no la de la conexión. En BYOK,
   `own_app_subscribed` lo cubre con `WabaAccount.subscribed`, que es lo que se guardó al suscribir; no ve una
   desuscripción posterior hecha en Meta. Verificar el id de la app en `subscribed_apps`

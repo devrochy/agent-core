@@ -41,7 +41,8 @@ class MetaAssetError(AgentCoreError):
     """La WABA o el número no se pueden guardar en este negocio.
 
     `code`: `waba_not_accessible` (el token no ve la WABA), `phone_not_in_waba` (el número
-    no es de esa WABA) o `asset_claimed` (otro negocio ya lo tiene)."""
+    no es de esa WABA), `asset_claimed` (otro negocio ya lo tiene) o `connection_deleted` (la
+    conexión se eliminó mientras se completaba el alta)."""
 
     def __init__(self, message: str, *, code: str) -> None:
         super().__init__(message)
@@ -162,4 +163,132 @@ async def _claimed_by_other_tenant(
                 {"w": waba_id, "p": phone_number_id, "t": tenant_id},
             )
         ).scalar_one()
+    )
+
+
+# ---------------------------------------------------------------- filas de activos
+# Un número vive en una sola fila por negocio (`uq_phone_numbers_tenant_phone`) y una
+# conexión eliminada deja sus números y WABAs con `deleted_at` (ADR-0122). Reconectar el
+# mismo activo en el mismo negocio revive esas filas: así plantillas y precios siguen en
+# su WABA. Todas las altas pasan por acá, dentro de la transacción de `claim_assets`.
+
+
+async def waba_para_conexion(
+    session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID, waba_id: str
+) -> Any:
+    """La fila de `waba_id` para `connection_id`: la propia si existe; si no, revive la
+    eliminada más reciente del negocio (con sus plantillas y precios); si no, una nueva.
+
+    Una WABA revivida queda `subscribed=False` hasta que el alta la suscriba (ADR-0102)."""
+    from sqlalchemy import select
+
+    from core.db.models import WabaAccount
+
+    propia = (
+        await session.execute(
+            select(WabaAccount).where(
+                WabaAccount.tenant_id == tenant_id,
+                WabaAccount.connection_id == connection_id,
+                WabaAccount.waba_id == waba_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if propia is not None:
+        propia.deleted_at = None
+        return propia
+    eliminada = (
+        await session.execute(
+            select(WabaAccount)
+            .where(
+                WabaAccount.tenant_id == tenant_id,
+                WabaAccount.waba_id == waba_id,
+                WabaAccount.deleted_at.is_not(None),
+            )
+            .order_by(WabaAccount.deleted_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if eliminada is not None:
+        log.info("waba_revivida", waba_id=waba_id, connection_id=str(connection_id))
+        eliminada.connection_id = connection_id
+        eliminada.deleted_at = None
+        eliminada.subscribed = False
+        await session.flush()
+        return eliminada
+    nueva = WabaAccount(tenant_id=tenant_id, connection_id=connection_id, waba_id=waba_id)
+    session.add(nueva)
+    await session.flush()
+    return nueva
+
+
+async def numero_para_conexion(
+    session: Any,
+    tenant_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    phone_number_id: str,
+    *,
+    waba_account_id: uuid.UUID | None = None,
+) -> tuple[Any, uuid.UUID | None]:
+    """La fila única de `phone_number_id` en el negocio, asignada (y revivida) a
+    `connection_id`. Devuelve `(fila, conexión anterior o None)`. Lanza `MetaAssetError` si
+    la fila estaba eliminada y otro negocio tomó el número mientras tanto.
+
+    Si la conexión anterior se queda sin números vivos, sus conversaciones pasan a esta: si
+    no, los avisos y seguimientos de esos clientes fallarían cerrados (ADR-0122)."""
+    from sqlalchemy import func, select
+
+    from core.db.models import PhoneNumber
+
+    fila = (
+        await session.execute(
+            select(PhoneNumber).where(PhoneNumber.tenant_id == tenant_id, PhoneNumber.phone_number_id == phone_number_id)
+        )
+    ).scalar_one_or_none()
+    anterior: uuid.UUID | None = None
+    if fila is None:
+        fila = PhoneNumber(
+            tenant_id=tenant_id, connection_id=connection_id, phone_number_id=phone_number_id,
+            waba_account_id=waba_account_id,
+        )
+        session.add(fila)
+    else:
+        if fila.connection_id != connection_id:
+            anterior = fila.connection_id
+        if fila.deleted_at is not None:
+            # Mientras estuvo eliminado, otro negocio pudo tomarlo (también por una conexión
+            # manual, que el índice parcial no ve): revivirlo lo dejaría con dos dueños.
+            if await claimed_elsewhere(session, tenant_id, phone_number_id=phone_number_id, source="revivir_numero"):
+                raise MetaAssetError(CLAIMED_MESSAGE, code="asset_claimed")
+            log.info("numero_revivido", phone_number_id=phone_number_id, connection_id=str(connection_id))
+        fila.connection_id = connection_id
+        fila.deleted_at = None
+        if waba_account_id is not None:
+            fila.waba_account_id = waba_account_id
+    await session.flush()
+
+    if anterior is not None:
+        quedan = (
+            await session.execute(
+                select(func.count()).select_from(PhoneNumber).where(
+                    PhoneNumber.tenant_id == tenant_id,
+                    PhoneNumber.connection_id == anterior,
+                    PhoneNumber.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one()
+        if not quedan:
+            await mover_conversaciones(session, tenant_id, desde=anterior, hacia=connection_id)
+    return fila, anterior
+
+
+async def mover_conversaciones(session: Any, tenant_id: uuid.UUID, *, desde: uuid.UUID, hacia: uuid.UUID) -> None:
+    """Las conversaciones de la conexión `desde` pasan a `hacia` (mismo número, otra conexión)."""
+    from sqlalchemy import update
+
+    from core.db.models import Conversation
+
+    await session.execute(
+        update(Conversation)
+        .where(Conversation.tenant_id == tenant_id, Conversation.meta_connection_id == desde)
+        .values(meta_connection_id=hacia)
     )

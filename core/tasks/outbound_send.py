@@ -47,6 +47,14 @@ _POLICY_PAUSE_RETRY_S = 15 * 60
 _POLICY_DEFER_TTL_S = 2 * 24 * 3600
 
 
+class ConexionPausadaError(GraphError):
+    """La conexión de la conversación está pausada o eliminada (ADR-0122). Falla sin
+    reintentos y sin escalar: la pausa es a propósito, no un error que atender."""
+
+    def __init__(self, motivo: str) -> None:
+        super().__init__(motivo, category="PERMANENT")
+
+
 @dataclass
 class RetryDecision:
     action: Literal["retry", "fail_permanent", "defer"]
@@ -222,6 +230,14 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
         if not await _claim_outbound(message.id, message.conversation_id, tenant_id):
             return None
 
+        # Encolado antes de pausar o eliminar la conexión (ADR-0122): falla sin escalar.
+        if conversation.channel != "web" and conversation.connection_id is None:
+            from core.gateway.meta_connection_state import motivo_pausa_de
+
+            if (motivo := await motivo_pausa_de(conversation.meta_connection_id)) is not None:
+                await _release_claim(message.id, message.conversation_id, tenant_id)
+                return ConexionPausadaError(motivo)
+
         provider, credentials = await resolve_credentials(
             conversation.connection_id,
             conversation.meta_connection_id,
@@ -233,6 +249,11 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
         # marca el mensaje como enviado y el widget lo lee por polling.
         if conversation.channel == "web":
             provider, credentials = "web", {}
+        elif provider == "meta" and not credentials.get("access_token"):
+            # Sin credenciales (la conexión viva no tiene número o token, ADR-0122): ni el
+            # tiempo ni los reintentos lo arreglan. Falla ya y se escala.
+            await _release_claim(message.id, message.conversation_id, tenant_id)
+            return GraphError("La conexión de WhatsApp no tiene credenciales para enviar", category="PERMANENT")
         adapter = outbound_adapter_for(provider)
 
         try:
@@ -273,7 +294,7 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
 
 
 async def _mark_failed(
-    message_id: uuid.UUID, tenant_id: uuid.UUID, exc: GraphError, *, dlq: bool
+    message_id: uuid.UUID, tenant_id: uuid.UUID, exc: GraphError, *, dlq: bool, escalar: bool = True
 ) -> tuple[uuid.UUID, object, uuid.UUID] | None:
     async with tenant_scope(tenant_id):
         async with get_session() as session:
@@ -303,9 +324,10 @@ async def _mark_failed(
                 error_code=exc.code, error_subcode=exc.error_subcode, fbtrace_id=exc.fbtrace_id,
             )
 
-        from core.orchestrator.escalation import escalate
+        if escalar:
+            from core.orchestrator.escalation import escalate
 
-        await escalate(conversation_id, reason="send_failed", summary=exc.message[:500])
+            await escalate(conversation_id, reason="send_failed", summary=exc.message[:500])
 
     return conversation_id, created_at, failed_id
 
@@ -388,7 +410,12 @@ def outbound_send_task(self, message_id: str, tenant_id: str) -> None:
         return
 
     dlq = self.request.retries >= MAX_ATTEMPTS and error.category not in ("PERMANENT", "AUTH")
-    info = run_async(_mark_failed(uuid.UUID(message_id), uuid.UUID(tenant_id), error, dlq=dlq))
+    info = run_async(
+        _mark_failed(
+            uuid.UUID(message_id), uuid.UUID(tenant_id), error, dlq=dlq,
+            escalar=not isinstance(error, ConexionPausadaError),
+        )
+    )
     # La cadena no se corta: aunque esta burbuja falló para siempre, el
     # siguiente mensaje pendiente de la conversación sigue en orden.
     if info is not None:

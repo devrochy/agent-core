@@ -56,11 +56,16 @@ async def _resolve_meta_connection_credentials(
     2026-09-22: `phone_numbers.phone_number_id` es único global, no
     compuesto con `tenant_id`; si esa garantía de esquema se relajara algún
     día, esta aserción evita enviar con el token de OTRO tenant)."""
+    from core.gateway.meta_connection_state import motivo_pausa
     from core.gateway.meta_credentials import access_token_for
 
     async with get_session() as session:
         connection = await session.get(MetaConnection, meta_connection_id)
         if connection is None:
+            return None
+        # Pausada (`revoked`), eliminada o sin alta: no sale nada por ella (ADR-0122).
+        if (motivo := motivo_pausa(connection)) is not None:
+            log.warning("meta_connection_no_utilizable", meta_connection_id=str(meta_connection_id), motivo=motivo)
             return None
         # Filtro explícito de tenant además de RLS (defensa en profundidad,
         # invariante nº1): el número nunca se lee sin atarlo a su conexión
@@ -70,6 +75,7 @@ async def _resolve_meta_connection_credentials(
                 select(PhoneNumber).where(
                     PhoneNumber.connection_id == meta_connection_id,
                     PhoneNumber.tenant_id == connection.tenant_id,
+                    PhoneNumber.deleted_at.is_(None),
                 )
             )
         ).scalars().first()
@@ -104,6 +110,9 @@ async def resolve_credentials(
     manual) -> `MetaConnection`+`meta_token_store` (wizard de Embedded
     Signup, ADR-0030) -> conexión primaria en BD -> `.env`.
 
+    La primaria y el `.env` son solo para conversaciones sin `meta_connection_id`: con
+    él, si esa conexión no puede enviar se devuelve `{}` (ADR-0122).
+
     `allow_env_fallback=False` para plantillas (ADR-0108): una plantilla no
     depende de la ventana, así que con el número de la plataforma (`.env`) le
     llegaría al cliente de un negocio un aviso desde el número de SolversHub.
@@ -136,6 +145,14 @@ async def resolve_credentials(
         creds = await _resolve_meta_connection_credentials(meta_connection_id, expected_tenant_id)
         if creds:
             return "meta", creds
+        # Sin respaldo silencioso (ADR-0122): la conversación tiene su número, y si esa
+        # conexión no puede enviar (pausada, eliminada, sin número o sin token), la respuesta
+        # no sale desde la primaria ni desde el número de la plataforma. El envío falla.
+        log.warning(
+            "credenciales_de_la_conexion_no_disponibles",
+            meta_connection_id=str(meta_connection_id),
+        )
+        return "meta", {}
 
     # Fallback: conexión primaria de MENSAJERÍA en BD -- `tenant_id` explícito
     # además de RLS (defensa en profundidad): sin este filtro, dos tenants con
@@ -188,6 +205,31 @@ def validate_service_window(conversation: Conversation, *, is_template: bool) ->
         )
 
 
+async def _registrar_si_pausada(conversation: Conversation, content: str, sender_type: str) -> bool:
+    """Si la conexión de la conversación está pausada o eliminada (ADR-0122), deja el
+    mensaje como `failed` con el motivo y devuelve True: no se encola nada.
+
+    Los llamadores que escalan cuando el envío falla (consumer, debounce) ya revisan la
+    pausa antes de llegar acá: una pausa no es un fallo que tenga que atender una persona."""
+    from core.gateway.meta_connection_state import motivo_pausa_de
+
+    if conversation.channel == "web" or getattr(conversation, "connection_id", None) is not None:
+        return False
+    motivo = await motivo_pausa_de(conversation.meta_connection_id)
+    if motivo is None:
+        return False
+    log.info("envio_con_conexion_pausada", conversation_id=str(conversation.id), motivo=motivo)
+    async with get_session() as session:
+        session.add(
+            Message(
+                tenant_id=get_current_tenant_id(), conversation_id=conversation.id,
+                direction="outbound", sender_type=sender_type, content=content,
+                status="failed", error_reason=motivo,
+            )
+        )
+    return True
+
+
 async def send_to_conversation(
     conversation_id: uuid.UUID,
     text: str,
@@ -221,6 +263,9 @@ async def send_to_conversation(
         customer = await session.get(Customer, conversation.customer_id)
         if customer is None:
             return False
+
+    if await _registrar_si_pausada(conversation, text, sender_type):
+        return False
 
     try:
         validate_service_window(conversation, is_template=is_template)
@@ -330,6 +375,9 @@ async def send_template_to_conversation(
         conversation = await session.get(Conversation, conversation_id)
         if conversation is None or conversation.channel == "web":
             return False
+
+    if await _registrar_si_pausada(conversation, preview_text, sender_type):
+        return False
 
     _provider, credentials = await resolve_credentials(
         conversation.connection_id,

@@ -56,7 +56,9 @@ async def _wabas_a_sincronizar() -> list[tuple[WabaAccount, MetaConnection]]:
                 wabas = (
                     await session.execute(
                         select(WabaAccount).where(
-                            WabaAccount.connection_id == connection.id, WabaAccount.tenant_id == tenant_id
+                            WabaAccount.connection_id == connection.id,
+                            WabaAccount.tenant_id == tenant_id,
+                            WabaAccount.deleted_at.is_(None),
                         )
                     )
                 ).scalars().all()

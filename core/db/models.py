@@ -1238,14 +1238,28 @@ class WabaAccount(Base):
     are_translations_complete: Mapped[bool | None] = mapped_column(Boolean)
     template_limits_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     raw: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # Borrado lógico con su conexión (ADR-0122): plantillas y precios cuelgan de esta fila.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class PhoneNumber(Base):
-    """Número de WhatsApp sincronizado desde Graph API."""
+    """Número de WhatsApp sincronizado desde Graph API.
+
+    Un número vive en un solo negocio a la vez (único parcial global) y cada negocio tiene
+    una sola fila por número (único completo): reconectarlo revive la fila (ADR-0122)."""
 
     __tablename__ = "phone_numbers"
+    __table_args__ = (
+        Index(
+            "uq_phone_numbers_phone_number_id_vivo",
+            "phone_number_id",
+            unique=True,
+            postgresql_where=text("deleted_at is null"),
+        ),
+        UniqueConstraint("tenant_id", "phone_number_id", name="uq_phone_numbers_tenant_phone"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
@@ -1253,7 +1267,7 @@ class PhoneNumber(Base):
     waba_account_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("waba_accounts.id", ondelete="SET NULL")
     )
-    phone_number_id: Mapped[str] = mapped_column(Text, unique=True)
+    phone_number_id: Mapped[str] = mapped_column(Text)
     display_phone_number: Mapped[str | None] = mapped_column(Text)
     verified_name: Mapped[str | None] = mapped_column(Text)
     quality_rating: Mapped[str | None] = mapped_column(Text)
@@ -1264,6 +1278,7 @@ class PhoneNumber(Base):
     registered: Mapped[bool] = mapped_column(Boolean, default=False)
     pin_set: Mapped[bool] = mapped_column(Boolean, default=False)
     raw: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -1318,8 +1333,11 @@ class MessageTemplate(Base):
         UniqueConstraint(
             "waba_account_id", "name", "language", name="uq_message_templates_waba_name_lang"
         ),
+        # Por negocio (ADR-0122): las plantillas de una WABA borrada se conservan, y si otro
+        # negocio la reclama, su sync trae los mismos `meta_template_id`.
         Index(
-            "uq_message_templates_meta_id",
+            "uq_message_templates_tenant_meta_id",
+            "tenant_id",
             "meta_template_id",
             unique=True,
             postgresql_where=text("meta_template_id is not null"),

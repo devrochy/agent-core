@@ -12,7 +12,8 @@ import uuid
 from sqlalchemy import select
 
 from core.db.models import MetaConnection, PhoneNumber, WabaAccount
-from core.db.session import get_owned, get_session
+from core.db.session import get_session
+from core.gateway.meta_connection_state import get_live_meta_connection
 
 
 async def resolve_waba_and_credentials(connection_id: uuid.UUID, tenant_id: uuid.UUID | None):
@@ -25,13 +26,18 @@ async def resolve_waba_and_credentials(connection_id: uuid.UUID, tenant_id: uuid
     from core.gateway.meta_credentials import CredentialsUnavailable, credentials_for
 
     async with get_session() as session:
-        connection = await get_owned(session, MetaConnection, connection_id, tenant_id)
+        # Solo conexiones vivas y sus WABAs vivas (ADR-0122).
+        connection = await get_live_meta_connection(session, connection_id, tenant_id)
         if connection is None:
             return None, None, None
         waba = (
             await session.execute(
                 select(WabaAccount)
-                .where(WabaAccount.connection_id == connection_id, WabaAccount.tenant_id == connection.tenant_id)
+                .where(
+                    WabaAccount.connection_id == connection_id,
+                    WabaAccount.tenant_id == connection.tenant_id,
+                    WabaAccount.deleted_at.is_(None),
+                )
                 .order_by(WabaAccount.created_at)
             )
         ).scalars().first()

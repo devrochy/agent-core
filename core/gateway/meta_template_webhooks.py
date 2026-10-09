@@ -3,12 +3,9 @@ de verdad del estado (el sync paginado es solo fallback). Nunca toca el log
 crudo de webhooks (ADR-0028): ya se registró ahí antes de llamar a estos
 handlers.
 
-Los tres eventos traen solo `message_template_id` -- RLS bloquearía el
-lookup en `message_templates` sin tenant seteado todavía (mismo
-chicken-and-egg que `resolve_tenant_for_phone`/`_waba`/`_page`/`_ig_user`,
-ADR-0012/migración 0021): se resuelve el tenant primero vía la función
-SECURITY DEFINER `resolve_tenant_for_message_template` (migración 0026), y
-recién ahí se abre `tenant_scope` para leer/escribir la fila real.
+Los tres eventos traen solo `message_template_id`. La entry ya viene ruteada a su
+negocio (ADR-0100), así que la plantilla se busca bajo el `tenant_scope` de ese negocio
+(ADR-0122: el id es único por negocio, no global).
 
 Cada handler recibe `expected_tenant_id`: el negocio de la entry del webhook, ya
 autorizado por su firma. Si la plantilla es de OTRO negocio, el evento se descarta:
@@ -22,7 +19,7 @@ import uuid
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from core.db.models import MessageTemplate, utcnow
 from core.db.session import get_session
@@ -76,30 +73,28 @@ async def _log_raw_payload_once(event_name: str, payload: dict[str, Any]) -> Non
         log.info("template_webhook_payload_no_verificado_primera_vez", event_name=event_name, payload=payload)
 
 
-async def _resolve_tenant_for_template(meta_template_id: str) -> Any:
-    """SECURITY DEFINER, exenta de RLS -- ver docstring del módulo."""
-    async with get_session() as session:
-        return (
-            await session.execute(
-                text("select resolve_tenant_for_message_template(:p)"), {"p": str(meta_template_id)}
-            )
-        ).scalar_one_or_none()
+async def _plantilla_es_del_negocio(meta_template_id: str, tenant_id: uuid.UUID, *, event: str) -> bool:
+    """¿El negocio de la entry tiene esta plantilla? Se busca bajo SU `tenant_scope` (RLS).
 
-
-def _es_de_otro_negocio(
-    template_tenant_id: Any, expected_tenant_id: uuid.UUID, *, meta_template_id: Any, event: str
-) -> bool:
-    """¿La plantilla es de otro negocio que el de la entry? Se compara como texto:
-    asyncpg devuelve su propio tipo de UUID."""
-    if str(template_tenant_id) == str(expected_tenant_id):
+    Desde ADR-0122 el `meta_template_id` es único por negocio, no global: si otro negocio
+    reclamó una WABA eliminada, los dos tienen la fila. La función SECURITY DEFINER de antes
+    (`resolve_tenant_for_message_template`, `LIMIT 1` global) elegía una al azar y descartaba
+    los cambios del dueño nuevo. Una plantilla de otro negocio no se encuentra acá (ADR-0100)."""
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            existe = (
+                await session.execute(
+                    select(MessageTemplate.id)
+                    .where(MessageTemplate.tenant_id == tenant_id, MessageTemplate.meta_template_id == meta_template_id)
+                    .limit(1)
+                )
+            ).first()
+    if existe is None:
+        log.info(
+            "template_webhook_sin_fila_del_negocio",
+            meta_template_id=meta_template_id, webhook_field=event, tenant_id=str(tenant_id),
+        )
         return False
-    log.warning(
-        "template_webhook_de_otro_negocio",
-        meta_template_id=str(meta_template_id),
-        webhook_field=event,
-        tenant_id=str(expected_tenant_id),
-        template_tenant_id=str(template_tenant_id),
-    )
     return True
 
 
@@ -108,16 +103,8 @@ async def handle_template_status_update(payload: dict[str, Any], *, expected_ten
     if parsed.event not in _ALL_STATUS_EVENTS:
         raise AssertionError(f"evento de message_template_status_update no manejado: {parsed.event!r}")
 
-    tenant_id = await _resolve_tenant_for_template(str(parsed.message_template_id))
-    if tenant_id is None:
-        log.info(
-            "template_status_update_sin_fila_local",
-            meta_template_id=parsed.message_template_id,
-            status_event=parsed.event,
-        )
-        return
-    if _es_de_otro_negocio(
-        tenant_id, expected_tenant_id, meta_template_id=parsed.message_template_id, event=parsed.event
+    if not await _plantilla_es_del_negocio(
+        str(parsed.message_template_id), expected_tenant_id, event=parsed.event
     ):
         return
     tenant_id = expected_tenant_id
@@ -162,11 +149,8 @@ async def handle_template_category_update(payload: dict[str, Any], *, expected_t
     if parsed.message_template_id is None:
         return
 
-    tenant_id = await _resolve_tenant_for_template(str(parsed.message_template_id))
-    if tenant_id is None:
-        return
-    if _es_de_otro_negocio(
-        tenant_id, expected_tenant_id, meta_template_id=parsed.message_template_id, event="template_category_update"
+    if not await _plantilla_es_del_negocio(
+        str(parsed.message_template_id), expected_tenant_id, event="template_category_update"
     ):
         return
     tenant_id = expected_tenant_id
@@ -202,12 +186,8 @@ async def handle_template_quality_update(payload: dict[str, Any], *, expected_te
     if parsed.message_template_id is None:
         return
 
-    tenant_id = await _resolve_tenant_for_template(str(parsed.message_template_id))
-    if tenant_id is None:
-        return
-    if _es_de_otro_negocio(
-        tenant_id, expected_tenant_id, meta_template_id=parsed.message_template_id,
-        event="message_template_quality_update",
+    if not await _plantilla_es_del_negocio(
+        str(parsed.message_template_id), expected_tenant_id, event="message_template_quality_update"
     ):
         return
     tenant_id = expected_tenant_id

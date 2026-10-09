@@ -31,7 +31,7 @@ import uuid
 from datetime import UTC, datetime
 
 import httpx
-from sqlalchemy import case, delete, select, update
+from sqlalchemy import case, select, update
 from sqlalchemy.exc import IntegrityError
 
 from core.config import get_settings
@@ -39,7 +39,14 @@ from core.db.models import MetaConnection, PhoneNumber, Tenant, WabaAccount, utc
 from core.db.session import get_session
 from core.gateway import meta_token_store
 from core.gateway.connections import verify_meta_credentials
-from core.gateway.meta_asset_claims import MetaAssetError, claim_assets, verify_waba_and_phone
+from core.gateway.meta_asset_claims import (
+    MetaAssetError,
+    claim_assets,
+    mover_conversaciones,
+    numero_para_conexion,
+    verify_waba_and_phone,
+    waba_para_conexion,
+)
 from core.gateway.meta_errors import GraphError
 from core.gateway.meta_graph import graph_fetch
 from core.shared.exceptions import AgentCoreError
@@ -170,56 +177,26 @@ async def save_byok_connection(
         connection.connected_at = utcnow()
         connection_id = connection.id
 
-        # `phone_number_id` es único GLOBAL (lo asigna Meta): al reconectar la
-        # misma app el número ya existe apuntando a la conexión vieja, así que
-        # hay que REUTILIZAR la fila y reasignarla a la conexión nueva. Filtrar
-        # por `connection_id` haría un INSERT y violaría
-        # `phone_numbers_phone_number_id_key` (bug real del flujo reconnect).
-        # Filtro explícito de `tenant_id` (defensa en profundidad): un conexión
-        # de otro tenant no puede reclamar el número de este.
-        phone = (
-            await session.execute(
-                select(PhoneNumber).where(
-                    PhoneNumber.tenant_id == tenant_id,
-                    PhoneNumber.phone_number_id == phone_number_id,
-                )
-            )
-        ).scalar_one_or_none()
-        previous_connection_id: uuid.UUID | None = None
-        if phone is None:
-            phone = PhoneNumber(tenant_id=tenant_id, connection_id=connection_id, phone_number_id=phone_number_id)
-            session.add(phone)
-        else:
-            previous_connection_id = phone.connection_id
-            phone.connection_id = connection_id
-        phone.display_phone_number = info.get("display_phone_number")
-        phone.verified_name = info.get("verified_name")
-        phone.registered = True
-
-        # `phone_number_id` es único GLOBAL y RLS impide ver la fila de OTRO
-        # tenant: si el número ya lo reclamó otro tenant, el conflicto recién
-        # aparece acá. Se traduce a un error de negocio limpio (el wizard y el
-        # alta lo muestran como flash) en vez de un IntegrityError crudo (500).
+        # Una fila por número en el negocio (ADR-0122): al reconectar la misma app, o
+        # después de eliminar la conexión vieja, se reutiliza (y revive) la fila y se
+        # reasigna a esta conexión. Lo mismo la WABA, con sus plantillas y precios.
+        # `phone_number_id` además es único entre las filas vivas de todos los negocios: si
+        # otro lo tiene, el conflicto aparece en el flush y se traduce a un error de negocio
+        # limpio (el wizard lo muestra) en vez de un IntegrityError crudo (500).
+        waba = await waba_para_conexion(session, tenant_id, connection_id, waba_id)
         try:
-            await session.flush()
+            phone, previous_connection_id = await numero_para_conexion(
+                session, tenant_id, connection_id, phone_number_id, waba_account_id=waba.id
+            )
         except IntegrityError as exc:
             raise ByokError(
                 f"El número de WhatsApp {phone_number_id} ya está asociado a otra conexión. "
                 "Desconectalo desde el tenant que lo tiene, o usá otro número."
             ) from exc
+        phone.display_phone_number = info.get("display_phone_number")
+        phone.verified_name = info.get("verified_name")
+        phone.registered = True
 
-        waba = (
-            await session.execute(
-                select(WabaAccount).where(
-                    WabaAccount.tenant_id == tenant_id,
-                    WabaAccount.connection_id == connection_id,
-                    WabaAccount.waba_id == waba_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if waba is None:
-            waba = WabaAccount(tenant_id=tenant_id, connection_id=connection_id, waba_id=waba_id)
-            session.add(waba)
         # Ninguna WABA de la conexión cuenta como suscrita hasta que el `POST /subscribed_apps`
         # de abajo salga bien: al reconectar se reusa la conexión (y la fila, si es la misma
         # WABA), y un `True` de antes haría pasar por suscrito un reintento que falló
@@ -386,23 +363,41 @@ async def _rollback_failed_alta(
                     )
                     .values(connection_id=previous)
                 )
+                # Y sus conversaciones, si el intento se las había llevado.
+                await mover_conversaciones(session, tenant_id, desde=connection_id, hacia=previous)
 
         if created_new:
-            connection.deleted_at = utcnow()
+            # Borrado lógico, como `soft_delete_connection` (invariante 8, ADR-0122): si el
+            # intento revivió una WABA eliminada, sus plantillas y precios se conservan.
+            now = utcnow()
+            connection.deleted_at = now
             await session.execute(
-                delete(PhoneNumber).where(PhoneNumber.tenant_id == tenant_id, PhoneNumber.connection_id == connection_id)
+                update(PhoneNumber)
+                .where(
+                    PhoneNumber.tenant_id == tenant_id,
+                    PhoneNumber.connection_id == connection_id,
+                    PhoneNumber.deleted_at.is_(None),
+                )
+                .values(deleted_at=now)
             )
             await session.execute(
-                delete(WabaAccount).where(WabaAccount.tenant_id == tenant_id, WabaAccount.connection_id == connection_id)
+                update(WabaAccount)
+                .where(
+                    WabaAccount.tenant_id == tenant_id,
+                    WabaAccount.connection_id == connection_id,
+                    WabaAccount.deleted_at.is_(None),
+                )
+                .values(deleted_at=now)
             )
 
 
 # Estados en los que la conexión sigue siendo la credencial del negocio (ADR-0101).
 # `degraded`/`error` los pone el cron de salud cuando falla un check (un token a menos de
 # 7 días de vencer ya es `error`), o el alta si falla al guardar; Meta sigue firmando con
-# el secreto de la app. Fuera quedan `revoked` (desactivada a mano o borrada: cortar es
-# intencional) y `draft` (sin credenciales).
-_ESTADOS_CON_CREDENCIAL = ("pending", "connected", "degraded", "error")
+# el secreto de la app. `revoked` (pausada a mano) también, pero solo como último recurso
+# (ADR-0122): su entrada se verifica y se guarda sin IA en vez de dar 401. Fuera quedan
+# `draft` (sin credenciales) y las borradas (`deleted_at`).
+_ESTADOS_CON_CREDENCIAL = ("pending", "connected", "degraded", "error", "revoked")
 
 
 async def _resolve_byok_token(tenant_id: uuid.UUID, kind: str) -> str | None:
@@ -443,6 +438,9 @@ async def _resolve_byok_token(tenant_id: uuid.UUID, kind: str) -> str | None:
                     MetaConnection.deleted_at.is_(None),
                 )
                 .order_by(
+                    # Una pausada nunca le gana a una viva, sea del origen que sea: una BYOK
+                    # que tomó Embedded Signup conserva el secreto de su app (ADR-0122).
+                    case((MetaConnection.status == "revoked", 1), else_=0),
                     case((MetaConnection.origin == "byok", 0), else_=1),
                     case((MetaConnection.status == "degraded", 1), (MetaConnection.status == "error", 2), else_=0),
                     MetaConnection.connected_at.desc(),
