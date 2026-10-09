@@ -284,3 +284,20 @@ async def test_una_cuenta_que_paso_a_master_no_entra_por_el_enlace(app_client) -
     r = await app_client.post(ACEPTAR, json={"token": token, "new_password": CLAVE})
     assert r.status_code == 409
     assert (await _leer_invitacion(invitation_id)).estado == "pendiente"
+
+
+async def test_aceptar_en_la_app_una_invitacion_de_un_negocio_suspendido_no_da_acceso() -> None:
+    """Mismo filtro que la lista (HU-SH-06): un negocio suspendido no suma miembros."""
+    from core.admin.invitations_service import aceptar_invitacion
+    from core.db.models import Tenant, TenantUser
+    from core.db.session import get_session
+
+    tenant_id, invitation_id, email, _ = await _invitacion()
+    async with get_session() as s:
+        (await s.get(Tenant, tenant_id)).status = "suspended"
+    admin = await _admin_de(email)
+
+    assert await aceptar_invitacion(invitation_id=invitation_id, admin_id=admin.id) is not None
+    async with get_session() as s:
+        vinculos = (await s.execute(select(TenantUser).where(TenantUser.tenant_id == tenant_id))).scalars().all()
+    assert vinculos == []

@@ -55,6 +55,11 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str = Field(description="Código de recuperación recibido por correo.")
     new_password: str = Field(min_length=8)
+    identifier: str | None = Field(
+        default=None,
+        max_length=320,
+        description="Correo o usuario de la cuenta: el código solo se busca entre los suyos.",
+    )
 
 
 class AcceptInvitationRequest(BaseModel):
@@ -109,22 +114,61 @@ async def post_logout(
     return Response(status_code=204)
 
 
+# Cupo de pedidos de código (HU-SH-06): cada pedido anula el código anterior y manda un correo.
+# Sin límite, alguien podría llenar de correos a una persona y no dejarla recuperar su cuenta.
+FORGOT_POR_IDENTIFICADOR = 3
+FORGOT_POR_IP = 10
+FORGOT_VENTANA_S = 900
+
+
 @router.post("/forgot-password", status_code=202)
-async def post_forgot_password(payload: ForgotPasswordRequest, background: BackgroundTasks) -> Response:
+async def post_forgot_password(
+    payload: ForgotPasswordRequest, request: Request, background: BackgroundTasks
+) -> Response:
     """Siempre 202 con el mismo cuerpo: no filtra si la cuenta existe (ADR-0098).
 
     El trabajo pesado (hash + correo) va en background para emparejar el tiempo
-    de respuesta de cuentas existentes e inexistentes.
+    de respuesta de cuentas existentes e inexistentes. Con un cupo por identificador
+    (3 cada 15 min) y por IP (10): pasado el cupo responde igual, pero no genera ni
+    envía otro código.
     """
-    background.add_task(solicitar_reset, payload.identifier)
+    from core.security.login_lockout import client_ip, within_quota
+
+    identifier = payload.identifier.strip().lower()
+    if await within_quota(
+        "reset_pedido",
+        identifier or None,
+        client_ip(request),
+        por_identificador=FORGOT_POR_IDENTIFICADOR,
+        por_ip=FORGOT_POR_IP,
+        ventana_s=FORGOT_VENTANA_S,
+    ):
+        background.add_task(solicitar_reset, payload.identifier)
     return Response(status_code=202)
 
 
 @router.post("/reset-password", status_code=204)
-async def post_reset_password(payload: ResetPasswordRequest) -> Response:
-    error = await aplicar_reset(payload.token, payload.new_password)
+async def post_reset_password(payload: ResetPasswordRequest, request: Request) -> Response:
+    """Aplica el código. Con el mismo bloqueo progresivo del login (5 fallos en 10 min → 15
+    min), por IP y por identificador si viene (HU-SH-06)."""
+    from core.security.login_lockout import (
+        client_ip,
+        is_blocked,
+        register_failure,
+        register_success,
+    )
+
+    ip = client_ip(request)
+    identifier = (payload.identifier or "").strip().lower() or None
+    if await is_blocked("reset", identifier, ip):
+        raise ApiError(
+            429, "auth_bloqueado", "Demasiados intentos. Espera unos minutos e inténtalo de nuevo."
+        )
+    error = await aplicar_reset(payload.token, payload.new_password, identifier)
     if error is not None:
+        await register_failure("reset", identifier, ip)
         raise ApiError(400, "invalid_token", error)
+    await register_success("reset", identifier, ip)
     return Response(status_code=204)
 
 

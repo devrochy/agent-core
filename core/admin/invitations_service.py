@@ -207,6 +207,11 @@ async def aceptar_invitacion(*, invitation_id: uuid.UUID, admin_id: uuid.UUID) -
         invitacion = await _invitacion_propia(session, invitation_id, admin_id)
         if invitacion is None:
             return "invitación no encontrada o ya resuelta"
+        negocio = await session.get(Tenant, invitacion.tenant_id)
+        if negocio is None or negocio.deleted_at is not None or negocio.status != "active":
+            # Mismo filtro que `pendientes_de` (HU-SH-06): un negocio suspendido o borrado no
+            # suma miembros por una invitación vieja.
+            return "invitación no encontrada o ya resuelta"
         if invitacion.expires_at is not None and invitacion.expires_at <= datetime.now(UTC):
             # Una invitación vencida no da acceso aunque siga pendiente (ADR-0121).
             return INVITACION_VENCIDA

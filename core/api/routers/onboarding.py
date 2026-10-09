@@ -56,6 +56,13 @@ class PrimerosPasosResponse(BaseModel):
     pasos: list[PasoOut]
 
 
+def _puede_ver(principal: Principal, seccion: str | None) -> bool:
+    """¿Puede leer la sección del paso? Si no, el paso no le muestra cuánto hay cargado."""
+    if seccion is None:
+        return False
+    return principal.admin.role == "master" or principal.permissions.get(seccion) in ("read", "write")
+
+
 def _puede_actuar(principal: Principal, seccion: str | None) -> bool:
     if seccion is None:
         return False
@@ -81,7 +88,7 @@ async def get_primeros_pasos(
             clave=paso.clave,
             estado=paso.estado,
             motivo=paso.motivo,
-            cantidad=paso.cantidad,
+            cantidad=paso.cantidad if _puede_ver(principal, paso.seccion) else None,
             pack=paso.pack,
             tipo=paso.tipo,  # type: ignore[arg-type]
             titulo=paso.titulo,

@@ -97,7 +97,7 @@
           "auth"
         ],
         "summary": "Post Forgot Password",
-        "description": "Siempre 202 con el mismo cuerpo: no filtra si la cuenta existe (ADR-0098).\n\nEl trabajo pesado (hash + correo) va en background para emparejar el tiempo\nde respuesta de cuentas existentes e inexistentes.",
+        "description": "Siempre 202 con el mismo cuerpo: no filtra si la cuenta existe (ADR-0098).\n\nEl trabajo pesado (hash + correo) va en background para emparejar el tiempo\nde respuesta de cuentas existentes e inexistentes. Con un cupo por identificador\n(3 cada 15 min) y por IP (10): pasado el cupo responde igual, pero no genera ni\nenvía otro código.",
         "operationId": "post_forgot_password_api_v1_auth_forgot_password_post",
         "requestBody": {
           "content": {
@@ -138,6 +138,7 @@
           "auth"
         ],
         "summary": "Post Reset Password",
+        "description": "Aplica el código. Con el mismo bloqueo progresivo del login (5 fallos en 10 min → 15\nmin), por IP y por identificador si viene (HU-SH-06).",
         "operationId": "post_reset_password_api_v1_auth_reset_password_post",
         "requestBody": {
           "content": {
@@ -20181,6 +20182,19 @@
             "type": "string",
             "minLength": 8,
             "title": "New Password"
+          },
+          "identifier": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 320
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Identifier",
+            "description": "Correo o usuario de la cuenta: el código solo se busca entre los suyos."
           }
         },
         "type": "object",
