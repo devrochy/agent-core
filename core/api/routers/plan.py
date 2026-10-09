@@ -2,6 +2,10 @@
 
 Plan activo, consumo por métrica, historial de pagos y catálogo de planes.
 Mismos datos que la vista SSR `/admin/plan` (ADR-0045).
+
+Desde HU-SH-04 (ADR-0123) es también el **canal panel** del cobro de la plataforma: muestra el
+período que toca pagar (`cobro`) con su referencia, si ya lo pagó el asistente, y
+`POST /subscribe` responde 409 `ya_pagado` en vez de cobrar dos veces el mismo período.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from pydantic import BaseModel
 from core.admin.plan_view import (
     billing_payments,
     billing_usage,
+    cobro_del_periodo,
     subscription_overview_or_none,
 )
 from core.api.deps import Principal, require
@@ -54,6 +59,22 @@ class Payment(BaseModel):
     created_at: datetime
     paid_at: datetime | None
     checkout_url: str | None
+    # HU-SH-04: referencia del período que cubre (`plat-<slug>-<AAAAMM>`).
+    periodo: str | None = None
+
+
+class Cobro(BaseModel):
+    """El período que toca pagar del plan actual (HU-SH-04, ADR-0123)."""
+
+    referencia: str
+    inicio: datetime
+    fin: datetime
+    plan_id: str
+    monto_cop: int
+    estado: str  # pendiente | pagado
+    pagado_por: str | None = None  # asistente | panel
+    # Al día: desde cuándo se puede pagar el período siguiente.
+    disponible_desde: datetime | None = None
 
 
 class PlanResponse(BaseModel):
@@ -61,6 +82,9 @@ class PlanResponse(BaseModel):
     usage: list[UsageMetric]
     payments: list[Payment]
     plans: list[PlanInfo]
+    cobro: Cobro | None = None
+    # El negocio lo creó el asistente de SolversHub: su plan se cambia por el asistente.
+    plan_por_el_asistente: bool = False
 
 
 @router.get("", response_model=PlanResponse)
@@ -73,6 +97,7 @@ async def get_plan(
     overview = await subscription_overview_or_none(tenant_id) if tenant_id else None
     usage = await billing_usage(tenant_id, overview) if tenant_id else []
     payments = await billing_payments(tenant_id) if tenant_id else []
+    cobro, por_el_asistente = await cobro_del_periodo(tenant_id) if tenant_id else (None, False)
 
     current_plan_id = overview.plan_id if overview else None
     return PlanResponse(
@@ -102,6 +127,8 @@ async def get_plan(
             )
             for plan in public_plans()
         ],
+        cobro=Cobro(**cobro) if cobro else None,
+        plan_por_el_asistente=por_el_asistente,
     )
 
 
@@ -118,8 +145,11 @@ async def subscribe_to_plan(
     payload: SubscribeRequest,
     principal: Annotated[Principal, Depends(require("plan", write=True))],
 ) -> SubscribeResponse:
-    """Inicia la suscripción a un plan pago: devuelve la URL del checkout."""
-    from core.billing.checkout import start_subscription
+    """Link de pago del período que toca pagar (plan actual) o de un plan nuevo.
+
+    409 `ya_pagado`: ese período ya está pagado (por el panel o por el asistente).
+    409 `cambio_en_el_asistente`: el negocio lo creó el asistente; su plan se cambia ahí."""
+    from core.billing.checkout import CambioDePlanEnElAsistente, PeriodoYaPagado, start_subscription
     from core.billing.plans import get_plan
 
     if get_plan(payload.plan_id) is None:
@@ -127,6 +157,8 @@ async def subscribe_to_plan(
 
     try:
         checkout_url = await start_subscription(payload.plan_id)
+    except (PeriodoYaPagado, CambioDePlanEnElAsistente) as exc:
+        raise ApiError(409, exc.code, str(exc)) from exc
     except Exception as exc:
         log.exception("plan_subscribe_failed", plan=payload.plan_id)
         raise ApiError(502, "checkout_failed", f"No se pudo iniciar el pago: {str(exc)[:140]}") from exc

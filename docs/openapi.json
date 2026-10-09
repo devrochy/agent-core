@@ -5118,7 +5118,7 @@
           "admin · plan"
         ],
         "summary": "Subscribe To Plan",
-        "description": "Inicia la suscripción a un plan pago: devuelve la URL del checkout.",
+        "description": "Link de pago del período que toca pagar (plan actual) o de un plan nuevo.\n\n409 `ya_pagado`: ese período ya está pagado (por el panel o por el asistente).\n409 `cambio_en_el_asistente`: el negocio lo creó el asistente; su plan se cambia ahí.",
         "operationId": "subscribe_to_plan_api_v1_admin_plan_subscribe_post",
         "parameters": [
           {
@@ -14133,6 +14133,70 @@
         ],
         "title": "ClientRow"
       },
+      "Cobro": {
+        "properties": {
+          "referencia": {
+            "type": "string",
+            "title": "Referencia"
+          },
+          "inicio": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Inicio"
+          },
+          "fin": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Fin"
+          },
+          "plan_id": {
+            "type": "string",
+            "title": "Plan Id"
+          },
+          "monto_cop": {
+            "type": "integer",
+            "title": "Monto Cop"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "pagado_por": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pagado Por"
+          },
+          "disponible_desde": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disponible Desde"
+          }
+        },
+        "type": "object",
+        "required": [
+          "referencia",
+          "inicio",
+          "fin",
+          "plan_id",
+          "monto_cop",
+          "estado"
+        ],
+        "title": "Cobro",
+        "description": "El período que toca pagar del plan actual (HU-SH-04, ADR-0123)."
+      },
       "CollaboratorCreate": {
         "properties": {
           "email": {
@@ -18526,6 +18590,21 @@
             },
             "type": "array",
             "title": "Plans"
+          },
+          "cobro": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Cobro"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plan_por_el_asistente": {
+            "type": "boolean",
+            "title": "Plan Por El Asistente",
+            "default": false
           }
         },
         "type": "object",
@@ -21872,6 +21951,17 @@
               }
             ],
             "title": "Checkout Url"
+          },
+          "periodo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Periodo"
           }
         },
         "type": "object",
