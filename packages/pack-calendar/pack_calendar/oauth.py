@@ -23,12 +23,13 @@ import time
 from typing import Any
 from urllib.parse import urlencode
 
-import httpx
 from sqlalchemy import select
 
 from core.config import get_settings
+from core.mcp.types import ScopedHttp
 from core.shared.exceptions import PluginError
 from core.shared.logger import get_logger
+from pack_calendar import google_api
 
 log = get_logger(__name__)
 
@@ -82,20 +83,21 @@ async def exchange_code(
     *,
     redirect: str | None = None,
 ) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            TOKEN_URL,
-            data={
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "code": code,
-                "grant_type": "authorization_code",
-                "redirect_uri": redirect or redirect_uri(),
-            },
-        )
-    if response.status_code != 200:
-        raise PluginError(PLUGIN_ID, f"OAuth exchange falló: {response.text[:200]}")
-    tokens: dict[str, Any] = response.json()
+    response = await google_api.request(
+        google_api.default_http(),
+        "POST",
+        TOKEN_URL,
+        data={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": code,
+            "grant_type": "authorization_code",
+            "redirect_uri": redirect or redirect_uri(),
+        },
+    )
+    if response["status"] != 200:
+        raise PluginError(PLUGIN_ID, f"OAuth exchange falló: {google_api.snippet(response['data'])}")
+    tokens: dict[str, Any] = response["data"]
     tokens["expires_at"] = time.time() + float(tokens.get("expires_in", 3600)) - 60
     return tokens
 
@@ -109,13 +111,12 @@ async def _account_email(access_token: str) -> str:
     if not access_token:
         return ""
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.get(
-                USERINFO_URL, headers={"Authorization": f"Bearer {access_token}"}
-            )
-        if response.status_code == 200:
-            return str(response.json().get("email", "") or "")
-        log.warning("google_userinfo_status", status=response.status_code)
+        response = await google_api.request(
+            google_api.default_http(), "GET", USERINFO_URL, token=access_token, timeout=15
+        )
+        if response["status"] == 200 and isinstance(response["data"], dict):
+            return str(response["data"].get("email", "") or "")
+        log.warning("google_userinfo_status", status=response["status"])
     except Exception as exc:
         log.warning("google_userinfo_failed", error=type(exc).__name__)
     return ""
@@ -225,11 +226,14 @@ async def save_tokens(tokens: dict[str, Any], *, from_refresh: bool = False) -> 
             stored.config_encrypted = encrypted
 
 
-async def get_access_token(client_id: str, client_secret: str) -> str:
+async def get_access_token(
+    client_id: str, client_secret: str, *, http: ScopedHttp | None = None
+) -> str:
     """Devuelve un access_token válido, refrescando si expiró.
 
     Lee primero la conexión del tenant y cae a la copia en `plugin_configs`
-    mientras dure la ventana de compatibilidad.
+    mientras dure la ventana de compatibilidad. El refresh sale por `http` (el
+    `context.http` de la tool) o, sin él, por el cliente acotado del pack.
     """
     tokens = await _connection_tokens() or await _plugin_config_tokens()
     if not tokens:
@@ -245,19 +249,20 @@ async def get_access_token(client_id: str, client_secret: str) -> str:
     refresh_token = tokens.get("refresh_token")
     if not refresh_token:
         raise PluginError(PLUGIN_ID, "Sin refresh_token: reconecta la cuenta de Google")
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            TOKEN_URL,
-            data={
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "refresh_token": refresh_token,
-                "grant_type": "refresh_token",
-            },
-        )
-    if response.status_code != 200:
-        raise PluginError(PLUGIN_ID, f"Refresh de token falló: {response.text[:200]}")
-    new_tokens: dict[str, Any] = response.json()
+    response = await google_api.request(
+        http or google_api.default_http(),
+        "POST",
+        TOKEN_URL,
+        data={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        },
+    )
+    if response["status"] != 200:
+        raise PluginError(PLUGIN_ID, f"Refresh de token falló: {google_api.snippet(response['data'])}")
+    new_tokens: dict[str, Any] = response["data"]
     new_tokens["expires_at"] = time.time() + float(new_tokens.get("expires_in", 3600)) - 60
     new_tokens.setdefault("refresh_token", refresh_token)
     if tokens.get("account_email"):

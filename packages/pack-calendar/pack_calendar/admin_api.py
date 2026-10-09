@@ -367,21 +367,16 @@ async def cancel_appointment(
 
     if row.google_event_id:
         try:
-            import httpx
-
             from core.plugin_manager import plugin_manager
-            from pack_calendar.oauth import get_access_token
+            from pack_calendar import google_api
+            from pack_calendar.admin import _google_token
 
+            # Sin ToolContext: el cliente acotado del pack (`google_api.default_http`).
             config = await plugin_manager.load_config(PLUGIN_ID)
-            token = await get_access_token(
-                config.client_id, config.client_secret.get_secret_value()
+            token = await _google_token(config)
+            await google_api.delete_event(
+                google_api.default_http(), config.calendar_id, token, row.google_event_id
             )
-            async with httpx.AsyncClient(timeout=30) as client:
-                await client.delete(
-                    "https://www.googleapis.com/calendar/v3/calendars/"
-                    f"{config.calendar_id}/events/{row.google_event_id}",
-                    headers={"Authorization": f"Bearer {token}"},
-                )
         except Exception:
             from core.shared.logger import get_logger
 

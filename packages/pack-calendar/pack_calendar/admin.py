@@ -23,6 +23,7 @@ from core.admin.context import base_context
 from core.db.session import get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from pack_calendar import google_api
 
 log = get_logger(__name__)
 
@@ -77,7 +78,6 @@ async def _authorized(request: Request, *, write: bool) -> bool:
 
 
 # ------------------------------------------------------------ calendario (citas)
-CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 MAX_RANGE_DAYS = 93  # el calendario no pide más de 3 meses por request
 
 
@@ -107,31 +107,20 @@ def _as_uuid(value: Any) -> uuid.UUID | None:
 
 async def _fetch_google_events(config: Any, start: datetime, end: datetime) -> list[dict[str, Any]]:
     """Lista eventos reales de Google en [start, end). Lanza si falla la API."""
-    import httpx
-
-    from pack_calendar.oauth import get_access_token
-
-    token = await get_access_token(
-        config.client_id, config.client_secret.get_secret_value()  # type: ignore[attr-defined]
+    token = await _google_token(config)
+    return await google_api.list_events(
+        google_api.default_http(),
+        config.calendar_id,  # type: ignore[attr-defined]
+        token,
+        {
+            "timeMin": _utc_iso(start),
+            "timeMax": _utc_iso(end),
+            "singleEvents": "true",
+            "orderBy": "startTime",
+            "maxResults": 1000,
+            "fields": "items(id,status,summary,start,end,attendees,htmlLink)",
+        },
     )
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.get(
-            f"{CALENDAR_API}/calendars/{config.calendar_id}/events",  # type: ignore[attr-defined]
-            params={
-                "timeMin": _utc_iso(start),
-                "timeMax": _utc_iso(end),
-                "singleEvents": "true",
-                "orderBy": "startTime",
-                "maxResults": 1000,
-                "fields": "items(id,status,summary,start,end,attendees,htmlLink)",
-            },
-            headers={"Authorization": f"Bearer {token}"},
-        )
-    if response.status_code >= 400:
-        from core.shared.exceptions import PluginError
-
-        raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}")
-    return list(response.json().get("items") or [])
 
 
 def _google_event_to_fc(event: dict[str, Any]) -> dict[str, Any]:
@@ -495,20 +484,15 @@ async def calendar_appointment_cancel(request: Request, appointment_id: uuid.UUI
     if row.google_event_id:
         try:
             from core.plugin_manager import plugin_manager
-            from pack_calendar.oauth import get_access_token
 
             config = await plugin_manager.load_config(PLUGIN_ID)
-            token = await get_access_token(
-                config.client_id, config.client_secret.get_secret_value()  # type: ignore[attr-defined]
+            token = await _google_token(config)
+            await google_api.delete_event(
+                google_api.default_http(),
+                config.calendar_id,  # type: ignore[attr-defined]
+                token,
+                row.google_event_id,
             )
-            import httpx
-
-            async with httpx.AsyncClient(timeout=30) as client:
-                await client.delete(
-                    f"https://www.googleapis.com/calendar/v3/calendars/"
-                    f"{config.calendar_id}/events/{row.google_event_id}",  # type: ignore[attr-defined]
-                    headers={"Authorization": f"Bearer {token}"},
-                )
         except Exception:
             log.warning("calendar_google_cancel_failed", appointment_id=str(appointment_id))
 
@@ -552,8 +536,6 @@ async def _google_create_event(
     attendee_email: str | None,
     notes: str,
 ) -> dict[str, Any]:
-    import httpx
-
     body: dict[str, Any] = {
         "summary": title,
         "description": notes,
@@ -562,33 +544,15 @@ async def _google_create_event(
     }
     if attendee_email:
         body["attendees"] = [{"email": attendee_email}]
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            f"{CALENDAR_API}/calendars/{config.calendar_id}/events",  # type: ignore[attr-defined]
-            json=body,
-            headers={"Authorization": f"Bearer {token}"},
-        )
-    if response.status_code >= 400:
-        from core.shared.exceptions import PluginError
-
-        raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}")
-    return response.json()
+    return await google_api.create_event(
+        google_api.default_http(), config.calendar_id, token, body  # type: ignore[attr-defined]
+    )
 
 
 async def _google_patch_event(config: Any, token: str, google_event_id: str, body: dict[str, Any]) -> dict[str, Any]:
-    import httpx
-
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.patch(
-            f"{CALENDAR_API}/calendars/{config.calendar_id}/events/{google_event_id}",  # type: ignore[attr-defined]
-            json=body,
-            headers={"Authorization": f"Bearer {token}"},
-        )
-    if response.status_code >= 400:
-        from core.shared.exceptions import PluginError
-
-        raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}")
-    return response.json()
+    return await google_api.patch_event(
+        google_api.default_http(), config.calendar_id, token, google_event_id, body  # type: ignore[attr-defined]
+    )
 
 
 async def _notify_cita_movida(conversation_id: uuid.UUID, title: str, new_start: datetime) -> bool:

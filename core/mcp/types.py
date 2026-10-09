@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -78,16 +78,29 @@ def _is_private_host(host: str) -> bool:
     )
 
 
+# Métodos que puede usar un pack con su allowlist del manifest (APIs REST como
+# Google Calendar necesitan editar y borrar). Las tools declarativas del tenant
+# siguen limitadas a GET/POST (default de `ScopedHttp`).
+PLUGIN_HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
+
+
 class ScopedHttp:
     """Cliente HTTP acotado a una allowlist de dominios (ADR-0052).
 
-    Solo permite `POST`/`GET` a hosts de la allowlist. Sin allowlist, toda salida
-    se rechaza (fail-closed). Nunca expone `httpx` crudo ni el entorno.
+    Por defecto solo permite `POST`/`GET` a hosts de la allowlist; `methods`
+    amplía el set (packs, ver `plugin_http`). Sin allowlist, toda salida se
+    rechaza (fail-closed). Nunca expone `httpx` crudo ni el entorno.
     """
 
-    def __init__(self, allowed_domains: list[str] | None, timeout: float = 15.0) -> None:
+    def __init__(
+        self,
+        allowed_domains: list[str] | None,
+        timeout: float = 15.0,
+        methods: tuple[str, ...] = ("GET", "POST"),
+    ) -> None:
         self._allowed = {d.strip().lower() for d in (allowed_domains or []) if d.strip()}
         self._timeout = timeout
+        self._methods = {m.upper() for m in methods}
 
     def _allowed_host(self, url: str) -> bool:
         from urllib.parse import urlparse
@@ -111,26 +124,40 @@ class ScopedHttp:
         *,
         params: dict[str, Any] | None = None,
         json_body: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
-        if method.upper() not in ("GET", "POST"):
+        """`data` va form-encoded (p. ej. el token endpoint de OAuth2); `timeout`
+        pisa el del cliente para esta llamada."""
+        if method.upper() not in self._methods:
             return {"error": f"Método no permitido: {method}"}
         if not self._allowed_host(url):
             return {"error": f"Dominio no autorizado: {url}"}
         import httpx
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout or self._timeout) as client:
                 resp = await client.request(
-                    method.upper(), url, params=params, json=json_body, headers=headers or {}
+                    method.upper(),
+                    url,
+                    params=params,
+                    json=json_body,
+                    data=data,
+                    headers=headers or {},
                 )
         except Exception as exc:
             return {"error": f"Fallo de red: {type(exc).__name__}"}
         try:
-            data = resp.json()
+            body = resp.json()
         except Exception:
-            data = resp.text[:2000]
-        return {"status": resp.status_code, "data": data}
+            body = resp.text[:2000]
+        return {"status": resp.status_code, "data": body}
+
+
+def plugin_http(allowed_domains: Iterable[str] | None) -> ScopedHttp:
+    """`ScopedHttp` de un pack: su allowlist del manifest y los métodos REST."""
+    return ScopedHttp(list(allowed_domains or ()), methods=PLUGIN_HTTP_METHODS)
 
 
 @dataclass
@@ -222,6 +249,10 @@ class BaseModule(ABC):
     # Conexiones/tipos que la habilidad necesita para funcionar (ADR-0072), ej.
     # ["whatsapp_meta", "google_calendar"]. Se muestran como requisitos.
     required_connections: ClassVar[list[str]] = []
+    # Allowlist de dominios a los que el pack puede salir (ADR-0019/0052). Es la
+    # verdad en runtime; debe coincidir con `network` de `[tool.agent_core.plugin]`.
+    # El core arma con ella el `context.http` de sus tools (`plugin_manager.scoped_http`).
+    network_allowlist: ClassVar[tuple[str, ...]] = ()
     # Plan mínimo en el que está disponible (código de `core/billing/plans.py`),
     # ej. "free" | "basic" | "premium" | "empresarial".
     min_plan: str = "free"

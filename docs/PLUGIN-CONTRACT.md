@@ -309,6 +309,17 @@ Un handler que falla se loggea y NO interrumpe el flujo.
 ✗ Modelos de otro plugin  (los dominios no se importan entre sí; coordina vía eventos)
 ```
 
+### Salida a red (ADR-0052)
+
+Un pack no importa `httpx` (ni otro cliente HTTP). Declara sus dominios en
+`BaseModule.network_allowlist` (y los mismos en `network` de `[tool.agent_core.plugin]`):
+
+- **Tools**: usan `context.http`. El core lo arma por tool con
+  `plugin_manager.scoped_http(plugin_id)`: allowlist del módulo, `GET/POST/PUT/PATCH/DELETE`,
+  sin IPs internas. Responde `{"status", "data"}` o `{"error"}`; nunca lanza.
+- **Panel, jobs, OAuth** (sin `ToolContext`): `core.mcp.types.plugin_http(<su allowlist>)`,
+  el mismo cliente. Ejemplo: `pack_calendar/google_api.py`.
+
 ## 14. Checklist antes de publicar
 
 - [ ] `pip install -e plugins/mod_x` sin errores y aparece en `agent-core status`

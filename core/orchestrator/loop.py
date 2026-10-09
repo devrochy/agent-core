@@ -38,7 +38,7 @@ from core.llm.prompt_builder import DEFAULT_TIMEZONE, PromptContext, build_syste
 from core.llm.types import LLMMessage, LLMToolCall
 from core.mcp.host import mcp_host, new_tool_context
 from core.mcp.translator import skills_summary, to_llm_schemas
-from core.mcp.types import GuardrailResult
+from core.mcp.types import GuardrailResult, ScopedHttp
 from core.memory import entity as entity_memory
 from core.memory import vector as vector_memory
 from core.memory import working as working_memory
@@ -619,26 +619,38 @@ def _persona_guard(response_text: str, spec) -> GuardrailResult | None:  # type:
     return None
 
 
+def _http_for_tool(tool_name: str, declarative: dict[str, Any]) -> ScopedHttp:
+    """`context.http` de la tool que se ejecuta (ADR-0052): única salida a red.
+
+    Se acota a la allowlist de LA tool (no la unión de todas), para que una tool no
+    pueda llamar a dominios autorizados para otra: la de un pack usa la
+    `network_allowlist` de su módulo; la declarativa del tenant, la suya. Una tool
+    registrada nunca toma la allowlist de una declarativa homónima (el host tiene
+    prioridad, igual que al ejecutar).
+    """
+    from core.plugin_manager import plugin_manager
+
+    registered = mcp_host.get_tool(tool_name)
+    if registered is not None:
+        return plugin_manager.scoped_http(registered.plugin_id)
+    allowed = getattr(declarative.get(tool_name), "_allowed_domains", None) or []
+    return ScopedHttp(list(allowed))
+
+
 async def _execute_tool_safely(
     conversation: Conversation, customer: Customer, tool_call: LLMToolCall, spec=None  # type: ignore[no-untyped-def]
 ) -> dict[str, Any]:
     """Ejecuta una tool aislando el error: un plugin roto se desactiva, el turno sigue."""
     from core.mcp.declarative import tools_for_spec
-    from core.mcp.types import ScopedHttp
     from core.plugin_manager import plugin_manager
 
-    # ScopedHttp (ADR-0052): única salida a red. Se acota a la allowlist de LA tool
-    # que se ejecuta (no la unión de todas), para que una tool no pueda llamar a
-    # dominios autorizados para otra. Una tool Python que no use `context.http` no
-    # queda afectada.
     declarative = {t.name: t for t in tools_for_spec(spec)} if spec is not None else {}
-    allowed = list(getattr(declarative.get(tool_call.name), "_allowed_domains", []) or [])
     context = new_tool_context(
         conversation_id=conversation.id,
         customer_id=customer.id,
         idempotency_key=f"{conversation.id}:{tool_call.id}",
         channel=conversation.channel,
-        http=ScopedHttp(allowed),
+        http=_http_for_tool(tool_call.name, declarative),
     )
 
     # Enablement + consentimiento de la tool por tenant (ADR-0019). Aunque las

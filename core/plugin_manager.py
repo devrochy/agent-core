@@ -33,7 +33,7 @@ from sqlalchemy import select
 from core.db.models import PluginConfig, PluginRecord, PluginTenantState, Tenant
 from core.db.session import get_session
 from core.mcp.host import mcp_host
-from core.mcp.types import BaseModule, BasePluginConfig
+from core.mcp.types import BaseModule, BasePluginConfig, ScopedHttp, plugin_http
 from core.shared.audit import record_audit
 from core.shared.crypto import get_secret_box
 from core.shared.events import ON_PLUGIN_ACTIVATED, ON_PLUGIN_DISABLED, event_bus
@@ -494,6 +494,17 @@ class PluginManager:
     # ------------------------------------------------------------ helpers
     def get(self, plugin_id: str) -> BaseModule | None:
         return self._modules.get(plugin_id)
+
+    def scoped_http(self, plugin_id: str) -> ScopedHttp:
+        """Única salida a red de un pack (ADR-0052): acotada a su `network_allowlist`.
+
+        La usa el loop para el `context.http` de las tools del pack. En rutas sin
+        `ToolContext` (panel, jobs) el pack arma lo mismo con `plugin_http` y su
+        allowlist, sin importar este módulo. Un plugin no detectado (o el core)
+        queda con allowlist vacía: fail-closed.
+        """
+        module = self._modules.get(plugin_id)
+        return plugin_http(module.network_allowlist if module is not None else ())
 
     def is_active(self, plugin_id: str) -> bool:
         return plugin_id in self._active
