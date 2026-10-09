@@ -20,6 +20,12 @@ Cada día, para cada negocio con un plan pago cuyo período termina dentro de
      `/plan` y un push. El cron del vendedor no le manda link a quien pagó el último período
      por el panel (`pago_externo`).
 
+El correo es comunicación comercial del **vendedor** (enmienda de ADR-0123, 2026-10-09): un
+negocio del alta automática lo recibe por la integración SMTP de su vendedor (canal de correo
+saliente, ADR-0071, como una conversación más del vendedor). Si el vendedor no tiene una
+integración de correo activa, o el negocio no tiene vendedor, sale por el SMTP de la plataforma
+(`SYSTEM_SMTP_*`, ADR-0098). El aviso no lleva secretos: solo el enlace a `/plan`.
+
 Un período ya pagado (por cualquiera de los dos canales) no genera cobro ni aviso.
 """
 
@@ -200,7 +206,8 @@ async def on_platform_renewal_due(**payload: Any) -> None:
             log.warning("billing_renovacion_asistente_no_cobra", tenant_id=str(negocio), estado=estado)
             canal = CANAL_PANEL
     if canal == CANAL_PANEL:
-        detalle = {**detalle, **await _avisar_por_el_panel(negocio, payload)}
+        vendedor = vinculo.vendedor if vinculo is not None else None
+        detalle = {**detalle, **await _avisar_por_el_panel(negocio, payload, vendedor)}
     await record_audit(
         actor=ACTOR,
         action="renovacion_avisada",
@@ -258,24 +265,54 @@ def asunto_y_cuerpo(payload: dict[str, Any], enlace: str) -> tuple[str, str]:
     return asunto, cuerpo
 
 
-async def _avisar_por_el_panel(negocio: uuid.UUID, payload: dict[str, Any]) -> dict[str, Any]:
-    """Correo a los dueños con el enlace a `/plan` y un push. Un fallo del SMTP se propaga:
-    el outbox reintenta el evento."""
-    from core.admin.invitations_service import url_del_panel
+REMITENTE_VENDEDOR = "vendedor"
+REMITENTE_PLATAFORMA = "plataforma"
+
+
+async def _enviar_aviso(vendedor: uuid.UUID | None, email: str, asunto: str, cuerpo: str) -> str | None:
+    """Envía el aviso de renovación. Devuelve por dónde salió (`vendedor` o `plataforma`) o
+    None si no hay ningún SMTP configurado.
+
+    Primero, la integración SMTP del vendedor: queda como una conversación de correo del
+    vendedor con ese cliente y el envío lo reintenta su cola de salida. Sin integración activa
+    (o sin vendedor), el SMTP de la plataforma; un fallo de ese SMTP se propaga para que el
+    outbox reintente el evento."""
+    if vendedor is not None:
+        from core.gateway.outbound_email import EmailOutboxError, queue_outbound_email
+
+        try:
+            async with tenant_scope(vendedor):
+                await queue_outbound_email(email, asunto, cuerpo)
+            return REMITENTE_VENDEDOR
+        except EmailOutboxError as exc:
+            if exc.reason != "no_connection":
+                log.warning("billing_renovacion_correo_vendedor_fallido", tenant_id=str(vendedor), motivo=exc.reason)
     from core.gateway.system_email import send_system_email
+
+    try:
+        return REMITENTE_PLATAFORMA if await send_system_email(email, asunto, cuerpo) is not None else None
+    except (OSError, smtplib.SMTPException):
+        log.warning("billing_renovacion_correo_fallido", exc_info=True)
+        raise
+
+
+async def _avisar_por_el_panel(
+    negocio: uuid.UUID, payload: dict[str, Any], vendedor: uuid.UUID | None = None
+) -> dict[str, Any]:
+    """Correo a los dueños con el enlace a `/plan` y un push."""
+    from core.admin.invitations_service import url_del_panel
 
     asunto, cuerpo = asunto_y_cuerpo(payload, f"{url_del_panel()}/plan")
     enviados = 0
     sin_smtp = False
+    remitentes: set[str] = set()
     for email in await _correos_de_los_duenos(negocio):
-        try:
-            if await send_system_email(email, asunto, cuerpo) is None:
-                sin_smtp = True
-            else:
-                enviados += 1
-        except (OSError, smtplib.SMTPException):
-            log.warning("billing_renovacion_correo_fallido", tenant_id=str(negocio), exc_info=True)
-            raise
+        remitente = await _enviar_aviso(vendedor, email, asunto, cuerpo)
+        if remitente is None:
+            sin_smtp = True
+        else:
+            enviados += 1
+            remitentes.add(remitente)
     try:
         from core.tasks.push_tasks import notify_owners_push
 
@@ -287,7 +324,7 @@ async def _avisar_por_el_panel(negocio: uuid.UUID, payload: dict[str, Any]) -> d
         )
     except Exception:
         log.warning("billing_renovacion_push_fallido", tenant_id=str(negocio), exc_info=True)
-    return {"correos": enviados, "sin_smtp": sin_smtp}
+    return {"correos": enviados, "sin_smtp": sin_smtp, "remitente": ",".join(sorted(remitentes)) or None}
 
 
 __all__ = ["asunto_y_cuerpo", "on_platform_renewal_due", "renovar_negocio", "renovar_suscripciones"]
