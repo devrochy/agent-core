@@ -118,6 +118,9 @@ Corre bajo el `tenant_scope` del evento, es decir, del vendedor:
      (un hash inválido que `verify_password` rechaza: nadie puede entrar). En la misma transacción se anota
      en `detalle.owner` que esta alta la creó, así un reintento lo sabe. La invitación `owner` lleva un
      **enlace de un solo uso** que vence a los 7 días.
+   - **Reintento con otro correo:** la cuenta anotada tiene que ser la del correo actual del pedido
+     (normalizado igual que en el alta). Si el master corrigió el correo y reintentó, el alta va a
+     revisión: el enlace de la cuenta de un correo nunca sale hacia otro.
    - **Cuenta que ya existía,** con o sin contraseña: no se toca ni se vincula. Va la invitación de
      siempre en la app (ADR-0081), sin enlace: se entra con la contraseña (o recuperándola por correo) y se
      acepta.
@@ -132,7 +135,10 @@ Corre bajo el `tenant_scope` del evento, es decir, del vendedor:
      reenviar el mismo enlace en un reintento.
    - **Canje** (`POST /api/v1/auth/accept-invitation`, con el mismo bloqueo progresivo del login):
      - solo vale para una **cuenta limpia**: sin contraseña, sin acceso a ningún negocio y sin otras
-       invitaciones pendientes. Si no, 409 y se entra por la app;
+       invitaciones pendientes. Si no, 409 y se entra por la app. Por ejemplo, si con el mismo correo se
+       compraron dos negocios, la segunda alta deja otra invitación pendiente y el enlace de la primera da
+       409: el dueño define su contraseña con "olvidé mi contraseña" (código por correo), entra y acepta
+       las dos invitaciones en la app (`docs/runbooks/altas-en-revision.md`);
      - la contraseña se escribe con un UPDATE condicional sobre la cuenta sin contraseña, así que un reset
        que llegó antes gana;
      - la invitación se acepta con otro UPDATE condicional (uso único). Si alguno de los dos falla, no
@@ -221,14 +227,19 @@ En test se puede encender para verificar.
 **Negativas / lo que aceptamos pagar:**
 - Sin correo de sistema configurado (`SYSTEM_SMTP_*`), el owner no recibe el enlace: el alta avisa a los
   dueños del vendedor y el owner entra con "olvidé mi contraseña" cuando haya SMTP.
-- Si el comprador escribe mal su correo, el acceso le llega a otra persona. Esa persona no compró nada y
-  no tiene a qué entrar, pero el comprador se queda sin su negocio hasta que lo corrija una persona.
-  Confirmar el correo en el chat es un ajuste del playbook de ventas (`solvershub-comercial`).
+- **Riesgo aceptado: el correo mal escrito.** El acceso le llega a otra persona, que no compró nada y no
+  tiene a qué entrar, pero el comprador se queda sin su negocio hasta que lo corrija una persona. Lo
+  mitiga el aviso por WhatsApp, que muestra el correo enmascarado con el dominio completo
+  (`a***@dominio`), así el comprador puede notar el error y escribir. Confirmar el correo en el chat
+  es un ajuste del playbook de ventas (`solvershub-comercial`).
 - Rotar `APP_SECRET_KEY` invalida los enlaces pendientes (se recuperan con "olvidé mi contraseña").
 - Un cambio de plan desde el asistente no cambia todavía el plan del negocio ni aplica su preset
   pendiente (HU-SH-04). Por eso no se enciende en producción antes (§ 6).
 - Faltan los controles de HU-SH-07 (términos, interruptor, límites de tasa). Hasta entonces, la allowlist
   vacía es el interruptor.
+- **Un Free por cliente y por correo no frena a quien rota ambos.** Con un número de WhatsApp y un correo
+  nuevos en cada alta se sigue pudiendo crear un Free tras otro. Cerrarlo (documento, verificación,
+  límites por origen) le toca a HU-SH-07.
 
 **Qué haría que revisáramos esto:**
 - un segundo vendedor con reglas distintas (pasaría a config por vendedor);

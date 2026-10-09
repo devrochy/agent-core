@@ -95,6 +95,20 @@ async def _anotar_owner(
     fila.detalle = {**(fila.detalle or {}), "owner": {"admin_id": str(admin_id), "creada": creada}}
 
 
+CORREO_CAMBIADO = (
+    "el correo del pedido no es el de la cuenta que esta alta ya había preparado para el dueño: "
+    "no se manda su acceso a otro correo; revisar a mano (runbook docs/runbooks/altas-en-revision.md)"
+)
+
+
+def _exigir_mismo_correo(admin: Admin | None, email: str) -> None:
+    """La cuenta a la que se invita es la del correo del pedido (normalizado igual que en el
+    alta: sin espacios y en minúsculas). Si no, revisión: el enlace de la cuenta A nunca va al
+    correo B."""
+    if admin is None or (admin.email or "").strip().lower() != email:
+        raise AltaEnRevision(CORREO_CAMBIADO)
+
+
 async def cuenta_del_owner(
     email: str, *, vendedor: uuid.UUID, registro_id: uuid.UUID, previo: dict[str, Any] | None
 ) -> CuentaDelOwner:
@@ -102,11 +116,16 @@ async def cuenta_del_owner(
 
     Si no existe, se crea sin contraseña y se anota en la fila del alta en la MISMA
     transacción. Un reintento usa lo anotado (`previo`): para él la cuenta ya existe, pero
-    la creó esta alta."""
+    la creó esta alta. Si el correo del pedido cambió desde entonces (el master lo corrigió y
+    reintentó), la cuenta anotada es la de OTRO correo: revisión, nunca su enlace a este."""
     from core.admin.invitations_service import SIN_CONTRASENA
 
     if previo and previo.get("admin_id"):
-        return CuentaDelOwner(uuid.UUID(str(previo["admin_id"])), bool(previo.get("creada")))
+        cuenta = CuentaDelOwner(uuid.UUID(str(previo["admin_id"])), bool(previo.get("creada")))
+        async with get_session() as session:
+            anotada = await session.get(Admin, cuenta.admin_id)
+        _exigir_mismo_correo(anotada, email)
+        return cuenta
     async with get_session() as session:
         admin = (await session.execute(select(Admin).where(Admin.email == email))).scalar_one_or_none()
         if admin is not None:
@@ -148,6 +167,7 @@ async def preparar_invitacion(
 
     async with get_session() as session:
         admin = await session.get(Admin, cuenta.admin_id)
+    _exigir_mismo_correo(admin, email)  # segundo cinturón: el enlace va al correo de la cuenta
     if admin is None or not admin.active:
         raise AltaEnRevision("la cuenta de ese correo no está disponible")
     con_enlace = cuenta.creada_en_esta_alta and admin.password_hash == SIN_CONTRASENA
@@ -265,6 +285,7 @@ async def avisar_por_whatsapp(
 
 
 __all__ = [
+    "CORREO_CAMBIADO",
     "EVENTO_INVITACION",
     "TEXTO_WHATSAPP",
     "VIGENCIA_ENLACE",
