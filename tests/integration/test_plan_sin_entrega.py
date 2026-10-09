@@ -24,7 +24,7 @@ T1 = TEST_ALPHA_ID
 DATOS = {"full_name": "Ana", "id_document": "1", "phone": "300", "email": "a@example.com"}
 
 
-async def _cotizacion(precio: float, billing_period: str | None) -> str:
+async def _cotizacion(precio: float, billing_period: str | None, cliente: uuid.UUID) -> str:
     from pack_commerce.models import Product, ProductVariant, Quote, QuoteItem
 
     from core.db.session import get_session
@@ -41,7 +41,7 @@ async def _cotizacion(precio: float, billing_period: str | None) -> str:
             )
             s.add(variante)
             await s.flush()
-            cotizacion = Quote(tenant_id=T1, conversation_id=uuid.uuid4(), customer_id=uuid.uuid4(),
+            cotizacion = Quote(tenant_id=T1, conversation_id=uuid.uuid4(), customer_id=cliente,
                                subtotal=precio, discount=0, total=precio, status="aceptada")
             s.add(cotizacion)
             await s.flush()
@@ -50,13 +50,13 @@ async def _cotizacion(precio: float, billing_period: str | None) -> str:
             return str(cotizacion.id)
 
 
-async def _pedido(quote_id: str) -> dict:
+async def _pedido(quote_id: str, cliente: uuid.UUID) -> dict:
     from pack_commerce.skills import OrderSkill
 
     from core.mcp.types import ToolContext
     from core.shared.tenant import tenant_scope
 
-    ctx = ToolContext(conversation_id=uuid.uuid4(), customer_id=uuid.uuid4(),
+    ctx = ToolContext(conversation_id=uuid.uuid4(), customer_id=cliente,
                       idempotency_key=f"t:{uuid.uuid4().hex[:8]}", channel="whatsapp")
     async with tenant_scope(T1):
         return await OrderSkill().crear_pedido(
@@ -65,12 +65,14 @@ async def _pedido(quote_id: str) -> dict:
 
 
 async def test_un_plan_se_pide_sin_metodo_de_entrega() -> None:
-    resultado = await _pedido(await _cotizacion(0.0, "mensual"))
+    cliente = uuid.uuid4()
+    resultado = await _pedido(await _cotizacion(0.0, "mensual", cliente), cliente)
     assert resultado.get("status") == "confirmed", resultado
     assert "entregado_en" not in resultado
     assert "delivery_method" not in resultado
 
 
 async def test_un_producto_sigue_necesitando_metodo_de_entrega() -> None:
-    resultado = await _pedido(await _cotizacion(50000.0, None))
+    cliente = uuid.uuid4()
+    resultado = await _pedido(await _cotizacion(50000.0, None, cliente), cliente)
     assert "método de entrega" in resultado.get("error", "").lower()
