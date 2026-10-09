@@ -9,7 +9,7 @@ Seguridad:
 - La `key` es pública (va en el fragmento del widget) y resuelve el tenant.
 - Solo se aceptan peticiones cuyo `Origin` esté en los dominios permitidos.
 - Se exige un token de Turnstile si el tenant lo configuró.
-- Rate limit por (widget, IP) en Redis, compartido entre instancias.
+- Rate limit por (widget, IP) y de keys inexistentes por IP, en Redis.
 - El inbound se encola al MISMO stream que los demás canales: reutiliza el
   pipeline completo (kill-switch, cuotas, orquestador, guardrails).
 """
@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 import uuid
 from datetime import datetime
 from typing import Any
@@ -26,13 +25,13 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from redis.exceptions import RedisError
 from sqlalchemy import select, text
 
 from core.db.models import Conversation, Customer, Message
 from core.db.session import get_session
 from core.gateway.webhooks import INBOUND_STREAM
 from core.memory.working import get_redis
+from core.security import rate_limit
 from core.security.login_lockout import client_ip
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
@@ -42,18 +41,28 @@ router = APIRouter(prefix="/public/web-chat", tags=["public · web-chat"])
 
 TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
 
-# Rate limit por (widget, IP) en Redis, compartido entre instancias. La clave
-# lleva la `key` pública del widget (1:1 con el tenant) y no el `tenant_id`
-# porque el límite corre ANTES de tocar la base: resolver el tenant primero
-# costaría una query por request aun con el cupo agotado. Una key bien formada
-# pero inexistente abre su propio cupo (y termina en 404). Ventana
-# deslizante con un sorted set; el `EXPIRE` borra la clave de una IP que deja de
-# mandar (sin crecer en memoria).
+# Rate limit en Redis (`core.security.rate_limit`), compartido entre instancias.
+# Corre ANTES de tocar la base: resolver el tenant primero costaría una query
+# por request aun con el cupo agotado. Dos cupos:
+# - Por (widget, IP): la clave lleva la `key` pública del widget (1:1 con el
+#   tenant) y no el `tenant_id`, que todavía no se conoce. Una IP no gasta el
+#   cupo de otro tenant.
+# - Keys inexistentes por IP: cada 404 suma un fallo; con el cupo lleno, esa IP
+#   recibe 429 antes de resolver nada. Así una key al azar por request (que abre
+#   un cupo nuevo cada vez) no llega sin freno a la base. Solo cuentan los
+#   fallos, y no frenan a las keys que se sabe que existen (`_KNOWN_*`, se
+#   anotan al resolver): visitantes de distintos tenants detrás de la misma IP
+#   (CGNAT de los operadores móviles) no se cortan el chat entre sí, ni con
+#   tráfico legítimo ni porque uno mande keys al azar.
 _RATE_LIMIT = 30          # mensajes por (widget, IP) por ventana
 _RATE_WINDOW_S = 60
 _RATE_KEY_PREFIX = "rl:web_chat:messages"
+_MISS_LIMIT = 20          # keys inexistentes por IP por ventana
+_MISS_WINDOW_S = 60
+_MISS_KEY_PREFIX = "rl:web_chat:misses"
+_KNOWN_KEY_PREFIX = "rl:web_chat:known"
+_KNOWN_TTL_S = 900
 _WIDGET_KEY_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")  # `secrets.token_urlsafe`
-_clock = time.time
 
 
 def _rate_key(key: str, ip: str) -> str:
@@ -64,29 +73,25 @@ def _rate_key(key: str, ip: str) -> str:
     return f"{_RATE_KEY_PREFIX}:{key_part}:{ip}"
 
 
-async def _rate_limited(key: str, ip: str) -> bool:
-    """True si `ip` superó el cupo de este widget en la ventana.
+def _miss_bucket(ip: str) -> rate_limit.Bucket:
+    return rate_limit.Bucket(f"{_MISS_KEY_PREFIX}:{ip}", _MISS_LIMIT, _MISS_WINDOW_S)
 
-    Los hits rechazados también cuentan (igual que antes). Si Redis no responde,
-    deja pasar (fail-open): el `Origin` y Turnstile siguen siendo barreras, y el
-    encolado del mensaje depende de Redis igual.
+
+def _known_key(key: str) -> str | None:
+    return f"{_KNOWN_KEY_PREFIX}:{key}" if _WIDGET_KEY_RE.fullmatch(key or "") else None
+
+
+async def _rate_limited(key: str, ip: str) -> bool:
+    """True si `ip` superó el cupo de este widget o, si no se sabe que la key
+    existe, el de keys inexistentes.
+
+    Si Redis no responde, deja pasar (fail-open): el `Origin` y Turnstile siguen
+    siendo barreras, y el encolado del mensaje depende de Redis igual.
     """
-    now = _clock()
-    rate_key = _rate_key(key, ip)
-    try:
-        async with get_redis().pipeline(transaction=True) as pipe:
-            pipe.zremrangebyscore(rate_key, "-inf", now - _RATE_WINDOW_S)
-            pipe.zadd(rate_key, {f"{now:.6f}:{uuid.uuid4().hex}": now})
-            # Tope de tamaño: alcanza con guardar los `_RATE_LIMIT + 1` hits más
-            # recientes para decidir; una inundación no infla el set.
-            pipe.zremrangebyrank(rate_key, 0, -(_RATE_LIMIT + 2))
-            pipe.zcard(rate_key)
-            pipe.expire(rate_key, _RATE_WINDOW_S)
-            _, _, _, count, _ = await pipe.execute()
-    except RedisError as exc:
-        log.warning("web_chat_rate_limit_unavailable", error=str(exc))
-        return False
-    return int(count) > _RATE_LIMIT
+    bucket = rate_limit.Bucket(_rate_key(key, ip), _RATE_LIMIT, _RATE_WINDOW_S)
+    return await rate_limit.hit(
+        bucket, guards=(_miss_bucket(ip),), known_key=_known_key(key), name="web_chat"
+    )
 
 
 def _norm(value: Any) -> str:
@@ -165,7 +170,10 @@ async def post_message(key: str, request: Request) -> JSONResponse:
 
     found = await _resolve_by_key(key)
     if found is None:
+        await rate_limit.record(_miss_bucket(ip), name="web_chat")
         return JSONResponse({"error": "unknown_key"}, status_code=404)
+    if known := _known_key(key):
+        await rate_limit.remember(known, _KNOWN_TTL_S, name="web_chat")
     tenant_id, config = found
     if not config.get("enabled"):
         return JSONResponse({"error": "disabled"}, status_code=403)
