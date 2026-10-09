@@ -78,13 +78,12 @@ EVENTOS: dict[str, dict[str, str]] = {
         "suscripcion.concepto": "Plan o concepto de la suscripción",
         "prueba.termina": "Fecha en que termina la prueba",
     },
-    # HU-SH-03 (ADR-0121): el negocio del cliente se creó solo; invitación al dueño.
+    # HU-SH-03 (ADR-0121): el acceso al negocio comprado llega por correo. Sin enlace ni
+    # token: el enlace va SOLO por correo y el aviso es igual en todos los casos.
     "provisioning.invitation": {
         "cliente.nombre": "Nombre del cliente",
-        "negocio.nombre": "Nombre del negocio creado",
-        "invitacion.enlace": "Enlace para entrar (o el panel, si ya tiene cuenta)",
-        "invitacion.vence": "Fecha en que vence el enlace",
-        "invitacion.correo": "Correo de la cuenta del dueño",
+        "negocio.nombre": "Nombre del negocio",
+        "invitacion.correo": "Correo al que llega el acceso (enmascarado)",
     },
 }
 

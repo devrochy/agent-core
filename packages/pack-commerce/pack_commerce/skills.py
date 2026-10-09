@@ -23,6 +23,7 @@ from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from core.shared.texto_seguro import contiene_url
 from pack_commerce.models import (
     CategoryComplement,
     Inventory,
@@ -348,7 +349,7 @@ _ESPACIOS = re.compile(r"\s+")
 @lru_cache(maxsize=1)
 def _presets() -> tuple[tuple[str, str], ...]:
     """(id, nombre) de los presets del core (ADR-0110). Son archivos del release, no datos de
-    un negocio: se leen una vez por proceso (`get_tools` corre en cada turno)."""
+    un negocio: se leen una vez por proceso."""
     from core.presets import list_presets
 
     return tuple((p.id, p.nombre) for p in list_presets())
@@ -827,17 +828,6 @@ class OrderSkill(BaseSkill):
     ]
 
     def get_tools(self) -> list[MCPTool]:
-        # Tipo de negocio del cliente: id de un preset, de la lista (ADR-0121).
-        opciones = [o["id"] for o in _verticales()]
-        vertical: dict[str, Any] = {
-            "type": "string",
-            "description": (
-                "Tipo de negocio del cliente: el id de una opción. Solo si la tool lo pide "
-                "en missing_fields."
-            ),
-        }
-        if opciones:
-            vertical["enum"] = opciones
         return [
             MCPTool(
                 name="generar_cotizacion",
@@ -947,14 +937,6 @@ class OrderSkill(BaseSkill):
                                 "city": {"type": "string"},
                                 "phone": {"type": "string"},
                                 "email": {"type": "string"},
-                                "business_name": {
-                                    "type": "string",
-                                    "description": (
-                                        "Nombre del negocio del cliente. Solo si la tool lo "
-                                        "pide en missing_fields."
-                                    ),
-                                },
-                                "vertical": vertical,
                             },
                         },
                         "guardar_datos_cliente": {
@@ -1427,13 +1409,29 @@ class OrderSkill(BaseSkill):
         requeridos = _campos_requeridos(config, es_plan, delivery_method)
         complete, missing = _validar_checkout(requeridos, customer_data)
         if not complete:
-            return {
+            faltan: dict[str, Any] = {
                 "status": "faltan_datos_cliente",
                 "error": "Faltan datos del cliente",
                 "missing_fields": missing,
                 "existing_data": {k: v for k, v in customer_data.items() if str(v or "").strip()},
                 "hint": "Pide los datos que faltan uno a uno, sin repetir los que ya tenés.",
             }
+            if "vertical" in missing:
+                # El tipo de negocio va en customer_data.vertical como el id de una opción
+                # (ADR-0121): no está en el schema de la tool, que es la misma para todos.
+                faltan["opciones_vertical"] = _verticales()
+            return faltan
+        if es_plan and customer_data.get("business_name"):
+            # El nombre del negocio va en correos y avisos: un enlace ahí sirve para phishing.
+            if contiene_url(customer_data.get("business_name")):
+                if "business_name" in requeridos:
+                    return {
+                        "status": "dato_invalido",
+                        "error": "El nombre del negocio no puede llevar enlaces ni dominios.",
+                        "field": "business_name",
+                        "hint": "Pídele al cliente el nombre de su negocio, sin enlaces.",
+                    }
+                customer_data = {k: v for k, v in customer_data.items() if k != "business_name"}
         if es_plan and customer_data.get("vertical"):
             # El tipo de negocio es un id de preset (ADR-0121). Si el negocio lo pide y no es
             # de la lista, se rechaza con las opciones; si no lo pide, un valor que no sirve
@@ -1617,6 +1615,25 @@ class OrderSkill(BaseSkill):
                     return {"error": f"No hay stock suficiente de {data['product'].name}."}
                 additions.append((data["variant"], quantity, data["price"]))
                 add_total += data["price"] * quantity
+
+            # Un plan va en su propio pedido: sumarle líneas a un Free (que nace pagado) dejaría
+            # cosas sin cobrar en un pedido "pagado", y el alta automática confía en ese
+            # estado (HU-SH-03, revisión del PR #345).
+            lineas = (
+                await session.execute(
+                    select(OrderItem.variant_id).where(
+                        OrderItem.tenant_id == get_current_tenant_id(),
+                        OrderItem.order_id == order.id,
+                    )
+                )
+            ).scalars().all()
+            if await _es_pedido_de_plan(session, list(lineas)) or await _es_pedido_de_plan(
+                session, [v.id for v, _q, _p in additions]
+            ):
+                return {
+                    "error": "Un plan va en su propio pedido: no se le agregan productos ni se agrega a otro pedido.",
+                    "hint": "Crea una cotización nueva con lo que el cliente quiere sumar.",
+                }
 
             new_total = _float(order.total) + add_total
             config = await _plugin_config()

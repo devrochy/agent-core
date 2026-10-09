@@ -677,3 +677,100 @@ def memoria_purgar(
         raise typer.Exit(1)
     n = asyncio.run(_run())
     console.print(f"✓ [green]{n} recuerdos olvidados[/green] para {slug}")
+
+
+# ------------------------------------------------------------------ altas automáticas (ADR-0121)
+def _uuid_del_vendedor(valor: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(valor)
+    except ValueError as exc:
+        console.print("[red]✗ El vendedor va por UUID (igual que PROVISIONING_SELLER_TENANTS).[/red]")
+        raise typer.Exit(1) from exc
+
+
+@app.command("altas")
+def altas(
+    vendedor: str = typer.Argument(..., help="UUID del negocio vendedor"),
+    estado: str = typer.Option("revision", "--estado", help="en_curso | completado | revision | omitido | todas"),
+) -> None:
+    """Altas automáticas de negocios de un vendedor (por defecto, las que están en revisión)."""
+    vendedor_id = _uuid_del_vendedor(vendedor)
+
+    async def _run() -> list:
+        from core.db.models import ProvisioningRequest
+        from core.db.session import get_session
+        from core.shared.tenant import tenant_scope
+
+        async with tenant_scope(vendedor_id):
+            async with get_session() as session:
+                consulta = select(ProvisioningRequest).where(
+                    ProvisioningRequest.tenant_id == vendedor_id,
+                    ProvisioningRequest.deleted_at.is_(None),
+                )
+                if estado != "todas":
+                    consulta = consulta.where(ProvisioningRequest.estado == estado)
+                return list(
+                    (await session.execute(consulta.order_by(ProvisioningRequest.created_at.desc()).limit(200)))
+                    .scalars()
+                    .all()
+                )
+
+    filas = asyncio.run(_run())
+    tabla = Table("Referencia", "Estado", "Intentos", "Negocio", "Motivo", "Creada")
+    for fila in filas:
+        tabla.add_row(
+            fila.referencia,
+            fila.estado,
+            str(fila.intentos),
+            fila.negocio_slug or "—",
+            (fila.motivo or "")[:80],
+            fila.created_at.strftime("%Y-%m-%d %H:%M"),
+        )
+    console.print(tabla)
+
+
+@app.command("reintentar-alta")
+def reintentar_alta(
+    vendedor: str = typer.Argument(..., help="UUID del negocio vendedor"),
+    referencia: str = typer.Argument(..., help="Referencia del alta (número del pedido)"),
+) -> None:
+    """Vuelve a correr un alta en revisión, después de corregir lo que faltaba. Retoma el
+    mismo negocio (id y slug deterministas). Runbook: docs/altas-en-revision.md."""
+    vendedor_id = _uuid_del_vendedor(vendedor)
+
+    async def _run():  # type: ignore[no-untyped-def]
+        from core.plugin_manager import plugin_manager
+        from core.provisioning.consumer import reintentar_alta as _reintentar
+
+        # La fuente de los datos del pedido la registra commerce al activarse.
+        await plugin_manager.ensure_process_activation()
+        return await _reintentar(vendedor_id, referencia)
+
+    try:
+        fila = asyncio.run(_run())
+    except Exception as exc:
+        console.print(f"[red]✗ {exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"✓ Alta {referencia}: [bold]{fila.estado}[/bold] {fila.motivo or ''}")
+
+
+@app.command("descartar-alta")
+def descartar_alta(
+    vendedor: str = typer.Argument(..., help="UUID del negocio vendedor"),
+    referencia: str = typer.Argument(..., help="Referencia del alta (número del pedido)"),
+    motivo: str = typer.Option(..., "--motivo", help="Por qué se descarta (queda en el alta y en audit_log)"),
+) -> None:
+    """Cierra un alta en revisión sin crear el negocio (queda `omitido` con el motivo)."""
+    vendedor_id = _uuid_del_vendedor(vendedor)
+
+    async def _run():  # type: ignore[no-untyped-def]
+        from core.provisioning.consumer import descartar_alta as _descartar
+
+        return await _descartar(vendedor_id, referencia, motivo)
+
+    try:
+        fila = asyncio.run(_run())
+    except ValueError as exc:
+        console.print(f"[red]✗ {exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"✓ Alta {referencia} descartada: {fila.motivo}")

@@ -1,13 +1,17 @@
-"""Owner del negocio nuevo: cuenta, invitación y entrega del enlace (HU-SH-03, ADR-0121 § 3.8).
+"""Owner del negocio nuevo: cuenta, invitación, correo con el enlace y aviso por WhatsApp
+(HU-SH-03, ADR-0121 § 3.8).
 
-- Correo sin cuenta → `Admin` sin contraseña (`SIN_CONTRASENA`) e invitación `owner` con
-  enlace de un solo uso: al abrirlo, el owner define su contraseña (D-SPEC-07-2).
-- Correo de una cuenta existente → invitación pendiente de siempre (ADR-0081): entra con
-  su contraseña y la acepta en la app. No se toca su contraseña.
-- Entrega por correo de sistema (ADR-0098) y por WhatsApp en la conversación del comprador
-  con el vendedor (aviso por evento `provisioning.invitation`, ADR-0108).
+Reglas (endurecidas en la revisión de seguridad del PR #345):
 
-Corre bajo el `tenant_scope` del vendedor: la conversación de WhatsApp es la suya.
+- El enlace que define la contraseña va **solo por correo**, y solo si la cuenta la creó
+  **esta** alta: queda anotado en `detalle.owner` de la fila del alta, en la misma
+  transacción que crea la cuenta, para que un reintento lo sepa. Una cuenta que ya existía
+  (con o sin contraseña) recibe la invitación en la app (ADR-0081), sin enlace.
+- Por WhatsApp sale **siempre el mismo aviso**, sin token: el acceso llega al correo, que se
+  muestra enmascarado. Es igual tenga o no cuenta, sea de un master o no, y aunque el alta
+  quede en revisión: el comprador no puede averiguar nada de una cuenta con él.
+
+Corre bajo el `tenant_scope` del vendedor: la fila del alta y la conversación son suyas.
 """
 
 from __future__ import annotations
@@ -21,29 +25,33 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from core.db.models import Admin, Conversation
-from core.db.session import get_session
+from core.db.models import Admin, Conversation, ProvisioningRequest
+from core.db.session import get_owned, get_session
 from core.gateway.event_notices import clean_param
 from core.provisioning import AltaEnRevision, AltaTransitoria
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from core.shared.texto_seguro import enmascarar_correo
 
 log = get_logger(__name__)
 
 VIGENCIA_ENLACE = timedelta(days=7)
 EVENTO_INVITACION = "provisioning.invitation"
 
-# Textos de respaldo del aviso por WhatsApp (dentro de la ventana de 24 h). El negocio
-# vendedor los puede reemplazar en Plantillas por evento (`fallback_text`, ADR-0108).
-TEXTO_WHATSAPP_CON_ENLACE = (
-    "¡Listo, {cliente.nombre}! Tu negocio «{negocio.nombre}» ya está creado. Para entrar, "
-    "define tu contraseña con este enlace (es de un solo uso y vence el {invitacion.vence}): "
-    "{invitacion.enlace}"
+# Aviso por WhatsApp (dentro de la ventana de 24 h). El negocio vendedor lo puede
+# reemplazar en Plantillas por evento (`fallback_text`, ADR-0108); las variables del evento
+# no incluyen ningún enlace ni token.
+TEXTO_WHATSAPP = (
+    "¡Gracias, {cliente.nombre}! El acceso a tu negocio «{negocio.nombre}» llega a tu correo "
+    "({invitacion.correo}). Si en unos minutos no lo ves, revisa la carpeta de spam o "
+    "escríbenos por aquí."
 )
-TEXTO_WHATSAPP_EN_APP = (
-    "¡Listo, {cliente.nombre}! Tu negocio «{negocio.nombre}» ya está creado. Entra con tu "
-    "cuenta ({invitacion.correo}) y acepta la invitación: {invitacion.enlace}"
-)
+
+
+@dataclass(frozen=True)
+class CuentaDelOwner:
+    admin_id: uuid.UUID
+    creada_en_esta_alta: bool
 
 
 @dataclass(frozen=True)
@@ -78,32 +86,56 @@ async def validar_correo_del_owner(email: str) -> None:
         raise AltaEnRevision(f"no se puede invitar a ese correo: {motivo}")
 
 
-async def _cuenta_del_owner(email: str) -> Admin:
-    """La cuenta del correo; si no existe, la crea sin contraseña."""
+async def _anotar_owner(
+    session: Any, vendedor: uuid.UUID, registro_id: uuid.UUID, admin_id: uuid.UUID, creada: bool
+) -> None:
+    fila = await get_owned(session, ProvisioningRequest, registro_id, vendedor)
+    if fila is None:
+        raise AltaTransitoria(f"la fila del alta {registro_id} no es visible")
+    fila.detalle = {**(fila.detalle or {}), "owner": {"admin_id": str(admin_id), "creada": creada}}
+
+
+async def cuenta_del_owner(
+    email: str, *, vendedor: uuid.UUID, registro_id: uuid.UUID, previo: dict[str, Any] | None
+) -> CuentaDelOwner:
+    """La cuenta del correo y si la creó esta alta.
+
+    Si no existe, se crea sin contraseña y se anota en la fila del alta en la MISMA
+    transacción. Un reintento usa lo anotado (`previo`): para él la cuenta ya existe, pero
+    la creó esta alta."""
     from core.admin.invitations_service import SIN_CONTRASENA
 
+    if previo and previo.get("admin_id"):
+        return CuentaDelOwner(uuid.UUID(str(previo["admin_id"])), bool(previo.get("creada")))
     async with get_session() as session:
         admin = (await session.execute(select(Admin).where(Admin.email == email))).scalar_one_or_none()
-    if admin is not None:
-        return admin
+        if admin is not None:
+            await _anotar_owner(session, vendedor, registro_id, admin.id, False)
+            return CuentaDelOwner(admin.id, False)
     try:
         async with get_session() as session:
             admin = Admin(email=email, password_hash=SIN_CONTRASENA, role="colaborador", active=True)
             session.add(admin)
             await session.flush()
+            await _anotar_owner(session, vendedor, registro_id, admin.id, True)
         log.info("provisioning_owner_creado", admin_id=str(admin.id))
-        return admin
+        return CuentaDelOwner(admin.id, True)
     except IntegrityError:
-        # Otra alta creó la misma cuenta a la vez (mismo correo en dos pedidos).
+        # Otra alta creó la misma cuenta a la vez: para esta, la cuenta ya existía.
         async with get_session() as session:
-            return (await session.execute(select(Admin).where(Admin.email == email))).scalar_one()
+            admin = (await session.execute(select(Admin).where(Admin.email == email))).scalar_one()
+            await _anotar_owner(session, vendedor, registro_id, admin.id, False)
+        return CuentaDelOwner(admin.id, False)
 
 
-async def preparar_invitacion(tenant_id: uuid.UUID, email: str) -> InvitacionOwner | None:
-    """Cuenta del owner + invitación `owner` al negocio. Idempotente.
+async def preparar_invitacion(
+    tenant_id: uuid.UUID, email: str, cuenta: CuentaDelOwner
+) -> InvitacionOwner | None:
+    """Invitación `owner` al negocio. Idempotente. Lleva enlace solo si la cuenta la creó
+    esta alta y sigue sin contraseña.
 
     None si el owner ya es miembro (un reintento después de que aceptó). Lanza
-    `AltaEnRevision` si el correo no se puede invitar (master, permisos globales o cuenta
+    `AltaEnRevision` si la cuenta no se puede invitar (master, permisos globales o
     desactivada)."""
     from core.admin.invitations_service import (
         SIN_CONTRASENA,
@@ -114,10 +146,11 @@ async def preparar_invitacion(tenant_id: uuid.UUID, email: str) -> InvitacionOwn
         url_del_panel,
     )
 
-    admin = await _cuenta_del_owner(email)
-    if not admin.active:
-        raise AltaEnRevision("la cuenta de ese correo está desactivada")
-    con_enlace = admin.password_hash == SIN_CONTRASENA
+    async with get_session() as session:
+        admin = await session.get(Admin, cuenta.admin_id)
+    if admin is None or not admin.active:
+        raise AltaEnRevision("la cuenta de ese correo no está disponible")
+    con_enlace = cuenta.creada_en_esta_alta and admin.password_hash == SIN_CONTRASENA
     invitacion, error = await crear_invitacion_owner(
         tenant_id=tenant_id, admin_id=admin.id, con_enlace=con_enlace, vigencia=VIGENCIA_ENLACE
     )
@@ -141,22 +174,25 @@ async def preparar_invitacion(tenant_id: uuid.UUID, email: str) -> InvitacionOwn
 
 # ------------------------------------------------------------------ entrega
 def asunto_y_cuerpo(inv: InvitacionOwner, *, negocio: str, nombre: str | None) -> tuple[str, str]:
+    """El asunto no lleva el nombre del negocio (lo escribe el comprador: sirve para
+    phishing); el cuerpo sí, ya validado sin enlaces."""
     saludo = f"Hola {nombre}," if nombre else "Hola,"
-    asunto = f"Tu negocio {negocio} ya está en SolversHub"
     if inv.con_enlace:
+        asunto = "Tu acceso a SolversHub"
         cuerpo = (
             f"{saludo}\n\n"
             f"Tu negocio «{negocio}» ya está creado en SolversHub.\n\n"
             "Para entrar, define tu contraseña con este enlace "
             f"(es de un solo uso y vence el {inv.vence_texto}):\n{inv.enlace}\n\n"
-            "Si no fuiste tú, ignora este correo."
+            "Si no fuiste tú, ignora este correo: sin este enlace nadie puede entrar con tu correo."
         )
     else:
+        asunto = "Te invitaron a un negocio en SolversHub"
         cuerpo = (
             f"{saludo}\n\n"
-            f"Tu negocio «{negocio}» ya está creado en SolversHub y te invitamos como dueño.\n"
+            f"Te invitaron como dueño del negocio «{negocio}» en SolversHub.\n"
             f"Entra con tu cuenta ({inv.email}) y acepta la invitación:\n{inv.enlace}\n\n"
-            "Si no fuiste tú, ignora este correo."
+            "Si no reconoces esta compra, no la aceptes."
         )
     return asunto, cuerpo
 
@@ -174,13 +210,13 @@ async def entregar_por_correo(inv: InvitacionOwner, *, negocio: str, nombre: str
     return "enviado" if enviado else "sin_smtp"
 
 
-def contexto_del_aviso(inv: InvitacionOwner, *, negocio: str, nombre: str | None) -> dict[str, Any]:
-    """Contexto del aviso: las variables salen de acá y solo de las rutas permitidas del
-    evento (ADR-0108), nunca del texto del LLM."""
+def contexto_del_aviso(*, negocio: str, nombre: str | None, email: str) -> dict[str, Any]:
+    """Contexto del aviso por WhatsApp: sin enlace ni token, y el correo enmascarado. Las
+    variables salen de acá y solo de las rutas permitidas del evento (ADR-0108)."""
     return {
         "cliente": {"nombre": clean_param(nombre or "", 60) or "cliente"},
         "negocio": {"nombre": clean_param(negocio, 80)},
-        "invitacion": {"enlace": inv.enlace, "vence": inv.vence_texto, "correo": inv.email},
+        "invitacion": {"correo": enmascarar_correo(email)},
     }
 
 
@@ -201,11 +237,12 @@ async def _conversacion_whatsapp(customer_id: uuid.UUID) -> Conversation | None:
         ).scalar_one_or_none()
 
 
-async def entregar_por_whatsapp(
-    inv: InvitacionOwner, *, customer_id: uuid.UUID | None, negocio: str, nombre: str | None
+async def avisar_por_whatsapp(
+    customer_id: uuid.UUID | None, *, negocio: str, nombre: str | None, email: str, aviso_key: str
 ) -> str:
-    """Aviso en la conversación de WhatsApp del comprador con el vendedor. Devuelve el modo
-    (`texto`, `plantilla`, `sin_plantilla`, `duplicado`, `no_enviado`) o `sin_conversacion`."""
+    """El mismo aviso en todos los casos (sin enumeración). Best-effort: el acceso va por
+    correo, así que un aviso que no sale no frena el alta. Devuelve el modo de
+    `send_event_notice` o `sin_conversacion`."""
     from core.gateway.event_notices import NoticeNotSentError, send_event_notice
 
     if customer_id is None:
@@ -217,25 +254,27 @@ async def entregar_por_whatsapp(
         resultado = await send_event_notice(
             conversacion.id,
             EVENTO_INVITACION,
-            contexto_del_aviso(inv, negocio=negocio, nombre=nombre),
-            notice_key=f"provisioning_invite:{inv.invitation_id}",
-            default_fallback_text=TEXTO_WHATSAPP_CON_ENLACE if inv.con_enlace else TEXTO_WHATSAPP_EN_APP,
+            contexto_del_aviso(negocio=negocio, nombre=nombre, email=email),
+            notice_key=aviso_key,
+            default_fallback_text=TEXTO_WHATSAPP,
         )
-    except NoticeNotSentError as exc:
-        raise AltaTransitoria(f"el aviso por WhatsApp no salió: {exc}") from exc
+    except NoticeNotSentError:
+        log.warning("provisioning_aviso_whatsapp_sin_enviar", conversation_id=str(conversacion.id))
+        return "no_enviado"
     return resultado.modo
 
 
 __all__ = [
     "EVENTO_INVITACION",
-    "TEXTO_WHATSAPP_CON_ENLACE",
-    "TEXTO_WHATSAPP_EN_APP",
+    "TEXTO_WHATSAPP",
     "VIGENCIA_ENLACE",
+    "CuentaDelOwner",
     "InvitacionOwner",
     "asunto_y_cuerpo",
+    "avisar_por_whatsapp",
     "contexto_del_aviso",
+    "cuenta_del_owner",
     "entregar_por_correo",
-    "entregar_por_whatsapp",
     "preparar_invitacion",
     "validar_correo_del_owner",
 ]

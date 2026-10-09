@@ -46,7 +46,8 @@ class DatosDeAltaDelPedido:
         elegida = next((v for v in variantes if variant_id and str(v.id) == variant_id), None)
         if elegida is None and len(variantes) == 1:
             elegida = variantes[0]
-        plan = str((elegida.attributes or {}).get(ATRIBUTO) or "").strip().lower() if elegida else ""
+        atributos = (elegida.attributes or {}) if elegida else {}
+        plan = str(atributos.get(ATRIBUTO) or "").strip().lower()
         datos = dict(order.datos_alta or {})
         return {
             "plan": plan or None,
@@ -55,5 +56,8 @@ class DatosDeAltaDelPedido:
             "email": datos.get("email"),
             "telefono": datos.get("telefono"),
             "nombre": order.delivery_full_name,
+            "customer_id": str(order.customer_id) if order.customer_id else None,
+            # Un plan va en su propio pedido (agregar_item_pedido no los mezcla): un
+            # pedido de plan "pagado" es un Free confirmado o un pago real (D-16).
             "pagado": order.payment_status == "pagado",
         }

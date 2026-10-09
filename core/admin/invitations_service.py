@@ -23,7 +23,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 
 from core.admin.collaborators_service import apply_pack_roles, ensure_tenant_link
 from core.db.models import Admin, AdminPermission, Tenant, TenantInvitation, TenantUser
@@ -39,7 +39,13 @@ VALID_ROLES = ("owner", "colaborador")
 SIN_CONTRASENA = "!sin-contrasena:invitacion"
 YA_PERTENECE = "el usuario ya pertenece a este negocio"
 ENLACE_INVALIDO = "el enlace no es válido o ya venció"
-CUENTA_CON_CONTRASENA = "la cuenta ya tiene contraseña: inicia sesión y acepta la invitación"
+INVITACION_VENCIDA = "la invitación venció: pídele al negocio una nueva"
+# El enlace solo define la contraseña de una cuenta nueva y limpia (ADR-0121): si ya tiene
+# contraseña, acceso a otro negocio u otra invitación pendiente, entra por la app.
+CUENTA_EXISTENTE = (
+    "la cuenta ya existe: entra con tu contraseña (o recupérala con «olvidé mi contraseña») "
+    "y acepta la invitación en la app"
+)
 _CONTEXTO_TOKEN = "tenant-invitation:v1"
 _MAX_TOKEN = 200
 
@@ -121,6 +127,11 @@ async def crear_invitacion(
     return None
 
 
+def _vigente():  # type: ignore[no-untyped-def]
+    """Una invitación vencida (ADR-0121) ya no se muestra ni se puede aceptar."""
+    return or_(TenantInvitation.expires_at.is_(None), TenantInvitation.expires_at > func.now())
+
+
 async def pendientes_de(admin_id: uuid.UUID) -> list[dict[str, Any]]:
     """Invitaciones pendientes del admin (cross-tenant), con nombre/slug del negocio."""
     async with get_session() as session:
@@ -137,6 +148,7 @@ async def pendientes_de(admin_id: uuid.UUID) -> list[dict[str, Any]]:
                 .where(
                     TenantInvitation.admin_id == admin_id,
                     TenantInvitation.estado == "pendiente",
+                    _vigente(),
                     Tenant.deleted_at.is_(None),
                     Tenant.status == "active",
                 )
@@ -164,6 +176,7 @@ async def contar_pendientes(admin_id: uuid.UUID) -> int:
                 .where(
                     TenantInvitation.admin_id == admin_id,
                     TenantInvitation.estado == "pendiente",
+                    _vigente(),
                 )
             )
         ).scalar_one()
@@ -188,6 +201,9 @@ async def aceptar_invitacion(*, invitation_id: uuid.UUID, admin_id: uuid.UUID) -
         invitacion = await _invitacion_propia(session, invitation_id, admin_id)
         if invitacion is None:
             return "invitación no encontrada o ya resuelta"
+        if invitacion.expires_at is not None and invitacion.expires_at <= datetime.now(UTC):
+            # Una invitación vencida no da acceso aunque siga pendiente (ADR-0121).
+            return INVITACION_VENCIDA
         invitacion.estado = "aceptada"
         invitacion.responded_at = datetime.now(UTC)
         invitacion.token_nonce = None  # el enlace (ADR-0121) deja de valer
@@ -353,12 +369,15 @@ async def crear_invitacion_owner(
 
 
 async def canjear_invitacion(token: str, new_password: str) -> str | None:
-    """Canjea el enlace de un solo uso (ADR-0121): define la contraseña de una cuenta creada
-    sin ella y acepta la invitación (`TenantUser`). Devuelve un error (str) o None.
+    """Canjea el enlace de un solo uso (ADR-0121): define la contraseña de una cuenta que el
+    aprovisionamiento creó sin ella y acepta la invitación (`TenantUser`). Devuelve un error
+    (str) o None.
 
-    Solo vale mientras la cuenta no tenga contraseña: un enlace que llegó por WhatsApp no
-    prueba que el dueño del correo consienta, así que una cuenta existente entra con su
-    contraseña y acepta en la app (ADR-0081)."""
+    Solo vale para una cuenta **limpia**: sin contraseña, sin acceso a ningún negocio y sin
+    otras invitaciones pendientes. Si no, `CUENTA_EXISTENTE`: entra con su contraseña (o la
+    recupera por correo) y acepta en la app (ADR-0081). La contraseña se escribe con un
+    UPDATE condicional sobre `SIN_CONTRASENA`: si un reset llegó antes, el canje no la pisa.
+    """
     from core.admin.auth import hash_password
 
     partes = partes_del_token(token)
@@ -380,11 +399,21 @@ async def canjear_invitacion(token: str, new_password: str) -> str | None:
         admin = await session.get(Admin, invitacion.admin_id)
         if admin is None or not admin.active:
             return ENLACE_INVALIDO
-        if admin.password_hash != SIN_CONTRASENA:
-            return CUENTA_CON_CONTRASENA
+        tenant_id = invitacion.tenant_id
+        if await _tiene_otro_acceso(session, admin.id, tenant_id):
+            return CUENTA_EXISTENTE
+        # La contraseña solo se escribe si sigue sin tener una (carrera con un reset).
+        cambio = await session.execute(
+            update(Admin)
+            .where(Admin.id == admin.id, Admin.password_hash == SIN_CONTRASENA)
+            .values(password_hash=hash_password(new_password))
+        )
+        if getattr(cambio, "rowcount", 0) != 1:
+            await session.rollback()
+            return CUENTA_EXISTENTE
         # Uso único atómico: el UPDATE condicional gana una sola vez aunque lleguen dos
         # canjes a la vez con el mismo enlace.
-        resultado = await session.execute(
+        aceptada = await session.execute(
             update(TenantInvitation)
             .where(
                 TenantInvitation.id == invitacion.id,
@@ -393,23 +422,14 @@ async def canjear_invitacion(token: str, new_password: str) -> str | None:
             )
             .values(estado="aceptada", responded_at=ahora, token_nonce=None)
         )
-        if getattr(resultado, "rowcount", 0) != 1:
+        if getattr(aceptada, "rowcount", 0) != 1:
+            await session.rollback()  # deshace también la contraseña
             return ENLACE_INVALIDO
-        admin.password_hash = hash_password(new_password)
-        tenant_id = invitacion.tenant_id
         role = invitacion.role
         pack_roles = list(invitacion.pack_roles or [])
         admin_id = admin.id
         email = admin.email
-        ya_miembro = (
-            await session.execute(
-                select(TenantUser.id).where(
-                    TenantUser.tenant_id == tenant_id, TenantUser.admin_id == admin_id
-                )
-            )
-        ).first()
-        if ya_miembro is None:
-            session.add(TenantUser(tenant_id=tenant_id, admin_id=admin_id, role=role))
+        session.add(TenantUser(tenant_id=tenant_id, admin_id=admin_id, role=role))
     await apply_pack_roles(pack_roles, tenant_id, admin_id)
 
     from core.shared.audit import record_audit
@@ -428,3 +448,24 @@ async def canjear_invitacion(token: str, new_password: str) -> str | None:
         admin_id=str(admin_id),
     )
     return None
+
+
+async def _tiene_otro_acceso(session, admin_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:  # type: ignore[no-untyped-def]
+    """¿La cuenta ya entra a algún negocio, o tiene invitaciones pendientes en otro?"""
+    miembro = (
+        await session.execute(select(TenantUser.id).where(TenantUser.admin_id == admin_id).limit(1))
+    ).first()
+    if miembro is not None:
+        return True
+    otra = (
+        await session.execute(
+            select(TenantInvitation.id)
+            .where(
+                TenantInvitation.admin_id == admin_id,
+                TenantInvitation.estado == "pendiente",
+                TenantInvitation.tenant_id != tenant_id,
+            )
+            .limit(1)
+        )
+    ).first()
+    return otra is not None

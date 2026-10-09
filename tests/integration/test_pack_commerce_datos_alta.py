@@ -167,6 +167,56 @@ async def test_si_el_negocio_lo_pide_y_falta_el_tipo_de_negocio_se_pregunta(monk
     resultado = await _pedido(quote, cliente, datos)
     assert resultado["status"] == "faltan_datos_cliente"
     assert resultado["missing_fields"] == ["vertical"]
+    # Las opciones vienen con la respuesta: `vertical` no está en el schema de la tool.
+    assert "restaurante" in {o["id"] for o in resultado["opciones_vertical"]}
+
+
+async def test_un_nombre_de_negocio_con_enlace_se_rechaza_si_se_pide(monkeypatch) -> None:
+    _pide_tipo_de_negocio(monkeypatch)
+    cliente = uuid.uuid4()
+    quote = await _cotizacion(0.0, "mensual", cliente, {"precio_de_plan": "free"})
+    resultado = await _pedido(quote, cliente, {**DATOS, "business_name": "Pagos en www.mi-banco-falso.co"})
+    assert resultado["status"] == "dato_invalido"
+    assert resultado["field"] == "business_name"
+
+
+async def test_un_nombre_de_negocio_con_enlace_no_pedido_se_descarta() -> None:
+    cliente = uuid.uuid4()
+    quote = await _cotizacion(0.0, "mensual", cliente, {})
+    resultado = await _pedido(quote, cliente, {**DATOS, "business_name": "visita x.com"})
+    assert resultado.get("status") == "confirmed", resultado
+    assert "negocio" not in (await _orden(resultado["order_id"])).datos_alta
+
+
+async def test_un_plan_va_en_su_propio_pedido() -> None:
+    """Sumarle un plan pago a un Free (que nace pagado) lo dejaba "pagado" sin cobrar."""
+    from pack_commerce.models import QuoteItem
+    from pack_commerce.skills import OrderSkill
+
+    from core.db.session import get_session
+    from core.mcp.types import ToolContext
+    from core.shared.tenant import tenant_scope
+
+    cliente = uuid.uuid4()
+    quote = await _cotizacion(0.0, "mensual", cliente, {"precio_de_plan": "free"})
+    resultado = await _pedido(quote, cliente, DATOS)
+    assert resultado.get("status") == "confirmed", resultado
+    otra = await _cotizacion(600_000.0, "mensual", cliente, {"precio_de_plan": "premium"})
+    async with tenant_scope(await _negocio()):
+        async with get_session() as s:
+            item = (await s.execute(select(QuoteItem).where(QuoteItem.quote_id == uuid.UUID(otra)))).scalar_one()
+            variante_premium = str(item.variant_id)
+    ctx = ToolContext(
+        conversation_id=uuid.uuid4(), customer_id=cliente,
+        idempotency_key=f"t:{uuid.uuid4().hex[:8]}", channel="whatsapp",
+    )
+    async with tenant_scope(await _negocio()):
+        agregar = await OrderSkill().agregar_item_pedido(
+            {"order_id": resultado["order_id"], "items": [{"variant_id": variante_premium, "quantity": 1}]}, ctx
+        )
+    assert "plan va en su propio pedido" in agregar.get("error", "")
+    orden = await _orden(resultado["order_id"])
+    assert float(orden.total) == 0.0 and orden.payment_status == "pagado"
 
 
 async def test_si_el_negocio_no_lo_pide_un_tipo_invalido_se_descarta_sin_frenar_el_pedido() -> None:

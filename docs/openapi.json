@@ -173,7 +173,7 @@
           "auth"
         ],
         "summary": "Post Accept Invitation",
-        "description": "Canjea el enlace de un solo uso de una invitación (ADR-0121): define la contraseña de\nuna cuenta creada sin ella y la deja como miembro del negocio. Luego se entra con\n`/auth/login`. Un enlace inválido, usado o vencido da 400 sin decir cuál de los tres;\nuna cuenta que ya tiene contraseña da 409 (entra y acepta la invitación en la app).",
+        "description": "Canjea el enlace de un solo uso de una invitación (ADR-0121): define la contraseña de\nuna cuenta que el alta automática creó sin ella y la deja como miembro del negocio.\nLuego se entra con `/auth/login`. Un enlace inválido, usado o vencido da 400 sin decir\ncuál de los tres; una cuenta que ya existe (con contraseña, acceso a otro negocio u otra\ninvitación pendiente) da 409: entra y acepta en la app. Con el mismo bloqueo progresivo\ndel login (5 fallos en 10 min → 15 min), por IP y por invitación.",
         "operationId": "post_accept_invitation_api_v1_auth_accept_invitation_post",
         "requestBody": {
           "content": {

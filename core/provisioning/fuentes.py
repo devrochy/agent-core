@@ -25,7 +25,8 @@ class DatosDeAlta(TypedDict, total=False):
     email: str | None  # correo del owner
     telefono: str | None
     nombre: str | None  # nombre de la persona que compró
-    pagado: bool  # el pedido está pagado (Free nace pagado, D-16)
+    customer_id: str | None  # cliente del pedido: el consumidor lo coteja con el del evento
+    pagado: bool  # el pedido cubre el plan de la línea (Free nace pagado, D-16)
 
 
 @runtime_checkable

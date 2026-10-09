@@ -10,7 +10,10 @@ Gherkin de la HU:
 - «Sin el LLM» no necesita BD: `tests/test_provisioning_sin_llm.py`.
 
 Además: aislamiento entre negocios (RLS y nunca un owner en un negocio ajeno), alta en
-revisión, pedido que aún no se ve, cambio de plan, cuenta existente y aviso por WhatsApp.
+revisión, pedido que aún no se ve, cambio de plan, y lo que pidió la revisión de seguridad
+del PR #345: el enlace va solo por correo y solo a una cuenta creada en esa alta, el aviso
+por WhatsApp es igual en todos los casos, un Free por cliente y por correo, nombres sin
+enlaces, cliente del pedido cotejado, y reintentar o descartar un alta en revisión.
 """
 
 from __future__ import annotations
@@ -51,6 +54,29 @@ def vendedores(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., None]]
     yield fijar
     monkeypatch.delenv("PROVISIONING_SELLER_TENANTS", raising=False)
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def avisos(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Avisos por WhatsApp capturados (lo que el comprador ve)."""
+    from core.gateway.event_notices import NoticeResult
+
+    enviados: list[dict[str, Any]] = []
+
+    async def falso(conversation_id, event_key, context, *, notice_key, default_fallback_text=""):  # type: ignore[no-untyped-def]
+        enviados.append(
+            {
+                "conversation_id": conversation_id,
+                "event": event_key,
+                "context": context,
+                "key": notice_key,
+                "texto": default_fallback_text,
+            }
+        )
+        return NoticeResult("texto")
+
+    monkeypatch.setattr("core.gateway.event_notices.send_event_notice", falso)
+    return enviados
 
 
 @pytest.fixture
@@ -137,6 +163,26 @@ async def _pedido_de_plan(
             return order.public_order_number, customer_id
 
 
+async def _cliente_con_whatsapp(tid: uuid.UUID) -> uuid.UUID:
+    from core.db.models import Conversation, Customer
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            cliente = Customer(
+                tenant_id=tid,
+                channel="whatsapp",
+                external_id=f"whatsapp:+57{uuid.uuid4().int % 10**10}",
+                name="Ana",
+            )
+            s.add(cliente)
+            await s.flush()
+            s.add(Conversation(tenant_id=tid, customer_id=cliente.id, channel="whatsapp"))
+            await s.flush()
+            return cliente.id
+
+
 def _datos(email: str, *, negocio: str = "Pizzería Roma", vertical: str | None = "restaurante") -> dict[str, Any]:
     datos: dict[str, Any] = {"email": email, "telefono": "+573000000000", "negocio": negocio}
     if vertical:
@@ -207,6 +253,20 @@ async def _suscripcion_de(tid: uuid.UUID) -> Any:
             ).scalar_one()
 
 
+async def _pagos(tid: uuid.UUID) -> list[Any]:
+    from core.db.models import SubscriptionPayment
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            return list(
+                (
+                    await s.execute(select(SubscriptionPayment).where(SubscriptionPayment.tenant_id == tid))
+                ).scalars().all()
+            )
+
+
 async def _invitaciones(tid: uuid.UUID) -> list[Any]:
     from core.db.models import TenantInvitation
     from core.db.session import get_session
@@ -245,6 +305,18 @@ def _correo() -> str:
     return f"{uniq('owner')}@correo-prueba.co"
 
 
+async def _master() -> str:
+    """Un master de plataforma con un correo válido (no se le puede invitar, ADR-0081)."""
+    from core.admin.auth import hash_password
+    from core.db.models import Admin
+    from core.db.session import get_session
+
+    email = f"{uniq('master')}@correo-prueba.co"
+    async with get_session() as s:
+        s.add(Admin(email=email, password_hash=hash_password("clave-master-1"), role="master"))
+    return email
+
+
 # ------------------------------------------------------------------ Gherkin
 async def test_alta_automatica_premium_con_preset_e_invitacion(vendedores, correos) -> None:
     """Gherkin «Alta automática»: por el despachador real del outbox, en menos de 2 minutos."""
@@ -255,7 +327,7 @@ async def test_alta_automatica_premium_con_preset_e_invitacion(vendedores, corre
     from core.tasks.domain_events_dispatch import dispatch_due_events
 
     vendedor = await _vendedor()
-    vendedores("otro-vendedor", vendedor)
+    vendedores(uuid.uuid4(), vendedor)
     email = _correo()
     referencia, _ = await _pedido_de_plan(vendedor, datos_alta=_datos(email))
 
@@ -266,7 +338,7 @@ async def test_alta_automatica_premium_con_preset_e_invitacion(vendedores, corre
 
     [evento] = await _eventos(vendedor, referencia)
     assert evento.status == "entregado", evento.last_error
-    assert evento.payload["plan_code"].startswith("PLAN-PREMIUM")
+    assert evento.payload["referencia"] == referencia and evento.payload["variant_id"]
     registro = await _registro(vendedor, referencia)
     assert registro.estado == "completado", registro.motivo
     negocio = await _tenant(registro.negocio_tenant_id)
@@ -279,6 +351,9 @@ async def test_alta_automatica_premium_con_preset_e_invitacion(vendedores, corre
     assert (sub.plan_id, sub.status, sub.trial_ends_at) == ("premium", "active", None)
     assert timedelta(days=29, hours=23) < sub.period_end - datetime.now(UTC) <= timedelta(days=30)
     assert sub.provider_reference == f"plat-{negocio.slug}-{datetime.now(UTC):%Y%m}"
+    [pago] = await _pagos(negocio.id)
+    assert (pago.status, pago.plan_id, int(pago.amount_cop)) == ("aprobado", "premium", 600_000)
+    assert pago.provider_reference == sub.provider_reference
 
     assert negocio.settings["preset"]["id"] == "restaurante"
     async with tenant_scope(negocio.id):
@@ -478,11 +553,12 @@ async def test_correo_de_un_master_queda_en_revision_antes_de_crear_el_negocio(v
 
     vendedor = await _vendedor()
     vendedores(vendedor)
-    referencia, _ = await _pedido_de_plan(vendedor, datos_alta=_datos("admin@local"))
+    referencia, _ = await _pedido_de_plan(vendedor, datos_alta=_datos(await _master()))
     await _entregar(vendedor, referencia)
 
     registro = await _registro(vendedor, referencia)
     assert registro.estado == "revision"
+    assert "no se puede invitar" in registro.motivo
     assert await _tenant(id_del_negocio(vendedor, referencia)) is None
 
 
@@ -564,37 +640,191 @@ async def test_cuenta_existente_recibe_invitacion_sin_enlace(vendedores, correos
     assert "acepta la invitación" in correo["body"] and "#" not in correo["body"]
 
 
-async def test_aviso_por_whatsapp_en_la_conversacion_del_comprador(vendedores, correos, monkeypatch) -> None:
-    from core.db.models import Conversation, Customer
-    from core.db.session import get_session
-    from core.gateway.event_notices import NoticeResult
-    from core.shared.tenant import tenant_scope
-
-    avisos: list[dict[str, Any]] = []
-
-    async def falso(conversation_id, event_key, context, *, notice_key, default_fallback_text=""):  # type: ignore[no-untyped-def]
-        avisos.append({"conversation_id": conversation_id, "event": event_key, "context": context, "key": notice_key})
-        return NoticeResult("texto")
-
-    monkeypatch.setattr("core.gateway.event_notices.send_event_notice", falso)
+async def test_correo_ajeno_sin_cuenta_el_enlace_solo_va_por_correo(vendedores, correos, avisos) -> None:
+    """Quien compra con el correo de otro no recibe el enlace: va al correo, y por WhatsApp
+    sale un aviso sin token, con el correo enmascarado."""
     vendedor = await _vendedor()
     vendedores(vendedor)
-    async with tenant_scope(vendedor):
-        async with get_session() as s:
-            cliente = Customer(tenant_id=vendedor, channel="whatsapp", external_id=f"whatsapp:+57{uuid.uuid4().int % 10**10}", name="Ana")
-            s.add(cliente)
-            await s.flush()
-            conversacion = Conversation(tenant_id=vendedor, customer_id=cliente.id, channel="whatsapp")
-            s.add(conversacion)
-            await s.flush()
-            cliente_id, conversacion_id = cliente.id, conversacion.id
-    referencia, _ = await _pedido_de_plan(vendedor, customer_id=cliente_id, datos_alta=_datos(_correo()))
+    cliente = await _cliente_con_whatsapp(vendedor)
+    email = _correo()
+    referencia, _ = await _pedido_de_plan(vendedor, customer_id=cliente, datos_alta=_datos(email))
     await _entregar(vendedor, referencia)
 
     registro = await _registro(vendedor, referencia)
+    assert registro.estado == "completado", registro.motivo
+    assert registro.detalle["owner"]["creada"] is True
+    [correo] = [c for c in correos if c["to"] == email]
+    assert f"/invitacion#{registro.invitation_id}." in correo["body"]
+    assert "Pizzería" not in correo["subject"]
     [aviso] = avisos
-    assert aviso["conversation_id"] == conversacion_id
     assert aviso["event"] == "provisioning.invitation"
-    assert aviso["context"]["negocio"]["nombre"] == "Pizzería Roma"
-    assert f"/invitacion#{registro.invitation_id}." in aviso["context"]["invitacion"]["enlace"]
+    assert aviso["key"] == f"provisioning_aviso:{registro.id}"
+    assert aviso["context"]["invitacion"] == {"correo": email[0] + "***@correo-prueba.co"}
+    assert "{invitacion.enlace}" not in aviso["texto"]
+    plano = str(aviso)
+    assert "/invitacion#" not in plano and email not in plano
     assert registro.detalle["invitacion"]["whatsapp"] == "texto"
+
+
+async def test_cuenta_existente_sin_contrasena_no_recibe_enlace(vendedores, correos, avisos) -> None:
+    """Una cuenta que quedó sin contraseña por un alta anterior no se toma con un enlace
+    nuevo: la invitación va en la app y se entra recuperando la contraseña por correo."""
+    from core.admin.invitations_service import SIN_CONTRASENA
+    from core.db.models import Admin
+    from core.db.session import get_session
+
+    email = _correo()
+    async with get_session() as s:
+        s.add(Admin(email=email, password_hash=SIN_CONTRASENA, role="colaborador"))
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    cliente = await _cliente_con_whatsapp(vendedor)
+    referencia, _ = await _pedido_de_plan(vendedor, customer_id=cliente, datos_alta=_datos(email))
+    await _entregar(vendedor, referencia)
+
+    registro = await _registro(vendedor, referencia)
+    assert registro.detalle["owner"]["creada"] is False
+    [invitacion] = await _invitaciones(registro.negocio_tenant_id)
+    assert (invitacion.token_nonce, invitacion.expires_at) == (None, None)
+    [correo] = [c for c in correos if c["to"] == email]
+    assert "#" not in correo["body"] and "acepta la invitación" in correo["body"]
+    assert len(avisos) == 1
+
+
+async def test_dos_altas_con_el_mismo_correo_solo_la_primera_lleva_enlace(vendedores, correos) -> None:
+    """La cuenta la crea la primera alta; la segunda la encuentra hecha: sin enlace."""
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    email = _correo()
+    primera, _ = await _pedido_de_plan(vendedor, datos_alta=_datos(email, negocio="Primero"))
+    segunda, _ = await _pedido_de_plan(vendedor, datos_alta=_datos(email, negocio="Segundo"))
+    await _entregar(vendedor, primera)
+    await _entregar(vendedor, segunda)
+
+    uno, dos = await _registro(vendedor, primera), await _registro(vendedor, segunda)
+    assert (uno.estado, dos.estado) == ("completado", "completado")
+    assert (uno.detalle["owner"]["creada"], dos.detalle["owner"]["creada"]) == (True, False)
+    [inv_uno] = await _invitaciones(uno.negocio_tenant_id)
+    [inv_dos] = await _invitaciones(dos.negocio_tenant_id)
+    assert inv_uno.token_nonce and inv_dos.token_nonce is None
+    cuerpos = [c["body"] for c in correos if c["to"] == email]
+    assert sum("/invitacion#" in c for c in cuerpos) == 1
+
+
+async def test_el_aviso_es_el_mismo_aunque_el_alta_quede_en_revision(vendedores, correos, avisos) -> None:
+    """Sin enumeración: el correo de un master deja el alta en revisión, pero el comprador ve
+    el mismo aviso que en un alta normal (mismo texto y mismas variables)."""
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    normal_cliente = await _cliente_con_whatsapp(vendedor)
+    master_cliente = await _cliente_con_whatsapp(vendedor)
+    correo_master = await _master()
+    normal, _ = await _pedido_de_plan(vendedor, customer_id=normal_cliente, datos_alta=_datos(_correo()))
+    master, _ = await _pedido_de_plan(vendedor, customer_id=master_cliente, datos_alta=_datos(correo_master))
+    await _entregar(vendedor, normal)
+    await _entregar(vendedor, master)
+
+    assert (await _registro(vendedor, normal)).estado == "completado"
+    revision = await _registro(vendedor, master)
+    assert revision.estado == "revision" and "no se puede invitar" in revision.motivo
+    uno, dos = avisos
+    assert uno["texto"] == dos["texto"]
+    assert set(uno["context"]) == set(dos["context"])
+    assert set(uno["context"]["invitacion"]) == set(dos["context"]["invitacion"]) == {"correo"}
+    assert dos["context"]["invitacion"]["correo"] == "m***@correo-prueba.co"
+    assert not [c for c in correos if c["to"] == correo_master]
+
+
+async def test_un_free_repetido_del_mismo_cliente_o_correo_queda_en_revision(vendedores, correos) -> None:
+    """Free → cancelar → Free (u otro número con el mismo correo) no crea N negocios."""
+    from core.provisioning.consumer import aprovisionar
+    from core.shared.tenant import tenant_scope
+
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    email = _correo()
+    primero, cliente = await _pedido_de_plan(vendedor, plan="free", precio=0, datos_alta=_datos(email))
+    await _entregar(vendedor, primero)
+    assert (await _registro(vendedor, primero)).estado == "completado"
+
+    # Mismo correo desde otro cliente.
+    otro, _ = await _pedido_de_plan(vendedor, plan="free", precio=0, datos_alta=_datos(email))
+    await _entregar(vendedor, otro)
+    assert (await _registro(vendedor, otro)).estado == "revision"
+
+    # Mismo cliente (después de cancelar la primera suscripción) con otro correo.
+    tercero, _ = await _pedido_de_plan(
+        vendedor, plan="free", precio=0, customer_id=cliente, datos_alta=_datos(_correo()), activar=False
+    )
+    async with tenant_scope(vendedor):
+        fila = await aprovisionar(
+            vendedor,
+            {"subscription_id": str(uuid.uuid4()), "customer_id": str(cliente), "referencia": tercero},
+        )
+    assert fila is not None and fila.estado == "revision"
+    assert "Free" in fila.motivo
+
+
+async def test_un_nombre_con_enlace_no_llega_al_negocio_ni_al_correo(vendedores, correos) -> None:
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    email = _correo()
+    referencia, _ = await _pedido_de_plan(
+        vendedor, datos_alta=_datos(email, negocio="Ingresa a www.pagos-falsos.co")
+    )
+    await _entregar(vendedor, referencia)
+
+    registro = await _registro(vendedor, referencia)
+    negocio = await _tenant(registro.negocio_tenant_id)
+    assert negocio.name == "Ana Pérez"  # el nombre del comprador
+    [correo] = [c for c in correos if c["to"] == email]
+    assert "pagos-falsos" not in correo["body"] and "pagos-falsos" not in correo["subject"]
+
+
+async def test_si_el_cliente_del_pedido_no_es_el_de_la_suscripcion_va_a_revision(vendedores, correos) -> None:
+    from core.provisioning.consumer import aprovisionar, id_del_negocio
+    from core.shared.tenant import tenant_scope
+
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    referencia, _ = await _pedido_de_plan(vendedor, datos_alta=_datos(_correo()), activar=False)
+    async with tenant_scope(vendedor):
+        fila = await aprovisionar(
+            vendedor,
+            {"subscription_id": str(uuid.uuid4()), "customer_id": str(uuid.uuid4()), "referencia": referencia},
+        )
+    assert fila is not None and fila.estado == "revision"
+    assert "cliente" in fila.motivo
+    assert await _tenant(id_del_negocio(vendedor, referencia)) is None
+
+
+async def test_el_master_reintenta_o_descarta_un_alta_en_revision(vendedores, correos) -> None:
+    """Runbook `docs/altas-en-revision.md`: se corrige el dato y se reintenta; o se descarta."""
+    from pack_commerce.models import Order
+
+    from core.db.session import get_session
+    from core.provisioning.consumer import descartar_alta, reintentar_alta
+    from core.shared.tenant import tenant_scope
+
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    sin_correo, _ = await _pedido_de_plan(vendedor, datos_alta={"negocio": "Sin correo"})
+    otro, _ = await _pedido_de_plan(vendedor, datos_alta={"negocio": "Otro sin correo"})
+    await _entregar(vendedor, sin_correo)
+    await _entregar(vendedor, otro)
+    assert (await _registro(vendedor, sin_correo)).estado == "revision"
+
+    async with tenant_scope(vendedor):
+        async with get_session() as s:
+            pedido = (await s.execute(select(Order).where(Order.public_order_number == sin_correo))).scalar_one()
+            pedido.datos_alta = {**pedido.datos_alta, "email": _correo()}
+    reintentada = await reintentar_alta(vendedor, sin_correo)
+    assert reintentada.estado == "completado", reintentada.motivo
+    with pytest.raises(ValueError):
+        await reintentar_alta(vendedor, sin_correo)  # ya no está en revisión
+
+    descartada = await descartar_alta(vendedor, otro, "pedido de prueba")
+    assert descartada.estado == "omitido" and "pedido de prueba" in descartada.motivo
+    await _entregar(vendedor, otro)  # un evento repetido no la reabre
+    assert (await _registro(vendedor, otro)).estado == "omitido"
+    assert len(await _auditoria(vendedor, "aprovisionamiento_descartado")) == 1

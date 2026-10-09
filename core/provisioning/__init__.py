@@ -1,14 +1,13 @@
 """Aprovisionamiento automático de negocios (HU-SH-03, ADR-0121).
 
-Un negocio VENDEDOR (allowlist `PROVISIONING_SELLER_TENANTS`, hoy `solvershub`) vende un
-plan de la plataforma. Cuando su suscripción se activa (`subscription.activated` del
-outbox, ADR-0107), el consumidor del core crea el negocio del comprador con ese plan, el
-preset de su vertical y una invitación al owner, sin intervención humana.
+Un negocio VENDEDOR (allowlist `PROVISIONING_SELLER_TENANTS`, por UUID) vende un plan de la
+plataforma. Cuando su suscripción se activa (`subscription.activated` del outbox, ADR-0107),
+el consumidor del core crea el negocio del comprador con ese plan, el preset de su vertical
+y una invitación al owner, sin intervención humana.
 
-**Identidad de servicio.** `provisioning` es un principal de tipo `service` que solo
-existe dentro del core: no es una fila de `admins`, no tiene contraseña, token, sesión de
-panel ni permisos, y ninguna ruta de la API la acepta. Sirve para una sola cosa: firmar
-como actor lo que hace el consumidor en `audit_log`.
+**Identidad de servicio.** `provisioning` es un actor que solo existe dentro del core: no es
+una fila de `admins`, no tiene contraseña, token, sesión de panel ni permisos, y ninguna
+ruta de la API lo acepta. Solo firma lo que hace el consumidor en `audit_log`.
 
 Módulos:
 
@@ -16,31 +15,16 @@ Módulos:
   que puede importar un pack (lo implementa `pack_commerce` con su pedido).
 - `vendedores`: la allowlist.
 - `consumer`: el handler de `subscription.activated` y el alta.
-- `owner`: identidad del owner, invitación y entrega del enlace.
+- `owner`: cuenta del owner, invitación, correo con el enlace y aviso por WhatsApp.
 
-Ninguna tool expuesta al LLM importa el alta (test «Sin el LLM» y contrato
+Ninguna tool expuesta al LLM llega al alta (test «Sin el LLM» y contrato
 `alta-fuera-del-llm` de `.importlinter`).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class IdentidadDeServicio:
-    """Principal interno del core. Sin credenciales: solo nombra al actor de la auditoría."""
-
-    nombre: str
-    tipo: str = "service"
-
-    @property
-    def actor(self) -> str:
-        return self.nombre
-
-
-PROVISIONING = IdentidadDeServicio("provisioning")
-ACTOR = PROVISIONING.actor
+# Actor de la auditoría del aprovisionamiento: la identidad de servicio, sin credenciales.
+ACTOR = "provisioning"
 
 
 class AltaEnRevision(Exception):
@@ -60,11 +44,4 @@ class AltaOcupada(RuntimeError):
     """Otro worker está procesando la misma alta: el outbox la reintenta más tarde."""
 
 
-__all__ = [
-    "ACTOR",
-    "PROVISIONING",
-    "AltaEnRevision",
-    "AltaOcupada",
-    "AltaTransitoria",
-    "IdentidadDeServicio",
-]
+__all__ = ["ACTOR", "AltaEnRevision", "AltaOcupada", "AltaTransitoria"]
