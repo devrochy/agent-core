@@ -366,6 +366,10 @@ de artefactos de tenant).
   tampoco se renueva al vencer `period_end`. → HU-SH-04 (fuente única del cobro de plataforma, renovación
   y preset pendiente al subir de plan). Hasta entonces, no encender `PROVISIONING_SELLER_TENANTS` en
   producción. [Alta]
+- **Rotar número y correo sigue permitiendo un Free tras otro** — el alta automática (ADR-0121) manda a
+  revisión un Free del mismo cliente o del mismo correo, pero quien cambia de número de WhatsApp y de
+  correo en cada alta sigue creando negocios Free. → HU-SH-07 (antiabuso: documento, verificación y
+  límites por origen). [Alta]
 - **Confirmar el correo en el chat antes de crear el pedido de un plan** — el acceso del negocio
   aprovisionado llega solo al correo del pedido (ADR-0121): si el cliente lo escribe mal, se queda sin
   acceso hasta que una persona lo corrija (`docs/runbooks/altas-en-revision.md`). Es un ajuste del playbook de
