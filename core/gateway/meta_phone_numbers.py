@@ -10,6 +10,7 @@ probar contra un número de staging antes de confiar ciegamente en ellas.
 
 from __future__ import annotations
 
+import secrets
 import uuid
 from typing import Any
 
@@ -21,6 +22,19 @@ from core.gateway.meta_graph import graph_fetch
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
+
+# PIN de verificación en dos pasos del número (registro en la Cloud API). Viven aquí, con
+# `register_phone_number`, para que el wizard (gateway) y "Números" (admin) los compartan sin
+# importarse entre sí (arquitecto, HU-SH-05).
+PIN_KIND = "phone_register_pin"
+PIN_MISMATCH_CODE = 133005
+TOO_MANY_GUESSES_CODE = 133008
+
+
+def generate_pin() -> str:
+    """PIN de 6 dígitos con `secrets` (no `random`): es un secreto real de two-step
+    verification, no un identificador de UI."""
+    return f"{secrets.randbelow(1_000_000):06d}"
 
 _PHONE_FIELDS = (
     "id,display_phone_number,verified_name,quality_rating,code_verification_status,"

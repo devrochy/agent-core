@@ -10,6 +10,8 @@
     BYOK guarda un `verify_token` propio, el que escribe el admin o uno aleatorio;
   - enmienda ADR-0102 (mejorar solo con diagnóstico verificado): una conexión `pending` que solo esperaba el
     registro del número pasa a `connected` cuando Meta acepta el registro.
+- **Extendido por:** [ADR-0128](0128-embedded-signup-real.md) (HU-SH-05): el PIN obligatorio en producción (§2) y el
+  paso de `pending` a `connected` al registrar también rigen para Embedded Signup.
 - **Contexto:** HU-CONN-06 (issue agent-core #338), SPEC-08 · Hito 0A (D-30). Depende de HU-CONN-01 (ADR-0094) y
   HU-CONN-05 (ADR-0126). Revisado por `arquitecto`, `auditor-multitenant` y `security-reviewer` (2026-10-09); la
   primera versión promovía en la misma conexión y el arquitecto la rechazó (ver alternativas).
