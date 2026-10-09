@@ -30,6 +30,7 @@ from pack_cobranza.skills import CobranzaSkill
 
 if TYPE_CHECKING:
     from core.mcp.host import MCPHost
+    from core.primeros_pasos.contrato import ContenidoCargado
 
 log = get_logger(__name__)
 
@@ -125,6 +126,29 @@ class CobranzaModule(BaseModule):
                     )
                 )
         log.info("cobranza_gestor_creado", tenant_id=str(tid), admin_id=str(aid))
+
+    async def contenido_cargado(self, tenant_id: Any) -> ContenidoCargado:
+        """Clientes de cartera para el paso «catálogo o servicios» de los primeros pasos
+        (HU-SH-06, ADR-0124). Solo lee."""
+        from sqlalchemy import func, select
+
+        from core.db.session import get_session
+        from core.primeros_pasos.contrato import ContenidoCargado
+        from core.shared.tenant import tenant_scope
+        from pack_cobranza.models import Cliente
+
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                cantidad, primero = (
+                    await session.execute(
+                        select(func.count(Cliente.id), func.min(Cliente.created_at)).where(
+                            Cliente.tenant_id == tenant_id, Cliente.deleted_at.is_(None)
+                        )
+                    )
+                ).one()
+        return ContenidoCargado(
+            tipo="cartera", cantidad=int(cantidad or 0), primero_en=primero, seccion="pack_cobranza:clientes"
+        )
 
     def public_routes(self) -> list[Any]:
         """APIs públicas del pack: campo v1 (ADR-0057) y gestor/APK (ADR-0065)."""

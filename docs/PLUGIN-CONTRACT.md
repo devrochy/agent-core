@@ -118,6 +118,13 @@ class Module(BaseModule):
         ...  # limpieza opcional; el host retira skills/guardrails/eventos solo
 ```
 
+**Hooks opcionales** (todos con default no-op): `seed_data(tenant_id, data)` (ADR-0083),
+`on_collaborator_role(...)` (ADR-0066) y `contenido_cargado(tenant_id)` (HU-SH-06, ADR-0124). Este
+último dice cuánto contenido propio cargó el negocio (catálogo, servicios, cartera) para el paso
+«catálogo o servicios» de los primeros pasos: devuelve un
+`core.primeros_pasos.contrato.ContenidoCargado(tipo, cantidad, primero_en, seccion)`, solo lee y
+filtra por `tenant_id`. El core lo llama solo si la habilidad está habilitada en el negocio.
+
 ### 5.1 Panel admin propio (rutas + plantillas)
 
 Si el plugin aporta UI, define un `APIRouter` con un prefijo limpio (ej. `/crm`) y
@@ -301,6 +308,7 @@ Un handler que falla se loggea y NO interrumpe el flujo.
 ✓ core.tasks.decorators   (register_cron)
 ✓ core.shared.events      (constantes de eventos)
 ✓ core.shared.logger / exceptions
+✓ core.primeros_pasos.contrato (ContenidoCargado, ADR-0124; nada más de ese paquete)
 ✓ core.gateway.sender     (send_to_conversation — SOLO desde jobs, nunca desde tools)
 
 ✗ core.orchestrator.*     (el loop es del core; usa eventos y el host)

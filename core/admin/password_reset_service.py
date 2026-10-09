@@ -95,8 +95,12 @@ async def solicitar_reset(identifier: str) -> None:
     )
 
 
-async def aplicar_reset(token: str, new_password: str) -> str | None:
-    """Aplica el código y la contraseña nueva. Devuelve un error (str) o None."""
+async def aplicar_reset(token: str, new_password: str, identifier: str | None = None) -> str | None:
+    """Aplica el código y la contraseña nueva. Devuelve un error (str) o None.
+
+    Con `identifier` (correo o usuario, HU-SH-06) el código solo se busca entre los de esa
+    cuenta: adivinar deja de ser contra todos los códigos pendientes de todas las cuentas.
+    Sin él (clientes viejos) se busca como antes. El bloqueo progresivo lo pone la API."""
     code = (token or "").strip().upper()
     if len(code) != _CODE_LENGTH or any(c not in _CODE_ALPHABET for c in code):
         return "código inválido"
@@ -106,11 +110,18 @@ async def aplicar_reset(token: str, new_password: str) -> str | None:
 
     wanted = _code_hash(code)
     async with get_session() as session:
-        filas = (
-            await session.execute(
-                select(PasswordResetToken).where(PasswordResetToken.used_at.is_(None))
-            )
-        ).scalars().all()
+        pendientes = select(PasswordResetToken).where(PasswordResetToken.used_at.is_(None))
+        ident = (identifier or "").strip().lower()
+        if ident:
+            cuenta = (
+                await session.execute(
+                    select(Admin.id).where((Admin.email == ident) | (Admin.username == ident))
+                )
+            ).scalar_one_or_none()
+            if cuenta is None:
+                return "código inválido o vencido"
+            pendientes = pendientes.where(PasswordResetToken.admin_id == cuenta)
+        filas = (await session.execute(pendientes)).scalars().all()
         now = datetime.now(UTC)
         valido = None
         for t in filas:

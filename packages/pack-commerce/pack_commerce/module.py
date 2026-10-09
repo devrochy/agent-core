@@ -53,6 +53,7 @@ from pack_commerce.skills import CatalogSkill, LeadSkill, OrderSkill, classify_c
 
 if TYPE_CHECKING:
     from core.mcp.host import MCPHost
+    from core.primeros_pasos.contrato import ContenidoCargado
 
 log = get_logger(__name__)
 
@@ -1096,6 +1097,32 @@ class CRMModule(BaseModule):
         from pack_commerce.seed import seed_catalog
 
         return await seed_catalog(tenant_id, data)
+
+    async def contenido_cargado(self, tenant_id: uuid.UUID) -> ContenidoCargado:
+        """Productos a la venta (con alguna variante activa) para el paso «catálogo o servicios»
+        de los primeros pasos (HU-SH-06, ADR-0124). Solo lee."""
+        from core.primeros_pasos.contrato import ContenidoCargado
+        from core.shared.tenant import tenant_scope
+
+        a_la_venta = (
+            select(ProductVariant.id)
+            .where(
+                ProductVariant.tenant_id == tenant_id,
+                ProductVariant.product_id == Product.id,
+                ProductVariant.active.is_(True),
+            )
+            .exists()
+        )
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                cantidad, primero = (
+                    await session.execute(
+                        select(func.count(Product.id), func.min(Product.created_at)).where(
+                            Product.tenant_id == tenant_id, a_la_venta
+                        )
+                    )
+                ).one()
+        return ContenidoCargado(tipo="catalogo", cantidad=int(cantidad or 0), primero_en=primero, seccion=PLUGIN_ID)
 
     def on_activate(self, host: MCPHost) -> None:
         host.register_skill(LeadSkill())

@@ -10,7 +10,8 @@ por el correo de sistema; `forgot-password` responde siempre 202 sin filtrar si
 la cuenta existe.
 
 `accept-invitation` (ADR-0121) canjea el enlace de un solo uso con el que el dueño
-de un negocio creado por el alta automática define su contraseña y entra.
+de un negocio creado por el alta automática define su contraseña y entra: devuelve la
+sesión, igual que el login (ADR-0124).
 """
 
 from __future__ import annotations
@@ -23,7 +24,12 @@ from fastapi.background import BackgroundTasks
 from pydantic import BaseModel, Field
 
 from core.admin.auth import SESSION_TTL_HOURS, admin_from_token, login, logout
-from core.admin.invitations_service import CUENTA_EXISTENTE, canjear_invitacion, partes_del_token
+from core.admin.invitations_service import (
+    CUENTA_EXISTENTE,
+    ENLACE_INVALIDO,
+    canjear_invitacion,
+    partes_del_token,
+)
 from core.admin.password_reset_service import aplicar_reset, solicitar_reset
 from core.api.deps import Principal, get_principal
 from core.api.errors import ApiError
@@ -49,6 +55,11 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str = Field(description="Código de recuperación recibido por correo.")
     new_password: str = Field(min_length=8)
+    identifier: str | None = Field(
+        default=None,
+        max_length=320,
+        description="Correo o usuario de la cuenta: el código solo se busca entre los suyos.",
+    )
 
 
 class AcceptInvitationRequest(BaseModel):
@@ -57,6 +68,15 @@ class AcceptInvitationRequest(BaseModel):
         description="Token del enlace de la invitación: lo que va después de `#` en `/invitacion#…`.",
     )
     new_password: str = Field(min_length=8, description="Contraseña nueva de la cuenta (8+).")
+
+
+class AcceptInvitationResponse(BaseModel):
+    """Sesión del dueño que acaba de definir su contraseña (ADR-0124), como la del login."""
+
+    token: str
+    admin_id: uuid.UUID
+    tenant_id: uuid.UUID = Field(description="Negocio al que entró: el panel lo deja activo.")
+    expires_in: int = Field(description="Segundos de vigencia de la sesión.")
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -94,33 +114,72 @@ async def post_logout(
     return Response(status_code=204)
 
 
+# Cupo de pedidos de código (HU-SH-06): cada pedido anula el código anterior y manda un correo.
+# Sin límite, alguien podría llenar de correos a una persona y no dejarla recuperar su cuenta.
+FORGOT_POR_IDENTIFICADOR = 3
+FORGOT_POR_IP = 10
+FORGOT_VENTANA_S = 900
+
+
 @router.post("/forgot-password", status_code=202)
-async def post_forgot_password(payload: ForgotPasswordRequest, background: BackgroundTasks) -> Response:
+async def post_forgot_password(
+    payload: ForgotPasswordRequest, request: Request, background: BackgroundTasks
+) -> Response:
     """Siempre 202 con el mismo cuerpo: no filtra si la cuenta existe (ADR-0098).
 
     El trabajo pesado (hash + correo) va en background para emparejar el tiempo
-    de respuesta de cuentas existentes e inexistentes.
+    de respuesta de cuentas existentes e inexistentes. Con un cupo por identificador
+    (3 cada 15 min) y por IP (10): pasado el cupo responde igual, pero no genera ni
+    envía otro código.
     """
-    background.add_task(solicitar_reset, payload.identifier)
+    from core.security.login_lockout import client_ip, within_quota
+
+    identifier = payload.identifier.strip().lower()
+    if await within_quota(
+        "reset_pedido",
+        identifier or None,
+        client_ip(request),
+        por_identificador=FORGOT_POR_IDENTIFICADOR,
+        por_ip=FORGOT_POR_IP,
+        ventana_s=FORGOT_VENTANA_S,
+    ):
+        background.add_task(solicitar_reset, payload.identifier)
     return Response(status_code=202)
 
 
 @router.post("/reset-password", status_code=204)
-async def post_reset_password(payload: ResetPasswordRequest) -> Response:
-    error = await aplicar_reset(payload.token, payload.new_password)
+async def post_reset_password(payload: ResetPasswordRequest, request: Request) -> Response:
+    """Aplica el código. Con el mismo bloqueo progresivo del login (5 fallos en 10 min → 15
+    min), por IP y por identificador si viene (HU-SH-06)."""
+    from core.security.login_lockout import (
+        client_ip,
+        is_blocked,
+        register_failure,
+        register_success,
+    )
+
+    ip = client_ip(request)
+    identifier = (payload.identifier or "").strip().lower() or None
+    if await is_blocked("reset", identifier, ip):
+        raise ApiError(
+            429, "auth_bloqueado", "Demasiados intentos. Espera unos minutos e inténtalo de nuevo."
+        )
+    error = await aplicar_reset(payload.token, payload.new_password, identifier)
     if error is not None:
+        await register_failure("reset", identifier, ip)
         raise ApiError(400, "invalid_token", error)
+    await register_success("reset", identifier, ip)
     return Response(status_code=204)
 
 
-@router.post("/accept-invitation", status_code=204)
-async def post_accept_invitation(payload: AcceptInvitationRequest, request: Request) -> Response:
+@router.post("/accept-invitation", response_model=AcceptInvitationResponse)
+async def post_accept_invitation(payload: AcceptInvitationRequest, request: Request) -> AcceptInvitationResponse:
     """Canjea el enlace de un solo uso de una invitación (ADR-0121): define la contraseña de
-    una cuenta que el alta automática creó sin ella y la deja como miembro del negocio.
-    Luego se entra con `/auth/login`. Un enlace inválido, usado o vencido da 400 sin decir
-    cuál de los tres; una cuenta que ya existe (con contraseña, acceso a otro negocio u otra
-    invitación pendiente) da 409: entra y acepta en la app. Con el mismo bloqueo progresivo
-    del login (5 fallos en 10 min → 15 min), por IP y por invitación."""
+    una cuenta que el alta automática creó sin ella, la deja como miembro del negocio y abre
+    su sesión (ADR-0124), así el dueño entra directo. Un enlace inválido, usado o vencido da
+    400 sin decir cuál de los tres; una cuenta que ya existe (con contraseña, acceso a otro
+    negocio u otra invitación pendiente) da 409: entra y acepta en la app. Con el mismo
+    bloqueo progresivo del login (5 fallos en 10 min → 15 min), por IP y por invitación."""
     from core.security.login_lockout import (
         client_ip,
         is_blocked,
@@ -135,11 +194,16 @@ async def post_accept_invitation(payload: AcceptInvitationRequest, request: Requ
         raise ApiError(
             429, "auth_bloqueado", "Demasiados intentos. Espera unos minutos e inténtalo de nuevo."
         )
-    error = await canjear_invitacion(payload.token, payload.new_password)
-    if error is None:
+    error, hecho = await canjear_invitacion(payload.token, payload.new_password)
+    if error is None and hecho is not None:
         await register_success("invitacion", identificador, ip)
-        return Response(status_code=204)
+        return AcceptInvitationResponse(
+            token=hecho.token_de_sesion,
+            admin_id=hecho.admin_id,
+            tenant_id=hecho.tenant_id,
+            expires_in=SESSION_TTL_HOURS * 3600,
+        )
     await register_failure("invitacion", identificador, ip)
     if error == CUENTA_EXISTENTE:
         raise ApiError(409, "account_exists", error)
-    raise ApiError(400, "invalid_token", error)
+    raise ApiError(400, "invalid_token", error or ENLACE_INVALIDO)

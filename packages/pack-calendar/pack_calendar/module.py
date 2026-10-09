@@ -25,7 +25,10 @@ from pack_calendar.config import CalendarConfig
 from pack_calendar.skills import CalendarSkill
 
 if TYPE_CHECKING:
+    import uuid
+
     from core.mcp.host import MCPHost
+    from core.primeros_pasos.contrato import ContenidoCargado
 
 PLUGIN_ID = "pack_calendar"
 
@@ -363,6 +366,31 @@ class GoogleCalendarModule(BaseModule):
         from core.shared.events import ON_APPOINTMENT_CHANGED
 
         host.subscribe(ON_APPOINTMENT_CHANGED, _on_cita_cambiada)
+
+    async def contenido_cargado(self, tenant_id: uuid.UUID) -> ContenidoCargado:
+        """Tipos de cita activos (los servicios que se agendan) para el paso «catálogo o
+        servicios» de los primeros pasos (HU-SH-06, ADR-0124). Solo lee."""
+        from sqlalchemy import func, select
+
+        from core.db.session import get_session
+        from core.primeros_pasos.contrato import ContenidoCargado
+        from core.shared.tenant import tenant_scope
+        from pack_calendar.models import AppointmentType
+
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                cantidad, primero = (
+                    await session.execute(
+                        select(func.count(AppointmentType.id), func.min(AppointmentType.created_at)).where(
+                            AppointmentType.tenant_id == tenant_id,
+                            AppointmentType.active.is_(True),
+                            AppointmentType.deleted_at.is_(None),
+                        )
+                    )
+                ).one()
+        return ContenidoCargado(
+            tipo="servicios", cantidad=int(cantidad or 0), primero_en=primero, seccion="pack_calendar:tipos"
+        )
 
     async def _resolved_completion_claims(self) -> dict[str, tuple[re.Pattern[str], set[str]]]:
         """Combina `_COMPLETION_CLAIMS` (incorporados) con la config de ESTE

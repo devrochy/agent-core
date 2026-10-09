@@ -97,7 +97,7 @@
           "auth"
         ],
         "summary": "Post Forgot Password",
-        "description": "Siempre 202 con el mismo cuerpo: no filtra si la cuenta existe (ADR-0098).\n\nEl trabajo pesado (hash + correo) va en background para emparejar el tiempo\nde respuesta de cuentas existentes e inexistentes.",
+        "description": "Siempre 202 con el mismo cuerpo: no filtra si la cuenta existe (ADR-0098).\n\nEl trabajo pesado (hash + correo) va en background para emparejar el tiempo\nde respuesta de cuentas existentes e inexistentes. Con un cupo por identificador\n(3 cada 15 min) y por IP (10): pasado el cupo responde igual, pero no genera ni\nenvía otro código.",
         "operationId": "post_forgot_password_api_v1_auth_forgot_password_post",
         "requestBody": {
           "content": {
@@ -138,6 +138,7 @@
           "auth"
         ],
         "summary": "Post Reset Password",
+        "description": "Aplica el código. Con el mismo bloqueo progresivo del login (5 fallos en 10 min → 15\nmin), por IP y por identificador si viene (HU-SH-06).",
         "operationId": "post_reset_password_api_v1_auth_reset_password_post",
         "requestBody": {
           "content": {
@@ -173,7 +174,7 @@
           "auth"
         ],
         "summary": "Post Accept Invitation",
-        "description": "Canjea el enlace de un solo uso de una invitación (ADR-0121): define la contraseña de\nuna cuenta que el alta automática creó sin ella y la deja como miembro del negocio.\nLuego se entra con `/auth/login`. Un enlace inválido, usado o vencido da 400 sin decir\ncuál de los tres; una cuenta que ya existe (con contraseña, acceso a otro negocio u otra\ninvitación pendiente) da 409: entra y acepta en la app. Con el mismo bloqueo progresivo\ndel login (5 fallos en 10 min → 15 min), por IP y por invitación.",
+        "description": "Canjea el enlace de un solo uso de una invitación (ADR-0121): define la contraseña de\nuna cuenta que el alta automática creó sin ella, la deja como miembro del negocio y abre\nsu sesión (ADR-0124), así el dueño entra directo. Un enlace inválido, usado o vencido da\n400 sin decir cuál de los tres; una cuenta que ya existe (con contraseña, acceso a otro\nnegocio u otra invitación pendiente) da 409: entra y acepta en la app. Con el mismo\nbloqueo progresivo del login (5 fallos en 10 min → 15 min), por IP y por invitación.",
         "operationId": "post_accept_invitation_api_v1_auth_accept_invitation_post",
         "requestBody": {
           "content": {
@@ -186,8 +187,15 @@
           "required": true
         },
         "responses": {
-          "204": {
-            "description": "Successful Response"
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptInvitationResponse"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -700,6 +708,56 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DashboardResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/onboarding": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · primeros pasos"
+        ],
+        "summary": "Get Primeros Pasos",
+        "operationId": "get_primeros_pasos_api_v1_admin_onboarding_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrimerosPasosResponse"
                 }
               }
             }
@@ -12472,6 +12530,39 @@
         ],
         "title": "AcceptInvitationRequest"
       },
+      "AcceptInvitationResponse": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          },
+          "admin_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Admin Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Tenant Id",
+            "description": "Negocio al que entró: el panel lo deja activo."
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In",
+            "description": "Segundos de vigencia de la sesión."
+          }
+        },
+        "type": "object",
+        "required": [
+          "token",
+          "admin_id",
+          "tenant_id",
+          "expires_in"
+        ],
+        "title": "AcceptInvitationResponse",
+        "description": "Sesión del dueño que acaba de definir su contraseña (ADR-0124), como la del login."
+      },
       "AccessAttempt": {
         "properties": {
           "fecha": {
@@ -17006,6 +17097,10 @@
             },
             "type": "object",
             "title": "Permissions"
+          },
+          "invitaciones_pendientes": {
+            "type": "integer",
+            "title": "Invitaciones Pendientes"
           }
         },
         "type": "object",
@@ -17016,7 +17111,8 @@
           "role",
           "tenant",
           "tenant_count",
-          "permissions"
+          "permissions",
+          "invitaciones_pendientes"
         ],
         "title": "MeResponse"
       },
@@ -18266,6 +18362,162 @@
         ],
         "title": "Page[TenantOption]"
       },
+      "PasoOut": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave",
+            "description": "datos_negocio | whatsapp | catalogo | probar_asistente | equipo | activar_preset | configurar_<habilidad>"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "pendiente",
+              "en_curso",
+              "completo"
+            ],
+            "title": "Estado"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "sin_descripcion",
+                  "sin_conexion",
+                  "sin_verificar",
+                  "con_problemas",
+                  "sin_terminar",
+                  "sin_habilidad",
+                  "sin_contenido",
+                  "sin_pruebas",
+                  "sin_invitaciones",
+                  "faltan_datos",
+                  "plan_insuficiente"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo",
+            "description": "Por qué no está completo (clave para el panel)."
+          },
+          "cantidad": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cantidad",
+            "description": "Elementos cargados (paso `catalogo`)."
+          },
+          "pack": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pack",
+            "description": "Habilidad del paso (`catalogo` y `configurar_*`)."
+          },
+          "tipo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "catalogo",
+                  "servicios",
+                  "cartera"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tipo"
+          },
+          "titulo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Titulo",
+            "description": "Nombre visible de la habilidad o del tipo de negocio."
+          },
+          "explicacion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explicacion",
+            "description": "Guía de configuración de la habilidad (su catálogo)."
+          },
+          "plan_requerido": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Requerido",
+            "description": "Plan que necesita el tipo de negocio."
+          },
+          "puede_actuar": {
+            "type": "boolean",
+            "title": "Puede Actuar",
+            "description": "El usuario tiene escritura en la sección del paso."
+          },
+          "completado_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completado En",
+            "description": "Primera vez que se cumplió (hito)."
+          },
+          "segundos_desde_alta": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segundos Desde Alta",
+            "description": "Del alta a la primera vez que se cumplió."
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave",
+          "estado",
+          "puede_actuar"
+        ],
+        "title": "PasoOut"
+      },
       "PasswordReset": {
         "properties": {
           "password": {
@@ -19208,6 +19460,47 @@
         ],
         "title": "PreflightOut"
       },
+      "PrimerosPasosResponse": {
+        "properties": {
+          "alta_en": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Alta En"
+          },
+          "origen": {
+            "type": "string",
+            "enum": [
+              "aprovisionamiento",
+              "manual"
+            ],
+            "title": "Origen"
+          },
+          "completos": {
+            "type": "integer",
+            "title": "Completos"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "pasos": {
+            "items": {
+              "$ref": "#/components/schemas/PasoOut"
+            },
+            "type": "array",
+            "title": "Pasos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "alta_en",
+          "origen",
+          "completos",
+          "total",
+          "pasos"
+        ],
+        "title": "PrimerosPasosResponse"
+      },
       "ProductOut": {
         "properties": {
           "id": {
@@ -19968,6 +20261,19 @@
             "type": "string",
             "minLength": 8,
             "title": "New Password"
+          },
+          "identifier": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 320
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Identifier",
+            "description": "Correo o usuario de la cuenta: el código solo se busca entre los suyos."
           }
         },
         "type": "object",

@@ -184,3 +184,29 @@ def client_ip(request) -> str:
         return str(peer)
     except Exception:
         return "desconocida"
+
+
+QUOTA_PREFIX = "auth:quota:"
+
+
+async def within_quota(
+    scope: str, identifier: str | None, ip: str | None, *, por_identificador: int, por_ip: int, ventana_s: int
+) -> bool:
+    """Cupo de pedidos (no de fallos) por identificador y por IP en una ventana (HU-SH-06).
+
+    Cuenta cada pedido. False si alguno de los dos pasó su límite. Mismo criterio que el
+    bloqueo: si Redis no responde, deja pasar (fail-open)."""
+    try:
+        dentro = True
+        if identifier:
+            total = await _incr_with_ttl(f"{QUOTA_PREFIX}{scope}:id:{identifier}", ventana_s)
+            dentro = dentro and total <= por_identificador
+        if ip:
+            total = await _incr_with_ttl(f"{QUOTA_PREFIX}{scope}:ip:{ip}", ventana_s)
+            dentro = dentro and total <= por_ip
+        if not dentro:
+            log.warning("auth_quota_excedida", scope=scope, identifier=identifier or "", ip=ip or "")
+        return dentro
+    except Exception:
+        log.warning("login_lockout_redis_error", scope=scope, op="within_quota", exc_info=True)
+        return True

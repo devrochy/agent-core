@@ -3,6 +3,10 @@
 Sirve al panel y a las apps para resolver sesión, tenant activo y permisos tras
 el login, sin adivinar el contrato. La lista COMPLETA de tenants no viaja aquí
 (un master puede tener cientos): el selector usa `/api/v1/admin/tenants`.
+
+`invitaciones_pendientes` (HU-SH-06): cuántas invitaciones esperan respuesta, para que el
+panel las muestre al entrar (una cuenta que ya existía recibe la invitación en la app,
+ADR-0121). La lista sale de `/api/v1/admin/invitations/pending`.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from core.admin.invitations_service import contar_pendientes
 from core.api.deps import Principal, get_principal
 from core.api.schemas import TenantOption
 
@@ -27,6 +32,7 @@ class MeResponse(BaseModel):
     tenant: TenantOption | None
     tenant_count: int
     permissions: dict[str, str | None]
+    invitaciones_pendientes: int
 
 
 @router.get("/me", response_model=MeResponse)
@@ -48,4 +54,5 @@ async def get_me(principal: Annotated[Principal, Depends(get_principal)]) -> MeR
         tenant=tenant,
         tenant_count=len(principal.tenants),
         permissions=principal.permissions,
+        invitaciones_pendientes=await contar_pendientes(admin.id),
     )

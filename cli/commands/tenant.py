@@ -12,6 +12,7 @@ Uso:
   agent-core tenant seed <slug>           # importa TENANTS_ROOT/<slug>/catalog.json
   agent-core tenant list
   agent-core tenant docs <slug>
+  agent-core tenant embudo --dias 30       # embudo de activación de las altas (ADR-0124)
 """
 
 from __future__ import annotations
@@ -424,6 +425,64 @@ def list_() -> None:
         console.print(table)
 
     asyncio.run(_run())
+
+
+# ------------------------------------------------------------------ embudo de activación (ADR-0124)
+def _duracion(segundos: int | None) -> str:
+    if segundos is None:
+        return "—"
+    if segundos < 3600:
+        return f"{segundos // 60} min"
+    if segundos < 48 * 3600:
+        return f"{segundos / 3600:.1f} h"
+    return f"{segundos / 86400:.1f} días"
+
+
+@app.command("embudo")
+def embudo(
+    dias: int = typer.Option(30, "--dias", min=1, max=365, help="Altas de los últimos N días"),
+    solo_automaticas: bool = typer.Option(
+        False, "--solo-automaticas", help="Solo los negocios del alta automática (ADR-0121)"
+    ),
+    sin_barrer: bool = typer.Option(
+        False, "--sin-barrer", help="No evaluar los negocios antes (solo lo ya registrado)"
+    ),
+) -> None:
+    """Embudo de activación (HU-SH-06): de las altas de la ventana, cuántas llegaron a cada
+    primer paso, en cuánto tiempo (mediana desde el alta) y cuántas dentro de las 24 horas.
+    Antes evalúa cada negocio, así cuenta también lo que nadie vio en el Resumen."""
+    from datetime import UTC, datetime, timedelta
+
+    async def _run():  # type: ignore[no-untyped-def]
+        from core.plugin_manager import plugin_manager
+        from core.primeros_pasos.hitos import embudo as _embudo
+
+        plugin_manager.scan()  # el paso «catálogo o servicios» pregunta a cada habilidad
+        hasta = datetime.now(UTC)
+        return await _embudo(
+            hasta - timedelta(days=dias), hasta, solo_automaticas=solo_automaticas, barrer=not sin_barrer
+        )
+
+    from core.primeros_pasos.hitos import etiqueta
+
+    resultado = asyncio.run(_run())
+    tabla = Table(
+        "Paso",
+        "Negocios",
+        "% de las altas",
+        "Mediana desde el alta",
+        "En 24 h",
+        title=f"Embudo de activación · {resultado.altas} altas en {dias} días",
+    )
+    for fila in resultado.filas:
+        tabla.add_row(
+            etiqueta(fila.paso),
+            str(fila.negocios),
+            f"{fila.porcentaje:.1f} %",
+            _duracion(fila.mediana_segundos),
+            str(fila.en_24_horas),
+        )
+    console.print(tabla)
 
 
 # ------------------------------------------------------------------ docs

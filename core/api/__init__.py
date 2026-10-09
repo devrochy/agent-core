@@ -27,6 +27,7 @@ from core.api.routers import (
     me,
     meta_ops,
     meta_wizard,
+    onboarding,
     plan,
     platform,
     playground,
@@ -48,6 +49,7 @@ api_router.include_router(sync.router)
 api_router.include_router(audit.router)
 api_router.include_router(tenants.router)
 api_router.include_router(dashboard.router)
+api_router.include_router(onboarding.router)
 api_router.include_router(dlq.router)
 api_router.include_router(conversations.router)
 api_router.include_router(playground.router)

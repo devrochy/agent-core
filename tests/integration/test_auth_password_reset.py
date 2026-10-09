@@ -28,6 +28,18 @@ RESET = "/api/v1/auth/reset-password"
 LOGIN = "/api/v1/auth/login"
 
 
+@pytest.fixture(autouse=True)
+async def _sin_bloqueos_de_reset():
+    """El bloqueo y el cupo del reset viven en Redis por IP: cada test arranca limpio."""
+    from core.memory.working import get_redis
+
+    redis = get_redis()
+    for patron in ("auth:*:reset:*", "auth:*:reset_pedido:*"):
+        for clave in await redis.keys(patron):
+            await redis.delete(clave)
+    yield
+
+
 async def _make_admin(email: str, password: str = PW) -> uuid.UUID:
     from core.admin.auth import hash_password
     from core.db.models import Admin
@@ -144,3 +156,52 @@ async def test_codigo_vencido_es_rechazado(app_client, monkeypatch) -> None:
 
     r = await app_client.post(RESET, json={"token": codigo, "new_password": "nueva-clave-123"})
     assert r.status_code == 400
+
+
+async def test_reset_con_identificador_busca_solo_en_esa_cuenta(app_client, monkeypatch) -> None:
+    """HU-SH-06: con el correo, el código de otra cuenta no sirve aunque sea válido."""
+    email_a = f"{uniq('reset-a')}@test.local"
+    email_b = f"{uniq('reset-b')}@test.local"
+    await _make_admin(email_a)
+    await _make_admin(email_b)
+    enviados = _capturar_correo(monkeypatch)
+    await app_client.post(FORGOT, json={"identifier": email_a})
+    codigo_a = _codigo_de(enviados[0][2])
+
+    r = await app_client.post(RESET, json={"token": codigo_a, "new_password": "nueva-clave-123", "identifier": email_b})
+    assert r.status_code == 400
+    r = await app_client.post(
+        RESET, json={"token": codigo_a, "new_password": "nueva-clave-123", "identifier": email_a.upper()}
+    )
+    assert r.status_code == 204
+
+
+async def test_reset_tiene_bloqueo_progresivo(app_client, monkeypatch) -> None:
+    """HU-SH-06: 5 códigos errados en 10 minutos bloquean (429), aunque después llegue el bueno."""
+    email = f"{uniq('reset-bloq')}@test.local"
+    await _make_admin(email)
+    enviados = _capturar_correo(monkeypatch)
+    await app_client.post(FORGOT, json={"identifier": email})
+    codigo = _codigo_de(enviados[0][2])
+
+    for _ in range(5):
+        r = await app_client.post(RESET, json={"token": "XXXXXXXX", "new_password": "nueva-clave-123", "identifier": email})
+        assert r.status_code == 400
+    r = await app_client.post(RESET, json={"token": codigo, "new_password": "nueva-clave-123", "identifier": email})
+    assert r.status_code == 429
+    assert r.json()["error"]["code"] == "auth_bloqueado"
+
+
+async def test_forgot_tiene_cupo_y_responde_siempre_igual(app_client, monkeypatch) -> None:
+    """HU-SH-06: más de 3 pedidos del mismo correo en 15 minutos no mandan más correos ni anulan
+    el código; la respuesta sigue siendo 202 vacía."""
+    email = f"{uniq('reset-cupo')}@test.local"
+    await _make_admin(email)
+    enviados = _capturar_correo(monkeypatch)
+    for _ in range(5):
+        r = await app_client.post(FORGOT, json={"identifier": email})
+        assert (r.status_code, r.text) == (202, "")
+    assert len(enviados) == 3
+    # El último código enviado sigue valiendo: los pedidos de más no lo anularon.
+    r = await app_client.post(RESET, json={"token": _codigo_de(enviados[-1][2]), "new_password": "nueva-clave-123"})
+    assert r.status_code == 204
