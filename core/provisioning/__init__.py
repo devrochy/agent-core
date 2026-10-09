@@ -44,6 +44,12 @@ class AltaEnRevision(Exception):
         self.motivo = motivo
 
 
+class AltaEnRevisionPorRiesgo(AltaEnRevision):
+    """Revisión por los controles de riesgo de ADR-0125 (interruptor, aceptación, Free
+    repetido, señales, recompra). Solo un alta así se puede aprobar: una en revisión por un
+    dato se corrige y se reintenta."""
+
+
 class AltaTransitoria(RuntimeError):
     """Algo que puede resolverse solo (el pedido todavía no es visible, la entrega falló):
     el outbox reintenta con backoff; al agotar los intentos del alta, queda en revisión."""
@@ -53,4 +59,4 @@ class AltaOcupada(RuntimeError):
     """Otro worker está procesando la misma alta: el outbox la reintenta más tarde."""
 
 
-__all__ = ["ACTOR", "AltaEnRevision", "AltaOcupada", "AltaTransitoria"]
+__all__ = ["ACTOR", "AltaEnRevision", "AltaEnRevisionPorRiesgo", "AltaOcupada", "AltaTransitoria"]

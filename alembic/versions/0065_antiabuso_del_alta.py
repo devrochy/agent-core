@@ -8,7 +8,7 @@
 
 Las dos guardan la prueba del contrato: un trigger impide cambiar una versión publicada (solo
 `deleted_at`) o la aceptación de un pedido (solo pueden cambiar las huellas, que se vacían a los
-12 meses, las señales, `updated_at` y `deleted_at`), y borrar filas. `purge_tenant` desactiva los
+12 meses, `updated_at` y `deleted_at`), y borrar filas. `purge_tenant` desactiva los
 triggers al purgar, así que no lo frena.
 
 Las dos son tablas de NEGOCIO del vendedor (`tenant_id`, RLS habilitada y forzada, policy de
@@ -79,8 +79,8 @@ BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'pedidos_de_alta: sin borrado físico (deleted_at)';
     END IF;
-    IF (to_jsonb(NEW) - ARRAY['huellas', 'senales', 'updated_at', 'deleted_at'])
-        IS DISTINCT FROM (to_jsonb(OLD) - ARRAY['huellas', 'senales', 'updated_at', 'deleted_at']) THEN
+    IF (to_jsonb(NEW) - ARRAY['huellas', 'updated_at', 'deleted_at'])
+        IS DISTINCT FROM (to_jsonb(OLD) - ARRAY['huellas', 'updated_at', 'deleted_at']) THEN
         RAISE EXCEPTION 'pedidos_de_alta: la aceptación y los datos del pedido no se editan';
     END IF;
     RETURN NEW;

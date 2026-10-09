@@ -125,7 +125,9 @@ def version_legal(vigentes: dict[str, Documento]) -> str:
     """Huella corta del juego de versiones vigentes. El comprador acepta ESTE juego: si se
     publica otra versión entre que se mostró y que aceptó, la huella cambia y se vuelve a
     mostrar."""
-    clave = "|".join(f"{tipo}:{vigentes[tipo].version}" for tipo in TIPOS if tipo in vigentes)
+    clave = "|".join(
+        f"{tipo}:{vigentes[tipo].version}:{vigentes[tipo].url}" for tipo in TIPOS if tipo in vigentes
+    )
     return hashlib.sha256(clave.encode()).hexdigest()[:12]
 
 

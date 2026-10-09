@@ -35,7 +35,8 @@
 - **Interruptor del master.** Se guarda en `tenants.settings["aprovisionamiento"]` del vendedor y queda
   auditado. Con el alta pausada, las altas nuevas quedan en cola de revisión. El proveedor de suscripciones
   y el preset leen el negocio con `FOR UPDATE` antes de escribir `settings`, así no pisan una pausa.
-- **Aprobar un alta en revisión.** Solo una en revisión. Queda `en_curso` y el worker la corre por el outbox
+- **Aprobar un alta en revisión.** Solo una en revisión por un control de riesgo (una por un dato se
+  corrige y se reintenta). Descartar toma el mismo candado que el consumidor. Queda `en_curso` y el worker la corre por el outbox
   (`provisioning.alta_aprobada`), sin los controles de riesgo que la frenaron; las validaciones de datos
   siguen. La aprobación es de un solo uso: si vuelve a revisión, o se reintenta, se borra. Queda auditada.
 - **La prueba no se edita.** Triggers impiden editar o borrar una versión publicada y la aceptación de un

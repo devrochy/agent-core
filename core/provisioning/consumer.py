@@ -41,10 +41,21 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from core.billing.periodos import Periodo
 from core.db.models import ProvisioningRequest, Tenant
 from core.db.session import get_owned, get_session
-from core.provisioning import ACTOR, AltaEnRevision, AltaOcupada, AltaTransitoria
+from core.provisioning import (
+    ACTOR,
+    AltaEnRevision,
+    AltaEnRevisionPorRiesgo,
+    AltaOcupada,
+    AltaTransitoria,
+)
 from core.provisioning.antiabuso import aceptacion_del_pedido, motivos_de_revision
 from core.provisioning.fuentes import DatosDeAlta, fuentes_de_alta
-from core.provisioning.revision import aprobar_alta, descartar_alta, por_referencia
+from core.provisioning.revision import (
+    aprobar_alta,
+    clave_del_candado,
+    descartar_alta,
+    por_referencia,
+)
 from core.provisioning.vendedores import es_vendedor
 from core.shared.audit import record_audit
 from core.shared.logger import get_logger
@@ -258,12 +269,6 @@ async def _registro(
     return existente
 
 
-def _clave_del_candado(registro_id: uuid.UUID) -> int:
-    return int.from_bytes(
-        hashlib.sha256(f"provisioning:{registro_id}".encode()).digest()[:8], "big", signed=True
-    )
-
-
 @asynccontextmanager
 async def _candado(registro_id: uuid.UUID) -> AsyncIterator[bool]:
     """Candado consultivo de transacción: se suelta solo al terminar (o si el proceso muere)."""
@@ -271,15 +276,26 @@ async def _candado(registro_id: uuid.UUID) -> AsyncIterator[bool]:
         tomado = (
             await session.execute(
                 text("select pg_try_advisory_xact_lock(:clave)"),
-                {"clave": _clave_del_candado(registro_id)},
+                {"clave": clave_del_candado(registro_id)},
             )
         ).scalar()
         yield bool(tomado)
 
 
 # Las filas se leen y se escriben filtrando también por el vendedor, no solo por la RLS.
-async def _fila(session: Any, vendedor: uuid.UUID, registro_id: uuid.UUID) -> ProvisioningRequest:
-    fila = await get_owned(session, ProvisioningRequest, registro_id, vendedor)
+async def _fila(
+    session: Any, vendedor: uuid.UUID, registro_id: uuid.UUID, *, para_escribir: bool = False
+) -> ProvisioningRequest:
+    if para_escribir:
+        fila = (
+            await session.execute(
+                select(ProvisioningRequest)
+                .where(ProvisioningRequest.id == registro_id, ProvisioningRequest.tenant_id == vendedor)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+    else:
+        fila = await get_owned(session, ProvisioningRequest, registro_id, vendedor)
     if fila is None:
         raise AltaTransitoria(f"la fila del alta {registro_id} no es visible")
     return fila
@@ -309,7 +325,9 @@ async def _sumar_intento(vendedor: uuid.UUID, registro_id: uuid.UUID) -> int:
 
 async def _guardar_detalle(vendedor: uuid.UUID, registro_id: uuid.UUID, **campos: Any) -> None:
     async with get_session() as session:
-        fila = await _fila(session, vendedor, registro_id)
+        # FOR UPDATE: no pisa una escritura concurrente del detalle (p. ej. reintentar, que
+        # borra la aprobación).
+        fila = await _fila(session, vendedor, registro_id, para_escribir=True)
         fila.detalle = {**(fila.detalle or {}), **campos}
 
 
@@ -345,7 +363,9 @@ async def _procesar(vendedor: uuid.UUID, registro: ProvisioningRequest) -> Provi
         try:
             return await _dar_de_alta(vendedor, actual, inicio, aviso)
         except AltaEnRevision as exc:
-            fila = await _cerrar_sin_alta(vendedor, actual, "revision", exc.motivo)
+            fila = await _cerrar_sin_alta(
+                vendedor, actual, "revision", exc.motivo, por_riesgo=isinstance(exc, AltaEnRevisionPorRiesgo)
+            )
             await _avisar_al_comprador(vendedor, actual, aviso)
             return fila
         except AltaTransitoria as exc:
@@ -482,7 +502,7 @@ async def _dar_de_alta(
                 "revisar si se reactiva ese negocio"
             )
         if motivos:
-            raise AltaEnRevision("; ".join(motivos))
+            raise AltaEnRevisionPorRiesgo("; ".join(motivos))
     await validar_correo_del_owner(email)
     vertical = _limpio(datos.get("vertical")).lower() or None
 
@@ -771,16 +791,24 @@ async def _completar(
 
 
 async def _cerrar_sin_alta(
-    vendedor: uuid.UUID, registro: ProvisioningRequest, estado: str, motivo: str
+    vendedor: uuid.UUID,
+    registro: ProvisioningRequest,
+    estado: str,
+    motivo: str,
+    *,
+    por_riesgo: bool = False,
 ) -> ProvisioningRequest:
     async with get_session() as session:
-        fila = await _fila(session, vendedor, registro.id)
+        fila = await _fila(session, vendedor, registro.id, para_escribir=True)
         fila.estado = estado
         fila.motivo = motivo[:500]
         # La aprobación es de un solo uso: si el alta vuelve a revisión, una persona la tiene
-        # que volver a mirar con el motivo nuevo (ADR-0125 § 6).
-        if "aprobacion" in (fila.detalle or {}):
-            fila.detalle = {k: v for k, v in (fila.detalle or {}).items() if k != "aprobacion"}
+        # que volver a mirar con el motivo nuevo. Y solo se aprueba una revisión por riesgo:
+        # una por un dato se corrige y se reintenta (ADR-0125 § 6).
+        detalle = {k: v for k, v in (fila.detalle or {}).items() if k not in ("aprobacion", "revision_por_riesgo")}
+        if por_riesgo:
+            detalle["revision_por_riesgo"] = True
+        fila.detalle = detalle
     await record_audit(
         actor=ACTOR,
         action="aprovisionamiento_en_revision" if estado == "revision" else "aprovisionamiento_omitido",
@@ -978,7 +1006,7 @@ async def reintentar_alta(vendedor: uuid.UUID, referencia: str) -> ProvisioningR
                     estado="en_curso",
                     intentos=0,
                     motivo=None,
-                    detalle=ProvisioningRequest.detalle.op("-")("aprobacion"),
+                    detalle=ProvisioningRequest.detalle.op("-")("aprobacion").op("-")("revision_por_riesgo"),
                     updated_at=func.now(),
                 )
             )

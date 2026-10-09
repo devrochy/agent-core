@@ -781,3 +781,19 @@ async def test_la_aceptacion_y_las_versiones_publicadas_no_se_editan_ni_se_borra
                 .where(DocumentoLegal.tenant_id == vendedor, DocumentoLegal.tipo == "dpa")
                 .values(deleted_at=datetime.now(UTC))
             )
+
+
+async def test_un_alta_en_revision_por_un_dato_no_se_aprueba(vendedores, silencio) -> None:
+    """Aprobar salta los controles de riesgo; una revisión por un dato (sin correo) nunca los
+    evaluó, así que se corrige y se reintenta."""
+    from core.provisioning.revision import aprobar_alta
+
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    referencia = await _pedido_activado(vendedor, email="no-es-un-correo")
+
+    alta = await _entregar(vendedor, referencia)
+    assert alta.estado == "revision"
+    assert "correo" in alta.motivo
+    with pytest.raises(ValueError, match="por un dato"):
+        await aprobar_alta(vendedor, referencia, por="admin:master@test")

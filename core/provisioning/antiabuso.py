@@ -65,7 +65,7 @@ _NO_DIGITOS = re.compile(r"\D+")
 _NO_ALFANUM = re.compile(r"[^0-9A-Z]+")
 # NIT con dígito de verificación: «900.123.456-7» y «900123456» son el mismo.
 _NIT_CON_DV = re.compile(r"^[\d.\s]+-\s*\d$")
-_TIPO_DE_DOCUMENTO = re.compile(r"^(?:C\.?\s?C|C\.?\s?E|T\.?\s?I|NIT|P\.?\s?P|P\.?\s?A)[\s.:#-]*(?=\d)")
+_TIPO_DE_DOCUMENTO = re.compile(r"^(?:C\.?\s?C|C\.?\s?E|T\.?\s?I|NIT)[\s.:#-]*(?=\d)")
 
 # Señales de datos inconsistentes que se guardan (sin el dato).
 SENAL_DOCUMENTO = "documento_invalido"
@@ -89,7 +89,7 @@ def normalizar_telefono(valor: Any) -> str | None:
 
 
 def normalizar_documento(valor: Any) -> str | None:
-    """Mayúsculas y alfanuméricos, sin el tipo delante (CC, CE, TI, NIT, PP, PA), sin el
+    """Mayúsculas y alfanuméricos, sin el tipo delante (CC, CE, TI, NIT), sin el
     dígito de verificación de un NIT escrito con guion y sin ceros a la izquierda. None si
     no parece un documento (menos de 5 o más de 15 caracteres, o un solo carácter repetido).
 
@@ -284,21 +284,38 @@ def _clave_de_terminos(vendedor: uuid.UUID, conversation_id: uuid.UUID | None) -
     return f"alta:terminos:{vendedor}:{conversation_id}"
 
 
+async def _ultimo_inbound(vendedor: uuid.UUID, conversation_id: uuid.UUID) -> datetime | None:
+    """Hora (de la base) del último mensaje del cliente en la conversación."""
+    async with _sesion_del(vendedor) as session:
+        return (
+            await session.execute(
+                select(func.max(Message.created_at)).where(
+                    Message.tenant_id == vendedor,
+                    Message.conversation_id == conversation_id,
+                    Message.direction == "inbound",
+                )
+            )
+        ).scalar_one_or_none()
+
+
 async def _anotar_terminos_mostrados(vendedor: uuid.UUID, conversation_id: uuid.UUID | None) -> None:
-    """Cuándo se mostraron los enlaces en esta conversación: la aceptación tiene que venir
-    en un mensaje del cliente POSTERIOR."""
+    """Hasta qué mensaje del cliente se mostraron los enlaces: la aceptación tiene que venir
+    en un mensaje POSTERIOR. Se guarda la hora de la base del último mensaje del cliente (no
+    el reloj de la app), así el mensaje que disparó este turno nunca cuenta como aceptación."""
     from core.memory.working import get_redis
 
+    if conversation_id is None:
+        return
+    ultimo = await _ultimo_inbound(vendedor, conversation_id)
+    marca = ultimo.isoformat() if ultimo else datetime(1970, 1, 1, tzinfo=UTC).isoformat()
     try:
-        await get_redis().set(
-            _clave_de_terminos(vendedor, conversation_id), datetime.now(UTC).isoformat(), ex=_TTL_TERMINOS_S
-        )
+        await get_redis().set(_clave_de_terminos(vendedor, conversation_id), marca, ex=_TTL_TERMINOS_S)
     except Exception:
         log.warning("alta_terminos_sin_redis", tenant_id=str(vendedor), exc_info=True)
 
 
 async def _mensaje_que_acepta(vendedor: uuid.UUID, conversation_id: uuid.UUID | None) -> str | None:
-    """El primer mensaje del cliente posterior a que se mostraran los enlaces, o None. Sin
+    """El último mensaje del cliente posterior a que se mostraran los enlaces, o None. Sin
     ese mensaje (el modelo repitió el token en el mismo turno, lo trajo de otra conversación
     o Redis no responde), no hay aceptación: falla cerrado."""
     from core.memory.working import get_redis
@@ -375,7 +392,7 @@ async def preparar_pedido_de_alta(
         version = legal.version_legal(vigentes)
         token = token_de_terminos(conversation_id, version)
         mensaje_id = None
-        if hmac.compare_digest(str(acepta_terminos or "").strip(), token):
+        if hmac.compare_digest(str(acepta_terminos or "").strip().encode(), token.encode()):
             mensaje_id = await _mensaje_que_acepta(vendedor, conversation_id)
         if mensaje_id is None:
             await _anotar_terminos_mostrados(vendedor, conversation_id)

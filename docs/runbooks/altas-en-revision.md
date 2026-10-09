@@ -70,7 +70,8 @@ los controles que fallaron: leerlo entero antes de aprobar. Las validaciones de 
 pagado, cliente, owner) siguen aplicando. Queda en `audit_log` (`aprovisionamiento_aprobado`) con quién
 aprobó y por qué estaba en revisión.
 
-- Solo se aprueba un alta en revisión.
+- Solo se aprueba un alta en revisión **por un control de riesgo** (los motivos de la tabla que dicen
+  **aprobar**). Una en revisión por un dato (correo, cliente, pago, plan) se corrige y se **reintenta**.
 - Desde el panel, aprobar deja el alta `en_curso` y el worker la corre en segundos (evento
   `provisioning.alta_aprobada` del outbox, con sus reintentos). Desde la CLI, además corre en el acto.
 - La aprobación es de un solo uso: si el alta vuelve a revisión por otro motivo, hay que aprobarla de

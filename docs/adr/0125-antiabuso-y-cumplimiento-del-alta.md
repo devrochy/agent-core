@@ -57,8 +57,10 @@ Los controles son:
    - El token es un HMAC de la **conversación** y del juego de versiones. No sirve en otra
      conversación, y si entre que se mostró y que se aceptó se publica otra versión, cambia y se
      vuelven a mostrar.
-   - Al mostrar los enlaces se anota en Redis cuándo (24 h). El token solo vale si después hay un
-     **mensaje del cliente**, y ese mensaje es la evidencia que se guarda. Así, el modelo no puede
+   - Al mostrar los enlaces se anota en Redis (24 h) la hora, en la base, del último mensaje del
+     cliente. El token solo vale si después hay un **mensaje del cliente** más nuevo, y ese mensaje es
+     la evidencia que se guarda.
+   - La huella del juego de versiones incluye la versión y el enlace de cada documento. Así, el modelo no puede
      repetir el token en el mismo turno ni traerlo de otra conversación. Sin Redis, no hay aceptación
      (falla cerrado) y se vuelven a mostrar los enlaces.
    - Sin los tres publicados, el pedido sigue sin aceptación y el alta va a revisión: un olvido del
@@ -69,6 +71,8 @@ Los controles son:
    - Usa `core/security/rate_limit.py` (Redis, ventana deslizante y *fail-open*). Si Redis se cae, el
      resto de los controles sigue en la base.
    - Sin cliente ni conversación no hay un cupo propio: se frena, en vez de compartir uno entre todos.
+   - Con los tres documentos publicados, sin Redis tampoco hay aceptación (falla cerrado). Si falta
+     alguno, sin Redis el cupo no aplica, pero esa alta va a revisión de todos modos.
    - El chat web ya tiene su cupo por IP y Turnstile.
 3. **Un Free por persona.**
    - Si el mismo cliente, el número de WhatsApp, el teléfono del checkout o el documento pidió un Free
@@ -143,8 +147,10 @@ pausa es una recompra. Los motivos son:
 
 ### 6. Aprobar un alta en revisión
 
-Solo se aprueba un alta **en revisión**. El alta aprobada corre **sin** los controles de riesgo que
-la frenaron:
+Solo se aprueba un alta **en revisión por un control de riesgo** (`detalle.revision_por_riesgo`). Una
+en revisión por un dato (correo inválido, cliente distinto, pedido sin pagar) se corrige y se
+reintenta: aprobarla saltaría controles que nunca se evaluaron. El alta aprobada corre **sin** los
+controles de riesgo que la frenaron:
 
 - se saltan el interruptor, la aceptación, un Free por persona, las señales, el Free repetido y la
   recompra;
@@ -183,7 +189,7 @@ Se aprueba de dos formas:
 impide:
 
 - editar una versión publicada (solo `deleted_at`);
-- editar los datos y la aceptación de un pedido de alta (solo las huellas, las señales, `updated_at` y
+- editar los datos y la aceptación de un pedido de alta (solo las huellas, `updated_at` y
   `deleted_at`);
 - borrar filas.
 
