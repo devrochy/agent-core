@@ -65,22 +65,27 @@ jobs:
         run: |
           agent-core db migrate
           python scripts/init_db.py
+      # HU-ARCH-28 (ADR-0119): cada escenario corre k = 4 veces. El umbral del 0A
+      # (≥95 % tres noches) se mide sobre pass@1 y no cambia; pass^4 y los
+      # escenarios inestables se reportan junto a él. k = 8 solo antes de una release.
       - name: Golden set completo
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-        run: python evals/runner.py
+        run: python evals/runner.py --k 4 --umbral 0.95 --reporte evals/reportes/golden.json
       - name: Journeys (HU-SUB-12)
-        # Conversaciones completas con pagos simulados y reloj. Umbral 95 % (D: 3 noches
-        # seguidas ≥95 %); el reporte queda como artefacto para comparar noches.
+        # Conversaciones completas con pagos simulados y reloj, y clientes simulados
+        # (HU-ARCH-28); el reporte queda como artefacto para comparar noches.
         if: always()
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-        run: python evals/journeys.py --umbral 0.95 --reporte evals/reportes/journeys.json
-      - name: Reporte de journeys
+        run: python evals/journeys.py --k 4 --umbral 0.95 --reporte evals/reportes/journeys.json
+      - name: Reporte de evals
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: journeys-${{ github.run_number }}
-          path: evals/reportes/journeys.json
+          name: evals-${{ github.run_number }}
+          path: |
+            evals/reportes/golden.json
+            evals/reportes/journeys.json
           if-no-files-found: warn
           retention-days: 30

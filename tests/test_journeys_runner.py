@@ -77,7 +77,7 @@ def test_revisar_turno_reporta_cada_falla() -> None:
 
 def test_los_journeys_del_repo_son_validos() -> None:
     """Cada journey tiene pasos de un tipo conocido y el set tiene su negocio."""
-    tipos = {"usuario", "evento", "reloj", "job", "verifica", "accion"}
+    tipos = {"usuario", "evento", "reloj", "job", "verifica", "accion", "simulado"}
     for carpeta in (RAIZ / "evals" / "journeys").iterdir():
         if not carpeta.is_dir():
             continue

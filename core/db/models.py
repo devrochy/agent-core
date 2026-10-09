@@ -1405,6 +1405,11 @@ class EvalRun(Base):
     passed: Mapped[int] = mapped_column(Integer, default=0)
     total: Mapped[int] = mapped_column(Integer, default=0)
     cost_usd: Mapped[float] = mapped_column(Numeric(10, 6), default=0)
+    # HU-ARCH-28 (ADR-0119): consistencia pass^k.
+    k: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    pass_1: Mapped[float | None] = mapped_column(Numeric(5, 4))
+    pass_k: Mapped[float | None] = mapped_column(Numeric(5, 4))
+    simulator: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -1421,5 +1426,13 @@ class EvalResult(Base):
     scenario: Mapped[str] = mapped_column(Text)
     ok: Mapped[bool] = mapped_column(Boolean, default=False)
     detail: Mapped[str] = mapped_column(Text, default="")
+    # HU-ARCH-28 (ADR-0119): intentos, consistencia y evidencia por escenario.
+    k: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    pass_1: Mapped[float | None] = mapped_column(Numeric(5, 4))
+    pass_k: Mapped[float | None] = mapped_column(Numeric(5, 4))
+    inestable: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    simulator: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
+    state_assertions: Mapped[list | None] = mapped_column(JSONB(none_as_null=True))
+    verifier: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))  # HU-ARCH-29
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
