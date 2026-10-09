@@ -24,6 +24,25 @@ EMAIL = "lead-intake@test.local"
 IDEM = f"intake:{EMAIL}"
 
 
+@pytest.fixture(autouse=True)
+async def _reset_rate_limit():
+    """El rate limit vive en Redis (no en el proceso): sin limpiar, dos corridas
+    seguidas dentro de la ventana comparten cupo."""
+    from pack_commerce import api
+
+    from core.memory.working import get_redis
+
+    r = get_redis()
+    keys = [
+        k
+        for slug in (SLUG, "no-existe")
+        async for k in r.scan_iter(match=f"{api._RATE_KEY_PREFIX}:{slug}:*")
+    ]
+    if keys:
+        await r.delete(*keys)
+    yield
+
+
 async def _configure_intake(
     tenant_id, enabled: bool, turnstile_secret: str | None = None
 ) -> None:
@@ -217,3 +236,55 @@ async def test_intake_turnstile(app_client, moto_setup, monkeypatch) -> None:
         json=_payload(),
     )
     assert r.status_code == 200
+
+
+async def test_intake_rate_limit_por_tenant(app_client, moto_setup, monkeypatch) -> None:
+    """429 `rate_limited` al pasar el cupo; el cupo es por tenant y la clave
+    en Redis vence sola (TTL = ventana)."""
+    from pack_commerce import api as intake_api
+
+    from core.memory.working import get_redis
+
+    _t1, moto = moto_setup
+    await _configure_intake(moto, enabled=True)
+    await _cleanup(moto)
+    monkeypatch.setattr(intake_api, "_RATE_LIMIT", 2)
+
+    for _ in range(2):
+        r = await app_client.post(
+            f"/api/pack/pack_commerce/leads/{SLUG}",
+            headers={"X-Intake-Secret": SECRET},
+            json=_payload(),
+        )
+        assert r.status_code == 200, r.text
+
+    r = await app_client.post(
+        f"/api/pack/pack_commerce/leads/{SLUG}",
+        headers={"X-Intake-Secret": SECRET},
+        json=_payload(),
+    )
+    assert r.status_code == 429
+    assert r.json() == {"error": "rate_limited"}
+
+    # Misma IP, otro slug: no hereda el cupo agotado (llega a resolver el tenant).
+    r = await app_client.post(
+        "/api/pack/pack_commerce/leads/no-existe",
+        headers={"X-Intake-Secret": SECRET},
+        json=_payload(),
+    )
+    assert r.status_code == 404
+
+    keys = [k async for k in get_redis().scan_iter(match=f"{intake_api._RATE_KEY_PREFIX}:{SLUG}:*")]
+    assert len(keys) == 1
+    ttl = await get_redis().ttl(keys[0])
+    assert 0 < ttl <= intake_api._RATE_WINDOW_S
+
+    # Seguir insistiendo no agranda el set: guarda como mucho el cupo + 1.
+    for _ in range(5):
+        r = await app_client.post(
+            f"/api/pack/pack_commerce/leads/{SLUG}",
+            headers={"X-Intake-Secret": SECRET},
+            json=_payload(),
+        )
+        assert r.status_code == 429
+    assert await get_redis().zcard(keys[0]) == intake_api._RATE_LIMIT + 1
