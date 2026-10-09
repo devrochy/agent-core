@@ -1,6 +1,6 @@
 # ADR-0119 — Fiabilidad medida: verificador de afirmaciones y evals de consistencia (pass^k)
 
-- **Estado:** propuesto
+- **Estado:** aceptado (2026-10-08, con HU-ARCH-28)
 - **Fecha:** 2026-10-08
 - **Contexto:** HU-ARCH-28 y HU-ARCH-29 (SPEC-02, Hito 0A, decisión D-28), HU-AOS-06, HU-AOS-21 y HU-AOS-31 (SPEC-26).
   Enmienda ADR-0051 §4 (evals persistidos) y ADR-0025 (las frases de cierre del negocio las lee el verificador).

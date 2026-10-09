@@ -1,0 +1,65 @@
+{
+  "nombre": "simulado-comprar-free",
+  "descripcion": "Cliente simulado (HU-ARCH-28) que quiere el Plan Free: se valida el estado final (pedido pagado sin link y suscripción en prueba), no el texto exacto.",
+  "pasos": [
+    {
+      "nota": "el cliente simulado conversa hasta activar el Free",
+      "simulado": {
+        "objetivo": "Activar el Plan Free de la academia. Das tus datos cuando te los pidan y confirmás si te preguntan.",
+        "datos": {
+          "nombre": "Ana Gómez",
+          "cedula": "1012345678",
+          "celular": "3001234567",
+          "correo": "ana.gomez@example.com"
+        },
+        "max_turnos": 8
+      },
+      "espera_fin": [
+        "objetivo",
+        "tope"
+      ]
+    },
+    {
+      "nota": "el pedido nace pagado",
+      "verifica": {
+        "tabla": "pack_commerce_orders",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "payment_status": "pagado",
+          "total": 0
+        },
+        "guardar_como": "pedido"
+      }
+    },
+    {
+      "nota": "sin link de pago para un plan gratis",
+      "verifica": {
+        "tabla": "pack_payments_transactions",
+        "donde": {
+          "reference": "{pedido.public_order_number}"
+        },
+        "filas": 0
+      }
+    },
+    {
+      "nota": "suscripción en prueba",
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "estado": "trialing",
+          "valor_periodo": 0,
+          "trial_termina": {
+            "$no_nulo": true
+          }
+        }
+      }
+    }
+  ]
+}
