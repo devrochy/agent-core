@@ -408,7 +408,9 @@ async def verify_meta_credentials(
             f"/{phone_number_id}",
             token=access_token,
             app_secret=app_secret,
-            query={"fields": "id,verified_name,display_phone_number"},
+            # `platform_type` y `account_mode`: si el número ya está registrado en la Cloud
+            # API y si es de prueba de Meta o real (BYOK de producción, HU-CONN-06).
+            query={"fields": "id,verified_name,display_phone_number,platform_type,account_mode,status"},
         )
     except GraphError as exc:
         text = f"{exc.message} {exc.error_user_msg or ''}".lower()

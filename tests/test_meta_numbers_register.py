@@ -44,9 +44,11 @@ def mundo(monkeypatch):
     """Conexión con credenciales y un número suyo; anota escrituras y llamadas en `eventos`."""
     eventos: list[tuple] = []
     tokens: dict[tuple[str, str], str] = {}
-    phone = SimpleNamespace(id=uuid.uuid4(), tenant_id=TENANT, registered=False, pin_set=False)
+    phone = SimpleNamespace(
+        id=uuid.uuid4(), tenant_id=TENANT, connection_id=CONNECTION, deleted_at=None, registered=False, pin_set=False
+    )
     numeros = {PHONE_ID: phone}
-    connection = SimpleNamespace(id=CONNECTION, tenant_id=TENANT, health={})
+    connection = SimpleNamespace(id=CONNECTION, tenant_id=TENANT, health={}, status="connected", status_reason=None)
     creds = SimpleNamespace(access_token="tok", app_secret="sec", graph_api_version="v21.0")
     estado = SimpleNamespace(graph_error=None, phone=phone, creds=creds)
 
@@ -261,3 +263,15 @@ async def test_un_intento_por_minuto(mundo):
     assert segundo == "Esperá un minuto antes de reintentar el registro"
     assert [e for e in mundo.eventos if e[0] == "register"] == [("register", PHONE_ID, "tok", "111111")]
     assert list(mundo.redis.keys) == [f"register_number:{TENANT}:{PHONE_ID}"]
+
+
+@pytest.mark.asyncio
+async def test_byok_de_produccion_sin_pin_no_genera_uno(mundo):
+    """El número real del negocio no recibe un PIN que nadie ve (HU-CONN-06, ADR-0127)."""
+    mundo.connection.origin, mundo.connection.environment = "byok", "production"
+
+    error = await service.register_number(TENANT, str(CONNECTION), PHONE_ID)
+
+    assert error is not None and "PIN" in error
+    assert mundo.eventos == []
+    assert mundo.phone.registered is False

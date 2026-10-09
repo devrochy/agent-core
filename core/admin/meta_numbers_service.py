@@ -148,6 +148,9 @@ async def _phone_of_connection(connection: MetaConnection, phone_number_id: str)
                     PhoneNumber.phone_number_id == phone_number_id,
                     PhoneNumber.connection_id == connection.id,
                     PhoneNumber.tenant_id == connection.tenant_id,
+                    # Uno dado de baja (p. ej. el de prueba tras "Pasar a producción") ya no es de
+                    # la conexión: pudo tomarlo otro negocio (ADR-0127).
+                    PhoneNumber.deleted_at.is_(None),
                 )
             )
         ).scalar_one_or_none()
@@ -292,6 +295,8 @@ async def register_number(
       guarda cifrado ANTES de llamar a Meta, como en Embedded Signup, y nunca se loguea ni se
       devuelve. Si Meta lo rechaza vuelve el que había: un PIN errado no borra el bueno.
     - Un intento por minuto y número: cada PIN errado suma hacia el bloqueo 133008 de Meta.
+    - Si la conexión solo esperaba este registro (`pending` con `MOTIVO_NUMERO_SIN_REGISTRAR`,
+      un alta BYOK con número sin registrar), queda `connected` (HU-CONN-06, ADR-0127).
     """
     from core.gateway import meta_token_store
     from core.gateway.meta_errors import GraphError
@@ -325,14 +330,18 @@ async def register_number(
     if phone is None:
         return _NOT_THIS_CONNECTION
 
+    previous_pin = await meta_token_store.get_token(
+        connection.id, PIN_KIND, phone_number_id, tenant_id=connection.tenant_id
+    )
+    if pin is None and previous_pin is None and _es_byok_de_produccion(connection):
+        # El número real del negocio: un PIN generado que nadie ve le dejaría una verificación
+        # en dos pasos que el negocio no conoce (ADR-0127).
+        return "Escribe el PIN de 6 dígitos del número: será su verificación en dos pasos"
+
     redis = get_redis()
     rate_limit_key = f"register_number:{connection.tenant_id}:{phone_number_id}"
     if not await redis.set(rate_limit_key, "1", nx=True, ex=_REGISTER_RATE_LIMIT_S):
         return "Esperá un minuto antes de reintentar el registro"
-
-    previous_pin = await meta_token_store.get_token(
-        connection.id, PIN_KIND, phone_number_id, tenant_id=connection.tenant_id
-    )
     pin = pin or previous_pin or _generate_pin()
     if pin != previous_pin:
         # Antes de llamar a Meta: si el registro sale bien y algo falla después, el PIN que
@@ -368,6 +377,10 @@ async def register_number(
     return None
 
 
+def _es_byok_de_produccion(connection: MetaConnection) -> bool:
+    return getattr(connection, "origin", None) == "byok" and getattr(connection, "environment", None) == "production"
+
+
 async def _restore_pin(connection: MetaConnection, phone_number_id: str, previous_pin: str | None) -> None:
     from core.gateway import meta_token_store
     from core.gateway.meta_onboarding import PIN_KIND
@@ -383,10 +396,48 @@ async def _restore_pin(connection: MetaConnection, phone_number_id: str, previou
 async def _mark_registered(phone: PhoneNumber, connection: MetaConnection, *, pin_set: bool) -> None:
     async with get_session() as session:
         row = await session.get(PhoneNumber, phone.id)
-        if row is not None and row.tenant_id == connection.tenant_id:
+        if (
+            row is not None
+            and row.tenant_id == connection.tenant_id
+            and row.connection_id == connection.id
+            and row.deleted_at is None
+        ):
             row.registered = True
             if pin_set:
                 row.pin_set = True
+    from core.gateway.meta_connection_state import esperando_registro
+
+    if esperando_registro(connection):
+        await _conectar_si_solo_faltaba_el_registro(connection)
+
+
+async def _conectar_si_solo_faltaba_el_registro(connection: MetaConnection) -> None:
+    """Una conexión `pending` que solo esperaba el registro (alta BYOK con número sin
+    registrar) pasa a `connected` si ya no le queda ningún número vivo sin registrar. El alta
+    ya verificó token y suscripción; el registro que Meta acaba de aceptar era lo que faltaba
+    (HU-CONN-06, ADR-0127)."""
+    from sqlalchemy import func
+
+    from core.gateway.meta_connection_state import esperando_registro
+
+    async with get_session() as session:
+        # FOR UPDATE y releída: una desactivación o un alta concurrente no queda pisada.
+        locked = await get_live_meta_connection(session, connection.id, connection.tenant_id, for_update=True)
+        if locked is None or not esperando_registro(locked):
+            return
+        sin_registrar = (
+            await session.execute(
+                select(func.count()).select_from(PhoneNumber).where(
+                    PhoneNumber.tenant_id == connection.tenant_id,
+                    PhoneNumber.connection_id == connection.id,
+                    PhoneNumber.deleted_at.is_(None),
+                    PhoneNumber.registered.is_(False),
+                )
+            )
+        ).scalar_one()
+        if not sin_registrar:
+            locked.status = "connected"
+            locked.status_reason = None
 
 
 # Orígenes cuyo token es del propio negocio: solo con ellos se recorre el portafolio. Con

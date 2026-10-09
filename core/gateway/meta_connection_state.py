@@ -25,6 +25,14 @@ from core.shared.tenant import get_current_tenant_id
 MOTIVO_PAUSADA = "La conexión de WhatsApp está desactivada"
 MOTIVO_ELIMINADA = "La conexión de WhatsApp fue eliminada"
 MOTIVO_SIN_ALTA = "La conexión de WhatsApp no terminó el alta"
+# Razón fija de una conexión `pending` que solo espera el registro del número en la Cloud
+# API con su PIN (HU-CONN-06, ADR-0127). Registrar el número la deja `connected`.
+MOTIVO_NUMERO_SIN_REGISTRAR = "Falta registrar el número en la Cloud API con su PIN"
+
+
+def esperando_registro(connection: Any) -> bool:
+    """¿La conexión solo espera que se registre su número? (`pending` por el registro)."""
+    return connection.status == "pending" and connection.status_reason == MOTIVO_NUMERO_SIN_REGISTRAR
 
 
 def motivo_pausa(connection: Any) -> str | None:

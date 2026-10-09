@@ -308,7 +308,8 @@ async def test_credenciales_validas_crea_conexion_telefono_waba_y_suscribe(monke
     assert waba_rows[0].waba_id == "waba-1"
 
     kinds = {call[1] for call in put_calls}
-    assert kinds == {"app_access", CLOUD_API_ACCESS_TOKEN_KIND}
+    # Sin `verify_token` del admin se guarda uno propio de la conexión (ADR-0127).
+    assert kinds == {"app_access", CLOUD_API_ACCESS_TOKEN_KIND, WEBHOOK_VERIFY_TOKEN_KIND}
     assert all(call[0] == connection.id for call in put_calls)
 
     # POST /{waba_id}/subscribed_apps + GET de verificación.
@@ -402,21 +403,36 @@ async def test_graph_error_al_suscribir_se_envuelve_en_byok(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_verify_token_vacio_no_guarda_nada_nuevo(monkeypatch):
-    """Dejar el campo vacío no debe cambiar el comportamiento actual --
-    el handshake sigue cayendo al `.env` global."""
+async def test_verify_token_vacio_genera_uno_propio_de_la_conexion(monkeypatch):
+    """Sin `verify_token` del admin se genera uno aleatorio de la conexión, se guarda y es el
+    que se registra en Meta: nunca el global, que el handshake de cualquier negocio acepta
+    (seguimiento de ADR-0126, ADR-0127)."""
+    from core.config import get_settings
+
     _mock_verify_ok(monkeypatch)
     put_calls = _mock_token_store(monkeypatch)
     _mock_subscribe_ok(monkeypatch)
+    tenant_id = uuid.uuid4()
     added: list = []
-    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added))
+    monkeypatch.setattr(
+        byok_mod, "get_session", FakeSessionCM(added, tenant=SimpleNamespace(id=tenant_id, slug="mi-tenant"))
+    )
+    registrados = []
+
+    async def _fake_upsert(config, object_, *, callback_url, verify_token):
+        registrados.append(verify_token)
+        return SimpleNamespace()
+
+    monkeypatch.setattr("core.gateway.meta_subscriptions.upsert_app_subscription", _fake_upsert)
 
     await save_byok_connection(
-        uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1", verify_token=None,
+        tenant_id, uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1", verify_token=None,
     )
 
-    kinds = {call[1] for call in put_calls}
-    assert WEBHOOK_VERIFY_TOKEN_KIND not in kinds
+    (guardado,) = [call[3] for call in put_calls if call[1] == WEBHOOK_VERIFY_TOKEN_KIND]
+    assert len(guardado) >= 32
+    assert guardado != get_settings().whatsapp_verify_token
+    assert registrados == [guardado]
 
 
 @pytest.mark.asyncio
@@ -607,3 +623,120 @@ async def test_resolve_byok_token_acepta_degradada_error_y_pausada_al_final(monk
     assert "(meta_connections.status = 'degraded') THEN 1" in order_by
     assert "(meta_connections.status = 'error') THEN 2" in order_by
     assert order_by.index("origin") < order_by.index("'degraded'") < order_by.rindex("connected_at DESC")
+
+
+# ------------------------------------------------ entorno y registro (HU-CONN-06, ADR-0127)
+@pytest.mark.parametrize(
+    ("info", "esperado"),
+    [
+        ({"platform_type": "CLOUD_API"}, True),
+        ({"platform_type": "NOT_APPLICABLE", "status": "CONNECTED"}, False),
+        ({"platform_type": "ON_PREMISE"}, False),
+        ({"status": "CONNECTED"}, True),
+        ({"status": "PENDING"}, False),
+        ({}, True),  # respuesta sin los campos: como antes
+    ],
+)
+def test_numero_registrado_segun_meta(info, esperado):
+    assert byok_mod.numero_registrado(info) is esperado
+
+
+@pytest.mark.asyncio
+async def test_produccion_guarda_el_entorno_y_queda_conectada(monkeypatch):
+    _mock_verify_ok(
+        monkeypatch,
+        info={"display_phone_number": "+57 300", "platform_type": "CLOUD_API", "account_mode": "LIVE"},
+    )
+    _mock_token_store(monkeypatch)
+    _mock_subscribe_ok(monkeypatch)
+    added: list = []
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added))
+
+    connection = await save_byok_connection(
+        uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1", environment="production",
+    )
+
+    assert connection.environment == "production"
+    assert connection.status == "connected"
+    (phone,) = [obj for obj in added if hasattr(obj, "phone_number_id")]
+    assert phone.registered is True
+    assert phone.raw["account_mode"] == "LIVE"
+
+
+@pytest.mark.asyncio
+async def test_numero_sin_registrar_deja_la_conexion_pendiente_del_pin(monkeypatch):
+    from core.gateway.meta_connection_state import MOTIVO_NUMERO_SIN_REGISTRAR, esperando_registro
+
+    _mock_verify_ok(monkeypatch, info={"platform_type": "NOT_APPLICABLE", "account_mode": "LIVE"})
+    _mock_token_store(monkeypatch)
+    _mock_subscribe_ok(monkeypatch)
+    added: list = []
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added))
+
+    connection = await save_byok_connection(
+        uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1", environment="production",
+    )
+
+    assert connection.status == "pending"
+    assert connection.status_reason == MOTIVO_NUMERO_SIN_REGISTRAR
+    assert esperando_registro(connection)
+    (phone,) = [obj for obj in added if hasattr(obj, "phone_number_id")]
+    assert phone.registered is False
+
+
+@pytest.mark.asyncio
+async def test_produccion_rechaza_el_numero_de_prueba_de_meta(monkeypatch):
+    _mock_verify_ok(monkeypatch, info={"platform_type": "CLOUD_API", "account_mode": "SANDBOX"})
+    put_calls = _mock_token_store(monkeypatch)
+    added: list = []
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added))
+
+    with pytest.raises(ByokError, match="número es el de prueba"):
+        await save_byok_connection(
+            uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1",
+            environment="production",
+        )
+    assert added == [] and put_calls == []
+
+
+@pytest.mark.asyncio
+async def test_prueba_acepta_el_numero_de_prueba(monkeypatch):
+    _mock_verify_ok(monkeypatch, info={"platform_type": "CLOUD_API", "account_mode": "SANDBOX"})
+    _mock_token_store(monkeypatch)
+    _mock_subscribe_ok(monkeypatch)
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM([]))
+
+    connection = await save_byok_connection(
+        uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1", environment="sandbox",
+    )
+    assert connection.environment == "sandbox" and connection.status == "connected"
+
+
+@pytest.mark.asyncio
+async def test_rechaza_el_app_id_de_la_plataforma_sin_llamar_a_meta(monkeypatch):
+    """La app de la plataforma la comparten todos los negocios: por BYOK su dueño movería el
+    callback de todos (seguimiento de ADR-0126)."""
+    from core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "meta_app_id", "app-plataforma")
+    llamadas = []
+
+    async def _fake_verify(*args):
+        llamadas.append(args)
+        return True, "", {}
+
+    monkeypatch.setattr(byok_mod, "verify_meta_credentials", _fake_verify)
+
+    with pytest.raises(ByokError, match="app de Meta de la plataforma"):
+        await save_byok_connection(
+            uuid.uuid4(), uuid.uuid4(), "app-plataforma", "secret-1", "phone-1", "tok-1", "waba-1",
+        )
+    assert llamadas == []
+
+
+@pytest.mark.asyncio
+async def test_entorno_invalido(monkeypatch):
+    with pytest.raises(ByokError, match="entorno"):
+        await save_byok_connection(
+            uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1", environment="staging",
+        )

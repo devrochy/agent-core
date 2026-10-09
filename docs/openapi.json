@@ -3423,6 +3423,256 @@
         }
       }
     },
+    "/api/v1/admin/meta/connections/{connection_id}/promotion": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Promotion State",
+        "description": "Pasos de \"Pasar a producción\" de una conexión BYOK de prueba.",
+        "operationId": "promotion_state_api_v1_admin_meta_connections__connection_id__promotion_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromotionState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/connections/{connection_id}/promotion/number": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Promotion Number",
+        "description": "Paso 1: crea (o actualiza) la conexión de producción de la misma app con el número real\ny su WABA, con el alta BYOK. Si el número no está registrado en la Cloud API, esa conexión\nqueda `pending` hasta registrarlo con su PIN. La de prueba no cambia.",
+        "operationId": "promotion_number_api_v1_admin_meta_connections__connection_id__promotion_number_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromotionNumberIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromotionState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/connections/{connection_id}/promotion/verify": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Promotion Verify",
+        "description": "Chequeos de producción con la app del negocio (nunca la de la plataforma), sin cambiar\nnada.",
+        "operationId": "promotion_verify_api_v1_admin_meta_connections__connection_id__promotion_verify_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromotionChecks"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/connections/{connection_id}/promotion/finish": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Promotion Finish",
+        "description": "Paso 4: si los chequeos de la conexión de producción con la app del negocio pasan, se da\nde baja la de prueba (sus conversaciones quedan en pausa: nunca se responden desde el\nnúmero real). Si alguno falla, no cambia nada y vuelven los chequeos. `state` es el de la\nconexión de producción.",
+        "operationId": "promotion_finish_api_v1_admin_meta_connections__connection_id__promotion_finish_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromotionResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/meta/byok/token/inspect": {
       "post": {
         "tags": [
@@ -4060,7 +4310,7 @@
           "admin · wizard whatsapp"
         ],
         "summary": "Wizard Byok",
-        "description": "Alta con app propia (BYOK): guarda credenciales, suscribe la WABA y deja la conexión.",
+        "description": "Alta con app propia (BYOK), de prueba o de producción: guarda credenciales, suscribe la\nWABA y deja la conexión. Si el número no está registrado en la Cloud API, lo registra con\nel PIN enviado; sin PIN (o si Meta lo rechaza), la conexión queda `pending` hasta que se\nregistre (HU-CONN-06).",
         "operationId": "wizard_byok_api_v1_admin_meta_wizard_byok_post",
         "parameters": [
           {
@@ -4096,9 +4346,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Wizard Byok Api V1 Admin Meta Wizard Byok Post"
+                  "$ref": "#/components/schemas/WizardByokOut"
                 }
               }
             }
@@ -15963,6 +16211,11 @@
             "type": "string",
             "title": "Environment"
           },
+          "origin": {
+            "type": "string",
+            "title": "Origin",
+            "default": ""
+          },
           "status": {
             "type": "string",
             "title": "Status"
@@ -19754,6 +20007,98 @@
         ],
         "title": "PromiseStatusUpdate"
       },
+      "PromotionCheck": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "ok",
+          "detail"
+        ],
+        "title": "PromotionCheck"
+      },
+      "PromotionChecks": {
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/PromotionCheck"
+            },
+            "type": "array",
+            "title": "Checks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "checks"
+        ],
+        "title": "PromotionChecks"
+      },
+      "PromotionNumberIn": {
+        "properties": {
+          "waba_id": {
+            "type": "string",
+            "pattern": "^\\s*\\d{1,25}\\s*$",
+            "title": "Waba Id"
+          },
+          "phone_number_id": {
+            "type": "string",
+            "pattern": "^\\s*\\d{1,25}\\s*$",
+            "title": "Phone Number Id"
+          },
+          "access_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "waba_id",
+          "phone_number_id"
+        ],
+        "title": "PromotionNumberIn",
+        "description": "Número de producción. `access_token`: el token permanente (System User) con acceso a\nesa WABA; sin él se usa el guardado. `SecretStr`: no sale en el repr."
+      },
       "PromotionOut": {
         "properties": {
           "id": {
@@ -19880,6 +20225,31 @@
         ],
         "title": "PromotionOut"
       },
+      "PromotionResult": {
+        "properties": {
+          "promoted": {
+            "type": "boolean",
+            "title": "Promoted"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/PromotionCheck"
+            },
+            "type": "array",
+            "title": "Checks"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PromotionState"
+          }
+        },
+        "type": "object",
+        "required": [
+          "promoted",
+          "checks",
+          "state"
+        ],
+        "title": "PromotionResult"
+      },
       "PromotionSave": {
         "properties": {
           "promotion_id": {
@@ -20000,6 +20370,145 @@
           "type"
         ],
         "title": "PromotionSave"
+      },
+      "PromotionState": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "environment": {
+            "type": "string",
+            "title": "Environment"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Reason"
+          },
+          "meta_app_id": {
+            "type": "string",
+            "title": "Meta App Id"
+          },
+          "production_connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Production Connection Id"
+          },
+          "production_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Production Status"
+          },
+          "production_status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Production Status Reason"
+          },
+          "phone_number_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone Number Id"
+          },
+          "blocked_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Reason"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/PromotionStep"
+            },
+            "type": "array",
+            "title": "Steps"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "environment",
+          "status",
+          "status_reason",
+          "meta_app_id",
+          "production_connection_id",
+          "production_status",
+          "production_status_reason",
+          "phone_number_id",
+          "blocked_reason",
+          "steps"
+        ],
+        "title": "PromotionState",
+        "description": "Dónde va la promoción (con lo guardado, sin llamar a Meta). Los pasos 1 a 3 miran la\nconexión de producción de la misma app (`production_connection_id`), que crea el paso 1;\nla de prueba sigue igual hasta terminar. `blocked_reason`: por qué no se puede pasar a\nproducción (no es BYOK, usa la app de la plataforma, está desactivada)."
+      },
+      "PromotionStep": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "done": {
+            "type": "boolean",
+            "title": "Done"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "done"
+        ],
+        "title": "PromotionStep"
       },
       "ProveedorSuscripcion": {
         "properties": {
@@ -22115,6 +22624,28 @@
             "type": "string",
             "title": "Verify Token",
             "default": ""
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "sandbox",
+              "production"
+            ],
+            "title": "Environment",
+            "default": "sandbox"
+          },
+          "pin": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pin"
           }
         },
         "type": "object",
@@ -22126,6 +22657,51 @@
           "waba_id"
         ],
         "title": "WizardByokIn"
+      },
+      "WizardByokOut": {
+        "properties": {
+          "connectionId": {
+            "type": "string",
+            "title": "Connectionid"
+          },
+          "environment": {
+            "type": "string",
+            "title": "Environment"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "phoneNumberId": {
+            "type": "string",
+            "title": "Phonenumberid"
+          },
+          "needsRegistration": {
+            "type": "boolean",
+            "title": "Needsregistration",
+            "default": false
+          },
+          "registrationError": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registrationerror"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connectionId",
+          "environment",
+          "status",
+          "phoneNumberId"
+        ],
+        "title": "WizardByokOut",
+        "description": "Resultado del alta BYOK. `needsRegistration`: la conexión quedó `pending` esperando\nque el número se registre en la Cloud API con su PIN (`registrationError` dice por qué\nno se pudo con el PIN enviado, si vino uno)."
       },
       "WizardExchangeIn": {
         "properties": {

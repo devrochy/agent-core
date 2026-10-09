@@ -9,13 +9,14 @@ las pantallas y los errores siguen funcionando, pero el flujo real no se complet
 
 from __future__ import annotations
 
+import re
 import uuid
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
-from core.api.deps import Principal, require
+from core.api.deps import Principal, require, require_owner_or_master
 from core.api.errors import ApiError
 from core.config import get_settings
 from core.db.session import get_session
@@ -171,6 +172,9 @@ async def wizard_pin(
     return _view_out(view)
 
 
+_ID_DE_GRAPH = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
 class WizardByokIn(BaseModel):
     app_id: str
     app_secret: str
@@ -178,33 +182,90 @@ class WizardByokIn(BaseModel):
     access_token: str
     waba_id: str
     verify_token: str = ""
+    # "Prueba (mi app de Meta, número de prueba)" o "Producción (mi app de Meta)" (SPEC-08).
+    # Sin el campo, prueba: es lo que hacía el wizard antes de HU-CONN-06.
+    environment: Literal["sandbox", "production"] = "sandbox"
+    # PIN de verificación en dos pasos (6 dígitos) para registrar el número si Meta no lo
+    # reporta registrado. Opcional: sin él, la conexión queda `pending` y el registro se hace
+    # después. `SecretStr`: no sale en el repr del modelo.
+    pin: SecretStr | None = None
 
 
-@router.post("/wizard/byok", status_code=201)
+class WizardByokOut(BaseModel):
+    """Resultado del alta BYOK. `needsRegistration`: la conexión quedó `pending` esperando
+    que el número se registre en la Cloud API con su PIN (`registrationError` dice por qué
+    no se pudo con el PIN enviado, si vino uno)."""
+
+    # camelCase, como el resto de las respuestas del wizard (`connectionId`, `nextStep`).
+    connectionId: str
+    environment: str
+    status: str
+    phoneNumberId: str
+    needsRegistration: bool = False
+    registrationError: str | None = None
+
+
+@router.post("/wizard/byok", response_model=WizardByokOut, status_code=201)
 async def wizard_byok(
     payload: WizardByokIn,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
-) -> dict[str, Any]:
-    """Alta con app propia (BYOK): guarda credenciales, suscribe la WABA y deja la conexión."""
+) -> WizardByokOut:
+    """Alta con app propia (BYOK), de prueba o de producción: guarda credenciales, suscribe la
+    WABA y deja la conexión. Si el número no está registrado en la Cloud API, lo registra con
+    el PIN enviado; sin PIN (o si Meta lo rechaza), la conexión queda `pending` hasta que se
+    registre (HU-CONN-06)."""
+    from core.admin.meta_numbers_service import register_number
     from core.gateway.meta_byok import ByokError, save_byok_connection
+    from core.gateway.meta_connection_state import esperando_registro
 
     campos = (payload.app_id, payload.app_secret, payload.phone_number_id, payload.access_token, payload.waba_id)
     if not all(c.strip() for c in campos):
         raise ApiError.bad_request("Faltan campos obligatorios de BYOK.", "missing_fields")
+    if any(not _ID_DE_GRAPH.fullmatch(c.strip()) for c in (payload.app_id, payload.phone_number_id, payload.waba_id)):
+        # Van en la ruta de Graph: sin `/` ni `?` que la cambien.
+        raise ApiError.bad_request("App ID, WABA ID y Phone Number ID no tienen un formato válido.", "invalid_id")
+    if payload.environment == "production":
+        # Una conexión de producción atiende clientes reales: como "Pasar a producción" y
+        # registrar el webhook, solo el propietario del negocio o el master (ADR-0127).
+        require_owner_or_master(principal)
+    phone_number_id = payload.phone_number_id.strip()
     try:
         connection = await save_byok_connection(
             principal.tenant_id,
             principal.admin.id,
             payload.app_id.strip(),
             payload.app_secret.strip(),
-            payload.phone_number_id.strip(),
+            phone_number_id,
             payload.access_token.strip(),
             payload.waba_id.strip(),
+            environment=payload.environment,
             verify_token=payload.verify_token.strip() or None,
         )
     except ByokError as exc:
         raise ApiError.bad_request(str(exc)[:200], "byok_error") from exc
-    return {"connectionId": str(getattr(connection, "id", connection))}
+
+    status = connection.status
+    registration_error: str | None = None
+    pin = payload.pin.get_secret_value().strip() if payload.pin is not None else ""
+    if esperando_registro(connection) and pin:
+        registration_error = await register_number(
+            principal.tenant_id, str(connection.id), phone_number_id, pin=pin
+        )
+        # El estado lo decide el registro (`_conectar_si_solo_faltaba_el_registro`): se relee.
+        from core.db.models import MetaConnection
+
+        async with get_session() as session:
+            fila = await session.get(MetaConnection, connection.id)
+            if fila is not None and fila.tenant_id == principal.tenant_id:
+                status = fila.status
+    return WizardByokOut(
+        connectionId=str(connection.id),
+        environment=connection.environment,
+        status=status,
+        phoneNumberId=phone_number_id,
+        needsRegistration=status == "pending",
+        registrationError=registration_error,
+    )
 
 
 class ManualConnectionIn(BaseModel):
