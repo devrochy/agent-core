@@ -89,3 +89,15 @@ def test_los_journeys_del_repo_son_validos() -> None:
             assert journey["pasos"], ruta.name
             for paso in journey["pasos"]:
                 assert tipos & set(paso), f"{ruta.name}: paso sin tipo {paso}"
+
+
+def test_el_pago_simulado_tiene_la_firma_de_build_provider() -> None:
+    """Si `build_provider` suma un parámetro y el simulado no, la tool de pagos falla y el
+    journey lo ve como "pago en línea no disponible" (pasó con #324)."""
+    import inspect
+
+    from pack_payments.skills import build_provider
+
+    real = list(inspect.signature(build_provider).parameters)
+    simulado = list(inspect.signature(journeys.PagoSimulado()._proveedor).parameters)
+    assert simulado == real  # mismos nombres: la tool llama con `http=` por nombre

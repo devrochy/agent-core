@@ -62,7 +62,8 @@ class PagoSimulado:
         tool.build_provider = self._proveedor  # type: ignore[assignment]
         capacidad.build_provider = self._proveedor  # type: ignore[assignment]
 
-    def _proveedor(self, _config: Any) -> Any:
+    def _proveedor(self, config: Any, http: Any = None) -> Any:
+        # Misma firma que `pack_payments.skills.build_provider` (con el `http` de la tool, #324).
         from pack_payments.providers.base import (
             BasePaymentProvider,
             PaymentLinkResult,
