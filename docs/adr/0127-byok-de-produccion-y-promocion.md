@@ -59,16 +59,18 @@
    1. **Número real** (`cargar_numero_real`): WABA, número (solo dígitos) y, opcional, el token permanente. Llama
       a `save_byok_connection(environment="production")` con el App ID, el App Secret, el token (si no viene uno
       nuevo) y el `verify_token` guardados de la conexión de prueba: el secreto no sale del servidor y la
-      suscripción de la app no cambia. Crea la conexión de producción de esa app o, si ya existe, la reusa (el
-      índice único `uq_meta_connections_tenant_app` incluye el entorno: hay a lo sumo una). **La de prueba no se
+      suscripción de la app no cambia. Crea la conexión de producción de esa app; la reusa solo para reintentar
+      con el mismo número (el índice único `uq_meta_connections_tenant_app` incluye el entorno: hay a lo sumo
+      una). Si ya existe una de producción con otro número vivo, 409 `production_exists`: el alta le sumaría un
+      segundo número y el sender respondería por cualquiera de los dos. **La de prueba no se
       toca**: sus testers siguen funcionando;
    2. **Registro** con el PIN en la conexión de producción, la misma ruta del punto 2;
    3. **Plantillas**: al menos una `APPROVED` en la WABA del número real;
    4. **Verificar y terminar** (`terminar_promocion`): corre `checks_de_su_app` sobre la de producción y, si pasan
       (`puede_terminar`), da de baja la de prueba con `soft_delete_connection` (ADR-0122: tokens revocados,
       números y WABAs con `deleted_at`, razón "Reemplazada por la conexión de producción de la misma app"). No
-      cambia el estado de la de producción (ADR-0102). Con la fila de producción bloqueada se revisa que su
-      estado, números y WABAs sean los verificados; si cambiaron, `connection_changed`.
+      cambia el estado de la de producción (ADR-0102). No hay candado entre los chequeos y la baja: lo peor de
+      una carrera es dar de baja la de prueba, que se recupera reconectándola.
 
    **Las conversaciones de los testers se quedan con la conexión de prueba**, que queda eliminada y por eso en
    pausa: nunca se responden desde el número real (ADR-0122 §3). La conversación no guarda el número, y el sender

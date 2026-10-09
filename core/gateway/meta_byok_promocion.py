@@ -231,8 +231,20 @@ async def cargar_numero_real(
 
     async with get_session() as session:
         connection = await _conexion(session, tenant_id, connection_id)
-    if (error := _no_promovible(connection)) is not None:
-        raise error
+        if (error := _no_promovible(connection)) is not None:
+            raise error
+        pareja = await _pareja_de_produccion(session, connection)
+        otros = [n for n in await _numeros_vivos(session, pareja) if n.phone_number_id != phone_number_id] if pareja else []
+    if otros:
+        # Ya hay una conexión de producción de esta app atendiendo otro número: el alta la
+        # reusaría y le sumaría este (dos números vivos: el sender responde por cualquiera).
+        # Solo se reusa para reintentar con el mismo número.
+        raise PromocionError(
+            "Ya tienes una conexión de producción con esta app y otro número: usa esa conexión, "
+            "o elimínala antes de pasar esta",
+            code="production_exists",
+            status=409,
+        )
     app_secret = await stored_app_secret(connection)
     if not app_secret:
         raise PromocionError(
@@ -403,27 +415,6 @@ def puede_terminar(checks: list[PreflightCheck]) -> bool:
     return all(check.ok is True for check in checks if check.key in CHECKS_OBLIGATORIOS)
 
 
-async def _huella(session: Any, connection: MetaConnection) -> tuple[Any, ...]:
-    """Lo verificado de la conexión de producción: estado, números y WABAs vivos. Si cambia
-    entre los chequeos y el candado (otra carga del número en paralelo), no se termina."""
-    numeros = await _numeros_vivos(session, connection)
-    wabas = (
-        await session.execute(
-            select(WabaAccount.waba_id).where(
-                WabaAccount.tenant_id == connection.tenant_id,
-                WabaAccount.connection_id == connection.id,
-                WabaAccount.deleted_at.is_(None),
-            )
-        )
-    ).scalars().all()
-    return (
-        connection.status,
-        connection.meta_app_id,
-        tuple(sorted((n.phone_number_id, bool(n.registered)) for n in numeros)),
-        tuple(sorted(wabas)),
-    )
-
-
 async def verificar_promocion(tenant_id: uuid.UUID, connection_id: uuid.UUID) -> list[PreflightCheck]:
     """Chequeos con la app del negocio de la conexión de producción (la pareja de una de prueba,
     o la propia si ya es de producción), sin cambiar nada."""
@@ -452,19 +443,12 @@ async def terminar_promocion(
         pareja = await _pareja_de_produccion(session, connection)
         if pareja is None:
             raise PromocionError("Primero carga el número real", code="missing_real_number")
-        antes = await _huella(session, pareja)
     checks = await checks_de_su_app(pareja)
     if not puede_terminar(checks):
         return False, checks, pareja.id
 
-    async with get_session() as session:
-        locked = await get_live_meta_connection(session, pareja.id, tenant_id, for_update=True)
-        if locked is None or await _huella(session, locked) != antes:
-            raise PromocionError(
-                "La conexión de producción cambió mientras se verificaba: vuelve a intentarlo",
-                code="connection_changed",
-                status=409,
-            )
+    # Sin candado entre los chequeos y la baja: lo peor de una carrera es dar de baja la de
+    # prueba, que se recupera reconectándola; cargar otro número en la de producción da 409.
     error = await soft_delete_connection(tenant_id, str(connection.id))
     if error is not None:
         raise PromocionError(error, code="retire_failed", status=409)

@@ -716,3 +716,35 @@ async def test_produccion_pide_el_pin_explicito(app_client, monkeypatch) -> None
     assert r.status_code == 400
     assert "PIN" in r.json()["error"]["message"]
     assert not [c for c in graph.llamadas if c[1].endswith("/register")]
+
+
+async def test_no_pisa_una_conexion_de_produccion_que_atiende_otro_numero(app_client, monkeypatch) -> None:
+    """Si ya hay una conexión de producción de la misma app con otro número, la promoción no le
+    suma un segundo número (el sender respondería por cualquiera): 409 y nada cambia."""
+    from core.db.models import MetaConnection, PhoneNumber
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    headers = await api_headers(app_client, tid)
+    cid, app_id, _ = await _byok_de_prueba(tid)
+    atendido = _num()
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            produccion = MetaConnection(
+                tenant_id=tid, channel="whatsapp", environment="production", origin="byok", meta_app_id=app_id,
+                status="connected",
+            )
+            session.add(produccion)
+            await session.flush()
+            session.add(PhoneNumber(tenant_id=tid, connection_id=produccion.id, phone_number_id=atendido))
+            prod_id = produccion.id
+    graph = GraphFalso(app_id=app_id)
+    _instalar(monkeypatch, graph)
+
+    r = await app_client.post(_url(cid, "/number"), json={"waba_id": _num(), "phone_number_id": _num()}, headers=headers)
+
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "production_exists"
+    assert graph.llamadas == []
+    assert (await _fila(tid, prod_id)).status == "connected"
