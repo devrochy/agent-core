@@ -45,7 +45,8 @@ TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverif
 # Rate limit por (widget, IP) en Redis, compartido entre instancias. La clave
 # lleva la `key` pública del widget (1:1 con el tenant) y no el `tenant_id`
 # porque el límite corre ANTES de tocar la base: resolver el tenant primero
-# costaría una query por request, justo lo que el límite protege. Ventana
+# costaría una query por request aun con el cupo agotado. Una key bien formada
+# pero inexistente abre su propio cupo (y termina en 404). Ventana
 # deslizante con un sorted set; el `EXPIRE` borra la clave de una IP que deja de
 # mandar (sin crecer en memoria).
 _RATE_LIMIT = 30          # mensajes por (widget, IP) por ventana
@@ -58,7 +59,8 @@ _clock = time.time
 def _rate_key(key: str, ip: str) -> str:
     # Una key que no puede ser de ningún widget no entra a la clave tal cual:
     # el path es input del visitante y no debe crear claves arbitrarias.
-    key_part = key if _WIDGET_KEY_RE.fullmatch(key or "") else "_invalid"
+    # El marcador no cumple la regex: no comparte cupo con ninguna key real.
+    key_part = key if _WIDGET_KEY_RE.fullmatch(key or "") else "!invalid"
     return f"{_RATE_KEY_PREFIX}:{key_part}:{ip}"
 
 

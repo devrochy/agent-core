@@ -227,7 +227,7 @@ async def test_rate_limit_una_inundacion_no_infla_el_set(redis: _FakeRedis) -> N
 async def test_rate_limit_key_invalida_no_crea_claves_arbitrarias(redis: _FakeRedis) -> None:
     await web_chat._rate_limited("../../" + "x" * 500, "203.0.113.1")
     await web_chat._rate_limited("a" * 129, "203.0.113.1")
-    assert redis.keys() == {f"{web_chat._RATE_KEY_PREFIX}:_invalid:203.0.113.1"}
+    assert redis.keys() == {f"{web_chat._RATE_KEY_PREFIX}:!invalid:203.0.113.1"}
 
 
 async def test_rate_limit_redis_caido_deja_pasar(monkeypatch: pytest.MonkeyPatch) -> None:
