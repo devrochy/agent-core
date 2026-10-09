@@ -159,6 +159,25 @@ async def _predicado_ok(tool, tenant_id: uuid.UUID) -> bool:  # type: ignore[no-
         return False
 
 
+def _falla_tools_prohibidas(valor: object, llamadas: list[str]) -> str:
+    """Evalúa `must_not_call_tools`; devuelve el motivo de la falla o "".
+
+    - `true`: no debe llamar ninguna tool (los escenarios del framework).
+    - lista de nombres: solo esas cuentan; las demás tools del turno no fallan.
+    - `false`, lista vacía o ausente: sin restricción.
+    Otro tipo (un string suelto, un número) es un error del escenario y falla.
+    """
+    if valor is True:
+        return f"llamó tools inesperadas: {llamadas}" if llamadas else ""
+    if valor is False:
+        return ""
+    if not isinstance(valor, list) or not all(isinstance(n, str) for n in valor):
+        return f"must_not_call_tools inválido (true/false o lista de nombres): {valor!r}"
+    vetadas = set(valor)
+    prohibidas = [n for n in llamadas if n in vetadas]
+    return f"llamó tools prohibidas: {prohibidas} (llamó: {llamadas})" if prohibidas else ""
+
+
 async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tuple[str, bool, str]:
     scenario = json.loads(path.read_text())
     name = scenario["name"]
@@ -240,8 +259,11 @@ async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tup
         if banned.lower() in text_lower:
             failures.append(f"contiene texto prohibido: '{banned}'")
 
-    if assertions.get("must_not_call_tools") and response.tool_calls:
-        failures.append(f"llamó tools inesperadas: {[t.name for t in response.tool_calls]}")
+    falla = _falla_tools_prohibidas(
+        assertions.get("must_not_call_tools", False), [t.name for t in response.tool_calls]
+    )
+    if falla:
+        failures.append(falla)
 
     if "must_call_tool" in assertions:
         expected = assertions["must_call_tool"]
