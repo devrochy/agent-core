@@ -17,6 +17,7 @@ importar un pack y el dominio (cobro de plataforma) es otro.
 from __future__ import annotations
 
 import hashlib
+import hmac
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -128,7 +129,8 @@ class WompiBillingProvider(BaseBillingProvider):
 
         concatenated = "".join(parts) + str(timestamp) + self.events_secret
         computed = hashlib.sha256(concatenated.encode()).hexdigest()
-        return computed.lower() == str(checksum).lower()
+        # Comparación en tiempo constante (HU-SH-04): no filtra por tiempos cuánto coincide.
+        return hmac.compare_digest(computed.lower(), str(checksum).lower())
 
     def parse_webhook_event(self, payload: dict[str, Any]) -> BillingWebhookEvent:
         transaction = (payload.get("data") or {}).get("transaction") or {}

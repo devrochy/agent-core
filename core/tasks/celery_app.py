@@ -213,6 +213,47 @@ celery.conf.beat_schedule[_BILLING_LIFECYCLE_TASK] = {
     "schedule": crontab(hour="4", minute="0"),
 }
 
+# Renovación del plan de la plataforma (HU-SH-04, ADR-0123): el cobro del período siguiente
+# BILLING_DIAS_RENOVACION días antes, con aviso por el canal preferido. A las 13:00 UTC
+# (08:00 en Bogotá), para que el aviso llegue de mañana.
+_BILLING_RENOVACION_TASK = "core.billing_renovacion"
+
+
+@celery.task(name=_BILLING_RENOVACION_TASK)
+def _billing_renovacion() -> None:
+    from core.billing.renovacion import renovar_suscripciones
+
+    try:
+        run_async(renovar_suscripciones())
+    except Exception:
+        log.exception("cron_task_failed", task=_BILLING_RENOVACION_TASK)
+
+
+celery.conf.beat_schedule[_BILLING_RENOVACION_TASK] = {
+    "task": _BILLING_RENOVACION_TASK,
+    "schedule": crontab(hour="13", minute="0"),
+}
+
+# Conciliación diaria de los dos canales del cobro de la plataforma (HU-SH-04): compara el
+# asistente con el negocio y alerta cada diferencia con su detalle.
+_BILLING_CONCILIACION_TASK = "core.billing_conciliacion"
+
+
+@celery.task(name=_BILLING_CONCILIACION_TASK)
+def _billing_conciliacion() -> None:
+    from core.billing.conciliacion import conciliar
+
+    try:
+        run_async(conciliar())
+    except Exception:
+        log.exception("cron_task_failed", task=_BILLING_CONCILIACION_TASK)
+
+
+celery.conf.beat_schedule[_BILLING_CONCILIACION_TASK] = {
+    "task": _BILLING_CONCILIACION_TASK,
+    "schedule": crontab(hour="5", minute="30"),
+}
+
 # Despachador del outbox de dominio (HU-SUB-03, ADR-0107): cada 30 s entrega
 # los `domain_events` pendientes vencidos con backoff y DLQ.
 _DOMAIN_EVENTS_DISPATCH_TASK = "core.domain_events_dispatch"

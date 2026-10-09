@@ -23,6 +23,31 @@ from pack_commerce.precios_de_plan import ATRIBUTO
 class DatosDeAltaDelPedido:
     provider_id = "pack_commerce"
 
+    async def plan_de_variante(self, variant_id: str) -> str | None:
+        """Plan de la plataforma que vende la variante (atributo `precio_de_plan`), para un
+        cambio de plan o un cargo de período sin pedido (HU-SH-04, ADR-0123)."""
+        import uuid as _uuid
+
+        from pack_commerce.models import ProductVariant
+
+        tenant_id = get_current_tenant_id()
+        try:
+            vid = _uuid.UUID(str(variant_id))
+        except (TypeError, ValueError):
+            return None
+        if tenant_id is None:
+            return None
+        async with get_session() as session:
+            variante = (
+                await session.execute(
+                    select(ProductVariant).where(ProductVariant.tenant_id == tenant_id, ProductVariant.id == vid)
+                )
+            ).scalar_one_or_none()
+        if variante is None:
+            return None
+        plan = str((variante.attributes or {}).get(ATRIBUTO) or "").strip().lower()
+        return plan or None
+
     async def datos_de_alta(
         self, referencia: str, *, variant_id: str | None = None
     ) -> DatosDeAlta | None:

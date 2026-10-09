@@ -791,6 +791,18 @@ async def _try_process_media(message: Any) -> Any:
 
 
 # ---------------------------------------------------------------- webhook de billing (ADR-0046)
+def _monto_firmado(payload: dict, centavos: object) -> int | None:
+    """`amount_in_cents` solo si la firma lo cubre (ADR-0123, como `pack_payments`): un monto
+    sin firmar no se usa para comparar."""
+    propiedades = (payload.get("signature") or {}).get("properties") or []
+    if "transaction.amount_in_cents" not in propiedades or isinstance(centavos, bool):
+        return None
+    try:
+        return int(str(centavos))
+    except (TypeError, ValueError):
+        return None
+
+
 @router.post("/billing/wompi")
 async def receive_billing_wompi(request: Request) -> Response:
     """Webhook del pago de la SUSCRIPCIÓN de plataforma (Wompi).
@@ -822,11 +834,26 @@ async def receive_billing_wompi(request: Request) -> Response:
         log.warning("billing_webhook_sin_referencia")
         return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
 
-    from core.billing.checkout import apply_payment
+    from core.billing.checkout import apply_payment, tenant_del_pago
 
     try:
+        tenant_id = await tenant_del_pago(event.provider_reference)
+        if tenant_id is None:
+            # R-05 (ADR-0123): con la cuenta de Wompi compartida, el evento puede ser de un
+            # pago del negocio que vende los planes (su pack de pagos).
+            from core.billing.enrutador import reenviar_al_negocio
+
+            destino = await reenviar_al_negocio(payload)
+            return Response(
+                status_code=200,
+                content=json.dumps({"status": "reenviado" if destino != "ignored" else "ignored"}),
+                media_type="application/json",
+            )
         updated = await apply_payment(
-            provider_reference=event.provider_reference, status=event.status
+            provider_reference=event.provider_reference,
+            status=event.status,
+            tenant_id=tenant_id,
+            amount_in_cents=_monto_firmado(payload, event.amount_in_cents),
         )
     except Exception:
         log.exception("billing_webhook_apply_failed")
