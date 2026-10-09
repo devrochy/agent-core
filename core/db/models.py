@@ -618,6 +618,64 @@ class TenantInvitation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # Nonce del enlace de un solo uso (ADR-0120): el token se deriva de él y del id con
+    # APP_SECRET_KEY; la base nunca guarda el token. NULL = invitación sin enlace (ADR-0081).
+    token_nonce: Mapped[str | None] = mapped_column(Text, default=None)
+
+
+class ProvisioningRequest(Base):
+    """Alta automática de un negocio pedida por un negocio vendedor (HU-SH-03, ADR-0120).
+
+    Tabla de NEGOCIO del vendedor (`tenant_id`, RLS forzada): una fila por alta, única por
+    `(tenant_id, referencia)` y por `(tenant_id, subscription_id)`. `estado`:
+    `en_curso | completado | revision | omitido`. Solo la escribe el consumidor de
+    `subscription.activated` (identidad de servicio `provisioning`).
+    """
+
+    __tablename__ = "provisioning_requests"
+    __table_args__ = (
+        Index(
+            "uq_provisioning_requests_tenant_referencia",
+            "tenant_id",
+            "referencia",
+            unique=True,
+            postgresql_where=text("deleted_at is null"),
+        ),
+        Index(
+            "uq_provisioning_requests_tenant_subscription",
+            "tenant_id",
+            "subscription_id",
+            unique=True,
+            postgresql_where=text("subscription_id is not null and deleted_at is null"),
+        ),
+        Index("ix_provisioning_requests_tenant_estado", "tenant_id", "estado", "created_at"),
+        CheckConstraint(
+            "estado in ('en_curso', 'completado', 'revision', 'omitido')",
+            name="ck_provisioning_requests_estado",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    referencia: Mapped[str] = mapped_column(Text, nullable=False)
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    estado: Mapped[str] = mapped_column(Text, nullable=False, default="en_curso")
+    plan_id: Mapped[str | None] = mapped_column(Text, default=None)
+    vertical: Mapped[str | None] = mapped_column(Text, default=None)
+    negocio_tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="SET NULL"), default=None
+    )
+    negocio_slug: Mapped[str | None] = mapped_column(Text, default=None)
+    invitation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    motivo: Mapped[str | None] = mapped_column(Text, default=None)
+    detalle: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    intentos: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 # ---------------------------------------------------------------- escalamiento
