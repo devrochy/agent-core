@@ -18,6 +18,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
+import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -274,7 +276,25 @@ async def main() -> int:
         default=None,
         help="Slug del tenant: corre su golden set desde TENANTS_ROOT/<slug>/evals/",
     )
+    parser.add_argument("--k", type=int, default=1, help="Intentos por escenario (pass^k, HU-ARCH-28)")
+    parser.add_argument(
+        "--umbral",
+        type=float,
+        default=1.0,
+        help="pass@1 mínimo (0..1) para salir con 0; con 1.0 cualquier falla rompe el gate",
+    )
+    parser.add_argument("--reporte", default="", help="Ruta del reporte JSON (opcional)")
     args = parser.parse_args()
+    sys.path.insert(0, str(Path(__file__).parent))
+    from consistencia import (
+        Intento,
+        ResultadoEscenario,
+        escribir_reporte,
+        linea,
+        reporte,
+        resumir,
+        texto_resumen,
+    )
 
     patterns = [p.strip() for p in args.pattern.split(",") if p.strip()] or [""]
 
@@ -301,60 +321,42 @@ async def main() -> int:
 
     label = f"tenant {args.tenant}" if args.tenant else "framework"
     tenant_id = await _tenant_id(args.tenant) if args.tenant else TENANT1
-    print(f"Corriendo {len(paths)} escenarios ({label}, ref {_git_ref()})...\n")
-    exit_code = 0
-    results: list[tuple[str, bool, str]] = []
+    k = max(1, args.k)
+    print(f"Corriendo {len(paths)} escenarios con k={k} ({label}, ref {_git_ref()})...\n")
+    results: list[ResultadoEscenario] = []
     for path in paths:
-        try:
-            name, ok, detail = await run_scenario(path, spec, tenant_id)
-        except Exception as exc:
-            name, ok, detail = path.stem, False, f"excepción: {exc}"
-        status = "✓ PASS" if ok else "✗ FAIL"
-        print(f"  {status}  {name}" + (f"  — {detail}" if detail else ""))
-        results.append((name, ok, detail))
-        if not ok:
-            exit_code = 1
-    print(f"\nGolden set: {len(paths)} escenarios · spec {label} · ref {_git_ref()}")
+        escenario = ResultadoEscenario(nombre=path.stem)
+        for _ in range(k):
+            inicio = time.monotonic()
+            try:
+                name, ok, detail = await run_scenario(path, spec, tenant_id)
+            except Exception as exc:
+                name, ok, detail = path.stem, False, f"excepción: {exc}"
+            escenario.nombre = name
+            escenario.intentos.append(Intento(ok=ok, detalle=detail, segundos=round(time.monotonic() - inicio, 1)))
+        print(linea(escenario))
+        results.append(escenario)
+    resumen = resumir(results, k)
+    print(f"\n{texto_resumen('Golden set', resumen, args.umbral)} · spec {label} · ref {_git_ref()}")
 
     # Persistir la corrida atada a la versión del AgentSpec (ADR-0051). Solo con
     # tenant real (el framework no escribe en la BD de un cliente).
     if args.tenant:
-        await _persist_run(tenant_id, spec.version, results)
-    return exit_code
+        await _persist_run(tenant_id, spec.version, results, k)
+    if args.reporte:
+        escribir_reporte(args.reporte, reporte(f"golden:{label}", results, k))
+    # El gate se mide sobre pass@1 (ADR-0119): con k = 1 y umbral 1.0 es el de siempre.
+    return 0 if resumen.pass_1 >= args.umbral else 1
 
 
-async def _persist_run(
-    tenant_id: uuid.UUID, spec_version: str | None, results: list[tuple[str, bool, str]]
-) -> None:
+async def _persist_run(tenant_id: uuid.UUID, spec_version: str | None, results: list, k: int = 1) -> None:  # type: ignore[type-arg]
     """Guarda `eval_runs` + `eval_results` del tenant (best-effort, no rompe el gate)."""
     try:
-        from core.db.models import EvalResult, EvalRun
-        from core.db.session import get_session
-        from core.shared.tenant import tenant_scope
+        from consistencia import persistir
 
-        passed = sum(1 for _, ok, _ in results if ok)
-        async with tenant_scope(tenant_id):
-            async with get_session() as session:
-                run = EvalRun(
-                    tenant_id=tenant_id,
-                    spec_version=spec_version,
-                    git_ref=_git_ref(),
-                    passed=passed,
-                    total=len(results),
-                )
-                session.add(run)
-                await session.flush()
-                for name, ok, detail in results:
-                    session.add(
-                        EvalResult(
-                            tenant_id=tenant_id,
-                            run_id=run.id,
-                            scenario=name,
-                            ok=ok,
-                            detail=(detail or "")[:500],
-                        )
-                    )
-        print(f"  (corrida guardada: {passed}/{len(results)}, spec v{spec_version})")
+        await persistir(tenant_id, spec_version, _git_ref(), results, k)
+        passed = sum(r.ok for r in results)
+        print(f"  (corrida guardada: {passed}/{len(results)}, k={k}, spec v{spec_version})")
     except Exception as exc:
         print(f"  (no se pudo persistir la corrida: {exc})")
 

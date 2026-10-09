@@ -8,6 +8,7 @@ mira la primera respuesta del modelo (HU-SUB-12).
 python evals/journeys.py                      # set suscripciones completo
 python evals/journeys.py 03,05 --detalle      # algunos, con la conversación y las tools
 python evals/journeys.py --set otro --umbral 0.95 --reporte evals/reportes/journeys.json
+python evals/journeys.py 10,11 --k 4           # cada journey 4 veces: pass@1, pass^4 e inestables
 ```
 
 **Solo en bases de prueba** (CI, nightly o un stack efímero local): cada corrida deja un negocio
@@ -45,6 +46,7 @@ camino real del pack (capacidad, tool `generar_link_pago`, transacciones) sin re
 | `{"job": "pack.nombre"}` | Corre `<pack>.jobs._<nombre>(now)` con el reloj del journey. |
 | `{"verifica": {"tabla": ..., "donde": {...}, "espera": {...}}}` | Consulta filas del negocio (RLS + `tenant_id`). `donde` filtra por igualdad (`campo->>clave` en JSONB); `espera` compara la primera fila (`$no_nulo`, `$en`, `$contiene`); `filas` exige cantidad; `guardar_como` deja la fila para `{nombre.campo}`. |
 | `{"accion": "activar_suscripcion", "datos": {"plan": {...}}}` | Activa una suscripción del cliente con el proveedor del negocio (contrato del core), sin conversación. |
+| `{"simulado": {"objetivo": ..., "datos": {...}, "estilo": ..., "max_turnos": 8}, "espera_fin": [...]}` | Un cliente simulado (LLM, prompt en `evals/simulador/cliente.md`) conversa con el loop hasta cumplir su objetivo (`objetivo`), rendirse (`se_rindio`), pasar a un humano (`relevo`) o llegar al tope (`tope`). `espera_fin` lista los finales aceptados. La semilla (`semilla` del journey + número de intento) elige una variante de comportamiento. |
 
 `espera` de un turno:
 - `herramientas`: todas, en cualquier orden;
@@ -57,8 +59,25 @@ Las herramientas salen de `audit_log`. Sus resultados quedan como `{herramientas
 Variables en strings: `{cliente.id}`, `{negocio.id}`, `{ahora}`, `{pagos.ultimo.reference}`,
 `{suscripcion.subscription_id}` y las filas guardadas.
 
+## Consistencia (pass^k)
+
+Con `--k N` cada journey corre N veces, con un cliente nuevo y otra semilla por intento
+(HU-ARCH-28, ADR-0119). Por journey se reporta:
+
+- **pass@1**: fracción de intentos que pasaron;
+- **pass^k**: si pasaron los N;
+- **inestable**: pasó en unos y falló en otros. El reporte dice qué cambió: herramientas que faltaron o
+  aparecieron en los fallidos y el motivo más repetido.
+
+Cada `verifica` deja sus aserciones con esperado y real en `eval_results.state_assertions`, y el
+paso `simulado` deja su traza en `eval_results.simulator`. Un journey con cliente simulado se
+valida por el **estado final** en la base, no por el texto exacto de las respuestas.
+
+`evals/runner.py` (golden) también acepta `--k`, `--umbral` y `--reporte`.
+
 ## Umbral
 
-El nightly corre el set completo con `--umbral 0.95` y sube el reporte. El gate de CI corre un
+El umbral se mide sobre **pass@1**: con k = 1 es la tasa de siempre. El nightly corre el set
+completo con `--k 4 --umbral 0.95` y sube el reporte con pass^4. El gate de CI corre un
 subconjunto estable. Un journey que falla imprime la conversación, las herramientas y sus
 resultados.

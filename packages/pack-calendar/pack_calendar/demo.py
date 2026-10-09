@@ -22,6 +22,12 @@ def es_solape(exc: Exception) -> bool:
     return isinstance(exc, IntegrityError) and RESTRICCION_SIN_SOLAPE in str(getattr(exc, "orig", exc))
 
 
+def es_bloqueo_mutuo(exc: Exception) -> bool:
+    """Postgres puede cortar con `deadlock detected` (40P01) dos inserts que chocan en la
+    restricción de exclusión en vez de esperar: el que pierde se reintenta y ahí ve el solape."""
+    return getattr(getattr(exc, "orig", None), "sqlstate", None) == "40P01"
+
+
 def enlace_de(appt_type: Any, config: Any) -> str:
     """Enlace de la reunión: el del tipo de cita o, si no tiene, el general del negocio."""
     return (getattr(appt_type, "enlace_reunion", None) or getattr(config, "enlace_reunion", "") or "").strip()

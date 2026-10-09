@@ -101,6 +101,11 @@ class Contexto:
     pagos: PagoSimulado
     desfase: timedelta = timedelta(0)
     variables: dict[str, Any] = field(default_factory=dict)
+    semilla: int = 0
+    # HU-ARCH-28: evidencia del intento para pass^k.
+    aserciones: list[dict[str, Any]] = field(default_factory=list)
+    herramientas: list[str] = field(default_factory=list)
+    simulador: dict[str, Any] | None = None
 
     @property
     def ahora(self) -> datetime:
@@ -280,6 +285,7 @@ async def paso_usuario(ctx: Contexto, paso: dict[str, Any], registro: list[str])
     for h in herramientas:  # disponibles para los pasos siguientes: {herramientas.crear_pedido.order_id}
         ctx.variables.setdefault("herramientas", {})[h["nombre"]] = h["salida"]
     nombres = [h["nombre"] for h in herramientas]
+    ctx.herramientas.extend(nombres)
     registro.append(f"    herramientas: {nombres}")
     for h in herramientas:
         salida = json.dumps(h["salida"], ensure_ascii=False, default=str)
@@ -339,6 +345,65 @@ async def paso_job(ctx: Contexto, paso: dict[str, Any], registro: list[str]) -> 
     registro.append(f"    job {paso['job']} @ {ctx.ahora:%Y-%m-%d}: {resultado}")
 
 
+def _json(valor: Any) -> Any:
+    """Valor de la base serializable para el reporte (Decimal, fechas, UUID → str)."""
+    if valor is None or isinstance(valor, (bool, int, float, str, list, dict)):
+        return valor
+    return str(valor)
+
+
+async def paso_simulado(ctx: Contexto, paso: dict[str, Any], registro: list[str]) -> None:
+    """Cliente simulado (HU-ARCH-28): conversa con el loop real hasta cumplir su objetivo,
+    pedir relevo humano o llegar al tope de turnos. La conversación queda en la traza."""
+    from simulador import CUMPLIDO, RINDE, ClienteSimulado
+
+    from core.llm import resolve_provider
+    from core.orchestrator.loop import process_conversation
+    from core.shared.tenant import tenant_scope
+
+    datos = ctx.render(paso["simulado"])
+    cliente = ClienteSimulado(
+        objetivo=str(datos["objetivo"]),
+        datos=dict(datos.get("datos") or {}),
+        estilo=str(datos.get("estilo") or "cordial y breve"),
+        semilla=ctx.semilla,
+    )
+    tope = int(datos.get("max_turnos", 8))
+    async with tenant_scope(ctx.tenant_id):
+        provider = resolve_provider()
+    inicio = datetime.now(UTC) - timedelta(seconds=1)
+    fin = "tope"
+    for _ in range(tope):
+        mensaje = await cliente.siguiente(provider)
+        if mensaje == CUMPLIDO:
+            fin = "objetivo"
+            break
+        if mensaje == RINDE:
+            fin = "se_rindio"
+            break
+        cliente.anotar("cliente", mensaje)
+        async with tenant_scope(ctx.tenant_id):
+            resultado = await process_conversation(ctx.conversation_id, mensaje)
+        if resultado is None:
+            fin = "relevo"
+            break
+        cliente.anotar("asistente", resultado.text)
+        registro.append(f"    cliente: {mensaje}\n    asistente: {resultado.text}")
+        if resultado.escalated:
+            fin = "relevo"
+            break
+    herramientas = await _herramientas_desde(ctx, inicio)
+    for h in herramientas:
+        ctx.variables.setdefault("herramientas", {})[h["nombre"]] = h["salida"]
+    nombres = [h["nombre"] for h in herramientas]
+    ctx.herramientas.extend(nombres)
+    ctx.simulador = cliente.traza(fin)
+    registro.append(f"    simulador: fin={fin}, turnos={ctx.simulador['turnos']}, herramientas={nombres}")
+    esperados = paso.get("espera_fin")
+    if esperados and fin not in esperados:
+        raise FallaJourney(f"la conversación terminó por «{fin}», se esperaba {esperados}")
+
+
 def _coincide(valor: Any, esperado: Any) -> bool:
     if isinstance(esperado, dict):
         if "$no_nulo" in esperado:
@@ -392,16 +457,24 @@ async def paso_verifica(ctx: Contexto, paso: dict[str, Any], registro: list[str]
         async with get_session() as session:
             filas = [dict(r._mapping) for r in (await session.execute(consulta, valores)).all()]
     registro.append(f"    verifica {tabla}: {len(filas)} fila(s)")
-    if "filas" in datos and len(filas) != int(datos["filas"]):
-        raise FallaJourney(f"{tabla}: {len(filas)} filas, se esperaban {datos['filas']}")
+    donde = datos.get("donde") or {}
+    # HU-ARCH-28: cada aserción queda con esperado y real (eval_results.state_assertions).
+    if "filas" in datos:
+        ok = len(filas) == int(datos["filas"])
+        ctx.aserciones.append({"tabla": tabla, "donde": donde, "campo": "filas", "esperado": int(datos["filas"]), "real": len(filas), "ok": ok})
+        if not ok:
+            raise FallaJourney(f"{tabla}: {len(filas)} filas, se esperaban {datos['filas']}")
     esperado = datos.get("espera") or {}
     if esperado and not filas:
-        raise FallaJourney(f"{tabla}: sin filas para {datos.get('donde')}")
-    fallas = [
-        f"{tabla}.{campo} = {filas[0].get(campo)!r}, se esperaba {valor!r}"
-        for campo, valor in esperado.items()
-        if not _coincide(filas[0].get(campo), valor)
-    ]
+        ctx.aserciones.append({"tabla": tabla, "donde": donde, "campo": "*", "esperado": esperado, "real": None, "ok": False})
+        raise FallaJourney(f"{tabla}: sin filas para {donde}")
+    fallas = []
+    for campo, valor in esperado.items():
+        real = filas[0].get(campo)
+        ok = _coincide(real, valor)
+        ctx.aserciones.append({"tabla": tabla, "donde": donde, "campo": campo, "esperado": valor, "real": _json(real), "ok": ok})
+        if not ok:
+            fallas.append(f"{tabla}.{campo} = {real!r}, se esperaba {valor!r}")
     if fallas:
         raise FallaJourney("; ".join(fallas))
     if datos.get("guardar_como") and filas:
@@ -440,15 +513,29 @@ class Resultado:
     detalle: str = ""
     segundos: float = 0.0
     registro: list[str] = field(default_factory=list)
+    ctx: Contexto | None = None
+
+    def intento(self):  # type: ignore[no-untyped-def]
+        """El intento para pass^k (HU-ARCH-28)."""
+        from consistencia import Intento
+
+        return Intento(
+            ok=self.ok,
+            detalle=self.detalle,
+            herramientas=list(self.ctx.herramientas) if self.ctx else [],
+            aserciones=list(self.ctx.aserciones) if self.ctx else [],
+            simulador=self.ctx.simulador if self.ctx else None,
+            segundos=round(self.segundos, 1),
+        )
 
 
-async def correr_journey(ruta: Path, tenant_id: uuid.UUID, pagos: PagoSimulado) -> Resultado:
+async def correr_journey(ruta: Path, tenant_id: uuid.UUID, pagos: PagoSimulado, semilla: int = 0) -> Resultado:
     journey = json.loads(ruta.read_text(encoding="utf-8"))
     nombre = journey.get("nombre", ruta.stem)
     inicio = time.monotonic()
     registro: list[str] = []
     customer_id, conversation_id = await nuevo_cliente(tenant_id, journey.get("cliente", "Cliente de prueba"))
-    ctx = Contexto(tenant_id, customer_id, conversation_id, pagos)
+    ctx = Contexto(tenant_id, customer_id, conversation_id, pagos, semilla=int(journey.get("semilla", 0)) + semilla)
     for numero, paso in enumerate(journey["pasos"], start=1):
         registro.append(f"  paso {numero}: {paso.get('nota', next(iter(paso)))}")
         try:
@@ -464,16 +551,18 @@ async def correr_journey(ruta: Path, tenant_id: uuid.UUID, pagos: PagoSimulado) 
                 await paso_verifica(ctx, paso, registro)
             elif "accion" in paso:
                 await paso_accion(ctx, paso, registro)
+            elif "simulado" in paso:
+                await paso_simulado(ctx, paso, registro)
             else:
                 raise FallaJourney(f"paso sin tipo conocido: {sorted(paso)}")
         except FallaJourney as exc:
-            return Resultado(nombre, False, f"paso {numero}: {exc}", time.monotonic() - inicio, registro)
+            return Resultado(nombre, False, f"paso {numero}: {exc}", time.monotonic() - inicio, registro, ctx)
         except Exception as exc:  # un error del sistema bajo prueba también es una falla del journey
             import traceback
 
             registro.append("    " + "".join(traceback.format_exc(limit=-6)).replace("\n", "\n    "))
-            return Resultado(nombre, False, f"paso {numero}: {type(exc).__name__}: {exc}", time.monotonic() - inicio, registro)
-    return Resultado(nombre, True, "", time.monotonic() - inicio, registro)
+            return Resultado(nombre, False, f"paso {numero}: {type(exc).__name__}: {exc}", time.monotonic() - inicio, registro, ctx)
+    return Resultado(nombre, True, "", time.monotonic() - inicio, registro, ctx)
 
 
 def rutas_del_set(set_id: str, patrones: list[str]) -> tuple[dict[str, Any], list[Path]]:
@@ -501,61 +590,58 @@ async def _preparar_proceso() -> None:
 
 
 async def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Runner de journeys (HU-SUB-12)")
+    parser = argparse.ArgumentParser(description="Runner de journeys (HU-SUB-12) con pass^k (HU-ARCH-28)")
     parser.add_argument("patron", nargs="?", default="", help="Subconjunto por nombre (ej: 03,05)")
     parser.add_argument("--set", default="suscripciones", help="Carpeta de evals/journeys/")
-    parser.add_argument("--umbral", type=float, default=1.0, help="Pase mínimo (0..1) para salir con 0")
+    parser.add_argument("--k", type=int, default=1, help="Intentos por journey (4 en el nightly, 8 antes de una release)")
+    parser.add_argument("--umbral", type=float, default=1.0, help="pass@1 mínimo (0..1) para salir con 0")
     parser.add_argument("--reporte", default="", help="Ruta del reporte JSON (opcional)")
-    parser.add_argument("--detalle", action="store_true", help="Imprimir la conversación de cada journey")
+    parser.add_argument("--detalle", action="store_true", help="Imprimir la conversación de cada intento")
     args = parser.parse_args(argv)
+    sys.path.insert(0, str(EVALS_DIR))
+    from consistencia import (
+        ResultadoEscenario,
+        escribir_reporte,
+        linea,
+        reporte,
+        resumir,
+        texto_resumen,
+    )
 
     patrones = [p.strip() for p in args.patron.split(",") if p.strip()] or [""]
     negocio, rutas = rutas_del_set(args.set, patrones)
     if not rutas:
         print(f"No hay journeys que matcheen '{args.patron}' en evals/journeys/{args.set}/")
         return 1
+    k = max(1, args.k)
 
     _solo_bases_de_prueba()
     await _preparar_proceso()
     pagos = PagoSimulado(monto_minimo=float((negocio.get("pagos_simulados") or {}).get("monto_minimo", 0)))
     tenant_id = await preparar_negocio(negocio, pagos)
-    print(f"Corriendo {len(rutas)} journeys del set {args.set} (negocio {tenant_id})...\n")
+    print(f"Corriendo {len(rutas)} journeys del set {args.set} con k={k} (negocio {tenant_id})...\n")
 
-    resultados: list[Resultado] = []
+    resultados: list[ResultadoEscenario] = []
     for ruta in rutas:
-        resultado = await correr_journey(ruta, tenant_id, pagos)
-        resultados.append(resultado)
-        estado = "✓ PASS" if resultado.ok else "✗ FAIL"
-        print(f"  {estado}  {resultado.nombre} ({resultado.segundos:.0f}s)" + (f"  — {resultado.detalle}" if resultado.detalle else ""))
-        if args.detalle or not resultado.ok:
-            print("\n".join(resultado.registro))
+        escenario = ResultadoEscenario(nombre=ruta.stem)
+        for intento in range(k):
+            resultado = await correr_journey(ruta, tenant_id, pagos, semilla=intento)
+            escenario.nombre = resultado.nombre
+            escenario.intentos.append(resultado.intento())
+            if args.detalle or not resultado.ok:
+                print(f"  — intento {intento + 1}/{k} {'ok' if resultado.ok else 'falló'} ({resultado.segundos:.0f}s)")
+                print("\n".join(resultado.registro))
+        resultados.append(escenario)
+        print(linea(escenario))
 
-    pasaron = sum(r.ok for r in resultados)
-    tasa = pasaron / len(resultados)
-    print(f"\nJourneys {args.set}: {pasaron}/{len(resultados)} ({tasa:.0%}) · umbral {args.umbral:.0%}")
-    await _guardar(tenant_id, args.set, resultados)
+    resumen = resumir(resultados, k)
+    print("\n" + texto_resumen(f"Journeys {args.set}", resumen, args.umbral))
+    simulador = {"k": k, "semillas": list(range(k))}
+    await _guardar(tenant_id, args.set, resultados, k, simulador)
     if args.reporte:
-        destino = Path(args.reporte)
-        destino.parent.mkdir(parents=True, exist_ok=True)
-        destino.write_text(
-            json.dumps(
-                {
-                    "set": args.set,
-                    "fecha": datetime.now(UTC).isoformat(),
-                    "pasaron": pasaron,
-                    "total": len(resultados),
-                    "tasa": tasa,
-                    "journeys": [
-                        {"nombre": r.nombre, "ok": r.ok, "detalle": r.detalle, "segundos": round(r.segundos, 1)}
-                        for r in resultados
-                    ],
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-    return 0 if tasa >= args.umbral else 1
+        escribir_reporte(args.reporte, reporte(args.set, resultados, k, simulador))
+    # El gate del 0A no cambia (ADR-0119): se mide sobre pass@1; pass^k se reporta.
+    return 0 if resumen.pass_1 >= args.umbral else 1
 
 
 def _solo_bases_de_prueba() -> None:
@@ -568,22 +654,22 @@ def _solo_bases_de_prueba() -> None:
         raise SystemExit(f"Los journeys no corren con APP_ENV={entorno!r}: solo en bases de prueba.")
 
 
-async def _guardar(tenant_id: uuid.UUID, set_id: str, resultados: list[Resultado]) -> None:
+async def _guardar(tenant_id: uuid.UUID, set_id: str, resultados: list, k: int, simulador: dict) -> None:  # type: ignore[type-arg]
     """`eval_runs` del negocio de la corrida, atado a la versión de su AgentSpec."""
     try:
+        from consistencia import persistir
+
         from core.agents.spec import load_active_spec
         from core.shared.tenant import tenant_scope
 
         sys.path.insert(0, str(EVALS_DIR))
-        from runner import _persist_run  # type: ignore[import-not-found]
+        from runner import _git_ref  # type: ignore[import-not-found]
 
         async with tenant_scope(tenant_id):
             spec = await load_active_spec()
-        await _persist_run(
-            tenant_id, f"journeys:{set_id}@{spec.version}", [(r.nombre, r.ok, r.detalle) for r in resultados]
-        )
+        await persistir(tenant_id, f"journeys:{set_id}@{spec.version}", _git_ref(), resultados, k, simulador)
     except Exception as exc:  # no rompe la corrida: el resultado ya se imprimió
-        print(f"(no se guardó la corrida: {type(exc).__name__})")
+        print(f"(no se guardó la corrida: {type(exc).__name__}: {exc})")
 
 
 async def _correr() -> int:
