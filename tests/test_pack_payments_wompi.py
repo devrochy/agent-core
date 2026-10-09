@@ -18,7 +18,12 @@ import hashlib
 
 import pytest
 from pack_payments.providers.base import PaymentRequestRejected
-from pack_payments.providers.wompi import MIN_AMOUNT_COP, WompiProvider
+from pack_payments.providers.wompi import (
+    PRODUCTION_MIN_AMOUNT_COP,
+    SANDBOX_MIN_AMOUNT_COP,
+    WompiProvider,
+    min_amount_cop,
+)
 
 
 def _make_payload(
@@ -31,8 +36,9 @@ def _make_payload(
     reference="OC-0001",
     events_secret="test_events_secret",
     tamper=False,
+    properties=None,
 ):
-    properties = ["transaction.id", "transaction.status", "transaction.amount_in_cents"]
+    properties = properties or ["transaction.id", "transaction.status", "transaction.amount_in_cents"]
     data = {
         "transaction": {
             "id": transaction_id,
@@ -217,5 +223,86 @@ async def test_create_payment_link_rejection_is_recoverable_not_plugin_error(mon
         )
 
 
-def test_min_amount_cop_constant_matches_known_wompi_minimum():
-    assert MIN_AMOUNT_COP == 150_000
+def test_min_amount_depends_on_environment():
+    """150.000 COP es el mínimo del SANDBOX (422 real en pruebas); en producción
+    Wompi publica 1.500 COP (modelo Agregador, soporte.wompi.co)."""
+    assert SANDBOX_MIN_AMOUNT_COP == 150_000
+    assert PRODUCTION_MIN_AMOUNT_COP == 1_500
+    assert min_amount_cop(sandbox=True) == 150_000
+    assert min_amount_cop(sandbox=False) == 1_500
+    assert _provider().min_amount_cop == 150_000
+    assert WompiProvider("pub", "prv_prod_x", "s", sandbox=False).min_amount_cop == 1_500
+
+
+@pytest.mark.asyncio
+async def test_create_payment_link_production_accepts_amount_below_sandbox_minimum(monkeypatch):
+    """El Pollo Broaster ($60.000) que el sandbox rechaza sí se cobra en producción."""
+    captured: dict = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"data": {"id": "link-prod"}}
+
+    class FakeAsyncClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            captured["url"] = url
+            captured["json"] = json
+            return FakeResponse()
+
+    import pack_payments.providers.wompi as wompi_mod
+
+    monkeypatch.setattr(wompi_mod.httpx, "AsyncClient", FakeAsyncClient)
+
+    provider = WompiProvider("pub", "prv_prod_x", "s", sandbox=False)
+    result = await provider.create_payment_link(
+        reference="OC-0001", amount=60_000, currency="COP", expires_in_hours=24
+    )
+    assert result.provider_reference == "link-prod"
+    assert captured["url"].startswith("https://production.wompi.co/")
+    assert captured["json"]["amount_in_cents"] == 6_000_000
+
+
+@pytest.mark.asyncio
+async def test_create_payment_link_production_rejects_below_published_minimum():
+    provider = WompiProvider("pub", "prv_prod_x", "s", sandbox=False)
+    with pytest.raises(PaymentRequestRejected, match="1,500"):
+        await provider.create_payment_link(reference="OC-0001", amount=1_000, currency="COP", expires_in_hours=24)
+
+
+def test_parse_webhook_event_amount_from_signed_amount_in_cents():
+    payload = _make_payload(amount_in_cents=15_000_050)
+    event = _provider().parse_webhook_event(payload)
+    assert event.amount == 150_000.50
+
+
+def test_parse_webhook_event_amount_none_when_not_signed():
+    """Wompi avisa que `signature.properties` pueden variar: si el monto no está
+    firmado no se confía en él (alguien pudo cambiarlo sin romper el checksum)."""
+    payload = _make_payload(properties=["transaction.id", "transaction.status"])
+    payload["data"]["transaction"]["amount_in_cents"] = 1
+    assert _provider().parse_webhook_event(payload).amount is None
+
+
+@pytest.mark.parametrize("cents", [None, "abc", 1.5, True, -100, float("nan")])
+def test_parse_webhook_event_amount_none_when_invalid(cents):
+    payload = _make_payload()
+    payload["data"]["transaction"]["amount_in_cents"] = cents
+    assert _provider().parse_webhook_event(payload).amount is None
+
+
+def test_parse_webhook_event_amount_accepts_numeric_string():
+    payload = _make_payload()
+    payload["data"]["transaction"]["amount_in_cents"] = "4490000"
+    assert _provider().parse_webhook_event(payload).amount == 44_900.0

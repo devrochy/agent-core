@@ -10,6 +10,7 @@ pago sin importarlo.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from fastapi import APIRouter, Request
@@ -80,9 +81,27 @@ async def wompi_webhook(request: Request, slug: str) -> dict[str, Any]:
     return {"status": "ok"}
 
 
+# Estado de una transacción cuyo pago aprobado llegó con un monto distinto al
+# del link (o sin monto firmado): no se confirma y queda para revisión manual.
+MONTO_DISTINTO = "monto_distinto"
+
+
+def _monto_coincide(pagado: float | None, esperado: float | Decimal | None) -> bool:
+    """El monto que el proveedor firmó coincide con el que pedimos al crear el link.
+
+    `pagado=None` (el proveedor no firmó el monto) nunca coincide: confirmar un
+    pago sin saber cuánto se pagó es confiar en que la pasarela respetó el monto
+    fijo del link.
+    """
+    if pagado is None or esperado is None:
+        return False
+    return abs(Decimal(str(pagado)) - Decimal(str(esperado))) <= Decimal("0.01")
+
+
 async def _apply_webhook_event(
     event: WebhookEvent, raw_payload: dict[str, Any], provider_name: str
 ) -> PaymentTransaction | None:
+    alerta: dict[str, Any] | None = None
     async with get_session() as session:
         transaction = (
             await session.execute(
@@ -95,32 +114,99 @@ async def _apply_webhook_event(
         if transaction is None:
             log.warning("wompi_webhook_no_matching_transaction", provider_reference=event.provider_reference)
             return None
-        status_changed = transaction.status != event.status
-        transaction.status = event.status
-        transaction.last_webhook_payload = raw_payload
-        await session.flush()
-        await session.refresh(transaction)
 
-        # Solo se emite en la transición real de estado (como antes); el outbox
-        # lo escribe en esta misma transacción, con el tenant explícito.
-        if status_changed and event.status in ("aprobado", "rechazado"):
-            from core.events.outbox import emit_domain
-            from core.shared.events import ON_PAYMENT_CONFIRMED, ON_PAYMENT_REJECTED
-
-            topic = ON_PAYMENT_CONFIRMED if event.status == "aprobado" else ON_PAYMENT_REJECTED
-            await emit_domain(
-                session,
-                tenant_id=get_current_tenant_id(),
-                topic=topic,
-                dedupe_key=f"payment:{transaction.provider_reference}:{event.status}",
-                payload={
-                    "reference": transaction.reference,
-                    "provider": provider_name,
-                    "provider_reference": transaction.provider_reference,
-                    "amount": float(transaction.amount),
-                },
+        if (
+            event.status == "aprobado"
+            and transaction.status != "aprobado"
+            and not _monto_coincide(event.amount, transaction.amount)
+        ):
+            # Un pago aprobado por otro monto no confirma nada: se guarda el
+            # payload, la transacción queda en revisión y se avisa a los dueños
+            # (una sola vez: los reintentos de Wompi no repiten la alerta). Una
+            # transacción ya confirmada no se revierte por un reenvío.
+            log.error(
+                "wompi_webhook_monto_distinto",
+                reference=transaction.reference,
+                esperado=str(transaction.amount),
+                recibido=str(event.amount),
             )
-        return transaction
+            if transaction.status != MONTO_DISTINTO:
+                alerta = {
+                    "transaction_id": str(transaction.id),
+                    "reference": transaction.reference,
+                    "provider_reference": transaction.provider_reference,
+                    "esperado": str(transaction.amount),
+                    "recibido": str(event.amount) if event.amount is not None else None,
+                }
+            transaction.status = MONTO_DISTINTO
+            transaction.last_webhook_payload = raw_payload
+            await session.flush()
+        elif transaction.status == MONTO_DISTINTO and event.status != "aprobado":
+            # Ya hay plata en revisión manual: un evento posterior (rechazo de otro
+            # intento, pendiente) no la saca de ahí ni emite nada.
+            transaction.last_webhook_payload = raw_payload
+            await session.flush()
+        else:
+            status_changed = transaction.status != event.status
+            transaction.status = event.status
+            transaction.last_webhook_payload = raw_payload
+            await session.flush()
+            await session.refresh(transaction)
+
+            # Solo se emite en la transición real de estado (como antes); el outbox
+            # lo escribe en esta misma transacción, con el tenant explícito.
+            if status_changed and event.status in ("aprobado", "rechazado"):
+                from core.events.outbox import emit_domain
+                from core.shared.events import ON_PAYMENT_CONFIRMED, ON_PAYMENT_REJECTED
+
+                topic = ON_PAYMENT_CONFIRMED if event.status == "aprobado" else ON_PAYMENT_REJECTED
+                # Confirmado: el monto que firmó el proveedor (ya validado contra el
+                # del link). Rechazado: el del link si el proveedor no lo firmó.
+                amount = event.amount if event.amount is not None else float(transaction.amount)
+                await emit_domain(
+                    session,
+                    tenant_id=get_current_tenant_id(),
+                    topic=topic,
+                    dedupe_key=f"payment:{transaction.provider_reference}:{event.status}",
+                    payload={
+                        "reference": transaction.reference,
+                        "provider": provider_name,
+                        "provider_reference": transaction.provider_reference,
+                        "amount": amount,
+                    },
+                )
+
+    # Fuera de la transacción: la alerta solo sale si el cambio de estado se guardó.
+    if alerta is not None:
+        await _alertar_monto_distinto(alerta)
+    return transaction
+
+
+async def _alertar_monto_distinto(alerta: dict[str, Any]) -> None:
+    """Pago aprobado con un monto distinto al del link: auditoría + push a los dueños."""
+    from core.shared.audit import record_audit
+
+    await record_audit(
+        actor=f"plugin:{PLUGIN_ID}",
+        action="payments_pago_monto_distinto",
+        output_data=alerta,
+    )
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return
+    recibido = alerta["recibido"] if alerta["recibido"] is not None else "un monto sin verificar"
+    try:
+        from core.tasks.push_tasks import notify_owners_push
+
+        notify_owners_push.delay(
+            str(tenant_id),
+            "Pago en línea con monto distinto",
+            f"Llegó un pago de {recibido} para {alerta['reference']}, pero el cobro era de "
+            f"{alerta['esperado']}. No se confirmó: revísalo.",
+            {"kind": "payments_pago_monto_distinto", "transaction_id": alerta["transaction_id"]},
+        )
+    except Exception:
+        log.warning("payments_alerta_push_fallida", reference=alerta["reference"], exc_info=True)
 
 
 class PaymentsModule(BaseModule):

@@ -10,16 +10,21 @@ El body de creación de un link de pago (`POST /v1/payment_links`) se
 verificó contra el sandbox REAL de Wompi (encontrado en vivo, tenant
 yopoldo, 2026-09-11: un 422 real por `collect_shipping` faltante) y contra
 la implementación ya probada de `agent-sale`
-(`src/payments/wompiClient.ts`), que documenta además un mínimo real de
-Wompi para el monto (150.000 COP) no explícito en su guía pública —
-descubierto ahí también por QA contra el sandbox real, no por
-documentación.
+(`src/payments/wompiClient.ts`).
+
+Mínimo del monto: el de 150.000 COP salió de un 422 del SANDBOX ("La base de
+la transacción debe ser igual o mayor a 150000"), no de la documentación. En
+producción el mínimo publicado por Wompi es 1.500 COP en el modelo Agregador
+(y $1 en Gateway), según soporte.wompi.co ("¿Cuál es el monto mínimo para
+realizar una transacción?", consultado 2026-10-08). Por eso el chequeo
+depende del ambiente.
 """
 
 from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import httpx
@@ -37,10 +42,17 @@ log = get_logger(__name__)
 PRODUCTION_BASE_URL = "https://production.wompi.co/v1"
 SANDBOX_BASE_URL = "https://sandbox.wompi.co/v1"
 
-# Mínimo real de Wompi para la base de una transacción en COP -- no está en
-# su guía pública de Links de pago, lo confirmó agent-sale por QA contra el
-# sandbox real (mismo 422 que si no se chequea acá antes de llamar).
-MIN_AMOUNT_COP = 150_000
+# Mínimo del sandbox de Wompi para la base de una transacción en COP: no está
+# en su guía pública, lo confirmó agent-sale por QA contra el sandbox real
+# (mismo 422 que si no se chequea acá antes de llamar).
+SANDBOX_MIN_AMOUNT_COP = 150_000
+# Mínimo publicado para producción (modelo Agregador; Gateway admite desde $1).
+PRODUCTION_MIN_AMOUNT_COP = 1_500
+
+
+def min_amount_cop(sandbox: bool) -> int:
+    """Mínimo en COP que Wompi acepta en el ambiente dado."""
+    return SANDBOX_MIN_AMOUNT_COP if sandbox else PRODUCTION_MIN_AMOUNT_COP
 
 # Wompi usa su propio vocabulario de estado de transacción; lo normalizamos
 # al de este pack para que ningún pack downstream tenga que conocerlo.
@@ -61,18 +73,19 @@ class WompiProvider(BasePaymentProvider):
         self.private_key = private_key
         self.events_secret = events_secret
         self.base_url = SANDBOX_BASE_URL if sandbox else PRODUCTION_BASE_URL
+        self.min_amount_cop = min_amount_cop(sandbox)
 
     async def create_payment_link(
         self, *, reference: str, amount: float, currency: str, expires_in_hours: int
     ) -> PaymentLinkResult:
-        if currency == "COP" and amount < MIN_AMOUNT_COP:
+        if currency == "COP" and amount < self.min_amount_cop:
             # Chequeo ANTES de llamar a la red: sabemos que Wompi va a rechazar
             # esto (mismo criterio que agent-sale, wompiClient.ts) -- evita una
             # llamada de red que ya sabemos que falla, y devuelve un mensaje
             # accionable en vez de un 422 crudo.
             raise PaymentRequestRejected(
                 f"El monto (${amount:,.0f}) es menor al mínimo permitido para pago en línea "
-                f"(${MIN_AMOUNT_COP:,.0f} COP). Ofrecé otro método de pago."
+                f"(${self.min_amount_cop:,.0f} COP). Ofrecé otro método de pago."
             )
         amount_in_cents = round(amount * 100)
         expires_at = (datetime.now(UTC) + timedelta(hours=expires_in_hours)).isoformat()
@@ -153,4 +166,28 @@ class WompiProvider(BasePaymentProvider):
             provider_reference=str(transaction.get("payment_link_id", "")),
             status=_STATUS_MAP.get(raw_status, "pendiente"),
             raw=payload,
+            amount=_signed_amount(payload, transaction),
         )
+
+
+def _signed_amount(payload: dict[str, Any], transaction: dict[str, Any]) -> float | None:
+    """Monto pagado (`amount_in_cents` / 100), solo si la firma lo cubre.
+
+    Wompi avisa que `signature.properties` "pueden variar" por evento
+    (docs.wompi.co/docs/colombia/eventos): si `transaction.amount_in_cents` no
+    está entre las propiedades firmadas, el monto no está autenticado y se
+    devuelve `None` (el que confirma el pago lo trata como no coincidente).
+    """
+    properties = (payload.get("signature") or {}).get("properties") or []
+    if "transaction.amount_in_cents" not in properties:
+        return None
+    cents = transaction.get("amount_in_cents")
+    if isinstance(cents, bool) or cents is None:
+        return None
+    try:
+        value = Decimal(str(cents))
+    except InvalidOperation:
+        return None
+    if not value.is_finite() or value != value.to_integral_value() or value < 0:
+        return None
+    return float(value / 100)
