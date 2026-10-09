@@ -22,15 +22,13 @@ from typing import Any
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
-import httpx
-
-from core.mcp.types import BaseSkill, MCPTool, ToolContext
+from core.mcp.types import BaseSkill, MCPTool, ScopedHttp, ToolContext
 from core.shared.exceptions import PluginError
 from core.shared.tenant import get_current_tenant_id
+from pack_calendar import google_api
 from pack_calendar.config import CalendarConfig
 from pack_calendar.oauth import get_access_token
 
-CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 PLUGIN_ID = "pack_calendar"
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 _SOURCE_TTL_SECONDS = 60.0
@@ -114,27 +112,15 @@ def _as_uuid(value: Any) -> uuid.UUID | None:
 
 
 async def _google_patch_event(
-    config: CalendarConfig, token: str, google_event_id: str, body: dict[str, Any]
+    http: ScopedHttp, config: CalendarConfig, token: str, google_event_id: str, body: dict[str, Any]
 ) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.patch(
-            f"{CALENDAR_API}/calendars/{config.calendar_id}/events/{google_event_id}",
-            json=body,
-            headers={"Authorization": f"Bearer {token}"},
-        )
-    if response.status_code >= 400:
-        raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}")
-    return response.json()
+    return await google_api.patch_event(http, config.calendar_id, token, google_event_id, body)
 
 
-async def _google_delete_event(config: CalendarConfig, token: str, google_event_id: str) -> None:
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.delete(
-            f"{CALENDAR_API}/calendars/{config.calendar_id}/events/{google_event_id}",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-    if response.status_code >= 400:
-        raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}")
+async def _google_delete_event(
+    http: ScopedHttp, config: CalendarConfig, token: str, google_event_id: str
+) -> None:
+    await google_api.delete_event(http, config.calendar_id, token, google_event_id)
 
 
 def _open_window(config: CalendarConfig, date: str) -> str:
@@ -355,8 +341,10 @@ class CalendarSkill(BaseSkill):
             return "google_calendar" in connected
         return True
 
-    async def _google_token(self, config: CalendarConfig) -> str:
-        return await get_access_token(config.client_id, config.client_secret.get_secret_value())
+    async def _google_token(self, config: CalendarConfig, http: ScopedHttp) -> str:
+        return await get_access_token(
+            config.client_id, config.client_secret.get_secret_value(), http=http
+        )
 
     async def _appointment_type(self, value: Any) -> Any | None:
         """Tipo de cita activo por id (o None si no viene / no existe)."""
@@ -663,7 +651,8 @@ class CalendarSkill(BaseSkill):
         calendar_link = _calendar_link(start, end, title, f"Cita agendada con {business}", config.timezone)
         link = calendar_link
         if source == "google":
-            token = await self._google_token(config)
+            http = google_api.tool_http(context)
+            token = await self._google_token(config, http)
             body: dict[str, Any] = {
                 "summary": title,
                 "description": str(arguments.get("description", ""))
@@ -673,15 +662,7 @@ class CalendarSkill(BaseSkill):
             }
             if arguments.get("attendee_email"):
                 body["attendees"] = [{"email": str(arguments["attendee_email"])}]
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.post(
-                    f"{CALENDAR_API}/calendars/{config.calendar_id}/events",
-                    json=body,
-                    headers={"Authorization": f"Bearer {token}"},
-                )
-            if response.status_code >= 400:
-                raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}")
-            event = response.json()
+            event = await google_api.create_event(http, config.calendar_id, token, body)
             google_event_id = event.get("id")
             link = event.get("htmlLink", "") or calendar_link
 
@@ -1084,12 +1065,13 @@ class CalendarSkill(BaseSkill):
         )
         link = calendar_link
         if source == "google" and appt.google_event_id:
-            token = await self._google_token(config)
+            http = google_api.tool_http(context)
+            token = await self._google_token(config, http)
             body: dict[str, Any] = {
                 "start": {"dateTime": start.isoformat(), "timeZone": config.timezone},
                 "end": {"dateTime": end.isoformat(), "timeZone": config.timezone},
             }
-            event = await _google_patch_event(config, token, appt.google_event_id, body)
+            event = await _google_patch_event(http, config, token, appt.google_event_id, body)
             link = event.get("htmlLink", "") or calendar_link
 
         from core.db.models import utcnow
@@ -1225,8 +1207,9 @@ class CalendarSkill(BaseSkill):
         for row in rows:
             if source == "google" and row.google_event_id:
                 try:
-                    token = await self._google_token(config)
-                    await _google_delete_event(config, token, row.google_event_id)
+                    http = google_api.tool_http(context)
+                    token = await self._google_token(config, http)
+                    await _google_delete_event(http, config, token, row.google_event_id)
                 except Exception:
                     pass  # best-effort: el espejo local manda para el panel
 
@@ -1377,26 +1360,25 @@ class CalendarSkill(BaseSkill):
         )
 
     async def _busy_for_day(
-        self, config: CalendarConfig, source: str, day: str, tz: ZoneInfo
+        self, config: CalendarConfig, source: str, day: str, tz: ZoneInfo, context: ToolContext
     ) -> tuple[list[dict[str, str]], list[tuple[datetime, datetime]]]:
         """Ocupados del día (Google o agenda interna) como lista legible + intervalos."""
         if source != "google":
             return await self._local_busy(day, tz)
-        token = await self._google_token(config)
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(
-                f"{CALENDAR_API}/calendars/{config.calendar_id}/events",
-                params={
-                    "timeMin": f"{day}T00:00:00Z",
-                    "timeMax": f"{day}T23:59:59Z",
-                    "singleEvents": "true",
-                    "orderBy": "startTime",
-                },
-                headers={"Authorization": f"Bearer {token}"},
-            )
-        if response.status_code >= 400:
-            raise PluginError(PLUGIN_ID, f"Calendar API {response.status_code}: {response.text[:200]}")
-        events = response.json().get("items", [])
+        http = google_api.tool_http(context)
+        token = await self._google_token(config, http)
+        events = await google_api.list_events(
+            http,
+            config.calendar_id,
+            token,
+            {
+                "timeMin": f"{day}T00:00:00Z",
+                "timeMax": f"{day}T23:59:59Z",
+                "singleEvents": "true",
+                "orderBy": "startTime",
+            },
+            detail=True,
+        )
         busy = [
             {
                 "start": e.get("start", {}).get("dateTime", e.get("start", {}).get("date")),
@@ -1429,7 +1411,7 @@ class CalendarSkill(BaseSkill):
                 "message": f"Esa fecha ya pasó; hoy es {_long_date(today)}.",
             }
 
-        busy, intervals = await self._busy_for_day(config, source, day_s, tz)
+        busy, intervals = await self._busy_for_day(config, source, day_s, tz, context)
         window = _open_window(config, day_s)
         return {
             "status": "ok",
@@ -1482,7 +1464,7 @@ class CalendarSkill(BaseSkill):
             window = _open_window(config, day_s)
             if not window:
                 continue
-            _busy, intervals = await self._busy_for_day(config, source, day_s, tz)
+            _busy, intervals = await self._busy_for_day(config, source, day_s, tz, context)
             free = _free_slots(
                 window,
                 intervals,

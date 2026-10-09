@@ -18,6 +18,7 @@ from fastapi import APIRouter
 import pack_calendar.jobs  # noqa: F401  # registra el @register_cron (HU-SH-02)
 from core.mcp.types import BaseModule, GuardrailResult
 from core.shared.logger import get_logger
+from pack_calendar import google_api
 from pack_calendar.admin import router as calendar_admin_router
 from pack_calendar.admin_api import router as calendar_admin_api_router
 from pack_calendar.config import CalendarConfig
@@ -326,6 +327,8 @@ class GoogleCalendarModule(BaseModule):
     category = "Agenda"
     min_plan = "free"
     required_connections: ClassVar[list[str]] = ["google_calendar"]
+    # Salida a red de las tools y del panel (ADR-0052): solo las APIs de Google.
+    network_allowlist: ClassVar[tuple[str, ...]] = google_api.NETWORK
     action_summary: ClassVar[list[str]] = ["Consultar disponibilidad", "Agendar citas", "Recordatorios"]
     setup_guide = "Define tu horario de atención y los tipos de cita (o conecta Google Calendar)."
     requires_config = True
