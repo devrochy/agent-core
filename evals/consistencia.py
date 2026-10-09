@@ -161,6 +161,10 @@ def escribir_reporte(ruta: str, datos: dict[str, Any]) -> None:
     destino.write_text(json.dumps(datos, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
 
+def _sin_conversacion(traza: dict[str, Any]) -> dict[str, Any]:
+    return {clave: valor for clave, valor in traza.items() if clave != "conversacion"}
+
+
 async def persistir(
     tenant_id: uuid.UUID,
     spec_version: str | None,
@@ -208,6 +212,9 @@ async def persistir(
                             if i.aserciones
                         ]
                         or None,
-                        simulator={"intentos": [i.simulador for i in r.intentos if i.simulador]} if any(i.simulador for i in r.intentos) else None,
+                        # Sin la conversación: queda solo en el reporte local, no en la base.
+                        simulator={"intentos": [_sin_conversacion(i.simulador) for i in r.intentos if i.simulador]}
+                        if any(i.simulador for i in r.intentos)
+                        else None,
                     )
                 )

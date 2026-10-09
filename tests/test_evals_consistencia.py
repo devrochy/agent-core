@@ -159,3 +159,8 @@ def test_los_journeys_simulados_declaran_objetivo_y_aserciones_de_estado() -> No
         pasos = journey["pasos"]
         assert any("simulado" in p and p["simulado"].get("objetivo") for p in pasos)
         assert any("verifica" in p and p["verifica"].get("espera") for p in pasos)
+
+
+def test_la_base_no_guarda_la_conversacion_del_simulador() -> None:
+    traza = {"semilla": 1, "variante": "v", "fin": "objetivo", "turnos": 2, "conversacion": [{"quien": "cliente", "texto": "x"}]}
+    assert consistencia._sin_conversacion(traza) == {"semilla": 1, "variante": "v", "fin": "objetivo", "turnos": 2}
