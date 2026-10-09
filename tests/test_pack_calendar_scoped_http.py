@@ -8,12 +8,9 @@ mensajes de antes.
 
 from __future__ import annotations
 
-import ast
 import time
-import tomllib
 import uuid
 from datetime import date, timedelta
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -23,8 +20,6 @@ from pydantic import SecretStr
 
 from core.mcp.types import PLUGIN_HTTP_METHODS, MCPTool, ScopedHttp, ToolContext, plugin_http
 from core.shared.exceptions import PluginError
-
-PACK_DIR = Path(__file__).resolve().parents[1] / "packages" / "pack-calendar"
 
 
 class _FakeHttp:
@@ -140,27 +135,8 @@ def test_loop_arma_el_http_del_pack_y_no_el_de_una_declarativa_homonima(monkeypa
 # ------------------------------------------------------------------ pack
 
 
-def test_el_pack_no_importa_httpx() -> None:
-    offenders = []
-    for path in sorted((PACK_DIR / "pack_calendar").glob("*.py")):
-        for node in ast.walk(ast.parse(path.read_text())):
-            names = []
-            if isinstance(node, ast.Import):
-                names = [a.name for a in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                names = [node.module or ""]
-            if any(n == "httpx" or n.startswith("httpx.") for n in names):
-                offenders.append(f"{path.name}:{node.lineno}")
-    assert offenders == []
-
-
-def test_allowlist_del_modulo_esta_en_el_manifest() -> None:
-    from pack_calendar.module import GoogleCalendarModule
-
-    manifest = tomllib.loads((PACK_DIR / "pyproject.toml").read_text())
-    network = manifest["tool"]["agent_core"]["plugin"]["network"]
-    assert set(GoogleCalendarModule.network_allowlist) == {"www.googleapis.com", "oauth2.googleapis.com"}
-    assert set(GoogleCalendarModule.network_allowlist) <= set(network)
+# `test_ningun_pack_importa_un_cliente_http` y la allowlist ⊆ manifest de todos los
+# packs viven en tests/test_packs_salida_a_red.py.
 
 
 def _google_skill(monkeypatch, tokens: list[Any]):  # type: ignore[no-untyped-def]

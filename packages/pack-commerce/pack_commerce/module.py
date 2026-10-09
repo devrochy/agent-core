@@ -33,6 +33,7 @@ from core.mcp.types import BaseModule, GuardrailResult
 from core.shared.events import ON_CONVERSATION_STARTED
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from pack_commerce import api as leads_api
 from pack_commerce.admin_api import router as admin_api_router
 from pack_commerce.api import router as leads_router
 from pack_commerce.config import CRMConfig
@@ -1065,6 +1066,8 @@ class CRMModule(BaseModule):
     setup_guide = "Carga tu catálogo (CSV o a mano) y define cómo cierras pedidos y cobras."
     requires_config = True
     config_schema = CRMConfig
+    # Salida a red (ADR-0052): solo el `siteverify` de Turnstile del intake de leads.
+    network_allowlist: ClassVar[tuple[str, ...]] = leads_api.NETWORK
     admin_menu: list[dict[str, str]] = [  # noqa: RUF012
         {"label": "Dashboard", "path": "/crm/"},
         {"label": "Leads", "path": "/admin/packs/pack_commerce/leads"},

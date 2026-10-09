@@ -16,7 +16,10 @@ pack_commerce = "pack_commerce.module:CRMModule"
 include = ["pack_commerce*"]
 
 [tool.agent_core.plugin]
-# Manifest del pack (ADR-0019): entidades para el wizard de importación.
+# Manifest del pack (ADR-0019). Allowlist de dominios de red: Turnstile (intake de leads).
+network = ["challenges.cloudflare.com"]
+
+# entidades que este pack gestiona (para el wizard de importación)
 [tool.agent_core.plugin.entities]
 pack_commerce_leads = ["name", "phone", "email", "interest", "score", "status"]
 pack_commerce_products = ["name", "price", "stock", "description"]

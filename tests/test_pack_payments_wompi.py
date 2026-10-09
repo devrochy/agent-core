@@ -15,6 +15,7 @@ concatenar los valores de `signature.properties` (en orden, sin separador)
 from __future__ import annotations
 
 import hashlib
+from typing import Any
 
 import pytest
 from pack_payments.providers.base import PaymentRequestRejected
@@ -61,8 +62,22 @@ def _make_payload(
     }
 
 
-def _provider(events_secret: str = "test_events_secret") -> WompiProvider:
-    return WompiProvider(public_key="pub", private_key="prv_test_x", events_secret=events_secret, sandbox=True)
+class _FakeHttp:
+    """`ScopedHttp` simulado: registra las llamadas y devuelve las respuestas en orden."""
+
+    def __init__(self, *responses: dict[str, Any]) -> None:
+        self.calls: list[tuple[str, str, dict[str, Any]]] = []
+        self._responses = list(responses)
+
+    async def request(self, method: str, url: str, **kw: Any) -> dict[str, Any]:
+        self.calls.append((method, url, kw))
+        return self._responses.pop(0)
+
+
+def _provider(events_secret: str = "test_events_secret", http: Any = None) -> WompiProvider:
+    return WompiProvider(
+        public_key="pub", private_key="prv_test_x", events_secret=events_secret, sandbox=True, http=http
+    )
 
 
 def test_verify_webhook_signature_accepts_valid_checksum():
@@ -138,87 +153,65 @@ async def test_create_payment_link_rejects_amount_below_wompi_minimum_without_ne
 
 
 @pytest.mark.asyncio
-async def test_create_payment_link_sends_collect_shipping_and_no_reference_field(monkeypatch):
+async def test_create_payment_link_sends_collect_shipping_and_no_reference_field():
     """El body real que Wompi exige: `collect_shipping` (encontrado en vivo,
     422 real por su ausencia) y SIN `reference` (Wompi no la documenta ni la
     usa en Payment Links -- confirmado contra agent-sale, que tampoco la
     manda)."""
-    captured: dict = {}
+    http = _FakeHttp({"status": 200, "data": {"data": {"id": "link-xyz"}}})
 
-    class FakeResponse:
-        status_code = 200
-
-        def json(self):
-            return {"data": {"id": "link-xyz"}}
-
-        text = ""
-
-    class FakeAsyncClient:
-        def __init__(self, *a, **k):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *a):
-            return False
-
-        async def post(self, url, json=None, headers=None):
-            captured["url"] = url
-            captured["json"] = json
-            captured["headers"] = headers
-            return FakeResponse()
-
-    import pack_payments.providers.wompi as wompi_mod
-
-    monkeypatch.setattr(wompi_mod.httpx, "AsyncClient", FakeAsyncClient)
-
-    provider = _provider()
+    provider = _provider(http=http)
     result = await provider.create_payment_link(
         reference="OC-0001", amount=200_000, currency="COP", expires_in_hours=24
     )
 
     assert result.provider_reference == "link-xyz"
-    assert captured["json"]["collect_shipping"] is False
-    assert "reference" not in captured["json"]
-    assert "expires_at" in captured["json"]
-    assert captured["json"]["amount_in_cents"] == 20_000_000
+    assert result.payment_link_url == "https://checkout.wompi.co/l/link-xyz"
+    [(method, url, kw)] = http.calls
+    assert (method, url) == ("POST", "https://sandbox.wompi.co/v1/payment_links")
+    assert kw["headers"] == {"Authorization": "Bearer prv_test_x"}
+    assert kw["timeout"] == 15.0
+    assert kw["json_body"]["collect_shipping"] is False
+    assert "reference" not in kw["json_body"]
+    assert "expires_at" in kw["json_body"]
+    assert kw["json_body"]["amount_in_cents"] == 20_000_000
 
 
 @pytest.mark.asyncio
-async def test_create_payment_link_rejection_is_recoverable_not_plugin_error(monkeypatch):
+async def test_create_payment_link_rejection_is_recoverable_not_plugin_error():
     """Un 422 real de Wompi (ej. collect_shipping/monto) debe llegar como
     PaymentRequestRejected -- NUNCA como PluginError, que dispararía
     auto_disable y apagaría pack_payments para TODOS los tenants por un
     rechazo de negocio (incidente real, 2026-09-11)."""
+    http = _FakeHttp({"status": 422, "data": {"error": {"type": "INPUT_VALIDATION_ERROR"}}})
 
-    class FakeResponse:
-        status_code = 422
-        text = '{"error":{"type":"INPUT_VALIDATION_ERROR"}}'
-
-        def json(self):
-            return {}
-
-    class FakeAsyncClient:
-        def __init__(self, *a, **k):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *a):
-            return False
-
-        async def post(self, *a, **k):
-            return FakeResponse()
-
-    import pack_payments.providers.wompi as wompi_mod
-
-    monkeypatch.setattr(wompi_mod.httpx, "AsyncClient", FakeAsyncClient)
-
-    provider = _provider()
-    with pytest.raises(PaymentRequestRejected):
+    provider = _provider(http=http)
+    with pytest.raises(PaymentRequestRejected, match=r"422 .*INPUT_VALIDATION_ERROR"):
         await provider.create_payment_link(
+            reference="OC-0001", amount=200_000, currency="COP", expires_in_hours=24
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_payment_link_sin_id_es_rechazo_recuperable():
+    """Un 2xx sin `data.id` (o con cuerpo que no es JSON) no revienta: rechazo recuperable."""
+    for body in ({"data": {}}, "<html>bad gateway</html>"):
+        with pytest.raises(PaymentRequestRejected, match="sin id"):
+            await _provider(http=_FakeHttp({"status": 200, "data": body})).create_payment_link(
+                reference="OC-0001", amount=200_000, currency="COP", expires_in_hours=24
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_payment_link_fallo_de_red_es_plugin_error():
+    """Si la llamada no llegó a Wompi (red, dominio fuera de la allowlist) es una falla
+    de infraestructura: `PluginError`, como antes la excepción de httpx que el host
+    envolvía. No es un rechazo de negocio."""
+    from core.shared.exceptions import PluginError
+
+    http = _FakeHttp({"error": "Fallo de red: ReadTimeout"})
+    with pytest.raises(PluginError, match="Fallo de red: ReadTimeout"):
+        await _provider(http=http).create_payment_link(
             reference="OC-0001", amount=200_000, currency="COP", expires_in_hours=24
         )
 
@@ -235,43 +228,18 @@ def test_min_amount_depends_on_environment():
 
 
 @pytest.mark.asyncio
-async def test_create_payment_link_production_accepts_amount_below_sandbox_minimum(monkeypatch):
+async def test_create_payment_link_production_accepts_amount_below_sandbox_minimum():
     """El Pollo Broaster ($60.000) que el sandbox rechaza sí se cobra en producción."""
-    captured: dict = {}
+    http = _FakeHttp({"status": 200, "data": {"data": {"id": "link-prod"}}})
 
-    class FakeResponse:
-        status_code = 200
-        text = ""
-
-        def json(self):
-            return {"data": {"id": "link-prod"}}
-
-    class FakeAsyncClient:
-        def __init__(self, *a, **k):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *a):
-            return False
-
-        async def post(self, url, json=None, headers=None):
-            captured["url"] = url
-            captured["json"] = json
-            return FakeResponse()
-
-    import pack_payments.providers.wompi as wompi_mod
-
-    monkeypatch.setattr(wompi_mod.httpx, "AsyncClient", FakeAsyncClient)
-
-    provider = WompiProvider("pub", "prv_prod_x", "s", sandbox=False)
+    provider = WompiProvider("pub", "prv_prod_x", "s", sandbox=False, http=http)
     result = await provider.create_payment_link(
         reference="OC-0001", amount=60_000, currency="COP", expires_in_hours=24
     )
     assert result.provider_reference == "link-prod"
-    assert captured["url"].startswith("https://production.wompi.co/")
-    assert captured["json"]["amount_in_cents"] == 6_000_000
+    [(_, url, kw)] = http.calls
+    assert url.startswith("https://production.wompi.co/")
+    assert kw["json_body"]["amount_in_cents"] == 6_000_000
 
 
 @pytest.mark.asyncio

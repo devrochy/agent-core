@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import select
 
 from core.db.session import get_session
-from core.mcp.types import BaseSkill, MCPTool, ToolContext
+from core.mcp.types import BaseSkill, MCPTool, ScopedHttp, ToolContext
 from core.shared.exceptions import PluginError
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
@@ -33,12 +33,15 @@ async def tenant_config() -> PaymentsConfig:
     return config
 
 
-def build_provider(config: PaymentsConfig) -> WompiProvider:
+def build_provider(config: PaymentsConfig, http: ScopedHttp | None = None) -> WompiProvider:
+    """`http`: el `context.http` de la tool. Sin él (panel, capacidad de pagos), el
+    proveedor usa `plugin_http` con la allowlist del pack (ADR-0052)."""
     return WompiProvider(
         public_key=config.public_key,
         private_key=config.private_key.get_secret_value(),
         events_secret=config.events_secret.get_secret_value(),
         sandbox=config.sandbox,
+        http=http,
     )
 
 
@@ -93,7 +96,7 @@ class PaymentSkill(BaseSkill):
             # no debe disparar auto_disable (mismo criterio que
             # PaymentRequestRejected: un problema de datos, no de código).
             return {"error": str(exc)}
-        provider = build_provider(config)
+        provider = build_provider(config, http=context.http)
 
         # Idempotencia (invariante del contrato de plugin): si esta misma llamada de
         # tool ya corrió antes (reintento del loop), no generar un segundo link.

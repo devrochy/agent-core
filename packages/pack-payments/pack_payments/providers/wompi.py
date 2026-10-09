@@ -1,4 +1,11 @@
-"""Proveedor Wompi (pasarela de pagos, Colombia). Sin SDK: httpx nativo.
+"""Proveedor Wompi (pasarela de pagos, Colombia). Sin SDK.
+
+Salida a red (ADR-0052): el pack no usa `httpx` directo. La tool
+`generar_link_pago` le pasa al proveedor su `context.http`; el panel ("Probar y
+guardar") y la capacidad de pagos, que no tienen `ToolContext`, usan
+`plugin_http(NETWORK)` (`NETWORK` es la `network_allowlist` del módulo). Un fallo
+de red o un dominio fuera de la allowlist es `PluginError`, como antes la
+excepción de `httpx`; un 4xx/5xx de Wompi sigue siendo `PaymentRequestRejected`.
 
 Verificación de firma de webhook: confirmada contra la documentación
 pública de Wompi (docs.wompi.co/docs/colombia/eventos) — concatenar los
@@ -23,12 +30,13 @@ depende del ambiente.
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-import httpx
-
+from core.mcp.types import ScopedHttp, plugin_http
+from core.shared.exceptions import PluginError
 from core.shared.logger import get_logger
 from pack_payments.providers.base import (
     BasePaymentProvider,
@@ -41,6 +49,11 @@ log = get_logger(__name__)
 
 PRODUCTION_BASE_URL = "https://production.wompi.co/v1"
 SANDBOX_BASE_URL = "https://sandbox.wompi.co/v1"
+# Hosts a los que el servidor sale. `checkout.wompi.co` (manifest) solo lo abre
+# el navegador del pagador: el link se arma, no se llama.
+NETWORK = ("production.wompi.co", "sandbox.wompi.co")
+TIMEOUT = 15.0
+PLUGIN_ID = "pack_payments"
 
 # Mínimo del sandbox de Wompi para la base de una transacción en COP: no está
 # en su guía pública, lo confirmó agent-sale por QA contra el sandbox real
@@ -68,12 +81,21 @@ _STATUS_MAP = {
 class WompiProvider(BasePaymentProvider):
     provider_name = "wompi"
 
-    def __init__(self, public_key: str, private_key: str, events_secret: str, sandbox: bool = True) -> None:
+    def __init__(
+        self,
+        public_key: str,
+        private_key: str,
+        events_secret: str,
+        sandbox: bool = True,
+        http: ScopedHttp | None = None,
+    ) -> None:
         self.public_key = public_key
         self.private_key = private_key
         self.events_secret = events_secret
         self.base_url = SANDBOX_BASE_URL if sandbox else PRODUCTION_BASE_URL
         self.min_amount_cop = min_amount_cop(sandbox)
+        # `context.http` de la tool; sin él (panel, capacidad), el cliente del pack.
+        self.http = http or plugin_http(NETWORK)
 
     async def create_payment_link(
         self, *, reference: str, amount: float, currency: str, expires_in_hours: int
@@ -101,21 +123,28 @@ class WompiProvider(BasePaymentProvider):
             "amount_in_cents": amount_in_cents,
             "expires_at": expires_at,
         }
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                f"{self.base_url}/payment_links",
-                json=body,
-                headers={"Authorization": f"Bearer {self.private_key}"},
-            )
-        if resp.status_code >= 400:
+        result = await self.http.request(
+            "POST",
+            f"{self.base_url}/payment_links",
+            json_body=body,
+            headers={"Authorization": f"Bearer {self.private_key}"},
+            timeout=TIMEOUT,
+        )
+        if "error" in result:
+            # No llegó a Wompi (red, dominio fuera de la allowlist): falla de
+            # infraestructura, no rechazo de negocio.
+            raise PluginError(PLUGIN_ID, f"Wompi: {result['error']}")
+        status = int(result["status"])
+        payload = result["data"]
+        if status >= 400:
             # Rechazo de NEGOCIO (validación de Wompi), no una falla del plugin
             # -- PaymentRequestRejected, nunca PluginError acá (ver su docstring
             # en providers/base.py: eso apagaría pack_payments para TODOS los
             # tenants por un rechazo esperable).
             raise PaymentRequestRejected(
-                f"Wompi rechazó la creación del link: {resp.status_code} {resp.text[:300]}"
+                f"Wompi rechazó la creación del link: {status} {_snippet(payload)}"
             )
-        data = resp.json().get("data", {})
+        data = (payload.get("data") or {}) if isinstance(payload, dict) else {}
         link_id = data.get("id")
         if not link_id:
             raise PaymentRequestRejected("Respuesta de Wompi sin id de link de pago")
@@ -168,6 +197,12 @@ class WompiProvider(BasePaymentProvider):
             raw=payload,
             amount=_signed_amount(payload, transaction),
         )
+
+
+def _snippet(data: Any, limit: int = 300) -> str:
+    """Primeros caracteres del cuerpo de la respuesta (para el mensaje de rechazo)."""
+    text = data if isinstance(data, str) else json.dumps(data, ensure_ascii=False, default=str)
+    return text[:limit]
 
 
 def _signed_amount(payload: dict[str, Any], transaction: dict[str, Any]) -> float | None:

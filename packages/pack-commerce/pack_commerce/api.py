@@ -16,6 +16,9 @@ sesión de admin). Reemplaza el intake propuesto en ADR-0055 (que usaba
 5. Crea/actualiza el lead de forma **idempotente**: `Customer` del core (identidad,
    ADR-0022) + `Lead` del pack (dominio comercial), con clave
    `intake:<email|phone>`.
+
+Salida a red (ADR-0052): la validación de Turnstile no usa `httpx` directo, sino
+`plugin_http(NETWORK)` (`NETWORK` es la `network_allowlist` del módulo).
 """
 
 from __future__ import annotations
@@ -23,7 +26,6 @@ from __future__ import annotations
 import time
 from typing import Any
 
-import httpx
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
@@ -32,6 +34,7 @@ from core.agents.spec import enabled_packs, load_active_spec
 from core.db.models import Customer
 from core.db.session import get_session
 from core.gateway.webhook_verify import constant_time_equal
+from core.mcp.types import plugin_http
 from core.plugin_manager import plugin_manager
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
@@ -45,6 +48,9 @@ PLUGIN_ID = "pack_commerce"
 router = APIRouter(prefix="/api/pack/pack_commerce", tags=[PLUGIN_ID])
 
 TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+# Hosts a los que el pack sale (solo el `siteverify` de Turnstile).
+NETWORK = ("challenges.cloudflare.com",)
+TURNSTILE_TIMEOUT = 8.0
 
 # Rate limit en proceso (por instancia). El intake es server→server; suficiente
 # como primera barrera. Un abuso sostenido se corta en el WAF/proxy externo.
@@ -69,17 +75,17 @@ async def _verify_turnstile(token: str, secret: str, ip: str | None) -> bool:
     """Valida un token de Cloudflare Turnstile (`siteverify`). Fail-closed."""
     if not token:
         return False
-    try:
-        async with httpx.AsyncClient(timeout=8) as client:
-            res = await client.post(
-                TURNSTILE_VERIFY_URL,
-                data={"secret": secret, "response": token, "remoteip": ip or ""},
-            )
-            data = res.json()
-    except Exception:
-        log.warning("turnstile_verify_error", exc_info=True)
+    result = await plugin_http(NETWORK).request(
+        "POST",
+        TURNSTILE_VERIFY_URL,
+        data={"secret": secret, "response": token, "remoteip": ip or ""},
+        timeout=TURNSTILE_TIMEOUT,
+    )
+    if "error" in result:
+        log.warning("turnstile_verify_error", error=result["error"])
         return False
-    return bool(data.get("success"))
+    data = result["data"]
+    return isinstance(data, dict) and bool(data.get("success"))
 
 
 @router.get("/intake-config/{slug}")
