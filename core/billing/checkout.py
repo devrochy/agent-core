@@ -240,31 +240,40 @@ async def apply_payment(
     *,
     provider_reference: str,
     status: str,
+    amount_in_cents: int | None,
     tenant_id: uuid.UUID | None = None,
-    amount_in_cents: int | None = None,
 ) -> bool:
     """Aplica un evento de pago (idempotente). True si actualizó algo.
 
     Correlaciona por `provider_reference` (el id del link). Un pago ya `aprobado` o
     `duplicado` no se vuelve a tocar: ni un reintento del webhook ni un rechazo tardío de
     otro intento del mismo link lo deshacen. Solo se aplica un intento con link del panel
-    (no el cobro de la renovación ni un pago del asistente), y si el webhook trae el monto,
-    tiene que ser el del link: si no, queda `monto_distinto` y se alerta (como en
-    `pack_payments`).
+    (no el cobro de la renovación ni un pago del asistente). `amount_in_cents` es el monto
+    FIRMADO por el proveedor: si falta o no es el del link, queda `monto_distinto` y se alerta
+    (como en `pack_payments`).
     """
     if not provider_reference:
         return False
 
     async def _apply(tid: uuid.UUID) -> bool:
-        from core.billing.service import APLICADO, DUPLICADO, aplicar_pago_de_periodo
+        from core.billing.service import (
+            APLICADO,
+            DUPLICADO,
+            _suscripcion_bloqueada,
+            aplicar_pago_de_periodo,
+        )
         from core.events.outbox import emit_domain
         from core.shared.events import ON_PLATFORM_PERIOD_PAID
 
         duplicado = None
-        monto_distinto: tuple[str | None, int] | None = None
+        anulado_pagado: str | None = None
+        monto_distinto: tuple[str | None, int | None] | None = None
         periodo: Periodo | None = None
         async with tenant_scope(tid):
             async with get_session() as session:
+                # Mismo orden de candados que el canal asistente (`aplicar_pago_de_periodo`):
+                # primero la suscripción, después el pago. Al revés, los dos podían trabarse.
+                await _suscripcion_bloqueada(session, tid, datetime.now(UTC))
                 payment = (
                     await session.execute(
                         select(SubscriptionPayment)
@@ -285,15 +294,23 @@ async def apply_payment(
                         payment.status = "rechazado"
                         return True
                     return False
-                if amount_in_cents is not None and int(amount_in_cents) != round(float(payment.amount_cop) * 100):
+                if amount_in_cents is None or int(amount_in_cents) != round(float(payment.amount_cop) * 100):
+                    # Sin monto firmado o con otro monto: no se aplica (como `pack_payments`).
                     payment.status = "monto_distinto"
-                    monto_distinto = (payment.periodo, int(amount_in_cents))
+                    monto_distinto = (payment.periodo, amount_in_cents)
                     log.error(
                         "subscription_payment_monto_distinto",
                         tenant_id=str(tid),
                         esperado=str(payment.amount_cop),
-                        recibido_centavos=int(amount_in_cents),
+                        recibido_centavos=amount_in_cents,
                     )
+                elif payment.status == "anulado":
+                    # Un intento que ya no servía (otro pago cubrió su período o el plan cambió)
+                    # igual se pagó: la plata llegó de más. No se aplica (si no, un link viejo de
+                    # Basic devolvería el negocio a Basic) y se alerta como pago doble.
+                    payment.status = DUPLICADO
+                    payment.paid_at = datetime.now(UTC)
+                    anulado_pagado = payment.periodo or provider_reference
                 else:
                     if payment.periodo and payment.period_start and payment.period_end:
                         periodo = Periodo(payment.period_start, payment.period_end, payment.periodo)
@@ -337,13 +354,22 @@ async def apply_payment(
         if monto_distinto is not None:
             from core.shared.alerts import send_alert
 
+            recibido = f"{monto_distinto[1]} centavos" if monto_distinto[1] is not None else "un monto sin firmar"
             await send_alert(
                 "Pago del plan con monto distinto",
-                f"Negocio {tid}, período {monto_distinto[0]}: llegaron {monto_distinto[1]} centavos y el link "
-                "era por otro monto. No se aplicó: revisarlo a mano.",
+                f"Negocio {tid}, período {monto_distinto[0]}: llegaron {recibido} y el link era por otro monto. "
+                "No se aplicó: revisarlo a mano.",
                 severity="critical",
             )
             return False
+        if anulado_pagado is not None:
+            from core.billing.canales import CANAL_PANEL, alertar_pago_duplicado, vinculo_asistente
+
+            vinculo = await vinculo_asistente(tid)
+            await alertar_pago_duplicado(
+                tid, anulado_pagado, canal=CANAL_PANEL, cubierto_por="un intento anulado", vendedor=vinculo.vendedor if vinculo else None
+            )
+            return True
         if duplicado is not None:
             from core.billing.canales import CANAL_PANEL, alertar_pago_duplicado, vinculo_asistente
 

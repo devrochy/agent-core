@@ -12,10 +12,13 @@ Cada día, para cada negocio con un plan pago cuyo período termina dentro de
    Idempotente por la referencia: un período tiene un solo cobro de renovación.
 2. En la misma transacción escribe `platform.renewal_due` en el outbox (ADR-0107). Su handler
    avisa por el **canal preferido** del negocio:
-   - **asistente** (negocio del alta automática que paga por WhatsApp): el proveedor de
-     suscripciones del vendedor genera ya el cargo del período con su link, y el aviso sale
-     por WhatsApp como siempre, con plantilla fuera de la ventana de 24 h (ADR-0108);
-   - **panel**: correo a los dueños con el enlace a `/plan` y un push.
+   - **asistente** (negocio del alta automática que paga por WhatsApp): el cargo con su link y
+     su aviso por WhatsApp (plantilla fuera de 24 h, ADR-0108) los manda el cron
+     `generar_cargos` del vendedor, con `dias_anticipacion` = `BILLING_DIAS_RENOVACION`. Aquí
+     solo se confirma por el contrato (`get`) que esa suscripción puede cobrar;
+   - **panel** (o si el asistente no puede cobrar): correo a los dueños con el enlace a
+     `/plan` y un push. El cron del vendedor no le manda link a quien pagó el último período
+     por el panel (`pago_externo`).
 
 Un período ya pagado (por cualquiera de los dos canales) no genera cobro ni aviso.
 """
@@ -186,11 +189,15 @@ async def on_platform_renewal_due(**payload: Any) -> None:
     canal, vinculo = await canal_preferido(negocio)
     detalle: dict[str, Any] = {}
     if canal == CANAL_ASISTENTE and vinculo is not None:
-        detalle = await _cobrar_por_el_asistente(vinculo, inicio)
-        if detalle.get("estado") not in ("generado", "ya_existia"):
-            # La suscripción en el vendedor no puede cobrar ese período (cancelada,
-            # desalineada…): el aviso sale por el panel y la conciliación lo muestra.
-            log.warning("billing_renovacion_asistente_sin_cargo", tenant_id=str(negocio), **detalle)
+        # El cargo, su link y su aviso por WhatsApp los manda el cron `generar_cargos` del
+        # proveedor del vendedor (`dias_anticipacion` = `BILLING_DIAS_RENOVACION`). Aquí solo se
+        # confirma, por el contrato (`get`), que esa suscripción puede cobrar.
+        estado = await _estado_en_el_vendedor(vinculo)
+        detalle = {"suscripcion_en_el_asistente": estado}
+        if estado not in ("activa", "trialing"):
+            # Cancelada, vencida, pausada o ilegible: el aviso sale por el panel y la
+            # conciliación lo muestra.
+            log.warning("billing_renovacion_asistente_no_cobra", tenant_id=str(negocio), estado=estado)
             canal = CANAL_PANEL
     if canal == CANAL_PANEL:
         detalle = {**detalle, **await _avisar_por_el_panel(negocio, payload)}
@@ -203,20 +210,20 @@ async def on_platform_renewal_due(**payload: Any) -> None:
     log.info("billing_renovacion_avisada", tenant_id=str(negocio), referencia=referencia, canal=canal)
 
 
-async def _cobrar_por_el_asistente(vinculo: Any, inicio: datetime) -> dict[str, Any]:
-    """El vendedor genera YA el cargo del período (con su link y su aviso por WhatsApp)."""
+async def _estado_en_el_vendedor(vinculo: Any) -> str | None:
+    """Estado de la suscripción del negocio en el vendedor (operación `get` del contrato)."""
     from core.billing.canales import capacidad_del_vendedor
-    from core.subscriptions import SubscriptionError, cobrar_periodo
+    from core.subscriptions import SubscriptionError
 
     try:
         async with tenant_scope(vinculo.vendedor):
             cap = await capacidad_del_vendedor(vinculo.vendedor)
             if cap is None:
-                return {"estado": "sin_proveedor"}
-            resultado = await cobrar_periodo(cap, vinculo.subscription_id, inicio=inicio)
+                return None
+            vista = await cap.get(vinculo.subscription_id)
     except SubscriptionError as exc:
-        return {"estado": "no_cobrable", "motivo": exc.code}
-    return resultado or {"estado": "sin_soporte"}
+        return exc.code
+    return str(vista.get("estado") or "")
 
 
 async def _correos_de_los_duenos(negocio: uuid.UUID) -> list[str]:

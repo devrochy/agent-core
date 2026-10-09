@@ -161,7 +161,8 @@ async def subscribe_to_plan(
         raise ApiError(409, exc.code, str(exc)) from exc
     except Exception as exc:
         log.exception("plan_subscribe_failed", plan=payload.plan_id)
-        raise ApiError(502, "checkout_failed", f"No se pudo iniciar el pago: {str(exc)[:140]}") from exc
+        # El detalle (respuesta del proveedor, ids) va al log, no al cliente.
+        raise ApiError(502, "checkout_failed", "No se pudo iniciar el pago. Intenta de nuevo en unos minutos.") from exc
     if checkout_url is None:
         raise ApiError.bad_request(
             "La pasarela de pago no está configurada.", "checkout_unavailable"

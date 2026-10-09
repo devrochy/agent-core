@@ -42,6 +42,8 @@ pytestmark = [
 
 _SEQ = itertools.count(1)
 _SECRETO_DE_EVENTOS = "secreto-de-eventos-de-prueba"
+# Monto firmado por Wompi en el webhook: el del link de cada plan.
+_CENTAVOS = {"basic": 20_000_000, "premium": 60_000_000}
 
 
 # ------------------------------------------------------------------ dobles
@@ -469,13 +471,30 @@ async def _acercar_el_vencimiento(esc: Escenario, *, fin: datetime) -> datetime:
 
 
 async def _cobrar_periodo(esc: Escenario, inicio: datetime) -> dict[str, Any]:
-    """El vendedor genera el cargo del período (operación opcional `cobrar_periodo`)."""
-    from pack_subscriptions.capability import SubscriptionCapabilityImpl
+    """El cron `generar_cargos` del vendedor, solo para ESTA suscripción: genera el cargo del
+    período que empieza en `inicio`, con su link y su aviso (si le corresponde)."""
+    from pack_subscriptions.capability import _config
+    from pack_subscriptions.jobs import generar_cargo_de
+    from pack_subscriptions.models import Subscription
+    from pack_subscriptions.periodos import etiqueta_periodo
 
+    from core.agents.spec import enabled_packs, load_active_spec
+    from core.db.session import get_session
+    from core.payments import payment_registry
     from core.shared.tenant import tenant_scope
 
+    periodo = f"{inicio:%Y-%m}"
+    if await _cargo(esc, periodo) is not None:
+        return {"estado": "ya_existia", "periodo": periodo}
     async with tenant_scope(esc.vendedor):
-        return await SubscriptionCapabilityImpl().cobrar_periodo(esc.subscription_id, inicio=inicio)
+        cap = payment_registry.capability_for(enabled_packs(await load_active_spec(esc.vendedor)))
+        config = await _config()
+        async with get_session() as s:
+            sub = await s.get(Subscription, esc.subscription_id)
+            assert etiqueta_periodo(sub.proximo_cargo, sub.periodicidad) == periodo
+            cargo = await generar_cargo_de(s, esc.vendedor, sub, datetime.now(UTC), cap=cap, config=config)
+    assert cargo is not None
+    return {"estado": "generado", "periodo": periodo}
 
 
 async def _pagar_por_el_asistente(esc: Escenario, periodo: str, *, provider_reference: str | None = None) -> Any:
@@ -518,7 +537,7 @@ async def _pagar_por_el_panel(negocio: uuid.UUID, pasarela: _Pasarela, plan: str
 
     assert await _link_del_panel(negocio, plan)
     link = pasarela.links[-1]
-    assert await apply_payment(provider_reference=link, status="aprobado") is True
+    assert await apply_payment(provider_reference=link, status="aprobado", amount_in_cents=_CENTAVOS[plan]) is True
     [pago] = [p for p in await _pagos(negocio) if p.provider_reference == link]
     return pago
 
@@ -598,7 +617,7 @@ async def test_pago_por_el_panel_deja_pagado_el_cargo_del_asistente(
     # Pedirlo otra vez no crea un segundo link vivo para el mismo período.
     otra = await app_client.post("/api/v1/admin/plan/subscribe", json={"plan_id": "premium"}, headers=headers)
     assert otra.json()["checkout_url"] == r.json()["checkout_url"] and len(pasarela.links) == 1
-    assert await apply_payment(provider_reference=pasarela.links[-1], status="aprobado") is True
+    assert await apply_payment(provider_reference=pasarela.links[-1], status="aprobado", amount_in_cents=_CENTAVOS["premium"]) is True
     [pago] = [p for p in await _pagos(esc.negocio) if p.provider_reference == pasarela.links[-1]]
     assert (pago.periodo, pago.status, pago.provider) == (referencia, "aprobado", "wompi")
     negocio = await _suscripcion_de(esc.negocio)
@@ -730,15 +749,18 @@ async def test_renovacion_genera_el_cobro_y_avisa_por_el_asistente(
     assert evento.payload["referencia"] == referencia
 
     await _entregar(esc.negocio, "platform.renewal_due", on_platform_renewal_due)
+    [avisada] = await _auditoria(esc.negocio, "renovacion_avisada")
+    assert (avisada.output["canal"], avisada.output["suscripcion_en_el_asistente"]) == ("asistente", "activa")
+    assert not [c for c in correos if "vence" in c["subject"]]  # el canal preferido es el asistente
+
+    # El cargo con su link y su aviso los manda el cron del vendedor (dias_anticipacion = 5).
+    await _cobrar_periodo(esc, inicio)
     cargo = await _cargo(esc, f"{inicio:%Y-%m}")
     assert cargo is not None and cargo.estado == "pendiente" and cargo.link_url
     await _entregar(esc.vendedor, "subscription.charge_created", on_subscription_charge_created, charge_id=str(cargo.id))
     [aviso] = [a for a in avisos if a["event"] == "subscription.charge_created"]
     assert aviso["context"]["cargo"]["link"] == cargo.link_url
     assert aviso["context"]["cargo"]["periodo"] == f"{inicio:%Y-%m}"
-    assert not [c for c in correos if "vence" in c["subject"]]  # el canal preferido es el asistente
-    [avisada] = await _auditoria(esc.negocio, "renovacion_avisada")
-    assert avisada.output["canal"] == "asistente"
 
     # Idempotente: el job y el evento otra vez no generan otro cobro ni otro cargo.
     await renovar_suscripciones(ahora)
@@ -859,6 +881,7 @@ async def test_plan_del_alta_entra_en_la_renovacion_y_se_desbloquea_al_pagar(
     referencia = _referencia(esc, vencio)
     assert [p.status for p in await _pagos(esc.negocio) if p.periodo == referencia] == ["pendiente"]
     await _entregar(esc.negocio, "platform.renewal_due", on_platform_renewal_due)
+    await _cobrar_periodo(esc, vencio)  # el cron del vendedor
     cargo = await _cargo(esc, f"{vencio:%Y-%m}")
     assert cargo is not None and cargo.estado == "pendiente"
 
@@ -1235,12 +1258,116 @@ async def test_un_period_paid_sin_pago_aprobado_no_marca_nada_en_el_vendedor(ven
 
 
 @pytest.mark.aislamiento
-async def test_r05_no_reenvia_a_un_negocio_que_no_es_vendedor(vendedores, correos, alertas, pasarela, app_client, monkeypatch) -> None:
+async def test_r05_una_configuracion_mala_responde_500_para_que_wompi_reintente(
+    vendedores, correos, alertas, pasarela, app_client, monkeypatch
+) -> None:
+    """Con `BILLING_WOMPI_EVENTOS_TENANT` puesto, un reenvío que no se puede hacer (negocio sin
+    pack de pagos, inactivo o UUID inválido) responde 5xx: un 200 perdería el pago."""
     from core.config import get_settings
+    from core.tenants import deactivate_tenant
 
     vendedores()
-    otro = await _vendedor()
-    monkeypatch.setenv("BILLING_WOMPI_EVENTOS_TENANT", str(otro))
+    sin_pagos = await _vendedor()  # no es vendedor de la allowlist ni tiene pack de pagos
+    evento = _evento_wompi("link-ajeno", centavos=100)
+    for valor in (str(sin_pagos), "no-es-uuid"):
+        monkeypatch.setenv("BILLING_WOMPI_EVENTOS_TENANT", valor)
+        get_settings.cache_clear()
+        assert (await app_client.post("/webhooks/billing/wompi", json=evento)).status_code == 500
+    inactivo = await _vendedor(con_pagos=True)
+    from core.db.models import Tenant
+    from core.db.session import get_session
+
+    async with get_session() as s:
+        slug = (await s.get(Tenant, inactivo)).slug
+    await deactivate_tenant(slug)
+    monkeypatch.setenv("BILLING_WOMPI_EVENTOS_TENANT", str(inactivo))
     get_settings.cache_clear()
-    r = await app_client.post("/webhooks/billing/wompi", json=_evento_wompi("link-ajeno", centavos=100))
-    assert (r.status_code, r.json()["status"]) == (200, "ignored")
+    assert (await app_client.post("/webhooks/billing/wompi", json=evento)).status_code == 500
+
+
+async def test_quien_paga_por_el_panel_no_recibe_el_link_del_asistente(
+    vendedores, correos, alertas, pasarela, links_del_vendedor
+) -> None:
+    """El canal preferido se aplica donde sale el aviso: si el último período lo pagó el panel,
+    el cron del vendedor genera el cargo siguiente sin link, sin aviso y sin recordatorios."""
+    from pack_subscriptions.jobs import _avisos_de_cobro
+
+    esc = await _negocio_aprovisionado(vendedores, con_pagos=True)
+    inicio = await _acercar_el_vencimiento(esc, fin=datetime.now(UTC) + timedelta(days=3))
+    await _pagar_por_el_panel(esc.negocio, pasarela)
+    await _sincronizar(esc.negocio)
+    siguiente = (await _suscripcion_del_vendedor(esc)).proximo_cargo
+    assert siguiente > inicio
+
+    await _cobrar_periodo(esc, siguiente)
+    cargo = await _cargo(esc, f"{siguiente:%Y-%m}")
+    assert (cargo.estado, cargo.link_url) == ("pendiente", None)
+    creados = await _eventos(esc.vendedor, "subscription.charge_created")
+    assert not [e for e in creados if e.payload.get("charge_id") == str(cargo.id)]
+    await _avisos_de_cobro(siguiente + timedelta(hours=1))
+    recordatorios = await _eventos(esc.vendedor, "subscription.charge_reminder")
+    assert not [e for e in recordatorios if e.payload.get("charge_id") == str(cargo.id)]
+
+
+async def test_recompra_despues_de_cancelar_va_a_revision(vendedores, correos, alertas) -> None:
+    """Quien canceló y vuelve a comprar abre otra suscripción: no se crea un segundo negocio."""
+    from pack_subscriptions.capability import SubscriptionCapabilityImpl
+
+    from core.db.models import ProvisioningRequest
+    from core.db.session import get_session
+    from core.provisioning.consumer import on_subscription_activated
+    from core.shared.tenant import tenant_scope
+
+    esc = await _negocio_aprovisionado(vendedores)
+    async with tenant_scope(esc.vendedor):
+        await SubscriptionCapabilityImpl().cancel(esc.subscription_id)
+    basic = await _variante(esc.vendedor, "basic", 200_000)
+    pedido = await _pedido(esc.vendedor, basic, 200_000, esc.cliente, {"email": "otro@correo-prueba.co", "negocio": "Acme 2"})
+    await _entregar(esc.vendedor, "subscription.activated", on_subscription_activated, referencia=pedido)
+    async with tenant_scope(esc.vendedor):
+        async with get_session() as s:
+            fila = (
+                await s.execute(select(ProvisioningRequest).where(ProvisioningRequest.referencia == pedido))
+            ).scalar_one()
+    assert (fila.estado, fila.negocio_tenant_id) == ("revision", None)
+    assert "recompra" in fila.motivo
+
+
+@pytest.mark.aislamiento
+async def test_un_plan_activado_por_menos_que_su_precio_no_se_aplica(vendedores, correos, alertas) -> None:
+    """Una suscripción del vendedor activada a mano con otro precio (p. ej. Premium a $1) no
+    sube el plan del negocio ni extiende su período: queda `monto_distinto` y se alerta."""
+    from pack_subscriptions.capability import crear_suscripcion_para
+
+    from core.billing.canales import on_subscription_charge_paid
+    from core.provisioning.consumer import on_subscription_activated
+    from core.shared.tenant import tenant_scope
+
+    esc = await _negocio_aprovisionado(vendedores, plan="free", precio=0)
+    premium = await _variante(esc.vendedor, "premium", 600_000)
+    async with tenant_scope(esc.vendedor):
+        await crear_suscripcion_para(
+            customer_id=esc.cliente,
+            variante_id=premium,
+            plan={"nombre": "Plan Premium", "precio": 1, "moneda": "COP", "periodicidad": "mensual"},
+            reference="admin-manual",
+        )
+    await _entregar(esc.vendedor, "subscription.activated", on_subscription_activated, cambio_de_plan=True)
+    negocio = await _suscripcion_de(esc.negocio)
+    assert (negocio.plan_id, negocio.status) == ("free", "trialing")
+    assert [p.status for p in await _pagos(esc.negocio)] == ["monto_distinto"]
+    assert [a for a in alertas if a["severity"] == "critical" and "menos que su precio" in a["title"]]
+
+    # Un cargo de período por $1 tampoco extiende el plan.
+    antes = await _suscripcion_de(esc.negocio)
+    async with tenant_scope(esc.vendedor):
+        await on_subscription_charge_paid(
+            charge_id=str(uuid.uuid4()),
+            subscription_id=str(esc.subscription_id),
+            periodo=f"{antes.period_end:%Y-%m}",
+            periodo_inicio=antes.period_end.isoformat(),
+            periodo_fin=(antes.period_end + timedelta(days=31)).isoformat(),
+            monto="1",
+            variant_id=str(premium),
+        )
+    assert (await _suscripcion_de(esc.negocio)).period_end == antes.period_end

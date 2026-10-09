@@ -279,6 +279,7 @@ async def aplicar_pago_de_periodo(
         .values(status="anulado", updated_at=utcnow())
     )
 
+    plan_previo = sub.plan_id
     cubre_hoy = periodo.inicio <= now < periodo.fin
     if periodo.desde_cero or not tiene_periodo_pago(sub.plan_id, sub.status) or sub.period_end is None:
         sub.plan_id = plan.id
@@ -304,6 +305,19 @@ async def aplicar_pago_de_periodo(
     sub.provider = provider
     sub.provider_reference = provider_reference
     sub.updated_at = utcnow()
+    if sub.plan_id != plan_previo:
+        # El plan cambió: los links pendientes de otro plan dejan de servir. Si alguien paga
+        # uno igual, queda como pago doble y no devuelve el negocio al plan viejo.
+        await session.execute(
+            update(SubscriptionPayment)
+            .where(
+                SubscriptionPayment.tenant_id == tenant_id,
+                SubscriptionPayment.status == "pendiente",
+                SubscriptionPayment.plan_id != sub.plan_id,
+                SubscriptionPayment.deleted_at.is_(None),
+            )
+            .values(status="anulado", updated_at=utcnow())
+        )
     await session.flush()
     log.info(
         "cobro_plataforma_periodo_aplicado",

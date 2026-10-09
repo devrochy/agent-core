@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -131,15 +131,13 @@ async def capacidad_del_vendedor(vendedor: uuid.UUID) -> Any:
 
 
 async def plan_del_cargo(vendedor: uuid.UUID, variant_id: Any) -> str | None:
-    """Plan de la plataforma de la variante de la suscripción (bajo el scope del vendedor)."""
+    """Plan de la plataforma de la variante de la suscripción (bajo el scope del vendedor).
+    None si la variante no vende un plan de la plataforma."""
     from core.provisioning.fuentes import fuentes_de_alta, plan_de_la_variante
 
-    try:
-        fuente = await fuentes_de_alta.para_negocio(vendedor)
-        return await plan_de_la_variante(fuente, str(variant_id) if variant_id else None)
-    except Exception:
-        log.warning("cobro_plataforma_plan_de_variante_fallo", tenant_id=str(vendedor), exc_info=True)
-        return None
+    # Un fallo al leer el catálogo se propaga: el outbox reintenta (no es «sin plan»).
+    fuente = await fuentes_de_alta.para_negocio(vendedor)
+    return await plan_de_la_variante(fuente, str(variant_id) if variant_id else None)
 
 
 async def canal_preferido(negocio: uuid.UUID) -> tuple[str, VinculoAsistente | None]:
@@ -182,6 +180,94 @@ async def estado_en_el_asistente(vinculo: VinculoAsistente, etiqueta: str) -> st
 
 
 # ------------------------------------------------------------------ alertas
+def por_debajo_del_precio(plan_id: str, monto: Any) -> bool:
+    """¿Lo pagado es menos que el precio del plan de la plataforma? Un monto ilegible cuenta
+    como por debajo (no se aplica un plan sin saber cuánto se pagó)."""
+    from decimal import Decimal, InvalidOperation
+
+    from core.billing.plans import get_plan
+
+    plan = get_plan(plan_id)
+    if plan is None:
+        return True
+    try:
+        pagado = Decimal(str(monto))
+    except (InvalidOperation, ValueError):
+        return True
+    return not pagado.is_finite() or pagado < Decimal(plan.price_cop)
+
+
+async def registrar_monto_distinto(
+    negocio: uuid.UUID,
+    periodo: Periodo,
+    *,
+    plan_id: str,
+    monto: Any,
+    origen: str,
+    vendedor: uuid.UUID | None,
+) -> None:
+    """El asistente cobró un período o un cambio de plan por menos que el precio del plan: no
+    se aplica. Queda un pago `monto_distinto` en el negocio, auditado en los dos lados, y se
+    alerta para revisarlo a mano."""
+    from decimal import Decimal, InvalidOperation
+
+    from core.billing.plans import get_plan
+    from core.billing.service import _suscripcion_bloqueada
+    from core.db.models import SubscriptionPayment
+    from core.shared.alerts import send_alert
+
+    plan = get_plan(plan_id)
+    try:
+        importe = Decimal(str(monto))
+    except (InvalidOperation, ValueError):
+        importe = Decimal(0)
+    referencia_pago = f"{periodo.referencia}:monto:{uuid.uuid5(uuid.NAMESPACE_URL, origen).hex[:12]}"
+    async with tenant_scope(negocio):
+        async with get_session() as session:
+            sub = await _suscripcion_bloqueada(session, negocio, datetime.now(UTC))
+            existe = (
+                await session.execute(
+                    select(SubscriptionPayment.id).where(
+                        SubscriptionPayment.tenant_id == negocio,
+                        SubscriptionPayment.provider_reference == referencia_pago,
+                        SubscriptionPayment.deleted_at.is_(None),
+                    )
+                )
+            ).first()
+            if existe is not None:
+                return  # ya registrado y alertado (reintento del evento)
+            session.add(
+                SubscriptionPayment(
+                    tenant_id=negocio,
+                    subscription_id=sub.id,
+                    plan_id=plan_id,
+                    amount_cop=importe if importe.is_finite() else Decimal(0),
+                    currency=plan.currency if plan else "COP",
+                    status="monto_distinto",
+                    provider=CANAL_ASISTENTE,
+                    provider_reference=referencia_pago,
+                    periodo=periodo.referencia,
+                    period_start=periodo.inicio,
+                    period_end=periodo.fin,
+                    paid_at=datetime.now(UTC),
+                )
+            )
+        detalle = {"referencia": periodo.referencia, "plan": plan_id, "monto": str(monto), "origen": origen}
+        await record_audit(actor=ACTOR, action="cobro_plataforma_monto_distinto", output_data=detalle)
+    slug = await slug_de(negocio)
+    if vendedor is not None:
+        async with tenant_scope(vendedor):
+            await record_audit(
+                actor=ACTOR, action="cobro_plataforma_monto_distinto", output_data={**detalle, "negocio": slug}
+            )
+    log.error("cobro_plataforma_monto_distinto", tenant_id=str(negocio), **detalle)
+    await send_alert(
+        "Plan cobrado por menos que su precio",
+        f"{slug}: {origen} por {monto} para el plan {plan_id} ({periodo.referencia}). No se aplicó: revisarlo.",
+        severity="critical",
+    )
+
+
 async def alertar_pago_duplicado(
     negocio: uuid.UUID,
     referencia: str,
@@ -265,6 +351,18 @@ async def on_subscription_charge_paid(**payload: Any) -> None:
         plan_id = actual.plan_id if actual is not None else None
     if plan_id is None:
         log.error("cobro_plataforma_sin_plan", tenant_id=str(vendedor), referencia=periodo.referencia)
+        return
+    if por_debajo_del_precio(plan_id, payload.get("monto")):
+        # Un cargo por menos que el plan (p. ej. una suscripción creada a mano con otro precio)
+        # no paga ese plan: no se aplica y se alerta.
+        await registrar_monto_distinto(
+            negocio,
+            periodo,
+            plan_id=plan_id,
+            monto=payload.get("monto"),
+            origen=f"cargo {payload.get('charge_id')}",
+            vendedor=vendedor,
+        )
         return
     ancla = payload.get("dia_ancla")
     async with tenant_scope(negocio):

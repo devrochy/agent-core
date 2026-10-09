@@ -122,8 +122,8 @@ async def _generar_cargos(now: datetime) -> int:
 async def generar_cargo_de(session, tenant_id: uuid.UUID, sub: Subscription, now: datetime, *, cap, config) -> SubscriptionCharge | None:  # type: ignore[no-untyped-def]
     """Cargo del período que empieza en `sub.proximo_cargo`, con su link y su aviso, y avanza
     el calendario de la suscripción. None si no corresponde cobrar (prueba, Free, plan en
-    $0) o el cargo del período ya existía. Lo usan `generar_cargos` y la operación
-    `cobrar_periodo` del proveedor (HU-SH-04)."""
+    $0) o el cargo del período ya existía. Si el último período lo pagó otro canal, el cargo
+    se crea sin link ni aviso (HU-SH-04)."""
     if sub.trial_termina is not None and sub.trial_termina > now:
         return None
     if sub.estado == "trialing" and not Decimal(sub.valor_periodo or 0):
@@ -169,6 +169,12 @@ async def generar_cargo_de(session, tenant_id: uuid.UUID, sub: Subscription, now
     )
     session.add(cargo)
     await session.flush()
+    if await paga_por_otro_canal(session, tenant_id, sub):
+        # HU-SH-04 (ADR-0123): el último período lo pagó otro canal (p. ej. el panel de la
+        # plataforma). El cargo existe, pero sin link ni aviso: el cliente no recibe dos cobros
+        # del mismo período. Si paga por el otro canal, se registra como pago externo.
+        log.info("subs_cargo_sin_aviso_paga_por_otro_canal", subscription_id=str(sub.id), periodo=periodo)
+        return cargo
     link_url: str | None = None
     if cap is not None:
         try:
@@ -301,6 +307,27 @@ async def _marcar_vencidas(now: datetime) -> int:
     return total
 
 
+async def paga_por_otro_canal(session, tenant_id: uuid.UUID, sub: Subscription) -> bool:  # type: ignore[no-untyped-def]
+    """¿El último período pagado de la suscripción lo pagó otro canal (`pago_externo`)?
+    Entonces el cliente paga por ahí: el pack no le manda link ni recordatorios
+    (HU-SH-04, ADR-0123). Vuelve a cobrarle cuando pague un período con el link del pack."""
+    ultimo = (
+        await session.execute(
+            select(SubscriptionCharge)
+            .where(
+                SubscriptionCharge.tenant_id == tenant_id,
+                SubscriptionCharge.subscription_id == sub.id,
+                SubscriptionCharge.tipo == "periodo",
+                SubscriptionCharge.estado == "pagado",
+                SubscriptionCharge.deleted_at.is_(None),
+            )
+            .order_by(SubscriptionCharge.fecha_vencimiento.desc().nulls_last(), SubscriptionCharge.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return ultimo is not None and bool(ultimo.pago_externo)
+
+
 def _aplicar_cambio_programado(sub: Subscription, inicio: datetime) -> None:
     """Downgrade programado (HU-SUB-07): el período que empieza en `inicio` ya va con el
     plan nuevo, así que su cargo sale con el precio nuevo."""
@@ -396,6 +423,8 @@ async def _avisos_de_cobro(now: datetime) -> dict[str, int]:
                         continue
                     if sub.id in pausadas:
                         continue
+                    if await paga_por_otro_canal(session, tenant_id, sub):
+                        continue  # HU-SH-04: lo cobra el otro canal
                     dia = recordatorio_de_hoy(
                         vence.date(), cargo.created_at.date(), hoy, config.recordatorios_dias
                     )

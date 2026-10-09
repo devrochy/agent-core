@@ -46,10 +46,12 @@ def test_sin_cuenta_compartida_no_se_reenvia_nada(settings_limpios: pytest.Monke
     settings_limpios.setenv("BILLING_WOMPI_EVENTOS_TENANT", "")
     assert negocio_con_cuenta_compartida() is None
     settings_limpios.setenv("BILLING_WOMPI_EVENTOS_TENANT", "solvershub")  # un slug no vale: solo UUID
+    from core.billing.enrutador import ReenvioFallido
     from core.config import get_settings
 
     get_settings.cache_clear()
-    assert negocio_con_cuenta_compartida() is None
+    with pytest.raises(ReenvioFallido):  # configuración mala: el webhook responde 5xx
+        negocio_con_cuenta_compartida()
     vendedor = uuid.uuid4()
     settings_limpios.setenv("BILLING_WOMPI_EVENTOS_TENANT", f" {vendedor} ")
     get_settings.cache_clear()

@@ -23,7 +23,9 @@
   - un negocio del asistente cambia de plan en el asistente (409 `cambio_en_el_asistente`).
 - **Renovación** (`core.billing_renovacion`, diaria, 13:00 UTC): 5 días antes del fin del período
   (`BILLING_DIAS_RENOVACION`) genera el cobro del siguiente y avisa por el canal preferido:
-  - por WhatsApp, con la plantilla de `subscription.charge_created` fuera de 24 h;
+  - por WhatsApp: el cargo y su aviso con la plantilla de `subscription.charge_created` fuera de
+    24 h los manda el cron del vendedor (`dias_anticipacion` igual a `BILLING_DIAS_RENOVACION`), que
+    ya no le manda link a quien pagó el último período por el panel;
   - o por correo a los dueños, con el enlace a `/plan`.
 - **Conciliación** (`core.billing_conciliacion`, diaria): compara el asistente con el negocio y alerta
   cada diferencia con su detalle: auditoría, Slack y push. Qué hacer con cada una:
@@ -38,5 +40,13 @@
   - `0061`: `subscription_payments.periodo` con su índice único, `tenant_subscriptions.dia_ancla` e
     índice del negocio en `provisioning_requests`;
   - `pack_subscriptions_0007`: `pack_subscriptions_charges.pago_externo`.
-- Con esto se cumple la condición de ADR-0121 para encender `PROVISIONING_SELLER_TENANTS` en
-  producción, después de verificarlo en test.
+- **Cierres de dinero** (revisión de seguridad y arquitectura):
+  - un cargo o un cambio de plan del asistente por menos que el precio del plan no se aplica
+    (`monto_distinto` + alerta);
+  - la alta manual de suscripciones del pack exige permiso de escritura;
+  - el webhook del panel exige el monto firmado por Wompi;
+  - al cambiar de plan se anulan los links pendientes del plan anterior;
+  - una recompra después de cancelar va a revisión.
+- `PROVISIONING_SELLER_TENANTS` va en la **app y en el worker**. Los requisitos para encenderla en
+  producción están en ADR-0123 § 10.
+- Un test exige un solo head de Alembic en el core y en cada pack.

@@ -402,6 +402,28 @@ async def _free_repetido(
     return otra is not None
 
 
+async def _recompra(vendedor: uuid.UUID, registro: ProvisioningRequest) -> bool:
+    """¿El mismo cliente ya tiene un negocio creado por otra suscripción del vendedor?"""
+    if registro.customer_id is None:
+        return False
+    async with get_session() as session:
+        otra = (
+            await session.execute(
+                select(ProvisioningRequest.id)
+                .where(
+                    ProvisioningRequest.tenant_id == vendedor,
+                    ProvisioningRequest.id != registro.id,
+                    ProvisioningRequest.customer_id == registro.customer_id,
+                    ProvisioningRequest.estado == "completado",
+                    ProvisioningRequest.negocio_tenant_id.isnot(None),
+                    ProvisioningRequest.deleted_at.is_(None),
+                )
+                .limit(1)
+            )
+        ).first()
+    return otra is not None
+
+
 async def _dar_de_alta(
     vendedor: uuid.UUID, registro: ProvisioningRequest, inicio: float, aviso: dict[str, Any]
 ) -> ProvisioningRequest:
@@ -434,6 +456,13 @@ async def _dar_de_alta(
     await _guardar_detalle(vendedor, registro.id, correo=huella)
     if plan.is_free and await _free_repetido(vendedor, registro, huella):
         raise AltaEnRevision("ya hubo un alta para este cliente o este correo: un Free más se revisa")
+    if not plan.is_free and await _recompra(vendedor, registro):
+        # HU-SH-04: quien canceló y vuelve a comprar abre otra suscripción; crear otro negocio
+        # le dejaría dos. Una persona decide si reactivar el que tenía (runbook de altas).
+        raise AltaEnRevision(
+            "el cliente ya tiene un negocio de un alta anterior (recompra después de cancelar): "
+            "revisar si se reactiva ese negocio"
+        )
     await validar_correo_del_owner(email)
     vertical = _limpio(datos.get("vertical")).lower() or None
 
@@ -763,7 +792,7 @@ async def sincronizar_cambio_de_plan(
     Queda auditado en los dos negocios. Idempotente: un reintento no mueve el período ni vuelve
     a aplicar el preset.
     """
-    from core.billing.canales import plan_del_cargo
+    from core.billing.canales import plan_del_cargo, por_debajo_del_precio, registrar_monto_distinto
     from core.billing.periodos import tiene_periodo_pago
     from core.billing.plans import get_plan
     from core.billing.service import registrar_periodo_pagado
@@ -779,6 +808,19 @@ async def sincronizar_cambio_de_plan(
         resultado["estado"] = "plan_desconocido"
     elif plan.is_free or payload.get("estado") != "activa":
         resultado["estado"] = "sin_cambio"  # a Free o sin pagar todavía: nada que aplicar
+    elif por_debajo_del_precio(plan.id, payload.get("valor_periodo")):
+        # La suscripción del vendedor quedó con un precio menor que el del plan (p. ej. creada
+        # a mano): ese plan no está pagado. No se aplica y se alerta.
+        resultado.update(estado="monto_distinto", plan=plan.id, valor_periodo=payload.get("valor_periodo"))
+        slug = registro.negocio_slug or await _slug_de(negocio)
+        await registrar_monto_distinto(
+            negocio,
+            periodo_del_vendedor(slug, _periodo_del_evento(payload)),
+            plan_id=plan.id,
+            monto=payload.get("valor_periodo"),
+            origen=f"cambio de plan {referencia}",
+            vendedor=vendedor,
+        )
     else:
         slug = registro.negocio_slug or await _slug_de(negocio)
         async with tenant_scope(negocio):

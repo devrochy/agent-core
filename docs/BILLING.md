@@ -158,7 +158,10 @@ Un negocio creado por el alta automática (ADR-0121) paga su plan por dos camino
   su plan actual (409 `cambio_en_el_asistente`). Un Free que compra un plan pago cambia de plan en
   el mismo negocio y recibe el preset que le faltaba.
 - **Renovación** (`core/billing/renovacion.py`, diaria): cobro del período siguiente y aviso por el
-  canal del último pago: WhatsApp con plantilla (asistente) o correo con el enlace a `/plan`.
+  canal del último pago: WhatsApp con plantilla (el cargo lo manda el cron del vendedor, con
+  `dias_anticipacion` = `BILLING_DIAS_RENOVACION`) o correo con el enlace a `/plan`. El cron del
+  vendedor no le manda link a quien pagó el último período por el panel.
+- **`PROVISIONING_SELLER_TENANTS`** va en la app y en el worker (ADR-0123 § 11).
 - **Conciliación** (`core/billing/conciliacion.py`, diaria): compara los dos lados y alerta cada
   diferencia con su detalle. Qué hacer con cada una: `docs/runbooks/cobro-de-plataforma.md`.
 - **Una URL de eventos por cuenta de Wompi (R-05):** si la plataforma y el pack de pagos de
@@ -169,7 +172,7 @@ Un negocio creado por el alta automática (ADR-0121) paga su plan por dos camino
 Variables:
 
 ```
-BILLING_DIAS_RENOVACION=5          # días antes del fin del período en que se cobra el siguiente
+BILLING_DIAS_RENOVACION=5          # días antes del fin del período en que se cobra el siguiente (= dias_anticipacion del vendedor)
 BILLING_WOMPI_EVENTOS_TENANT=      # UUID del negocio que comparte la cuenta de Wompi (vacío: cuentas separadas)
 ```
 

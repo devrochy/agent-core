@@ -122,7 +122,7 @@ Notas aprendidas en vivo (2026-09-30):
 | `MIGRATIONS_DATABASE_URL` | `…agent_core_migrations:<pw>@huvhzaxim2notqkcxqa5930a:5432/agent_core` | `…postgres:<pw>@48h2r2laml64eyrggfg6eqld:5432/agent_core` |
 | `REDIS_URL` | `redis://default:<pw>@gk9bagcojtdrtofcx8tdxkiq:6379/0` | `redis://default:<pw>@rqkxxnen7ysp7xmqhocrbidw:6379/0` |
 | `AGENT_CORE_ROLE` | `api` | `api` |
-| `PROVISIONING_SELLER_TENANTS` | *(vacío hasta verificar HU-SH-04 en test; después, UUID de `solvershub`)* | UUID de `solvershub` (para verificar HU-SH-03 y HU-SH-04) |
+| `PROVISIONING_SELLER_TENANTS` (app **y** worker) | *(vacío hasta cumplir ADR-0123 § 10; después, UUID de `solvershub`)* | UUID de `solvershub` (para verificar HU-SH-03 y HU-SH-04) |
 | `BILLING_WOMPI_EVENTOS_TENANT` | UUID de `solvershub` si comparte la cuenta de Wompi con la plataforma; si no, vacío | Igual que producción, con la cuenta del sandbox |
 | `BILLING_DIAS_RENOVACION` | `5` (default) | `5` |
 
@@ -137,20 +137,29 @@ Notas:
   `TOKEN_*`, `WOMPI_*`) son **propios de cada entorno**.
 - **`PROVISIONING_SELLER_TENANTS`** (ADR-0121): **UUID** (no slugs), separados por coma, de
   los negocios que venden negocios. Solo un `subscription.activated` de uno de ellos crea un
-  negocio nuevo; vacía, el alta automática está apagada. Tiene que estar en el **worker**
-  (ahí corre el despachador del outbox); en la app no hace daño. No hay token de servicio
+  negocio nuevo; vacía, el alta automática está apagada. **Obligatoria en el worker y en la
+  app, con el mismo valor** (ADR-0123 § 11, enmienda de ADR-0121 § 2): el worker corre el
+  despachador del outbox; la app la usa en `/plan` para reconocer el canal asistente (sin ella
+  no responde «ya pagado en el asistente» ni frena el cambio de plan de un negocio del asistente). No hay token de servicio
   que configurar. Desde HU-SH-04 (ADR-0123) el plan pago del alta se renueva, el paso de Free a
-  pago cambia el plan del negocio y pagar desbloquea en el acto: se puede encender en
-  producción **después de verificar HU-SH-04 en test**. Para el correo con el acceso hace falta
+  pago cambia el plan del negocio y pagar desbloquea en el acto. **Requisitos para encenderla
+  en producción:** los de ADR-0123 § 10 (canal preferido respetado y `dias_anticipacion` del
+  vendedor = `BILLING_DIAS_RENOVACION`, variable en app y worker, R-05 verificado en el sandbox
+  de Wompi y los criterios verificados en test). Para el correo con el acceso hace falta
   `SYSTEM_SMTP_*`. Altas en revisión: `docs/runbooks/altas-en-revision.md`.
 - **`BILLING_WOMPI_EVENTOS_TENANT`** (ADR-0123, riesgo R-05): Wompi admite **una** URL de eventos
   por cuenta y ambiente. Si la plataforma (`WOMPI_BILLING_*`) y el pack de pagos de `solvershub`
   usan la misma cuenta, la URL de eventos de esa cuenta es `https://<host>/webhooks/billing/wompi`
   y esta variable lleva el UUID de `solvershub`: los eventos que no son de un pago de la
   plataforma se le reenvían (su pack los verifica con su secreto). Va en la **app** (recibe el
-  webhook). Con cuentas separadas, vacía. Ver `docs/runbooks/cobro-de-plataforma.md`.
+  webhook). Con cuentas separadas, vacía. Si está puesta pero el reenvío no se puede hacer (UUID
+  inválido, negocio inactivo, sin pack de pagos o con otro secreto) el webhook responde **500**
+  para que Wompi reintente: mirar el log `billing_webhook_apply_failed`. Ver
+  `docs/runbooks/cobro-de-plataforma.md`.
 - **`BILLING_DIAS_RENOVACION`**: días antes del fin del período en que el job de renovación
-  (worker/beat) genera el cobro del período siguiente y avisa por el canal preferido.
+  (worker/beat) genera el cobro del período siguiente y avisa por el canal preferido. Tiene que
+  ser igual a `dias_anticipacion` de la config de Suscripciones del negocio vendedor (la
+  conciliación avisa si difieren).
 
 ## Persistencia de artefactos de tenant (`TENANTS_ROOT`)
 

@@ -371,10 +371,9 @@ de artefactos de tenant).
   acceso hasta que una persona lo corrija (`docs/runbooks/altas-en-revision.md`). Es un ajuste del playbook de
   ventas del tenant `solvershub` (`solvershub-comercial`): repetir el correo y pedir confirmación antes de
   `crear_pedido`. [Media]
-- **Volver a comprar después de cancelar crea otro negocio** — con la suscripción `cancelada` en
-  `solvershub`, un pedido nuevo crea otra suscripción y el alta automática (ADR-0121) otro negocio. HU-SH-04
-  resolvió el caso de la Free vencida (se reusa la suscripción), no el de la cancelada. → reusar el negocio
-  del mismo cliente y correo, o mandarlo a revisión. [Media]
+- **Reactivar el negocio de quien vuelve a comprar después de cancelar** — desde HU-SH-04 (ADR-0123 § 12)
+  el alta queda en revisión en vez de crear un segundo negocio, y una persona reactiva el que tenía. →
+  reactivarlo solo (misma suscripción nueva vinculada al negocio anterior). [Media]
 - **Cambio de plan desde `/plan` para un negocio del asistente** — HU-SH-04 lo bloquea (409
   `cambio_en_el_asistente`, ADR-0123 § 6): cambiar el plan en el vendedor sin cobrarlo de nuevo exige otra
   operación del contrato, y el prorrateo es de HU-BILL-12. [Media]

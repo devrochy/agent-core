@@ -6,11 +6,15 @@
   - ADR-0045 § 4: los períodos pagos se cortan por calendario, con día ancla (antes, +30 días).
   - ADR-0046: el panel cobra un **período** con su referencia, no «30 días más»; el webhook de
     billing reenvía lo que no es suyo (riesgo R-05).
-  - ADR-0106: dos operaciones **opcionales** más del contrato de suscripciones
-    (`registrar_pago_externo` y `cobrar_periodo`), como `permite_varias` en ADR-0111.
+  - ADR-0106: una operación **opcional** más del contrato de suscripciones
+    (`registrar_pago_externo`), como `permite_varias` en ADR-0111.
   - ADR-0067: una operación opcional de la capacidad de pagos (`procesar_evento`).
-  - ADR-0121 § 3.2 y § 6: el cambio de plan de un negocio aprovisionado ya no solo se audita, y la
-    condición para encender `PROVISIONING_SELLER_TENANTS` en producción queda cumplida.
+  - ADR-0121 § 2: `PROVISIONING_SELLER_TENANTS` va en la **app y en el worker** (antes, solo en el
+    worker). La API la usa para reconocer el canal asistente de un negocio (§ 11).
+  - ADR-0121 § 3.2: el cambio de plan de un negocio aprovisionado ya no solo se audita, y una
+    recompra después de cancelar va a revisión.
+  - ADR-0121 § 6: la condición para encender `PROVISIONING_SELLER_TENANTS` en producción pasa a ser
+    la lista de requisitos de § 10.
 - **Contexto:** HU-SH-04 (SPEC-07, D-13 = A, D-16). Se apoya en ADR-0107 (outbox), ADR-0108 (avisos
   por plantilla), ADR-0110 § 3.1 (preset pendiente) y ADR-0111 (cambio de plan).
 
@@ -135,12 +139,18 @@
   - escribe `platform.renewal_due` en el outbox;
   - es idempotente: un cobro por período.
 - **Aviso por el canal preferido** (handler del evento). El canal preferido es el del último pago:
-  - **asistente** (negocio del alta que no pagó por el panel): la operación `cobrar_periodo` del
-    proveedor del vendedor genera ya el cargo del período, con su link. Su aviso
-    `subscription.charge_created` sale por WhatsApp, con plantilla fuera de la ventana de 24 h
-    (ADR-0108);
-  - **panel**, o si el asistente no puede cobrarlo: correo a los dueños con la referencia y el
-    enlace a `/plan`, más un push.
+  - **asistente** (negocio del alta que no pagó por el panel): el cargo del período, su link y su
+    aviso `subscription.charge_created` (WhatsApp, plantilla fuera de la ventana de 24 h, ADR-0108)
+    los manda el cron `generar_cargos` del vendedor, igual que para cualquier cliente. El handler
+    solo confirma con la operación `get` del contrato que esa suscripción puede cobrar;
+  - **panel**, o si el asistente no puede cobrar (cancelada, vencida, pausada): correo a los dueños
+    con la referencia y el enlace a `/plan`, más un push.
+- **La regla vive donde sale el aviso.** `generar_cargo_de` del pack crea el cargo **sin link ni
+  aviso** (y `avisos_de_cobro` no lo recuerda) si el último período pagado de esa suscripción tiene
+  `pago_externo`: quien paga por el panel no recibe dos cobros del mismo período.
+- **Mismo día en los dos lados, por configuración:** `dias_anticipacion` del pack de suscripciones
+  del vendedor tiene que ser igual a `BILLING_DIAS_RENOVACION`. La conciliación avisa si difieren
+  (`anticipacion_distinta`).
 - Un período ya pagado no genera cobro ni aviso.
 
 ### 8. Conciliación
@@ -156,7 +166,8 @@
   - pago doble (últimos 7 días);
   - plan distinto;
   - monto distinto;
-  - suscripción del vendedor que ya no está, con un plan pago vigente.
+  - suscripción del vendedor que ya no está, con un plan pago vigente;
+  - `dias_anticipacion` del vendedor distinto de `BILLING_DIAS_RENOVACION`.
 - **Alerta con el detalle:** `audit_log` del vendedor, un log por diferencia, `send_alert` (Slack si
   está configurado) y un push a los dueños del vendedor.
 - No corrige nada solo: cada caso tiene su arreglo en `docs/runbooks/cobro-de-plataforma.md`.
@@ -172,16 +183,49 @@
   - La URL de esa cuenta es `/webhooks/billing/wompi`.
   - El webhook de la plataforma verifica la firma con su secreto de eventos.
   - Si el link no es de un pago de la plataforma y `BILLING_WOMPI_EVENTOS_TENANT` apunta a un
-    negocio, se lo pasa al pack de pagos de ese negocio (operación opcional `procesar_evento`).
+    negocio activo, se lo pasa al pack de pagos de ese negocio (operación opcional
+    `procesar_evento`). No depende de la allowlist de vendedores.
   - El pack lo vuelve a verificar con **su** secreto y lo aplica igual que su webhook propio.
-- **Cuentas separadas:** la variable queda vacía y cada cuenta tiene su URL. Fail-closed.
+  - **Configuración mala, 5xx:** UUID inválido, negocio inactivo, sin pack de pagos o con otro
+    secreto. Wompi reintenta (hasta 3 veces en 24 h) mientras se corrige; un 200 perdería el pago.
+- **Cuentas separadas:** la variable queda vacía y cada cuenta tiene su URL.
 - **Falta verificarlo en el sandbox real:** campo único de URL en el dashboard y un pago de cada
   canal.
 
-### 10. Producción
+### 10. Requisitos para encender `PROVISIONING_SELLER_TENANTS` en producción
 
-Con esto se cumple la condición de ADR-0121 § 6. `PROVISIONING_SELLER_TENANTS` se puede encender en
-producción después de verificarlo en test (pendientes en el PR).
+Reemplazan la condición de ADR-0121 § 6. No se enciende hasta cumplir todos:
+
+1. **El canal preferido se respeta donde sale el aviso** (§ 7): el cron del vendedor no le manda
+   link ni aviso a quien pagó el último período por el panel, y `dias_anticipacion` del vendedor
+   es igual a `BILLING_DIAS_RENOVACION` (sin `anticipacion_distinta` en la conciliación).
+2. **`PROVISIONING_SELLER_TENANTS` está en la app y en el worker** (§ 11), y
+   `BILLING_WOMPI_EVENTOS_TENANT` está configurada según la cuenta de Wompi (§ 9).
+3. **R-05 verificado en el sandbox de Wompi:** un solo campo de URL de eventos por ambiente, la URL
+   apuntando donde corresponde y un pago de cada canal con su efecto (runbook
+   `docs/runbooks/cobro-de-plataforma.md` § 5).
+4. **Los criterios de HU-SH-04 verificados a mano en test.**
+
+### 11. `PROVISIONING_SELLER_TENANTS` en la app y en el worker
+
+La API también la lee: con ella sabe que un negocio tiene canal asistente. Sin la variable en la
+app, `/plan` no responde 409 `cambio_en_el_asistente` ni «ya pagado en el asistente», y muestra los
+botones de cambio de plan. El enrutador de R-05 no depende de ella (§ 9).
+
+### 12. Cierres de dinero de la revisión (2026-10-09)
+
+- **Plan por menos de su precio.** Un cargo pagado o un cambio de plan del asistente por menos que
+  el precio del plan de la plataforma no se aplica: queda un pago `monto_distinto` y se alerta. Pasa,
+  por ejemplo, con una suscripción creada a mano con otro precio. La alta manual de suscripciones del
+  pack exige además permiso de escritura.
+- **Monto del panel firmado.** El webhook del panel solo aplica si Wompi firmó el monto y es el del
+  link; si no, `monto_distinto` y alerta (como `pack_payments`).
+- **Candados en el mismo orden.** `apply_payment` bloquea primero la suscripción y después el pago,
+  igual que el canal asistente.
+- **Link viejo de otro plan.** Al cambiar el plan se anulan los links pendientes de otro plan. Un
+  intento anulado que igual se paga queda como pago doble: no devuelve el negocio al plan viejo.
+- **Recompra después de cancelar.** El mismo cliente con un negocio de un alta anterior va a
+  revisión, en vez de recibir un segundo negocio.
 
 ## Alternativas consideradas
 
@@ -258,7 +302,8 @@ producción después de verificarlo en test (pendientes en el PR).
     `provisioning_requests`;
   - `pack_subscriptions_0007`: `pack_subscriptions_charges.pago_externo`.
 - **Packs:**
-  - `pack_subscriptions`: `subscription.charge_paid`; `registrar_pago_externo` y `cobrar_periodo`;
+  - `pack_subscriptions`: `subscription.charge_paid`; `registrar_pago_externo`; sin link ni aviso a
+    quien paga por otro canal; alta manual con permiso de escritura;
     Free vencida reusada; el período en `subscription.activated`; `generar_cargo_de`;
   - `pack_commerce`: `plan_de_variante`;
   - `pack_payments`: `procesar_evento`.

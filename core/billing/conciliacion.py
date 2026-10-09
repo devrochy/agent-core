@@ -21,6 +21,7 @@ Diferencias que detecta:
 | `plan_distinto` | el plan de la suscripción en el vendedor no es el del negocio |
 | `monto_distinto` | un cargo pendiente del vendedor no cobra el precio del plan del negocio |
 | `sin_suscripcion_en_el_asistente` | la suscripción del vendedor ya no está, y el negocio sigue con un plan pago vigente |
+| `anticipacion_distinta` | el vendedor genera el cargo con otros `dias_anticipacion` que `BILLING_DIAS_RENOVACION` |
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from sqlalchemy import select
 from core.billing.canales import ACTOR, capacidad_del_vendedor, plan_del_cargo
 from core.billing.periodos import etiqueta_de_referencia, tiene_periodo_pago
 from core.billing.plans import get_plan
+from core.config import get_settings
 from core.db.models import ProvisioningRequest, SubscriptionPayment, TenantSubscription
 from core.db.session import get_session
 from core.shared.audit import record_audit
@@ -102,7 +104,19 @@ async def conciliar_vendedor(vendedor: uuid.UUID, *, now: datetime) -> tuple[int
             cap = await capacidad_del_vendedor(vendedor)
         except SubscriptionError:
             cap = None
+        anticipacion = await _dias_de_anticipacion(cap)
     diferencias: list[Diferencia] = []
+    renovacion = get_settings().billing_dias_renovacion
+    if filas and anticipacion is not None and anticipacion != renovacion:
+        # El asistente cobraría el período siguiente otro día que el panel (ADR-0123 § 7).
+        diferencias.append(
+            Diferencia(
+                "anticipacion_distinta",
+                "",
+                None,
+                {"dias_anticipacion_del_vendedor": anticipacion, "BILLING_DIAS_RENOVACION": renovacion},
+            )
+        )
     for fila in filas:
         try:
             diferencias.extend(await conciliar_negocio(vendedor, fila, cap, now=now))
@@ -114,6 +128,21 @@ async def conciliar_vendedor(vendedor: uuid.UUID, *, now: datetime) -> tuple[int
     if diferencias:
         await _alertar(vendedor, diferencias)
     return len(filas), diferencias
+
+
+async def _dias_de_anticipacion(cap: Any) -> int | None:
+    """`dias_anticipacion` de la config del proveedor de suscripciones del vendedor (bajo su
+    scope), si la tiene."""
+    from core.plugin_manager import plugin_manager
+
+    if cap is None:
+        return None
+    try:
+        config = await plugin_manager.load_config(cap.provider_id)
+    except Exception:
+        return None
+    valor = getattr(config, "dias_anticipacion", None)
+    return int(valor) if isinstance(valor, int) else None
 
 
 async def conciliar_negocio(

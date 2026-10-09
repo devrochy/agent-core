@@ -45,6 +45,18 @@ Acciones de `audit_log` con actor `billing`:
 | `monto_distinto` | El cargo pendiente del asistente no cobra el precio del plan | Revisar la variante del plan en el catálogo del vendedor (`precio_de_plan`) y el cron `sincronizar_precios_de_plan` |
 | `sin_suscripcion_en_el_asistente` | El cliente canceló en el asistente y el negocio sigue con plan pago | Nada, salvo que el cliente quiera seguir: paga por el panel. Al terminar el período, el negocio pasa a `past_due` |
 | `no_se_pudo_conciliar` | Falló la lectura de un lado | Ver el log `billing_conciliacion_negocio_fallo` |
+| `anticipacion_distinta` | El asistente cobra el período siguiente otro día que el panel | Poner `dias_anticipacion` de la config de Suscripciones del vendedor igual a `BILLING_DIAS_RENOVACION` |
+
+Otras alertas:
+
+- **«Plan cobrado por menos que su precio»** (crítica): un cargo o un cambio de plan del asistente
+  por menos que el precio del plan. No se aplicó; queda un pago `monto_distinto` en el negocio.
+  Revisar la suscripción en el vendedor (¿se creó a mano con otro precio?).
+- **«Pago del plan con monto distinto»** (crítica): el webhook del panel trajo otro monto o no lo
+  firmó. Revisar la transacción en Wompi.
+- **Recompra en revisión:** un cliente que canceló y volvió a comprar no recibe un segundo
+  negocio; el alta queda en revisión (`docs/runbooks/altas-en-revision.md`). Lo normal es
+  reactivar el negocio que tenía y descartar el alta nueva.
 
 Ningún arreglo automático toca plata: la conciliación solo avisa.
 
@@ -54,7 +66,10 @@ Ningún arreglo automático toca plata: la conciliación solo avisa.
   cuyo período termina dentro de `BILLING_DIAS_RENOVACION` días (5).
 - **Qué deja.** Un cobro `pendiente` con `provider = "plataforma"` y la referencia del período.
 - **Por dónde avisa.**
-  - Al negocio del alta que paga por WhatsApp, con el link del asistente: plantilla fuera de 24 h.
+  - Al negocio del alta que paga por WhatsApp: el cargo, el link y el aviso los manda el cron
+    `generar_cargos` del vendedor (`dias_anticipacion` = `BILLING_DIAS_RENOVACION`), con
+    plantilla fuera de 24 h. A quien pagó el último período por el panel, el cron no le manda link
+    ni recordatorios.
     Hay que tener mapeada la plantilla de `subscription.charge_created` en el vendedor (Plantillas
     por evento, ADR-0108). Si no, el aviso queda `sin_plantilla` y el panel lo muestra.
   - Al resto: correo a los dueños con el enlace a `/plan`. Hace falta `SYSTEM_SMTP_*`; sin él solo
@@ -68,6 +83,8 @@ el pack de pagos de `solvershub` usan la **misma** cuenta:
 1. En el dashboard de Wompi de esa cuenta, en sandbox y en producción, configurar la URL de eventos
    `https://<host>/webhooks/billing/wompi`.
 2. Poner `BILLING_WOMPI_EVENTOS_TENANT=<UUID de solvershub>` en la app (es la que recibe el webhook).
+   Si el reenvío no se puede hacer, el webhook responde 500 y Wompi reintenta: corregir y esperar
+   el reintento (hasta 3 en 24 h).
 3. El secreto de eventos del pack de pagos de `solvershub` tiene que ser el de esa cuenta: es el mismo
    que `WOMPI_BILLING_EVENTS_SECRET`.
 
