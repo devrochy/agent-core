@@ -102,11 +102,14 @@ async def _fila(tid: uuid.UUID, cid: uuid.UUID):
 
 
 async def _secreto(tid: uuid.UUID) -> str | None:
-    from core.gateway.meta_byok import resolve_byok_app_secret
+    """El secreto de la conexión que gana el orden de `_resolve_byok_token` (ADR-0101). Desde
+    ADR-0125 la firma del webhook ya no sale de ese orden (cada grupo se verifica con su
+    conexión), pero el orden sigue eligiendo el `verify_token` del self-check del preflight."""
+    from core.gateway.meta_byok import APP_SECRET_KIND, _resolve_byok_token
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(tid):
-        return await resolve_byok_app_secret(tid)
+        return await _resolve_byok_token(tid, APP_SECRET_KIND)
 
 
 def _checks_falsos(monkeypatch, checks: dict) -> None:

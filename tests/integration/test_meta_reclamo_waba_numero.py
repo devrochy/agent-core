@@ -192,8 +192,8 @@ async def test_un_numero_con_dos_duenos_no_cae_a_la_waba(app_client, monkeypatch
 
 
 async def test_un_conflicto_no_va_al_negocio_del_endpoint_por_slug() -> None:
-    """En el endpoint por slug, un evento sin negocio resuelto va al de la URL. Un
-    conflicto no es "sin negocio": no puede caer ahí."""
+    """En el endpoint por slug un conflicto nunca cae al negocio de la URL (ni siquiera con
+    la firma de la plataforma, que autoriza cualquier grupo)."""
     from core.gateway.webhooks import Firmantes, _process_payload
 
     waba_id, phone_x = uniq("waba-de-z"), uniq("phone-de-x")
@@ -207,7 +207,7 @@ async def test_un_conflicto_no_va_al_negocio_del_endpoint_por_slug() -> None:
         {"id": waba_id, "changes": [_cambio(phone_x, "wa-cliente-x", msg_id)]},
     ]}
     await _process_payload(
-        payload, known_tenant_id=tenant_slug, firmantes=Firmantes.de_negocio(tenant_slug), dev_fallback=False
+        payload, known_tenant_id=tenant_slug, firmantes=Firmantes(plataforma=True), dev_fallback=False
     )
 
     row = await _evento_registrado(msg_id)

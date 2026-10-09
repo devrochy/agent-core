@@ -193,7 +193,9 @@ async def effective_credentials(external_id: str = "") -> dict[str, str]:
 
 
 async def resolve_effective_verify_token(tenant_id: uuid.UUID) -> str:
-    """Token que el webhook del tenant acepta en el handshake GET.
+    """UN token que el handshake GET del webhook del tenant acepta (para el self-check del
+    preflight). El handshake acepta el de cada conexión (`webhook_secrets.
+    verify_tokens_aceptados`, HU-CONN-05); este devuelve uno de ellos.
 
     Orden: `ChannelConnection` (conexión manual) -> BYOK (`MetaConnection`,
     verify_token propio del wizard) -> `.env` (`WHATSAPP_VERIFY_TOKEN`).
@@ -204,12 +206,8 @@ async def resolve_effective_verify_token(tenant_id: uuid.UUID) -> str:
     BYOK (bug real: el self-check del wizard BYOK respondía 403 porque el
     handler validaba con el token global).
 
-    Lo usa `webhooks.py::verify_webhook_tenant`. Cualquier ruta que registre
-    una suscripción apuntando a la URL POR TENANT (`tenant_webhook_url(slug)`,
-    como el wizard BYOK) debe registrar este mismo token, o Meta queda
-    registrado con un token que el handshake rechaza. La ruta genérica
-    (`/admin/conexiones/webhooks/registrar`) es la excepción: apunta al
-    webhook genérico sin slug, que resuelve solo `effective_credentials()`.
+    Para registrar la suscripción de UNA conexión se usa su propio token
+    (`meta_health_service.verify_token_de_registro`), no este.
     El `tenant_id` va explícito a la resolución manual; el contexto
     (`tenant_scope`) sigue haciendo falta para RLS en la rama BYOK.
     """
@@ -222,33 +220,11 @@ async def resolve_effective_verify_token(tenant_id: uuid.UUID) -> str:
 
 def platform_app_secret() -> str:
     """App Secret de la app de la plataforma (`.env`): el único que puede autorizar
-    eventos de cualquier negocio en el webhook genérico (ADR-0100), porque ningún
-    negocio lo conoce. Única fuente de este criterio."""
+    eventos de cualquier negocio en el webhook (ADR-0100), porque ningún negocio lo
+    conoce. Única fuente de este criterio. Los secretos propios se resuelven por
+    conexión, en `core/gateway/webhook_secrets.py` (HU-CONN-05, ADR-0125)."""
     settings = get_settings()
     return settings.whatsapp_app_secret or settings.meta_app_secret or ""
-
-
-async def resolve_own_app_secret(tenant_id: uuid.UUID) -> str:
-    """App Secret propio del negocio: `ChannelConnection` (conexión manual) -> BYOK
-    (`MetaConnection`, app secret cargado en el wizard). **Sin** caer al `.env`:
-    vacío si el negocio usa la app de la plataforma. Necesita `tenant_scope` (el
-    secreto BYOK vive bajo RLS)."""
-    from core.gateway.meta_byok import resolve_byok_app_secret
-
-    manual = (await resolve_primary_credentials(tenant_id) or {}).get("app_secret")
-    byok = await resolve_byok_app_secret(tenant_id)
-    return manual or byok or ""
-
-
-async def resolve_effective_app_secret(tenant_id: uuid.UUID) -> str:
-    """App Secret con el que se valida la firma HMAC de los webhooks del tenant.
-
-    Mismo orden que `resolve_effective_verify_token`: `ChannelConnection`
-    (conexión manual) -> BYOK (`MetaConnection`, app secret cargado en el
-    wizard) -> `.env`. No usar `effective_credentials()` a secas: su fallback a
-    `env_credentials()` enmascara el secreto de la app dedicada del tenant y
-    hace que toda firma de Meta se rechace con 401 (bug real)."""
-    return await resolve_own_app_secret(tenant_id) or platform_app_secret()
 
 
 async def save_connection(

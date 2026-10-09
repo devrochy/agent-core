@@ -101,20 +101,24 @@ async def test_registrar_permite_a_owner_del_tenant(app_client, monkeypatch) -> 
         session.add(TenantUser(tenant_id=tid, admin_id=owner.id, role="owner"))
         await session.commit()
 
-    import core.gateway.meta_preflight as preflight_mod
     import core.gateway.meta_subscriptions as subs_mod
-    from core.gateway.meta_preflight import AppCredentials
+    from core.db.models import MetaConnection
+    from core.gateway import meta_token_store
+    from core.gateway.meta_byok import APP_SECRET_KIND
     from core.gateway.meta_subscriptions import AppSubscriptionStatus
+    from core.shared.tenant import tenant_scope
 
-    async def _fake_resolve(tenant_id, channel="whatsapp"):
-        return AppCredentials(
-            app_id="app-fake",
-            app_secret="s3cr3t-no-debe-salir",
-            config_id="",
-            graph_api_version="v21.0",
-        )
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            conn = (
+                await session.execute(select(MetaConnection).where(MetaConnection.tenant_id == tid))
+            ).scalar_one()
+        await meta_token_store.put_token(conn.id, APP_SECRET_KIND, conn.meta_app_id, "s3cr3t-propio", tenant_id=tid)
+
+    llamadas: list[tuple[str, str]] = []
 
     async def _fake_upsert(config, object_, *, callback_url, verify_token):
+        llamadas.append((config.app_id, config.app_secret))
         return AppSubscriptionStatus(
             meta_app_id=config.app_id,
             object=object_,
@@ -125,7 +129,6 @@ async def test_registrar_permite_a_owner_del_tenant(app_client, monkeypatch) -> 
             last_error=None,
         )
 
-    monkeypatch.setattr(preflight_mod, "resolve_app_credentials", _fake_resolve)
     monkeypatch.setattr(subs_mod, "upsert_app_subscription", _fake_upsert)
 
     headers = await api_headers(app_client, tid, email=owner_email, password="clave-segura-123")
@@ -135,14 +138,19 @@ async def test_registrar_permite_a_owner_del_tenant(app_client, monkeypatch) -> 
         headers=headers,
     )
     assert r.status_code == 204, r.text
+    # La ruta vieja por canal registra la única conexión, en SU app (HU-CONN-05).
+    assert llamadas == [(conn.meta_app_id, "s3cr3t-propio")]
 
 
 async def test_listado_no_expone_secretos(app_client) -> None:
-    from core.db.models import MetaAppSubscription, MetaConnection
+    from core.db.models import MetaAppSubscription, MetaConnection, Tenant
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
+    from core.tenants import tenant_webhook_url
 
     tid = await _make_tenant_with_connection()
+    async with get_session() as session:
+        url_propia = tenant_webhook_url((await session.get(Tenant, tid)).slug)
 
     async with tenant_scope(tid):
         async with get_session() as session:
@@ -155,7 +163,7 @@ async def test_listado_no_expone_secretos(app_client) -> None:
             MetaAppSubscription(
                 meta_app_id=conn.meta_app_id,
                 object="whatsapp_business_account",
-                callback_url="https://example.test/webhooks/whatsapp",
+                callback_url=url_propia,
                 active=True,
                 fields=["messages"],
             )
@@ -169,5 +177,6 @@ async def test_listado_no_expone_secretos(app_client) -> None:
     assert "app_secret" not in body
     assert "verify_token" not in body
     data = r.json()
-    assert data["subscriptions"][0]["callback_url"] == "https://example.test/webhooks/whatsapp"
+    # La URL de este negocio se muestra; la de otro negocio no (app BYOK compartida, ADR-0125).
+    assert data["subscriptions"][0]["callback_url"] == url_propia
     assert data["subscriptions"][0]["active"] is True

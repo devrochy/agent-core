@@ -2,6 +2,10 @@
 
 Genérico: se crea un tenant desechable, se registra su webhook (handshake GET) y
 se verifica que los mensajes POST se procesan con el tenant resuelto por slug.
+
+Desde HU-CONN-05 (ADR-0125) la firma de cada número se verifica con el secreto de SU
+conexión, y un número que no es de ninguna conexión del negocio no se procesa: los
+payloads de estos tests usan números registrados.
 """
 
 from __future__ import annotations
@@ -104,7 +108,8 @@ async def test_post_por_slug_procesa(app_client, recorded) -> None:
     from core.orchestrator.consumer import consume_loop
 
     slug = f"wh-{uuid.uuid4().hex[:6]}"
-    tid = await _onboard(slug, f"5552{uuid.uuid4().hex[:6]}", "tok")
+    phone = f"5552{uuid.uuid4().hex[:6]}"
+    tid = await _onboard(slug, phone, "tok")
     # modo inmediato (sin debounce de 15s) para que el turno se dispare ya.
     from core.db.models import AppSettings
     from core.db.session import get_session
@@ -127,7 +132,7 @@ async def test_post_por_slug_procesa(app_client, recorded) -> None:
     from core.config import get_settings
 
     body = json.dumps(
-        _meta_payload("cualquiera", "wa-slug", f"wamid.slug.{uuid.uuid4().hex[:6]}", "hola slug")
+        _meta_payload(phone, "wa-slug", f"wamid.slug.{uuid.uuid4().hex[:6]}", "hola slug")
     ).encode()
     secret = get_settings().whatsapp_app_secret or get_settings().meta_app_secret
     r = await app_client.post(
@@ -300,8 +305,9 @@ async def test_handshake_por_slug_rechaza_token_de_otro_tenant(app_client) -> No
     assert r2.status_code == 200 and r2.text == "X"
 
 
-async def test_handshake_por_slug_precedencia_manual_sobre_byok(app_client) -> None:
-    """Contrato de precedencia: conexión manual (ChannelConnection) > BYOK > .env."""
+async def test_handshake_por_slug_acepta_el_token_de_cada_conexion(app_client) -> None:
+    """HU-CONN-05: cada conexión que apunta a la URL del negocio re-verifica su suscripción
+    con su propio token (antes la manual tapaba a la BYOK y su handshake daba 403)."""
     from core.alta_negocio import onboard_tenant
     from core.db.models import MetaConnection
     from core.db.session import get_session
@@ -331,19 +337,26 @@ async def test_handshake_por_slug_precedencia_manual_sobre_byok(app_client) -> N
             connection_id, meta_byok.WEBHOOK_VERIFY_TOKEN_KIND, "app-prec", "token-byok", tenant_id=tid
         )
 
-    # Gana el token de la conexión manual.
+    # El token de la conexión manual.
     r = await app_client.get(
         "/webhooks/whatsapp/" + slug,
         params={"hub.mode": "subscribe", "hub.verify_token": "token-manual", "hub.challenge": "M"},
     )
     assert r.status_code == 200 and r.text == "M"
 
-    # El token BYOK queda tapado por el manual.
+    # Y el de la conexión BYOK.
     r2 = await app_client.get(
         "/webhooks/whatsapp/" + slug,
         params={"hub.mode": "subscribe", "hub.verify_token": "token-byok", "hub.challenge": "M"},
     )
-    assert r2.status_code == 403
+    assert r2.status_code == 200 and r2.text == "M"
+
+    # Uno que no registró ninguna conexión, no.
+    r3 = await app_client.get(
+        "/webhooks/whatsapp/" + slug,
+        params={"hub.mode": "subscribe", "hub.verify_token": "token-de-nadie", "hub.challenge": "M"},
+    )
+    assert r3.status_code == 403
 
 
 async def test_tone_invalido_rechazado() -> None:
@@ -358,168 +371,27 @@ async def test_tone_invalido_rechazado() -> None:
         )
 
 
-async def test_post_por_slug_valida_firma_con_app_secret_byok(app_client) -> None:
-    """Regresión: la firma HMAC del POST se valida con el App Secret del BYOK.
-
-    Antes se usaba `effective_credentials()` (que cae al `.env`), así que con
-    `WHATSAPP_APP_SECRET` global seteado toda entrega de Meta daba 401 y el
-    agente nunca respondía."""
-    from core.alta_negocio import onboard_tenant
-    from core.db.models import MetaConnection
-    from core.db.session import get_session
-    from core.gateway import meta_token_store
-    from core.shared.tenant import tenant_scope
-
-    slug = f"whsig-{uuid.uuid4().hex[:6]}"
-    tid, _ = await onboard_tenant(name=f"Sig {slug}", slug=slug, persona={"tone": "cercano"})
-
-    async with tenant_scope(tid):
-        async with get_session() as session:
-            connection = MetaConnection(
-                tenant_id=tid, channel="whatsapp", environment="sandbox", origin="byok", meta_app_id="app-sig",
-                status="connected",
-            )
-            session.add(connection)
-            await session.flush()
-            connection_id = connection.id
-        await meta_token_store.put_token(
-            connection_id, "app_access", "app-sig", "byok-secret", tenant_id=tid
-        )
-
-    body = json.dumps(
-        _meta_payload("phone-sig", "wa-sig", f"wamid.sig.{uuid.uuid4().hex[:6]}", "hola")
-    ).encode()
-
-    # Firma con el App Secret del BYOK -> aceptada (no 401).
-    r = await app_client.post(
-        "/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "byok-secret")
-    )
-    assert r.status_code != 401, r.text
-
-    # Firma con un secreto que NO es el del tenant -> 401.
-    r2 = await app_client.post(
-        "/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-equivocado")
-    )
-    assert r2.status_code == 401
-
-
-async def test_post_por_slug_precedencia_app_secret_manual_sobre_byok(app_client) -> None:
-    """Contrato: conexión manual (ChannelConnection) > BYOK > .env, también
-    para el App Secret con el que se valida la firma."""
-    from core.alta_negocio import onboard_tenant
-    from core.db.models import MetaConnection
-    from core.db.session import get_session
-    from core.gateway import meta_token_store
-    from core.gateway.connections import save_connection
-    from core.shared.tenant import tenant_scope
-
-    slug = f"whsigp-{uuid.uuid4().hex[:6]}"
-    tid, _ = await onboard_tenant(name=f"SigP {slug}", slug=slug, persona={"tone": "cercano"})
-
-    async with tenant_scope(tid):
-        await save_connection(
-            label=slug,
-            credentials={
-                "phone_number_id": f"55{uuid.uuid4().hex[:8]}",
-                "app_secret": "manual-secret",
-                "verify_token": "vt",
-            },
-        )
-        async with get_session() as session:
-            connection = MetaConnection(
-                tenant_id=tid, channel="whatsapp", environment="sandbox", origin="byok", meta_app_id="app-sigp",
-                status="connected",
-            )
-            session.add(connection)
-            await session.flush()
-            connection_id = connection.id
-        await meta_token_store.put_token(
-            connection_id, "app_access", "app-sigp", "byok-secret", tenant_id=tid
-        )
-
-    body = json.dumps(
-        _meta_payload("phone-sigp", "wa-sigp", f"wamid.sigp.{uuid.uuid4().hex[:6]}", "hola")
-    ).encode()
-
-    # Gana el secreto de la conexión manual.
-    r = await app_client.post(
-        "/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "manual-secret")
-    )
-    assert r.status_code != 401, r.text
-
-    # El secreto BYOK queda tapado por el manual.
-    r2 = await app_client.post(
-        "/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "byok-secret")
-    )
-    assert r2.status_code == 401
-
-async def test_post_por_slug_rechaza_firma_de_otro_tenant(app_client) -> None:
-    """Aislamiento: el App Secret de un tenant NO valida la firma del webhook
-    de otro tenant."""
-    from core.alta_negocio import onboard_tenant
-    from core.db.models import MetaConnection
-    from core.db.session import get_session
-    from core.gateway import meta_token_store
-    from core.shared.tenant import tenant_scope
-
-    slug_a = f"whsigct-a-{uuid.uuid4().hex[:6]}"
-    slug_b = f"whsigct-b-{uuid.uuid4().hex[:6]}"
-    tid_a, _ = await onboard_tenant(name=f"A {slug_a}", slug=slug_a, persona={"tone": "cercano"})
-    tid_b, _ = await onboard_tenant(name=f"B {slug_b}", slug=slug_b, persona={"tone": "cercano"})
-
-    async def _seed(tid, app_id: str, secret: str) -> None:
-        async with tenant_scope(tid):
-            async with get_session() as session:
-                connection = MetaConnection(
-                    tenant_id=tid, channel="whatsapp", environment="sandbox", origin="byok", meta_app_id=app_id,
-                    status="connected",
-                )
-                session.add(connection)
-                await session.flush()
-                connection_id = connection.id
-            await meta_token_store.put_token(
-                connection_id, "app_access", app_id, secret, tenant_id=tid
-            )
-
-    await _seed(tid_a, "app-sigct-a", "secreto-a")
-    await _seed(tid_b, "app-sigct-b", "secreto-b")
-
-    body = json.dumps(
-        _meta_payload("phone-ct", "wa-ct", f"wamid.ct.{uuid.uuid4().hex[:6]}", "hola")
-    ).encode()
-
-    # Secreto de A contra el slug de B -> 401.
-    r = await app_client.post(
-        "/webhooks/whatsapp/" + slug_b, content=body, headers=_sign(body, "secreto-a")
-    )
-    assert r.status_code == 401
-
-    # El secreto propio de B -> aceptado.
-    r2 = await app_client.post(
-        "/webhooks/whatsapp/" + slug_b, content=body, headers=_sign(body, "secreto-b")
-    )
-    assert r2.status_code != 401, r2.text
-
-
-# ------------------------------------------------------------------ ADR-0101: BYOK degradado
+# ------------------------------------------------------------------ firma por conexión (ADR-0125)
 async def _tenant_con_byok(
     prefix: str, *, status: str, app_id: str, app_secret: str | None = None, verify_token: str | None = None,
-    connected_at=None, origin: str = "byok",
+    connected_at=None, origin: str = "byok", phone: str | None = None,
 ) -> tuple[uuid.UUID, str]:
     from core.alta_negocio import onboard_tenant
 
     slug = f"{prefix}-{uuid.uuid4().hex[:6]}"
     tid, _ = await onboard_tenant(name=f"BYOK {slug}", slug=slug, persona={"tone": "cercano"})
     await _agregar_byok(tid, status=status, app_id=app_id, app_secret=app_secret, verify_token=verify_token,
-                        connected_at=connected_at, origin=origin)
+                        connected_at=connected_at, origin=origin, phone=phone)
     return tid, slug
 
 
 async def _agregar_byok(
     tid: uuid.UUID, *, status: str, app_id: str, app_secret: str | None = None, verify_token: str | None = None,
-    connected_at=None, origin: str = "byok",
-) -> None:
-    from core.db.models import MetaConnection
+    connected_at=None, origin: str = "byok", phone: str | None = None,
+) -> uuid.UUID:
+    """Conexión de Meta del negocio. Con `phone`, también su WABA y ese número: la firma de
+    sus mensajes se verifica con el `app_secret` de esta conexión."""
+    from core.db.models import MetaConnection, PhoneNumber, WabaAccount
     from core.db.session import get_session
     from core.gateway import meta_byok
     from core.shared.tenant import tenant_scope
@@ -533,6 +405,15 @@ async def _agregar_byok(
             session.add(connection)
             await session.flush()
             connection_id = connection.id
+            if phone:
+                waba = WabaAccount(tenant_id=tid, connection_id=connection_id, waba_id=f"waba-{uuid.uuid4().hex[:10]}")
+                session.add(waba)
+                await session.flush()
+                session.add(
+                    PhoneNumber(
+                        tenant_id=tid, connection_id=connection_id, waba_account_id=waba.id, phone_number_id=phone
+                    )
+                )
         if app_secret:
             await meta_byok.meta_token_store.put_token(
                 connection_id, meta_byok.APP_SECRET_KIND, app_id, app_secret, tenant_id=tid
@@ -541,20 +422,106 @@ async def _agregar_byok(
             await meta_byok.meta_token_store.put_token(
                 connection_id, meta_byok.WEBHOOK_VERIFY_TOKEN_KIND, app_id, verify_token, tenant_id=tid
             )
+    return connection_id
 
 
-def _cuerpo(prefix: str) -> bytes:
+def _phone(prefix: str) -> str:
+    return f"phone-{prefix}-{uuid.uuid4().hex[:8]}"
+
+
+def _cuerpo(phone: str) -> bytes:
     return json.dumps(
-        _meta_payload(f"phone-{prefix}", f"wa-{prefix}", f"wamid.{prefix}.{uuid.uuid4().hex[:6]}", "hola")
+        _meta_payload(phone, f"wa-{phone}", f"wamid.{phone}.{uuid.uuid4().hex[:6]}", "hola")
     ).encode()
+
+
+async def test_post_por_slug_valida_firma_con_app_secret_byok(app_client) -> None:
+    """Regresión: la firma HMAC del POST se valida con el App Secret del BYOK.
+
+    Antes se usaba `effective_credentials()` (que cae al `.env`), así que con
+    `WHATSAPP_APP_SECRET` global seteado toda entrega de Meta daba 401 y el
+    agente nunca respondía."""
+    phone = _phone("sig")
+    _, slug = await _tenant_con_byok("whsig", status="connected", app_id="app-sig", app_secret="byok-secret", phone=phone)
+    body = _cuerpo(phone)
+
+    r = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "byok-secret"))
+    assert r.status_code == 200, r.text
+    assert r.json().get("status") == "ok"
+
+    r2 = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-equivocado"))
+    assert r2.status_code == 401
+
+
+async def test_post_por_slug_un_numero_sin_conexion_no_se_procesa(app_client) -> None:
+    """Antes, el endpoint por slug le atribuía a su negocio cualquier número firmado con su
+    secreto. Ahora un número que no es de ninguna conexión del negocio no tiene secreto con
+    el que verificarse: 401, nunca se procesa (fail-closed, HU-CONN-05)."""
+    _, slug = await _tenant_con_byok(
+        "whsin", status="connected", app_id="app-sin", app_secret="secreto-sin", phone=_phone("sin")
+    )
+    body = _cuerpo(_phone("desconocido"))
+
+    r = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-sin"))
+
+    assert r.status_code == 401
+
+
+async def test_post_por_slug_cada_numero_con_el_secreto_de_su_conexion_manual_o_byok(app_client) -> None:
+    """Un negocio con una conexión manual (`ChannelConnection`) y otra BYOK: cada número se
+    verifica con el secreto de la suya, y el de una no sirve para el número de la otra
+    (antes la manual tapaba a la BYOK y todos sus mensajes daban 401)."""
+    from core.gateway.connections import save_connection
+    from core.shared.tenant import tenant_scope
+
+    phone_byok, phone_manual = _phone("sigp-byok"), f"55{uuid.uuid4().hex[:8]}"
+    tid, slug = await _tenant_con_byok(
+        "whsigp", status="connected", app_id="app-sigp", app_secret="byok-secret", phone=phone_byok
+    )
+    async with tenant_scope(tid):
+        await save_connection(
+            label=slug,
+            credentials={"phone_number_id": phone_manual, "app_secret": "manual-secret", "verify_token": "vt"},
+        )
+    body_byok, body_manual = _cuerpo(phone_byok), _cuerpo(phone_manual)
+
+    ok_byok = await app_client.post("/webhooks/whatsapp/" + slug, content=body_byok, headers=_sign(body_byok, "byok-secret"))
+    ok_manual = await app_client.post(
+        "/webhooks/whatsapp/" + slug, content=body_manual, headers=_sign(body_manual, "manual-secret")
+    )
+    cruzado = await app_client.post(
+        "/webhooks/whatsapp/" + slug, content=body_byok, headers=_sign(body_byok, "manual-secret")
+    )
+
+    assert ok_byok.status_code == 200 and ok_byok.json().get("status") == "ok", ok_byok.text
+    assert ok_manual.status_code == 200 and ok_manual.json().get("status") == "ok", ok_manual.text
+    assert cruzado.status_code == 401
+
+
+async def test_post_por_slug_rechaza_firma_de_otro_tenant(app_client) -> None:
+    """Aislamiento: el App Secret de un tenant NO valida la firma del webhook
+    de otro tenant."""
+    phone_b = _phone("ct-b")
+    await _tenant_con_byok("whsigct-a", status="connected", app_id="app-sigct-a", app_secret="secreto-a",
+                           phone=_phone("ct-a"))
+    _, slug_b = await _tenant_con_byok("whsigct-b", status="connected", app_id="app-sigct-b", app_secret="secreto-b",
+                                       phone=phone_b)
+    body = _cuerpo(phone_b)
+
+    r = await app_client.post("/webhooks/whatsapp/" + slug_b, content=body, headers=_sign(body, "secreto-a"))
+    assert r.status_code == 401
+
+    r2 = await app_client.post("/webhooks/whatsapp/" + slug_b, content=body, headers=_sign(body, "secreto-b"))
+    assert r2.status_code == 200, r2.text
 
 
 @pytest.mark.parametrize("status", ["degraded", "error"])
 async def test_post_por_slug_acepta_la_firma_de_un_byok_degradado(app_client, status) -> None:
-    """Un check de salud fallido no le quita el secreto al negocio: antes, todo su inbound
+    """Un check de salud fallido no le quita el secreto a la conexión: antes, todo su inbound
     daba 401 y Meta lo reintentaba en vano (ADR-0101)."""
-    _, slug = await _tenant_con_byok("whdeg", status=status, app_id="app-deg", app_secret="secreto-deg")
-    body = _cuerpo("deg")
+    phone = _phone("deg")
+    _, slug = await _tenant_con_byok("whdeg", status=status, app_id="app-deg", app_secret="secreto-deg", phone=phone)
+    body = _cuerpo(phone)
 
     r = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-deg"))
 
@@ -564,32 +531,47 @@ async def test_post_por_slug_acepta_la_firma_de_un_byok_degradado(app_client, st
 async def test_post_por_slug_acepta_la_firma_de_un_byok_pausado(app_client) -> None:
     """Pausada a mano (ADR-0122): la entrada se verifica con su secreto y se guarda sin IA. Antes
     daba 401: el mensaje se perdía y Meta lo reintentaba."""
-    _, slug = await _tenant_con_byok("whrev", status="revoked", app_id="app-rev", app_secret="secreto-rev")
-    body = _cuerpo("rev")
+    phone = _phone("rev")
+    _, slug = await _tenant_con_byok("whrev", status="revoked", app_id="app-rev", app_secret="secreto-rev", phone=phone)
+    body = _cuerpo(phone)
 
     r = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-rev"))
 
     assert r.status_code == 200, r.text
 
 
-async def test_una_pausada_nunca_le_gana_el_secreto_a_una_viva(app_client) -> None:
-    """Ni a una BYOK tomada por Embedded Signup (origen `embedded_signup`, conserva el secreto de su
-    app, ADR-0101): `revoked` va al final, antes que el origen (ADR-0122)."""
+@pytest.mark.parametrize(
+    ("estado_1", "estado_2", "origen_1"),
+    [
+        ("connected", "revoked", "embedded_signup"),  # una BYOK tomada por ES y otra pausada
+        ("connected", "error", "byok"),
+        ("connected", "degraded", "byok"),
+        ("degraded", "error", "byok"),
+    ],
+)
+async def test_dos_conexiones_cada_una_verifica_sus_numeros(app_client, estado_1, estado_2, origen_1) -> None:
+    """HU-CONN-05: con dos apps en el negocio ya no "gana" una (ADR-0101 elegía la más sana y
+    la otra daba 401). Cada número se verifica con el secreto de su conexión, sea cual sea su
+    estado, y el secreto de una no sirve para los números de la otra."""
     from datetime import UTC, datetime, timedelta
 
     ahora = datetime.now(UTC)
+    phone_1, phone_2 = _phone("uno"), _phone("dos")
     tid, slug = await _tenant_con_byok(
-        "whpausa", status="connected", app_id="app-tomada", app_secret="secreto-vivo",
-        connected_at=ahora - timedelta(days=30), origin="embedded_signup",
+        "whdos", status=estado_1, app_id="app-uno", app_secret="secreto-uno",
+        connected_at=ahora - timedelta(days=30), origin=origen_1, phone=phone_1,
     )
-    await _agregar_byok(tid, status="revoked", app_id="app-pausada", app_secret="secreto-pausado", connected_at=ahora)
-    body = _cuerpo("pausa")
+    await _agregar_byok(tid, status=estado_2, app_id="app-dos", app_secret="secreto-dos", connected_at=ahora,
+                        phone=phone_2)
+    body_1, body_2 = _cuerpo(phone_1), _cuerpo(phone_2)
 
-    viva = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-vivo"))
-    pausada = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-pausado"))
+    uno = await app_client.post("/webhooks/whatsapp/" + slug, content=body_1, headers=_sign(body_1, "secreto-uno"))
+    dos = await app_client.post("/webhooks/whatsapp/" + slug, content=body_2, headers=_sign(body_2, "secreto-dos"))
+    cruzado = await app_client.post("/webhooks/whatsapp/" + slug, content=body_1, headers=_sign(body_1, "secreto-dos"))
 
-    assert viva.status_code == 200, viva.text
-    assert pausada.status_code == 401
+    assert uno.status_code == 200, uno.text
+    assert dos.status_code == 200, dos.text
+    assert cruzado.status_code == 401
 
 
 async def test_handshake_por_slug_con_byok_degradado(app_client) -> None:
@@ -605,25 +587,6 @@ async def test_handshake_por_slug_con_byok_degradado(app_client) -> None:
     assert r.status_code == 200 and r.text == "CHAL-DEG"
 
 
-async def test_una_conexion_vieja_sana_le_gana_a_una_nueva_en_error(app_client) -> None:
-    """Con dos conexiones BYOK, el secreto sale de la sana aunque la de `error` sea más nueva."""
-    from datetime import UTC, datetime, timedelta
-
-    ahora = datetime.now(UTC)
-    tid, slug = await _tenant_con_byok(
-        "whdos", status="connected", app_id="app-sana", app_secret="secreto-sano",
-        connected_at=ahora - timedelta(days=30),
-    )
-    await _agregar_byok(tid, status="error", app_id="app-rota", app_secret="secreto-roto", connected_at=ahora)
-    body = _cuerpo("dos")
-
-    sana = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-sano"))
-    rota = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-roto"))
-
-    assert sana.status_code == 200, sana.text
-    assert rota.status_code == 401
-
-
 async def test_handshake_por_slug_con_byok_pausado_responde(app_client) -> None:
     """Una pausada sigue siendo dueña de su número (ADR-0095) y Meta puede re-verificar la
     suscripción mientras tanto (ADR-0122)."""
@@ -637,36 +600,33 @@ async def test_handshake_por_slug_con_byok_pausado_responde(app_client) -> None:
     assert r.status_code == 200 and r.text == "CHAL-REV"
 
 
-async def test_una_conexion_vieja_conectada_le_gana_a_una_nueva_degradada(app_client) -> None:
-    """`degraded` es solo un respaldo: si hay una `connected`, se usa esa aunque sea más vieja."""
-    from datetime import UTC, datetime, timedelta
+async def test_handshake_por_slug_con_dos_apps_acepta_el_token_de_cada_una(app_client) -> None:
+    """Antes solo se aceptaba el token de la conexión que ganaba el orden: la otra app no
+    podía re-verificar su suscripción."""
+    tid, slug = await _tenant_con_byok("whdosv", status="connected", app_id="app-v1", verify_token="token-v1")
+    await _agregar_byok(tid, status="connected", app_id="app-v2", verify_token="token-v2")
 
-    ahora = datetime.now(UTC)
-    tid, slug = await _tenant_con_byok(
-        "whdeg2", status="connected", app_id="app-ok", app_secret="secreto-ok", connected_at=ahora - timedelta(days=30),
-    )
-    await _agregar_byok(tid, status="degraded", app_id="app-degr", app_secret="secreto-degr", connected_at=ahora)
-    body = _cuerpo("deg2")
-
-    ok = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-ok"))
-    degr = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-degr"))
-
-    assert ok.status_code == 200, ok.text
-    assert degr.status_code == 401
+    for token in ("token-v1", "token-v2"):
+        r = await app_client.get(
+            "/webhooks/whatsapp/" + slug,
+            params={"hub.mode": "subscribe", "hub.verify_token": token, "hub.challenge": "C"},
+        )
+        assert r.status_code == 200 and r.text == "C", token
 
 
 async def test_una_conexion_de_embedded_signup_no_le_quita_el_secreto_a_la_byok(app_client) -> None:
-    """Una conexión de ES más nueva, sana y sin secreto propio no le gana a la BYOK: antes ganaba
-    el orden y dejaba al negocio sin el secreto de su app (todo su inbound daba 401)."""
+    """Una conexión de ES más nueva, sana y sin secreto propio no le quita nada a la BYOK."""
     from datetime import UTC, datetime, timedelta
 
     ahora = datetime.now(UTC)
+    phone = _phone("es")
     tid, slug = await _tenant_con_byok(
         "whes", status="connected", app_id="app-byok-es", app_secret="secreto-byok-es",
-        connected_at=ahora - timedelta(days=30),
+        connected_at=ahora - timedelta(days=30), phone=phone,
     )
-    await _agregar_byok(tid, status="connected", app_id="app-es", origin="embedded_signup", connected_at=ahora)
-    body = _cuerpo("es")
+    await _agregar_byok(tid, status="connected", app_id="app-es", origin="embedded_signup", connected_at=ahora,
+                        phone=_phone("es-plataforma"))
+    body = _cuerpo(phone)
 
     r = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-byok-es"))
 
@@ -676,19 +636,22 @@ async def test_una_conexion_de_embedded_signup_no_le_quita_el_secreto_a_la_byok(
 async def test_una_conexion_byok_tomada_por_embedded_signup_conserva_su_secreto(app_client) -> None:
     """El wizard de ES cambia el `origin` de una conexión BYOK pero no borra su secreto, y la app
     BYOK puede seguir suscrita a la WABA: sus eventos se siguen aceptando, como antes de ADR-0101."""
-    tid, slug = await _tenant_con_byok("whtoma", status="connected", app_id="app-toma", app_secret="secreto-toma")
     from sqlalchemy import update
 
     from core.db.models import MetaConnection
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
+    phone = _phone("toma")
+    tid, slug = await _tenant_con_byok(
+        "whtoma", status="connected", app_id="app-toma", app_secret="secreto-toma", phone=phone
+    )
     async with tenant_scope(tid):
         async with get_session() as session:
             await session.execute(
                 update(MetaConnection).where(MetaConnection.tenant_id == tid).values(origin="embedded_signup")
             )
-    body = _cuerpo("toma")
+    body = _cuerpo(phone)
 
     r = await app_client.post("/webhooks/whatsapp/" + slug, content=body, headers=_sign(body, "secreto-toma"))
 
