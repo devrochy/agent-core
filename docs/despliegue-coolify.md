@@ -122,6 +122,7 @@ Notas aprendidas en vivo (2026-09-30):
 | `MIGRATIONS_DATABASE_URL` | `…agent_core_migrations:<pw>@huvhzaxim2notqkcxqa5930a:5432/agent_core` | `…postgres:<pw>@48h2r2laml64eyrggfg6eqld:5432/agent_core` |
 | `REDIS_URL` | `redis://default:<pw>@gk9bagcojtdrtofcx8tdxkiq:6379/0` | `redis://default:<pw>@rqkxxnen7ysp7xmqhocrbidw:6379/0` |
 | `AGENT_CORE_ROLE` | `api` | `api` |
+| `PROVISIONING_SELLER_TENANTS` | *(vacío: alta automática apagada)* | `solvershub` (para verificar HU-SH-03) |
 
 Notas:
 
@@ -132,6 +133,11 @@ Notas:
   inyectan también en el build).
 - Los pares no listados (`MASTER_ENCRYPTION_KEY`, `APP_SECRET_KEY`, `LLM_*`,
   `TOKEN_*`, `WOMPI_*`) son **propios de cada entorno**.
+- **`PROVISIONING_SELLER_TENANTS`** (ADR-0120): slugs o UUID, separados por coma, de los
+  negocios que venden negocios. Solo un `subscription.activated` de uno de ellos crea un
+  negocio nuevo; vacía, el alta automática está apagada. Tiene que estar en el **worker**
+  (ahí corre el despachador del outbox); en la app no hace daño. No hay token de servicio
+  que configurar.
 
 ## Persistencia de artefactos de tenant (`TENANTS_ROOT`)
 

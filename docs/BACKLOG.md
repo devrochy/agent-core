@@ -350,6 +350,19 @@ de artefactos de tenant).
   (`pack_payments/skills.py:52-75`); el cobro por período con link ya existe
   (`charge_link` del contrato v1, con guard de período futuro); el débito recurrente
   sigue diferido (HU-SUB-17, Fase 2). [Media]
+- **La suscripción y su evento se confirman en otra transacción que el pedido** —
+  `activar_planes_del_pedido` (`pack_commerce/planes.py:103`) llama a `capability.activate`, y
+  `crear_suscripcion_para` abre su propia sesión (`pack_subscriptions/capability.py:124`): la
+  suscripción y `subscription.activated` quedan confirmadas aunque la transacción del pedido se
+  revierta después (p. ej. un error al registrar la promoción en `crear_pedido`,
+  `pack_commerce/skills.py:1499`). El alta automática lo tolera (exige el pedido visible y pagado;
+  si no aparece en 3 intentos queda en revisión), pero la suscripción huérfana queda. → que el
+  proveedor use la sesión del llamador o que commerce active después del commit. Visto en HU-SH-03
+  (2026-10-09). [Media]
+- **Un cambio de plan desde el asistente no cambia el plan del negocio aprovisionado** — Free →
+  Premium cambia la suscripción en `solvershub`, pero el consumidor de ADR-0120 solo lo audita
+  (`aprovisionamiento_cambio_de_plan`): el negocio sigue en Free y vence a los 30 días. → HU-SH-04
+  (fuente única del cobro de plataforma). [Alta]
 
 **Calendario / demos**
 - **Calendario interno (ADR-0084)** — las 5 tools requieren `google_calendar`
