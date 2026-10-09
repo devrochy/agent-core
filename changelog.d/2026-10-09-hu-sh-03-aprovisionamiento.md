@@ -16,7 +16,7 @@
 - Queda en `revision`, con el motivo y un push a los dueños del vendedor, lo que no se puede resolver
   solo: sin correo, plan desconocido, slug ajeno, correo de un master, cliente distinto o un Free repetido
   del mismo cliente o correo. El master la reintenta o la descarta con
-  `agent-core tenant reintentar-alta | descartar-alta` (`docs/altas-en-revision.md`).
+  `agent-core tenant reintentar-alta | descartar-alta` (`docs/runbooks/altas-en-revision.md`).
 - El enlace de un solo uso (`tenant_invitations.token_nonce`) va **solo por correo** y solo a una cuenta
   que el alta creó sin contraseña. El owner la define con `POST /api/v1/auth/accept-invitation`, que tiene
   bloqueo progresivo y solo sirve para una cuenta limpia. Una cuenta existente entra y acepta en la app.

@@ -141,7 +141,7 @@ Notas:
   plan):** el plan pago nace con un período que nada renueva, el paso de Free a pago solo se
   audita y `past_due`/`expired` bloquean en duro (`core/billing/enforcement.py:30`). Para el
   correo con el acceso hace falta `SYSTEM_SMTP_*`. Altas en revisión:
-  `docs/altas-en-revision.md`.
+  `docs/runbooks/altas-en-revision.md`.
 
 ## Persistencia de artefactos de tenant (`TENANTS_ROOT`)
 

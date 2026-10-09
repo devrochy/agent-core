@@ -735,7 +735,7 @@ def reintentar_alta(
     referencia: str = typer.Argument(..., help="Referencia del alta (número del pedido)"),
 ) -> None:
     """Vuelve a correr un alta en revisión, después de corregir lo que faltaba. Retoma el
-    mismo negocio (id y slug deterministas). Runbook: docs/altas-en-revision.md."""
+    mismo negocio (id y slug deterministas). Runbook: docs/runbooks/altas-en-revision.md."""
     vendedor_id = _uuid_del_vendedor(vendedor)
 
     async def _run():  # type: ignore[no-untyped-def]

@@ -368,7 +368,7 @@ de artefactos de tenant).
   producción. [Alta]
 - **Confirmar el correo en el chat antes de crear el pedido de un plan** — el acceso del negocio
   aprovisionado llega solo al correo del pedido (ADR-0121): si el cliente lo escribe mal, se queda sin
-  acceso hasta que una persona lo corrija (`docs/altas-en-revision.md`). Es un ajuste del playbook de
+  acceso hasta que una persona lo corrija (`docs/runbooks/altas-en-revision.md`). Es un ajuste del playbook de
   ventas del tenant `solvershub` (`solvershub-comercial`): repetir el correo y pedir confirmación antes de
   `crear_pedido`. [Media]
 

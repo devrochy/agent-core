@@ -173,7 +173,7 @@ Free confirmado). El negocio lo crea el core al ver la suscripción activada. No
 
 ### 5. Operación: un alta en revisión
 
-La resuelve el master desde el servidor, con el runbook `docs/altas-en-revision.md`:
+La resuelve el master desde el servidor, con el runbook `docs/runbooks/altas-en-revision.md`:
 
 - `agent-core tenant altas <vendedor>` lista las altas.
 - `agent-core tenant reintentar-alta <vendedor> <referencia>` la vuelve a correr después de corregir el
@@ -256,5 +256,5 @@ En test se puede encender para verificar.
   - `business_name` y `vertical` por `missing_fields`, con validación y sin enlaces;
   - un plan en su propio pedido.
 - `packages/pack-subscriptions`: `variant_id` en `subscription.activated` y `referencia` nula sin pedido.
-- `cli/commands/tenant.py` (`altas`, `reintentar-alta`, `descartar-alta`) y `docs/altas-en-revision.md`.
+- `cli/commands/tenant.py` (`altas`, `reintentar-alta`, `descartar-alta`) y `docs/runbooks/altas-en-revision.md`.
 - `.importlinter`: las tools y los packs no importan el alta.

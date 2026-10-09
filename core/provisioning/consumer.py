@@ -753,7 +753,7 @@ async def _por_referencia(vendedor: uuid.UUID, referencia: str) -> ProvisioningR
 
 async def reintentar_alta(vendedor: uuid.UUID, referencia: str) -> ProvisioningRequest:
     """Vuelve a correr un alta en `revision` (o trabada `en_curso`) después de corregir el
-    dato que faltaba (runbook `docs/altas-en-revision.md`). Retoma el mismo negocio."""
+    dato que faltaba (runbook `docs/runbooks/altas-en-revision.md`). Retoma el mismo negocio."""
     registro = await _por_referencia(vendedor, referencia)
     if registro is None:
         raise ValueError(f"No hay un alta con la referencia {referencia!r} en ese vendedor.")

@@ -799,7 +799,7 @@ async def test_si_el_cliente_del_pedido_no_es_el_de_la_suscripcion_va_a_revision
 
 
 async def test_el_master_reintenta_o_descarta_un_alta_en_revision(vendedores, correos) -> None:
-    """Runbook `docs/altas-en-revision.md`: se corrige el dato y se reintenta; o se descarta."""
+    """Runbook `docs/runbooks/altas-en-revision.md`: se corrige el dato y se reintenta; o se descarta."""
     from pack_commerce.models import Order
 
     from core.db.session import get_session
