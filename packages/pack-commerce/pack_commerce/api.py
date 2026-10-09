@@ -61,7 +61,8 @@ TURNSTILE_TIMEOUT = 8.0
 # Rate limit por (tenant, IP) en Redis, compartido entre instancias. La clave
 # lleva el `slug` (1:1 con el tenant) y no el `tenant_id` porque el límite
 # corre ANTES de tocar la base: resolver el tenant primero costaría una query
-# por request, justo lo que el límite protege. Ventana deslizante con un sorted
+# por request aun con el cupo agotado. Un slug bien formado pero inexistente
+# abre su propio cupo (y termina en 404). Ventana deslizante con un sorted
 # set; el `EXPIRE` borra la clave de una IP que deja de mandar (sin crecer en
 # memoria). El intake es server→server; un abuso sostenido se corta en el
 # WAF/proxy externo.
