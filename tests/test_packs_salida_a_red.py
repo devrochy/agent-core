@@ -115,6 +115,15 @@ def _mock_transport(monkeypatch, handler):  # type: ignore[no-untyped-def]
         return real(transport=httpx.MockTransport(handler), **kw)
 
     monkeypatch.setattr(httpx, "AsyncClient", factory)
+    # Sin DNS real: `ScopedHttp` resuelve y conecta a la IP validada (#321).
+    import ipaddress
+
+    import core.mcp.types as mcp_types
+
+    async def _resolve(host: str, port: int, timeout: float) -> list:
+        return [ipaddress.ip_address("104.16.0.1")]
+
+    monkeypatch.setattr(mcp_types, "_resolve_host", _resolve)
     return created
 
 
@@ -133,7 +142,11 @@ async def test_turnstile_sale_por_plugin_http_y_es_fail_closed(monkeypatch) -> N
 
     assert await api._verify_turnstile("tok", "sec", "1.2.3.4") is True
     [req] = seen
-    assert str(req.url) == api.TURNSTILE_VERIFY_URL
+    # Conecta a la IP ya validada con el `Host` del dominio (anti-SSRF, #321).
+    esperada = httpx.URL(api.TURNSTILE_VERIFY_URL)
+    assert req.url.host == "104.16.0.1"
+    assert req.headers["host"] == esperada.host
+    assert req.url.path == esperada.path
     assert req.headers["content-type"] == "application/x-www-form-urlencoded"
     assert req.content == b"secret=sec&response=tok&remoteip=1.2.3.4"
     assert created[-1]["timeout"] == 8
@@ -154,13 +167,14 @@ async def test_turnstile_sale_por_plugin_http_y_es_fail_closed(monkeypatch) -> N
 
 
 def test_turnstile_fuera_de_la_allowlist_no_sale() -> None:
+    import httpx
     from pack_commerce import api
 
     from core.mcp.types import plugin_http
 
     http = plugin_http(api.NETWORK)
-    assert http._allowed_host(api.TURNSTILE_VERIFY_URL)
-    assert not http._allowed_host("https://evil.example.com/siteverify")
+    assert http._allowed_host(httpx.URL(api.TURNSTILE_VERIFY_URL))
+    assert not http._allowed_host(httpx.URL("https://evil.example.com/siteverify"))
 
 
 # ------------------------------------------------------------- pack-payments
