@@ -1,0 +1,59 @@
+{
+  "nombre": "simulado-comprar-basic",
+  "descripcion": "Cliente simulado (HU-ARCH-28) que compra el Basic con pago en línea: el link cobra el total del pedido y, al confirmarse el pago, la suscripción queda activa sin prueba.",
+  "pasos": [
+    {
+      "nota": "el cliente simulado conversa hasta recibir el link",
+      "simulado": {
+        "objetivo": "Comprar el Plan Basic y pagarlo en línea. Tu objetivo se cumple cuando te mandan el link de pago.",
+        "datos": {
+          "nombre": "Ana Gómez",
+          "cedula": "1012345678",
+          "celular": "3001234567",
+          "correo": "ana.gomez@example.com",
+          "medio_de_pago": "pago en línea"
+        },
+        "max_turnos": 8
+      },
+      "espera_fin": ["objetivo", "tope"]
+    },
+    {
+      "nota": "pedido pendiente por el total",
+      "verifica": {
+        "tabla": "pack_commerce_orders",
+        "donde": {"customer_id": "{cliente.id}"},
+        "filas": 1,
+        "espera": {"payment_status": "pendiente", "total": 200000},
+        "guardar_como": "pedido"
+      }
+    },
+    {
+      "nota": "el link cobra el total del pedido",
+      "verifica": {
+        "tabla": "pack_payments_transactions",
+        "donde": {"reference": "{pedido.public_order_number}"},
+        "filas": 1,
+        "espera": {"amount": 200000, "provider": "simulado"}
+      }
+    },
+    {
+      "nota": "la pasarela confirma el pago",
+      "evento": "payment.confirmed",
+      "datos": {
+        "reference": "{pedido.public_order_number}",
+        "provider": "simulado",
+        "provider_reference": "sim-{pedido.public_order_number}",
+        "amount": 200000
+      }
+    },
+    {
+      "nota": "suscripción activa sin prueba",
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {"customer_id": "{cliente.id}"},
+        "filas": 1,
+        "espera": {"estado": "activa", "valor_periodo": 200000, "trial_termina": null}
+      }
+    }
+  ]
+}
