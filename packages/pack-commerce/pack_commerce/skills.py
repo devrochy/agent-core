@@ -1394,7 +1394,7 @@ class OrderSkill(BaseSkill):
                 # SEGUNDO incidente real, mismo día: la primera versión de este
                 # error incluía el monto exacto en texto libre ("...menores a
                 # $150.000"). El modelo lo repetía en su respuesta, y
-                # `_amount_guardrail` (module.py) lo bloqueaba por "monto no
+                # la verificación de montos (hoy en el core) lo bloqueaba por "monto no
                 # verificado" -- ese guardrail solo reconoce montos que salen
                 # de una clave de MONEY_KEYS en el resultado de una tool, no
                 # números embebidos en un string de error. En vez de enseñarle

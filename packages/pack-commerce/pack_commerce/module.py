@@ -1,6 +1,6 @@
 """CRMModule: el BaseModule del plugin.
 
-Registra skills (catalog, order, lead), guardrail de montos, eventos y el
+Registra skills (catalog, order, lead), afirmaciones de cierre, eventos y el
 panel admin del CRM (Leads, Productos, Categorías, Promociones, Pedidos).
 
 El pipeline de venta es: lead -> cotización (con promoción) -> pedido.
@@ -29,7 +29,8 @@ from sqlalchemy import func, select
 # plugin esté activo (guard del decorador).
 import pack_commerce.jobs  # noqa: F401
 from core.db.session import get_owned, get_session
-from core.mcp.types import BaseModule, GuardrailResult
+from core.mcp.types import Afirmacion, BaseModule
+from core.shared.dinero import MONEY_IN_TEXT, MONEY_KEYS, parse_money  # noqa: F401 (API del pack)
 from core.shared.events import ON_CONVERSATION_STARTED
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
@@ -59,94 +60,16 @@ log = get_logger(__name__)
 
 PLUGIN_ID = "pack_commerce"
 
-MONEY_IN_TEXT = re.compile(r"\$\s?[\d][\d.,]*|\bCOP\s?[\d][\d.,]*")
-
-# Claves bajo las que un resultado de tool puede traer un monto real (puerto
-# directo de MONEY_KEYS/walkForKeys de agent-sale, src/shared/observability/
-# priceGuardrail.ts) -- por NOMBRE de clave, no "cualquier número", para no
-# confundir un stock/quantity numérico con un monto verificado.
-MONEY_KEYS = {
-    "price", "unit_price", "line_total", "subtotal", "total", "discount",
-    # Montos que el SERVIDOR pone en las tools de suscripción (core): `monto` del cargo y
-    # `valor_periodo` del plan. Sin ellos, mencionar el valor de una suscripción o la
-    # diferencia de un cambio de plan se bloqueaba y escalaba (journeys HU-SUB-12/07).
-    # `amount` NO: `generar_link_pago` lo devuelve tal como lo pasó el LLM (auditoría).
-    "monto", "valor_periodo",
-}
-
-# Claves reservadas del core (docs/SAFE-RENDERER.md, core/orchestrator/safe_renderer.py)
-# -- se usa el literal, NO se importa: los packs no pueden importar de
-# core.orchestrator.* (invariante nº5/allowlist de CLAUDE.md), mismo criterio ya
-# usado acá para "_safe_append".
-_TOOL_NAME_KEY = "_tool_name"
-# Flags que el loop estampa en cada tool_result (HU-COM-02): `_current_turn`
-# distingue el turno actual del histórico; `_ok` marca un resultado exitoso.
-_TURN_KEY = "_current_turn"
-_OK_KEY = "_ok"
-
-
-def parse_money(text: str, locale: str = "es-CO") -> float | None:
-    """Interpreta un monto de texto en formato del negocio (es-CO por defecto).
-
-    Acepta `$1.800.000`, `1.800.000`, `1.800.000,50`, `COP 1.800.000`,
-    `$ 15` y `15`. Devuelve `None` si no hay un número reconocible.
-
-    Regla de separadores (es-CO): el punto es de miles y la coma es decimal.
-    Si solo hay puntos repetidos (`1.800.000`) o un punto con 3 dígitos detrás,
-    se tratan como miles; si hay coma, la coma es el decimal.
-    """
-    if not text:
-        return None
-    # Quita símbolos y espacios (incluye espacio fino/no separable).
-    cleaned = re.sub(r"[^\d.,]", "", text).strip()
-    if not cleaned:
-        return None
-    cleaned = cleaned.replace("\u00a0", "").replace("\u202f", "")
-
-    if "." in cleaned and "," in cleaned:
-        # El separador decimal es el que aparece más a la derecha; el otro es de miles.
-        if cleaned.rfind(",") > cleaned.rfind("."):
-            normalized = cleaned.replace(".", "").replace(",", ".")
-        else:
-            normalized = cleaned.replace(",", "")
-    elif "," in cleaned:
-        # Varias comas, o la última parte con != 2 dígitos -> son de miles.
-        partes = cleaned.split(",")
-        decimal = len(partes) == 2 and 1 <= len(partes[-1]) <= 2
-        normalized = cleaned.replace(",", ".") if decimal else cleaned.replace(",", "")
-    else:
-        normalized = cleaned
-        # Puntos: varios, o uno con exactamente 3 dígitos detrás -> miles.
-        if "." in normalized:
-            partes = normalized.split(".")
-            if len(partes) > 2 or (len(partes) == 2 and len(partes[1]) == 3):
-                normalized = normalized.replace(".", "")
-
-    try:
-        from decimal import Decimal, InvalidOperation
-
-        return float(Decimal(normalized))
-    except (InvalidOperation, ValueError):
-        return None
-
-
-def _normalized_amount_key(value: float) -> str:
-    """Clave de comparación de un monto: valor con 2 decimales, sin notación
-    científica (arregla el bloqueo de montos ≥ 1e6, HU-COM-02)."""
-    from decimal import Decimal
-
-    return str(Decimal(str(value)).quantize(Decimal("0.01")))
-
-
 # Frases que afirman que una acción de negocio quedó resuelta -> deben
-# corresponder a una tool REALMENTE llamada en ESTE turno, o es una "phantom
+# corresponder a una tool REALMENTE llamada en ESTE turno (lo comprueba el
+# verificador del core, ADR-0119, con estas afirmaciones), o es una "phantom
 # completion": el modelo dice que hizo algo sin haberlo hecho. Encontrado en
 # vivo (tenant yopoldo, 2026-09-11): tras 2 intentos fallidos de generar_cotizacion
 # (variant_id inventado), el modelo terminó diciendo "cerré tu pedido, en un
 # momentico el asesor te pasa el link" sin haber llamado crear_pedido NI
 # al generar el link NI escalado de verdad -- el cliente quedaba esperando algo
-# que nunca iba a pasar. Mismo principio que _amount_guardrail, pero para
-# acciones en vez de montos.
+# que nunca iba a pasar. Mismo principio que la verificación de montos, pero
+# para acciones.
 #
 # Los patrones usan raíces (`\w*`) en vez de conjugaciones exactas: la primera
 # versión de este guardrail (solo "cerré tu pedido"/"te envío el link") la
@@ -158,7 +81,9 @@ def _normalized_amount_key(value: float) -> str:
 COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
     "pedido": (
         re.compile(
-            r"cerr\w*\s+(?:tu|el|los?|la)?\s*pedido|"
+            # El artículo va con su propio espacio: `(?:tu)?\s*` era cuadrático ante
+            # una racha de espacios (revisión de seguridad de HU-ARCH-29).
+            r"cerr\w*\s+(?:(?:tu|el|los?|la)\s+)?pedido|"
             r"pedido\b(?:\W+\w+){0,3}\W+(?:confirmad\w*|cerrad\w*|cread\w*|generad\w*)",
             re.IGNORECASE,
         ),
@@ -170,10 +95,29 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
         # guardrails) implica que se está anunciando -- si no llamó la tool,
         # es una promesa vacía sin importar el verbo que haya usado.
         re.compile(r"link\s+(?:de\s+pago|para\s+pagar)", re.IGNORECASE),
-        # El link de un pedido, el del período de una suscripción (tool del core) y el
-        # de pagos en línea respaldan por igual el aviso (antes solo el del pedido: el
-        # link de la suscripción terminaba en escalamiento; journeys de HU-SUB-12).
-        {"confirmar_pago_pedido", "sub_link_pago", "generar_link_pago"},
+        # Además de `confirmar_pago_pedido`, lo respalda cualquier tool del turno que
+        # haya devuelto un link (`_LINK_CON_URL`): el de una suscripción, el de un
+        # cambio de plan o el de pagos en línea. Así el pack no lista tools de otros
+        # packs y un link nuevo no exige tocar esta lista (HU-ARCH-29).
+        {"confirmar_pago_pedido"},
+    ),
+    # HU-ARCH-29 (journeys, 2026-10-09): "Ya dejé tu cotización aceptada" sin haber
+    # llamado ninguna tool. Armar la cotización y aceptarla son dos acciones distintas.
+    "cotizacion_generada": (
+        re.compile(
+            r"\b(?:arm|gener)[eé]\s+(?:de\s+nuevo\s+)?(?:tu|la)\s+cotizaci[oó]n|"
+            r"\bcotizaci[oó]n\b(?:\W+\w+){0,2}\W+(?:armad|generad)\w*",
+            re.IGNORECASE,
+        ),
+        {"generar_cotizacion"},
+    ),
+    "cotizacion_aceptada": (
+        re.compile(
+            r"\b(?:acept|confirm)[eé]\s+(?:tu|la)\s+cotizaci[oó]n|"
+            r"\bcotizaci[oó]n\b(?:\W+\w+){0,2}\W+(?:aceptad|confirmad)\w*",
+            re.IGNORECASE,
+        ),
+        {"confirmar_cotizacion"},
     ),
     "asesor_humano": (
         re.compile(
@@ -199,6 +143,9 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
     ),
 }
 
+
+# Afirmaciones que también respalda una URL devuelta por una tool del turno.
+_LINK_CON_URL = frozenset({"link_de_pago"})
 
 _MAX_CUSTOM_COMPLETION_CLAIM_LINES = 50
 
@@ -245,30 +192,6 @@ def _parse_custom_completion_claims(raw: str) -> dict[str, tuple[re.Pattern[str]
         )
     return result
 
-
-def _extract_monetary_values(node: Any, key: str | None = None) -> list[float]:
-    """Recorre `node` recursivamente (listas y dicts anidados) y colecciona los
-    números que aparecen bajo una clave de `MONEY_KEYS`.
-
-    Antes, `_amount_guardrail` solo miraba los valores de primer nivel del
-    dict de resultado de cada tool -- `consultar_inventario`/`recomendar_producto`
-    devuelven el precio anidado dentro de `matches`/`recommendations` (una
-    lista), así que el guardrail nunca podía verificarlo y bloqueaba CUALQUIER
-    respuesta que mencionara un precio de catálogo real (encontrado en vivo:
-    tenant yopoldo, "Pollo Broaster" a $60.000 escalaba siempre, no de forma
-    intermitente). El escaneo por nombre de clave (no "cualquier número")
-    también evita que un `stock`/`quantity` se cuele como monto verificado.
-    """
-    values: list[float] = []
-    if isinstance(node, list):
-        for item in node:
-            values.extend(_extract_monetary_values(item))
-    elif isinstance(node, dict):
-        for child_key, child_value in node.items():
-            values.extend(_extract_monetary_values(child_value, child_key))
-    elif isinstance(node, (int, float)) and key is not None and key in MONEY_KEYS:
-        values.append(float(node))
-    return values
 
 admin_router = APIRouter(prefix="/crm", tags=[PLUGIN_ID])
 
@@ -1128,8 +1051,9 @@ class CRMModule(BaseModule):
         host.register_skill(LeadSkill())
         host.register_skill(CatalogSkill())
         host.register_skill(OrderSkill())
-        host.register_guardrail("crm_amount_check", self._amount_guardrail, priority=5)
-        host.register_guardrail("crm_completion_check", self._completion_guardrail, priority=6)
+        # Montos y afirmaciones de cierre los verifica el core (ADR-0119, HU-ARCH-29);
+        # reemplaza a `crm_amount_check` y `crm_completion_check`.
+        host.register_afirmaciones(self._afirmaciones)
         # Catálogo de planes para el cambio de plan del core (HU-SUB-07, ADR-0111).
         from core.subscriptions import plan_catalog_registry
         from pack_commerce.planes import CatalogoDePlanes
@@ -1345,101 +1269,29 @@ class CRMModule(BaseModule):
 
         await activar_planes_del_pedido(session, order)
 
-    # ------------------------------------------------------------ guardrail
-    async def _amount_guardrail(
-        self, response_text: str, tool_results: list[dict[str, Any]]
-    ) -> GuardrailResult:
-        """Si la respuesta menciona montos ($) que no salieron de una tool, bloquear.
-
-        Mismo principio que el price guardrail de agent-sale: el LLM no inventa cifras.
-        """
-        amounts_in_text = MONEY_IN_TEXT.findall(response_text)
-        if not amounts_in_text:
-            return GuardrailResult(passed=True)
-
-        known: set[str] = set()
-        for result in tool_results:
-            for value in _extract_monetary_values(result):
-                known.add(_normalized_amount_key(value))
-
-        for amount in amounts_in_text:
-            parsed = parse_money(amount)
-            if parsed is None:
-                continue
-            # Igualdad de VALOR (no substring): un "$15" con total 150.000 ya no
-            # pasa por coincidencia de texto (HU-COM-02).
-            if _normalized_amount_key(parsed) not in known:
-                return GuardrailResult(
-                    passed=False,
-                    reason=f"Monto no verificado en la respuesta: {amount}",
-                    retry_instruction=(
-                        "Mencionaste un monto que no proviene de ninguna herramienta. "
-                        "No cites cifras específicas salvo que una herramienta las haya devuelto."
-                    ),
-                )
-        return GuardrailResult(passed=True)
-
-    async def _resolved_completion_claims(self) -> dict[str, tuple[re.Pattern[str], set[str]]]:
-        """Combina `COMPLETION_CLAIMS` (incorporados) con la config de ESTE
-        tenant (ADR-0025): quita los deshabilitados
-        (`completion_claims_disabled`), agrega/reemplaza los custom
-        (`completion_claims_custom`). Fail-open ante config ausente/inválida
-        -- nunca debe romper el guardrail (mismo criterio que
-        `_plugin_config()` en `skills.py`)."""
+    # ------------------------------------------------------------ verificador
+    async def _afirmaciones(self) -> list[Afirmacion]:
+        """Afirmaciones de cierre del pack para el verificador del core (ADR-0119):
+        las incorporadas (`COMPLETION_CLAIMS`) menos las que este negocio desactivó
+        (`completion_claims_disabled`), más las propias (`completion_claims_custom`,
+        ADR-0025, siempre frases literales). Fail-open ante config ausente o
+        inválida: quedan las incorporadas."""
         from core.plugin_manager import plugin_manager
 
         claims = dict(COMPLETION_CLAIMS)
         try:
             config = await plugin_manager.load_config(PLUGIN_ID)
         except Exception:
+            log.warning("afirmaciones_config_fallo", plugin=PLUGIN_ID)
             config = None
-        if config is None:
-            return claims
-        disabled = {
-            n.strip() for n in (config.completion_claims_disabled or "").split(",") if n.strip()
-        }
-        for name in disabled:
-            claims.pop(name, None)
-        claims.update(_parse_custom_completion_claims(config.completion_claims_custom or ""))
-        return claims
-
-    async def _completion_guardrail(
-        self, response_text: str, tool_results: list[dict[str, Any]]
-    ) -> GuardrailResult:
-        """Si la respuesta afirma que una acción de negocio quedó resuelta
-        (pedido confirmado, link de pago enviado, asesor contactado) pero
-        ninguna tool que respalde esa afirmación corrió en este turno, bloquear.
-
-        No es infalible (es texto libre, no todas las formas de decirlo están
-        cubiertas), pero corta el caso real encontrado: el modelo prometiendo
-        algo que nunca iba a pasar, dejando al cliente esperando en el vacío.
-        Los claims son los incorporados + los que este tenant haya
-        configurado/desactivado (ADR-0025, `_resolved_completion_claims`).
-
-        Solo cuentan las tools del TURNO ACTUAL que terminaron bien (HU-COM-02):
-        un `crear_pedido` fallido o de un turno anterior no respalda "tu pedido
-        quedó confirmado". Si el resultado no trae los flags `_current_turn`/
-        `_ok` (llamada directa en tests), se asume turno actual y éxito para no
-        cambiar el comportamiento previo.
-        """
-        called_tools = {
-            result.get(_TOOL_NAME_KEY)
-            for result in tool_results
-            if isinstance(result, dict)
-            and result.get(_TURN_KEY, True)
-            and result.get(_OK_KEY, True)
-        }
-        claims = await self._resolved_completion_claims()
-        for label, (pattern, required_tools) in claims.items():
-            if pattern.search(response_text) and not (called_tools & required_tools):
-                return GuardrailResult(
-                    passed=False,
-                    reason=f"Afirmación de '{label}' sin la tool correspondiente en este turno",
-                    retry_instruction=(
-                        f"Dijiste que se completó una acción de '{label}' pero no llamaste la "
-                        "herramienta correspondiente en este turno. Llamala ahora mismo, o si no "
-                        "podés completarla de verdad, decilo explícitamente en vez de prometer "
-                        "algo que no vas a cumplir."
-                    ),
-                )
-        return GuardrailResult(passed=True)
+        if config is not None:
+            disabled = {
+                n.strip() for n in (config.completion_claims_disabled or "").split(",") if n.strip()
+            }
+            for name in disabled:
+                claims.pop(name, None)
+            claims.update(_parse_custom_completion_claims(config.completion_claims_custom or ""))
+        return [
+            Afirmacion(label=label, patron=pattern, tools=frozenset(tools), basta_url=label in _LINK_CON_URL)
+            for label, (pattern, tools) in claims.items()
+        ]

@@ -25,7 +25,7 @@ celery = Celery(
     # tasks definidas en estos módulos al finalizar el arranque. Sin esto,
     # `core.outbound_send` quedaba como "unregistered task" y los mensajes de
     # salida nunca se enviaban.
-    include=["core.tasks.outbound_send", "core.tasks.push_tasks"],
+    include=["core.tasks.outbound_send", "core.tasks.push_tasks", "core.tasks.production_readiness"],
 )
 celery.conf.update(
     task_serializer="json",
@@ -163,7 +163,7 @@ celery.conf.beat_schedule[_MEMORY_RETENTION_TASK] = {
 }
 
 # Heartbeat del worker (cada 1 min) -- la única forma de que el checklist
-# de promoción a producción (core/gateway/meta_production_readiness.py::
+# de la plataforma (core/gateway/meta_production_readiness.py::
 # check_worker_heartbeat_and_dlq) sepa que el worker de Celery está vivo,
 # no solo que existe la cola.
 _WORKER_HEARTBEAT_TASK = "core.worker_heartbeat"

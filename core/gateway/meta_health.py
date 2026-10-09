@@ -80,7 +80,10 @@ async def check_token_valid(
                 params={"input_token": token, "access_token": f"{app_id}|{app_secret}"},
             )
     except httpx.HTTPError as exc:
-        return PreflightCheck(key="token_valid", ok=None, detail=f"No se pudo contactar a Meta: {exc}", checked_at=now)
+        # Solo el tipo: el texto de la excepción no se guarda ni se muestra al negocio.
+        return PreflightCheck(
+            key="token_valid", ok=None, detail=f"No se pudo contactar a Meta ({type(exc).__name__})", checked_at=now
+        )
 
     if response.status_code >= 400:
         try:
@@ -260,17 +263,27 @@ async def check_webhook_override(
     if not override_url:
         return PreflightCheck(key="webhook_override", ok=True, detail="Sin override configurado", checked_at=now)
 
+    # La URL del override la controla el negocio (su app o su número): se pide solo a un host
+    # público por HTTPS, conectando a la IP ya validada y sin redirects (anti-SSRF, ADR-0052;
+    # HU-CONN-07 lo deja disparar a demanda desde el checklist de producción).
+    from core.mcp.types import ScopedHttp
+
+    reachable = False
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(override_url)
-        reachable = response.status_code < 500
-    except httpx.HTTPError:
-        reachable = False
+        target = httpx.URL(str(override_url))
+        host = target.host
+    except Exception:
+        target, host = None, ""
+    if target is not None and target.scheme == "https" and host:
+        result = await ScopedHttp([host], timeout=5.0, methods=("GET",)).request("GET", str(override_url))
+        status = result.get("status")
+        reachable = isinstance(status, int) and status < 500
 
     if not reachable:
         return PreflightCheck(
             key="webhook_override", ok=False,
-            detail=f"El override de webhook apunta a una URL que no responde: {override_url}", checked_at=now,
+            detail=f"El override de webhook apunta a una URL que no responde o no es pública (HTTPS): {override_url}",
+            checked_at=now,
         )
     return PreflightCheck(key="webhook_override", ok=True, detail=f"Override activo: {override_url}", checked_at=now)
 

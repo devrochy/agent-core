@@ -17,6 +17,7 @@ import uuid
 from typing import Any
 
 from core.mcp.types import (
+    AfirmacionesFn,
     BaseSkill,
     Guardrail,
     GuardrailFn,
@@ -38,6 +39,9 @@ class MCPHost:
         self._tools: dict[str, MCPTool] = {}
         self._skills: dict[str, tuple[BaseSkill, str]] = {}  # name -> (skill, plugin_id)
         self._guardrails: list[Guardrail] = []
+        # Fuentes de afirmaciones de cierre por plugin (ADR-0119): el verificador
+        # del core las pide en cada turno, solo de los packs habilitados.
+        self._afirmaciones: dict[str, AfirmacionesFn] = {}
         self._resources: dict[str, MCPResource] = {}
         self._plugin_handlers: dict[str, list[EventHandler]] = {}
         self._active_plugin: str = ""  # plugin en proceso de activación
@@ -72,10 +76,31 @@ class MCPHost:
         # (hallazgo de `auditor-multitenant`).
         if any(g.name == name for g in self._guardrails):
             raise PluginError(self._active_plugin, f"Guardrail duplicado: {name}")
+        # Los interruptores del verificador del core (y los nombres viejos que traducen)
+        # son reservados: apagar uno de un pack apagaría el verificador (ADR-0119).
+        from core.orchestrator.verificador.verificador import ALIAS, TOGGLES
+
+        if name in TOGGLES or name in ALIAS:
+            raise PluginError(self._active_plugin, f"Nombre de guardrail reservado: {name}")
         self._guardrails.append(
             Guardrail(name=name, fn=fn, priority=priority, plugin_id=self._active_plugin)
         )
         self._guardrails.sort(key=lambda g: g.priority)
+
+    def register_afirmaciones(self, fn: AfirmacionesFn) -> None:
+        """Registra las afirmaciones de cierre del plugin que se activa (ADR-0119).
+
+        `fn` se llama en cada turno dentro del `tenant_scope` del negocio, así que
+        puede leer la config del pack (claims desactivados y propios, ADR-0025).
+        Una por plugin."""
+        plugin_id = self._active_plugin
+        if plugin_id in self._afirmaciones:
+            raise PluginError(plugin_id, "Afirmaciones ya registradas")
+        self._afirmaciones[plugin_id] = fn
+
+    def get_afirmaciones(self) -> dict[str, AfirmacionesFn]:
+        """Fuentes de afirmaciones por `plugin_id` (el loop filtra por packs habilitados)."""
+        return dict(self._afirmaciones)
 
     def register_resource(self, resource: MCPResource) -> None:
         resource.plugin_id = self._active_plugin
@@ -97,6 +122,7 @@ class MCPHost:
         self._tools = {k: v for k, v in self._tools.items() if v.plugin_id != plugin_id}
         self._skills = {k: v for k, v in self._skills.items() if v[1] != plugin_id}
         self._guardrails = [g for g in self._guardrails if g.plugin_id != plugin_id]
+        self._afirmaciones.pop(plugin_id, None)
         self._resources = {k: v for k, v in self._resources.items() if v.plugin_id != plugin_id}
         handlers = self._plugin_handlers.pop(plugin_id, [])
         event_bus.unsubscribe_all(handlers)

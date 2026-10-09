@@ -221,3 +221,20 @@ async def test_preflight_nunca_expone_secretos(monkeypatch):
         blob = check.model_dump_json()
         assert APP_SECRET not in blob
         assert ACCESS_TOKEN not in blob
+
+
+@pytest.mark.asyncio
+async def test_sin_app_propia_el_negocio_no_ve_los_datos_de_la_app_de_la_plataforma(monkeypatch):
+    """HU-CONN-07: la app de la plataforma la revisa solo el master (Plataforma → App de
+    Meta). Un negocio sin app propia ve solo el handshake de su webhook."""
+
+    def _graph_prohibido(*a, **k):
+        raise AssertionError("no debe consultar la app de la plataforma")
+
+    _patch_common(monkeypatch, _oauth_success, graph_fetch_impl=_graph_prohibido)
+    checks = await preflight_mod.run_preflight(tenant_id="t1", tenant_slug="acme", include_platform_app=False)
+
+    assert [c.key for c in checks] == ["platform_app", "webhook_handshake"]
+    assert checks[0].ok is None
+    assert "Mi App" not in checks[0].detail
+    assert checks[1].ok is True

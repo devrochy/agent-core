@@ -612,9 +612,9 @@ llegar a la producción nueva.
   Para cada negocio activo: panel → cambiar de negocio → **Probar asistente** → mandar "hola" →
   tiene que contestar (el playground corre el mismo loop del runtime sin canal ni persistencia).
   Captura por negocio.
-- Checklist de producción del panel (`/conexiones/produccion`, o
-  `docker exec "$API" python scripts/verify_production.py`): `worker_heartbeat_and_dlq` y
-  `rls_forced` en verde.
+- Checklist de la plataforma en el panel (master: **Plataforma → App de Meta** → "Revisar ahora",
+  corre en el worker), o `docker exec "$API" python scripts/verify_production.py`:
+  `worker_heartbeat_and_dlq` y `rls_forced` en verde.
 - Logs de la API y del worker en Coolify sin errores nuevos; Sentry recibe eventos del entorno
   `production`.
 - Si hay un número de WhatsApp conectado: un mensaje real desde un teléfono recibe respuesta (es
@@ -661,8 +661,8 @@ Con el corte hecho. Test se cae mientras dure (vive en la máquina de desarrollo
      `{"status":"ok"}`.
    - `https://app.solvershub.site/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=<token>&hub.challenge=apagado`:
      muestra `apagado`.
-   - Panel → `/conexiones/produccion` → correr el checklist: `worker_heartbeat_and_dlq` en verde
-     (worker y beat).
+   - Panel (master) → **Plataforma → App de Meta** → "Revisar ahora": `worker_heartbeat_and_dlq`
+     en verde (worker y beat).
    - Panel → **Probar asistente** en un negocio: contesta.
 4. Encender la máquina de desarrollo y anotar la hora.
 

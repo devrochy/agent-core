@@ -1,8 +1,17 @@
-"""Checklist de promoción a producción -- los 9 checks automáticos del
-ticket, cada uno devuelve `PreflightCheck` (reusado de `meta_preflight.py`,
-mismo patrón que `meta_health.py`).
+"""Checklist de promoción a producción, en dos partes (HU-CONN-07):
 
-IMPORTANTE: la mayoría de estos checks solo dan una respuesta con sentido
+- **Por conexión** (`run_connection_production_checks`): número registrado, WABA suscrita,
+  webhook, plantillas mínimas aprobadas y token, evaluados con las credenciales de ESA
+  conexión. Lo ve el negocio en "Producción" de cada conexión.
+- **Plataforma** (`run_platform_checks`): la app de Meta de la plataforma y la
+  infraestructura. Solo el master, en "Plataforma → App de Meta".
+
+Las dos corren como job de Celery (`core/tasks/production_readiness.py`) y el resultado queda
+guardado con fecha (`core/admin/production_readiness_service.py`): nunca en el request ni con
+pytest. Cada check devuelve `PreflightCheck` (reusado de `meta_preflight.py`, mismo patrón que
+`meta_health.py`).
+
+IMPORTANTE: la mayoría de los checks de plataforma solo dan una respuesta con sentido
 corriendo contra un despliegue de PRODUCCIÓN real -- no contra el Postgres/
 Redis efímero de CI. Cada función documenta explícitamente si depende de
 un entorno real o corre igual en cualquier lado. Ver
@@ -28,8 +37,10 @@ import hashlib
 import json
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -67,19 +78,40 @@ async def check_webhook_handshake(callback_url: str, verify_token: str) -> Prefl
     )
 
 
-async def check_app_subscriptions_complete(meta_app_id: str) -> PreflightCheck:
+# Objetos de suscripción de app que exige el paso a producción (HU-CONN-07). Hoy la plataforma
+# solo opera WhatsApp: `page` (Messenger) e `instagram` no son obligatorios y, si faltan, se
+# informan sin poner el check en rojo. Un canal nuevo se agrega aquí cuando entre en producción.
+REQUIRED_APP_OBJECTS: tuple[str, ...] = ("whatsapp_business_account",)
+
+
+async def check_app_subscriptions_complete(
+    meta_app_id: str, required_objects: tuple[str, ...] = REQUIRED_APP_OBJECTS
+) -> PreflightCheck:
     """Lee el estado ya persistido por el cron de 15 min
     (`meta_subscriptions_health.py`) -- no repite el GET, mismo criterio
-    que `meta_health.py::check_app_subscription`."""
+    que `meta_health.py::check_app_subscription`.
+
+    Solo los objetos de `required_objects` deciden el resultado (HU-CONN-07): antes se exigían
+    también `page` e `instagram`, y una app que solo usa WhatsApp nunca pasaba. Los opcionales
+    sin suscripción se nombran en el detalle."""
     from core.gateway.meta_subscriptions import OBJECT_FIELDS, list_app_subscriptions
 
     now = datetime.now(UTC)
+    if not meta_app_id:
+        return PreflightCheck(
+            key="app_subscriptions_complete", ok=False, detail="META_APP_ID no configurado", checked_at=now
+        )
     statuses = await list_app_subscriptions(meta_app_id)
     by_object = {s.object: s for s in statuses}
 
     missing = []
+    optional_missing = []
     for object_, min_fields in OBJECT_FIELDS.items():
         row = by_object.get(object_)
+        if object_ not in required_objects:
+            if row is None or row.active is not True:
+                optional_missing.append(object_)
+            continue
         if row is None or row.active is not True:
             missing.append(f"{object_} (active={row.active if row else 'sin suscripción'})")
             continue
@@ -87,11 +119,16 @@ async def check_app_subscriptions_complete(meta_app_id: str) -> PreflightCheck:
         if missing_fields:
             missing.append(f"{object_} (faltan fields: {sorted(missing_fields)})")
 
+    optional = f" No obligatorios sin suscripción: {', '.join(optional_missing)}." if optional_missing else ""
     if missing:
         return PreflightCheck(
-            key="app_subscriptions_complete", ok=False, detail=f"Problemas: {'; '.join(missing)}", checked_at=now
+            key="app_subscriptions_complete", ok=False,
+            detail=f"Problemas: {'; '.join(missing)}.{optional}", checked_at=now,
         )
-    return PreflightCheck(key="app_subscriptions_complete", ok=True, detail="Los 3 objetos activos con fields completos", checked_at=now)
+    return PreflightCheck(
+        key="app_subscriptions_complete", ok=True,
+        detail=f"Activos con fields completos: {', '.join(required_objects)}.{optional}", checked_at=now,
+    )
 
 
 def check_prod_secret_differs_from_dev(current_secret: str) -> PreflightCheck:
@@ -308,3 +345,269 @@ async def check_connections_health_except_billing(tenant_id: uuid.UUID) -> Prefl
     if failing:
         return PreflightCheck(key="connections_health", ok=False, detail=f"Checks fallando: {', '.join(failing)}", checked_at=now)
     return PreflightCheck(key="connections_health", ok=True, detail="Todas las conexiones sanas (salvo billing, manual)", checked_at=now)
+
+
+# ------------------------------------------------------------------ plataforma (HU-CONN-07)
+# Checks de la app de Meta de la PLATAFORMA y de la infraestructura: los ve solo el master
+# ("Plataforma → App de Meta") y corren en el worker de Celery, nunca en el request.
+PLATFORM_CHECK_LABELS: dict[str, str] = {
+    "webhook_handshake": "El webhook de la plataforma responde la verificación de Meta",
+    "app_subscriptions_complete": "Suscripciones de la app de Meta (WhatsApp)",
+    "prod_secret_differs_from_dev": "App Secret distinto al de desarrollo",
+    "token_keys_configured": "Claves de cifrado de tokens",
+    "worker_heartbeat_and_dlq": "Worker vivo y bandeja de fallos vacía",
+    "rls_forced": "Aislamiento entre negocios forzado en la base",
+    "rls_tests_pass": "Tests de aislamiento (corren en CI)",
+    "no_secret_leak_in_templates": "Sin secretos en las plantillas del panel",
+}
+
+
+async def _safe(key: str, check: Callable[[], Awaitable[PreflightCheck] | PreflightCheck]) -> PreflightCheck:
+    """Un check que revienta queda en `None` con el tipo de error: no tumba la corrida."""
+    try:
+        result = check()
+        if isinstance(result, PreflightCheck):
+            return result
+        return await result
+    except Exception as exc:
+        log.exception("readiness_check_failed", check=key)
+        return PreflightCheck(
+            key=key, ok=None, detail=f"No se pudo evaluar ({type(exc).__name__})", checked_at=datetime.now(UTC)
+        )
+
+
+async def run_platform_checks() -> list[PreflightCheck]:
+    """Los checks de la app de la plataforma e infraestructura, en orden. Sin pytest ni
+    subprocesos: `rls_tests_pass` solo informa el commit desplegado."""
+    settings = get_settings()
+    callback_url = f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"
+    return [
+        await _safe("webhook_handshake", lambda: check_webhook_handshake(callback_url, settings.whatsapp_verify_token)),
+        await _safe("app_subscriptions_complete", lambda: check_app_subscriptions_complete(settings.meta_app_id)),
+        await _safe("prod_secret_differs_from_dev", lambda: check_prod_secret_differs_from_dev(settings.meta_app_secret)),
+        await _safe("token_keys_configured", check_token_keys_configured),
+        await _safe("worker_heartbeat_and_dlq", check_worker_heartbeat_and_dlq),
+        await _safe("rls_forced", check_rls_forced),
+        await _safe("rls_tests_pass", check_rls_tests_pass),
+        await _safe("no_secret_leak_in_templates", check_no_secret_leak_in_templates),
+    ]
+
+
+# ------------------------------------------------------------- por conexión (HU-CONN-07)
+# Lo que necesita UNA conexión para operar en producción, evaluado con SUS credenciales
+# (resolver de HU-CONN-01). Para Messenger e Instagram solo aplican token y webhook.
+CONNECTION_ITEM_LABELS: dict[str, str] = {
+    "token": "Token de acceso",
+    "number_registered": "Número registrado en la Cloud API",
+    "waba_subscribed": "WABA suscrita a la app",
+    "webhook": "Webhook",
+    "templates_approved": "Plantillas mínimas aprobadas",
+}
+_SOLO_WHATSAPP = frozenset({"number_registered", "waba_subscribed", "templates_approved"})
+
+
+def connection_item_keys(channel: str) -> list[str]:
+    return [key for key in CONNECTION_ITEM_LABELS if channel == "whatsapp" or key not in _SOLO_WHATSAPP]
+
+
+def combine_checks(key: str, checks: list[PreflightCheck]) -> PreflightCheck:
+    """Un ítem del checklist a partir de varios checks: `False` si alguno falla, `None` si
+    alguno no se pudo evaluar, `True` si todos pasan. El detalle es el de los que deciden."""
+    now = datetime.now(UTC)
+    if not checks:
+        return PreflightCheck(key=key, ok=None, detail="Sin datos para evaluar", checked_at=now)
+    failing = [c for c in checks if c.ok is False]
+    unknown = [c for c in checks if c.ok is None]
+    deciding = failing or unknown or checks
+    ok: bool | None = False if failing else (None if unknown else True)
+    return PreflightCheck(
+        key=key,
+        ok=ok,
+        detail=" · ".join(dict.fromkeys(c.detail for c in deciding if c.detail)),
+        checked_at=max((c.checked_at for c in checks if c.checked_at), default=now),
+        repair_action=next((c.repair_action for c in deciding if c.repair_action), None),
+    )
+
+
+def _with_number(check: PreflightCheck, phone: str | None) -> PreflightCheck:
+    if not phone:
+        return check
+    return check.model_copy(update={"detail": f"{phone}: {check.detail}"})
+
+
+async def check_minimum_templates(
+    connection_id: uuid.UUID, tenant_id: uuid.UUID, waba_account_ids: list[uuid.UUID]
+) -> PreflightCheck:
+    """Plantillas mínimas aprobadas en la WABA de ESTA conexión (no pega a Meta).
+
+    Mínimo = al menos una aprobada (fuera de la ventana de 24 h solo se escribe con plantilla)
+    y aprobadas todas las que el negocio asignó a sus avisos (`message_templates_map`,
+    HU-ARCH-13): un aviso con una plantilla sin aprobar no sale."""
+    from sqlalchemy import select
+
+    from core.db.models import MessageTemplate
+    from core.db.session import get_session
+    from core.gateway.event_notices import load_templates_map
+
+    now = datetime.now(UTC)
+    if not waba_account_ids:
+        return PreflightCheck(
+            key="templates_approved", ok=False, detail="La conexión no tiene WABA: no hay plantillas.",
+            checked_at=now, repair_action="reauthorize",
+        )
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                select(MessageTemplate.name, MessageTemplate.language).where(
+                    MessageTemplate.tenant_id == tenant_id,
+                    MessageTemplate.waba_account_id.in_(waba_account_ids),
+                    MessageTemplate.status == "APPROVED",
+                )
+            )
+        ).all()
+    approved = {(name, language) for name, language in rows}
+    mapping = await load_templates_map(tenant_id)
+    required = {
+        (str(entry["template"]), str(entry.get("language") or "es"))
+        for entry in mapping.values()
+        if isinstance(entry, dict) and entry.get("template")
+    }
+    missing = sorted(required - approved)
+    if missing:
+        nombres = ", ".join(f"{name} ({language})" for name, language in missing)
+        return PreflightCheck(
+            key="templates_approved", ok=False,
+            detail=f"Avisos con plantillas sin aprobar en esta conexión: {nombres}.",
+            checked_at=now, repair_action="manage_templates",
+        )
+    if not approved:
+        return PreflightCheck(
+            key="templates_approved", ok=False,
+            detail="No hay plantillas aprobadas: fuera de la ventana de 24 h no se puede escribir.",
+            checked_at=now, repair_action="manage_templates",
+        )
+    avisos = f"; las {len(required)} de los avisos están aprobadas" if required else ""
+    cuantas = "1 plantilla aprobada" if len(approved) == 1 else f"{len(approved)} plantillas aprobadas"
+    return PreflightCheck(key="templates_approved", ok=True, detail=f"{cuantas}{avisos}.", checked_at=now)
+
+
+async def run_connection_production_checks(connection: Any, tenant_id: uuid.UUID) -> list[PreflightCheck]:
+    """Checklist de producción de UNA conexión, con las credenciales de ESA conexión.
+
+    Exige un `tenant_scope` activo del negocio dueño (lo pide `credentials_for`). Sin
+    credenciales utilizables el token falla y lo que depende de Meta queda sin evaluar."""
+    from sqlalchemy import select
+
+    from core.db.models import PhoneNumber, WabaAccount
+    from core.db.session import get_session
+    from core.gateway import meta_health
+    from core.gateway.meta_credentials import CredentialsUnavailable, credentials_for
+
+    async with get_session() as session:
+        wabas = (
+            await session.execute(
+                select(WabaAccount)
+                .where(
+                    WabaAccount.connection_id == connection.id,
+                    WabaAccount.tenant_id == tenant_id,
+                    WabaAccount.deleted_at.is_(None),  # ADR-0122: borrado lógico con su conexión
+                )
+                .order_by(WabaAccount.created_at)
+            )
+        ).scalars().all()
+        phones = (
+            await session.execute(
+                select(PhoneNumber)
+                .where(
+                    PhoneNumber.connection_id == connection.id,
+                    PhoneNumber.tenant_id == tenant_id,
+                    PhoneNumber.deleted_at.is_(None),
+                )
+                .order_by(PhoneNumber.created_at)
+            )
+        ).scalars().all()
+    waba = wabas[0] if wabas else None
+    keys = connection_item_keys(connection.channel)
+    now = datetime.now(UTC)
+
+    creds = None
+    sin_credenciales = ""
+    try:
+        creds = await credentials_for(connection, waba_id=waba.waba_id if waba is not None else None)
+    except CredentialsUnavailable as exc:
+        sin_credenciales = exc.message
+
+    def _sin_credenciales(key: str) -> PreflightCheck:
+        return PreflightCheck(
+            key=key, ok=None, detail="No se pudo revisar: la conexión no tiene credenciales utilizables.",
+            checked_at=now, repair_action="reauthorize",
+        )
+
+    items: dict[str, PreflightCheck] = {}
+
+    # Token: sin credenciales no hay paso a producción (siempre rojo, no "sin dato").
+    if creds is None:
+        items["token"] = PreflightCheck(
+            key="token", ok=False, detail=f"Sin credenciales: {sin_credenciales}", checked_at=now,
+            repair_action="reauthorize",
+        )
+    else:
+        token = await _safe("token", lambda: meta_health.check_token_valid(
+            creds.access_token, creds.app_id, creds.app_secret, creds.graph_api_version,
+            connection_id=connection.id, tenant_id=tenant_id,
+        ))
+        items["token"] = combine_checks("token", [token])
+
+    if "number_registered" in keys:
+        if not phones:
+            items["number_registered"] = PreflightCheck(
+                key="number_registered", ok=False, detail="La conexión no tiene números.", checked_at=now,
+                repair_action="add_number",
+            )
+        elif creds is None:
+            items["number_registered"] = _sin_credenciales("number_registered")
+        else:
+            checks = []
+            for phone in phones:
+                check = await _safe("number_registered", lambda phone=phone: meta_health.check_number_registered(
+                    phone.phone_number_id, creds.access_token, creds.app_secret, creds.graph_api_version,
+                    connection.id, tenant_id=tenant_id,
+                ))
+                checks.append(_with_number(check, phone.display_phone_number if len(phones) > 1 else None))
+            items["number_registered"] = combine_checks("number_registered", checks)
+
+    if "waba_subscribed" in keys:
+        if waba is None:
+            items["waba_subscribed"] = PreflightCheck(
+                key="waba_subscribed", ok=False, detail="La conexión no tiene la WABA cargada.", checked_at=now,
+                repair_action="reauthorize",
+            )
+        elif creds is None:
+            items["waba_subscribed"] = _sin_credenciales("waba_subscribed")
+        else:
+            checks = [
+                await _safe("waba_subscribed", lambda: meta_health.check_webhook_subscribed(
+                    waba.waba_id, creds.access_token, creds.app_secret, creds.graph_api_version, connection.id
+                ))
+            ]
+            if connection.origin == "byok":
+                checks.append(meta_health.check_own_app_subscribed(wabas))
+            items["waba_subscribed"] = combine_checks("waba_subscribed", checks)
+
+    # Webhook: la suscripción de la app de ESTA conexión al objeto de su canal (estado que
+    # guarda el cron de 15 min) y, por número, que un override de webhook responda.
+    webhook = [await _safe("webhook", lambda: meta_health.check_app_subscription(connection))]
+    if creds is not None and connection.channel == "whatsapp":
+        for phone in phones:
+            check = await _safe("webhook", lambda phone=phone: meta_health.check_webhook_override(
+                phone.phone_number_id, creds.access_token, creds.app_secret, creds.graph_api_version, connection.id
+            ))
+            webhook.append(_with_number(check, phone.display_phone_number if len(phones) > 1 else None))
+    items["webhook"] = combine_checks("webhook", webhook)
+
+    if "templates_approved" in keys:
+        items["templates_approved"] = await _safe(
+            "templates_approved", lambda: check_minimum_templates(connection.id, tenant_id, [w.id for w in wabas])
+        )
+
+    return [items[key].model_copy(update={"key": key}) for key in keys]
