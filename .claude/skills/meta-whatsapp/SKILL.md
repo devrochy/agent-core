@@ -7,7 +7,7 @@ description: >
   HU-ARCH-13 antes de tocar el gateway o el wizard de conexiones. Cada dato lleva fecha y fuente.
 ---
 
-Datos verificados el **2026-10-02** (versión de Graph en el repo: `v21.0`,
+Datos verificados el **2026-10-02** (Embedded Signup, el **2026-10-09**) (versión de Graph en el repo: `v21.0`,
 `META_GRAPH_VERSION`). Re-verificar antes de una release; Meta cambia precios hasta cada
 trimestre.
 
@@ -62,9 +62,24 @@ los cobros por turno. Por defecto, **una burbuja por respuesta** (HU-ARCH-11).
   (`/oauth/access_token`); nunca confiar en tokens que llegan del frontend.
 - Guardar `meta_app_id`, `meta_config_id`, WABA id y número; el resolver de credenciales
   por conexión decide qué token usar (HU-CONN-01/05).
-- Estado actual: Embedded Signup **no está conectado** (HU-SH-05). BYOK ya no queda fijado en
-  sandbox: el wizard elige entorno y una BYOK de prueba se pasa a producción (HU-CONN-06,
-  ADR-0127).
+- **Embedded Signup v4** (verificado 2026-10-09 en
+  `developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/implementation`):
+  `FB.login(cb, { config_id, response_type: "code", override_default_response_type: true,
+  extras: { setup: {} } })`. **Ya no lleva `sessionInfoVersion` ni `featureType`** (eran de v2/v3).
+  El evento llega por `postMessage` desde `facebook.com` con `type: "WA_EMBEDDED_SIGNUP"`:
+  `event` = `FINISH` (Cloud API), `FINISH_ONLY_WABA`, `FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING`
+  (coexistencia), `FINISH_OBO_MIGRATION`, `FINISH_GRANT_ONLY_API_ACCESS`; `data` trae
+  `phone_number_id`, `waba_id`, `business_id`. Abandono: `CANCEL` con `data.current_step`; error
+  reportado: `CANCEL` con `error_message`, `error_code`, `session_id`, `timestamp`.
+- El `code` vive **30 s**. Canje: `GET /oauth/access_token?client_id&client_secret&code` (sin
+  `redirect_uri`). Después: `POST /{waba_id}/subscribed_apps` con ese token, `POST
+  /{phone_number_id}/register` con `messaging_product` y `pin` de 6 dígitos, y el negocio agrega su
+  método de pago en WhatsApp Manager (fuente: "Onboarding business customers as a Tech Provider").
+- Estado en el motor: conectado en el panel nuevo (HU-SH-05, ADR-0128). El PIN lo
+  escribe el negocio; el canje exige el intento de `POST /wizard/session`; la app de la plataforma
+  solo la registra el master. Falta la verificación con la app de la plataforma aprobada (dueño).
+- BYOK ya no queda fijado en sandbox: el wizard elige entorno y una BYOK de prueba se pasa a
+  producción (HU-CONN-06, ADR-0127).
 
 ## BYOK y ciclo de vida del número
 

@@ -170,13 +170,27 @@ async def check_app_subscription(connection: MetaConnection) -> PreflightCheck:
     if object_ is None:
         return PreflightCheck(key="app_subscription_active", ok=None, detail="Canal sin objeto de suscripción conocido", checked_at=now)
 
-    statuses = await list_app_subscriptions(connection.meta_app_id)
+    # La app que de verdad usa la conexión (ADR-0094): con Embedded Signup o carga manual, la
+    # de la plataforma. Una BYOK tomada por Embedded Signup conserva su `meta_app_id` viejo
+    # (es el `subject_id` de su secreto, ADR-0126 §8); mirar esa app daba la suscripción de
+    # una app que la conexión ya no usa (HU-SH-05).
+    from core.config import get_settings
+    from core.gateway.meta_credentials import uses_platform_app
+
+    app_id = (get_settings().meta_app_id or connection.meta_app_id) if uses_platform_app(connection) else connection.meta_app_id
+    statuses = await list_app_subscriptions(app_id)
     row = next((s for s in statuses if s.object == object_), None)
 
     if row is None or row.active is None:
         return PreflightCheck(
             key="app_subscription_active", ok=None,
-            detail="Todavía no corrió el chequeo de suscripción de app (cada 15 min)", checked_at=now,
+            detail=(
+                "Todavía no se leyó la suscripción de la app de la plataforma (el cron la lee cada 15 min; "
+                "si falta, la registra el admin de plataforma)."
+                if uses_platform_app(connection)
+                else "Todavía no corrió el chequeo de suscripción de app (cada 15 min)"
+            ),
+            checked_at=now,
         )
     if row.active is False:
         return PreflightCheck(
@@ -513,6 +527,10 @@ def next_status(
         return new_status, reason
 
     verificado = checks.get("token_valid", {}).get("ok") is True
+    if origin == "embedded_signup":
+        # La app de la plataforma es la que recibe sus mensajes: sin su suscripción confirmada
+        # (`None` porque nadie la leyó cuenta como no confirmada) no mejora (HU-SH-05, ADR-0128).
+        verificado = verificado and checks.get("app_subscription_active", {}).get("ok") is True
     if origin == "byok":
         verificado = (
             verificado

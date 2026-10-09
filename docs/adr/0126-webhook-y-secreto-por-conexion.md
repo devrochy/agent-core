@@ -162,6 +162,7 @@ Si aparece algo, se corrigen los datos antes de desplegar.
 - El alta de Embedded Signup sigue re-registrando la suscripción de la app de la plataforma con sus valores fijos
   (URL genérica y token global) desde el flujo del negocio. No cambia nada si ya estaba bien; queda como
   seguimiento moverlo al master.
+  **Resuelto en HU-SH-05** (ADR-0128 §4): el alta solo suscribe la WABA.
 - Messenger e Instagram usan la misma regla con la conexión de la página o de la cuenta. Hoy no hay clientes.
 - A una BYOK sin `verify_token` propio se le registra el global, que el handshake de cualquier slug acepta para
   esas conexiones. Solo sirve para pasar un handshake (eco del challenge), ya pasaba con el wizard; generar uno

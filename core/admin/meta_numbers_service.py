@@ -278,6 +278,18 @@ _PIN_LEN = 6
 _REGISTER_RATE_LIMIT_S = 60
 
 
+def _register_rate_limit_key(tenant_id: uuid.UUID, phone_number_id: str) -> str:
+    return f"register_number:{tenant_id}:{phone_number_id}"
+
+
+async def release_register_rate_limit(tenant_id: uuid.UUID, phone_number_id: str) -> None:
+    """Libera el límite de un intento por minuto: después de fijar un PIN nuevo en Meta, el
+    registro con ese PIN no es adivinar (el límite existe para no llegar al bloqueo 133008)."""
+    from core.memory.working import get_redis
+
+    await get_redis().delete(_register_rate_limit_key(tenant_id, phone_number_id))
+
+
 async def register_number(
     tenant_id: uuid.UUID, connection_id: str, phone_number_id: str, *, pin: str | None = None
 ) -> str | None:
@@ -300,13 +312,13 @@ async def register_number(
     """
     from core.gateway import meta_token_store
     from core.gateway.meta_errors import GraphError
-    from core.gateway.meta_onboarding import (
+    from core.gateway.meta_phone_numbers import (
         PIN_KIND,
         PIN_MISMATCH_CODE,
         TOO_MANY_GUESSES_CODE,
-        _generate_pin,
+        generate_pin,
+        register_phone_number,
     )
-    from core.gateway.meta_phone_numbers import register_phone_number
     from core.memory.working import get_redis
 
     try:
@@ -333,16 +345,16 @@ async def register_number(
     previous_pin = await meta_token_store.get_token(
         connection.id, PIN_KIND, phone_number_id, tenant_id=connection.tenant_id
     )
-    if pin is None and previous_pin is None and _es_byok_de_produccion(connection):
+    if pin is None and previous_pin is None and _pin_obligatorio(connection):
         # El número real del negocio: un PIN generado que nadie ve le dejaría una verificación
-        # en dos pasos que el negocio no conoce (ADR-0127).
+        # en dos pasos que el negocio no conoce (ADR-0127; también Embedded Signup, ADR-0128).
         return "Escribe el PIN de 6 dígitos del número: será su verificación en dos pasos"
 
     redis = get_redis()
-    rate_limit_key = f"register_number:{connection.tenant_id}:{phone_number_id}"
+    rate_limit_key = _register_rate_limit_key(connection.tenant_id, phone_number_id)
     if not await redis.set(rate_limit_key, "1", nx=True, ex=_REGISTER_RATE_LIMIT_S):
         return "Esperá un minuto antes de reintentar el registro"
-    pin = pin or previous_pin or _generate_pin()
+    pin = pin or previous_pin or generate_pin()
     if pin != previous_pin:
         # Antes de llamar a Meta: si el registro sale bien y algo falla después, el PIN que
         # quedó en el número no se pierde (mismo criterio que `register_number_step`).
@@ -377,13 +389,18 @@ async def register_number(
     return None
 
 
-def _es_byok_de_produccion(connection: MetaConnection) -> bool:
-    return getattr(connection, "origin", None) == "byok" and getattr(connection, "environment", None) == "production"
+def _pin_obligatorio(connection: MetaConnection) -> bool:
+    """En producción el PIN lo escribe el negocio: BYOK (ADR-0127) y Embedded Signup (ADR-0128).
+    La carga manual sigue como antes (el token es de la plataforma y es un respaldo)."""
+    return (
+        getattr(connection, "origin", None) in ("byok", "embedded_signup")
+        and getattr(connection, "environment", None) == "production"
+    )
 
 
 async def _restore_pin(connection: MetaConnection, phone_number_id: str, previous_pin: str | None) -> None:
     from core.gateway import meta_token_store
-    from core.gateway.meta_onboarding import PIN_KIND
+    from core.gateway.meta_phone_numbers import PIN_KIND
 
     if previous_pin is not None:
         await meta_token_store.put_token(

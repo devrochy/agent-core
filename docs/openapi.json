@@ -4135,7 +4135,7 @@
           "admin · wizard whatsapp"
         ],
         "summary": "Wizard State",
-        "description": "Qué puede ofrecer el wizard en este entorno (app de Meta configurada o no).",
+        "description": "Qué puede ofrecer el wizard en este entorno (app de Meta configurada o no). El App ID y\nel `config_id` son públicos (los usa el SDK de Facebook en el navegador); el App Secret\nnunca sale del servidor.",
         "operationId": "wizard_state_api_v1_admin_meta_wizard_get",
         "parameters": [
           {
@@ -4180,13 +4180,84 @@
       }
     },
     "/api/v1/admin/meta/wizard/session": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · wizard whatsapp"
+        ],
+        "summary": "Wizard Session State",
+        "description": "En qué paso quedó el alta con Facebook de este negocio (sin tocar nada): la viva, o la\núltima terminada. `null` si nunca empezó una.",
+        "operationId": "wizard_session_state_api_v1_admin_meta_wizard_session_get",
+        "parameters": [
+          {
+            "name": "environment",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "sandbox",
+                "production"
+              ],
+              "type": "string",
+              "default": "production",
+              "title": "Environment"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WizardSessionOut"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Wizard Session State Api V1 Admin Meta Wizard Session Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "api",
           "admin · wizard whatsapp"
         ],
         "summary": "Wizard Session",
-        "description": "Arranca (o reanuda) la sesión del wizard para el negocio.",
+        "description": "Arranca o reanuda el alta con Facebook. Un alta vencida (más de 24 h) se cierra y se\nempieza otra reutilizando el borrador. Si el alta ya pasó el popup, sigue con los pasos\nautomáticos; si lo espera, devuelve un `attempt` nuevo para el canje.",
         "operationId": "wizard_session_api_v1_admin_meta_wizard_session_post",
         "parameters": [
           {
@@ -4247,7 +4318,7 @@
           "admin · wizard whatsapp"
         ],
         "summary": "Wizard Exchange",
-        "description": "Canjea el código del Embedded Signup (el popup ya pudo dar waba/phone).\n\nLa WABA y el número del popup se guardan recién después del canje, verificados con\nel token nuevo y sin dueño en otro negocio (ADR-0095).",
+        "description": "Canjea el código del Embedded Signup y encadena el alta: suscribir la WABA, registrar el\nnúmero con el PIN, sincronizar plantillas y verificar salud (HU-SH-05).\n\nLa WABA y el número del popup se guardan recién después del canje, verificados con el\ntoken nuevo y sin dueño en otro negocio (ADR-0095). Si el canje falla, 400 (hay que repetir\nel popup); si falla un paso posterior, 200 con el paso y el error para retomarlo.",
         "operationId": "wizard_exchange_api_v1_admin_meta_wizard_exchange_post",
         "parameters": [
           {
@@ -4283,9 +4354,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Wizard Exchange Api V1 Admin Meta Wizard Exchange Post"
+                  "$ref": "#/components/schemas/WizardSessionOut"
                 }
               }
             }
@@ -4310,7 +4379,7 @@
           "admin · wizard whatsapp"
         ],
         "summary": "Wizard Number",
-        "description": "Paso «registrar el número» del wizard.",
+        "description": "Paso «registrar el número» con el PIN del negocio, y lo que sigue.",
         "operationId": "wizard_number_api_v1_admin_meta_wizard_number_post",
         "parameters": [
           {
@@ -4371,7 +4440,7 @@
           "admin · wizard whatsapp"
         ],
         "summary": "Wizard Pin",
-        "description": "Paso «fijar PIN nuevo» (verificación en dos pasos).",
+        "description": "Fija un PIN nuevo de verificación en dos pasos (el número tenía otro que nadie recuerda),\nregistra el número con él y sigue con el alta.",
         "operationId": "wizard_pin_api_v1_admin_meta_wizard_pin_post",
         "parameters": [
           {
@@ -13018,6 +13087,359 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/wizard/cancel": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · wizard whatsapp"
+        ],
+        "summary": "Wizard Cancel",
+        "description": "Registra que el popup se cerró o falló. El alta sigue viva en el mismo paso: el panel\nofrece reintentar (un `POST /wizard/session` da un intento nuevo).",
+        "operationId": "wizard_cancel_api_v1_admin_meta_wizard_cancel_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WizardCancelIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WizardSessionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/wizard/resume": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · wizard whatsapp"
+        ],
+        "summary": "Wizard Resume",
+        "description": "Reintenta el alta desde el paso donde quedó (después del popup).",
+        "operationId": "wizard_resume_api_v1_admin_meta_wizard_resume_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WizardStepIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WizardSessionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/connections/{connection_id}/test-message": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Test Message Options",
+        "operationId": "test_message_options_api_v1_admin_meta_connections__connection_id__test_message_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestMessageOptions"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Send Test Message",
+        "description": "Envía una plantilla aprobada sin variables al número indicado (uno cada 30 s, 10 al día).\nEn producción, solo el propietario del negocio o el master.",
+        "operationId": "send_test_message_api_v1_admin_meta_connections__connection_id__test_message_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestMessageIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestMessageOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/meta-app/embedded-signup": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Embedded Signup Requirements",
+        "operationId": "embedded_signup_requirements_api_v1_admin_platform_meta_app_embedded_signup_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbeddedSignupRequirements"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/meta-app/embedded-signup/step": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Embedded Signup Step",
+        "description": "Marca o desmarca un requisito manual (con nota), guardando quién y cuándo.",
+        "operationId": "embedded_signup_step_api_v1_admin_platform_meta_app_embedded_signup_step_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EsStepIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -23221,42 +23643,78 @@
           },
           "code": {
             "type": "string",
-            "title": "Code"
+            "format": "password",
+            "title": "Code",
+            "writeOnly": true
+          },
+          "attempt": {
+            "type": "string",
+            "format": "password",
+            "title": "Attempt",
+            "writeOnly": true
           },
           "event_type": {
             "type": "string",
+            "maxLength": 64,
             "title": "Event Type",
             "default": "FINISH"
           },
           "waba_id": {
             "type": "string",
+            "maxLength": 64,
             "title": "Waba Id",
             "default": ""
           },
           "phone_number_id": {
             "type": "string",
+            "maxLength": 64,
             "title": "Phone Number Id",
             "default": ""
           },
           "business_id": {
             "type": "string",
+            "maxLength": 64,
             "title": "Business Id",
             "default": ""
+          },
+          "pin": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pin"
           }
         },
         "type": "object",
         "required": [
           "wizard_id",
-          "code"
+          "code",
+          "attempt"
         ],
-        "title": "WizardExchangeIn"
+        "title": "WizardExchangeIn",
+        "description": "Lo que el panel recibe del popup: `code` (de `FB.login`, TTL de 30 s, se canjea solo en\nel servidor) y, del evento `WA_EMBEDDED_SIGNUP`, la WABA, el número y el portafolio.\n`attempt`: el de `POST /wizard/session`. `pin`: el PIN de 6 dígitos con el que se registra\nel número (el que ya tenga en verificación en dos pasos, o uno nuevo). `SecretStr`: no salen\nen el repr del modelo."
       },
       "WizardSessionIn": {
         "properties": {
           "environment": {
             "type": "string",
+            "enum": [
+              "sandbox",
+              "production"
+            ],
             "title": "Environment",
             "default": "production"
+          },
+          "restart": {
+            "type": "boolean",
+            "title": "Restart",
+            "default": false
           }
         },
         "type": "object",
@@ -23284,6 +23742,99 @@
               }
             ],
             "title": "Connection Id"
+          },
+          "environment": {
+            "type": "string",
+            "title": "Environment",
+            "default": "production"
+          },
+          "completed_steps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Completed Steps",
+            "default": []
+          },
+          "done": {
+            "type": "boolean",
+            "title": "Done",
+            "default": false
+          },
+          "expired": {
+            "type": "boolean",
+            "title": "Expired",
+            "default": false
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "needs_pin": {
+            "type": "boolean",
+            "title": "Needs Pin",
+            "default": false
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WizardErrorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cancelled": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WizardCancel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attempt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
+          },
+          "connection_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Status"
+          },
+          "connection_status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Status Reason"
           }
         },
         "type": "object",
@@ -23291,7 +23842,8 @@
           "wizard_id",
           "step"
         ],
-        "title": "WizardSessionOut"
+        "title": "WizardSessionOut",
+        "description": "Estado del alta con Facebook (Embedded Signup). `attempt`: solo al abrir o reanudar una\nsesión que todavía espera el popup; el panel lo devuelve con el `code` (un solo uso).\n`needs_pin`: el paso que falta es registrar el número con su PIN."
       },
       "WizardState": {
         "properties": {
@@ -23313,6 +23865,19 @@
             },
             "type": "array",
             "title": "Environments"
+          },
+          "graph_api_version": {
+            "type": "string",
+            "title": "Graph Api Version",
+            "default": ""
+          },
+          "missing_settings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Settings",
+            "default": []
           }
         },
         "type": "object",
@@ -23322,7 +23887,8 @@
           "config_id",
           "environments"
         ],
-        "title": "WizardState"
+        "title": "WizardState",
+        "description": "Qué puede ofrecer el wizard en este entorno. `missing_settings`: las variables de\nentorno de la app de la plataforma que faltan para Embedded Signup (vacío si está lista).\n`graph_api_version`: la versión con la que el panel inicializa el SDK de Facebook."
       },
       "WizardStepIn": {
         "properties": {
@@ -23330,6 +23896,19 @@
             "type": "string",
             "format": "uuid",
             "title": "Wizard Id"
+          },
+          "pin": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pin"
           }
         },
         "type": "object",
@@ -23519,6 +24098,477 @@
           "fecha_hora"
         ],
         "title": "Payment"
+      },
+      "EmbeddedSignupRequirements": {
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "title": "App Id"
+          },
+          "config_id": {
+            "type": "string",
+            "title": "Config Id"
+          },
+          "graph_api_version": {
+            "type": "string",
+            "title": "Graph Api Version"
+          },
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "automatic": {
+            "items": {
+              "$ref": "#/components/schemas/EsAutomaticCheck"
+            },
+            "type": "array",
+            "title": "Automatic"
+          },
+          "manual": {
+            "items": {
+              "$ref": "#/components/schemas/EsManualStep"
+            },
+            "type": "array",
+            "title": "Manual"
+          }
+        },
+        "type": "object",
+        "required": [
+          "app_id",
+          "config_id",
+          "graph_api_version",
+          "ready",
+          "automatic",
+          "manual"
+        ],
+        "title": "EmbeddedSignupRequirements",
+        "description": "`ready`: todo lo automático en verde y todo lo manual confirmado."
+      },
+      "EsAutomaticCheck": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "ok",
+          "detail"
+        ],
+        "title": "EsAutomaticCheck"
+      },
+      "EsManualStep": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "help": {
+            "type": "string",
+            "title": "Help"
+          },
+          "link": {
+            "type": "string",
+            "title": "Link"
+          },
+          "done": {
+            "type": "boolean",
+            "title": "Done"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "help",
+          "link",
+          "done",
+          "notes",
+          "updated_at"
+        ],
+        "title": "EsManualStep"
+      },
+      "EsStepIn": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Key"
+          },
+          "done": {
+            "type": "boolean",
+            "title": "Done"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "done"
+        ],
+        "title": "EsStepIn"
+      },
+      "TestMessageIn": {
+        "properties": {
+          "to": {
+            "type": "string",
+            "maxLength": 24,
+            "minLength": 8,
+            "title": "To"
+          },
+          "template_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Name"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          }
+        },
+        "type": "object",
+        "required": [
+          "to"
+        ],
+        "title": "TestMessageIn"
+      },
+      "TestMessageOptions": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "phone_number_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone Number Id"
+          },
+          "display_phone_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Phone Number"
+          },
+          "templates": {
+            "items": {
+              "$ref": "#/components/schemas/TestTemplate"
+            },
+            "type": "array",
+            "title": "Templates"
+          },
+          "can_send": {
+            "type": "boolean",
+            "title": "Can Send"
+          },
+          "blocked_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "status",
+          "phone_number_id",
+          "display_phone_number",
+          "templates",
+          "can_send",
+          "blocked_reason"
+        ],
+        "title": "TestMessageOptions"
+      },
+      "TestMessageOut": {
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "title": "Message Id"
+          },
+          "template": {
+            "$ref": "#/components/schemas/TestTemplate"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message_id",
+          "template"
+        ],
+        "title": "TestMessageOut"
+      },
+      "TestTemplate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "language"
+        ],
+        "title": "TestTemplate"
+      },
+      "WizardCancel": {
+        "properties": {
+          "current_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Step"
+          },
+          "with_error": {
+            "type": "boolean",
+            "title": "With Error",
+            "default": false
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          }
+        },
+        "type": "object",
+        "title": "WizardCancel"
+      },
+      "WizardCancelIn": {
+        "properties": {
+          "wizard_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Wizard Id"
+          },
+          "current_step": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Step"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "error_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Id"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "wizard_id"
+        ],
+        "title": "WizardCancelIn",
+        "description": "Evento `CANCEL` del popup (o el popup cerrado sin `code`). Los textos vienen de Meta a\ntravés del navegador: se guardan recortados, como dato."
+      },
+      "WizardErrorOut": {
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "at_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At Step"
+          },
+          "fbtrace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fbtrace Id"
+          }
+        },
+        "type": "object",
+        "title": "WizardErrorOut",
+        "description": "Último error del wizard, sin nada sensible: código, mensaje y paso. `fbtrace_id` es el\nidentificador de Meta para soporte."
       }
     }
   }
