@@ -56,9 +56,9 @@ class PaymentSkill(BaseSkill):
                     "referencia de negocio ya existente (ej. el número de un pedido). Úsala SOLO cuando "
                     "el cliente eligió explícitamente pagar en línea, con el monto y la referencia "
                     "correctos (nunca inventes el monto: usá el que devolvió la tool que creó el "
-                    "pedido/cotización). Wompi tiene un mínimo real de $150.000 COP por cobro: si el "
-                    "total es menor, esta tool devuelve un error -- ofrecé transferencia o "
-                    "contraentrega en vez de reintentar."
+                    "pedido/cotización). Wompi tiene un monto mínimo por cobro (más alto en el "
+                    "ambiente de pruebas): si el total es menor, esta tool devuelve un error -- "
+                    "ofrecé transferencia o contraentrega en vez de reintentar."
                 ),
                 parameters={
                     "type": "object",

@@ -42,8 +42,9 @@
           <div class="form-check mb-3">
             <input type="checkbox" class="form-check-input" id="test" name="test" value="1">
             <label class="form-check-label" for="test">
-              Probar la conexión antes de guardar (crea un link real por el mínimo de
-              ${{ "{:,}".format(min_amount) }} COP; con llave de producción es un cobro real)
+              Probar la conexión antes de guardar (crea un link real por el mínimo de Wompi:
+              ${{ "{:,}".format(min_amount_sandbox) }} COP con llave de pruebas,
+              ${{ "{:,}".format(min_amount_production) }} COP con llave de producción)
             </label>
           </div>
           <button class="btn btn-primary">Probar y guardar</button>

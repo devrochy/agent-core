@@ -22,7 +22,7 @@ from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from pack_payments.config import PaymentsConfig
 from pack_payments.providers.base import PaymentRequestRejected
-from pack_payments.providers.wompi import MIN_AMOUNT_COP
+from pack_payments.providers.wompi import min_amount_cop
 from pack_payments.skills import build_provider
 
 log = get_logger(__name__)
@@ -115,7 +115,8 @@ async def payments_config_page(request: Request):
         configured=configured,
         public_key=public_key,
         webhook_url=await _wompi_webhook_url(),
-        min_amount=int(MIN_AMOUNT_COP),
+        min_amount_sandbox=min_amount_cop(sandbox=True),
+        min_amount_production=min_amount_cop(sandbox=False),
         flash=request.query_params.get("flash"),
         flash_type=request.query_params.get("flash_type") or "success",
     )
@@ -182,7 +183,7 @@ async def payments_config_save(
             provider = build_provider(config)
             await provider.create_payment_link(
                 reference="prueba-conexion",
-                amount=float(MIN_AMOUNT_COP),
+                amount=float(provider.min_amount_cop),
                 currency="COP",
                 expires_in_hours=1,
             )

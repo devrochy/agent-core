@@ -14,9 +14,10 @@ description: Reglas para generar links de pago en línea
   enviar.
 - No generes un segundo link para la misma referencia si el cliente pregunta de
   nuevo por lo mismo en la misma conversación — recordá que ya se lo enviaste.
-- Wompi tiene un mínimo real de $150.000 COP por cobro: si el total es menor,
-  la tool devuelve un error explicándolo — no reintentes con el mismo monto,
-  ofrecé transferencia o contraentrega en su lugar.
+- Wompi tiene un monto mínimo por cobro ($1.500 COP en producción; $150.000 COP
+  en el ambiente de pruebas): si el total es menor, la tool devuelve un error
+  explicándolo — no reintentes con el mismo monto, ofrecé transferencia o
+  contraentrega en su lugar.
 - Si la tool devuelve un error, decíselo al cliente con honestidad y ofrecé una
   alternativa real (otro método de pago, o escalar) — nunca digas que enviaste
   un link o que el pedido quedó confirmado si la tool no lo confirmó.
