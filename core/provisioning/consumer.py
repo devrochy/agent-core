@@ -327,8 +327,8 @@ async def _datos_del_pedido(vendedor: uuid.UUID, registro: ProvisioningRequest) 
 async def _dar_de_alta(
     vendedor: uuid.UUID, registro: ProvisioningRequest, inicio: float
 ) -> ProvisioningRequest:
+    from core.alta_negocio import onboard_tenant
     from core.billing.plans import get_plan
-    from core.onboarding import onboard_tenant
     from core.provisioning.owner import preparar_invitacion, validar_correo_del_owner
 
     datos = await _datos_del_pedido(vendedor, registro)

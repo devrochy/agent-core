@@ -19,9 +19,10 @@ pytestmark = [
 async def test_ensure_brand_voice_siembra_desde_voz_de_marca() -> None:
     from sqlalchemy import select
 
+    from core.alta_negocio import onboard_tenant
     from core.db.models import AppSettings
     from core.db.session import get_session
-    from core.onboarding import ensure_brand_voice, onboard_tenant, tenant_dir
+    from core.onboarding import ensure_brand_voice, tenant_dir
     from core.shared.tenant import tenant_scope
 
     slug = uniq("bv")
@@ -56,7 +57,8 @@ async def test_ensure_brand_voice_siembra_desde_voz_de_marca() -> None:
 
 
 async def test_ensure_brand_voice_sin_archivo_no_falla() -> None:
-    from core.onboarding import ensure_brand_voice, onboard_tenant
+    from core.alta_negocio import onboard_tenant
+    from core.onboarding import ensure_brand_voice
 
     slug = uniq("bvnofile")
     tenant_id, _ = await onboard_tenant(

@@ -28,7 +28,7 @@ FECHA = "2027-03-15"  # fecha fija futura (con todos los días abiertos es indif
 async def _tenant_calendario() -> uuid.UUID:
     from _api_helpers import ADMIN_EMAIL
 
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = uniq("cal-int")
     tenant_id, _ = await onboard_tenant(

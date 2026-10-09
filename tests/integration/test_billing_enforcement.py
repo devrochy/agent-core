@@ -27,7 +27,7 @@ def _uniq(prefix: str) -> str:
 
 
 async def _onboard(slug: str) -> uuid.UUID:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     tid, _ = await onboard_tenant(
         name=f"Tenant enforce {slug}",

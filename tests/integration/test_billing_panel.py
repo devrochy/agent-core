@@ -43,7 +43,7 @@ async def _switch_tenant(app_client, session_cookie: str, tenant_id: uuid.UUID) 
 
 
 async def _new_tenant() -> uuid.UUID:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     tid, _ = await onboard_tenant(
         name=f"Tenant plan {_uniq('x')}",

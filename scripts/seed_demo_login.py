@@ -100,7 +100,7 @@ async def _habilitar_pack(tenant_id, pack: str) -> None:
 
 
 async def _tenant(nombre: str, slug: str, owner_email: str):
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     tenant_id, _ = await onboard_tenant(
         name=nombre,

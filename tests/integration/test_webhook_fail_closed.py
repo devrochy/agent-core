@@ -54,7 +54,7 @@ def _meta_payload(phone_id: str, wa_id: str, message_id: str, body: str) -> dict
 
 
 async def _onboard(slug: str, phone: str, *, app_secret: str = "") -> uuid.UUID:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     tid, _ = await onboard_tenant(
         name=f"FailClosed {slug}",

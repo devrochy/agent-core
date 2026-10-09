@@ -36,9 +36,9 @@ async def _invitacion(*, con_contrasena: bool = False) -> tuple[uuid.UUID, uuid.
         crear_invitacion_owner,
         token_de_invitacion,
     )
+    from core.alta_negocio import onboard_tenant
     from core.db.models import Admin
     from core.db.session import get_session
-    from core.onboarding import onboard_tenant
 
     slug = uniq("invitado")
     tenant_id, _ = await onboard_tenant(name=f"Negocio {slug}", slug=slug)

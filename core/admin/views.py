@@ -535,7 +535,7 @@ async def tenants_create(
 
     triggers = [t.strip() for t in escalation_triggers.split(",") if t.strip()]
     try:
-        from core.onboarding import onboard_tenant
+        from core.alta_negocio import onboard_tenant
 
         tid, _steps = await onboard_tenant(
             name=name,

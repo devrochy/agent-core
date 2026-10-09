@@ -229,7 +229,7 @@ async def test_no_master_no_gestiona_admins(app_client) -> None:
 
 async def test_login_por_tenant(app_client) -> None:
     """Un admin owner creado en el alta entra y ve solo su tenant (login por tenant)."""
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = f"rbac-tenant-{uuid.uuid4().hex[:6]}"
     email = _uniq("owner-tenant")

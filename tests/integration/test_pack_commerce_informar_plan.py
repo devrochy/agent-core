@@ -42,8 +42,8 @@ async def test_seed_mapea_metadatos_de_recurrencia() -> None:
     from sqlalchemy import select
 
     from cli.commands.tenant import seed_catalog
+    from core.alta_negocio import onboard_tenant
     from core.db.session import get_session
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = uniq("crmplan")
@@ -76,9 +76,9 @@ async def test_informar_plan_devuelve_metadatos() -> None:
     from pack_commerce.models import Product, ProductVariant
     from pack_commerce.skills import CatalogSkill
 
+    from core.alta_negocio import onboard_tenant
     from core.db.session import get_session
     from core.mcp.types import ToolContext
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = uniq("crmplan2")

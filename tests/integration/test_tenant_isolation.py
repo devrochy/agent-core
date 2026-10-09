@@ -289,9 +289,9 @@ async def test_numeracion_independiente_por_tenant(moto_setup) -> None:
 
 async def test_onboarding_idempotente(moto_setup) -> None:
     """Correr el onboarding dos veces no duplica filas."""
+    from core.alta_negocio import onboard_tenant
     from core.db.models import AgentSpecRecord, AppSettings, Tenant
     from core.db.session import get_session
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     _t1, moto = moto_setup

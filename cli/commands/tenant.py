@@ -201,7 +201,7 @@ async def _verify_whatsapp(whatsapp: dict) -> tuple[bool, str, dict]:
 async def _onboard(answers: dict) -> tuple[uuid.UUID, list[str]]:
     import secrets
 
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     admin_email = answers.get("admin_email") or None
     admin_password = answers.get("admin_password") or None

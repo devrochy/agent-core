@@ -39,7 +39,7 @@ _NEGOCIO: list[uuid.UUID] = []
 
 async def _negocio() -> uuid.UUID:
     """Negocio propio del módulo: el contador de pedidos no choca con el de otros tests."""
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     if not _NEGOCIO:
         slug = uniq("datos-alta")

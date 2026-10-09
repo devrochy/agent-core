@@ -68,7 +68,7 @@ def correos(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
 
 # ------------------------------------------------------------------ helpers
 async def _vendedor() -> uuid.UUID:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = uniq("vendedor")
     tid, _ = await onboard_tenant(
@@ -428,7 +428,7 @@ async def test_el_registro_del_alta_solo_lo_ve_el_vendedor(vendedores, correos) 
 
 async def test_nunca_agrega_un_owner_a_un_negocio_ajeno(vendedores, correos) -> None:
     """Si el slug del alta ya es de otro negocio, revisión: sin invitación ni cambio de plan."""
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
     from core.provisioning.consumer import id_del_negocio, slug_del_negocio
 
     vendedor = await _vendedor()

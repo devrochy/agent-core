@@ -21,9 +21,9 @@ pytestmark = [
 
 
 async def _make_tenant_with_connection(channel: str = "whatsapp") -> uuid.UUID:
+    from core.alta_negocio import onboard_tenant
     from core.db.models import MetaConnection
     from core.db.session import get_session
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = uniq("subs-admin")

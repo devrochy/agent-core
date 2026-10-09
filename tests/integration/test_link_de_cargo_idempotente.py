@@ -47,7 +47,7 @@ def proveedor(monkeypatch):
 
 
 async def _negocio() -> uuid.UUID:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
 

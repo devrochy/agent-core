@@ -32,7 +32,7 @@ PLATFORM_SECRET = "platform-secret-test"
 
 # ------------------------------------------------------------------ helpers
 async def _new_tenant(prefix: str) -> uuid.UUID:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = uniq(prefix)
     tid, _ = await onboard_tenant(

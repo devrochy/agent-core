@@ -21,7 +21,7 @@ PLAN_SNAPSHOT = {"nombre": "Plan Basic", "precio": 200000, "moneda": "COP", "per
 
 
 async def _tenant_subs(packs: list[str] | None = None) -> uuid.UUID:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = uniq("sub")
     tenant_id, _ = await onboard_tenant(

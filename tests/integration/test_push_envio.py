@@ -41,9 +41,9 @@ def _settings_push_enabled(monkeypatch) -> None:
 
 
 async def _tenant_con_owner(email: str, slug: str) -> tuple[uuid.UUID, uuid.UUID]:
+    from core.alta_negocio import onboard_tenant
     from core.db.models import TenantUser
     from core.db.session import get_session
-    from core.onboarding import onboard_tenant
 
     tid, _ = await onboard_tenant(
         name=f"Tenant {slug}",

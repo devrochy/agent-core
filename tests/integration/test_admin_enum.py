@@ -23,9 +23,9 @@ pytestmark = [
 
 
 async def _seed(slug: str, status: str = "connected", *, deleted: bool = False):
+    from core.alta_negocio import onboard_tenant
     from core.db.models import MetaConnection, WabaAccount
     from core.db.session import get_session
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     tid, _ = await onboard_tenant(name=f"AdminEnum {slug}", slug=slug, persona={"tone": "cercano"})
@@ -86,10 +86,10 @@ async def test_crons_de_meta_encuentran_el_asset_del_tenant() -> None:
 
 
 async def test_admin_meta_connection_ids_excluye_soft_deleted() -> None:
+    from core.alta_negocio import onboard_tenant
     from core.db.admin_enum import admin_meta_connection_ids
     from core.db.models import MetaConnection, utcnow
     from core.db.session import get_session
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = f"admdel-{uuid.uuid4().hex[:6]}"

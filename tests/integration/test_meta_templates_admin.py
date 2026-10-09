@@ -22,11 +22,11 @@ pytestmark = [
 
 
 async def _setup_connected_tenant():
+    from core.alta_negocio import onboard_tenant
     from core.db.models import MetaConnection, WabaAccount
     from core.db.session import get_session
     from core.gateway import meta_token_store
     from core.gateway.meta_onboarding import TOKEN_KIND
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = uniq("plantillas-api")

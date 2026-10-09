@@ -50,7 +50,7 @@ def proveedor_cobranza():
 
 
 async def _negocio(packs: list[str]) -> uuid.UUID:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = uniq("agn")
     tid, _ = await onboard_tenant(name=f"Negocio {slug}", slug=slug, packs=packs)

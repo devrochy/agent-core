@@ -52,11 +52,11 @@ forbidden_modules =
     pack_payments
     pack_subscriptions
 
-# ADR-0121 (HU-SH-03, «Sin el LLM»): crear negocios es solo del consumidor del core sobre
-# `subscription.activated`. Ninguna tool (core o pack), ni el host MCP, ni el loop del LLM
-# importan el alta. Los packs solo pueden usar el contrato `core.provisioning.fuentes`.
-# `core.onboarding` no se prohíbe entero (sus utilidades, como `tenant_dir`, las usan los
-# packs): que ninguna tool use `onboard_tenant` lo revisa `tests/test_provisioning_sin_llm.py`.
+# ADR-0121 (HU-SH-03, «Sin el LLM»): crear negocios es solo del master (panel, API de
+# plataforma, CLI) y del consumidor del core sobre `subscription.activated`. Ninguna tool
+# (core o pack), ni el host MCP, ni el loop del LLM importan el alta: `core.alta_negocio`
+# (`onboard_tenant`), el consumidor ni el owner. Los packs solo pueden usar el contrato
+# `core.provisioning.fuentes`, y `core.onboarding` (utilidades de artefactos) sigue libre.
 [importlinter:contract:alta-fuera-del-llm]
 name = Las tools y los packs no dan de alta negocios
 type = forbidden
@@ -71,6 +71,7 @@ source_modules =
     core.subscriptions
     core.orchestrator
 forbidden_modules =
+    core.alta_negocio
     core.provisioning.consumer
     core.provisioning.owner
 # Solo imports directos: todo pack llega al despachador del outbox por `core.tasks.celery_app`
