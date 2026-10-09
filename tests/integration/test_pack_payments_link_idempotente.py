@@ -33,43 +33,23 @@ T1 = TEST_ALPHA_ID
 T2 = TEST_BETA_ID
 
 
-class _FakeResponse:
-    status_code = 200
-    text = ""
+class _FakeHttp:
+    """`context.http` simulado: Wompi siempre responde un link (no sale a red)."""
 
-    def json(self):
-        return {"data": {"id": "link-fake-test"}}
-
-
-class _FakeAsyncClient:
-    def __init__(self, *a, **k):
-        pass
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *a):
-        return False
-
-    async def post(self, *a, **k):
-        return _FakeResponse()
-
-
-@pytest.fixture
-def _fake_wompi_http(monkeypatch: pytest.MonkeyPatch):
-    import pack_payments.providers.wompi as wompi_mod
-
-    monkeypatch.setattr(wompi_mod.httpx, "AsyncClient", _FakeAsyncClient)
+    async def request(self, *a, **k):  # type: ignore[no-untyped-def]
+        return {"status": 200, "data": {"data": {"id": "link-fake-test"}}}
 
 
 async def _tool_context():
     from core.mcp.types import ToolContext
 
+    # La tool sale a Wompi solo por `context.http` (ADR-0052).
     return ToolContext(
         conversation_id=uuid.uuid4(),
         customer_id=uuid.uuid4(),
         idempotency_key=f"test:{uuid.uuid4().hex[:8]}",
         channel="whatsapp",
+        http=_FakeHttp(),
     )
 
 
@@ -89,7 +69,7 @@ async def _save_test_config() -> None:
     )
 
 
-async def test_generar_link_pago_es_idempotente_por_reference(_fake_wompi_http):
+async def test_generar_link_pago_es_idempotente_por_reference():
     from pack_payments.skills import PaymentSkill
 
     from core.plugin_manager import plugin_manager
@@ -144,7 +124,7 @@ async def test_generar_link_pago_es_idempotente_por_reference(_fake_wompi_http):
             )
 
 
-async def test_generar_link_pago_mismo_reference_no_cruza_tenant(_fake_wompi_http):
+async def test_generar_link_pago_mismo_reference_no_cruza_tenant():
     """Hallazgo de `auditor-multitenant` (2026-09-12): el índice único real
     es `(tenant_id, reference)`, no solo `reference` -- dos tenants pueden
     usar el MISMO valor de referencia (ej. ambos numeran sus pedidos

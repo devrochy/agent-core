@@ -25,6 +25,7 @@ from core.shared.tenant import get_current_tenant_id, tenant_scope
 from pack_payments.admin import router as admin_config_router
 from pack_payments.config import PaymentsConfig
 from pack_payments.models import PaymentTransaction
+from pack_payments.providers import wompi
 from pack_payments.providers.base import WebhookEvent
 from pack_payments.skills import PaymentSkill, build_provider, tenant_config
 
@@ -221,6 +222,8 @@ class PaymentsModule(BaseModule):
     setup_guide = "Configura tus llaves de Wompi (sandbox o producción)."
     requires_config = True
     config_schema = PaymentsConfig
+    # Salida a red de la tool y del panel (ADR-0052): solo la API de Wompi.
+    network_allowlist: ClassVar[tuple[str, ...]] = wompi.NETWORK
     admin_router = admin_router
     declared_skills: list[type] = [PaymentSkill]  # noqa: RUF012
 

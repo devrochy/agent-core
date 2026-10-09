@@ -318,7 +318,11 @@ Un pack no importa `httpx` (ni otro cliente HTTP). Declara sus dominios en
   `plugin_manager.scoped_http(plugin_id)`: allowlist del módulo, `GET/POST/PUT/PATCH/DELETE`,
   sin IPs internas. Responde `{"status", "data"}` o `{"error"}`; nunca lanza.
 - **Panel, jobs, OAuth** (sin `ToolContext`): `core.mcp.types.plugin_http(<su allowlist>)`,
-  el mismo cliente. Ejemplo: `pack_calendar/google_api.py`.
+  el mismo cliente. Ejemplos: `pack_calendar/google_api.py`, `pack_payments/providers/wompi.py`
+  (el proveedor recibe `context.http` desde la tool) y el Turnstile de `pack_commerce/api.py`.
+
+`tests/test_packs_salida_a_red.py` falla si un archivo de `packages/pack-*` importa un cliente
+HTTP, o si la `network_allowlist` de un módulo no está en `network` de su manifest.
 
 ## 14. Checklist antes de publicar
 
