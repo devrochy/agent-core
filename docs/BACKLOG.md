@@ -361,8 +361,16 @@ de artefactos de tenant).
   (2026-10-09). [Media]
 - **Un cambio de plan desde el asistente no cambia el plan del negocio aprovisionado** — Free →
   Premium cambia la suscripción en `solvershub`, pero el consumidor de ADR-0121 solo lo audita
-  (`aprovisionamiento_cambio_de_plan`): el negocio sigue en Free y vence a los 30 días. → HU-SH-04
-  (fuente única del cobro de plataforma). [Alta]
+  (`aprovisionamiento_cambio_de_plan`): el negocio sigue en Free y vence a los 30 días. Tampoco aplica
+  el preset que quedó pendiente porque no cabía en Free (ADR-0110 § 3.1). El plan pago aprovisionado
+  tampoco se renueva al vencer `period_end`. → HU-SH-04 (fuente única del cobro de plataforma, renovación
+  y preset pendiente al subir de plan). Hasta entonces, no encender `PROVISIONING_SELLER_TENANTS` en
+  producción. [Alta]
+- **Confirmar el correo en el chat antes de crear el pedido de un plan** — el acceso del negocio
+  aprovisionado llega solo al correo del pedido (ADR-0121): si el cliente lo escribe mal, se queda sin
+  acceso hasta que una persona lo corrija (`docs/altas-en-revision.md`). Es un ajuste del playbook de
+  ventas del tenant `solvershub` (`solvershub-comercial`): repetir el correo y pedir confirmación antes de
+  `crear_pedido`. [Media]
 
 **Calendario / demos**
 - **Calendario interno (ADR-0084)** — las 5 tools requieren `google_calendar`
