@@ -333,3 +333,37 @@ async def permite_varias(capability: SubscriptionCapability) -> bool:
     except Exception:
         log.warning("permite_varias_fallo", provider=getattr(capability, "provider_id", "?"), exc_info=True)
         return False
+
+
+# ------------------------------------------------- operaciones opcionales (HU-SH-04, ADR-0123)
+# El cobro de la plataforma por dos canales necesita dos operaciones más del proveedor. Son
+# opcionales (como `permite_varias`): un proveedor que no las implementa devuelve None y el
+# llamador lo trata como «sin soporte» (aviso por el panel; la conciliación lo muestra).
+
+
+async def registrar_pago_externo(
+    capability: SubscriptionCapability,
+    subscription_id: uuid.UUID,
+    *,
+    inicio: Any,
+    fin: Any,
+    referencia: str,
+    canal: str,
+) -> dict[str, Any] | None:
+    """El período que empieza en `inicio` lo pagó otro canal: el cargo queda pagado y el
+    proveedor no lo vuelve a cobrar. `{"estado": registrado | ya_registrado | duplicado, …}`."""
+    metodo = getattr(capability, "registrar_pago_externo", None)
+    if metodo is None:
+        return None
+    return dict(await metodo(subscription_id, inicio=inicio, fin=fin, referencia=referencia, canal=canal))
+
+
+async def cobrar_periodo(
+    capability: SubscriptionCapability, subscription_id: uuid.UUID, *, inicio: Any
+) -> dict[str, Any] | None:
+    """Genera ya el cargo del período que empieza en `inicio`, con su link y su aviso al
+    cliente. `{"estado": generado | ya_existia | no_cobrable | desalineado, …}`."""
+    metodo = getattr(capability, "cobrar_periodo", None)
+    if metodo is None:
+        return None
+    return dict(await metodo(subscription_id, inicio=inicio))

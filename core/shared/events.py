@@ -63,6 +63,21 @@ ON_APPOINTMENT_REMINDER = "appointment.reminder"
 ON_APPOINTMENT_NO_SHOW = "appointment.no_show"
 ON_APPOINTMENT_CHANGED = "appointment.changed"
 ON_SUBSCRIPTION_TRIAL_ENDING = "subscription.trial_ending"
+# HU-SH-04 (ADR-0123): cobro de la plataforma por dos canales con fuente única.
+# - `subscription.charge_paid`: el proveedor de suscripciones marcó pagado el cargo de un
+#   período (en el negocio vendedor). Si la suscripción es la de un negocio aprovisionado, el
+#   core aplica ese período a su `tenant_subscriptions`. payload: charge_id, subscription_id,
+#   customer_id, periodo, periodo_inicio, periodo_fin, dia_ancla, monto, moneda, variant_id,
+#   provider_reference, pago_duplicado.
+ON_SUBSCRIPTION_CHARGE_PAID = "subscription.charge_paid"
+# - `platform.period_paid`: un período del plan del negocio se pagó por el panel (link de la
+#   plataforma). El core marca pagado el cargo del mismo período en el canal asistente
+#   (sincronización inversa). payload: referencia, periodo_inicio, periodo_fin, plan_id.
+ON_PLATFORM_PERIOD_PAID = "platform.period_paid"
+# - `platform.renewal_due`: el job de renovación generó el cobro del período siguiente; el core
+#   avisa por el canal preferido del negocio. payload: referencia, plan_id, plan_nombre, monto,
+#   moneda, periodo_inicio, periodo_fin.
+ON_PLATFORM_RENEWAL_DUE = "platform.renewal_due"
 
 
 class EventBus:

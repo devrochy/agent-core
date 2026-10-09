@@ -28,6 +28,7 @@ from pack_subscriptions.admin_api import router as subscriptions_admin_api_route
 from pack_subscriptions.capability import (
     SubscriptionCapabilityImpl,
     crear_suscripcion_para,
+    reactivar_por_pago,
 )
 from pack_subscriptions.config import SubscriptionConfig
 from pack_subscriptions.models import Subscription, SubscriptionCharge
@@ -87,6 +88,10 @@ class SubscriptionsModule(BaseModule):
         - Reactiva: una `vencida` (o una prueba) pagada vuelve a `activa`, y el período
           siguiente se calcula desde el período pagado.
         - Idempotente: un cargo ya pagado no se vuelve a tocar (el outbox reintenta).
+        - HU-SH-04 (ADR-0123): emite `subscription.charge_paid` por el outbox, en la misma
+          transacción, para que el core aplique el período al plan del negocio si la
+          suscripción es la de un negocio aprovisionado. Si el cargo ya lo había pagado OTRO
+          canal (`pago_externo`), la plata llegó dos veces: se avisa y el evento lo dice.
         """
         if not reference or not reference.startswith("sub-"):
             return
@@ -109,7 +114,27 @@ class SubscriptionsModule(BaseModule):
                         .with_for_update()  # dos entregas a la vez no aplican dos veces
                     )
                 ).scalar_one_or_none()
-                if cargo is None or cargo.estado == "pagado":
+                if cargo is None:
+                    return
+                if cargo.estado == "pagado":
+                    if cargo.pago_externo and cargo.tipo == "periodo":
+                        # Lo pagó otro canal y además se pagó el link del pack: pago doble.
+                        sub_pagada = (
+                            await session.execute(
+                                select(Subscription).where(
+                                    Subscription.tenant_id == tenant_id, Subscription.id == cargo.subscription_id
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        if sub_pagada is not None:
+                            await _emitir_cargo_pagado(
+                                session, cargo, sub_pagada, provider_reference, duplicado=True
+                            )
+                        await _alertar_pago_sin_aplicar(
+                            tenant_id,
+                            cargo,
+                            f"el período ya lo había pagado otro canal ({cargo.pago_externo.get('canal')}): pago doble",
+                        )
                     return
                 if cargo.estado != "pendiente":
                     # Pago de un cargo anulado (p. ej. un cambio de plan reemplazado): no se
@@ -147,21 +172,10 @@ class SubscriptionsModule(BaseModule):
                     await _emitir_activada(session, sub, None, cambio=True)
                     log.info("subs_cambio_de_plan_pagado", reference=reference, plan=sub.concepto)
                     return
-                # Reactiva una vencida, una prueba o una pausada POR MORA (HU-SUB-05);
-                # una pausa que pidió el cliente sigue pausada.
-                reactivable = sub is not None and (
-                    sub.estado in ("vencida", "trialing", "activa")
-                    or (sub.estado == "pausada" and sub.motivo_pausa == "mora")
-                )
-                if sub is not None and reactivable:
-                    sub.estado = "activa"
-                    sub.motivo_pausa = None
-                    inicio = cargo.fecha_vencimiento or datetime.now(UTC)
-                    siguiente = sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla)
-                    if sub.periodo_actual_inicio is None or sub.periodo_actual_inicio < inicio:
-                        sub.periodo_actual_inicio = inicio
-                    if sub.proximo_cargo is None or sub.proximo_cargo < siguiente:
-                        sub.proximo_cargo = siguiente
+                if sub is not None:
+                    reactivar_por_pago(sub, cargo)
+                    if cargo.tipo == "periodo":
+                        await _emitir_cargo_pagado(session, cargo, sub, provider_reference, duplicado=False)
         log.info("subs_charge_pagado", reference=reference)
 
     async def _completion_guardrail(
@@ -185,6 +199,41 @@ class SubscriptionsModule(BaseModule):
                     ),
                 )
         return GuardrailResult(passed=True)
+
+
+async def _emitir_cargo_pagado(
+    session, cargo: SubscriptionCharge, sub: Subscription, provider_reference: str, *, duplicado: bool  # type: ignore[no-untyped-def]
+) -> None:
+    """`subscription.charge_paid` por el outbox, en la misma transacción que el cargo pagado
+    (HU-SH-04, ADR-0123). Trae el período con sus dos bordes y la variante: si la
+    suscripción es la de un negocio aprovisionado por un vendedor, el core aplica ese período
+    al plan del negocio (fuente única). Para el resto de los negocios no hace nada."""
+    from core.events.outbox import emit_domain
+    from core.shared.events import ON_SUBSCRIPTION_CHARGE_PAID
+
+    inicio = cargo.fecha_vencimiento or datetime.now(UTC)
+    fin = sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla)
+    clave = f"sub_charge_paid:{cargo.id}" + (f":dup:{provider_reference}" if duplicado else "")
+    await emit_domain(
+        session,
+        tenant_id=cargo.tenant_id,
+        topic=ON_SUBSCRIPTION_CHARGE_PAID,
+        dedupe_key=clave,
+        payload={
+            "charge_id": str(cargo.id),
+            "subscription_id": str(sub.id),
+            "customer_id": str(sub.customer_id),
+            "periodo": cargo.periodo,
+            "periodo_inicio": inicio.isoformat(),
+            "periodo_fin": fin.isoformat(),
+            "dia_ancla": sub.dia_ancla,
+            "monto": str(cargo.monto),
+            "moneda": sub.moneda,
+            "variant_id": str(sub.variante_id) if sub.variante_id else None,
+            "provider_reference": provider_reference,
+            "pago_duplicado": duplicado,
+        },
+    )
 
 
 def _cambio_no_aplicable(sub: Subscription, cambio: dict[str, Any]) -> str | None:

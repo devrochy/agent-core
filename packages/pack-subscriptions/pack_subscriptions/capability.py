@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from core.db.session import get_session
 from core.shared.logger import get_logger
@@ -104,6 +104,33 @@ def aplicar_plan(sub: Subscription, datos: dict[str, Any], ahora: datetime) -> N
         sub.proximo_cargo = sumar_periodo(ahora, sub.periodicidad, ahora.day)
 
 
+def reactivar_por_pago(sub: Subscription, cargo: SubscriptionCharge, *, fin: datetime | None = None) -> None:
+    """El cargo de un período quedó pagado (por el link del pack o por otro canal): reactiva
+    una vencida, una prueba o una pausada POR MORA (HU-SUB-05; una pausa que pidió el cliente
+    sigue pausada) y el período siguiente se calcula desde el pagado.
+
+    `fin` (HU-SH-04): dónde cortó el período el canal que cobró. Si no coincide con el
+    calendario de la suscripción (el otro canal arrancó un período nuevo), manda ese corte y
+    el día ancla pasa a ser el del período pagado.
+    """
+    reactivable = sub.estado in ("vencida", "trialing", "activa") or (
+        sub.estado == "pausada" and sub.motivo_pausa == "mora"
+    )
+    if not reactivable:
+        return
+    sub.estado = "activa"
+    sub.motivo_pausa = None
+    inicio = cargo.fecha_vencimiento or datetime.now(UTC)
+    siguiente = sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla)
+    if fin is not None and fin != siguiente:
+        sub.dia_ancla = inicio.day
+        siguiente = fin
+    if sub.periodo_actual_inicio is None or sub.periodo_actual_inicio < inicio:
+        sub.periodo_actual_inicio = inicio
+    if sub.proximo_cargo is None or sub.proximo_cargo < siguiente:
+        sub.proximo_cargo = siguiente
+
+
 async def crear_suscripcion_para(
     *, customer_id: uuid.UUID, variante_id: uuid.UUID | None, plan: dict[str, Any], reference: str = ""
 ) -> Subscription:
@@ -137,16 +164,29 @@ async def crear_suscripcion_para(
             ).scalar_one_or_none()
             if previa is not None:
                 return previa
+        estados = Subscription.estado.in_(_ESTADOS_VIGENTES)
+        if precio > 0:
+            # HU-SH-04 (ADR-0123): quien compra un plan pago después de que venció su Free
+            # sigue con SU suscripción (y con su negocio, si lo aprovisionó un vendedor):
+            # antes nacía otra suscripción y el alta automática creaba otro negocio.
+            estados = or_(estados, and_(Subscription.estado == "vencida", Subscription.valor_periodo == 0))
         filtros = [
             Subscription.tenant_id == get_current_tenant_id(),
             Subscription.customer_id == customer_id,
-            Subscription.estado.in_(_ESTADOS_VIGENTES),
+            estados,
             Subscription.deleted_at.is_(None),
         ]
         if config.varias_por_cliente and variante_id is not None:
             # Varias por cliente (ADR-0111): solo cuenta una vigente del MISMO plan.
             filtros.append(Subscription.variante_id == variante_id)
-        existente = (await session.execute(select(Subscription).where(*filtros))).scalars().first()
+        existente = (
+            await session.execute(
+                select(Subscription)
+                .where(*filtros)
+                # Una vigente antes que una Free vencida.
+                .order_by((Subscription.estado == "vencida").asc(), Subscription.created_at.desc())
+            )
+        ).scalars().first()
         now = datetime.now(UTC)
         periodicidad = _periodicidad(plan.get("periodicidad"), config.periodicidad)
         if existente is not None:
@@ -204,7 +244,10 @@ async def _emitir_activada(session, sub: Subscription, referencia: str | None, *
     """`subscription.activated` por el outbox. `referencia` es el pedido que la activó, o
     None si no hubo pedido (activación manual, journeys, cargo de cambio de plan): así el
     alta automática de un negocio (HU-SH-03, ADR-0121) no tiene que adivinar cuáles son
-    referencias internas. `variant_id` dice qué línea del pedido se activó."""
+    referencias internas. `variant_id` dice qué línea del pedido se activó.
+
+    `periodo_inicio`, `proximo_cargo` y `dia_ancla` (HU-SH-04, ADR-0123): el período en curso,
+    para que el plan del negocio aprovisionado corte el período el mismo día."""
     from core.events.outbox import emit_domain
     from core.shared.events import ON_SUBSCRIPTION_ACTIVATED
 
@@ -224,6 +267,9 @@ async def _emitir_activada(session, sub: Subscription, referencia: str | None, *
             "referencia": referencia,
             "cambio_de_plan": cambio,
             "variant_id": str(sub.variante_id) if sub.variante_id else None,
+            "periodo_inicio": sub.periodo_actual_inicio.isoformat() if sub.periodo_actual_inicio else None,
+            "proximo_cargo": sub.proximo_cargo.isoformat() if sub.proximo_cargo else None,
+            "dia_ancla": sub.dia_ancla,
         },
     )
 
@@ -572,3 +618,124 @@ class SubscriptionCapabilityImpl:
             "periodo": periodo,
             "monto": float(cargo.monto or 0),
         }
+
+    # ------------------------------------------------ operaciones opcionales (ADR-0123)
+    async def _sub_bloqueada(self, session, subscription_id: uuid.UUID) -> Subscription:  # type: ignore[no-untyped-def]
+        sub = (
+            await session.execute(
+                select(Subscription)
+                .where(
+                    Subscription.tenant_id == get_current_tenant_id(),
+                    Subscription.id == subscription_id,
+                    Subscription.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if sub is None:
+            raise SubscriptionError("La suscripción no existe.", code="suscripcion_no_encontrada")
+        return sub
+
+    async def _cargo_del_periodo(self, session, sub: Subscription, periodo: str) -> SubscriptionCharge | None:  # type: ignore[no-untyped-def]
+        return (
+            await session.execute(
+                select(SubscriptionCharge)
+                .where(
+                    SubscriptionCharge.tenant_id == get_current_tenant_id(),
+                    SubscriptionCharge.subscription_id == sub.id,
+                    SubscriptionCharge.periodo == periodo,
+                    SubscriptionCharge.tipo == "periodo",
+                    SubscriptionCharge.deleted_at.is_(None),
+                )
+                .order_by(SubscriptionCharge.created_at.asc())
+                .with_for_update()
+            )
+        ).scalars().first()
+
+    async def registrar_pago_externo(
+        self,
+        subscription_id: uuid.UUID,
+        *,
+        inicio: datetime,
+        fin: datetime,
+        referencia: str,
+        canal: str,
+    ) -> dict[str, Any]:
+        """Operación opcional del contrato (HU-SH-04, ADR-0123): el período que empieza en
+        `inicio` lo pagó OTRO canal (p. ej. el panel de la plataforma). Su cargo queda pagado
+        (se crea si todavía no existía) y la suscripción se reactiva como con un pago propio:
+        el asistente no lo vuelve a cobrar ni a recordar. Idempotente por `referencia`.
+
+        Devuelve `{"estado", "periodo", "charge_id"}`. `estado`: `registrado`, `ya_registrado`
+        o `duplicado` (el cargo ya estaba pagado por el link del pack u otro pago).
+        """
+        ahora = datetime.now(UTC)
+        externo = {"canal": canal, "referencia": referencia, "registrado_en": ahora.isoformat()}
+        async with get_session() as session:
+            sub = await self._sub_bloqueada(session, subscription_id)
+            periodo = etiqueta_periodo(inicio, sub.periodicidad)
+            cargo = await self._cargo_del_periodo(session, sub, periodo)
+            if cargo is not None and cargo.estado == "pagado":
+                previo = cargo.pago_externo or {}
+                estado = "ya_registrado" if previo.get("referencia") == referencia else "duplicado"
+                return {"estado": estado, "periodo": periodo, "charge_id": str(cargo.id)}
+            if cargo is None:
+                cargo = SubscriptionCharge(
+                    tenant_id=get_current_tenant_id(),
+                    subscription_id=sub.id,
+                    periodo=periodo,
+                    monto=sub.valor_periodo or 0,
+                    estado="pagado",
+                    fecha_vencimiento=inicio,
+                    pago_externo=externo,
+                )
+                session.add(cargo)
+            else:
+                cargo.estado = "pagado"
+                cargo.pago_externo = externo
+            await session.flush()
+            reactivar_por_pago(sub, cargo, fin=fin)
+            await session.flush()
+            log.info("subs_pago_externo_registrado", subscription_id=str(sub.id), periodo=periodo, canal=canal)
+            return {"estado": "registrado", "periodo": periodo, "charge_id": str(cargo.id)}
+
+    async def cobrar_periodo(self, subscription_id: uuid.UUID, *, inicio: datetime) -> dict[str, Any]:
+        """Operación opcional del contrato (HU-SH-04, ADR-0123): genera YA el cargo del período
+        que empieza en `inicio`, con su link y su aviso al cliente (plantilla fuera de la
+        ventana de 24 h, ADR-0108). Es lo que hace `generar_cargos` cada día, para una
+        suscripción y sin esperar a `dias_anticipacion`. Idempotente por período.
+
+        Devuelve `{"estado", "periodo", "link", "pagado"}`. `estado`: `generado`, `ya_existia`,
+        `no_cobrable` (la suscripción no está activa) o `desalineado` (el próximo período de
+        la suscripción no es el que se pide).
+        """
+        from core.agents.spec import enabled_packs, load_active_spec
+        from core.payments import payment_registry
+        from pack_subscriptions.jobs import generar_cargo_de
+
+        ahora = datetime.now(UTC)
+        cap = payment_registry.capability_for(enabled_packs(await load_active_spec()))
+        config = await _config()
+        async with get_session() as session:
+            sub = await self._sub_bloqueada(session, subscription_id)
+            periodo = etiqueta_periodo(inicio, sub.periodicidad)
+            cargo = await self._cargo_del_periodo(session, sub, periodo)
+            if cargo is not None:
+                return {
+                    "estado": "ya_existia",
+                    "periodo": periodo,
+                    "link": cargo.link_url,
+                    "pagado": cargo.estado == "pagado",
+                }
+            if sub.estado not in ("trialing", "activa") or sub.proximo_cargo is None:
+                return {"estado": "no_cobrable", "periodo": periodo, "motivo": sub.estado}
+            if etiqueta_periodo(sub.proximo_cargo, sub.periodicidad) != periodo:
+                return {
+                    "estado": "desalineado",
+                    "periodo": periodo,
+                    "proximo_cargo": sub.proximo_cargo.isoformat(),
+                }
+            nuevo = await generar_cargo_de(session, get_current_tenant_id(), sub, ahora, cap=cap, config=config)
+            if nuevo is None:
+                return {"estado": "no_cobrable", "periodo": periodo, "motivo": "sin cargo para este período"}
+            return {"estado": "generado", "periodo": periodo, "link": nuevo.link_url, "pagado": False}

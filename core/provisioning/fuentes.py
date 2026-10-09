@@ -43,6 +43,23 @@ class FuenteDeAltas(Protocol):
         ...
 
 
+async def plan_de_la_variante(fuente: FuenteDeAltas | None, variant_id: str | None) -> str | None:
+    """Plan de la plataforma que vende una variante del vendedor (HU-SH-04, ADR-0123).
+
+    Operación opcional de la fuente (`plan_de_variante`): sirve para un cambio de plan o un
+    cargo de período, que no traen un pedido. None si la fuente no la implementa, si la
+    variante no vende un plan de la plataforma o si el plan no existe en el catálogo."""
+    from core.billing.plans import get_plan
+
+    if fuente is None or not variant_id:
+        return None
+    metodo = getattr(fuente, "plan_de_variante", None)
+    if metodo is None:
+        return None
+    plan_id = str(await metodo(str(variant_id)) or "").strip().lower()
+    return plan_id if plan_id and get_plan(plan_id) is not None else None
+
+
 @dataclass
 class FuentesDeAltasRegistry:
     _fuentes: dict[str, FuenteDeAltas] = field(default_factory=dict)
@@ -73,4 +90,4 @@ class FuentesDeAltasRegistry:
 
 fuentes_de_alta = FuentesDeAltasRegistry()
 
-__all__ = ["DatosDeAlta", "FuenteDeAltas", "FuentesDeAltasRegistry", "fuentes_de_alta"]
+__all__ = ["DatosDeAlta", "FuenteDeAltas", "FuentesDeAltasRegistry", "fuentes_de_alta", "plan_de_la_variante"]
