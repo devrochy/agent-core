@@ -507,14 +507,22 @@ async def run_connection_production_checks(connection: Any, tenant_id: uuid.UUID
         wabas = (
             await session.execute(
                 select(WabaAccount)
-                .where(WabaAccount.connection_id == connection.id, WabaAccount.tenant_id == tenant_id)
+                .where(
+                    WabaAccount.connection_id == connection.id,
+                    WabaAccount.tenant_id == tenant_id,
+                    WabaAccount.deleted_at.is_(None),  # ADR-0122: borrado lógico con su conexión
+                )
                 .order_by(WabaAccount.created_at)
             )
         ).scalars().all()
         phones = (
             await session.execute(
                 select(PhoneNumber)
-                .where(PhoneNumber.connection_id == connection.id, PhoneNumber.tenant_id == tenant_id)
+                .where(
+                    PhoneNumber.connection_id == connection.id,
+                    PhoneNumber.tenant_id == tenant_id,
+                    PhoneNumber.deleted_at.is_(None),
+                )
                 .order_by(PhoneNumber.created_at)
             )
         ).scalars().all()

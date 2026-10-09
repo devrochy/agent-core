@@ -15,7 +15,7 @@ Tablas nuevas y vacías: sin reescritura ni bloqueo largo. `purge_tenant` cubre
 `meta_production_checks` sola (descubre las tablas con `tenant_id`).
 
 Revision ID: 0064
-Revises: 0062
+Revises: 0063
 Create Date: 2026-10-09
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from alembic import op
 
 revision = "0064"
-down_revision = "0062"
+down_revision = "0063"
 branch_labels = None
 depends_on = None
 
