@@ -175,6 +175,13 @@ repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev
 
 ## Baja
 
+**Varias integraciones SMTP por negocio, pero se usa una sola**
+Un negocio puede crear varias conexiones `email_smtp`, pero `queue_outbound_email` y `send_email` usan
+siempre la principal o la más nueva (`core/gateway/connections.py:123-140`). No se puede elegir un
+remitente por propósito (ventas, facturación, soporte). Propuesta: un `proposito` en la integración y
+que cada envío pida el suyo, con la principal como respaldo. Encaja con las integraciones con scope de
+Agent OS (ADR-0115). Decidido al enmendar ADR-0123 (2026-10-09).
+
 **`graph_fetch` deja escapar errores de transporte de httpx**
 `core/gateway/meta_graph.py:84-94` solo convierte `TimeoutException` y `ConnectError` en `GraphError`. Un
 `ReadError`/`RemoteProtocolError` sube como excepción no controlada: la ruta da 500 y, con Sentry encendido, el evento

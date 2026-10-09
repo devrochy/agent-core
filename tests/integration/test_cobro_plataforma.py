@@ -803,6 +803,7 @@ async def test_renovacion_por_el_panel_avisa_por_correo(vendedores, correos, ale
     assert any(a["severity"] == "push" and a["tenant_id"] == str(negocio) for a in alertas)
     [avisada] = await _auditoria(negocio, "renovacion_avisada")
     assert (avisada.output["canal"], avisada.output["correos"]) == ("panel", 1)
+    assert avisada.output["remitente"] == "plataforma"  # sin vendedor: SMTP de la plataforma
 
 
 async def test_renovacion_no_cobra_un_periodo_ya_pagado(vendedores, correos, alertas, pasarela) -> None:
@@ -1371,3 +1372,89 @@ async def test_un_plan_activado_por_menos_que_su_precio_no_se_aplica(vendedores,
             variant_id=str(premium),
         )
     assert (await _suscripcion_de(esc.negocio)).period_end == antes.period_end
+
+
+async def _renovacion_por_el_panel_de_un_negocio_del_alta(
+    vendedores: Callable[..., None],
+) -> Escenario:
+    """Negocio del alta automática que paga por el panel, con el período venciendo en 5 días."""
+    from core.admin.invitations_service import aceptar_invitacion
+    from core.billing.renovacion import renovar_negocio
+    from core.db.models import TenantInvitation, TenantSubscription
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    esc = await _negocio_aprovisionado(vendedores, con_pagos=True)
+    # El aviso va a los dueños miembros: el dueño acepta la invitación del alta.
+    async with get_session() as s:
+        inv = (
+            (
+                await s.execute(
+                    select(TenantInvitation).where(TenantInvitation.tenant_id == esc.negocio)
+                )
+            )
+            .scalars()
+            .first()
+        )
+    assert inv is not None
+    assert await aceptar_invitacion(invitation_id=inv.id, admin_id=inv.admin_id) is None
+    ahora = datetime.now(UTC)
+    await _acercar_el_vencimiento(esc, fin=ahora + timedelta(days=5) - timedelta(hours=1))
+    async with tenant_scope(esc.negocio):
+        async with get_session() as s:
+            sub = (
+                await s.execute(
+                    select(TenantSubscription).where(TenantSubscription.tenant_id == esc.negocio)
+                )
+            ).scalar_one()
+            sub.provider = "wompi"  # pagó el último período por el panel
+    assert await renovar_negocio(esc.negocio, now=ahora, dias=5)
+    return esc
+
+
+async def test_renovacion_por_el_panel_sale_por_el_smtp_del_vendedor(
+    vendedores, correos, alertas, monkeypatch
+) -> None:
+    """Enmienda de ADR-0123 (2026-10-09): el aviso de renovación es comunicación del vendedor.
+    Con integración SMTP activa en el vendedor, sale por ella (en el tenant del vendedor) y no
+    por el SMTP de la plataforma."""
+    from core.billing.renovacion import on_platform_renewal_due
+    from core.shared.tenant import get_current_tenant_id
+
+    encolados: list[dict[str, Any]] = []
+
+    async def cola_falsa(to: str, subject: str, body: str) -> str:
+        encolados.append({"tenant": get_current_tenant_id(), "to": to, "body": body})
+        return "msg-vendedor"
+
+    monkeypatch.setattr("core.gateway.outbound_email.queue_outbound_email", cola_falsa)
+    esc = await _renovacion_por_el_panel_de_un_negocio_del_alta(vendedores)
+    await _entregar(esc.negocio, "platform.renewal_due", on_platform_renewal_due)
+
+    assert encolados and all(e["tenant"] == esc.vendedor for e in encolados)
+    assert all("/plan" in e["body"] for e in encolados)
+    # El SMTP de la plataforma no mandó el aviso de renovación (el acceso del alta sí sale por él).
+    assert not [c for c in correos if "vence" in c["subject"]]
+    [avisada] = await _auditoria(esc.negocio, "renovacion_avisada")
+    assert (avisada.output["canal"], avisada.output["remitente"]) == ("panel", "vendedor")
+
+
+async def test_renovacion_por_el_panel_sin_smtp_del_vendedor_usa_el_de_la_plataforma(
+    vendedores, correos, alertas, monkeypatch
+) -> None:
+    """Si el vendedor no tiene una integración de correo activa, el aviso sale por el SMTP de la
+    plataforma (respaldo)."""
+    from core.billing.renovacion import on_platform_renewal_due
+    from core.gateway.outbound_email import EmailOutboxError
+
+    async def sin_conexion(to: str, subject: str, body: str) -> str:
+        raise EmailOutboxError("no_connection")
+
+    monkeypatch.setattr("core.gateway.outbound_email.queue_outbound_email", sin_conexion)
+    esc = await _renovacion_por_el_panel_de_un_negocio_del_alta(vendedores)
+    await _entregar(esc.negocio, "platform.renewal_due", on_platform_renewal_due)
+
+    renovacion = [c for c in correos if "vence" in c["subject"]]
+    assert renovacion and all("/plan" in c["body"] for c in renovacion)
+    [avisada] = await _auditoria(esc.negocio, "renovacion_avisada")
+    assert (avisada.output["canal"], avisada.output["remitente"]) == ("panel", "plataforma")

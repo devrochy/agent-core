@@ -72,8 +72,11 @@ Ningún arreglo automático toca plata: la conciliación solo avisa.
     ni recordatorios.
     Hay que tener mapeada la plantilla de `subscription.charge_created` en el vendedor (Plantillas
     por evento, ADR-0108). Si no, el aviso queda `sin_plantilla` y el panel lo muestra.
-  - Al resto: correo a los dueños con el enlace a `/plan`. Hace falta `SYSTEM_SMTP_*`; sin él solo
-    sale el push.
+  - Al resto: correo a los dueños con el enlace a `/plan`, más un push. Si el negocio vino del alta
+    automática, el correo sale por la **integración SMTP del vendedor** (queda en sus
+    conversaciones de correo). Si el vendedor no tiene una, o el negocio no tiene vendedor, sale por
+    el SMTP de la plataforma (`SYSTEM_SMTP_*`). Sin ningún SMTP, solo sale el push. El
+    `renovacion_avisada` de `audit_log` dice por dónde salió (`remitente`).
 
 ## 5. Una cuenta de Wompi compartida (riesgo R-05)
 

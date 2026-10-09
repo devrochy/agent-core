@@ -309,3 +309,31 @@ botones de cambio de plan. El enrutador de R-05 no depende de ella (§ 9).
   - `pack_payments`: `procesar_evento`.
 - **Documentación:** `docs/BILLING.md`, `docs/despliegue-coolify.md` y
   `docs/runbooks/cobro-de-plataforma.md`.
+
+## Enmienda (2026-10-09): el aviso de renovación sale por el SMTP del vendedor
+
+**Contexto.** El aviso de renovación por el panel salía por el SMTP de la plataforma
+(`SYSTEM_SMTP_*`). Pero lo manda el **vendedor** (el negocio que vende planes, por ejemplo
+`solvershub`) a su cliente: es comunicación comercial suya. Con varios vendedores
+(`PROVISIONING_SELLER_TENANTS` es una lista), el cliente de una agencia recibiría el cobro con el
+remitente de SolversHub.
+
+**Decisión.** Cada correo sale por donde le corresponde:
+
+| Correo | Por dónde | Por qué |
+|---|---|---|
+| Aviso de renovación (canal panel) de un negocio del alta automática | Integración SMTP del **vendedor** (canal de correo saliente, ADR-0071): queda como una conversación de correo del vendedor con ese cliente | Es comunicación comercial del vendedor: su marca y su remitente. No lleva secretos (solo el enlace a `/plan`) |
+| El mismo aviso, si el vendedor no tiene una integración de correo activa, o el negocio no tiene vendedor | SMTP de la plataforma (`SYSTEM_SMTP_*`, ADR-0098) | Respaldo: el aviso no se pierde |
+| Acceso del alta (enlace que define la contraseña, ADR-0121) | SMTP de la plataforma (sin cambio) | Es seguridad de la cuenta, que vive en la plataforma. Por el canal del vendedor, el enlace quedaría guardado en sus conversaciones y lo verían sus colaboradores (el mismo problema que se cerró al sacarlo de WhatsApp) |
+| Recuperación de contraseña | SMTP de la plataforma (sin cambio) | No hay negocio en contexto (ADR-0098) |
+
+`renovacion_avisada` registra el `remitente` (`vendedor` o `plataforma`).
+
+**Fuera de esta enmienda.** Un negocio puede crear varias integraciones SMTP, pero al enviar se usa
+una sola: la principal o la más nueva (`core/gateway/connections.py:123-140`). Elegir el SMTP por
+propósito (ventas, facturación…) es parte de las integraciones de Agent OS (ADR-0115) y queda en
+`docs/BACKLOG.md`.
+
+**Impacto en el código.** `core/billing/renovacion.py` (`_enviar_aviso`) y sus tests en
+`tests/integration/test_cobro_plataforma.py`.
+
