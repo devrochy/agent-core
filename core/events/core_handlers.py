@@ -17,8 +17,9 @@ from core.billing.canales import on_platform_period_paid, on_subscription_charge
 from core.billing.renovacion import on_platform_renewal_due
 from core.db.models import Conversation, Customer
 from core.db.session import get_session
-from core.provisioning.consumer import on_subscription_activated
+from core.provisioning.consumer import on_alta_aprobada, on_subscription_activated
 from core.shared.events import (
+    ON_ALTA_APROBADA,
     ON_APPOINTMENT_CONFIRMED,
     ON_APPOINTMENT_NO_SHOW,
     ON_APPOINTMENT_REMINDER,
@@ -204,6 +205,8 @@ _HANDLERS = (
     # negocio vendedor (allowlist). Para el resto de los negocios no hace nada. Desde
     # HU-SH-04 también sincroniza un cambio de plan del negocio ya creado.
     (ON_SUBSCRIPTION_ACTIVATED, on_subscription_activated),
+    # HU-SH-07 (ADR-0125): un alta en revisión aprobada por el master corre acá.
+    (ON_ALTA_APROBADA, on_alta_aprobada),
     # HU-SH-04 (ADR-0123): cobro de la plataforma por dos canales con fuente única.
     (ON_SUBSCRIPTION_CHARGE_PAID, on_subscription_charge_paid),
     (ON_PLATFORM_PERIOD_PAID, on_platform_period_paid),

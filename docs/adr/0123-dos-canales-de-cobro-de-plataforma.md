@@ -205,6 +205,10 @@ Reemplazan la condición de ADR-0121 § 6. No se enciende hasta cumplir todos:
    apuntando donde corresponde y un pago de cada canal con su efecto (runbook
    `docs/runbooks/cobro-de-plataforma.md` § 5).
 4. **Los criterios de HU-SH-04 verificados a mano en test.**
+5. **Los controles de HU-SH-07** (ADR-0125): términos, privacidad y DPA publicados por el master
+   en Plataforma (con el texto del abogado, HU-GTM-02), el playbook de ventas actualizado
+   (`terminos_pendientes`, `free_no_disponible`, `limite_de_altas`), `checkout_fields.plan` del
+   vendedor con el documento y el teléfono, y los criterios de HU-SH-07 verificados a mano en test.
 
 ### 11. `PROVISIONING_SELLER_TENANTS` en la app y en el worker
 

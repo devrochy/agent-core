@@ -209,6 +209,8 @@ Columnas A/W/B: la variable va en la API, el worker o el beat. Fuente de verdad 
 | `WOMPI_BILLING_SANDBOX` | ✓ | ✓ | ✓ | `false` solo con llaves de producción |
 | `SYSTEM_SMTP_HOST`, `SYSTEM_SMTP_PORT`, `SYSTEM_SMTP_USERNAME`, `SYSTEM_SMTP_PASSWORD`, `SYSTEM_SMTP_FROM` | ✓ | ✓ | ✓ | proveedor de correo (buzones de HU-GTM-01) |
 | `PROVISIONING_SELLER_TENANTS` | ✓ | ✓ | — | fijo: **vacía** hasta cumplir los requisitos de ADR-0123 § 10 (canal preferido respetado y `dias_anticipacion` del vendedor = `BILLING_DIAS_RENOVACION`, variable en app y worker, R-05 verificado en el sandbox de Wompi, criterios verificados en test); después, el UUID de `solvershub`. **Obligatoria en la API y en el worker con el mismo valor** (ADR-0123 § 11, enmienda de ADR-0121 § 2): el worker corre el despachador del outbox y la API la usa en `/plan` para reconocer el canal asistente. El correo con el acceso necesita `SYSTEM_SMTP_*`. Altas en revisión: `docs/runbooks/altas-en-revision.md` |
+| `ALTA_PEDIDOS_POR_HORA` | ✓ | — | — | opcional (default `3`): pedidos de planes de la plataforma por hora desde un mismo cliente del chat en un vendedor; pasado el cupo, la tool responde `limite_de_altas` (HU-SH-07, ADR-0125). Usa Redis |
+| `ALTA_INTENTOS_REVISION` | ✓ | ✓ | — | opcional (default `3`): pedidos de alta de la misma persona (cliente, teléfono o documento) en 24 h a partir de los cuales el alta va a revisión (HU-SH-07, ADR-0125). Mismo valor en la API y en el worker (el consumidor corre en el worker; `reintentar-alta` y la aprobación, en la API) |
 | `BILLING_WOMPI_EVENTOS_TENANT` | ✓ | — | — | ADR-0123 (riesgo R-05): Wompi admite una URL de eventos por cuenta y ambiente. Si la plataforma y el pack de pagos de `solvershub` comparten cuenta, la URL de eventos es `https://<host>/webhooks/billing/wompi` y esta variable lleva el UUID de `solvershub`; con cuentas separadas, vacía. Con una configuración inválida el webhook responde 500 para que Wompi reintente (`billing_webhook_apply_failed`). Ver `docs/runbooks/cobro-de-plataforma.md` |
 | `BILLING_DIAS_RENOVACION` | ✓ | ✓ | ✓ | `5` (por defecto): días antes del fin del período en que se genera el cobro siguiente. Igual a `dias_anticipacion` de Suscripciones del negocio vendedor (la conciliación avisa si difieren) |
 | `EXPO_PUSH_ENABLED`, `EXPO_PUSH_URL`, `EXPO_PUSH_ACCESS_TOKEN` | ✓ | ✓ | ✓ | `EXPO_PUSH_ENABLED=false` hasta que la app oficial pase a producción |
@@ -265,7 +267,7 @@ dueño. Si se pierde el Coolify de `prod-app`, se reconstruye con este inventari
 
 | Secreto | Cómo se rota | Qué se redespliega | Efecto |
 | --- | --- | --- | --- |
-| `APP_SECRET_KEY` | generar y reemplazar | api, worker, beat | se cierran las sesiones del panel |
+| `APP_SECRET_KEY` | generar y reemplazar | api, worker, beat | se cierran las sesiones del panel; cambian las huellas del antiabuso del alta (ADR-0125): durante 12 meses un Free anterior deja de reconocerse por teléfono o documento |
 | Clave de `TOKEN_MASTER_KEYS` | agregar una clave con id nuevo y apuntar `TOKEN_ACTIVE_KEY_ID` a ella; la vieja **se queda** mientras haya filas cifradas con ella (no hay re-cifrado masivo: cada fila se re-cifra al guardarse) | api, worker, beat | ninguno |
 | Clave de `app_runtime` | `ALTER ROLE` con `\password` en `psql` y luego `DATABASE_URL` | api, worker, beat | corte breve |
 | Clave de `agent_core_migrations` | `ALTER ROLE` y `MIGRATIONS_DATABASE_URL` | api | ninguno |

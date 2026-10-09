@@ -162,6 +162,26 @@ celery.conf.beat_schedule[_MEMORY_RETENTION_TASK] = {
     "schedule": crontab(hour="3", minute="45"),
 }
 
+# Antiabuso del alta (HU-SH-07, ADR-0125): las huellas de teléfono y documento de los
+# pedidos de alta se vacían a los 12 meses (ya no sirven para ninguna regla).
+_ALTA_HUELLAS_RETENCION_TASK = "core.alta_huellas_retencion"
+
+
+@celery.task(name=_ALTA_HUELLAS_RETENCION_TASK)
+def _alta_huellas_retencion() -> None:
+    from core.provisioning.antiabuso import olvidar_huellas_vencidas
+
+    try:
+        run_async(olvidar_huellas_vencidas())
+    except Exception:
+        log.exception("cron_task_failed", task=_ALTA_HUELLAS_RETENCION_TASK)
+
+
+celery.conf.beat_schedule[_ALTA_HUELLAS_RETENCION_TASK] = {
+    "task": _ALTA_HUELLAS_RETENCION_TASK,
+    "schedule": crontab(hour="4", minute="10"),
+}
+
 # Heartbeat del worker (cada 1 min) -- la única forma de que el checklist
 # de la plataforma (core/gateway/meta_production_readiness.py::
 # check_worker_heartbeat_and_dlq) sepa que el worker de Celery está vivo,

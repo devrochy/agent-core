@@ -55,8 +55,9 @@ forbidden_modules =
 # ADR-0121 (HU-SH-03, «Sin el LLM»): crear negocios es solo del master (panel, API de
 # plataforma, CLI) y del consumidor del core sobre `subscription.activated`. Ninguna tool
 # (core o pack), ni el host MCP, ni el loop del LLM importan el alta: `core.alta_negocio`
-# (`onboard_tenant`), el consumidor ni el owner. Los packs solo pueden usar el contrato
-# `core.provisioning.fuentes`, y `core.onboarding` (utilidades de artefactos) sigue libre.
+# (`onboard_tenant`), el consumidor ni el owner. Los packs pueden usar `core.provisioning.fuentes`
+# y `core.provisioning.antiabuso` (HU-SH-07), que no llegan al alta (contrato
+# `antiabuso-sin-alta`), y `core.onboarding` (utilidades de artefactos) sigue libre.
 [importlinter:contract:alta-fuera-del-llm]
 name = Las tools y los packs no dan de alta negocios
 type = forbidden
@@ -78,3 +79,27 @@ forbidden_modules =
 # (crons y push), y el despachador registra el consumidor. Lo que importa es que ninguna
 # tool lo llame; `tests/test_provisioning_sin_llm.py` lo revisa también dentro de funciones.
 allow_indirect_imports = True
+
+# ADR-0125 (HU-SH-07): lo que un pack o una ruta de la API usan del aprovisionamiento no llega
+# al alta, ni siquiera de forma indirecta: así el camino pack → antiabuso → consumidor no existe.
+[importlinter:contract:antiabuso-sin-alta]
+name = Lo que usan los packs y la API del aprovisionamiento no da de alta negocios
+type = forbidden
+source_modules =
+    core.provisioning.fuentes
+    core.provisioning.antiabuso
+    core.provisioning.legal
+    core.provisioning.interruptor
+    core.provisioning.revision
+    core.provisioning.vendedores
+forbidden_modules =
+    core.alta_negocio
+    core.provisioning.consumer
+    core.provisioning.owner
+# El único eslabón que se ignora es el registro del consumidor como suscriptor del outbox
+# (`core.events.core_handlers` lo enlaza a `subscription.activated`). Por ese registro no se
+# llama al alta: el alta corre solo cuando llega el evento. Sin esta excepción, cualquier
+# módulo que toque `core.agents.spec` (que llega a `core.tasks.celery_app` por los packs)
+# rompería el contrato. Todo otro camino, directo o indirecto, sigue prohibido.
+ignore_imports =
+    core.events.core_handlers -> core.provisioning.consumer
