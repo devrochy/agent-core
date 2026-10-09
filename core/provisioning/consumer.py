@@ -459,6 +459,9 @@ async def _dar_de_alta(
     aviso.update(email=email, negocio=negocio, nombre=nombre)
     huella = huella_del_correo(email)
     await _guardar_detalle(vendedor, registro.id, correo=huella)
+    # El plan queda en la fila desde ya: quien revisa la cola lo ve antes de aprobar.
+    async with get_session() as session:
+        (await _fila(session, vendedor, registro.id)).plan_id = plan.id
     # Una persona ya revisó y aprobó esta alta: no vuelve a revisión por lo mismo (ADR-0125).
     # Si no, se juntan TODOS los motivos, así quien la revisa los ve todos antes de aprobar.
     if not (registro.detalle or {}).get("aprobacion"):
