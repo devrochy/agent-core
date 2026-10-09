@@ -20,3 +20,10 @@
 - **Obsoletas** (se mantienen para la app móvil): `GET /admin/meta/checklist/production` y
   `POST /admin/meta/checklist/production/run`. La segunda ya no corre los checks de la plataforma ni nada
   en el request: encola la revisión de cada conexión y devuelve lo guardado.
+- **Tras la revisión de seguridad:** espera mínima de 60 s entre corridas terminadas (cada una llama a
+  Meta); el worker solo toma corridas en cola y vigentes, con tope de 240 s; el servicio exige master
+  para la plataforma y un test impide usar `platform_readiness_runs` fuera de su servicio; el GET al
+  override de webhook de un número solo va a hosts públicos por HTTPS (anti-SSRF, `ScopedHttp`); los
+  detalles guardados ya no llevan el texto de excepciones de red ni el cuerpo crudo de una respuesta no
+  JSON de Meta; y "Requisitos de Meta" ya no muestra a un negocio los datos de la app de la plataforma
+  (nombre, suscripciones, `config_id`): eso queda en "Plataforma → App de Meta".

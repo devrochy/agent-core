@@ -237,8 +237,20 @@ async def test_otro_negocio_no_ve_ni_corre_la_produccion_de_una_conexion_ajena(a
     assert r.status_code == 404, r.text
     assert encolados == []
 
-    # El worker tampoco ejecuta una corrida con el negocio equivocado.
-    await execute_connection_run(uuid.UUID(run_a["run_id"]), tid_b)
+    # El worker tampoco toma una corrida en cola si le llega con el negocio equivocado.
+    async with tenant_scope(tid_a):
+        async with get_session() as session:
+            en_cola = MetaProductionCheck(tenant_id=tid_a, connection_id=cid_a, status="queued", checks=[])
+            session.add(en_cola)
+            await session.flush()
+            en_cola_id = en_cola.id
+    llamadas = _meta_falso(monkeypatch)
+    await execute_connection_run(en_cola_id, tid_b)
+    assert llamadas == []
+    async with tenant_scope(tid_a):
+        async with get_session() as session:
+            fila = await session.get(MetaProductionCheck, en_cola_id)
+    assert fila.status == "queued" and fila.started_at is None
 
     # RLS: el negocio B no ve las corridas de A.
     async with tenant_scope(tid_b):
@@ -278,6 +290,26 @@ async def test_pedir_otra_corrida_mientras_una_esta_en_curso_devuelve_la_misma(a
     tercera = (await app_client.post(_url(cid, run=True), headers=headers)).json()
     assert tercera["run_id"] != primera["run_id"]
     assert tercera["status"] == "queued"
+
+
+@pytest.mark.aislamiento
+async def test_una_corrida_recien_terminada_no_se_repite_enseguida(app_client, monkeypatch):
+    """Cada revisión llama a Meta: tras una terminada hay una espera mínima."""
+    from core.admin.production_readiness_service import execute_connection_run
+
+    tid = await _tenant()
+    cid, _app, _secreto = await _conexion_byok(tid)
+    headers = await api_headers(app_client, tid)
+    encolados = _cola_falsa(monkeypatch)
+    _meta_falso(monkeypatch)
+
+    primera = (await app_client.post(_url(cid, run=True), headers=headers)).json()
+    await execute_connection_run(uuid.UUID(primera["run_id"]), tid)
+    segunda = (await app_client.post(_url(cid, run=True), headers=headers)).json()
+
+    assert segunda["run_id"] == primera["run_id"]
+    assert segunda["status"] == "done"
+    assert len(encolados) == 1
 
 
 async def test_sin_numeros_ni_plantillas_de_avisos_aprobadas_no_esta_lista(app_client, monkeypatch):
@@ -385,12 +417,16 @@ async def test_la_corrida_de_plataforma_es_un_job_y_queda_guardada_con_fecha(app
     from core.db.session import get_session
     from core.gateway.meta_preflight import PreflightCheck
 
-    # Una sola corrida activa en toda la base: se cierran las que hayan quedado de otros tests.
+    # Una sola corrida activa en toda la base y espera mínima tras una terminada: se cierran y
+    # se envejecen las que hayan quedado de otros tests.
     async with get_session() as session:
         await session.execute(
             update(PlatformReadinessRun)
             .where(PlatformReadinessRun.status.in_(("queued", "running")))
             .values(status="failed", error="test")
+        )
+        await session.execute(
+            update(PlatformReadinessRun).values(finished_at=datetime.now(UTC) - timedelta(hours=1))
         )
     tid = await _tenant()
     headers = await api_headers(app_client, tid)  # admin@local es master

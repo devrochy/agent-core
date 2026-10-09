@@ -1488,6 +1488,13 @@ class PlatformReadinessRun(Base):
             "status in ('queued','running','done','failed')", name="ck_platform_readiness_runs_status"
         ),
         Index("ix_platform_readiness_runs_requested_at", "requested_at"),
+        # Una sola corrida activa: índice único sobre una constante, parcial a las activas.
+        Index(
+            "uq_platform_readiness_runs_activa",
+            text("(true)"),
+            unique=True,
+            postgresql_where=text("status in ('queued','running')"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

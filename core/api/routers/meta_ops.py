@@ -796,7 +796,9 @@ async def checklist_requirements(
     async with get_session() as session:
         tenant = await session.get(Tenant, principal.tenant_id)
         slug = tenant.slug if tenant else ""
-    checks = await run_preflight(principal.tenant_id, slug)
+    checks = await run_preflight(
+        principal.tenant_id, slug, include_platform_app=principal.admin.role == "master"
+    )
     return ChecklistOut(
         steps=steps,
         checks=[PreflightOut(key=c.key, ok=c.ok, detail=c.detail) for c in checks],

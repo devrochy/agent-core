@@ -69,7 +69,7 @@ async def test_requisitos_separan_pasos_manuales_y_checks_automaticos(app_client
     tid = await _new_tenant()
     headers = await api_headers(app_client, tid)
 
-    async def _fake_run_preflight(tenant_id, slug=""):
+    async def _fake_run_preflight(tenant_id, slug="", **_kw):
         return _fake_preflight_checks(ok=False)
 
     monkeypatch.setattr(preflight_mod, "run_preflight", _fake_run_preflight)

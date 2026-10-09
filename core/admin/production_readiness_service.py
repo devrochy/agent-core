@@ -14,7 +14,9 @@ revisión lenta de Meta o de la infraestructura nunca bloquea el event loop de l
 
 Una sola corrida activa (`queued`/`running`) por conexión y una para la plataforma (índices
 únicos parciales): pedir otra mientras corre devuelve la que está en curso. Una corrida activa
-de más de `STALE_AFTER` se da por perdida (worker caído) y deja pedir otra.
+de más de `STALE_AFTER` se da por perdida (worker caído) y deja pedir otra. Tras una corrida
+terminada hay `COOLDOWN` de espera: cada revisión llama a Meta, y en Embedded Signup con la
+app de la plataforma, cuya cuota comparten todos los negocios.
 
 Único punto de escritura de las dos tablas.
 """
@@ -42,6 +44,10 @@ log = get_logger(__name__)
 ACTIVE_STATUSES = ("queued", "running")
 # El job tiene `task_time_limit=300`: pasado el doble, la corrida ya no va a terminar.
 STALE_AFTER = timedelta(minutes=10)
+# Espera mínima entre corridas terminadas: pedir otra antes devuelve la última.
+COOLDOWN = timedelta(seconds=60)
+# Tope de una corrida en el worker (por debajo del `task_time_limit=300` de Celery).
+RUN_TIMEOUT_S = 240
 STALE_ERROR = "La revisión no terminó a tiempo (el worker no respondió). Vuelve a intentarlo."
 ENQUEUE_ERROR = "No se pudo encolar la revisión. Vuelve a intentarlo en unos minutos."
 INTERNAL_ERROR = "La revisión falló por un error interno. Vuelve a intentarlo."
@@ -53,6 +59,10 @@ _SIN_PRODUCCION = ("revoked", "draft")
 
 class ConnectionNotFound(Exception):
     """La conexión no existe, es de otro negocio o está borrada."""
+
+
+class NotMaster(Exception):
+    """La plataforma solo la ve y la revisa el master."""
 
 
 class EnqueueFailed(Exception):
@@ -163,6 +173,22 @@ async def request_connection_run(
             ).scalar_one_or_none()
             if active is not None:
                 return active, False
+            recent = (
+                await session.execute(
+                    select(MetaProductionCheck)
+                    .where(
+                        MetaProductionCheck.tenant_id == tenant_id,
+                        MetaProductionCheck.connection_id == connection_id,
+                        MetaProductionCheck.status == "done",
+                        MetaProductionCheck.finished_at > utcnow() - COOLDOWN,
+                        MetaProductionCheck.deleted_at.is_(None),
+                    )
+                    .order_by(MetaProductionCheck.finished_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if recent is not None:
+                return recent, False
             run = MetaProductionCheck(
                 tenant_id=tenant_id, connection_id=connection_id, status="queued", requested_by=admin_id,
                 requested_at=utcnow(), checks=[],
@@ -231,7 +257,10 @@ async def execute_connection_run(run_id: uuid.UUID, tenant_id: uuid.UUID) -> Non
                     .where(
                         MetaProductionCheck.id == run_id,
                         MetaProductionCheck.tenant_id == tenant_id,
-                        MetaProductionCheck.status.in_(ACTIVE_STATUSES),
+                        # Solo una en cola y vigente: una re-entrega de Celery (acks tardíos) no
+                        # vuelve a correr la que ya está corriendo.
+                        MetaProductionCheck.status == "queued",
+                        MetaProductionCheck.requested_at > utcnow() - STALE_AFTER,
                     )
                     .values(status="running", started_at=utcnow())
                     .returning(MetaProductionCheck.connection_id)
@@ -247,7 +276,7 @@ async def execute_connection_run(run_id: uuid.UUID, tenant_id: uuid.UUID) -> Non
             await _finish_connection_run(tenant_id, run_id, status="failed", error=CONNECTION_GONE_ERROR)
             return
         try:
-            checks = await run_connection_production_checks(connection, tenant_id)
+            checks = await asyncio.wait_for(run_connection_production_checks(connection, tenant_id), RUN_TIMEOUT_S)
         except Exception:
             log.exception("production_check_failed", run_id=str(run_id), tenant_id=str(tenant_id))
             await _finish_connection_run(tenant_id, run_id, status="failed", error=INTERNAL_ERROR)
@@ -287,7 +316,14 @@ async def live_connection_ids(tenant_id: uuid.UUID) -> list[uuid.UUID]:
 
 
 # ------------------------------------------------------------------------ plataforma
-async def latest_platform_run() -> PlatformReadinessRun | None:
+def _require_master(admin: Any) -> None:
+    """Defensa en profundidad: la ruta ya lo exige, pero el servicio no confía en eso."""
+    if getattr(admin, "role", None) != "master":
+        raise NotMaster("Solo el admin de plataforma ve la App de Meta.")
+
+
+async def latest_platform_run(admin: Any) -> PlatformReadinessRun | None:
+    _require_master(admin)
     async with get_session() as session:
         return (
             await session.execute(
@@ -305,9 +341,12 @@ async def _active_platform_run() -> PlatformReadinessRun | None:
         ).scalar_one_or_none()
 
 
-async def request_platform_run(admin_id: uuid.UUID | None) -> tuple[PlatformReadinessRun, bool]:
-    """Registra y encola una corrida de la plataforma. Solo para el master (lo exige la ruta)."""
+async def request_platform_run(admin: Any) -> tuple[PlatformReadinessRun, bool]:
+    """Registra y encola una corrida de la plataforma. Solo el master."""
     from core.tasks.production_readiness import run_platform_readiness_task
+
+    _require_master(admin)
+    admin_id = admin.id
 
     try:
         async with get_session() as session:
@@ -326,6 +365,19 @@ async def request_platform_run(admin_id: uuid.UUID | None) -> tuple[PlatformRead
             ).scalar_one_or_none()
             if active is not None:
                 return active, False
+            recent = (
+                await session.execute(
+                    select(PlatformReadinessRun)
+                    .where(
+                        PlatformReadinessRun.status == "done",
+                        PlatformReadinessRun.finished_at > utcnow() - COOLDOWN,
+                    )
+                    .order_by(PlatformReadinessRun.finished_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if recent is not None:
+                return recent, False
             run = PlatformReadinessRun(status="queued", requested_by=admin_id, requested_at=utcnow(), checks=[])
             session.add(run)
             await session.flush()
@@ -375,7 +427,11 @@ async def execute_platform_run(run_id: uuid.UUID) -> None:
         claimed = (
             await session.execute(
                 update(PlatformReadinessRun)
-                .where(PlatformReadinessRun.id == run_id, PlatformReadinessRun.status.in_(ACTIVE_STATUSES))
+                .where(
+                    PlatformReadinessRun.id == run_id,
+                    PlatformReadinessRun.status == "queued",
+                    PlatformReadinessRun.requested_at > utcnow() - STALE_AFTER,
+                )
                 .values(status="running", started_at=utcnow())
                 .returning(PlatformReadinessRun.id)
             )
@@ -384,7 +440,7 @@ async def execute_platform_run(run_id: uuid.UUID) -> None:
         log.info("platform_readiness_skipped", run_id=str(run_id))
         return
     try:
-        checks = await run_platform_checks()
+        checks = await asyncio.wait_for(run_platform_checks(), RUN_TIMEOUT_S)
     except Exception:
         log.exception("platform_readiness_failed", run_id=str(run_id))
         await _finish_platform_run(run_id, status="failed", error=INTERNAL_ERROR)

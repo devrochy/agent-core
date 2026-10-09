@@ -248,11 +248,11 @@ class PlatformMetaApp(ReadinessRun):
     meta_app_id: str = ""
 
 
-async def _platform_meta_app() -> PlatformMetaApp:
+async def _platform_meta_app(principal: Principal) -> PlatformMetaApp:
     from core.admin.production_readiness_service import latest_platform_run
     from core.config import get_settings
 
-    run = await latest_platform_run()
+    run = await latest_platform_run(principal.admin)
     return PlatformMetaApp(meta_app_id=get_settings().meta_app_id or "", **readiness_run_out(run))
 
 
@@ -264,7 +264,7 @@ async def get_platform_meta_app(
     plataforma e infraestructura: webhook, suscripciones de la app, App Secret, claves de
     cifrado, worker, RLS. No corre nada: para revisar, `POST /meta-app/run`."""
     _require_master(principal)
-    return await _platform_meta_app()
+    return await _platform_meta_app(principal)
 
 
 @router.post("/meta-app/run", response_model=PlatformMetaApp, status_code=202)
@@ -277,7 +277,7 @@ async def run_platform_meta_app(
 
     _require_master(principal)
     try:
-        await readiness.request_platform_run(principal.admin.id)
+        await readiness.request_platform_run(principal.admin)
     except readiness.EnqueueFailed as exc:
         raise ApiError(503, "enqueue_failed", str(exc)) from exc
-    return await _platform_meta_app()
+    return await _platform_meta_app(principal)

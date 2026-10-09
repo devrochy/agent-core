@@ -118,8 +118,11 @@ def classify_and_build_error(
     un 429) -- en ese caso no hay `error.code` que clasificar, se trata como
     PERMANENT con el texto crudo truncado."""
     if body is None:
+        # El cuerpo crudo (HTML de un proxy o CDN) va solo al log: el mensaje se muestra y se
+        # guarda en el panel (HU-CONN-07).
+        log.warning("graph_respuesta_no_json", http_status=http_status, body=raw_text[:500])
         return GraphError(
-            f"Respuesta no-JSON de Meta (HTTP {http_status}): {raw_text[:500]}",
+            f"Respuesta no-JSON de Meta (HTTP {http_status})",
             category="PERMANENT",
             http_status=http_status,
         )

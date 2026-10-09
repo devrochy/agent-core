@@ -487,9 +487,8 @@ async def check_minimum_templates(
             checked_at=now, repair_action="manage_templates",
         )
     avisos = f"; las {len(required)} de los avisos están aprobadas" if required else ""
-    return PreflightCheck(
-        key="templates_approved", ok=True, detail=f"{len(approved)} plantillas aprobadas{avisos}.", checked_at=now
-    )
+    cuantas = "1 plantilla aprobada" if len(approved) == 1 else f"{len(approved)} plantillas aprobadas"
+    return PreflightCheck(key="templates_approved", ok=True, detail=f"{cuantas}{avisos}.", checked_at=now)
 
 
 async def run_connection_production_checks(connection: Any, tenant_id: uuid.UUID) -> list[PreflightCheck]:
