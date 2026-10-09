@@ -689,6 +689,13 @@ class CalendarSkill(BaseSkill):
                 "message": "Ese horario acaba de ocuparse. Ofrecé uno de free_slots.",
                 "free_slots": alternativas.get("free_slots", []),
             }
+        if appt_id is None and source != "google":
+            # En modo interno la fila ES la cita: sin fila no hay cita, y el cliente no
+            # puede leer "quedó agendada".
+            return {
+                "error": "No se pudo guardar la cita. Pedile disculpas al cliente y ofrecé intentarlo de nuevo.",
+                "status": "failed",
+            }
         await self._record_event(
             action="programada",
             title=title,
@@ -743,43 +750,63 @@ class CalendarSkill(BaseSkill):
 
             get_logger(__name__).warning("calendar_mirror_sin_tenant")
             return None
-        try:
-            from core.db.session import get_session
-            from pack_calendar.models import Appointment
+        from pack_calendar.demo import HorarioOcupado, es_bloqueo_mutuo, es_solape
 
-            async with get_session() as session:
-                row = Appointment(
-                    tenant_id=tenant_id,
-                    conversation_id=_as_uuid(context.conversation_id),
-                    customer_id=_as_uuid(context.customer_id),
-                    appointment_type_id=appointment_type_id,
-                    google_event_id=google_event_id,
-                    title=title or str(arguments.get("title", "Cita")),
-                    attendee_email=(
-                        str(arguments["attendee_email"])
-                        if arguments.get("attendee_email")
-                        else None
-                    ),
-                    start_at=start,
-                    end_at=end,
-                    status="scheduled",
-                    created_by="assistant",
-                    timezone=await self._timezone_name(),
-                    asignado_admin_id=asignado_admin_id,
+        for intento in range(3):
+            try:
+                return await self._insertar_cita(
+                    tenant_id, arguments, context, start, end, google_event_id, appointment_type_id, title, asignado_admin_id
                 )
-                session.add(row)
-                await session.flush()
-                return row.id
-        except Exception as exc:  # nunca tumbar el agendamiento real por el espejo
-            from pack_calendar.demo import HorarioOcupado, es_solape
+            except Exception as exc:  # nunca tumbar el agendamiento real por el espejo
+                if es_solape(exc):
+                    # En modo interno la fila ES la cita: otra reserva ganó el horario.
+                    raise HorarioOcupado from exc
+                if es_bloqueo_mutuo(exc) and intento < 2:
+                    continue  # dos reservas a la vez: al reintentar, la base dice quién ganó
+                from core.shared.logger import get_logger
 
-            if es_solape(exc):
-                # En modo interno la fila ES la cita: otra reserva ganó el horario.
-                raise HorarioOcupado from exc
-            from core.shared.logger import get_logger
+                get_logger(__name__).warning("calendar_mirror_failed", exc_info=True)
+                return None
+        return None
 
-            get_logger(__name__).warning("calendar_mirror_failed", exc_info=True)
-            return None
+    async def _insertar_cita(
+        self,
+        tenant_id: uuid.UUID,
+        arguments: dict[str, Any],
+        context: ToolContext,
+        start: datetime,
+        end: datetime,
+        google_event_id: str | None,
+        appointment_type_id: uuid.UUID | None,
+        title: str,
+        asignado_admin_id: uuid.UUID | None,
+    ) -> uuid.UUID:
+        from core.db.session import get_session
+        from pack_calendar.models import Appointment
+
+        async with get_session() as session:
+            row = Appointment(
+                tenant_id=tenant_id,
+                conversation_id=_as_uuid(context.conversation_id),
+                customer_id=_as_uuid(context.customer_id),
+                appointment_type_id=appointment_type_id,
+                google_event_id=google_event_id,
+                title=title or str(arguments.get("title", "Cita")),
+                attendee_email=(
+                    str(arguments["attendee_email"])
+                    if arguments.get("attendee_email")
+                    else None
+                ),
+                start_at=start,
+                end_at=end,
+                status="scheduled",
+                created_by="assistant",
+                timezone=await self._timezone_name(),
+                asignado_admin_id=asignado_admin_id,
+            )
+            session.add(row)
+            await session.flush()
+            return row.id
 
     async def _record_event(
         self,
