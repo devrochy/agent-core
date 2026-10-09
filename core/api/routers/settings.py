@@ -40,6 +40,7 @@ from core.llm.difficulty_router import (
 )
 from core.llm.prompt_builder import DEFAULT_TIMEZONE
 from core.mcp.host import mcp_host
+from core.orchestrator.verificador import TOGGLES, normalizar_desactivados
 
 router = APIRouter(prefix="/admin/settings", tags=["admin · configuración"])
 
@@ -188,8 +189,11 @@ async def _load_app_settings(tenant_id) -> AppSettings | None:
 
 
 def _available_guardrails(spec) -> list[str]:
+    """Guardrails de los packs habilitados más los interruptores del verificador
+    del core (ADR-0119): sin ellos, guardar la configuración borraría lo que el
+    negocio había apagado."""
     enabled = enabled_packs(spec)
-    return sorted(g.name for g in mcp_host.get_guardrails() if g.plugin_id in enabled)
+    return sorted({g.name for g in mcp_host.get_guardrails() if g.plugin_id in enabled} | set(TOGGLES))
 
 
 def _normalize_origins(origins: list[str]) -> list[str]:
@@ -244,7 +248,7 @@ def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) 
         timezone=(app_settings.timezone if app_settings and app_settings.timezone else DEFAULT_TIMEZONE),
         guardrail_max_retries=int(behavior.get("guardrail_max_retries", 1) or 0),
         guardrail_fail_action="neutral" if behavior.get("guardrail_fail_action") == "neutral" else "escalate",
-        disabled_guardrails=list(behavior.get("disabled_guardrails", []) or []),
+        disabled_guardrails=normalizar_desactivados(behavior.get("disabled_guardrails", [])),
         available_guardrails=available,
         difficulty_long_message_threshold=int(
             behavior.get("difficulty_long_message_threshold", LONG_MESSAGE_THRESHOLD)
@@ -336,7 +340,7 @@ async def save_identity(
             else "un_mensaje",
             # Mismo rango que aplica el loop (`core/orchestrator/loop.py`).
             guardrail_max_retries=max(0, min(5, payload.guardrail_max_retries)),
-            disabled_guardrails=sorted(set(available) & set(payload.disabled_guardrails)),
+            disabled_guardrails=sorted(set(available) & set(normalizar_desactivados(payload.disabled_guardrails))),
             difficulty_long_message_threshold=max(
                 50, min(5000, payload.difficulty_long_message_threshold)
             ),
