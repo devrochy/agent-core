@@ -51,3 +51,22 @@ ADR-0009).
 
 `evals/runner.py` (fixture de spec), golden set (`evals/golden_scenarios/`), CLI
 (`cli/commands/agent.py`), GitHub Actions (gate de CI).
+
+## Adenda (2026-10-09, HU-SH-08)
+
+Para un asistente cuyos artefactos viven en `TENANTS_ROOT` (playbooks, flujo, voz de marca, catálogo; ADR-0026 y
+ADR-0109), el pipeline de esta decisión se cumple así:
+
+- **Release candidato:** el spec y también los artefactos del negocio en su repo (para SolversHub,
+  `solvershub-comercial/tenants/solvershub/`).
+- **Gate de evals y tenant de staging:** `evals/journeys.py --tenant <slug>` arma una réplica efímera del negocio
+  con los artefactos del checkout y corre sus journeys. En cada PR del repo del negocio corre el subconjunto
+  estable con k = 8 y umbral 95 % sobre pass@1 (ADR-0119) contra la versión del motor en producción. Si no pasa,
+  el PR no se mergea. El set completo corre cada noche contra `develop`, y la release del motor lo lanza con el
+  tag candidato. El workflow vive en el repo del negocio, no en el framework.
+- **Rollback:** revert del PR en el repo del negocio y reaplicar los artefactos (runbook del negocio). Activar una
+  versión del spec con `agent-core agent rollback --version X` solo si el cambio creó una versión nueva.
+- **Fuera del gate:** los cambios hechos desde el panel (modelo, persona o spec). Siguen con el rollback en un clic
+  de ADR-0051. ADR-0117 (propuesto) los cubrirá con releases por conexión, cuyo build congela estos mismos
+  artefactos.
+
