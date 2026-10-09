@@ -5614,6 +5614,517 @@
         }
       }
     },
+    "/api/v1/admin/platform/altas-automaticas": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Listar Vendedores",
+        "description": "Cada negocio de la allowlist con su interruptor, documentos y altas en revisión.",
+        "operationId": "listar_vendedores_api_v1_admin_platform_altas_automaticas_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/VendedorAltas"
+                  },
+                  "title": "Response Listar Vendedores Api V1 Admin Platform Altas Automaticas Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/altas-automaticas/{vendedor_id}/interruptor": {
+      "put": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Fijar Interruptor",
+        "description": "Pausa o reanuda el alta automática. Pausada, cada alta nueva queda en revisión.",
+        "operationId": "fijar_interruptor_api_v1_admin_platform_altas_automaticas__vendedor_id__interruptor_put",
+        "parameters": [
+          {
+            "name": "vendedor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Vendedor Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InterruptorIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VendedorAltas"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/altas-automaticas/{vendedor_id}/documentos": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Historial De Documentos",
+        "description": "Todas las versiones publicadas, la más nueva primero.",
+        "operationId": "historial_de_documentos_api_v1_admin_platform_altas_automaticas__vendedor_id__documentos_get",
+        "parameters": [
+          {
+            "name": "vendedor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Vendedor Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentoLegalOut"
+                  },
+                  "title": "Response Historial De Documentos Api V1 Admin Platform Altas Automaticas  Vendedor Id  Documentos Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Publicar Documento",
+        "description": "Publica una versión nueva de un documento legal, vigente desde ya. Las altas que\nse pidan desde ahora aceptan esta versión; las anteriores conservan la suya.",
+        "operationId": "publicar_documento_api_v1_admin_platform_altas_automaticas__vendedor_id__documentos_post",
+        "parameters": [
+          {
+            "name": "vendedor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Vendedor Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentoLegalIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentoLegalOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/altas-automaticas/{vendedor_id}/altas": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Listar Altas",
+        "description": "Altas del vendedor, las más nuevas primero (por defecto, las que están en revisión).",
+        "operationId": "listar_altas_api_v1_admin_platform_altas_automaticas__vendedor_id__altas_get",
+        "parameters": [
+          {
+            "name": "vendedor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Vendedor Id"
+            }
+          },
+          {
+            "name": "estado",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "en_curso",
+                    "completado",
+                    "revision",
+                    "omitido"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "const": "todas",
+                  "type": "string"
+                }
+              ],
+              "default": "revision",
+              "title": "Estado"
+            }
+          },
+          {
+            "name": "limite",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limite"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AltaOut"
+                  },
+                  "title": "Response Listar Altas Api V1 Admin Platform Altas Automaticas  Vendedor Id  Altas Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/altas-automaticas/{vendedor_id}/altas/{referencia}/aprobar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Aprobar",
+        "description": "Aprueba un alta en revisión: corre ya, sin los controles de riesgo que la frenaron.",
+        "operationId": "aprobar_api_v1_admin_platform_altas_automaticas__vendedor_id__altas__referencia__aprobar_post",
+        "parameters": [
+          {
+            "name": "vendedor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Vendedor Id"
+            }
+          },
+          {
+            "name": "referencia",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Referencia"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AltaOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/altas-automaticas/{vendedor_id}/altas/{referencia}/descartar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Descartar",
+        "description": "Cierra un alta en revisión sin crear el negocio.",
+        "operationId": "descartar_api_v1_admin_platform_altas_automaticas__vendedor_id__altas__referencia__descartar_post",
+        "parameters": [
+          {
+            "name": "vendedor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Vendedor Id"
+            }
+          },
+          {
+            "name": "referencia",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Referencia"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DescartarIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AltaOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/settings": {
       "get": {
         "tags": [
@@ -22346,6 +22857,299 @@
           "fecha_hora"
         ],
         "title": "Payment"
+      },
+      "AltaOut": {
+        "properties": {
+          "referencia": {
+            "type": "string",
+            "title": "Referencia"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo"
+          },
+          "intentos": {
+            "type": "integer",
+            "title": "Intentos"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "negocio_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Negocio Slug"
+          },
+          "aprobada": {
+            "type": "boolean",
+            "title": "Aprobada"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "referencia",
+          "estado",
+          "motivo",
+          "intentos",
+          "plan_id",
+          "negocio_slug",
+          "aprobada",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AltaOut"
+      },
+      "DescartarIn": {
+        "properties": {
+          "motivo": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 3,
+            "title": "Motivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "motivo"
+        ],
+        "title": "DescartarIn"
+      },
+      "DocumentoLegalIn": {
+        "properties": {
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "terminos",
+              "privacidad",
+              "dpa"
+            ],
+            "title": "Tipo"
+          },
+          "version": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Version"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 10,
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tipo",
+          "version",
+          "url"
+        ],
+        "title": "DocumentoLegalIn"
+      },
+      "DocumentoLegalOut": {
+        "properties": {
+          "tipo": {
+            "type": "string",
+            "title": "Tipo"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "vigente_desde": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Vigente Desde"
+          },
+          "publicado_por": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publicado Por"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tipo",
+          "nombre",
+          "version",
+          "url",
+          "vigente_desde"
+        ],
+        "title": "DocumentoLegalOut"
+      },
+      "Interruptor": {
+        "properties": {
+          "pausado": {
+            "type": "boolean",
+            "title": "Pausado"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo"
+          },
+          "por": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Por"
+          },
+          "en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "En"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pausado"
+        ],
+        "title": "Interruptor"
+      },
+      "InterruptorIn": {
+        "properties": {
+          "pausado": {
+            "type": "boolean",
+            "title": "Pausado"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pausado"
+        ],
+        "title": "InterruptorIn"
+      },
+      "VendedorAltas": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "activo": {
+            "type": "boolean",
+            "title": "Activo"
+          },
+          "interruptor": {
+            "$ref": "#/components/schemas/Interruptor"
+          },
+          "documentos": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentoLegalOut"
+            },
+            "type": "array",
+            "title": "Documentos"
+          },
+          "documentos_faltantes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Documentos Faltantes"
+          },
+          "en_revision": {
+            "type": "integer",
+            "title": "En Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "activo",
+          "interruptor",
+          "documentos",
+          "documentos_faltantes",
+          "en_revision"
+        ],
+        "title": "VendedorAltas"
       }
     }
   }

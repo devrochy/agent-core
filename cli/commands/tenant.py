@@ -813,6 +813,59 @@ def reintentar_alta(
     console.print(f"✓ Alta {referencia}: [bold]{fila.estado}[/bold] {fila.motivo or ''}")
 
 
+@app.command("aprobar-alta")
+def aprobar_alta(
+    vendedor: str = typer.Argument(..., help="UUID del negocio vendedor"),
+    referencia: str = typer.Argument(..., help="Referencia del alta (número del pedido)"),
+) -> None:
+    """Aprueba un alta en revisión después de revisarla: corre sin los controles de riesgo
+    que la frenaron (HU-SH-07). Runbook: docs/runbooks/altas-en-revision.md."""
+    vendedor_id = _uuid_del_vendedor(vendedor)
+
+    async def _run():  # type: ignore[no-untyped-def]
+        from core.plugin_manager import plugin_manager
+        from core.provisioning.consumer import aprobar_alta as _aprobar
+
+        await plugin_manager.ensure_process_activation()
+        return await _aprobar(vendedor_id, referencia, por="cli")
+
+    try:
+        fila = asyncio.run(_run())
+    except Exception as exc:
+        console.print(f"[red]✗ {exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"✓ Alta {referencia} aprobada: [bold]{fila.estado}[/bold] {fila.motivo or ''}")
+
+
+@app.command("interruptor-altas")
+def interruptor_altas(
+    vendedor: str = typer.Argument(..., help="UUID del negocio vendedor"),
+    pausar: bool | None = typer.Option(None, "--pausar/--reanudar", help="Pausa o reanuda el alta automática"),
+    motivo: str = typer.Option("", "--motivo", help="Por qué (obligatorio al pausar)"),
+) -> None:
+    """Interruptor del alta automática (HU-SH-07). Pausada, cada alta nueva queda en revisión.
+    Sin --pausar ni --reanudar, muestra el estado."""
+    vendedor_id = _uuid_del_vendedor(vendedor)
+    if pausar and not motivo.strip():
+        console.print("[red]✗ Indica --motivo al pausar.[/red]")
+        raise typer.Exit(1)
+
+    async def _run() -> dict:
+        from core.provisioning import interruptor
+
+        if pausar is None:
+            return await interruptor.estado(vendedor_id)
+        return await interruptor.fijar(vendedor_id, pausar=pausar, motivo=motivo, por="cli")
+
+    try:
+        estado = asyncio.run(_run())
+    except LookupError as exc:
+        console.print(f"[red]✗ {exc}[/red]")
+        raise typer.Exit(1) from exc
+    texto = "[red]pausada[/red]" if estado["pausado"] else "[green]activa[/green]"
+    console.print(f"Alta automática {texto} {estado.get('motivo') or ''}")
+
+
 @app.command("descartar-alta")
 def descartar_alta(
     vendedor: str = typer.Argument(..., help="UUID del negocio vendedor"),

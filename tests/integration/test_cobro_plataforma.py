@@ -29,6 +29,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from _alta_helpers import aceptar_terminos
 from _api_helpers import api_headers, uniq
 from sqlalchemy import func, select
 
@@ -283,7 +284,10 @@ async def _pedido(
             s.add(OrderItem(tenant_id=tid, order_id=order.id, variant_id=variante_id, quantity=1, unit_price=precio))
             await s.flush()
             assert await activar_planes_del_pedido(s, order) == 1
-            return order.public_order_number
+            referencia = order.public_order_number
+    # HU-SH-07: como `crear_pedido`, el pedido lleva la aceptación de los términos.
+    await aceptar_terminos(tid, referencia, customer_id=cliente, gratis=precio == 0)
+    return referencia
 
 
 async def _eventos(tid: uuid.UUID, topic: str) -> list[Any]:

@@ -21,6 +21,7 @@ from sqlalchemy import or_, select, text
 from core.db.session import get_owned, get_session
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
+from core.provisioning.antiabuso import preparar_pedido_de_alta, registrar_pedido_de_alta
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from core.shared.texto_seguro import contiene_url
@@ -1442,6 +1443,24 @@ class OrderSkill(BaseSkill):
                     return rechazo_vertical
                 customer_data = {k: v for k, v in customer_data.items() if k != "vertical"}
 
+        # HU-SH-07 (ADR-0125): en un negocio que vende planes de la plataforma, el pedido de
+        # un plan pasa por los controles del alta: términos aceptados en su versión vigente,
+        # cupo por hora desde el mismo origen y un Free por persona. El core decide; si no es
+        # un vendedor, no hace nada.
+        pedido_de_alta = None
+        if es_plan:
+            pedido_de_alta = await preparar_pedido_de_alta(
+                customer_id=context.customer_id,
+                conversation_id=context.conversation_id,
+                canal=context.channel,
+                telefono=customer_data.get("phone"),
+                documento=customer_data.get("id_document"),
+                gratis=es_gratis,
+                acepta_terminos=customer_data.get("acepta_terminos"),
+            )
+            if isinstance(pedido_de_alta, dict):
+                return pedido_de_alta
+
         # Guardar datos de entrega en la memoria de entidad del core (Capa 2)
         # SOLO con consentimiento (Ley 1581, D17): sin él, el pedido se crea
         # igual pero nada queda en el perfil para la próxima compra.
@@ -1492,6 +1511,9 @@ class OrderSkill(BaseSkill):
             )
             session.add(order)
             await session.flush()
+            if pedido_de_alta is not None:
+                # Misma transacción que el pedido: sin pedido no queda la aceptación.
+                registrar_pedido_de_alta(session, pedido_de_alta, referencia=order.public_order_number)
             for item in items:
                 session.add(
                     OrderItem(

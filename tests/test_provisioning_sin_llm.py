@@ -110,10 +110,15 @@ def test_ninguna_tool_se_llama_como_un_alta(tools: list) -> None:  # type: ignor
     assert [t.name for t in tools if _NOMBRE_DE_ALTA.search(t.name)] == []
 
 
+# La única ruta que llega al consumidor: aprobar o descartar un alta en revisión, solo el
+# master con su sesión humana (HU-SH-07, ADR-0125), como el alta manual de Plataforma.
+_RUTAS_DEL_MASTER = ("platform_altas.py",)
+
+
 def test_el_consumidor_solo_se_dispara_por_el_outbox() -> None:
     """El aprovisionamiento solo se registra como handler de `subscription.activated` en el
     despachador: ninguna ruta de la API lo importa (la API de plataforma del master sí usa
-    `core.alta_negocio`, con su sesión humana)."""
+    `core.alta_negocio`, con su sesión humana, y aprueba o descarta altas en revisión)."""
     from core.events import core_handlers
     from core.provisioning.consumer import on_subscription_activated
     from core.shared.events import ON_SUBSCRIPTION_ACTIVATED
@@ -121,8 +126,25 @@ def test_el_consumidor_solo_se_dispara_por_el_outbox() -> None:
     assert (ON_SUBSCRIPTION_ACTIVATED, on_subscription_activated) in core_handlers._HANDLERS
     raiz = Path(__file__).resolve().parents[1] / "core" / "api"
     for archivo in raiz.rglob("*.py"):
+        if archivo.name in _RUTAS_DEL_MASTER:
+            continue
         for prohibido in ("core.provisioning.consumer", "core.provisioning.owner"):
             assert not _importa(archivo, prohibido), f"{archivo} importa {prohibido}"
+
+
+def test_las_rutas_que_llegan_al_alta_son_solo_del_master() -> None:
+    """Cada ruta de `platform_altas` exige el rol master antes de hacer nada."""
+    from fastapi.routing import APIRoute
+
+    from core.api.routers import platform_altas
+
+    rutas = [r for r in platform_altas.router.routes if isinstance(r, APIRoute)]
+    assert rutas
+    for ruta in rutas:
+        fuente = inspect.getsource(ruta.endpoint)
+        cuerpo = fuente.split('"""')[-1] if '"""' in fuente else fuente
+        primera = next(linea.strip() for linea in cuerpo.splitlines()[1:] if linea.strip())
+        assert primera == "_require_master(principal)", f"{ruta.path}: {primera}"
 
 
 def test_onboard_tenant_ya_no_esta_en_core_onboarding() -> None:

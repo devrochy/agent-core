@@ -8,7 +8,10 @@ del negocio VENDEDOR. Pasos:
 3. Candado consultivo por alta: dos workers nunca trabajan la misma.
 4. Datos del pedido por la fuente del vendedor (`pack_commerce`), no del texto del LLM, y
    cotejo del cliente del pedido con el de la suscripción.
-5. Un Free solo una vez por cliente y por correo; si no, revisión.
+5. Controles de HU-SH-07 (ADR-0125): interruptor del master, aceptación de términos
+   registrada, un Free por persona y señales de riesgo; si algo falla, revisión. Un alta que
+   aprobó una persona (`aprobar_alta`) los salta. Un Free solo una vez por cliente y por
+   correo (ADR-0121).
 6. Negocio con id y slug deterministas (`onboard_tenant`), período pagado (`core/billing`)
    y preset del vertical.
 7. Owner: cuenta, invitación y correo con el enlace (solo si la cuenta la creó esta alta);
@@ -39,6 +42,7 @@ from core.billing.periodos import Periodo
 from core.db.models import ProvisioningRequest, Tenant
 from core.db.session import get_owned, get_session
 from core.provisioning import ACTOR, AltaEnRevision, AltaOcupada, AltaTransitoria
+from core.provisioning.antiabuso import aceptacion_del_pedido, motivos_de_revision
 from core.provisioning.fuentes import DatosDeAlta, fuentes_de_alta
 from core.provisioning.vendedores import es_vendedor
 from core.shared.audit import record_audit
@@ -454,9 +458,21 @@ async def _dar_de_alta(
     aviso.update(email=email, negocio=negocio, nombre=nombre)
     huella = huella_del_correo(email)
     await _guardar_detalle(vendedor, registro.id, correo=huella)
-    if plan.is_free and await _free_repetido(vendedor, registro, huella):
+    # Una persona ya revisó y aprobó esta alta: no vuelve a revisión por lo mismo (ADR-0125).
+    aprobada = bool((registro.detalle or {}).get("aprobacion"))
+    if not aprobada:
+        motivos = await motivos_de_revision(
+            vendedor,
+            referencia=registro.referencia,
+            email=email,
+            gratis=plan.is_free,
+            customer_id=registro.customer_id,
+        )
+        if motivos:
+            raise AltaEnRevision("; ".join(motivos))
+    if not aprobada and plan.is_free and await _free_repetido(vendedor, registro, huella):
         raise AltaEnRevision("ya hubo un alta para este cliente o este correo: un Free más se revisa")
-    if not plan.is_free and await _recompra(vendedor, registro):
+    if not aprobada and not plan.is_free and await _recompra(vendedor, registro):
         # HU-SH-04: quien canceló y vuelve a comprar abre otra suscripción; crear otro negocio
         # le dejaría dos. Una persona decide si reactivar el que tenía (runbook de altas).
         raise AltaEnRevision(
@@ -479,6 +495,8 @@ async def _dar_de_alta(
         await _registrar_periodo(tenant_id, plan.id, slug, (registro.detalle or {}).get("periodo") or {})
     preset = await _aplicar_preset(tenant_id, vertical)
     vendedor_slug = await _slug_de(vendedor)
+    # Qué versiones de términos, privacidad y DPA aceptó el dueño y cuándo (HU-SH-07).
+    aceptacion = await aceptacion_del_pedido(vendedor, registro.referencia)
     await _guardar_origen(
         tenant_id,
         {
@@ -488,6 +506,8 @@ async def _dar_de_alta(
             "plan": plan.id,
             "vertical": vertical,
             "preset": preset,
+            "aceptacion": aceptacion,
+            "aprobada_por": ((registro.detalle or {}).get("aprobacion") or {}).get("por"),
         },
     )
 
@@ -512,6 +532,7 @@ async def _dar_de_alta(
         entrega=entrega,
         pasos=pasos,
         duracion_ms=int((time.monotonic() - inicio) * 1000),
+        aceptacion=aceptacion,
     )
 
 
@@ -677,6 +698,7 @@ async def _completar(
     entrega: dict[str, Any],
     pasos: list[str],
     duracion_ms: int,
+    aceptacion: dict[str, Any] | None = None,
 ) -> ProvisioningRequest:
     aviso = None
     if entrega.get("estado") != "ya_es_miembro" and entrega.get("correo") != "enviado":
@@ -725,7 +747,7 @@ async def _completar(
         await record_audit(
             actor=ACTOR,
             action="negocio_creado",
-            input_data={**entrada, "vendedor": vendedor_slug},
+            input_data={**entrada, "vendedor": vendedor_slug, "aceptacion": aceptacion},
             output_data={k: v for k, v in salida.items() if k != "negocio_tenant_id"},
         )
     log.info(
@@ -950,7 +972,46 @@ async def reintentar_alta(vendedor: uuid.UUID, referencia: str) -> ProvisioningR
     return resultado
 
 
-async def descartar_alta(vendedor: uuid.UUID, referencia: str, motivo: str) -> ProvisioningRequest:
+async def aprobar_alta(vendedor: uuid.UUID, referencia: str, *, por: str) -> ProvisioningRequest:
+    """Una persona revisó un alta en `revision` y la aprueba (HU-SH-07, ADR-0125): vuelve a
+    correr sin los controles de riesgo (interruptor, aceptación, un Free por persona, señales,
+    Free repetido y recompra), que son los que la mandaron a revisión. Las validaciones de
+    datos (plan, correo, pedido pagado, cliente, owner) siguen aplicando. Queda en `audit_log`
+    con quién la aprobó y por qué estaba en revisión."""
+    registro = await _por_referencia(vendedor, referencia)
+    if registro is None:
+        raise ValueError(f"No hay un alta con la referencia {referencia!r} en ese vendedor.")
+    if registro.estado not in ("revision", "en_curso"):
+        raise ValueError(f"El alta está {registro.estado}: solo se aprueba una en revisión.")
+    aprobacion = {
+        "por": (por or "desconocido")[:254],
+        "en": datetime.now(UTC).isoformat(),
+        "motivo_revision": registro.motivo,
+    }
+    async with tenant_scope(vendedor):
+        async with get_session() as session:
+            fila = await _fila(session, vendedor, registro.id)
+            fila.estado = "en_curso"
+            fila.intentos = 0
+            fila.motivo = None
+            fila.detalle = {**(fila.detalle or {}), "aprobacion": aprobacion}
+        await record_audit(
+            actor=aprobacion["por"],
+            action="aprovisionamiento_aprobado",
+            input_data={
+                "referencia": referencia,
+                "estado_anterior": registro.estado,
+                "motivo_revision": registro.motivo,
+            },
+        )
+        actualizado = await _por_referencia(vendedor, referencia)
+        resultado = await _procesar(vendedor, actualizado or registro)
+    return resultado
+
+
+async def descartar_alta(
+    vendedor: uuid.UUID, referencia: str, motivo: str, *, por: str = "cli"
+) -> ProvisioningRequest:
     """Cierra un alta en `revision` sin crear el negocio (`omitido`, queda el motivo). Un
     evento repetido del mismo pedido ya no la reabre."""
     registro = await _por_referencia(vendedor, referencia)
@@ -965,7 +1026,7 @@ async def descartar_alta(vendedor: uuid.UUID, referencia: str, motivo: str) -> P
             fila.estado = "omitido"
             fila.motivo = f"descartada: {texto}"[:500]
         await record_audit(
-            actor="cli",
+            actor=por,
             action="aprovisionamiento_descartado",
             input_data={"referencia": referencia, "estado_anterior": registro.estado},
             output_data={"motivo": texto},
@@ -976,6 +1037,7 @@ async def descartar_alta(vendedor: uuid.UUID, referencia: str, motivo: str) -> P
 
 __all__ = [
     "MAX_INTENTOS",
+    "aprobar_alta",
     "aprovisionar",
     "correo_valido",
     "descartar_alta",

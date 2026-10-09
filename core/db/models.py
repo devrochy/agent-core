@@ -681,6 +681,92 @@ class ProvisioningRequest(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
+class DocumentoLegal(Base):
+    """Versión publicada de un documento legal de un negocio vendedor (HU-SH-07, ADR-0125).
+
+    Tabla de NEGOCIO del vendedor (`tenant_id`, RLS forzada). `tipo`: `terminos | privacidad |
+    dpa`. Las filas no se editan: una versión nueva es una fila nueva, y la vigente de cada
+    tipo es la de `vigente_desde` más reciente que ya empezó. Así, cuando llega el texto del
+    abogado, se publica otra versión (desde Plataforma) sin tocar código, y cada aceptación
+    apunta a la versión que se mostró.
+    """
+
+    __tablename__ = "documentos_legales"
+    __table_args__ = (
+        Index(
+            "uq_documentos_legales_tenant_tipo_version",
+            "tenant_id",
+            "tipo",
+            "version",
+            unique=True,
+            postgresql_where=text("deleted_at is null"),
+        ),
+        Index("ix_documentos_legales_tenant_tipo_vigente", "tenant_id", "tipo", "vigente_desde"),
+        CheckConstraint("tipo in ('terminos', 'privacidad', 'dpa')", name="ck_documentos_legales_tipo"),
+        CheckConstraint("version ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$'", name="ck_documentos_legales_version"),
+        CheckConstraint("url ~ '^https://[^[:space:]]+$' and char_length(url) <= 500", name="ck_documentos_legales_url"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    tipo: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[str] = mapped_column(Text, nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    vigente_desde: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    publicado_por: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class PedidoDeAlta(Base):
+    """Pedido de un plan de la plataforma hecho a un negocio vendedor (HU-SH-07, ADR-0125).
+
+    Tabla de NEGOCIO del vendedor (`tenant_id`, RLS forzada): una fila por pedido
+    (`referencia` = número público del pedido), escrita en la misma transacción que el pedido.
+    Guarda lo mínimo para el antiabuso y el cumplimiento:
+
+    - `huellas`: HMAC del teléfono y del documento (`tel:<hex>`, `doc:<hex>`), nunca el dato.
+      Sirven para «un Free por persona» y «muchos intentos»; se vacían a los 12 meses.
+    - `senales`: códigos de datos inconsistentes vistos en el checkout (p. ej.
+      `documento_invalido`), sin el dato.
+    - `aceptacion` + `aceptado_en`: qué versiones de términos, privacidad y DPA aceptó, cuándo
+      y en qué mensaje. Sin aceptación (no había documentos publicados), el alta va a revisión.
+    """
+
+    __tablename__ = "pedidos_de_alta"
+    __table_args__ = (
+        Index(
+            "uq_pedidos_de_alta_tenant_referencia",
+            "tenant_id",
+            "referencia",
+            unique=True,
+            postgresql_where=text("deleted_at is null"),
+        ),
+        # Las reglas miran 24 h o 12 meses de un vendedor: decenas de filas por día.
+        Index("ix_pedidos_de_alta_tenant_creado", "tenant_id", "created_at"),
+        Index("ix_pedidos_de_alta_tenant_cliente", "tenant_id", "customer_id", "created_at"),
+        CheckConstraint(
+            "(aceptacion is null) = (aceptado_en is null)", name="ck_pedidos_de_alta_aceptacion"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    referencia: Mapped[str] = mapped_column(Text, nullable=False)
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    canal: Mapped[str | None] = mapped_column(Text, default=None)
+    gratis: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    huellas: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    senales: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    # none_as_null: sin aceptación es NULL de SQL (no el JSON `null`), por el CHECK.
+    aceptacion: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True), default=None)
+    aceptado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
 class OnboardingHito(Base):
     """Primera vez que un negocio completó un paso del onboarding (HU-SH-06, ADR-0124).
 

@@ -373,10 +373,19 @@ de artefactos de tenant).
   tampoco se renueva al vencer `period_end`. → HU-SH-04 (fuente única del cobro de plataforma, renovación
   y preset pendiente al subir de plan). Hasta entonces, no encender `PROVISIONING_SELLER_TENANTS` en
   producción. [Alta]
-- **Rotar número y correo sigue permitiendo un Free tras otro** — el alta automática (ADR-0121) manda a
-  revisión un Free del mismo cliente o del mismo correo, pero quien cambia de número de WhatsApp y de
-  correo en cada alta sigue creando negocios Free. → HU-SH-07 (antiabuso: documento, verificación y
-  límites por origen). [Alta]
+- ~~**Rotar número y correo sigue permitiendo un Free tras otro**~~ — resuelto en HU-SH-07 (ADR-0125): un
+  Free por persona por teléfono o documento (12 meses, con huellas HMAC), cupo de pedidos de alta por
+  origen y señales de riesgo a revisión. Queda abierto quien rota número, correo **y** documento.
+- **Verificar el documento o el teléfono antes de un Free** — con ADR-0125, quien rota número de WhatsApp,
+  correo y documento sigue sacando un Free (las señales y el cupo lo encarecen, no lo cierran). Si aparecen
+  altas Free fraudulentas que pasan las reglas, verificar el documento o el número con un código. [Media]
+- **Playbook de ventas con los controles del alta** — `crear_pedido` de un plan en `solvershub` ahora puede
+  responder `terminos_pendientes`, `free_no_disponible` o `limite_de_altas` (ADR-0125). El playbook de
+  `solvershub-comercial` tiene que mostrar los tres enlaces y pedir la aceptación explícita, ofrecer un plan
+  pago y explicar la espera; hoy se guía solo por el `hint` de la tool. [Alta]
+- **Textos legales definitivos** — términos, privacidad y DPA dependen del abogado (HU-GTM-02). Al llegar, el
+  master publica cada versión en Plataforma → Alta automática (sin tocar código). Hasta que estén las tres
+  publicadas, toda alta automática va a revisión (ADR-0125 § 2). [Alta]
 - **Confirmar el correo en el chat antes de crear el pedido de un plan** — el acceso del negocio
   aprovisionado llega solo al correo del pedido (ADR-0121): si el cliente lo escribe mal, se queda sin
   acceso hasta que una persona lo corrija (`docs/runbooks/altas-en-revision.md`). Es un ajuste del playbook de
