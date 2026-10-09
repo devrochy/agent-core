@@ -397,5 +397,12 @@ de artefactos de tenant).
 - **`completion_claims` no parametrizables en calendar** — `pack_calendar/module.py:39-72`
   las tiene fijas (commerce sí las configura, `pack_commerce/config.py:115-136`). → DSL
   por tenant. [Baja]
+- **Embudo de activación en el panel** (HU-SH-06, ADR-0124) — hoy se mide con `agent-core tenant embudo`
+  y el log `onboarding_hito`. Si se quiere un tablero o alertas, un cron que barra las altas recientes y
+  una vista agregada para el master. [Baja]
+- **Enlace de invitación vencido de una cuenta sin contraseña** — si el owner no usa el enlace en 7 días,
+  «olvidé mi contraseña» le define la contraseña, pero la invitación vencida ya no se muestra: entra sin
+  negocio. Hace falta reenviar la invitación (master) o renovarla al recuperar la contraseña. Visto en
+  HU-SH-06 (2026-10-09). [Media]
 - **`brand_voice` vacío no se detecta** — `AppSettings.brand_voice` puede quedar vacío sin
   aviso, y es la fuente de verdad de precios. → validación/aviso en el panel. [Baja]
