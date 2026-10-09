@@ -359,18 +359,28 @@ de artefactos de tenant).
   si no aparece en 3 intentos queda en revisión), pero la suscripción huérfana queda. → que el
   proveedor use la sesión del llamador o que commerce active después del commit. Visto en HU-SH-03
   (2026-10-09). [Media]
-- **Un cambio de plan desde el asistente no cambia el plan del negocio aprovisionado** — Free →
+- ✅ **[Cerrado por HU-SH-04, ADR-0123: el plan cambia en el mismo negocio con su preset, se renueva y se paga por los dos canales]** ~~Un cambio de plan desde el asistente no cambia el plan del negocio aprovisionado~~ — Free →
   Premium cambia la suscripción en `solvershub`, pero el consumidor de ADR-0121 solo lo audita
   (`aprovisionamiento_cambio_de_plan`): el negocio sigue en Free y vence a los 30 días. Tampoco aplica
   el preset que quedó pendiente porque no cabía en Free (ADR-0110 § 3.1). El plan pago aprovisionado
   tampoco se renueva al vencer `period_end`. → HU-SH-04 (fuente única del cobro de plataforma, renovación
   y preset pendiente al subir de plan). Hasta entonces, no encender `PROVISIONING_SELLER_TENANTS` en
   producción. [Alta]
+- **Rotar número y correo sigue permitiendo un Free tras otro** — el alta automática (ADR-0121) manda a
+  revisión un Free del mismo cliente o del mismo correo, pero quien cambia de número de WhatsApp y de
+  correo en cada alta sigue creando negocios Free. → HU-SH-07 (antiabuso: documento, verificación y
+  límites por origen). [Alta]
 - **Confirmar el correo en el chat antes de crear el pedido de un plan** — el acceso del negocio
   aprovisionado llega solo al correo del pedido (ADR-0121): si el cliente lo escribe mal, se queda sin
   acceso hasta que una persona lo corrija (`docs/runbooks/altas-en-revision.md`). Es un ajuste del playbook de
   ventas del tenant `solvershub` (`solvershub-comercial`): repetir el correo y pedir confirmación antes de
   `crear_pedido`. [Media]
+- **Reactivar el negocio de quien vuelve a comprar después de cancelar** — desde HU-SH-04 (ADR-0123 § 12)
+  el alta queda en revisión en vez de crear un segundo negocio, y una persona reactiva el que tenía. →
+  reactivarlo solo (misma suscripción nueva vinculada al negocio anterior). [Media]
+- **Cambio de plan desde `/plan` para un negocio del asistente** — HU-SH-04 lo bloquea (409
+  `cambio_en_el_asistente`, ADR-0123 § 6): cambiar el plan en el vendedor sin cobrarlo de nuevo exige otra
+  operación del contrato, y el prorrateo es de HU-BILL-12. [Media]
 
 **Calendario / demos**
 - **Calendario interno (ADR-0084)** — las 5 tools requieren `google_calendar`

@@ -33,6 +33,7 @@ y la huella del correo. Lo auditado está en `audit_log`, con actor `provisionin
 | Ya hubo un alta para este cliente o este correo (un Free más) | Es el antiabuso: **descartar**. Si es legítimo, que compre un plan pago o crear el negocio a mano desde Plataforma |
 | No se puede invitar a ese correo (master, permisos globales o cuenta desactivada) | **Descartar** y pedirle al cliente otro correo (un pedido nuevo) |
 | El cliente del pedido no coincide con el de la suscripción | Posible manipulación: revisar la conversación y **descartar** |
+| El correo del pedido no es el de la cuenta que esta alta ya había preparado | El correo se corrigió después de crear la cuenta del anterior: volver al correo original y **reintentar**, o **descartar** y crear el negocio a mano (ver § 5) |
 | El slug ya es de otro negocio | No debería pasar (el slug lleva un sufijo propio): **descartar** y crear el negocio a mano |
 | La suscripción se activó sin un pedido | Activación manual o un journey: **descartar** (o crear el negocio a mano) |
 
@@ -59,7 +60,24 @@ El alta queda `omitido` con el motivo (`aprovisionamiento_descartado` en `audit_
 del mismo pedido no la reabre. Si ya se había creado un negocio, sigue existiendo: se suspende o se purga
 desde Plataforma.
 
-## 5. "Alta sin acceso enviado"
+## 5. El dueño no puede usar el enlace (409)
+
+El enlace solo define la contraseña de una cuenta **limpia**: sin contraseña, sin acceso a ningún
+negocio y sin otras invitaciones pendientes. Si el correo ya tiene otra invitación pendiente (por
+ejemplo, compró dos negocios con el mismo correo) o acceso a otro negocio, el canje responde 409
+(`account_exists`). En ese caso, el dueño:
+
+1. Entra con **"olvidé mi contraseña"** usando su correo: el código le llega ahí y define la contraseña.
+2. Inicia sesión y **acepta en la app** cada invitación pendiente (una por negocio).
+
+El enlace de la invitación ya no hace falta.
+
+Si el alta queda en revisión con "el correo del pedido no es el de la cuenta que esta alta ya había
+preparado", es que el correo se corrigió después de que el alta creó la cuenta del correo anterior. El
+enlace no se manda al correo nuevo. Hay que decidir a mano: volver al correo original y **reintentar**,
+o **descartar** el alta y crear el negocio desde Plataforma con el correo correcto.
+
+## 6. "Alta sin acceso enviado"
 
 1. Configurar `SYSTEM_SMTP_*` (`docs/despliegue-coolify.md`).
 2. El dueño entra con **"olvidé mi contraseña"** usando su correo: la cuenta se creó sin contraseña y el

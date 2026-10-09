@@ -112,88 +112,105 @@ async def _generar_cargos(now: datetime) -> int:
                 ).scalars().all()
                 generadas = 0
                 for sub in subs:
-                    if sub.trial_termina is not None and sub.trial_termina > now:
-                        continue
-                    if sub.estado == "trialing" and not Decimal(sub.valor_periodo or 0):
-                        # Free al terminar la prueba: no se renueva, vence (`_marcar_vencidas`).
-                        continue
-                    inicio = sub.proximo_cargo
-                    _aplicar_cambio_programado(sub, inicio)
-                    # Un cambio de plan pendiente se calculó sobre el período que termina:
-                    # pagarlo después ya no aplica (auditoría HU-SUB-07).
-                    from pack_subscriptions.capability import _anular_cambios_pendientes
-
-                    await _anular_cambios_pendientes(session, sub)
-                    siguiente = sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla)
-                    if not Decimal(sub.valor_periodo or 0):
-                        sub.periodo_actual_inicio = inicio
-                        sub.proximo_cargo = siguiente
-                        continue
-                    periodo = etiqueta_periodo(inicio, sub.periodicidad)
-                    existe = (
-                        await session.execute(
-                            select(SubscriptionCharge).where(
-                                SubscriptionCharge.tenant_id == tenant_id,
-                                SubscriptionCharge.subscription_id == sub.id,
-                                SubscriptionCharge.periodo == periodo,
-                                SubscriptionCharge.tipo == "periodo",
-                                SubscriptionCharge.deleted_at.is_(None),
-                            )
-                        )
-                    ).scalars().first()
-                    sub.periodo_actual_inicio = inicio
-                    sub.proximo_cargo = siguiente
-                    if existe is not None:
-                        continue
-                    cargo = SubscriptionCharge(
-                        tenant_id=tenant_id,
-                        subscription_id=sub.id,
-                        periodo=periodo,
-                        monto=Decimal(sub.valor_periodo or 0),
-                        estado="pendiente",
-                        fecha_vencimiento=inicio,
-                    )
-                    session.add(cargo)
-                    await session.flush()
-                    generadas += 1
-                    link_url: str | None = None
-                    if cap is not None:
-                        try:
-                            link = await cap.create_link(
-                                reference=f"sub-{cargo.id}",
-                                amount=float(cargo.monto or 0),
-                                description=f"Suscripción {sub.concepto}",
-                            )
-                            cargo.referencia = link.reference
-                            cargo.link_url = link.url
-                            link_url = link.url
-                        except Exception:
-                            log.warning("subs_link_fallido", subscription_id=str(sub.id), exc_info=True)
-                    # Aviso al cliente por el outbox, en la MISMA transacción que el
-                    # cargo (ADR-0107): si el cargo se revierte, no hay aviso. El core
-                    # lo envía como plantilla o texto según la ventana (ADR-0108).
-                    await emit_domain(
-                        session,
-                        tenant_id=tenant_id,
-                        topic=ON_SUBSCRIPTION_CHARGE_CREATED,
-                        dedupe_key=f"sub_charge:{cargo.id}",
-                        payload={
-                            "charge_id": str(cargo.id),
-                            "subscription_id": str(sub.id),
-                            "customer_id": str(sub.customer_id),
-                            "concepto": sub.concepto,
-                            "monto": str(cargo.monto),
-                            "moneda": sub.moneda,
-                            "periodo": periodo,
-                            "fecha_vencimiento": inicio.date().isoformat(),
-                            "referencia": cargo.referencia,
-                            "link": link_url,
-                            "texto": config.aviso_cargo_texto,
-                        },
-                    )
+                    if await generar_cargo_de(session, tenant_id, sub, now, cap=cap, config=config) is not None:
+                        generadas += 1
         total += generadas
         log.info("subs_cargos_generados", tenant_id=str(tenant_id), generadas=generadas)
     return total
+
+
+async def generar_cargo_de(session, tenant_id: uuid.UUID, sub: Subscription, now: datetime, *, cap, config) -> SubscriptionCharge | None:  # type: ignore[no-untyped-def]
+    """Cargo del período que empieza en `sub.proximo_cargo`, con su link y su aviso, y avanza
+    el calendario de la suscripción. None si no corresponde cobrar (prueba, Free, plan en
+    $0) o el cargo del período ya existía. Si el último período lo pagó otro canal, el cargo
+    se crea sin link ni aviso (HU-SH-04)."""
+    if sub.trial_termina is not None and sub.trial_termina > now:
+        return None
+    if sub.estado == "trialing" and not Decimal(sub.valor_periodo or 0):
+        # Free al terminar la prueba: no se renueva, vence (`_marcar_vencidas`).
+        return None
+    inicio = sub.proximo_cargo
+    if inicio is None:
+        return None
+    _aplicar_cambio_programado(sub, inicio)
+    # Un cambio de plan pendiente se calculó sobre el período que termina:
+    # pagarlo después ya no aplica (auditoría HU-SUB-07).
+    from pack_subscriptions.capability import _anular_cambios_pendientes
+
+    await _anular_cambios_pendientes(session, sub)
+    siguiente = sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla)
+    if not Decimal(sub.valor_periodo or 0):
+        sub.periodo_actual_inicio = inicio
+        sub.proximo_cargo = siguiente
+        return None
+    periodo = etiqueta_periodo(inicio, sub.periodicidad)
+    existe = (
+        await session.execute(
+            select(SubscriptionCharge).where(
+                SubscriptionCharge.tenant_id == tenant_id,
+                SubscriptionCharge.subscription_id == sub.id,
+                SubscriptionCharge.periodo == periodo,
+                SubscriptionCharge.tipo == "periodo",
+                SubscriptionCharge.deleted_at.is_(None),
+            )
+        )
+    ).scalars().first()
+    sub.periodo_actual_inicio = inicio
+    sub.proximo_cargo = siguiente
+    if existe is not None:
+        return None
+    cargo = SubscriptionCharge(
+        tenant_id=tenant_id,
+        subscription_id=sub.id,
+        periodo=periodo,
+        monto=Decimal(sub.valor_periodo or 0),
+        estado="pendiente",
+        fecha_vencimiento=inicio,
+    )
+    session.add(cargo)
+    await session.flush()
+    if await paga_por_otro_canal(session, tenant_id, sub):
+        # HU-SH-04 (ADR-0123): el último período lo pagó otro canal (p. ej. el panel de la
+        # plataforma). El cargo existe, pero sin link ni aviso: el cliente no recibe dos cobros
+        # del mismo período. Si paga por el otro canal, se registra como pago externo.
+        log.info("subs_cargo_sin_aviso_paga_por_otro_canal", subscription_id=str(sub.id), periodo=periodo)
+        return cargo
+    link_url: str | None = None
+    if cap is not None:
+        try:
+            link = await cap.create_link(
+                reference=f"sub-{cargo.id}",
+                amount=float(cargo.monto or 0),
+                description=f"Suscripción {sub.concepto}",
+            )
+            cargo.referencia = link.reference
+            cargo.link_url = link.url
+            link_url = link.url
+        except Exception:
+            log.warning("subs_link_fallido", subscription_id=str(sub.id), exc_info=True)
+    # Aviso al cliente por el outbox, en la MISMA transacción que el
+    # cargo (ADR-0107): si el cargo se revierte, no hay aviso. El core
+    # lo envía como plantilla o texto según la ventana (ADR-0108).
+    await emit_domain(
+        session,
+        tenant_id=tenant_id,
+        topic=ON_SUBSCRIPTION_CHARGE_CREATED,
+        dedupe_key=f"sub_charge:{cargo.id}",
+        payload={
+            "charge_id": str(cargo.id),
+            "subscription_id": str(sub.id),
+            "customer_id": str(sub.customer_id),
+            "concepto": sub.concepto,
+            "monto": str(cargo.monto),
+            "moneda": sub.moneda,
+            "periodo": periodo,
+            "fecha_vencimiento": inicio.date().isoformat(),
+            "referencia": cargo.referencia,
+            "link": link_url,
+            "texto": config.aviso_cargo_texto,
+        },
+    )
+    return cargo
 
 
 @register_cron(PACK_ID, "45 3 * * *")
@@ -288,6 +305,27 @@ async def _marcar_vencidas(now: datetime) -> int:
             if vistas:
                 log.info("subs_vencidas", tenant_id=str(tenant_id), total=len(vistas))
     return total
+
+
+async def paga_por_otro_canal(session, tenant_id: uuid.UUID, sub: Subscription) -> bool:  # type: ignore[no-untyped-def]
+    """¿El último período pagado de la suscripción lo pagó otro canal (`pago_externo`)?
+    Entonces el cliente paga por ahí: el pack no le manda link ni recordatorios
+    (HU-SH-04, ADR-0123). Vuelve a cobrarle cuando pague un período con el link del pack."""
+    ultimo = (
+        await session.execute(
+            select(SubscriptionCharge)
+            .where(
+                SubscriptionCharge.tenant_id == tenant_id,
+                SubscriptionCharge.subscription_id == sub.id,
+                SubscriptionCharge.tipo == "periodo",
+                SubscriptionCharge.estado == "pagado",
+                SubscriptionCharge.deleted_at.is_(None),
+            )
+            .order_by(SubscriptionCharge.fecha_vencimiento.desc().nulls_last(), SubscriptionCharge.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return ultimo is not None and bool(ultimo.pago_externo)
 
 
 def _aplicar_cambio_programado(sub: Subscription, inicio: datetime) -> None:
@@ -385,6 +423,8 @@ async def _avisos_de_cobro(now: datetime) -> dict[str, int]:
                         continue
                     if sub.id in pausadas:
                         continue
+                    if await paga_por_otro_canal(session, tenant_id, sub):
+                        continue  # HU-SH-04: lo cobra el otro canal
                     dia = recordatorio_de_hoy(
                         vence.date(), cargo.created_at.date(), hoy, config.recordatorios_dias
                     )

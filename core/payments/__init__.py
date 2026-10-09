@@ -87,6 +87,16 @@ class PaymentRegistry:
 payment_registry = PaymentRegistry()
 
 
+async def procesar_evento(capability: PaymentCapability, payload: dict) -> str | None:
+    """Operación opcional de la capacidad (HU-SH-04, ADR-0123, riesgo R-05): aplicar un evento
+    de la pasarela que llegó por otra URL. La capacidad verifica la firma con SUS credenciales.
+    None si la capacidad no la implementa."""
+    metodo = getattr(capability, "procesar_evento", None)
+    if metodo is None:
+        return None
+    return str(await metodo(payload))
+
+
 def qr_png_data_uri(payload: str) -> str | None:
     """QR PNG como data URI; `None` si `qrcode` no está instalado o falla."""
     if not payload:

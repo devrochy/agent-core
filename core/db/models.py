@@ -36,6 +36,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     Numeric,
+    SmallInteger,
     Text,
     UniqueConstraint,
     text,
@@ -649,6 +650,8 @@ class ProvisioningRequest(Base):
             postgresql_where=text("subscription_id is not null and deleted_at is null"),
         ),
         Index("ix_provisioning_requests_tenant_estado", "tenant_id", "estado", "created_at"),
+        # HU-SH-04: el negocio creado → su suscripción en el vendedor (canal asistente).
+        Index("ix_provisioning_requests_tenant_negocio", "tenant_id", "negocio_tenant_id"),
         CheckConstraint(
             "estado in ('en_curso', 'completado', 'revision', 'omitido')",
             name="ck_provisioning_requests_estado",
@@ -891,6 +894,10 @@ class TenantSubscription(Base):
     Una sola suscripción activa por tenant (índice único parcial sobre
     `deleted_at is null`). `status`: trialing | active | past_due | expired |
     canceled. El plan free es también el trial: `trial_ends_at` marca su fin.
+
+    Es la FUENTE ÚNICA del cobro de la plataforma (D-13, ADR-0123): el pago por el
+    asistente y por el panel actualizan esta fila. `dia_ancla`: día del mes en que
+    empiezan los períodos pagos (calendario, como `pack_subscriptions`).
     """
 
     __tablename__ = "tenant_subscriptions"
@@ -902,6 +909,7 @@ class TenantSubscription(Base):
     period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dia_ancla: Mapped[int | None] = mapped_column(SmallInteger, default=None)
     provider: Mapped[str | None] = mapped_column(Text)
     provider_reference: Mapped[str | None] = mapped_column(Text)
     canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -917,10 +925,25 @@ class SubscriptionPayment(Base):
 
     Idempotente por `(tenant_id, provider_reference)` (índice único parcial):
     el webhook de Wompi puede reintentar el mismo evento sin duplicar el pago.
-    `status`: pendiente | aprobado | rechazado | anulado.
+    `status`: pendiente | aprobado | rechazado | anulado | duplicado.
+
+    `periodo` (ADR-0123): referencia del período que cubre (`plat-<slug>-<AAAAMM>`), la
+    misma en los dos canales. Un período tiene a lo sumo UN pago `aprobado` (índice único
+    parcial); un segundo pago del mismo período queda `duplicado` y se alerta. `anulado` =
+    intento pendiente que dejó de servir porque el período lo pagó otro intento o canal.
     """
 
     __tablename__ = "subscription_payments"
+    __table_args__ = (
+        Index("ix_subscription_payments_tenant_periodo", "tenant_id", "periodo"),
+        Index(
+            "uq_subscription_payments_periodo_aprobado",
+            "tenant_id",
+            "periodo",
+            unique=True,
+            postgresql_where=text("status = 'aprobado' and periodo is not null and deleted_at is null"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
@@ -931,6 +954,7 @@ class SubscriptionPayment(Base):
     status: Mapped[str] = mapped_column(Text, default="pendiente")
     provider: Mapped[str] = mapped_column(Text)
     provider_reference: Mapped[str] = mapped_column(Text)
+    periodo: Mapped[str | None] = mapped_column(Text, default=None)
     checkout_url: Mapped[str | None] = mapped_column(Text)
     period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

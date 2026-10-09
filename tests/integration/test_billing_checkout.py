@@ -38,6 +38,10 @@ async def _onboard(slug: str) -> uuid.UUID:
     return tid
 
 
+# Monto firmado del webhook: el del link (ADR-0123 lo compara con el del pago).
+_CENTAVOS_POR_PLAN = {"basic": 20_000_000, "premium": 60_000_000}
+
+
 class _FakeProvider:
     """Proveedor con la firma/parseo REALES de Wompi y la red mockeada."""
 
@@ -112,7 +116,7 @@ async def test_apply_payment_aprobado_activa(monkeypatch):
                 )
             ).scalar_one()
 
-    updated = await checkout.apply_payment(provider_reference=ref, status="aprobado")
+    updated = await checkout.apply_payment(provider_reference=ref, status="aprobado", amount_in_cents=_CENTAVOS_POR_PLAN["premium"])
     assert updated is True
     sub = await get_active_subscription(tid)
     assert sub.plan_id == "premium"
@@ -142,9 +146,9 @@ async def test_apply_payment_idempotente(monkeypatch):
                 )
             ).scalar_one()
 
-    assert await checkout.apply_payment(provider_reference=ref, status="aprobado") is True
+    assert await checkout.apply_payment(provider_reference=ref, status="aprobado", amount_in_cents=_CENTAVOS_POR_PLAN["basic"]) is True
     # Segundo intento del webhook con el MISMO evento: no reaplica.
-    assert await checkout.apply_payment(provider_reference=ref, status="aprobado") is False
+    assert await checkout.apply_payment(provider_reference=ref, status="aprobado", amount_in_cents=_CENTAVOS_POR_PLAN["basic"]) is False
     async with tenant_scope(tid):
         async with get_session() as session:
             payment = (
@@ -177,7 +181,7 @@ async def test_apply_payment_rechazado_no_activa(monkeypatch):
                 )
             ).scalar_one()
 
-    await checkout.apply_payment(provider_reference=ref, status="rechazado")
+    await checkout.apply_payment(provider_reference=ref, status="rechazado", amount_in_cents=None)
     sub = await get_active_subscription(tid)
     assert sub.status == "trialing"  # sigue en free/trial, no se activó
 
@@ -206,14 +210,19 @@ async def test_payment_aislado_entre_tenants(monkeypatch):
     assert rows == []
 
 
-def _signed_wompi_payload(payment_link_id: str, status: str, secret: str) -> dict:
+def _signed_wompi_payload(
+    payment_link_id: str, status: str, secret: str, amount_in_cents: int = 20_000_000
+) -> dict:
+    """Como Wompi: la firma cubre el estado y el monto (ADR-0123 exige el monto firmado)."""
     timestamp = 1700000000
-    data = {"transaction": {"payment_link_id": payment_link_id, "status": status}}
+    data = {
+        "transaction": {"payment_link_id": payment_link_id, "status": status, "amount_in_cents": amount_in_cents}
+    }
     checksum = hashlib.sha256(
-        (str(status) + str(timestamp) + secret).encode()
+        (str(status) + str(amount_in_cents) + str(timestamp) + secret).encode()
     ).hexdigest()
     return {
-        "signature": {"properties": ["transaction.status"], "checksum": checksum},
+        "signature": {"properties": ["transaction.status", "transaction.amount_in_cents"], "checksum": checksum},
         "timestamp": timestamp,
         "data": data,
     }
@@ -289,3 +298,39 @@ async def test_webhook_billing_firma_invalida(app_client, monkeypatch):
     assert resp.status_code == 401
     sub = await get_active_subscription(tid)
     assert sub.status == "trialing"
+
+
+async def test_apply_payment_sin_monto_firmado_no_activa(monkeypatch):
+    """HU-SH-04: sin el monto firmado por Wompi (o con otro), el pago no se aplica."""
+    from core.billing import checkout
+    from core.billing.service import get_active_subscription
+    from core.db.models import SubscriptionPayment
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    fake = _FakeProvider()
+    monkeypatch.setattr(checkout, "get_billing_provider", lambda: fake)
+    monkeypatch.setattr("core.shared.alerts.send_alert", _sin_alerta)
+
+    tid = await _onboard(_uniq("firma"))
+    async with tenant_scope(tid):
+        await checkout.start_subscription("basic")
+        async with get_session() as session:
+            ref = (
+                await session.execute(
+                    select(SubscriptionPayment.provider_reference).where(SubscriptionPayment.tenant_id == tid)
+                )
+            ).scalar_one()
+    assert await checkout.apply_payment(provider_reference=ref, status="aprobado", amount_in_cents=None) is False
+    sub = await get_active_subscription(tid)
+    assert sub.plan_id == "free"
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            pago = (
+                await session.execute(select(SubscriptionPayment).where(SubscriptionPayment.tenant_id == tid))
+            ).scalar_one()
+    assert pago.status == "monto_distinto"
+
+
+async def _sin_alerta(*_args, **_kwargs) -> None:
+    return None

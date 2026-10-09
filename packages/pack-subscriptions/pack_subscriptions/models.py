@@ -91,6 +91,8 @@ class SubscriptionCharge(Base):
     # HU-SUB-07 (ADR-0111): `periodo` | `cambio_plan` (diferencia prorrateada de un upgrade).
     tipo: Mapped[str] = mapped_column(Text, nullable=False, default="periodo", server_default="periodo")
     cambio_plan: Mapped[dict | None] = mapped_column(JSONB, default=None)  # plan al que lleva el cargo
+    # HU-SH-04 (ADR-0123): lo pagó otro canal ({"canal", "referencia", "registrado_en"}).
+    pago_externo: Mapped[dict | None] = mapped_column(JSONB, default=None)
     fecha_vencimiento: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

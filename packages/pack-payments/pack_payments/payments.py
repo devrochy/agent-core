@@ -9,6 +9,7 @@ en el checkout, así que la capacidad publica **un** método "pago en línea / Q
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from core.db.session import get_session
 from core.payments import PaymentCapabilityError, PaymentLink, PaymentMethod
@@ -88,6 +89,15 @@ class WompiPaymentCapability:
             qr_payload=link.payment_link_url,
             method="wompi",
         )
+
+
+    async def procesar_evento(self, payload: dict[str, Any]) -> str:
+        """Operación opcional (HU-SH-04, ADR-0123, riesgo R-05): un evento de Wompi que llegó
+        por la URL de la plataforma porque la cuenta es compartida. Se verifica con el
+        secreto de eventos de ESTE negocio y se aplica igual que en el webhook propio."""
+        from pack_payments.module import procesar_evento_de_wompi
+
+        return await procesar_evento_de_wompi(payload)
 
 
 async def _transaccion(reference: str) -> PaymentTransaction | None:
