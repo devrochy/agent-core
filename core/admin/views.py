@@ -2698,11 +2698,13 @@ async def settings_page(request: Request):
             session.add(app_settings)
     spec = await load_active_spec()
     enabled = enabled_packs(spec)
+    from core.orchestrator.verificador import TOGGLES, normalizar_desactivados
+
     all_guardrails = [
         {"name": g.name, "plugin_id": g.plugin_id}
         for g in mcp_host.get_guardrails()
         if g.plugin_id in enabled
-    ]
+    ] + [{"name": name, "plugin_id": "core"} for name in TOGGLES]
     # Flujo de atención (ADR-0054): solo lectura en el panel (la edición es por
     # archivo del tenant, ADR-0017/0026). `resolve_flow` cae al default del pack
     # si el tenant todavía no tiene flow.json. Se filtra por las tools realmente
@@ -2717,7 +2719,12 @@ async def settings_page(request: Request):
     ctx.update(
         tab=request.query_params.get("tab", "identidad"),
         s=app_settings,
-        behavior=dict(app_settings.behavior_config),
+        behavior={
+            **dict(app_settings.behavior_config),
+            "disabled_guardrails": normalizar_desactivados(
+                (app_settings.behavior_config or {}).get("disabled_guardrails", [])
+            ),
+        },
         all_guardrails=all_guardrails,
         escalation_keywords=list((app_settings.escalation_config or {}).get("keywords", [])),
         escalation=dict(app_settings.escalation_config or {}),
@@ -2964,7 +2971,9 @@ async def settings_save(
     # seguridad (el filtro solo puede restringir, nunca ampliar acceso),
     # pero evita basura persistida.
     spec = await load_active_spec()
-    valid_names = {g.name for g in mcp_host.get_guardrails() if g.plugin_id in enabled_packs(spec)}
+    from core.orchestrator.verificador import TOGGLES, normalizar_desactivados
+
+    valid_names = {g.name for g in mcp_host.get_guardrails() if g.plugin_id in enabled_packs(spec)} | set(TOGGLES)
     async with get_session() as session:
         app_settings = (
             await session.execute(
@@ -2985,7 +2994,7 @@ async def settings_save(
             tono=tono,
             debounce_mode=debounce_mode,
             guardrail_max_retries=max(0, guardrail_max_retries),
-            disabled_guardrails=sorted(valid_names & set(disabled_guardrails)),
+            disabled_guardrails=sorted(valid_names & set(normalizar_desactivados(disabled_guardrails))),
             difficulty_long_message_threshold=max(50, min(5000, difficulty_long_message_threshold)),
             difficulty_turnos_sin_resolver_threshold=max(
                 1, min(20, difficulty_turnos_sin_resolver_threshold)

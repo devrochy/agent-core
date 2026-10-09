@@ -250,51 +250,22 @@ def _maybe_seed(slug: str, tenant_id: uuid.UUID) -> None:
 
 
 async def seed_pack_plugins(slug: str, tenant_id: uuid.UUID) -> list[str]:
-    """Seed genérico por pack (ADR-0083, issue #154).
+    """Seed genérico por pack (ADR-0083, issue #154): `core.onboarding.sembrar_packs`."""
+    from core.onboarding import sembrar_packs
 
-    Importa `TENANTS_ROOT/<slug>/<plugin_id>.json` para cada pack detectado que
-    tenga uno (commerce usa `catalog.json`, por eso se excluye). El CLI no
-    importa packs ni cruza sus tablas (ADR-0110).
-    """
-    import json
-    from pathlib import Path
-
-    from core.config import get_settings
-    from core.plugin_manager import plugin_manager
-
-    root = Path(get_settings().tenants_root)
-    steps: list[str] = []
-
-    for module in plugin_manager.list_modules():
-        if module.id == "pack_commerce":
-            continue
-        path = root / slug / f"{module.id}.json"
-        if not path.exists():
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            console.print(f"[yellow]{module.id}.json de {slug} no es JSON válido; se ignora[/yellow]")
-            continue
-        applied = await module.seed_data(tenant_id, data)
-        steps.extend(applied)
-        console.print(f"✓ [green]{module.id}.json importado desde {slug}/[/green]")
-    return steps
+    pasos = await sembrar_packs(tenant_id, slug)
+    for paso in pasos:
+        if paso.endswith(".json importado"):
+            console.print(f"✓ [green]{paso} desde {slug}/[/green]")
+    return pasos
 
 
 # ------------------------------------------------------------------ seed
 async def seed_catalog(tenant_id: uuid.UUID, data: dict) -> list[str]:
-    """Importa un catálogo de pack_commerce a la BD del tenant. Idempotente.
+    """Importa un catálogo de pack_commerce a la BD del tenant (`core.onboarding.sembrar_catalogo`)."""
+    from core.onboarding import sembrar_catalogo
 
-    Delegado en `seed_data` del pack (ADR-0110): el CLI no importa packs.
-    """
-    from core.plugin_manager import plugin_manager
-
-    plugin_manager.scan()
-    module = plugin_manager.get("pack_commerce")
-    if module is None:
-        raise RuntimeError("pack_commerce no está instalado")
-    return await module.seed_data(tenant_id, data)
+    return await sembrar_catalogo(tenant_id, data)
 
 
 @app.command()

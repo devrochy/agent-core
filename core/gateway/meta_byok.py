@@ -16,12 +16,11 @@ el token que emite el flujo OAuth de Embedded Signup) -- no hay ningún
 candado de `kind` en el store, así que reusarlo con un string propio es
 seguro.
 
-`WEBHOOK_VERIFY_TOKEN_KIND`/`resolve_webhook_verify_token`: por defecto
-el handshake de `core/gateway/webhooks.py` usa `settings.whatsapp_
-verify_token` (global). Si el admin generó/escribió uno propio en el
-paso de webhook del wizard, se guarda acá y `webhooks.py` lo prioriza
-antes de caer al global -- opcional, dejarlo vacío no cambia nada del
-comportamiento actual.
+`WEBHOOK_VERIFY_TOKEN_KIND`: por defecto la suscripción de la app se
+registra con `settings.whatsapp_verify_token` (global). Si el admin
+generó/escribió uno propio en el paso de webhook del wizard, se guarda acá
+y es el que se registra y el que el handshake acepta para esa conexión
+(`webhook_secrets.verify_tokens_aceptados`, ADR-0126).
 """
 
 from __future__ import annotations
@@ -396,12 +395,16 @@ async def _rollback_failed_alta(
 # 7 días de vencer ya es `error`), o el alta si falla al guardar; Meta sigue firmando con
 # el secreto de la app. `revoked` (pausada a mano) también, pero solo como último recurso
 # (ADR-0122): su entrada se verifica y se guarda sin IA en vez de dar 401. Fuera quedan
-# `draft` (sin credenciales) y las borradas (`deleted_at`).
-_ESTADOS_CON_CREDENCIAL = ("pending", "connected", "degraded", "error", "revoked")
+# `draft` (sin credenciales) y las borradas (`deleted_at`). El webhook verifica cada grupo
+# con el secreto de las conexiones en estos estados dueñas de sus activos (ADR-0126).
+ESTADOS_CON_CREDENCIAL = ("pending", "connected", "degraded", "error", "revoked")
 
 
 async def _resolve_byok_token(tenant_id: uuid.UUID, kind: str) -> str | None:
-    """Token (del `kind` pedido) de la `MetaConnection` de WhatsApp del tenant.
+    """Token (del `kind` pedido) de UNA `MetaConnection` de WhatsApp del tenant: la que
+    gana el orden de abajo. Hoy solo para el `verify_token` del self-check del preflight;
+    la firma del webhook ya no sale de aquí sino de la conexión dueña de cada grupo
+    (`webhook_secrets`, ADR-0126), y el handshake acepta el token de cada conexión.
 
     `None` si el tenant no tiene una conexión (o está a mitad de guardarse) o si
     no guardó ese token -- el llamador decide el fallback. Filtra `tenant_id`
@@ -434,7 +437,7 @@ async def _resolve_byok_token(tenant_id: uuid.UUID, kind: str) -> str | None:
                 .where(
                     MetaConnection.tenant_id == tenant_id,
                     MetaConnection.channel == "whatsapp",
-                    MetaConnection.status.in_(_ESTADOS_CON_CREDENCIAL),
+                    MetaConnection.status.in_(ESTADOS_CON_CREDENCIAL),
                     MetaConnection.deleted_at.is_(None),
                 )
                 .order_by(
@@ -458,11 +461,3 @@ async def resolve_webhook_verify_token(tenant_id: uuid.UUID) -> str | None:
     """`verify_token` propio del wizard BYOK del tenant, o `None` (el llamador
     cae a `settings.whatsapp_verify_token`)."""
     return await _resolve_byok_token(tenant_id, WEBHOOK_VERIFY_TOKEN_KIND)
-
-
-async def resolve_byok_app_secret(tenant_id: uuid.UUID) -> str | None:
-    """App Secret de la app de Meta del tenant (cargado por el wizard BYOK),
-    o `None` (el llamador cae al `.env`). Se usa para validar la firma HMAC de
-    los webhooks entrantes: la app dedicada del tenant firma con ESTE secreto,
-    no con el global."""
-    return await _resolve_byok_token(tenant_id, APP_SECRET_KIND)

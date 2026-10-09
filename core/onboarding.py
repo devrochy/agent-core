@@ -148,3 +148,57 @@ async def ensure_brand_voice(tenant_id: uuid.UUID, slug: str, *, sobrescribir: b
                     return False
             settings.brand_voice = content
     return True
+
+async def sembrar_catalogo(tenant_id: uuid.UUID, data: dict) -> list[str]:
+    """Importa un `catalog.json` de pack_commerce al negocio. Idempotente.
+
+    Lo delega en `seed_data` del pack (ADR-0110): el core no importa packs."""
+    from core.plugin_manager import plugin_manager
+
+    plugin_manager.scan()
+    module = plugin_manager.get("pack_commerce")
+    if module is None:
+        raise RuntimeError("pack_commerce no está instalado")
+    return await module.seed_data(tenant_id, data)
+
+
+async def sembrar_packs(tenant_id: uuid.UUID, slug: str) -> list[str]:
+    """Seed genérico por pack (ADR-0083, issue #154): `TENANTS_ROOT/<slug>/<pack>.json` de
+    cada pack instalado que tenga uno (commerce usa `catalog.json`, por eso se excluye).
+    Un archivo que no es JSON válido se ignora con un aviso en el log."""
+    from core.plugin_manager import plugin_manager
+
+    _validate_slug(slug)
+    pasos: list[str] = []
+    for module in plugin_manager.list_modules():
+        if module.id == "pack_commerce":
+            continue
+        path = tenant_dir(slug) / f"{module.id}.json"
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            log.warning("seed_pack_json_invalido", pack=module.id, slug=slug)
+            continue
+        pasos.extend(await module.seed_data(tenant_id, data))
+        pasos.append(f"{module.id}.json importado")
+    return pasos
+
+
+async def sembrar_artefactos(tenant_id: uuid.UUID, slug: str, *, voz_de_marca: bool = False) -> list[str]:
+    """Lo que hace `agent-core tenant seed`: catálogo, seed de cada pack y voz de marca desde
+    `TENANTS_ROOT/<slug>/` (HU-SH-01). Lo usan el CLI y el runner de journeys, que arma una
+    réplica del asistente de un negocio con sus artefactos (HU-SH-08)."""
+    _validate_slug(slug)
+    pasos: list[str] = []
+    data = load_tenant_catalog(slug)
+    if data is not None:
+        if data.get("pack") == "pack_commerce":
+            pasos.extend(await sembrar_catalogo(tenant_id, data))
+        else:
+            log.warning("seed_catalogo_sin_pack_conocido", slug=slug, pack=str(data.get("pack")))
+    pasos.extend(await sembrar_packs(tenant_id, slug))
+    if await ensure_brand_voice(tenant_id, slug, sobrescribir=voz_de_marca):
+        pasos.append("brand_voice sembrada desde docs/voz-de-marca.md")
+    return pasos

@@ -195,18 +195,24 @@ scrubber por clave no tapa. Arreglo: `except httpx.TransportError` → `GraphErr
 - `core/shared/events.py::emit_nowait` (fallback sync) no propaga el tenant (hoy sin callers). Desde
   ADR-0107/HU-SUB-03 los eventos de dominio ya no dependen de esto: van por el outbox `domain_events`
   con `tenant_id` explícito; el bus in-process queda solo para eventos del core.
-- `meta_token_store.get_token` no filtra `tenant_id` en el WHERE (preexistente; el AAD falla
-  cerrado).
+- ~~`meta_token_store.get_token` no filtra `tenant_id` en el WHERE~~: lo filtra desde HU-CONN-05 (ADR-0126).
 - `ix_meta_tokens_tenant` no es índice compuesto (preexistente).
 - `save_byok_connection` tiene un branch de "tenant mismatch" inalcanzable (RLS lo filtra antes).
 
 **Pendientes tras HU-CONN-01 (credenciales por conexión, ADR-0094)**
-- Suscripciones y webhook (`meta_subscriptions*.py`, `meta_preflight.resolve_app_credentials`,
-  `connections.resolve_effective_app_secret`) siguen eligiendo "la" conexión del tenant en vez de usar
-  `credentials_for`: es HU-CONN-05 (webhook y secreto por conexión).
+- Seguimientos de HU-CONN-05 (ADR-0126): rechazar en el wizard BYOK el `META_APP_ID` de la plataforma (y quitar la
+  guarda por `meta_app_id` de `uses_platform_app`); generar un `verify_token` propio por conexión BYOK en vez del
+  global; revisar los `subscribed_apps` de la WABA al reclamarla (pendiente de ADR-0122); dos negocios con la misma
+  app BYOK se pisan el callback al registrar; mover al master el re-registro de la app de la plataforma que hace el
+  alta de Embedded Signup.
+- ~~Webhook y "Registrar webhook" eligiendo "la" conexión del tenant~~: resuelto en HU-CONN-05 (ADR-0126).
+  Queda `meta_preflight.resolve_app_credentials` (preflight y checklist viejos), que sigue eligiendo una
+  conexión por negocio.
 - Tras una toma por el wizard de ES, `meta_connections.meta_app_id` sigue siendo el de la app BYOK anterior
-  (ningún consumidor deduce el origen de él desde ADR-0094); alinearlo, y su índice único
-  `uq_meta_connections_tenant_app`, va con HU-CONN-05.
+  (ningún consumidor deduce el origen de él desde ADR-0094). HU-CONN-05 no lo alineó a propósito: es el
+  `subject_id` con el que se guardó el App Secret de esa app, y el webhook lo sigue aceptando (ADR-0101,
+  ADR-0126). Si se alinea, hay que mover también el secreto o dejar de aceptarlo, y revisar el índice único
+  `uq_meta_connections_tenant_app`.
 - Descarga de media entrante: el core no la hace (`inbound.py` deja `url: ""`); HU-MEDIA-02 debe usar
   `credentials_for` para el `GET /{media_id}`.
 - `meta_private.meta_tokens` tiene RLS habilitada pero **no forzada** (`relforcerowsecurity = f`): la migración

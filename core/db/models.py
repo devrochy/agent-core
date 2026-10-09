@@ -1534,6 +1534,84 @@ class MetaAppSubscription(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class MetaProductionCheck(Base):
+    """Corrida del checklist de producción de UNA conexión de Meta (HU-CONN-07).
+
+    La pide el panel ("Producción" de la conexión) y la ejecuta el worker de Celery con las
+    credenciales de esa conexión; aquí queda el resultado con fecha. Tabla de NEGOCIO:
+    `tenant_id`, RLS habilitada y forzada, policy de aislamiento. Una sola corrida activa
+    (`queued`/`running`) por conexión. Solo se escribe desde
+    `core/admin/production_readiness_service.py`."""
+
+    __tablename__ = "meta_production_checks"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('queued','running','done','failed')", name="ck_meta_production_checks_status"
+        ),
+        Index(
+            "ix_meta_production_checks_tenant_connection",
+            "tenant_id",
+            "connection_id",
+            "requested_at",
+        ),
+        Index(
+            "uq_meta_production_checks_activa",
+            "tenant_id",
+            "connection_id",
+            unique=True,
+            postgresql_where=text("status in ('queued','running') and deleted_at is null"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    connection_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("meta_connections.id"), nullable=False)
+    status: Mapped[str] = mapped_column(Text, default="queued")
+    ready: Mapped[bool | None] = mapped_column(Boolean)
+    checks: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    error: Mapped[str | None] = mapped_column(Text)
+    requested_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PlatformReadinessRun(Base):
+    """Corrida del checklist de la app de Meta de la plataforma y la infraestructura
+    (HU-CONN-07, "Plataforma → App de Meta", solo master).
+
+    Tabla de SISTEMA (sin RLS, sin `tenant_id`): el resultado es de la plataforma, no de un
+    negocio. Solo la leen y escriben `core/admin/production_readiness_service.py` (detrás de
+    rutas master-only) y el job de Celery; no guarda secretos, solo el estado de cada check.
+    Una sola corrida activa (`queued`/`running`) a la vez."""
+
+    __tablename__ = "platform_readiness_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('queued','running','done','failed')", name="ck_platform_readiness_runs_status"
+        ),
+        Index("ix_platform_readiness_runs_requested_at", "requested_at"),
+        # Una sola corrida activa: índice único sobre una constante, parcial a las activas.
+        Index(
+            "uq_platform_readiness_runs_activa",
+            text("(true)"),
+            unique=True,
+            postgresql_where=text("status in ('queued','running')"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    status: Mapped[str] = mapped_column(Text, default="queued")
+    ready: Mapped[bool | None] = mapped_column(Boolean)
+    checks: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    error: Mapped[str | None] = mapped_column(Text)
+    requested_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class GraphApiCall(Base):
     """Observabilidad: una fila por llamada saliente a Graph API."""
 

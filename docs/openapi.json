@@ -2481,6 +2481,59 @@
         }
       }
     },
+    "/api/v1/admin/meta/connections/{connection_id}/webhook/register": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Register Connection Webhook Route",
+        "description": "Registra la suscripción de la app de ESA conexión (HU-CONN-05): BYOK en su propia\napp (dueño o master); la app de la plataforma (Embedded Signup), solo el master.",
+        "operationId": "register_connection_webhook_route_api_v1_admin_meta_connections__connection_id__webhook_register_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/meta/webhooks/register": {
       "post": {
         "tags": [
@@ -2488,7 +2541,9 @@
           "admin · meta"
         ],
         "summary": "Register Webhook",
+        "description": "Obsoleta: usa `POST /connections/{connection_id}/webhook/register`.",
         "operationId": "register_webhook_api_v1_admin_meta_webhooks_register_post",
+        "deprecated": true,
         "parameters": [
           {
             "name": "X-Tenant-Id",
@@ -3548,8 +3603,9 @@
           "admin · meta"
         ],
         "summary": "Checklist Production",
-        "description": "Lista de producción: los mismos pasos manuales, con su estado.",
+        "description": "Obsoleta (HU-CONN-07): los pasos manuales de Meta viven en `/checklist/requirements`\ny el checklist de producción es por conexión\n(`/connections/{connection_id}/production`). Se mantiene para la app móvil.",
         "operationId": "checklist_production_api_v1_admin_meta_checklist_production_get",
+        "deprecated": true,
         "parameters": [
           {
             "name": "X-Tenant-Id",
@@ -3653,8 +3709,9 @@
           "admin · meta"
         ],
         "summary": "Run Production Checks",
-        "description": "Corre las comprobaciones de puesta en producción (9 checks on-demand).",
+        "description": "Obsoleta (HU-CONN-07): usar `/connections/{connection_id}/production/run`.\n\nYa no corre nada en el request ni muestra los checks de la plataforma (son del master):\nencola el checklist de producción de cada conexión del negocio y devuelve el último\nresultado guardado de cada una. Se mantiene para la app móvil.",
         "operationId": "run_production_checks_api_v1_admin_meta_checklist_production_run_post",
+        "deprecated": true,
         "parameters": [
           {
             "name": "X-Tenant-Id",
@@ -3684,6 +3741,126 @@
                     "$ref": "#/components/schemas/PreflightOut"
                   },
                   "title": "Response Run Production Checks Api V1 Admin Meta Checklist Production Run Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/connections/{connection_id}/production": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Get Connection Production",
+        "description": "Checklist de producción de la conexión: el último resultado guardado, con fecha.\n\nNúmero registrado, WABA suscrita, webhook, plantillas mínimas aprobadas y token, evaluados\ncon las credenciales de ESTA conexión. No corre nada: para revisar, `POST .../run`.",
+        "operationId": "get_connection_production_api_v1_admin_meta_connections__connection_id__production_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionProduction"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/connections/{connection_id}/production/run": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Run Connection Production",
+        "description": "Encola la revisión de producción de la conexión (job de Celery) y responde al instante\ncon la corrida `queued` (o la que ya estaba en curso). El panel consulta el GET hasta que\ntermine.",
+        "operationId": "run_connection_production_api_v1_admin_meta_connections__connection_id__production_run_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionProduction"
                 }
               }
             }
@@ -15216,6 +15393,125 @@
         ],
         "title": "ConnectionItem"
       },
+      "ConnectionProduction": {
+        "properties": {
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "never",
+              "queued",
+              "running",
+              "done",
+              "failed"
+            ],
+            "title": "Status",
+            "default": "never"
+          },
+          "ready": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ready"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReadinessItem"
+            },
+            "type": "array",
+            "title": "Items",
+            "default": []
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "requested_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "channel": {
+            "type": "string",
+            "title": "Channel"
+          },
+          "environment": {
+            "type": "string",
+            "title": "Environment"
+          },
+          "origin": {
+            "type": "string",
+            "title": "Origin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "channel",
+          "environment",
+          "origin"
+        ],
+        "title": "ConnectionProduction"
+      },
       "ConnectionTypeItem": {
         "properties": {
           "id": {
@@ -19379,6 +19675,108 @@
         ],
         "title": "PlanResponse"
       },
+      "PlatformMetaApp": {
+        "properties": {
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "never",
+              "queued",
+              "running",
+              "done",
+              "failed"
+            ],
+            "title": "Status",
+            "default": "never"
+          },
+          "ready": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ready"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReadinessItem"
+            },
+            "type": "array",
+            "title": "Items",
+            "default": []
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "requested_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "meta_app_id": {
+            "type": "string",
+            "title": "Meta App Id",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "PlatformMetaApp",
+        "description": "Checklist de la app de Meta de la plataforma y la infraestructura (solo master)."
+      },
       "PlatformTenant": {
         "properties": {
           "id": {
@@ -20512,6 +20910,70 @@
         ],
         "title": "PushTokenRequest"
       },
+      "ReadinessItem": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "repair_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repair Action"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "ReadinessItem",
+        "description": "Un ítem del checklist. `ok`: `None` = no se pudo evaluar."
+      },
       "RecentConversation": {
         "properties": {
           "id": {
@@ -20619,14 +21081,25 @@
         "properties": {
           "channel": {
             "type": "string",
-            "title": "Channel"
+            "title": "Channel",
+            "default": ""
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
           }
         },
         "type": "object",
-        "required": [
-          "channel"
-        ],
-        "title": "RegisterRequest"
+        "title": "RegisterRequest",
+        "description": "Ruta vieja: mejor `POST /connections/{id}/webhook/register`. Con `connection_id`\nregistra esa conexión; con solo `channel`, la única conexión viva del canal."
       },
       "ReportRow": {
         "properties": {
@@ -21201,6 +21674,23 @@
       },
       "SubscriptionItem": {
         "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "origin": {
+            "type": "string",
+            "title": "Origin"
+          },
+          "uses_platform_app": {
+            "type": "boolean",
+            "title": "Uses Platform App"
+          },
+          "can_register": {
+            "type": "boolean",
+            "title": "Can Register"
+          },
           "channel": {
             "type": "string",
             "title": "Channel"
@@ -21256,6 +21746,10 @@
         },
         "type": "object",
         "required": [
+          "connection_id",
+          "origin",
+          "uses_platform_app",
+          "can_register",
           "channel",
           "object",
           "meta_app_id",
@@ -21264,7 +21758,8 @@
           "fields",
           "last_error"
         ],
-        "title": "SubscriptionItem"
+        "title": "SubscriptionItem",
+        "description": "Suscripción de la APP que usa una conexión (HU-CONN-05). Con la app de la\nplataforma y sin ser master, `callback_url` y `last_error` vienen vacíos."
       },
       "SubscriptionProviderSettings": {
         "properties": {

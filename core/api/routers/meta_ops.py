@@ -18,9 +18,11 @@ from pydantic import BaseModel, SecretStr
 from sqlalchemy import select
 
 from core.admin.meta_health_service import (
+    WebhookRegistroError,
     diagnose_connection,
     health_overview,
     register_channel_subscription,
+    register_connection_webhook,
     resubscribe_waba,
     set_billing_status,
     set_connection_status,
@@ -51,7 +53,7 @@ from core.admin.waweb_service import (
 )
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
-from core.config import get_settings
+from core.api.schemas import ReadinessRun, readiness_run_out
 from core.db.session import get_session
 
 if TYPE_CHECKING:
@@ -96,6 +98,13 @@ class BillingRequest(BaseModel):
 
 
 class SubscriptionItem(BaseModel):
+    """Suscripción de la APP que usa una conexión (HU-CONN-05). Con la app de la
+    plataforma y sin ser master, `callback_url` y `last_error` vienen vacíos."""
+
+    connection_id: uuid.UUID
+    origin: str
+    uses_platform_app: bool
+    can_register: bool
     channel: str
     object: str
     meta_app_id: str
@@ -110,17 +119,33 @@ class WebhooksResponse(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    channel: str
+    """Ruta vieja: mejor `POST /connections/{id}/webhook/register`. Con `connection_id`
+    registra esa conexión; con solo `channel`, la única conexión viva del canal."""
+
+    channel: str = ""
+    connection_id: uuid.UUID | None = None
+
+
+def _es_owner_o_master(principal: Principal) -> bool:
+    if principal.admin.role == "master":
+        return True
+    role = next((role for (tid, _name, role) in principal.tenants if tid == principal.tenant_id), None)
+    return role == "owner"
 
 
 def _require_owner_or_master(principal: Principal) -> None:
-    if principal.admin.role == "master":
-        return
-    role = next((role for (tid, _name, role) in principal.tenants if tid == principal.tenant_id), None)
-    if role != "owner":
+    if not _es_owner_o_master(principal):
         raise ApiError.forbidden(
             "Se requiere ser propietario del negocio o admin de plataforma."
         )
+
+
+def _api_error(exc: WebhookRegistroError) -> ApiError:
+    if exc.status == 404:
+        return ApiError.not_found(exc.message)
+    if exc.status == 403:
+        return ApiError(403, exc.code, exc.message)
+    return ApiError.bad_request(exc.message, exc.code)
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -171,19 +196,46 @@ async def billing(
 async def get_webhooks(
     principal: Annotated[Principal, Depends(require("connections"))],
 ) -> WebhooksResponse:
-    rows = await webhook_subscriptions_status(principal.tenant_id)
+    rows = await webhook_subscriptions_status(
+        principal.tenant_id,
+        es_master=principal.admin.role == "master",
+        puede_registrar=_es_owner_o_master(principal),
+    )
     return WebhooksResponse(subscriptions=[SubscriptionItem(**row) for row in rows])
 
 
-@router.post("/webhooks/register", status_code=204)
+@router.post("/connections/{connection_id}/webhook/register", status_code=204)
+async def register_connection_webhook_route(
+    connection_id: str,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> Response:
+    """Registra la suscripción de la app de ESA conexión (HU-CONN-05): BYOK en su propia
+    app (dueño o master); la app de la plataforma (Embedded Signup), solo el master."""
+    _require_owner_or_master(principal)
+    try:
+        await register_connection_webhook(
+            principal.tenant_id, connection_id, es_master=principal.admin.role == "master"
+        )
+    except WebhookRegistroError as exc:
+        raise _api_error(exc) from exc
+    return Response(status_code=204)
+
+
+@router.post("/webhooks/register", status_code=204, deprecated=True)
 async def register_webhook(
     payload: RegisterRequest,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> Response:
+    """Obsoleta: usa `POST /connections/{connection_id}/webhook/register`."""
     _require_owner_or_master(principal)
-    error = await register_channel_subscription(principal.tenant_id, payload.channel)
-    if error is not None:
-        raise ApiError.bad_request(error, "register_failed")
+    es_master = principal.admin.role == "master"
+    try:
+        if payload.connection_id is not None:
+            await register_connection_webhook(principal.tenant_id, str(payload.connection_id), es_master=es_master)
+        else:
+            await register_channel_subscription(principal.tenant_id, payload.channel, es_master=es_master)
+    except WebhookRegistroError as exc:
+        raise _api_error(exc) from exc
     return Response(status_code=204)
 
 
@@ -796,7 +848,9 @@ async def checklist_requirements(
     async with get_session() as session:
         tenant = await session.get(Tenant, principal.tenant_id)
         slug = tenant.slug if tenant else ""
-    checks = await run_preflight(principal.tenant_id, slug)
+    checks = await run_preflight(
+        principal.tenant_id, slug, include_platform_app=principal.admin.role == "master"
+    )
     return ChecklistOut(
         steps=steps,
         checks=[PreflightOut(key=c.key, ok=c.ok, detail=c.detail) for c in checks],
@@ -804,11 +858,13 @@ async def checklist_requirements(
     )
 
 
-@router.get("/checklist/production", response_model=ChecklistOut)
+@router.get("/checklist/production", response_model=ChecklistOut, deprecated=True)
 async def checklist_production(
     principal: Annotated[Principal, Depends(require("connections"))],
 ) -> ChecklistOut:
-    """Lista de producción: los mismos pasos manuales, con su estado."""
+    """Obsoleta (HU-CONN-07): los pasos manuales de Meta viven en `/checklist/requirements`
+    y el checklist de producción es por conexión
+    (`/connections/{connection_id}/production`). Se mantiene para la app móvil."""
     steps, meta_configured = await _checklist_steps(principal.tenant_id)
     return ChecklistOut(steps=steps, meta_configured=meta_configured)
 
@@ -842,24 +898,108 @@ async def checklist_step(
         fila.notes = payload.notes.strip() or None
     return Response(status_code=204)
 
-@router.post("/checklist/production/run", response_model=list[PreflightOut])
+@router.post("/checklist/production/run", response_model=list[PreflightOut], deprecated=True)
 async def run_production_checks(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> list[PreflightOut]:
-    """Corre las comprobaciones de puesta en producción (9 checks on-demand)."""
-    from core.gateway import meta_production_readiness as readiness
+    """Obsoleta (HU-CONN-07): usar `/connections/{connection_id}/production/run`.
 
-    settings = get_settings()
-    callback_url = f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"
-    checks = [
-        await readiness.check_webhook_handshake(callback_url, settings.whatsapp_verify_token),
-        await readiness.check_app_subscriptions_complete(settings.meta_app_id),
-        readiness.check_prod_secret_differs_from_dev(settings.meta_app_secret),
-        readiness.check_token_keys_configured(),
-        await readiness.check_worker_heartbeat_and_dlq(),
-        await readiness.check_rls_forced(),
-        readiness.check_rls_tests_pass(),
-        readiness.check_no_secret_leak_in_templates(),
-        await readiness.check_connections_health_except_billing(principal.tenant_id),
-    ]
-    return [PreflightOut(key=c.key, ok=c.ok, detail=c.detail) for c in checks]
+    Ya no corre nada en el request ni muestra los checks de la plataforma (son del master):
+    encola el checklist de producción de cada conexión del negocio y devuelve el último
+    resultado guardado de cada una. Se mantiene para la app móvil."""
+    from core.admin import production_readiness_service as readiness
+
+    tenant_id = _tenant_or_403(principal)
+    out: list[PreflightOut] = []
+    for connection_id in await readiness.live_connection_ids(tenant_id):
+        try:
+            await readiness.request_connection_run(tenant_id, connection_id, principal.admin.id)
+        except (readiness.ConnectionNotFound, readiness.EnqueueFailed):
+            pass
+        latest = await readiness.latest_connection_run(tenant_id, connection_id)
+        for item in (latest.checks if latest is not None and latest.status == "done" else []):
+            out.append(
+                PreflightOut(key=f"{str(connection_id)[:8]}:{item['key']}", ok=item.get("ok"), detail=item.get("detail"))
+            )
+    if not out:
+        out.append(
+            PreflightOut(
+                key="production_checks",
+                ok=None,
+                detail="La revisión de cada conexión quedó en curso: consulta de nuevo en unos segundos.",
+            )
+        )
+    return out
+
+
+# ------------------------------------------------ checklist de producción por conexión
+class ConnectionProduction(ReadinessRun):
+    connection_id: uuid.UUID
+    channel: str
+    environment: str
+    origin: str
+
+
+def _tenant_or_403(principal: Principal) -> uuid.UUID:
+    if principal.tenant_id is None:
+        raise ApiError.forbidden("Selecciona un negocio.")
+    return principal.tenant_id
+
+
+def _connection_uuid(connection_id: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(connection_id)
+    except ValueError as exc:
+        raise ApiError.not_found("Conexión no encontrada.") from exc
+
+
+async def _connection_production(tenant_id: uuid.UUID, connection_id: uuid.UUID) -> ConnectionProduction:
+    from core.admin.production_readiness_service import latest_connection_run, owned_connection
+
+    connection = await owned_connection(tenant_id, connection_id)
+    if connection is None:
+        raise ApiError.not_found("Conexión no encontrada.")
+    run = await latest_connection_run(tenant_id, connection_id)
+    return ConnectionProduction(
+        connection_id=connection.id,
+        channel=connection.channel,
+        environment=connection.environment,
+        origin=connection.origin,
+        **readiness_run_out(run),
+    )
+
+
+@router.get("/connections/{connection_id}/production", response_model=ConnectionProduction)
+async def get_connection_production(
+    connection_id: str,
+    principal: Annotated[Principal, Depends(require("connections"))],
+) -> ConnectionProduction:
+    """Checklist de producción de la conexión: el último resultado guardado, con fecha.
+
+    Número registrado, WABA suscrita, webhook, plantillas mínimas aprobadas y token, evaluados
+    con las credenciales de ESTA conexión. No corre nada: para revisar, `POST .../run`."""
+    tenant_id = _tenant_or_403(principal)
+    return await _connection_production(tenant_id, _connection_uuid(connection_id))
+
+
+@router.post(
+    "/connections/{connection_id}/production/run", response_model=ConnectionProduction, status_code=202
+)
+async def run_connection_production(
+    connection_id: str,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> ConnectionProduction:
+    """Encola la revisión de producción de la conexión (job de Celery) y responde al instante
+    con la corrida `queued` (o la que ya estaba en curso). El panel consulta el GET hasta que
+    termine."""
+    from core.admin import production_readiness_service as readiness
+
+    tenant_id = _tenant_or_403(principal)
+    cid = _connection_uuid(connection_id)
+    try:
+        await readiness.request_connection_run(tenant_id, cid, principal.admin.id)
+    except readiness.ConnectionNotFound as exc:
+        raise ApiError.not_found("Conexión no encontrada.") from exc
+    except readiness.EnqueueFailed as exc:
+        raise ApiError(503, "enqueue_failed", str(exc)) from exc
+    return await _connection_production(tenant_id, cid)
