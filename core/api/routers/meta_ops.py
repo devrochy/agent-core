@@ -51,7 +51,7 @@ from core.admin.waweb_service import (
 )
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
-from core.config import get_settings
+from core.api.schemas import ReadinessRun, readiness_run_out
 from core.db.session import get_session
 
 if TYPE_CHECKING:
@@ -804,11 +804,13 @@ async def checklist_requirements(
     )
 
 
-@router.get("/checklist/production", response_model=ChecklistOut)
+@router.get("/checklist/production", response_model=ChecklistOut, deprecated=True)
 async def checklist_production(
     principal: Annotated[Principal, Depends(require("connections"))],
 ) -> ChecklistOut:
-    """Lista de producción: los mismos pasos manuales, con su estado."""
+    """Obsoleta (HU-CONN-07): los pasos manuales de Meta viven en `/checklist/requirements`
+    y el checklist de producción es por conexión
+    (`/connections/{connection_id}/production`). Se mantiene para la app móvil."""
     steps, meta_configured = await _checklist_steps(principal.tenant_id)
     return ChecklistOut(steps=steps, meta_configured=meta_configured)
 
@@ -842,24 +844,108 @@ async def checklist_step(
         fila.notes = payload.notes.strip() or None
     return Response(status_code=204)
 
-@router.post("/checklist/production/run", response_model=list[PreflightOut])
+@router.post("/checklist/production/run", response_model=list[PreflightOut], deprecated=True)
 async def run_production_checks(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> list[PreflightOut]:
-    """Corre las comprobaciones de puesta en producción (9 checks on-demand)."""
-    from core.gateway import meta_production_readiness as readiness
+    """Obsoleta (HU-CONN-07): usar `/connections/{connection_id}/production/run`.
 
-    settings = get_settings()
-    callback_url = f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"
-    checks = [
-        await readiness.check_webhook_handshake(callback_url, settings.whatsapp_verify_token),
-        await readiness.check_app_subscriptions_complete(settings.meta_app_id),
-        readiness.check_prod_secret_differs_from_dev(settings.meta_app_secret),
-        readiness.check_token_keys_configured(),
-        await readiness.check_worker_heartbeat_and_dlq(),
-        await readiness.check_rls_forced(),
-        readiness.check_rls_tests_pass(),
-        readiness.check_no_secret_leak_in_templates(),
-        await readiness.check_connections_health_except_billing(principal.tenant_id),
-    ]
-    return [PreflightOut(key=c.key, ok=c.ok, detail=c.detail) for c in checks]
+    Ya no corre nada en el request ni muestra los checks de la plataforma (son del master):
+    encola el checklist de producción de cada conexión del negocio y devuelve el último
+    resultado guardado de cada una. Se mantiene para la app móvil."""
+    from core.admin import production_readiness_service as readiness
+
+    tenant_id = _tenant_or_403(principal)
+    out: list[PreflightOut] = []
+    for connection_id in await readiness.live_connection_ids(tenant_id):
+        try:
+            await readiness.request_connection_run(tenant_id, connection_id, principal.admin.id)
+        except (readiness.ConnectionNotFound, readiness.EnqueueFailed):
+            pass
+        latest = await readiness.latest_connection_run(tenant_id, connection_id)
+        for item in (latest.checks if latest is not None and latest.status == "done" else []):
+            out.append(
+                PreflightOut(key=f"{str(connection_id)[:8]}:{item['key']}", ok=item.get("ok"), detail=item.get("detail"))
+            )
+    if not out:
+        out.append(
+            PreflightOut(
+                key="production_checks",
+                ok=None,
+                detail="La revisión de cada conexión quedó en curso: consulta de nuevo en unos segundos.",
+            )
+        )
+    return out
+
+
+# ------------------------------------------------ checklist de producción por conexión
+class ConnectionProduction(ReadinessRun):
+    connection_id: uuid.UUID
+    channel: str
+    environment: str
+    origin: str
+
+
+def _tenant_or_403(principal: Principal) -> uuid.UUID:
+    if principal.tenant_id is None:
+        raise ApiError.forbidden("Selecciona un negocio.")
+    return principal.tenant_id
+
+
+def _connection_uuid(connection_id: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(connection_id)
+    except ValueError as exc:
+        raise ApiError.not_found("Conexión no encontrada.") from exc
+
+
+async def _connection_production(tenant_id: uuid.UUID, connection_id: uuid.UUID) -> ConnectionProduction:
+    from core.admin.production_readiness_service import latest_connection_run, owned_connection
+
+    connection = await owned_connection(tenant_id, connection_id)
+    if connection is None:
+        raise ApiError.not_found("Conexión no encontrada.")
+    run = await latest_connection_run(tenant_id, connection_id)
+    return ConnectionProduction(
+        connection_id=connection.id,
+        channel=connection.channel,
+        environment=connection.environment,
+        origin=connection.origin,
+        **readiness_run_out(run),
+    )
+
+
+@router.get("/connections/{connection_id}/production", response_model=ConnectionProduction)
+async def get_connection_production(
+    connection_id: str,
+    principal: Annotated[Principal, Depends(require("connections"))],
+) -> ConnectionProduction:
+    """Checklist de producción de la conexión: el último resultado guardado, con fecha.
+
+    Número registrado, WABA suscrita, webhook, plantillas mínimas aprobadas y token, evaluados
+    con las credenciales de ESTA conexión. No corre nada: para revisar, `POST .../run`."""
+    tenant_id = _tenant_or_403(principal)
+    return await _connection_production(tenant_id, _connection_uuid(connection_id))
+
+
+@router.post(
+    "/connections/{connection_id}/production/run", response_model=ConnectionProduction, status_code=202
+)
+async def run_connection_production(
+    connection_id: str,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> ConnectionProduction:
+    """Encola la revisión de producción de la conexión (job de Celery) y responde al instante
+    con la corrida `queued` (o la que ya estaba en curso). El panel consulta el GET hasta que
+    termine."""
+    from core.admin import production_readiness_service as readiness
+
+    tenant_id = _tenant_or_403(principal)
+    cid = _connection_uuid(connection_id)
+    try:
+        await readiness.request_connection_run(tenant_id, cid, principal.admin.id)
+    except readiness.ConnectionNotFound as exc:
+        raise ApiError.not_found("Conexión no encontrada.") from exc
+    except readiness.EnqueueFailed as exc:
+        raise ApiError(503, "enqueue_failed", str(exc)) from exc
+    return await _connection_production(tenant_id, cid)

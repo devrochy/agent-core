@@ -1,6 +1,7 @@
 """Checklist de puesta en marcha en la API nueva
 (`/api/v1/admin/meta/checklist/*`): requisitos manuales separados de los checks
-automáticos, corrida on-demand de producción y persistencia de pasos manuales."""
+automáticos y persistencia de pasos manuales. La corrida de producción vive en
+`test_checklist_produccion.py` (HU-CONN-07)."""
 
 from __future__ import annotations
 
@@ -83,73 +84,6 @@ async def test_requisitos_separan_pasos_manuales_y_checks_automaticos(app_client
     assert len(body["checks"]) == 9
     assert all(check["ok"] is False for check in body["checks"])
     assert "meta_configured" in body
-
-
-async def test_run_produccion_devuelve_el_estado_de_los_9_checks(app_client, monkeypatch):
-    import core.gateway.meta_production_readiness as readiness_mod
-
-    tid = await _new_tenant()
-    headers = await api_headers(app_client, tid)
-
-    async def _fake_check_fail(*a, **k):
-        from datetime import UTC, datetime
-
-        from core.gateway.meta_preflight import PreflightCheck
-
-        return PreflightCheck(key="fake", ok=False, detail="forzado a fallar", checked_at=datetime.now(UTC))
-
-    async def _fake_check_ok(*a, **k):
-        from datetime import UTC, datetime
-
-        from core.gateway.meta_preflight import PreflightCheck
-
-        return PreflightCheck(key="fake", ok=True, detail="todo bien", checked_at=datetime.now(UTC))
-
-    def _fake_sync_fail(*a, **k):
-        from datetime import UTC, datetime
-
-        from core.gateway.meta_preflight import PreflightCheck
-
-        return PreflightCheck(key="fake", ok=False, detail="forzado a fallar", checked_at=datetime.now(UTC))
-
-    def _fake_sync_ok(*a, **k):
-        from datetime import UTC, datetime
-
-        from core.gateway.meta_preflight import PreflightCheck
-
-        return PreflightCheck(key="fake", ok=True, detail="todo bien", checked_at=datetime.now(UTC))
-
-    # Todos fallan: el panel deshabilita "listo para producción" si algún automático
-    # está en rojo (la lógica de botón es del panel; acá se verifica el dato).
-    monkeypatch.setattr(readiness_mod, "check_webhook_handshake", _fake_check_fail)
-    monkeypatch.setattr(readiness_mod, "check_app_subscriptions_complete", _fake_check_fail)
-    monkeypatch.setattr(readiness_mod, "check_prod_secret_differs_from_dev", _fake_sync_fail)
-    monkeypatch.setattr(readiness_mod, "check_token_keys_configured", _fake_sync_fail)
-    monkeypatch.setattr(readiness_mod, "check_worker_heartbeat_and_dlq", _fake_check_fail)
-    monkeypatch.setattr(readiness_mod, "check_rls_forced", _fake_check_fail)
-    monkeypatch.setattr(readiness_mod, "check_rls_tests_pass", _fake_sync_fail)
-    monkeypatch.setattr(readiness_mod, "check_no_secret_leak_in_templates", _fake_sync_fail)
-    monkeypatch.setattr(readiness_mod, "check_connections_health_except_billing", _fake_check_fail)
-
-    r = await app_client.post("/api/v1/admin/meta/checklist/production/run", headers=headers)
-    assert r.status_code == 200, r.text
-    assert len(r.json()) == 9
-    assert all(check["ok"] is False for check in r.json())
-
-    # Todos pasan: el dato para habilitar el botón.
-    monkeypatch.setattr(readiness_mod, "check_webhook_handshake", _fake_check_ok)
-    monkeypatch.setattr(readiness_mod, "check_app_subscriptions_complete", _fake_check_ok)
-    monkeypatch.setattr(readiness_mod, "check_prod_secret_differs_from_dev", _fake_sync_ok)
-    monkeypatch.setattr(readiness_mod, "check_token_keys_configured", _fake_sync_ok)
-    monkeypatch.setattr(readiness_mod, "check_worker_heartbeat_and_dlq", _fake_check_ok)
-    monkeypatch.setattr(readiness_mod, "check_rls_forced", _fake_check_ok)
-    monkeypatch.setattr(readiness_mod, "check_rls_tests_pass", _fake_sync_ok)
-    monkeypatch.setattr(readiness_mod, "check_no_secret_leak_in_templates", _fake_sync_ok)
-    monkeypatch.setattr(readiness_mod, "check_connections_health_except_billing", _fake_check_ok)
-
-    r2 = await app_client.post("/api/v1/admin/meta/checklist/production/run", headers=headers)
-    assert r2.status_code == 200
-    assert all(check["ok"] is True for check in r2.json())
 
 
 async def test_marcar_paso_manual_persiste_notas(app_client):
