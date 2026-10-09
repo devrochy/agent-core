@@ -1,6 +1,6 @@
 # ADR-0116 — Colaboración entre agentes en un hilo y back-office asíncrono
 
-- **Estado:** propuesto
+- **Estado:** aceptado (2026-10-09, HU-AOS-01)
 - **Fecha:** 2026-10-08
 - **Contexto:** HU-AOS-18, HU-AOS-19, HU-AOS-20 y HU-AOS-30 (SPEC-26). Usa ADR-0112, ADR-0114, ADR-0113
   (`exposes.consultas`, límites del turno en el KernelSpec), ADR-0117 (el grafo va dentro de la release), ADR-0107

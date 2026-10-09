@@ -1,6 +1,6 @@
 # ADR-0118 — Habilidades versionadas con procedimientos, consultas y plantillas de agente; instalación con scope
 
-- **Estado:** propuesto
+- **Estado:** aceptado (2026-10-09, HU-AOS-01)
 - **Fecha:** 2026-10-08
 - **Contexto:** HU-AOS-16 y HU-AOS-34 (SPEC-26). Enmienda ADR-0019 (manifiesto, habilitación por `spec.packs` y
   consentimiento *fail-open* transitorio), ADR-0089 §3 (habilitación del plugin del negocio) y ADR-0110 §3 (habilitar y

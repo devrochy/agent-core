@@ -1,6 +1,6 @@
 # ADR-0112 — Agent OS de procedimientos: Coordinador por conexión, un hilo por conversación y agentes especialistas
 
-- **Estado:** propuesto
+- **Estado:** aceptado (2026-10-09, HU-AOS-01)
 - **Fecha:** 2026-10-08
 - **Contexto:** HU-AOS-01 (SPEC-26 en `solvershub-docs`, decisiones D-27 y D-28). Responde la pregunta P-10.
   No cambia la topología (rige ADR-0021). Los contratos cambian en ADR-0113.

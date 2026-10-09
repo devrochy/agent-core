@@ -1,6 +1,6 @@
 # ADR-0115 — Conexión canónica y conversación por (conexión, cliente)
 
-- **Estado:** propuesto
+- **Estado:** aceptado (2026-10-09, HU-AOS-01)
 - **Fecha:** 2026-10-08
 - **Contexto:** HU-AOS-11 (SPEC-26). Enmienda ADR-0069 (catálogo de tipos de conexión), ADR-0045 (medición de
   conversaciones), ADR-0122 §6 (altas y reconexión de números) y ADR-0127 §3 (número del envío y promoción).

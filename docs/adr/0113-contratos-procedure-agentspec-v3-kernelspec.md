@@ -1,6 +1,6 @@
 # ADR-0113 — Contratos `procedure/1`, AgentSpec v3 y KernelSpec v1 (major)
 
-- **Estado:** propuesto
+- **Estado:** aceptado (2026-10-09, HU-AOS-01)
 - **Fecha:** 2026-10-08
 - **Contexto:** HU-AOS-03 y HU-AOS-12 (SPEC-26). Enmienda ADR-0050 (AgentSpec v2), ADR-0014 (la allowlist de
   playbooks pasa a ser la de cada agente), ADR-0051 §3 y ADR-0052 (guardrails y tools declarativas salen de

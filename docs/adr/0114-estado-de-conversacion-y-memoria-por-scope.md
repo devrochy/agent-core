@@ -1,6 +1,6 @@
 # ADR-0114 — Estado de la conversación como tareas *event-sourced* y memoria por scope
 
-- **Estado:** propuesto
+- **Estado:** aceptado (2026-10-09, HU-AOS-01)
 - **Fecha:** 2026-10-08
 - **Contexto:** HU-AOS-04 y HU-AOS-36 (SPEC-26). Enmienda ADR-0053 (memoria, retención y PII). Usa ADR-0091 (fecha y
   hora al final del bloque dinámico) y ADR-0117 (episodios).
