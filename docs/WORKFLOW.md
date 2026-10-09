@@ -116,6 +116,45 @@ Antes del merge, en este orden:
 
 ---
 
+## CI: qué corre en cada evento (ADR-0120)
+
+| Evento | Nivel | Qué corre |
+|---|---|---|
+| PR → develop | rápido | ruff, basedpyright, import-linter, unitarios, gitleaks sobre los commits de la PR y, si la PR toca `core/`, `packages/`, `plugins/`, `alembic/`, `cli/`, `tests/integration/`, `pyproject.toml`, `uv.lock` o `.github/`, el subconjunto `pytest tests/integration -m aislamiento` |
+| push → develop (post-merge) | completo | lo anterior, más la integración completa, el gate de evals y journeys y gitleaks sobre toda la historia |
+| PR → main / push → main | completo | lo del push a develop, más el drift de `docs/openapi.json` |
+
+- **Despliegue a test.** Una PR verde en develop **no** garantiza que pase la integración completa. No se despliega a test hasta que el CI del push a develop esté en verde.
+- **Tests nuevos de aislamiento.** Un test de integración nuevo que proteja el aislamiento entre tenants (RLS, `tenant_id` explícito, IDOR, webhooks multi-tenant) lleva `pytest.mark.aislamiento`.
+- **Postgres del CI.** Es la imagen de producción (`docker/postgres/Dockerfile`), publicada en GHCR por `ci-postgres-image.yml`. Si cambia el Dockerfile, ese workflow la republica; para refrescar la imagen base, "Run workflow" en Actions. **Arranque:** `workflow_dispatch` solo existe cuando el workflow ya está en `main`, así que la primera imagen se publica a mano desde el host del runner (la etiqueta `source` vincula el paquete al repo para que el `GITHUB_TOKEN` del CI pueda bajarla):
+
+  ```bash
+  gh auth refresh -s write:packages
+  gh auth token | docker login ghcr.io -u devrochy --password-stdin
+  docker build --pull --label org.opencontainers.image.source=https://github.com/devrochy/agent-core -t ghcr.io/devrochy/solvershub-postgres:pg17-postgis docker/postgres
+  docker push ghcr.io/devrochy/solvershub-postgres:pg17-postgis && docker logout ghcr.io
+  ```
+
+### Segundo runner en el mismo host
+
+Los services usan puertos dinámicos, así que varios runners pueden compartir la
+máquina. Para registrar otro, con el token de *Settings → Actions → Runners → New
+self-hosted runner*:
+
+```bash
+mkdir ~/actions-runner-2 && cd ~/actions-runner-2
+# Descargar y descomprimir el mismo paquete del runner que usa ~/actions-runner
+./config.sh --url https://github.com/devrochy/agent-core --token <TOKEN> \
+  --name solvershub-ci-2 --labels self-hosted,linux,x64 --unattended
+sudo ./svc.sh install && sudo ./svc.sh start
+```
+
+El host ya tiene otros runners (`actions-runner-apk`, `actions-runner-panel`) y los
+contenedores de Coolify de test. Antes de sumar un tercero, conviene vigilar la CPU
+durante una corrida.
+
+---
+
 ## Un tema, un dueño
 
 Sin esta tabla la documentación se duplica y las copias divergen. Cada tema tiene un

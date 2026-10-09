@@ -131,6 +131,7 @@ async def test_credenciales_reales_segun_el_origen(platform_app) -> None:
     assert (manual.origin, manual.access_token, manual.app_secret) == ("manual", "tok-manual", PLATFORM_SECRET)
 
 
+@pytest.mark.aislamiento  # subconjunto de las PRs a develop (ADR-0120)
 async def test_un_negocio_nunca_resuelve_las_credenciales_de_otro(platform_app) -> None:
     from core.gateway.meta_byok import APP_SECRET_KIND, CLOUD_API_ACCESS_TOKEN_KIND
     from core.gateway.meta_credentials import CredentialsUnavailable, credentials_for

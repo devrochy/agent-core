@@ -225,6 +225,7 @@ async def test_tenant_ruidoso_no_bloquea_a_otro(app_client, tenant_setup, record
 
 
 # ---------------------------------------------------------------- 4. RLS real
+@pytest.mark.aislamiento  # subconjunto de las PRs a develop (ADR-0120)
 async def test_query_sin_tenant_no_ve_otro_tenant(app_client, tenant_setup):
     t1, t2 = tenant_setup
     from core.db.models import Customer
@@ -272,6 +273,7 @@ async def test_query_sin_tenant_no_ve_otro_tenant(app_client, tenant_setup):
 
 
 # ------------------------------------------------------ 5. recovery de huérfanas
+@pytest.mark.aislamiento  # subconjunto de las PRs a develop (ADR-0120)
 async def test_recover_orphaned_conversations_siembra_tenant_id(tenant_setup):
     """Bug encontrado por `auditor-multitenant` (2026-09-12) sobre el fix de
     debounce: el `for` que recorría las conversaciones huérfanas quedaba

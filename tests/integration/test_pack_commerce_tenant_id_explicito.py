@@ -19,6 +19,7 @@ import pytest
 from conftest import TEST_ALPHA_ID, TEST_BETA_ID
 
 pytestmark = [
+    pytest.mark.aislamiento,  # subconjunto de las PRs a develop (ADR-0120)
     pytest.mark.asyncio(loop_scope="session"),
     pytest.mark.skipif(
         os.environ.get("AGENT_CORE_INTEGRATION") != "1",
