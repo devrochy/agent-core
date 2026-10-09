@@ -686,6 +686,7 @@ async def test_el_token_de_terminos_de_un_negocio_no_vale_en_otro(vendedores, si
     modelo trae de la conversación de otro vendedor no acepta nada ni crea el pedido."""
     from pack_commerce.models import Order
 
+    from core.db.models import PedidoDeAlta
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -707,6 +708,11 @@ async def test_el_token_de_terminos_de_un_negocio_no_vale_en_otro(vendedores, si
     async with tenant_scope(otro):
         async with get_session() as s:
             assert (await s.execute(select(Order).where(Order.customer_id == ajeno))).all() == []
+            assert (await s.execute(select(PedidoDeAlta).where(PedidoDeAlta.customer_id == ajeno))).all() == []
+    # Control: con su propio token y un mensaje suyo después, el mismo cliente sí compra.
+    await _mensaje_del_cliente(otro, ajeno)
+    propio = await _pedir(otro, ajeno, _datos(acepta_terminos=resultado["acepta_terminos"]))
+    assert propio["status"] == "confirmed", propio
 
 
 @pytest.mark.aislamiento
