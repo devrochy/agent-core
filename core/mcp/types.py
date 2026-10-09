@@ -44,6 +44,7 @@ log = get_logger(__name__)
 # handler(arguments, context) -> resultado JSON-serializable
 ToolHandler = Callable[[dict[str, Any], "ToolContext"], Awaitable[dict[str, Any]]]
 GuardrailFn = Callable[[str, list[dict[str, Any]]], Awaitable["GuardrailResult"]]
+AfirmacionesFn = Callable[[], Awaitable[list["Afirmacion"]]]
 
 
 @dataclass
@@ -336,6 +337,31 @@ class Guardrail:
     fn: GuardrailFn
     priority: int = 10  # menor = se evalúa primero
     plugin_id: str = ""
+
+
+@dataclass(frozen=True)
+class Afirmacion:
+    """Afirmación de cierre que declara un pack para el verificador del core
+    (ADR-0119, HU-ARCH-29): frases que dan por hecha una acción y las tools que
+    la respaldan.
+
+    - `patron`: lo compila el pack. Las frases que configura un negocio
+      (`completion_claims_custom`, ADR-0025) llegan siempre escapadas, nunca
+      como regex crudo.
+    - `tools`: alguna tiene que haber terminado bien en el turno actual.
+    - `basta_url`: también la respalda cualquier tool del turno que haya
+      devuelto una URL (un link de pago lo puede dar el pedido, la suscripción
+      o pagos en línea; así el pack no lista tools de otros packs).
+
+    El verificador descarta solo las preguntas, las negaciones y los
+    condicionales ("para generar el link…"): eso es español genérico y vive en
+    el core, no en cada pack.
+    """
+
+    label: str
+    patron: re.Pattern[str]
+    tools: frozenset[str] = frozenset()
+    basta_url: bool = False
 
 
 class BaseSkill(ABC):

@@ -285,6 +285,43 @@ host.register_guardrail("mi_check", mi_guardrail, priority=5)  # menor = primero
 Presupuesto del core: 1 reintento; si reincide, escala a humano. Un guardrail que
 lanza excepción se ignora (fail-open) y se loggea: un guardrail roto no silencia al bot.
 
+### 11.1 Afirmaciones de cierre y montos (verificador del core, ADR-0119)
+
+Antes de los guardrails de los packs corre el **verificador de afirmaciones** del core
+(`core/orchestrator/verificador/`). Compara el borrador con lo que el sistema hizo:
+
+- **Montos:** toda cifra en `$`/`COP` tiene que haber salido de una tool, de este turno o de
+  uno anterior. Un pack que devuelve un monto verificado lo pone bajo una clave de
+  `core.shared.dinero.MONEY_KEYS` (`price`, `unit_price`, `line_total`, `subtotal`, `total`,
+  `discount`, `monto`, `valor_periodo`). Un monto que el LLM pasó como argumento (`amount`)
+  no cuenta.
+- **Links:** una URL que no devolvió una tool del turno ni está en el contexto (prompt o
+  mensajes del cliente) se quita del texto. El link exacto se entrega con `_safe_append`.
+- **Afirmaciones de cierre:** el pack declara qué frases dan por hecha una acción y qué
+  tools la respaldan. El core descarta preguntas, negaciones y condicionales.
+
+```python
+from core.mcp.types import Afirmacion
+
+async def mis_afirmaciones() -> list[Afirmacion]:
+    # Corre en el tenant_scope del negocio: puede leer la config del pack.
+    return [
+        Afirmacion(
+            label="reserva",
+            patron=re.compile(r"reserv\w*\s+(?:qued|est)\w*\s+confirmad\w*", re.IGNORECASE),
+            tools=frozenset({"crear_reserva"}),
+            basta_url=False,  # True: también la respalda cualquier URL devuelta en el turno
+        )
+    ]
+
+# en on_activate:
+host.register_afirmaciones(mis_afirmaciones)  # una fuente por plugin
+```
+
+Las frases que configura un negocio se escapan (`re.escape`, ADR-0025): nunca regex crudo.
+Los interruptores del verificador por negocio son `verificador_montos`, `verificador_cierre`
+y `verificador_links` (en `disabled_guardrails`).
+
 ## 12. Eventos del core
 
 | Evento | Payload | Cuándo |
@@ -302,7 +339,8 @@ Un handler que falla se loggea y NO interrumpe el flujo.
 ## 13. Qué puede importar un plugin (y qué NO)
 
 ```
-✓ core.mcp.types          (BaseModule, BaseSkill, MCPTool, ToolContext, GuardrailResult)
+✓ core.mcp.types          (BaseModule, BaseSkill, MCPTool, ToolContext, GuardrailResult, Afirmacion)
+✓ core.shared.dinero      (MONEY_KEYS, MONEY_IN_TEXT, parse_money)
 ✓ core.db.session         (get_session)
 ✓ core.memory.entity      (upsert_attributes, get_profile)
 ✓ core.tasks.decorators   (register_cron)

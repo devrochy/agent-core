@@ -1,4 +1,5 @@
-"""`_amount_guardrail`: verificación de montos, extracción anidada por clave.
+"""Verificación de montos (antes `crm_amount_check` de pack-commerce, ahora el
+verificador del core, ADR-0119) y extracción anidada por clave (`core.shared.dinero`).
 
 Reproduce el caso real que escalaba en producción de test (tenant `yopoldo`,
 2026-09-11): `consultar_inventario` devuelve el precio anidado dentro de
@@ -11,7 +12,17 @@ catálogo, siempre, no de forma intermitente.
 from __future__ import annotations
 
 import pytest
-from pack_commerce.module import CRMModule, _extract_monetary_values, parse_money
+from pack_commerce.module import CRMModule
+
+from core.shared.dinero import extract_monetary_values as _extract_monetary_values
+from core.shared.dinero import parse_money
+
+
+async def _verificar(module, texto: str, resultados: list[dict]):
+    """El texto pasa por el verificador del core con las afirmaciones del pack."""
+    from core.orchestrator.verificador import Evidencia, verificar
+
+    return verificar(texto, Evidencia.desde(resultados), await module._afirmaciones())
 
 
 def test_extract_monetary_values_finds_nested_price_in_list():
@@ -58,11 +69,11 @@ async def test_amount_guardrail_passes_with_nested_price():
             ]
         }
     ]
-    verdict = await module._amount_guardrail(
+    verdict = await _verificar(module, 
         "¡Perfecto! Tu Pollo Broaster cuesta $60,000. ¿Confirmás el pedido?",
         tool_results,
     )
-    assert verdict.passed, verdict.reason
+    assert verdict.passed, verdict.motivo
 
 
 @pytest.mark.asyncio
@@ -70,12 +81,12 @@ async def test_amount_guardrail_still_blocks_hallucinated_amount():
     """Un monto que ninguna tool devolvió sigue bloqueando (no se rompió la protección real)."""
     module = CRMModule()
     tool_results = [{"matches": [{"price": 60000.0}]}]
-    verdict = await module._amount_guardrail(
+    verdict = await _verificar(module, 
         "Tu pedido especial cuesta $999,999 en total.",
         tool_results,
     )
     assert not verdict.passed
-    assert "999" in verdict.reason
+    assert verdict.motivo == "monto_sin_evidencia"
 
 
 @pytest.mark.asyncio
@@ -90,11 +101,11 @@ async def test_amount_guardrail_passes_with_generar_cotizacion_shape():
             "status": "draft",
         }
     ]
-    verdict = await module._amount_guardrail(
+    verdict = await _verificar(module, 
         "Tu cotización queda en $60,000 en total.",
         tool_results,
     )
-    assert verdict.passed, verdict.reason
+    assert verdict.passed, verdict.motivo
 
 
 # ---------------------------------------------------------------- HU-COM-02
@@ -126,8 +137,8 @@ async def test_amount_guardrail_acepta_montos_grandes():
     """
     module = CRMModule()
     tool_results = [{"total": 1_800_000.0}]
-    verdict = await module._amount_guardrail("El plan Empresarial cuesta $1.800.000.", tool_results)
-    assert verdict.passed, verdict.reason
+    verdict = await _verificar(module, "El plan Empresarial cuesta $1.800.000.", tool_results)
+    assert verdict.passed, verdict.motivo
 
 
 @pytest.mark.asyncio
@@ -135,7 +146,7 @@ async def test_amount_guardrail_bloquea_monto_inventado_por_substring():
     """'$15' con total 150.000 NO debe pasar por coincidencia de texto (HU-COM-02)."""
     module = CRMModule()
     tool_results = [{"total": 150_000.0}]
-    verdict = await module._amount_guardrail("Te queda en $15.", tool_results)
+    verdict = await _verificar(module, "Te queda en $15.", tool_results)
     assert not verdict.passed, "un monto inventado no debe colarse por substring"
 
 

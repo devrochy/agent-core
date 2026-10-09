@@ -55,3 +55,39 @@ La consistencia se mide con pass^k sobre conversaciones simuladas, y lo que dice
 - Migración aditiva de `eval_runs` y `eval_results`.
 - Verificador en el core, integrado en `core/orchestrator/loop.py`. Lee `behavior_config` (ADR-0092) y la configuración de cada pack (`completion_claims_custom`).
 - Retiro de los tres guardrails tras medir.
+
+## Adenda de implementación (2026-10-09, HU-ARCH-29)
+
+Lo que fijó la implementación del verificador, revisada por el agente `arquitecto` antes de escribir código:
+
+- **Dónde vive:** `core/orchestrator/verificador/` (`evidencia.py` y `verificador.py`). Corre en `end_turn` después de
+  las validaciones de persona y antes de los guardrails de packs, que ven el texto ya corregido. Comparte el contador de
+  reintentos y `guardrail_fail_action` (ADR-0092). Es fail-open para montos y cierres: si lanza una excepción, el turno pasa y el
+  veredicto queda como `error`, pero los links se quitan todos.
+- **Punto de extensión para packs:** `MCPHost.register_afirmaciones(fn)` con `Afirmacion(label, patron, tools,
+  basta_url)` en `core.mcp.types`. Es API de plugins, no `packages/contracts`. Se filtra por packs habilitados
+  (ADR-0019) y se limpia en `remove_plugin`. La polaridad (preguntas, negaciones y condicionales) es español genérico
+  y vive en el core, no en cada pack.
+- **Links:** las URLs se comparan normalizadas (sin esquema ni `www.`, host en minúsculas) y se detectan también las
+  que empiezan por `www.`. Una URL sin respaldo **se quita**, no se reemplaza, y no consume reintento: el link exacto lo entrega
+  `_safe_append`. Son evidencia las URLs de tools del turno actual y las del contexto (prompt del sistema y mensajes
+  del cliente). No lo son las de turnos anteriores, porque un link de pago pudo quedar vencido (ADR-0087), ni las de
+  mensajes anteriores del asistente, porque lavarían un link inventado.
+- **Montos:** `core.shared.dinero` (antes en pack-commerce). `MONEY_KEYS` es una convención del core para los packs.
+  Las cifras abreviadas ("$1,8 millones") no se verifican.
+- **Fechas y referencias:** se extraen y se cuentan en el veredicto, pero no bloquean (modo sombra) hasta tener
+  incidentes que lo justifiquen.
+- **`required_tool` (ADR-0051):** sin cambios. Sigue evaluándose en `run_guardrails` con su semántica actual.
+- **Instrucciones de reintento:** secciones `verificador_<motivo>` del playbook `respuestas` (invariante 3). En código
+  solo queda un texto genérico de respaldo.
+- **Veredicto por turno:** una fila en `audit_log` (`actor = core:verificador`, `action = verificacion`) con códigos
+  y conteos, sin texto. Se escribe desde una sola función (`registrar_veredicto`) para que HU-AOS-10 la mueva a
+  `turn_outcomes`. Los turnos que escala una tool no llegan a `end_turn` y no dejan veredicto.
+- **Interruptores:** `verificador_montos`, `verificador_cierre` y `verificador_links`. Los nombres viejos
+  (`crm_amount_check`, `crm_completion_check`) se traducen solos (`normalizar_desactivados`), así un negocio que los
+  había apagado los mantiene apagados.
+- **Retiro de los guardrails:** `crm_amount_check` y `crm_completion_check` se retiran porque el set etiquetado
+  (`evals/verificador/`, `python evals/verificador.py`) da falsos positivos ≤ 2 % y ningún falso negativo. Lo vigila
+  un test de la suite unitaria. Medición del 2026-10-09: 205 correctas con 0 falsos positivos y 14 falsas con 0 falsos
+  negativos; en los mismos borradores, los guardrails viejos tenían 16,7 % de falsos positivos. `calendar_completion_check` sigue registrado: no tuvo falsos positivos medidos y su
+  respaldo depende del `status` de cada acción. Se mide y se retira en una HU siguiente.

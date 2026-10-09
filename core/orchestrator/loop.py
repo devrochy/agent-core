@@ -52,6 +52,13 @@ from core.orchestrator.safe_renderer import (
     strip_reserved_keys,
 )
 from core.orchestrator.skill_router import select_relevant_skills
+from core.orchestrator.verificador import (
+    cargar_afirmaciones,
+    instruccion_correctiva,
+    normalizar_desactivados,
+    registrar_veredicto,
+    verificar_seguro,
+)
 from core.shared.audit import record_audit
 from core.shared.crypto import get_secret_box
 from core.shared.exceptions import BusinessError, LLMProviderError, PluginError
@@ -349,8 +356,9 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     guardrail_fail_action = "neutral" if behavior.get("guardrail_fail_action") == "neutral" else "escalate"
     # Guardrail individual on/off por tenant (mismo patrón, ver `AppSettings.
     # behavior_config`): apagar un guardrail puntual (ej. `crm_amount_check`)
-    # sin apagar el pack entero.
-    disabled_guardrails = set(behavior.get("disabled_guardrails", []))
+    # sin apagar el pack entero. Incluye los interruptores del verificador
+    # (`verificador_*`, con los nombres viejos de commerce ya traducidos).
+    disabled_guardrails = set(normalizar_desactivados(behavior.get("disabled_guardrails", [])))
 
     # ---------------- 3. Agentic loop
     messages = list(history)
@@ -363,6 +371,17 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         messages.append(LLMMessage(role="user", content=latest_message))
     all_tool_results: list[dict[str, Any]] = []
     guardrail_retries = 0
+    # Verificador de afirmaciones (ADR-0119, HU-ARCH-29). Las URLs que el negocio o
+    # el cliente ya pusieron en la conversación son evidencia; las del asistente no.
+    # El último bloque del prompt es el dinámico (perfil del cliente, memorias y
+    # fecha, `build_system_blocks`): lo escribe en parte el propio asistente
+    # (`remember_fact`, memorias de turnos previos), así que no cuenta.
+    contexto_urls = "\n".join(
+        [*system_blocks[:-1], *(m.content for m in messages if m.role == "user" and isinstance(m.content, str))]
+    )
+    afirmaciones = None
+    motivos_verificador: list[str] = []
+    veredicto = None
     turn_cost: float = 0.0
     budget = spec.policies.budgetUsdPerConversation
     usage = _TurnUsage()
@@ -497,7 +516,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
 
         # ---- end_turn: guardrails
         # Se siembra con tool_results de turnos ANTERIORES (audit_log) + los del
-        # turno actual -- sin esto, un guardrail como _amount_guardrail solo veía
+        # turno actual -- sin esto, la verificación de montos solo veía
         # lo llamado en ESTE turno y escalaba conversaciones válidas cada vez que
         # el asistente repetía/confirmaba un monto ya verificado antes (mismo bug
         # que agent-sale ya había encontrado y resuelto en priceGuardrail.ts).
@@ -510,15 +529,42 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # `maxLength` (tope de longitud) usan el mismo mecanismo de reintento
         # correctivo -> escalar.
         persona_verdict = _persona_guard(response.content, spec)
-        # Reglas declarativas del tenant (ADR-0051): `spec.extensions["guardrails"]`.
-        custom_rules = (spec.extensions or {}).get("guardrails") if spec.extensions else None
-        verdict = persona_verdict or await run_guardrails(
-            response.content,
-            [*history_tool_results, *all_tool_results],
-            enabled,
-            disabled_guardrails,
-            custom_rules=custom_rules,
-        )
+        # Se verifica el texto como llegará al cliente: `strip_markdown` puede rearmar
+        # una URL partida con asteriscos (`**https**://…`).
+        borrador = strip_markdown(response.content)
+        if persona_verdict is not None:
+            verdict = persona_verdict
+        else:
+            # Verificador (ADR-0119): quita links sin respaldo y comprueba montos y
+            # afirmaciones de cierre contra la evidencia. Corre antes que los
+            # guardrails de packs, que ven el texto ya corregido.
+            if afirmaciones is None:
+                afirmaciones = await cargar_afirmaciones(enabled)
+            veredicto = verificar_seguro(
+                borrador,
+                [*history_tool_results, *all_tool_results],
+                contexto_urls,
+                afirmaciones,
+                disabled_guardrails,
+            )
+            borrador = veredicto.texto
+            if not veredicto.passed:
+                motivos_verificador.append(veredicto.motivo)
+                verdict = GuardrailResult(
+                    passed=False,
+                    reason=veredicto.codigo,
+                    retry_instruction=await instruccion_correctiva(spec, veredicto),
+                )
+            else:
+                # Reglas declarativas del tenant (ADR-0051): `spec.extensions["guardrails"]`.
+                custom_rules = (spec.extensions or {}).get("guardrails") if spec.extensions else None
+                verdict = await run_guardrails(
+                    borrador,
+                    [*history_tool_results, *all_tool_results],
+                    enabled,
+                    disabled_guardrails,
+                    custom_rules=custom_rules,
+                )
         if not verdict.passed:
             if guardrail_retries < guardrail_max_retries:
                 guardrail_retries += 1
@@ -529,6 +575,14 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             # (montos, datos del cliente): se persiste solo el identificador del
             # guardrail, no el texto completo (evita PII en `escalations.summary`).
             guardrail_id = verdict.reason.split(":", 1)[0][:120]
+            if veredicto is not None and motivos_verificador:
+                await registrar_veredicto(
+                    conversation_id,
+                    veredicto,
+                    resultado="fallo",
+                    intentos=guardrail_retries + 1,
+                    motivos=motivos_verificador,
+                )
             if guardrail_fail_action == "neutral":
                 # ADR-0092: no escala ni pausa el bot. Responde que va a
                 # verificar (más lo que el servidor ya confirmó en el turno),
@@ -560,8 +614,16 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             return TurnResult(text=escalation_text, escalated=True)
 
         # ---- respuesta final
+        if veredicto is not None and (veredicto.extrajo_algo or motivos_verificador or veredicto.error):
+            await registrar_veredicto(
+                conversation_id,
+                veredicto,
+                resultado="error" if veredicto.error else ("reintento" if motivos_verificador else "ok"),
+                intentos=guardrail_retries + 1,
+                motivos=motivos_verificador,
+            )
         extras = extract_safe_extras(all_tool_results)
-        final_text = apply_safe_extras(strip_markdown(response.content), extras)
+        final_text = apply_safe_extras(borrador, extras)
         return await _close_turn(
             conversation_id,
             spec,
@@ -895,7 +957,7 @@ async def _historical_tool_results(conversation_id: uuid.UUID) -> list[dict[str,
     `_load_history` no sirve para esto: colapsa la historia a texto plano
     user/assistant y descarta el JSON de cada tool_result. `audit_log` es la
     única fuente que los conserva (insert-only, ADR de auditoría) -- se usa
-    solo para alimentar guardrails como `_amount_guardrail`, nunca para
+    solo para alimentar el verificador y los guardrails, nunca para
     construir el prompt ni la respuesta final.
     """
     async with get_session() as session:
@@ -914,7 +976,7 @@ async def _historical_tool_results(conversation_id: uuid.UUID) -> list[dict[str,
             .limit(40)
         )
         # Turnos ANTERIORES (HU-COM-02): no respaldan una afirmación de cierre
-        # del turno actual. Sí alimentan `_amount_guardrail` (montos ya vistos).
+        # del turno actual. Sí alimentan la verificación de montos (montos ya vistos).
         return [
             {**row, "_current_turn": False}
             for row in result.scalars().all()
