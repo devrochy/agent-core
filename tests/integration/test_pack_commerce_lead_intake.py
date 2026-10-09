@@ -33,11 +33,10 @@ async def _reset_rate_limit():
     from core.memory.working import get_redis
 
     r = get_redis()
-    keys = [
-        k
-        for slug in (SLUG, "no-existe")
-        async for k in r.scan_iter(match=f"{api._RATE_KEY_PREFIX}:{slug}:*")
-    ]
+    patterns = [f"{api._RATE_KEY_PREFIX}:{slug}:*" for slug in (SLUG, "no-existe", "no-existe-2")]
+    patterns.append(f"{api._MISS_KEY_PREFIX}:*")
+    patterns.append(f"{api._KNOWN_KEY_PREFIX}:{SLUG}")
+    keys = [k for pattern in patterns async for k in r.scan_iter(match=pattern)]
     if keys:
         await r.delete(*keys)
     yield
@@ -288,3 +287,49 @@ async def test_intake_rate_limit_por_tenant(app_client, moto_setup, monkeypatch)
         )
         assert r.status_code == 429
     assert await get_redis().zcard(keys[0]) == intake_api._RATE_LIMIT + 1
+
+
+async def test_intake_slugs_inexistentes_cortan_por_ip(app_client, moto_setup, monkeypatch) -> None:
+    """Contra Redis real: los 404 suman en el cupo de fallos de la IP y, lleno,
+    la IP recibe 429 antes de resolver el tenant, salvo en slugs que ya se
+    resolvieron (conocidos)."""
+    from pack_commerce import api as intake_api
+
+    from core.memory.working import get_redis
+
+    _t1, moto = moto_setup
+    await _configure_intake(moto, enabled=True)
+    await _cleanup(moto)
+    monkeypatch.setattr(intake_api, "_MISS_LIMIT", 2)
+
+    async def _post(slug: str):
+        return await app_client.post(
+            f"/api/pack/pack_commerce/leads/{slug}",
+            headers={"X-Intake-Secret": SECRET},
+            json=_payload(),
+        )
+
+    for slug in ("no-existe", "no-existe-2"):
+        r = await _post(slug)
+        assert r.status_code == 404, r.text
+
+    keys = [k async for k in get_redis().scan_iter(match=f"{intake_api._MISS_KEY_PREFIX}:*")]
+    assert len(keys) == 1
+    assert 0 < await get_redis().ttl(keys[0]) <= intake_api._MISS_WINDOW_S
+
+    # Slug real pero todavía no conocido: el cupo de fallos lo corta.
+    r = await _post(SLUG)
+    assert r.status_code == 429
+    assert r.json() == {"error": "rate_limited"}
+
+    # Una vez resuelto, queda conocido y los fallos de la IP ya no lo cortan.
+    await get_redis().delete(keys[0])
+    r = await _post(SLUG)
+    assert r.status_code == 200, r.text
+    known = f"{intake_api._KNOWN_KEY_PREFIX}:{SLUG}"
+    assert 0 < await get_redis().ttl(known) <= intake_api._KNOWN_TTL_S
+    for slug in ("no-existe", "no-existe-2"):
+        assert (await _post(slug)).status_code == 404
+    r = await _post(SLUG)
+    assert r.status_code == 200, r.text
+    assert (await _post("no-existe")).status_code == 429
