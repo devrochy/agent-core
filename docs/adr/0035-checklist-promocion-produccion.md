@@ -130,3 +130,18 @@ producción pueda ejecutarlo.
 - `alembic/versions/0029_force_row_level_security.py`,
   `packages/pack-commerce/alembic/versions/0005_...`,
   `packages/pack-payments/alembic/versions/0002_...`.
+
+## Enmienda (HU-CONN-07, 2026-10-09)
+
+El checklist siempre salía en rojo (exigía las suscripciones de `page` e `instagram`) y corría en el
+request. Se divide en dos y deja de ejecutarse en la API:
+
+- **Por conexión** ("Producción" de cada conexión, lo ve el negocio): token, número registrado, WABA
+  suscrita, webhook y plantillas mínimas aprobadas, evaluados con las credenciales de ESA conexión
+  (resolver de ADR-0094). El check `connections_health` agregado por negocio deja el panel.
+- **Plataforma** ("Plataforma → App de Meta", solo master): los checks de la app de la plataforma e
+  infraestructura. `app_subscriptions_complete` exige solo `whatsapp_business_account`.
+- Las dos corridas son jobs de Celery y el resultado queda guardado con fecha
+  (`meta_production_checks`, por negocio con RLS forzada, y `platform_readiness_runs`, tabla de
+  sistema; migración `0064`). Ninguna corre pytest ni subprocesos.
+- `scripts/verify_production.py` sigue igual como herramienta de operador.

@@ -605,3 +605,33 @@ async def test_quality_red_alerta_una_vez_por_numero(monkeypatch):
     await check_number_registered("phone-1", "tok", "secret", "v21.0", uuid.uuid4())
 
     assert len(enviadas) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "override",
+    [
+        "http://hooks.example.com/meta",  # sin HTTPS
+        "https://127.0.0.1/meta",  # loopback
+        "https://10.0.0.5/meta",  # red privada
+        "https://169.254.169.254/latest/meta-data",  # metadata del host
+        "https://redis:6379/",  # nombre interno
+    ],
+)
+async def test_webhook_override_no_consulta_urls_internas_ni_sin_https(monkeypatch, override):
+    """El override lo controla el negocio y el checklist de producción lo dispara a demanda
+    (HU-CONN-07): nunca se hace el GET a algo que no sea un host público por HTTPS."""
+
+    async def _fake_graph_fetch(*a, **k):
+        return {"webhook_configuration": {"override_callback_uri": override}}
+
+    class _Prohibido:
+        def __init__(self, *a, **k):
+            raise AssertionError("no debe abrir conexiones")
+
+    monkeypatch.setattr(health_mod, "graph_fetch", _fake_graph_fetch)
+    monkeypatch.setattr(httpx, "AsyncClient", _Prohibido)
+
+    check = await check_webhook_override("phone-1", "tok", "secret", "v21.0", uuid.uuid4())
+
+    assert check.ok is False

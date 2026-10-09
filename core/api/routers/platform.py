@@ -1,4 +1,4 @@
-"""Plataforma (master): `GET /api/v1/admin/platform/tenants`.
+"""Plataforma (master): `GET /api/v1/admin/platform/tenants` y la App de Meta.
 
 Listado **de todos** los tenants para gestión de plataforma, con su plan. Solo
 para el admin `master`. Paginado (la vista SSR recorre todos y calcula el plan de
@@ -19,6 +19,7 @@ from core.admin.plan_view import subscription_overview_or_none
 from core.api.deps import Principal, get_principal
 from core.api.errors import ApiError
 from core.api.pagination import Page, PageParams, build_page, page_params
+from core.api.schemas import ReadinessRun, readiness_run_out
 from core.db.models import Tenant
 from core.db.session import get_session
 
@@ -238,3 +239,45 @@ async def purge_tenant_endpoint(
     except Exception as exc:
         raise ApiError(502, "purge_failed", f"No se pudo eliminar: {str(exc)[:140]}") from exc
     return Response(status_code=204)
+
+
+# ------------------------------------------------- App de Meta de la plataforma (HU-CONN-07)
+class PlatformMetaApp(ReadinessRun):
+    """Checklist de la app de Meta de la plataforma y la infraestructura (solo master)."""
+
+    meta_app_id: str = ""
+
+
+async def _platform_meta_app(principal: Principal) -> PlatformMetaApp:
+    from core.admin.production_readiness_service import latest_platform_run
+    from core.config import get_settings
+
+    run = await latest_platform_run(principal.admin)
+    return PlatformMetaApp(meta_app_id=get_settings().meta_app_id or "", **readiness_run_out(run))
+
+
+@router.get("/meta-app", response_model=PlatformMetaApp)
+async def get_platform_meta_app(
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> PlatformMetaApp:
+    """Último resultado guardado (con fecha) de los chequeos de la app de Meta de la
+    plataforma e infraestructura: webhook, suscripciones de la app, App Secret, claves de
+    cifrado, worker, RLS. No corre nada: para revisar, `POST /meta-app/run`."""
+    _require_master(principal)
+    return await _platform_meta_app(principal)
+
+
+@router.post("/meta-app/run", response_model=PlatformMetaApp, status_code=202)
+async def run_platform_meta_app(
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> PlatformMetaApp:
+    """Encola la revisión de la plataforma (job de Celery, sin pytest) y responde al instante
+    con la corrida `queued` (o la que ya estaba en curso)."""
+    from core.admin import production_readiness_service as readiness
+
+    _require_master(principal)
+    try:
+        await readiness.request_platform_run(principal.admin)
+    except readiness.EnqueueFailed as exc:
+        raise ApiError(503, "enqueue_failed", str(exc)) from exc
+    return await _platform_meta_app(principal)

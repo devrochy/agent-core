@@ -304,7 +304,9 @@ async def _check_webhook_handshake(
     )
 
 
-async def run_preflight(tenant_id, tenant_slug: str) -> list[PreflightCheck]:
+async def run_preflight(
+    tenant_id, tenant_slug: str, *, include_platform_app: bool = True
+) -> list[PreflightCheck]:
     """Corre todos los checks automáticos. Nunca levanta excepción: un check que
     no se pudo correr (config faltante) se reporta como `ok=False`, no rompe
     el resto de la checklist.
@@ -317,6 +319,19 @@ async def run_preflight(tenant_id, tenant_slug: str) -> list[PreflightCheck]:
     async with tenant_scope(tenant_id):
         config = await resolve_app_credentials(tenant_id)
         version = config.graph_api_version if config else get_settings().graph_api_version
+
+        # Sin app propia, la app es la de la plataforma: sus datos (nombre, suscripciones,
+        # callback, config_id) los revisa solo el master en "Plataforma → App de Meta"
+        # (HU-CONN-07). El negocio ve solo el handshake de su webhook.
+        if config is not None and config.connection_id is None and not include_platform_app:
+            return [
+                PreflightCheck(
+                    key="platform_app",
+                    ok=None,
+                    detail="Usas la app de Meta de la plataforma: la revisa el equipo de SolversHub.",
+                ),
+                await _run_webhook_check_only(tenant_id, tenant_slug),
+            ]
 
         if config is None:
             return [
