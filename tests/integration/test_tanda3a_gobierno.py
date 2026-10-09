@@ -211,6 +211,47 @@ async def test_guardrails_propios_persisten_en_spec(app_client) -> None:
     assert {r["kind"] for r in rules} == {"forbidden_phrase", "max_length"}
 
 
+async def test_tools_declarativas_rechazan_dominios_internos(app_client) -> None:
+    """Anti-SSRF (ADR-0052): `allowed_domains` solo acepta FQDN públicos."""
+    import json
+    from urllib.parse import unquote
+
+    from core.agents.spec import load_active_spec
+    from core.shared.tenant import tenant_scope
+
+    tid = await _tenant_id()
+    session = await _login(app_client)
+    headers = {"Cookie": await _switch(app_client, session, tid)}
+
+    def _tools(domains: list[str]) -> str:
+        return json.dumps(
+            [{"name": "consulta", "url": "https://api.negocio.com/x", "allowed_domains": domains}]
+        )
+
+    r = await app_client.post(
+        "/admin/configuracion/habilidades",
+        headers=headers,
+        data={"declarative_tools_json": _tools(["api.negocio.com", "redis", "127.1"])},
+    )
+    assert r.status_code == 303
+    location = unquote(r.headers["location"])
+    assert "flash_type=danger" in location and "redis, 127.1" in location
+    async with tenant_scope(tid):
+        spec = await load_active_spec()
+    assert not any(t["name"] == "consulta" for t in (spec.extensions or {}).get("tools") or [])
+
+    r = await app_client.post(
+        "/admin/configuracion/habilidades",
+        headers=headers,
+        data={"declarative_tools_json": _tools(["API.negocio.com."])},
+    )
+    assert r.status_code == 303 and "flash_type=success" in r.headers["location"]
+    async with tenant_scope(tid):
+        spec = await load_active_spec()
+    [tool] = [t for t in (spec.extensions or {}).get("tools") or [] if t["name"] == "consulta"]
+    assert tool["allowed_domains"] == ["api.negocio.com"]
+
+
 # ---------------------------------------------------------------- 3A.4 evals
 async def test_eval_runs_persisten_y_se_ven(app_client) -> None:
     from core.db.models import EvalResult, EvalRun

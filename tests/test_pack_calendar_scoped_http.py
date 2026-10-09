@@ -59,6 +59,15 @@ def _mock_transport(monkeypatch, handler) -> list[dict[str, Any]]:  # type: igno
         return real(transport=httpx.MockTransport(handler), **kw)
 
     monkeypatch.setattr(httpx, "AsyncClient", factory)
+    # Sin DNS real: los hosts de Google resuelven a una IP pública fija.
+    import ipaddress
+
+    import core.mcp.types as mcp_types
+
+    async def _resolve(host: str, port: int, timeout: float) -> list[Any]:
+        return [ipaddress.ip_address("142.250.78.10")]
+
+    monkeypatch.setattr(mcp_types, "_resolve_host", _resolve)
     return created
 
 

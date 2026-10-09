@@ -2827,8 +2827,9 @@ async def settings_skills_save(request: Request):
     # Tools declarativas del tenant (ADR-0052): JSON en extensions["tools"].
     if form.get("declarative_tools_json") is not None:
         import json as _json
+        from urllib.parse import quote
 
-        from core.mcp.declarative import validate_declarative_tools
+        from core.mcp.declarative import rejected_domains, validate_declarative_tools
 
         extensions = dict(data.get("extensions") or {})
         raw = str(form.get("declarative_tools_json") or "").strip()
@@ -2841,6 +2842,15 @@ async def settings_skills_save(request: Request):
                     f"/admin/configuracion?tab=habilidades&flash=JSON de tools inválido: {str(exc)[:120]}&flash_type=danger",
                     status_code=303,
                 )
+        rejected = rejected_domains(parsed)
+        if rejected:
+            # Anti-SSRF (ADR-0052): solo dominios públicos con punto; ni IPs ni
+            # nombres internos (`redis`, `localhost`, `*.internal`).
+            msg = f"allowed_domains no permitidos (usa dominios públicos): {', '.join(rejected)[:160]}"
+            return RedirectResponse(
+                f"/admin/configuracion?tab=habilidades&flash={quote(msg)}&flash_type=danger",
+                status_code=303,
+            )
         extensions["tools"] = validate_declarative_tools(parsed)
         data["extensions"] = extensions
     return await _save_spec_from_form(request, data, "habilidades")
