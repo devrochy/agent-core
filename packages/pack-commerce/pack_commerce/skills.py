@@ -206,6 +206,39 @@ async def _active_customer_order(customer_id) -> Order | None:  # type: ignore[n
         return result.scalar_one_or_none()
 
 
+async def _quote_del_cliente(session, quote_id, customer_id) -> Quote | None:  # type: ignore[no-untyped-def]
+    """La cotización SOLO si es del cliente de la conversación (además del tenant).
+
+    El `quote_id` lo pasa el LLM: sin el filtro de `customer_id`, un cliente que
+    conozca el UUID de la cotización de OTRO cliente del mismo negocio podría
+    confirmarla, cambiarle la promoción o convertirla en pedido (IDOR dentro del
+    tenant, auditor-multitenant en HU-SUB-07). Ajena o inexistente devuelven lo
+    mismo (`None`): no se revela que existe.
+    """
+    return (
+        await session.execute(
+            select(Quote).where(
+                Quote.id == quote_id,
+                Quote.customer_id == customer_id,
+                Quote.tenant_id == get_current_tenant_id(),
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def _order_del_cliente(session, order_id, customer_id) -> Order | None:  # type: ignore[no-untyped-def]
+    """El pedido SOLO si es del cliente de la conversación (ver `_quote_del_cliente`)."""
+    return (
+        await session.execute(
+            select(Order).where(
+                Order.id == order_id,
+                Order.customer_id == customer_id,
+                Order.tenant_id == get_current_tenant_id(),
+            )
+        )
+    ).scalar_one_or_none()
+
+
 async def _transfer_safe_append() -> str:
     """Arma el bloque de datos de transferencia (nunca lo escribe el LLM)."""
     config = await _plugin_config()
@@ -1015,7 +1048,7 @@ class OrderSkill(BaseSkill):
             return {"error": "Cotización no encontrada."}
         async with get_session() as session:
             tenant_id = get_current_tenant_id()
-            quote = await get_owned(session, Quote, quote_id, tenant_id)
+            quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             if quote is None:
                 return {"error": "Cotización no encontrada."}
             items = (
@@ -1114,7 +1147,7 @@ class OrderSkill(BaseSkill):
         benefit, promo = best
         new_total = max(_float(quote.subtotal) - benefit, 0)
         async with get_session() as session:
-            quote = await get_owned(session, Quote, quote_id, get_current_tenant_id())
+            quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             quote.discount = benefit
             quote.total = new_total
             quote.applied_promotion_id = promo.id
@@ -1151,14 +1184,9 @@ class OrderSkill(BaseSkill):
         async with get_session() as session:
             # Defensa en profundidad además de RLS (mismo criterio que
             # calificar_lead/actualizar_lead, auditor-multitenant 2026-09-12):
-            # filtrar tenant_id explícito en vez de session.get() a secas.
-            quote = (
-                await session.execute(
-                    select(Quote).where(
-                        Quote.id == quote_id, Quote.tenant_id == get_current_tenant_id()
-                    )
-                )
-            ).scalar_one_or_none()
+            # filtrar tenant_id explícito en vez de session.get() a secas, y
+            # customer_id para que no se pueda confirmar la de otro cliente.
+            quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             if quote is None:
                 return {"error": "Cotización no encontrada."}
             if quote.status == "convertida":
@@ -1234,14 +1262,9 @@ class OrderSkill(BaseSkill):
             return {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
 
         async with get_session() as session:
-            # Defensa en profundidad además de RLS (auditor-multitenant 2026-09-12).
-            quote = (
-                await session.execute(
-                    select(Quote).where(
-                        Quote.id == quote_id, Quote.tenant_id == get_current_tenant_id()
-                    )
-                )
-            ).scalar_one_or_none()
+            # Defensa en profundidad además de RLS (auditor-multitenant 2026-09-12);
+            # solo la cotización del cliente de la conversación (HU-SUB-07).
+            quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             if quote is None:
                 return {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
             existing_order = (
@@ -1355,13 +1378,7 @@ class OrderSkill(BaseSkill):
             )
 
         async with get_session() as session:
-            quote = (
-                await session.execute(
-                    select(Quote).where(
-                        Quote.id == quote_id, Quote.tenant_id == get_current_tenant_id()
-                    )
-                )
-            ).scalar_one_or_none()
+            quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             # Numeración por tenant (ADR-0018): contador atómico por tenant.
             order_seq = (
                 await session.execute(
@@ -1481,13 +1498,7 @@ class OrderSkill(BaseSkill):
             return {"error": "Pedido no encontrado."}
 
         async with get_session() as session:
-            order = (
-                await session.execute(
-                    select(Order).where(
-                        Order.id == order_id, Order.tenant_id == get_current_tenant_id()
-                    )
-                )
-            ).scalar_one_or_none()
+            order = await _order_del_cliente(session, order_id, context.customer_id)
             if order is None:
                 return {"error": "Pedido no encontrado."}
             if order.status != "abierto":
@@ -1572,7 +1583,7 @@ class OrderSkill(BaseSkill):
             return {"error": "Pedido no encontrado."}
 
         async with get_session() as session:
-            order = await get_owned(session, Order, order_id, get_current_tenant_id())
+            order = await _order_del_cliente(session, order_id, context.customer_id)
             if order is None:
                 return {"error": "Pedido no encontrado."}
             if order.payment_status == "pagado":
@@ -1618,7 +1629,7 @@ class OrderSkill(BaseSkill):
             }
 
         async with get_session() as session:
-            order = await get_owned(session, Order, order_id, get_current_tenant_id())
+            order = await _order_del_cliente(session, order_id, context.customer_id)
             if order is not None:
                 order.payment_reference = reference
                 order.payment_link_url = link.url

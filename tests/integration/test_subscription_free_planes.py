@@ -248,6 +248,7 @@ async def _pedido_de_plan(precio: float) -> dict:
     from core.shared.tenant import tenant_scope
 
     t1 = TEST_ALPHA_ID
+    cliente = uuid.uuid4()
     async with tenant_scope(t1):
         async with get_session() as s:
             sku = f"PLAN-{uuid.uuid4().hex[:6]}"
@@ -260,7 +261,7 @@ async def _pedido_de_plan(precio: float) -> dict:
             s.add(variant)
             await s.flush()
             quote = Quote(
-                tenant_id=t1, conversation_id=uuid.uuid4(), customer_id=uuid.uuid4(),
+                tenant_id=t1, conversation_id=uuid.uuid4(), customer_id=cliente,
                 subtotal=precio, discount=0, total=precio, status="aceptada",
             )
             s.add(quote)
@@ -270,7 +271,7 @@ async def _pedido_de_plan(precio: float) -> dict:
             quote_id = str(quote.id)
 
     ctx = ToolContext(
-        conversation_id=uuid.uuid4(), customer_id=uuid.uuid4(),
+        conversation_id=uuid.uuid4(), customer_id=cliente,
         idempotency_key=f"test:{uuid.uuid4().hex[:8]}", channel="whatsapp",
     )
     async with tenant_scope(t1):

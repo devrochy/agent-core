@@ -218,7 +218,7 @@ async def test_agregar_item_pedido_acepta_sku_directo(fake_tool_context):
             ).scalar()
             order = Order(
                 conversation_id=uuid.uuid4(),
-                customer_id=uuid.uuid4(),
+                customer_id=fake_tool_context.customer_id,
                 status="abierto",
                 payment_method="efectivo_contraentrega",
                 payment_status="pendiente",

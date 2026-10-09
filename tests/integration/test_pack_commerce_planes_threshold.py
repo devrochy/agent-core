@@ -35,7 +35,7 @@ def ctx():
     )
 
 
-async def _quote_con_variante(session, *, total: float, billing_period: str | None):
+async def _quote_con_variante(session, *, total: float, billing_period: str | None, customer_id):
     from pack_commerce.models import Product, ProductVariant, Quote, QuoteItem
 
     sku = f"PLAN-{uuid.uuid4().hex[:6]}"
@@ -48,7 +48,7 @@ async def _quote_con_variante(session, *, total: float, billing_period: str | No
     session.add(variant)
     await session.flush()
     quote = Quote(
-        tenant_id=T1, conversation_id=uuid.uuid4(), customer_id=uuid.uuid4(),
+        tenant_id=T1, conversation_id=uuid.uuid4(), customer_id=customer_id,
         subtotal=total, discount=0, total=total, status="aceptada",
     )
     session.add(quote)
@@ -88,7 +88,9 @@ async def test_plan_de_1_8m_no_escala_por_defecto(ctx) -> None:
 
     async with tenant_scope(T1):
         async with get_session() as session:
-            quote = await _quote_con_variante(session, total=1_800_000.0, billing_period="mensual")
+            quote = await _quote_con_variante(
+                session, total=1_800_000.0, billing_period="mensual", customer_id=ctx.customer_id
+            )
             quote_id = str(quote.id)
 
     result = await _crear_pedido(quote_id, ctx)
@@ -102,7 +104,9 @@ async def test_oneshot_de_1_8m_si_escala(ctx) -> None:
 
     async with tenant_scope(T1):
         async with get_session() as session:
-            quote = await _quote_con_variante(session, total=1_800_000.0, billing_period=None)
+            quote = await _quote_con_variante(
+                session, total=1_800_000.0, billing_period=None, customer_id=ctx.customer_id
+            )
             quote_id = str(quote.id)
 
     result = await _crear_pedido(quote_id, ctx)

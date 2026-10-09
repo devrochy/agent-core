@@ -80,7 +80,7 @@ def fake_capability(monkeypatch):
     return cap
 
 
-async def _make_order(session, *, total: float = 185_000.0, status: str = "abierto"):
+async def _make_order(session, *, customer_id, total: float = 185_000.0, status: str = "abierto"):
     from pack_commerce.models import Order
     from sqlalchemy import text
 
@@ -91,7 +91,7 @@ async def _make_order(session, *, total: float = 185_000.0, status: str = "abier
         tenant_id=T1,
         quote_id=None,
         conversation_id=uuid.uuid4(),
-        customer_id=uuid.uuid4(),
+        customer_id=customer_id,
         status=status,
         payment_status="pendiente",
         payment_method="pago_en_linea",
@@ -127,7 +127,7 @@ async def test_monto_del_servidor(fake_context, fake_capability):
 
     async with tenant_scope(T1):
         async with get_session() as session:
-            order = await _make_order(session, total=185_000.0)
+            order = await _make_order(session, customer_id=fake_context.customer_id, total=185_000.0)
             order_id = str(order.id)
 
         result = await OrderSkill().confirmar_pago_pedido({"order_id": order_id}, fake_context)
@@ -146,7 +146,7 @@ async def test_items_agregados_suben_version(fake_context, fake_capability):
 
     async with tenant_scope(T1):
         async with get_session() as session:
-            order = await _make_order(session, total=185_000.0)
+            order = await _make_order(session, customer_id=fake_context.customer_id, total=185_000.0)
             order_id = str(order.id)
             base = order.public_order_number
 
@@ -181,7 +181,7 @@ async def test_webhook_con_monto_distinto_no_paga(fake_context, fake_capability,
 
     async with tenant_scope(T1):
         async with get_session() as session:
-            order = await _make_order(session, total=185_000.0)
+            order = await _make_order(session, customer_id=fake_context.customer_id, total=185_000.0)
             order_id = str(order.id)
             base = order.public_order_number
 
@@ -203,7 +203,7 @@ async def test_rechazo_tardio_no_cambia_pagado(fake_context, fake_capability, co
 
     async with tenant_scope(T1):
         async with get_session() as session:
-            order = await _make_order(session, total=185_000.0)
+            order = await _make_order(session, customer_id=fake_context.customer_id, total=185_000.0)
             order_id = str(order.id)
             base = order.public_order_number
 
@@ -231,7 +231,7 @@ async def test_monto_bajo_minimo_es_error_de_negocio(fake_context, monkeypatch):
     monkeypatch.setattr(OrderSkill, "_payment_capability", _cap)
     async with tenant_scope(T1):
         async with get_session() as session:
-            order = await _make_order(session, total=54_000.0)
+            order = await _make_order(session, customer_id=fake_context.customer_id, total=54_000.0)
             order_id = str(order.id)
 
         result = await OrderSkill().confirmar_pago_pedido({"order_id": order_id}, fake_context)
