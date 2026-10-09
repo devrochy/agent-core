@@ -96,3 +96,10 @@ forbidden_modules =
     core.alta_negocio
     core.provisioning.consumer
     core.provisioning.owner
+# El único eslabón que se ignora es el registro del consumidor como suscriptor del outbox
+# (`core.events.core_handlers` lo enlaza a `subscription.activated`). Por ese registro no se
+# llama al alta: el alta corre solo cuando llega el evento. Sin esta excepción, cualquier
+# módulo que toque `core.agents.spec` (que llega a `core.tasks.celery_app` por los packs)
+# rompería el contrato. Todo otro camino, directo o indirecto, sigue prohibido.
+ignore_imports =
+    core.events.core_handlers -> core.provisioning.consumer
