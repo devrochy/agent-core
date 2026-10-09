@@ -10,6 +10,7 @@ Decisiones (ADR-025 de agent-sale):
 from __future__ import annotations
 
 import secrets
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
@@ -48,15 +49,22 @@ async def login(email_or_username: str, password: str) -> str | None:
         ).scalar_one_or_none()
         if admin is None or not verify_password(password, admin.password_hash):
             return None
-        token = secrets.token_urlsafe(48)
-        session.add(
-            AdminSession(
-                token=token,
-                admin_id=admin.id,
-                expires_at=datetime.now(UTC) + timedelta(hours=SESSION_TTL_HOURS),
-            )
+        return nueva_sesion(session, admin.id)
+
+
+def nueva_sesion(session, admin_id: uuid.UUID) -> str:  # type: ignore[no-untyped-def]
+    """Agrega una `AdminSession` nueva en la transacción `session` y devuelve su token. Solo
+    después de probar la identidad: la contraseña (`login`) o el enlace de un solo uso de la
+    invitación recién canjeado (ADR-0124)."""
+    token = secrets.token_urlsafe(48)
+    session.add(
+        AdminSession(
+            token=token,
+            admin_id=admin_id,
+            expires_at=datetime.now(UTC) + timedelta(hours=SESSION_TTL_HOURS),
         )
-        return token
+    )
+    return token
 
 
 async def logout(token: str) -> None:

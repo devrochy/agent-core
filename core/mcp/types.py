@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     import httpx
 
     from core.mcp.host import MCPHost
+    from core.primeros_pasos.contrato import ContenidoCargado
 
 log = get_logger(__name__)
 
@@ -423,6 +424,15 @@ class BaseModule(ABC):
         Default: no-op.
         """
         return []
+
+    async def contenido_cargado(self, tenant_id: uuid.UUID) -> ContenidoCargado | None:
+        """Hook opcional (HU-SH-06, ADR-0124): cuánto contenido propio cargó el negocio en
+        esta habilidad (catálogo, servicios, cartera), para el paso «catálogo o servicios» de
+        los primeros pasos. El core lo llama solo si la habilidad está habilitada, bajo el
+        `tenant_scope` del negocio; el pack filtra igual por `tenant_id` y no escribe nada.
+        Default: None (la habilidad no aporta contenido a ese paso).
+        """
+        return None
 
     def public_routes(self) -> list[Any]:
         """Routers PÚBLICOS del pack (sin sesión de admin), ej. la app de campo.

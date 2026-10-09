@@ -20,6 +20,7 @@ import hashlib
 import hmac
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -168,15 +169,20 @@ async def pendientes_de(admin_id: uuid.UUID) -> list[dict[str, Any]]:
 
 
 async def contar_pendientes(admin_id: uuid.UUID) -> int:
+    """Cuántas invitaciones le muestra `pendientes_de` (mismos filtros: vigentes y de negocios
+    activos). El panel lo usa para avisarlas al entrar (HU-SH-06)."""
     async with get_session() as session:
         return (
             await session.execute(
                 select(func.count())
                 .select_from(TenantInvitation)
+                .join(Tenant, Tenant.id == TenantInvitation.tenant_id)
                 .where(
                     TenantInvitation.admin_id == admin_id,
                     TenantInvitation.estado == "pendiente",
                     _vigente(),
+                    Tenant.deleted_at.is_(None),
+                    Tenant.status == "active",
                 )
             )
         ).scalar_one()
@@ -368,40 +374,56 @@ async def crear_invitacion_owner(
     return pendiente, None
 
 
-async def canjear_invitacion(token: str, new_password: str) -> str | None:
+@dataclass(frozen=True)
+class CanjeHecho:
+    """El enlace se canjeó: la cuenta, el negocio al que entró y su sesión nueva (ADR-0124)."""
+
+    admin_id: uuid.UUID
+    tenant_id: uuid.UUID
+    token_de_sesion: str
+
+
+async def canjear_invitacion(token: str, new_password: str) -> tuple[str | None, CanjeHecho | None]:
     """Canjea el enlace de un solo uso (ADR-0121): define la contraseña de una cuenta que el
-    aprovisionamiento creó sin ella y acepta la invitación (`TenantUser`). Devuelve un error
-    (str) o None.
+    aprovisionamiento creó sin ella, acepta la invitación (`TenantUser`) y abre la sesión del
+    dueño (ADR-0124: «defino mi contraseña y entro a mi negocio»). Devuelve `(error, None)` o
+    `(None, CanjeHecho)`.
 
     Solo vale para una cuenta **limpia**: sin contraseña, sin acceso a ningún negocio y sin
     otras invitaciones pendientes. Si no, `CUENTA_EXISTENTE`: entra con su contraseña (o la
     recupera por correo) y acepta en la app (ADR-0081). La contraseña se escribe con un
     UPDATE condicional sobre `SIN_CONTRASENA`: si un reset llegó antes, el canje no la pisa.
+    La contraseña, la aceptación, la membresía y la sesión van en la misma transacción: o
+    queda todo o nada.
     """
-    from core.admin.auth import hash_password
+    from core.admin.auth import hash_password, nueva_sesion
 
     partes = partes_del_token(token)
     if partes is None:
-        return ENLACE_INVALIDO
+        return ENLACE_INVALIDO, None
     if not new_password or len(new_password) < 8:
-        return "la contraseña debe tener al menos 8 caracteres"
+        return "la contraseña debe tener al menos 8 caracteres", None
     invitation_id, firma = partes
     ahora = datetime.now(UTC)
     async with get_session() as session:
         invitacion = await session.get(TenantInvitation, invitation_id)
         if invitacion is None or invitacion.estado != "pendiente" or not invitacion.token_nonce:
-            return ENLACE_INVALIDO
+            return ENLACE_INVALIDO, None
         nonce = invitacion.token_nonce
         if not hmac.compare_digest(firma.encode(), _firma(invitacion.id, nonce).encode()):
-            return ENLACE_INVALIDO
+            return ENLACE_INVALIDO, None
         if invitacion.expires_at is not None and invitacion.expires_at <= ahora:
-            return ENLACE_INVALIDO
+            return ENLACE_INVALIDO, None
         admin = await session.get(Admin, invitacion.admin_id)
         if admin is None or not admin.active:
-            return ENLACE_INVALIDO
+            return ENLACE_INVALIDO, None
         tenant_id = invitacion.tenant_id
+        # El canje abre una sesión (ADR-0124): se repiten las guardas del invitado, por si la
+        # cuenta pasó a master o ganó permisos globales después de invitarla.
+        if await _invitado_valido(admin.id) is not None:
+            return CUENTA_EXISTENTE, None
         if await _tiene_otro_acceso(session, admin.id, tenant_id):
-            return CUENTA_EXISTENTE
+            return CUENTA_EXISTENTE, None
         # La contraseña solo se escribe si sigue sin tener una (carrera con un reset).
         cambio = await session.execute(
             update(Admin)
@@ -410,7 +432,7 @@ async def canjear_invitacion(token: str, new_password: str) -> str | None:
         )
         if getattr(cambio, "rowcount", 0) != 1:
             await session.rollback()
-            return CUENTA_EXISTENTE
+            return CUENTA_EXISTENTE, None
         # Uso único atómico: el UPDATE condicional gana una sola vez aunque lleguen dos
         # canjes a la vez con el mismo enlace.
         aceptada = await session.execute(
@@ -424,12 +446,13 @@ async def canjear_invitacion(token: str, new_password: str) -> str | None:
         )
         if getattr(aceptada, "rowcount", 0) != 1:
             await session.rollback()  # deshace también la contraseña
-            return ENLACE_INVALIDO
+            return ENLACE_INVALIDO, None
         role = invitacion.role
         pack_roles = list(invitacion.pack_roles or [])
         admin_id = admin.id
         email = admin.email
         session.add(TenantUser(tenant_id=tenant_id, admin_id=admin_id, role=role))
+        token_de_sesion = nueva_sesion(session, admin_id)
     await apply_pack_roles(pack_roles, tenant_id, admin_id)
 
     from core.shared.audit import record_audit
@@ -447,7 +470,7 @@ async def canjear_invitacion(token: str, new_password: str) -> str | None:
         invitation_id=str(invitation_id),
         admin_id=str(admin_id),
     )
-    return None
+    return None, CanjeHecho(admin_id=admin_id, tenant_id=tenant_id, token_de_sesion=token_de_sesion)
 
 
 async def _tiene_otro_acceso(session, admin_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:  # type: ignore[no-untyped-def]

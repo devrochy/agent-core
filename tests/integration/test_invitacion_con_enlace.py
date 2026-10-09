@@ -1,7 +1,8 @@
 """Enlace de un solo uso de la invitación al owner (HU-SH-03, ADR-0121 § 3.8).
 
 `POST /api/v1/auth/accept-invitation`: el owner de un negocio creado por el alta
-automática define su contraseña y queda como miembro. Uso único, vencimiento, firma,
+automática define su contraseña, queda como miembro y entra con la sesión que devuelve el
+canje (HU-SH-06, ADR-0124). Uso único, vencimiento, firma,
 cuenta que no es nueva y limpia (con contraseña, otra membresía u otra invitación
 pendiente), carrera con un reset de contraseña y bloqueo progresivo. También el
 vencimiento al aceptar una invitación en la app (ADR-0081).
@@ -102,7 +103,21 @@ async def test_el_enlace_define_la_contrasena_y_deja_al_owner_en_su_negocio(app_
     tenant_id, invitation_id, email, token = await _invitacion()
 
     r = await app_client.post(ACEPTAR, json={"token": token, "new_password": CLAVE})
-    assert r.status_code == 204, r.text
+    assert r.status_code == 200, r.text
+    # El canje abre la sesión (ADR-0124): el dueño entra a su negocio sin volver a loguearse.
+    sesion = r.json()
+    assert sesion["tenant_id"] == str(tenant_id)
+    assert sesion["expires_in"] > 0
+    me = await app_client.get(
+        "/api/v1/admin/me",
+        headers={"Authorization": f"Bearer {sesion['token']}", "X-Tenant-Id": str(tenant_id)},
+    )
+    assert me.status_code == 200, me.text
+    assert (me.json()["email"], me.json()["tenant"]["id"], me.json()["tenant"]["role"]) == (
+        email,
+        str(tenant_id),
+        "owner",
+    )
 
     login = await app_client.post(LOGIN, json={"identifier": email, "password": CLAVE})
     assert login.status_code == 200, login.text
@@ -127,7 +142,7 @@ async def test_el_enlace_define_la_contrasena_y_deja_al_owner_en_su_negocio(app_
 
 async def test_el_enlace_es_de_un_solo_uso(app_client) -> None:
     _, _, email, token = await _invitacion()
-    assert (await app_client.post(ACEPTAR, json={"token": token, "new_password": CLAVE})).status_code == 204
+    assert (await app_client.post(ACEPTAR, json={"token": token, "new_password": CLAVE})).status_code == 200
 
     otra = await app_client.post(ACEPTAR, json={"token": token, "new_password": "otra-clave-999"})
     assert otra.status_code == 400
@@ -252,4 +267,20 @@ async def test_bloqueo_progresivo_ante_muchos_intentos(app_client) -> None:
         assert r.status_code == 400
     bloqueado = await app_client.post(ACEPTAR, json={"token": token, "new_password": CLAVE})
     assert bloqueado.status_code == 429
+    assert (await _leer_invitacion(invitation_id)).estado == "pendiente"
+
+
+async def test_una_cuenta_que_paso_a_master_no_entra_por_el_enlace(app_client) -> None:
+    """El canje abre una sesión (ADR-0124): repite las guardas del invitado. Si la cuenta pasó a
+    master después de la invitación, no entra por el enlace."""
+    from core.db.models import Admin
+    from core.db.session import get_session
+
+    _, invitation_id, email, token = await _invitacion()
+    async with get_session() as s:
+        cuenta = (await s.execute(select(Admin).where(Admin.email == email))).scalar_one()
+        cuenta.role = "master"
+
+    r = await app_client.post(ACEPTAR, json={"token": token, "new_password": CLAVE})
+    assert r.status_code == 409
     assert (await _leer_invitacion(invitation_id)).estado == "pendiente"

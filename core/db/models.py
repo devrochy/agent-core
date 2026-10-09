@@ -678,6 +678,40 @@ class ProvisioningRequest(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
+class OnboardingHito(Base):
+    """Primera vez que un negocio completó un paso del onboarding (HU-SH-06, ADR-0124).
+
+    Tabla de NEGOCIO (`tenant_id`, RLS forzada): una fila por `(tenant_id, paso)` mientras no
+    esté borrada. El estado de los primeros pasos no se guarda (se calcula del estado real,
+    `core/primeros_pasos`); esto solo fija cuándo se cumplió cada uno, para el embudo de
+    activación. `fuente`: `dato` si la hora sale del propio dato (la conexión, el primer
+    producto) o `deteccion` si es la hora en que el core lo vio por primera vez.
+    """
+
+    __tablename__ = "onboarding_hitos"
+    __table_args__ = (
+        Index(
+            "uq_onboarding_hitos_tenant_paso",
+            "tenant_id",
+            "paso",
+            unique=True,
+            postgresql_where=text("deleted_at is null"),
+        ),
+        CheckConstraint("paso ~ '^[a-z][a-z0-9_]{0,63}$'", name="ck_onboarding_hitos_paso"),
+        CheckConstraint("segundos_desde_alta >= 0", name="ck_onboarding_hitos_segundos"),
+        CheckConstraint("fuente in ('dato', 'deteccion')", name="ck_onboarding_hitos_fuente"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    paso: Mapped[str] = mapped_column(Text, nullable=False)
+    completado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    segundos_desde_alta: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    fuente: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
 # ---------------------------------------------------------------- escalamiento
 class Escalation(Base):
     """Handoff a humano — mecanismo NATIVO del core (los plugins lo disparan vía MCPHost).
