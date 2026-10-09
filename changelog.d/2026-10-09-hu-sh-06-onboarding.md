@@ -8,7 +8,7 @@
 - Hook opcional `BaseModule.contenido_cargado(tenant_id)` (contrato `core/primeros_pasos/contrato.py`): cada
   habilidad dice cuánto contenido cargó el negocio. Lo implementan `pack_commerce` (productos a la venta),
   `pack_calendar` (tipos de cita) y `pack_cobranza` (clientes). El core no lee tablas de los packs.
-- Embudo de activación: `onboarding_hitos` (migración `0060`, RLS forzada) guarda la primera vez que se cumplió
+- Embudo de activación: `onboarding_hitos` (migración `0062`, RLS forzada) guarda la primera vez que se cumplió
   cada paso, con los segundos desde el alta (`tenants.created_at`), más la invitación aceptada y el primer
   mensaje de un cliente real. Idempotente (`ON CONFLICT DO NOTHING`), auditado (`primer_paso_completado`) y en
   el log (`onboarding_hito`). `agent-core tenant embudo [--dias N] [--solo-automaticas]` barre y agrega:

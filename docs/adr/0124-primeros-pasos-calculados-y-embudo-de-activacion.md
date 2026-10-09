@@ -132,7 +132,7 @@ modales de ayuda y las guías por habilidad siguen siendo de SPEC-12.
   (`GET /api/v1/admin/onboarding`, sección `dashboard`).
 - `core/mcp/types.py`: hook `BaseModule.contenido_cargado`. Packs: `pack_commerce`, `pack_calendar`,
   `pack_cobranza`. `docs/PLUGIN-CONTRACT.md`.
-- `core/db/models.py` y `alembic/versions/0060_onboarding_hitos.py`.
+- `core/db/models.py` y `alembic/versions/0062_onboarding_hitos.py`.
 - `core/admin/invitations_service.py` (`canjear_invitacion` devuelve la sesión; `contar_pendientes` con los
   filtros de la lista), `core/admin/auth.py` (`nueva_sesion`), `core/api/routers/auth.py` y `me.py`.
 - `cli/commands/tenant.py`: `agent-core tenant embudo`. `docs/openapi.json`.

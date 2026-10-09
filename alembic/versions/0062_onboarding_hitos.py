@@ -9,8 +9,8 @@
 Tabla nueva y vacía: sin reescritura ni bloqueo largo. `purge_tenant` la cubre sola (descubre las
 tablas con `tenant_id`).
 
-Revision ID: 0060
-Revises: 0059
+Revision ID: 0062
+Revises: 0061
 Create Date: 2026-10-09
 """
 from __future__ import annotations
@@ -19,8 +19,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0060"
-down_revision = "0059"
+revision = "0062"
+down_revision = "0061"
 branch_labels = None
 depends_on = None
 
