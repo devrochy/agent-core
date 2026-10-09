@@ -35,6 +35,7 @@ from typing import Any
 from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from core.billing.periodos import Periodo
 from core.db.models import ProvisioningRequest, Tenant
 from core.db.session import get_owned, get_session
 from core.provisioning import ACTOR, AltaEnRevision, AltaOcupada, AltaTransitoria
@@ -145,6 +146,7 @@ async def aprovisionar(vendedor: uuid.UUID, payload: Mapping[str, Any]) -> Provi
         referencia=referencia,
         customer_id=_uuid(payload.get("customer_id")),
         variant_id=variant_id,
+        periodo=_periodo_del_evento(payload),
     )
     if registro.subscription_id != subscription_id:
         # Segunda línea de un pedido con dos planes: un pedido, un negocio.
@@ -157,8 +159,12 @@ async def aprovisionar(vendedor: uuid.UUID, payload: Mapping[str, Any]) -> Provi
         return registro
     if registro.referencia != referencia:
         # Otro pedido (o un cargo de cambio) sobre una suscripción ya registrada: un cambio
-        # de plan. Sincronizar el plan del negocio aprovisionado es de HU-SH-04.
-        await _auditar_cambio_de_plan(registro, referencia, variant_id)
+        # de plan. El plan del negocio cambia y se aplica el preset pendiente (HU-SH-04). Si
+        # el alta todavía corre, primero se termina; si no se puede, el outbox reintenta.
+        if registro.estado == "en_curso":
+            registro = await _procesar(vendedor, registro)
+        await sincronizar_cambio_de_plan(vendedor, registro, payload, referencia, variant_id)
+        return registro
     if registro.estado != "en_curso":
         log.info(
             "provisioning_ya_resuelto",
@@ -191,6 +197,24 @@ async def _buscar(
     return (por_suscripcion or list(filas) or [None])[0]
 
 
+def _periodo_del_evento(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """El período en curso de la suscripción del cliente en el vendedor (HU-SH-04): el plan
+    del negocio corta sus períodos el mismo día que el asistente."""
+    periodo = {
+        clave: payload.get(clave)
+        for clave in ("periodo_inicio", "proximo_cargo", "dia_ancla")
+        if payload.get(clave) is not None
+    }
+    return periodo
+
+
+def _fecha(valor: Any) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(valor)) if valor else None
+    except ValueError:
+        return None
+
+
 async def _registro(
     vendedor: uuid.UUID,
     *,
@@ -198,12 +222,16 @@ async def _registro(
     referencia: str,
     customer_id: uuid.UUID | None,
     variant_id: str | None,
+    periodo: dict[str, Any] | None = None,
 ) -> ProvisioningRequest:
     """La fila del alta (la crea si no existe). INSERT … ON CONFLICT DO NOTHING: dos
     entregas a la vez terminan leyendo la misma fila."""
     existente = await _buscar(vendedor, subscription_id, referencia)
     if existente is not None:
         return existente
+    detalle: dict[str, Any] = {"variant_id": variant_id} if variant_id else {}
+    if periodo:
+        detalle["periodo"] = periodo
     async with get_session() as session:
         await session.execute(
             pg_insert(ProvisioningRequest)
@@ -214,7 +242,7 @@ async def _registro(
                 subscription_id=subscription_id,
                 customer_id=customer_id,
                 estado="en_curso",
-                detalle={"variant_id": variant_id} if variant_id else {},
+                detalle=detalle,
                 intentos=0,
             )
             .on_conflict_do_nothing()
@@ -374,6 +402,28 @@ async def _free_repetido(
     return otra is not None
 
 
+async def _recompra(vendedor: uuid.UUID, registro: ProvisioningRequest) -> bool:
+    """¿El mismo cliente ya tiene un negocio creado por otra suscripción del vendedor?"""
+    if registro.customer_id is None:
+        return False
+    async with get_session() as session:
+        otra = (
+            await session.execute(
+                select(ProvisioningRequest.id)
+                .where(
+                    ProvisioningRequest.tenant_id == vendedor,
+                    ProvisioningRequest.id != registro.id,
+                    ProvisioningRequest.customer_id == registro.customer_id,
+                    ProvisioningRequest.estado == "completado",
+                    ProvisioningRequest.negocio_tenant_id.isnot(None),
+                    ProvisioningRequest.deleted_at.is_(None),
+                )
+                .limit(1)
+            )
+        ).first()
+    return otra is not None
+
+
 async def _dar_de_alta(
     vendedor: uuid.UUID, registro: ProvisioningRequest, inicio: float, aviso: dict[str, Any]
 ) -> ProvisioningRequest:
@@ -406,6 +456,13 @@ async def _dar_de_alta(
     await _guardar_detalle(vendedor, registro.id, correo=huella)
     if plan.is_free and await _free_repetido(vendedor, registro, huella):
         raise AltaEnRevision("ya hubo un alta para este cliente o este correo: un Free más se revisa")
+    if not plan.is_free and await _recompra(vendedor, registro):
+        # HU-SH-04: quien canceló y vuelve a comprar abre otra suscripción; crear otro negocio
+        # le dejaría dos. Una persona decide si reactivar el que tenía (runbook de altas).
+        raise AltaEnRevision(
+            "el cliente ya tiene un negocio de un alta anterior (recompra después de cancelar): "
+            "revisar si se reactiva ese negocio"
+        )
     await validar_correo_del_owner(email)
     vertical = _limpio(datos.get("vertical")).lower() or None
 
@@ -419,7 +476,7 @@ async def _dar_de_alta(
         vendedor, registro.id, tenant_id=tenant_id, slug=slug, plan_id=plan.id, vertical=vertical
     )
     if not plan.is_free:
-        await _registrar_periodo(tenant_id, plan.id, slug)
+        await _registrar_periodo(tenant_id, plan.id, slug, (registro.detalle or {}).get("periodo") or {})
     preset = await _aplicar_preset(tenant_id, vertical)
     vendedor_slug = await _slug_de(vendedor)
     await _guardar_origen(
@@ -476,10 +533,29 @@ async def _slug_propio(
     return slug
 
 
-async def _registrar_periodo(tenant_id: uuid.UUID, plan_id: str, slug: str) -> None:
+def periodo_del_vendedor(slug: str, periodo: Mapping[str, Any], *, now: datetime | None = None) -> Periodo:
+    """El período pagado en el vendedor (`periodo_inicio` → `proximo_cargo` de la suscripción
+    del cliente), para que el plan del negocio corte el mismo día (HU-SH-04). Sin esos datos
+    (un evento anterior a ADR-0123), un período por calendario desde hoy."""
+    from core.billing.periodos import periodo_de, referencia_del_periodo
+
+    inicio = _fecha(periodo.get("periodo_inicio"))
+    fin = _fecha(periodo.get("proximo_cargo"))
+    if inicio is None or fin is None or fin <= inicio:
+        return periodo_de(slug, now or datetime.now(UTC), desde_cero=True)
+    return Periodo(inicio=inicio, fin=fin, referencia=referencia_del_periodo(slug, inicio), desde_cero=True)
+
+
+def _ancla(periodo: Mapping[str, Any]) -> int | None:
+    valor = periodo.get("dia_ancla")
+    return int(valor) if isinstance(valor, int) and 1 <= valor <= 31 else None
+
+
+async def _registrar_periodo(tenant_id: uuid.UUID, plan_id: str, slug: str, periodo: Mapping[str, Any]) -> None:
     """Plan pago: el período pagado por el pedido, con su pago en `subscription_payments`,
-    lo escribe `core/billing` (idempotente por la referencia del período). Free se queda con
-    la prueba de 30 días que dejó el alta (D-16)."""
+    lo escribe `core/billing` (idempotente por la referencia del período). Los bordes del
+    período son los de la suscripción del cliente en el vendedor (HU-SH-04). Free se queda
+    con la prueba de 30 días que dejó el alta (D-16)."""
     from core.billing.service import registrar_periodo_pagado
 
     async with tenant_scope(tenant_id):
@@ -488,8 +564,8 @@ async def _registrar_periodo(tenant_id: uuid.UUID, plan_id: str, slug: str) -> N
                 session,
                 tenant_id,
                 plan_id,
-                provider="asistente",
-                provider_reference=f"plat-{slug}-{datetime.now(UTC):%Y%m}",
+                periodo=periodo_del_vendedor(slug, periodo),
+                dia_ancla=_ancla(periodo),
             )
 
 
@@ -694,9 +770,90 @@ async def _cerrar_sin_alta(
     return fila
 
 
-async def _auditar_cambio_de_plan(
-    registro: ProvisioningRequest, referencia: str, variant_id: str | None
-) -> None:
+async def sincronizar_cambio_de_plan(
+    vendedor: uuid.UUID,
+    registro: ProvisioningRequest,
+    payload: Mapping[str, Any],
+    referencia: str,
+    variant_id: str | None,
+) -> dict[str, Any]:
+    """Cambio de plan en el asistente de un negocio ya aprovisionado (HU-SH-04, ADR-0123).
+
+    La suscripción del cliente en el vendedor cambió de plan (Free → pago con un pedido nuevo
+    o con `sub_cambiar_plan`, o un upgrade pagado): el plan del negocio cambia, SIN crear otro
+    negocio, y se aplica el preset que quedó pendiente porque no cabía en el plan anterior
+    (ADR-0110 § 3.1).
+
+    - Desde Free (en prueba o vencida): período pagado desde el cambio, con los bordes del
+      vendedor y su referencia (`registrar_periodo_pagado`, idempotente).
+    - Entre planes pagos: el plan cambia en el acto y el período sigue (el vendedor ya cobró la
+      diferencia). Un downgrade llega con el cargo del período siguiente.
+
+    Queda auditado en los dos negocios. Idempotente: un reintento no mueve el período ni vuelve
+    a aplicar el preset.
+    """
+    from core.billing.canales import plan_del_cargo, por_debajo_del_precio, registrar_monto_distinto
+    from core.billing.periodos import tiene_periodo_pago
+    from core.billing.plans import get_plan
+    from core.billing.service import registrar_periodo_pagado
+    from core.db.models import TenantSubscription
+
+    resultado: dict[str, Any] = {"negocio_tenant_id": str(registro.negocio_tenant_id) if registro.negocio_tenant_id else None}
+    negocio = registro.negocio_tenant_id
+    plan_id = await plan_del_cargo(vendedor, variant_id)
+    plan = get_plan(plan_id) if plan_id else None
+    if registro.estado != "completado" or negocio is None:
+        resultado["estado"] = f"sin_negocio ({registro.estado})"
+    elif plan is None:
+        resultado["estado"] = "plan_desconocido"
+    elif plan.is_free or payload.get("estado") != "activa":
+        resultado["estado"] = "sin_cambio"  # a Free o sin pagar todavía: nada que aplicar
+    elif por_debajo_del_precio(plan.id, payload.get("valor_periodo")):
+        # La suscripción del vendedor quedó con un precio menor que el del plan (p. ej. creada
+        # a mano): ese plan no está pagado. No se aplica y se alerta.
+        resultado.update(estado="monto_distinto", plan=plan.id, valor_periodo=payload.get("valor_periodo"))
+        slug = registro.negocio_slug or await _slug_de(negocio)
+        await registrar_monto_distinto(
+            negocio,
+            periodo_del_vendedor(slug, _periodo_del_evento(payload)),
+            plan_id=plan.id,
+            monto=payload.get("valor_periodo"),
+            origen=f"cambio de plan {referencia}",
+            vendedor=vendedor,
+        )
+    else:
+        slug = registro.negocio_slug or await _slug_de(negocio)
+        async with tenant_scope(negocio):
+            async with get_session() as session:
+                sub = (
+                    await session.execute(
+                        select(TenantSubscription)
+                        .where(TenantSubscription.tenant_id == negocio, TenantSubscription.deleted_at.is_(None))
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                anterior = sub.plan_id if sub is not None else None
+                if sub is None or not tiene_periodo_pago(sub.plan_id, sub.status):
+                    periodo = periodo_del_vendedor(slug, _periodo_del_evento(payload))
+                    pago = await registrar_periodo_pagado(
+                        session, negocio, plan.id, periodo=periodo, dia_ancla=_ancla(_periodo_del_evento(payload))
+                    )
+                    resultado.update(estado="periodo_pagado", referencia=periodo.referencia, pago=pago.resultado)
+                else:
+                    sub.plan_id = plan.id
+                    resultado["estado"] = "plan_cambiado"
+        resultado.update(plan_anterior=anterior, plan=plan.id)
+        resultado["preset"] = await _aplicar_preset_pendiente(vendedor, registro, negocio)
+        async with get_session() as session:
+            fila = await _fila(session, vendedor, registro.id)
+            fila.plan_id = plan.id
+        async with tenant_scope(negocio):
+            await record_audit(
+                actor=ACTOR,
+                action="plan_cambiado_por_el_asistente",
+                input_data={"referencia": referencia, "plan": plan.id},
+                output_data={k: v for k, v in resultado.items() if k != "negocio_tenant_id"},
+            )
     await record_audit(
         actor=ACTOR,
         action="aprovisionamiento_cambio_de_plan",
@@ -706,17 +863,36 @@ async def _auditar_cambio_de_plan(
             "subscription_id": str(registro.subscription_id) if registro.subscription_id else None,
             "variant_id": variant_id,
         },
-        output_data={
-            "negocio_tenant_id": str(registro.negocio_tenant_id) if registro.negocio_tenant_id else None,
-            "pendiente": "sincronizar el plan del negocio y su preset pendiente (HU-SH-04)",
-        },
+        output_data=resultado,
     )
     log.info(
         "provisioning_cambio_de_plan",
         tenant_id=str(registro.tenant_id),
         referencia=referencia,
         referencia_del_alta=registro.referencia,
+        estado=resultado.get("estado"),
+        plan=resultado.get("plan"),
     )
+    return resultado
+
+
+async def _aplicar_preset_pendiente(
+    vendedor: uuid.UUID, registro: ProvisioningRequest, negocio: uuid.UUID
+) -> dict[str, Any] | None:
+    """El preset que quedó pendiente en el alta (no cabía en el plan, ADR-0110 § 3.1) se
+    aplica al subir de plan. Si ya estaba aplicado o no hay vertical, no hace nada."""
+    async with get_session() as session:
+        tenant = await session.get(Tenant, negocio)
+    alta = dict(((tenant.settings or {}) if tenant else {}).get("alta") or {})
+    previo = dict(alta.get("preset") or (registro.detalle or {}).get("preset") or {})
+    vertical = registro.vertical or alta.get("vertical")
+    if not vertical or previo.get("estado") != "pendiente":
+        return previo or None
+    preset = await _aplicar_preset(negocio, vertical)
+    await _guardar_origen(negocio, {**alta, "preset": preset})
+    await _guardar_detalle(vendedor, registro.id, preset=preset)
+    log.info("provisioning_preset_al_subir_de_plan", negocio_tenant_id=str(negocio), estado=preset.get("estado"))
+    return preset
 
 
 async def _avisar_a_los_duenos(

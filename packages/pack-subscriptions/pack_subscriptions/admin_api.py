@@ -42,7 +42,9 @@ class SuscripcionOut(BaseModel):
 @router.post("/suscripciones", response_model=SuscripcionOut)
 async def crear_suscripcion_manual(
     body: CrearSuscripcionBody,
-    principal: Annotated[Principal, Depends(require("pack_subscriptions:suscripciones"))],
+    # Escritura (HU-SH-04): activar una suscripción con un precio libre es una acción de
+    # dinero; un colaborador de solo lectura no puede hacerlo.
+    principal: Annotated[Principal, Depends(require("pack_subscriptions:suscripciones", write=True))],
 ) -> SuscripcionOut:
     """Crea (o reutiliza) la suscripción de un `Customer` a un plan."""
     from pack_subscriptions.module import (

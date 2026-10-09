@@ -349,11 +349,16 @@ async def test_alta_automatica_premium_con_preset_e_invitacion(vendedores, corre
 
     sub = await _suscripcion_de(negocio.id)
     assert (sub.plan_id, sub.status, sub.trial_ends_at) == ("premium", "active", None)
-    assert timedelta(days=29, hours=23) < sub.period_end - datetime.now(UTC) <= timedelta(days=30)
-    assert sub.provider_reference == f"plat-{negocio.slug}-{datetime.now(UTC):%Y%m}"
+    # HU-SH-04 (ADR-0123): el período corta por calendario el mismo día que la suscripción del
+    # cliente en el vendedor (antes, +30 días: los dos lados se desalineaban).
+    from core.subscriptions.periodos import sumar_periodo
+
+    assert sub.period_end == sumar_periodo(sub.period_start, "mensual", sub.dia_ancla)
+    assert timedelta(days=27) < sub.period_end - datetime.now(UTC) <= timedelta(days=31)
+    assert sub.provider_reference == f"plat-{negocio.slug}-{sub.period_start:%Y%m}"
     [pago] = await _pagos(negocio.id)
     assert (pago.status, pago.plan_id, int(pago.amount_cop)) == ("aprobado", "premium", 600_000)
-    assert pago.provider_reference == sub.provider_reference
+    assert pago.provider_reference == sub.provider_reference == pago.periodo
 
     assert negocio.settings["preset"]["id"] == "restaurante"
     async with tenant_scope(negocio.id):
@@ -828,3 +833,52 @@ async def test_el_master_reintenta_o_descarta_un_alta_en_revision(vendedores, co
     await _entregar(vendedor, otro)  # un evento repetido no la reabre
     assert (await _registro(vendedor, otro)).estado == "omitido"
     assert len(await _auditoria(vendedor, "aprovisionamiento_descartado")) == 1
+
+
+async def test_reintento_con_el_correo_corregido_no_manda_el_enlace_a_otro_correo(vendedores, monkeypatch) -> None:
+    """La cuenta anotada en el alta es la del correo A. Si el master corrige el pedido al
+    correo B y reintenta, el alta va a revisión: el enlace de la cuenta A nunca va a B."""
+    from pack_commerce.models import Order
+
+    from core.db.session import get_session
+    from core.provisioning import AltaTransitoria
+    from core.provisioning.consumer import MAX_INTENTOS, reintentar_alta
+    from core.provisioning.owner import CORREO_CAMBIADO
+    from core.shared.tenant import tenant_scope
+
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    correo_a, correo_b = _correo(), _correo()
+    referencia, _ = await _pedido_de_plan(vendedor, datos_alta=_datos(correo_a))
+
+    async def smtp_caido(to: str, subject: str, body: str) -> str:
+        raise OSError("smtp caído")
+
+    # El alta crea la cuenta de A, pero el correo no sale: al tercer intento, revisión.
+    monkeypatch.setattr("core.gateway.system_email.send_system_email", smtp_caido)
+    for _ in range(MAX_INTENTOS - 1):
+        with pytest.raises(AltaTransitoria):
+            await _entregar(vendedor, referencia)
+    await _entregar(vendedor, referencia)
+    registro = await _registro(vendedor, referencia)
+    assert registro.estado == "revision"
+    assert registro.detalle["owner"]["creada"] is True
+
+    # El master corrige el correo del pedido a B y reintenta, con el SMTP ya funcionando.
+    enviados: list[dict[str, str]] = []
+
+    async def smtp_ok(to: str, subject: str, body: str) -> str:
+        enviados.append({"to": to, "subject": subject, "body": body})
+        return "msg-test"
+
+    monkeypatch.setattr("core.gateway.system_email.send_system_email", smtp_ok)
+    async with tenant_scope(vendedor):
+        async with get_session() as s:
+            pedido = (await s.execute(select(Order).where(Order.public_order_number == referencia))).scalar_one()
+            pedido.datos_alta = {**pedido.datos_alta, "email": correo_b}
+    fila = await reintentar_alta(vendedor, referencia)
+
+    assert fila.estado == "revision"
+    assert fila.motivo == CORREO_CAMBIADO
+    assert enviados == []  # ni el enlace de la cuenta A a B, ni nada a A
+    assert await _admin(correo_b) is None

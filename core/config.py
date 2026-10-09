@@ -219,12 +219,21 @@ class Settings(BaseSettings):
     # Sandbox por default (mismo criterio que pack-payments): producción se
     # habilita explícitamente.
     wompi_billing_sandbox: bool = Field(default=True, alias="WOMPI_BILLING_SANDBOX")
+    # R-05 (HU-SH-04, ADR-0123): Wompi admite UNA URL de eventos por cuenta y ambiente. Si la
+    # cuenta de la plataforma es la misma que usa el pack de pagos de un negocio (el de
+    # `solvershub`, que vende los planes), su URL apunta a `/webhooks/billing/wompi` y los
+    # eventos que no son de un pago de la plataforma se reenvían a ESE negocio (UUID). Vacío =
+    # cuentas separadas: no se reenvía nada (fail-closed).
+    billing_wompi_eventos_tenant: str = Field(default="", alias="BILLING_WOMPI_EVENTOS_TENANT")
+    # Días antes del fin del período en que el job de renovación genera el cobro del
+    # siguiente y avisa por el canal preferido del negocio (HU-SH-04).
+    billing_dias_renovacion: int = Field(default=5, ge=1, le=28, alias="BILLING_DIAS_RENOVACION")
 
     # --- Aprovisionamiento automático de negocios (HU-SH-03, ADR-0121) ---
     # Negocios VENDEDORES por UUID, separados por coma (p. ej. el de `solvershub`): solo
     # un `subscription.activated` de uno de ellos crea un negocio nuevo. Vacío = apagado.
     # Va en el worker (ahí corre el despachador del outbox). No hay token de servicio.
-    # No encenderlo en producción antes de HU-SH-04 (renovación y cambio de plan).
+    # Desde HU-SH-04 (ADR-0123) también es el canal asistente del cobro de la plataforma.
     provisioning_seller_tenants: str = Field(default="", alias="PROVISIONING_SELLER_TENANTS")
 
     # --- Observabilidad ---

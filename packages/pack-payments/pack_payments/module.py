@@ -58,28 +58,43 @@ async def wompi_webhook(request: Request, slug: str) -> dict[str, Any]:
     payload = await request.json()
 
     async with tenant_scope(tenant_id):
-        try:
-            config = await tenant_config()
-        except PluginError:
-            log.warning("wompi_webhook_not_configured", tenant_id=str(tenant_id))
-            return {"status": "ignored"}
+        resultado = await procesar_evento_de_wompi(payload)
+    return {"status": "ignored" if resultado in (SIN_CONFIG, FIRMA_INVALIDA) else "ok"}
 
-        provider = build_provider(config)
-        if not provider.verify_webhook_signature(payload):
-            log.warning("wompi_webhook_invalid_signature", tenant_id=str(tenant_id))
-            return {"status": "ignored"}
 
-        event = provider.parse_webhook_event(payload)
-        # El estado del pago y su evento de dominio se escriben en la MISMA
-        # transacción (outbox, ADR-0107): si la transacción se revierte, el
-        # evento no existe. Wompi reintenta la entrega por red (mismo evento);
-        # la escritura es idempotente por `dedupe_key`, así que un reenvío no
-        # duplica el efecto.
-        transaction = await _apply_webhook_event(event, payload, provider.provider_name)
-        if transaction is None:
-            return {"status": "ok"}
+SIN_CONFIG = "sin_config"
+FIRMA_INVALIDA = "firma_invalida"
 
-    return {"status": "ok"}
+
+async def procesar_evento_de_wompi(payload: dict[str, Any]) -> str:
+    """Verifica y aplica un evento de Wompi en el negocio actual (`tenant_scope`).
+
+    Lo usan el webhook propio del pack y, si la cuenta de Wompi es la misma que la de la
+    plataforma, el webhook de la plataforma, que reenvía lo que no es suyo (una sola URL de
+    eventos por cuenta: riesgo R-05, HU-SH-04, ADR-0123). La firma se verifica siempre con el
+    secreto de eventos de ESTE negocio. Devuelve `aplicado`, `sin_transaccion`, `sin_config`
+    o `firma_invalida`.
+    """
+    tenant_id = get_current_tenant_id()
+    try:
+        config = await tenant_config()
+    except PluginError:
+        log.warning("wompi_webhook_not_configured", tenant_id=str(tenant_id))
+        return SIN_CONFIG
+
+    provider = build_provider(config)
+    if not provider.verify_webhook_signature(payload):
+        log.warning("wompi_webhook_invalid_signature", tenant_id=str(tenant_id))
+        return FIRMA_INVALIDA
+
+    event = provider.parse_webhook_event(payload)
+    # El estado del pago y su evento de dominio se escriben en la MISMA
+    # transacción (outbox, ADR-0107): si la transacción se revierte, el
+    # evento no existe. Wompi reintenta la entrega por red (mismo evento);
+    # la escritura es idempotente por `dedupe_key`, así que un reenvío no
+    # duplica el efecto.
+    transaction = await _apply_webhook_event(event, payload, provider.provider_name)
+    return "aplicado" if transaction is not None else "sin_transaccion"
 
 
 # Estado de una transacción cuyo pago aprobado llegó con un monto distinto al

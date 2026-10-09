@@ -109,6 +109,18 @@ def test_nombre_del_negocio_con_un_enlace_se_descarta(nombre: str) -> None:
         ("Tienda Gmail.Com", True),
         ("visita x.com", True),
         ("a@b.co", True),
+        # Homógrafos y dominios Unicode: «а» cirílica, puntos ideográficos y de ancho completo.
+        ("p\u0430ypal.com", True),
+        ("evil\u3002com", True),
+        ("evil\uff0ecom", True),
+        ("evil\uff61com", True),
+        ("\uff45\uff56\uff49\uff4c\uff0e\uff43\uff4f\uff4d", True),  # todo de ancho completo
+        ("пример.рф", True),
+        ("\uff57\uff57\uff57.algo", True),
+        # Nombres legítimos con tildes y «ñ» pasan.
+        ("Panadería La Ñapa", False),
+        ("Señor Café S.A.S.", False),
+        ("Peluquería Muñoz & Hijos Ltda.", False),
     ],
 )
 def test_contiene_url(texto: str, esperado: bool) -> None:
