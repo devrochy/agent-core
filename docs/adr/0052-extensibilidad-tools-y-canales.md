@@ -81,8 +81,15 @@ Habilidades). Tests por pieza. **Sin cambio de contrato congelado.**
 
 - **SSRF (alto)**: `ScopedHttp` bloquea IPs internas/loopback/link-local/rangos
   reservados y metadata de cloud, **aunque** estén en la allowlist; solo `http(s)`
-  y el host debe resolver a la allowlist. (DNS que resuelve a IP privada queda como
-  limitación documentada.)
+  y el host debe resolver a la allowlist. ~~(DNS que resuelve a IP privada queda como
+  limitación documentada.)~~ Cerrado el 2026-10-08: el host debe tener forma de
+  dominio público (sin hosts de una etiqueta como `redis`, sin formas numéricas no
+  canónicas como `127.1`/`2130706433`, sin `*.internal`/`*.local`/`localhost`); se
+  resuelve el DNS y se rechaza si **alguna** IP no es pública (privada, loopback,
+  link-local, reservada, multicast, CGNAT `100.64/10`, IPv4 embebida en IPv6); y se
+  conecta a la IP ya validada con `Host`/SNI del dominio (sin segunda resolución,
+  así no hay DNS rebinding), sin redirects ni proxies del entorno. Las tools
+  declarativas solo guardan `allowed_domains` que sean FQDN públicos.
 - **Allowlist por turno (medio)**: el `ScopedHttp` del turno se acota a la allowlist
   de **la tool que se ejecuta**, no a la unión de todas.
 - **Shadowing (medio)**: una tool declarativa no puede pisar una tool ya registrada

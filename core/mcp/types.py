@@ -19,6 +19,10 @@ Python, no una petición de red (docs/MONOLITH-MODEL.md).
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
+import re
+import socket
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Iterable
@@ -27,8 +31,14 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel
 
+from core.shared.logger import get_logger
+
 if TYPE_CHECKING:
+    import httpx
+
     from core.mcp.host import MCPHost
+
+log = get_logger(__name__)
 
 # handler(arguments, context) -> resultado JSON-serializable
 ToolHandler = Callable[[dict[str, Any], "ToolContext"], Awaitable[dict[str, Any]]]
@@ -53,29 +63,100 @@ class ToolContext:
     http: ScopedHttp | None = None
 
 
-def _is_private_host(host: str) -> bool:
-    """True si el host es una IP interna/loopback/link-local o metadata de cloud.
+# Sufijos que nunca son un destino público (DNS interno, mDNS, metadata de cloud).
+_INTERNAL_SUFFIXES = ("localhost", "internal", "local", "localdomain", "home.arpa", "lan")
+_LABEL_RE = re.compile(r"^(?!-)[a-z0-9_-]{1,63}(?<!-)$")
+# Última etiqueta numérica (decimal, octal o hex): glibc la resuelve como IPv4
+# (`127.1`, `0x7f.1`, `0177.0.0.1`), igual que el "ends in a number" del WHATWG URL.
+_NUMERIC_LABEL_RE = re.compile(r"^(0x[0-9a-f]*|[0-9]+)$")
+# TLD de verdad: letras o IDN en punycode (ni `_` ni dígitos: `db.red_default`, `127.1`).
+_TLD_RE = re.compile(r"^([a-z]{2,63}|xn--[a-z0-9-]{1,59})$")
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+# Direcciones a probar si la conexión a la primera falla (p. ej. IPv6 sin ruta), y
+# tope del connect de cada intento para no gastar todo el timeout en una sola IP.
+_MAX_ADDRS = 2
+_CONNECT_TIMEOUT = 5.0
 
-    Bloquea el vector SSRF aunque la allowlist del tenant la incluya (ADR-0052).
-    Los nombres que resuelven a IP privada quedan fuera de este chequeo (no se
-    resuelve DNS); se documenta como limitación.
-    """
-    import ipaddress
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
-    if host in ("localhost", "metadata.google.internal"):
-        return True
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return False
+
+def _blocked_ip(ip: IPAddress) -> bool:
+    """True si la IP no es un destino público: privada, loopback, link-local,
+    reservada, multicast, sin especificar, CGNAT o una IPv4 embebida en IPv6
+    (mapeada, Teredo, 6to4 hacia una IPv4 no pública; NAT64 cae en `is_reserved`)."""
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None or ip.teredo is not None or ip.is_site_local:
+            return True
+        if ip.sixtofour is not None and _blocked_ip(ip.sixtofour):
+            return True
     return (
-        ip.is_private
+        not ip.is_global
+        or ip.is_private
         or ip.is_loopback
         or ip.is_link_local
         or ip.is_reserved
         or ip.is_multicast
         or ip.is_unspecified
+        or ip in _CGNAT
     )
+
+
+def _ip_literal(host: str) -> IPAddress | None:
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
+
+
+def _public_hostname(host: str) -> bool:
+    """True si `host` (minúsculas, ASCII) es un nombre DNS con forma de dominio
+    público: con punto, etiquetas LDH, sin TLD numérico ni sufijo interno."""
+    if not host.isascii() or len(host) > 253:
+        return False
+    labels = host.split(".")
+    if len(labels) < 2 or not all(_LABEL_RE.match(label) for label in labels):
+        return False
+    if _NUMERIC_LABEL_RE.match(labels[-1]) or not _TLD_RE.match(labels[-1]):
+        return False
+    return not any(host == s or host.endswith("." + s) for s in _INTERNAL_SUFFIXES)
+
+
+def is_public_host(host: str) -> bool:
+    """Chequeo sin DNS de un host de URL (ADR-0052): una IP pública canónica o un
+    nombre con forma de dominio público. Rechaza hosts de una etiqueta (`redis`,
+    `postgres`), formas numéricas no canónicas (`2130706433`, `127.1`, `0x7f.1`) y
+    sufijos internos (`localhost`, `metadata.google.internal`). Que el nombre
+    resuelva a una IP pública lo comprueba `ScopedHttp.request` al conectar."""
+    host = host.lower().removesuffix(".")
+    ip = _ip_literal(host)
+    if ip is not None:
+        return not _blocked_ip(ip)
+    return _public_hostname(host)
+
+
+def public_fqdn(domain: str) -> str | None:
+    """`domain` normalizado si es un FQDN público (sin IPs literales), si no None.
+
+    Lo usan las tools declarativas para validar su `allowed_domains` al guardar."""
+    host = str(domain).strip().lower().removesuffix(".")
+    if _ip_literal(host) is not None or not _public_hostname(host):
+        return None
+    return host
+
+
+async def _resolve_host(host: str, port: int, timeout: float) -> list[IPAddress]:
+    """IPs (sin repetir, en el orden del resolver) a las que resuelve `host`."""
+    loop = asyncio.get_running_loop()
+    infos = await asyncio.wait_for(
+        loop.getaddrinfo(host, port, type=socket.SOCK_STREAM, flags=socket.AI_ADDRCONFIG),
+        timeout,
+    )
+    ips: list[IPAddress] = []
+    for *_, sockaddr in infos:
+        ip = ipaddress.ip_address(str(sockaddr[0]))
+        if ip not in ips:
+            ips.append(ip)
+    return ips
 
 
 # Métodos que puede usar un pack con su allowlist del manifest (APIs REST como
@@ -90,6 +171,12 @@ class ScopedHttp:
     Por defecto solo permite `POST`/`GET` a hosts de la allowlist; `methods`
     amplía el set (packs, ver `plugin_http`). Sin allowlist, toda salida se
     rechaza (fail-closed). Nunca expone `httpx` crudo ni el entorno.
+
+    Anti-SSRF: el host debe pasar `is_public_host`, se resuelve por DNS y se
+    rechaza si ALGUNA IP no es pública; luego se conecta a la IP ya validada
+    (sin segunda resolución: evita DNS rebinding) con `Host` y SNI del nombre
+    original, así el certificado se verifica contra el dominio. Sin redirects
+    ni proxies del entorno.
     """
 
     def __init__(
@@ -98,24 +185,27 @@ class ScopedHttp:
         timeout: float = 15.0,
         methods: tuple[str, ...] = ("GET", "POST"),
     ) -> None:
-        self._allowed = {d.strip().lower() for d in (allowed_domains or []) if d.strip()}
+        self._allowed = {
+            d.strip().lower().removesuffix(".") for d in (allowed_domains or []) if d.strip()
+        }
         self._timeout = timeout
         self._methods = {m.upper() for m in methods}
 
-    def _allowed_host(self, url: str) -> bool:
-        from urllib.parse import urlparse
-
-        parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            return False
-        host = (parsed.hostname or "").lower()
-        if not host:
-            return False
-        # Nunca permitir direcciones internas/link-local/loopback ni metadata de
-        # cloud (SSRF), aunque estuvieran en la allowlist (ADR-0052).
-        if _is_private_host(host):
-            return False
-        return any(host == d or host.endswith("." + d) for d in self._allowed)
+    def _allowed_host(self, url: httpx.URL) -> str | None:
+        """Host normalizado si la URL apunta a la allowlist y a un host público."""
+        if url.scheme not in ("http", "https"):
+            return None
+        try:
+            host = url.raw_host.decode("ascii").lower().removesuffix(".")
+        except UnicodeDecodeError:
+            return None
+        # Nunca direcciones internas/link-local/loopback ni metadata de cloud
+        # (SSRF), aunque estuvieran en la allowlist (ADR-0052).
+        if not host or not is_public_host(host):
+            return None
+        if any(host == d or host.endswith("." + d) for d in self._allowed):
+            return host
+        return None
 
     async def request(
         self,
@@ -130,22 +220,60 @@ class ScopedHttp:
     ) -> dict[str, Any]:
         """`data` va form-encoded (p. ej. el token endpoint de OAuth2); `timeout`
         pisa el del cliente para esta llamada."""
-        if method.upper() not in self._methods:
-            return {"error": f"Método no permitido: {method}"}
-        if not self._allowed_host(url):
-            return {"error": f"Dominio no autorizado: {url}"}
         import httpx
 
+        if method.upper() not in self._methods:
+            return {"error": f"Método no permitido: {method}"}
+        denied = {"error": f"Dominio no autorizado: {url}"}
         try:
-            async with httpx.AsyncClient(timeout=timeout or self._timeout) as client:
-                resp = await client.request(
-                    method.upper(),
-                    url,
-                    params=params,
-                    json=json_body,
-                    data=data,
-                    headers=headers or {},
-                )
+            target = httpx.URL(url)
+        except Exception:
+            return denied
+        # Se valida y se conecta con el MISMO parseo (sin diferencias de parser).
+        host = self._allowed_host(target)
+        if host is None:
+            return denied
+        effective_timeout = timeout or self._timeout
+        port = target.port or (443 if target.scheme == "https" else 80)
+        try:
+            ips = await _resolve_host(host, port, effective_timeout)
+        except Exception as exc:
+            # Mismo error que una IP interna: distinguirlos permitiría enumerar
+            # nombres internos (Docker/Coolify) desde una tool del tenant.
+            log.warning("scoped_http_dns_fallo", host=host, error=type(exc).__name__)
+            return denied
+        if not ips or any(_blocked_ip(ip) for ip in ips):
+            log.warning("scoped_http_ip_no_publica", host=host, ips=[str(ip) for ip in ips])
+            return denied
+
+        send_headers = {k: v for k, v in (headers or {}).items() if k.lower() != "host"}
+        send_headers["Host"] = target.netloc.decode("ascii")
+        extensions = {"sni_hostname": host} if target.scheme == "https" else {}
+        per_try = httpx.Timeout(effective_timeout, connect=min(effective_timeout, _CONNECT_TIMEOUT))
+        last_exc: Exception | None = None
+        try:
+            async with httpx.AsyncClient(
+                timeout=effective_timeout, follow_redirects=False, trust_env=False
+            ) as client:
+                # IPv4 primero: sin happy-eyeballs, una IPv6 sin salida no debe
+                # costar la llamada.
+                for ip in sorted(ips, key=lambda ip: ip.version)[:_MAX_ADDRS]:
+                    try:
+                        resp = await client.request(
+                            method.upper(),
+                            target.copy_with(host=str(ip)),
+                            params=params,
+                            json=json_body,
+                            data=data,
+                            headers=send_headers,
+                            extensions=extensions,
+                            timeout=per_try,
+                        )
+                        break
+                    except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                        last_exc = exc
+                else:
+                    raise last_exc or httpx.ConnectError("sin direcciones")
         except Exception as exc:
             return {"error": f"Fallo de red: {type(exc).__name__}"}
         try:

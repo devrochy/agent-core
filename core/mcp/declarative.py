@@ -18,6 +18,10 @@ Forma de cada entrada:
 
 Los `{placeholders}` se interpolan con los argumentos de la tool (validados y
 escapados), nunca con texto del LLM sin pasar por argumentos.
+
+`allowed_domains` solo admite FQDN públicos (`public_fqdn`): ni IPs, ni hosts de
+una etiqueta (`redis`), ni sufijos internos. Al ejecutar, `ScopedHttp` además
+resuelve el DNS y rechaza IPs no públicas (anti-SSRF).
 """
 
 from __future__ import annotations
@@ -26,7 +30,7 @@ import re
 from typing import Any
 from urllib.parse import quote
 
-from core.mcp.types import MCPTool, ScopedHttp, ToolContext
+from core.mcp.types import MCPTool, ScopedHttp, ToolContext, public_fqdn
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
@@ -34,6 +38,27 @@ log = get_logger(__name__)
 PLUGIN_ID = "declarative"
 _NAME_RE = re.compile(r"^[a-zA-Z0-9_]{1,60}$")
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z0-9_]+)\}")
+
+
+def _clean_domains(raw: Any) -> list[str]:
+    """Los `allowed_domains` que son FQDN públicos, normalizados y sin repetir."""
+    domains: list[str] = []
+    for d in raw if isinstance(raw, list) else []:
+        fqdn = public_fqdn(str(d))
+        if fqdn and fqdn not in domains:
+            domains.append(fqdn)
+    return domains
+
+
+def rejected_domains(raw: Any) -> list[str]:
+    """`allowed_domains` que se descartarían al guardar (para avisar en el admin)."""
+    rejected: list[str] = []
+    for item in raw if isinstance(raw, list) else []:
+        domains = item.get("allowed_domains") if isinstance(item, dict) else None
+        for d in domains if isinstance(domains, list) else []:
+            if str(d).strip() and public_fqdn(str(d)) is None:
+                rejected.append(str(d).strip())
+    return rejected
 
 
 def validate_declarative_tools(raw: Any) -> list[dict[str, Any]]:
@@ -56,9 +81,7 @@ def validate_declarative_tools(raw: Any) -> list[dict[str, Any]]:
             "description": str(item.get("description") or name)[:400],
             "method": method,
             "url": url,
-            "allowed_domains": [
-                str(d).strip() for d in (item.get("allowed_domains") or []) if str(d).strip()
-            ],
+            "allowed_domains": _clean_domains(item.get("allowed_domains")),
             "headers": {
                 str(k): str(v) for k, v in (item.get("headers") or {}).items()
             }
