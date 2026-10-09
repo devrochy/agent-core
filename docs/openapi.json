@@ -5982,7 +5982,7 @@
           "admin · plataforma"
         ],
         "summary": "Aprobar",
-        "description": "Aprueba un alta en revisión: corre ya, sin los controles de riesgo que la frenaron.",
+        "description": "Aprueba un alta en revisión: queda `en_curso` y el worker la corre en segundos, sin\nlos controles de riesgo que la frenaron (por el outbox, con sus reintentos).",
         "operationId": "aprobar_api_v1_admin_platform_altas_automaticas__vendedor_id__altas__referencia__aprobar_post",
         "parameters": [
           {

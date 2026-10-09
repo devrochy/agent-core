@@ -17,6 +17,7 @@ from core.provisioning.antiabuso import (
     huella,
     normalizar_documento,
     normalizar_telefono,
+    token_de_terminos,
 )
 
 
@@ -30,7 +31,9 @@ def test_lo_que_no_es_un_telefono_no_da_huella(valor: str | None) -> None:
     assert normalizar_telefono(valor) is None
 
 
-@pytest.mark.parametrize("valor", ["1.020.304.050", "1020304050", " 1020304050 "])
+@pytest.mark.parametrize(
+    "valor", ["1.020.304.050", "1020304050", " 1020304050 ", "CC 1020304050", "C.C. 1.020.304.050", "01020304050"]
+)
 def test_una_cedula_en_cualquier_formato_da_lo_mismo(valor: str) -> None:
     assert normalizar_documento(valor) == "1020304050"
 
@@ -91,7 +94,16 @@ def test_dominio_desechable(correo: str, esperado: bool) -> None:
 
 @pytest.mark.parametrize(
     "url",
-    ["http://solvershub.co/terminos", "https://", "https://localhost/x", "https://a b.co", "https://u:p@x.co/t", "javascript:alert(1)"],
+    [
+        "http://solvershub.co/terminos",
+        "https://",
+        "https://localhost/x",
+        "https://a b.co",
+        "https://u:p@x.co/t",
+        "javascript:alert(1)",
+        "https://s\u043elvershub.co/terminos",  # «o» cirílica
+        "https://solvershub.co/\u202eterminos",
+    ],
 )
 def test_un_enlace_legal_que_no_es_https_publico_se_rechaza(url: str) -> None:
     with pytest.raises(legal.DocumentoInvalido):
@@ -125,3 +137,12 @@ def test_el_archivo_de_dominios_desechables_no_tiene_basura() -> None:
     dominios = _dominios_desechables()
     assert len(dominios) > 30
     assert all("." in d and " " not in d and d == d.lower() for d in dominios)
+
+
+def test_el_token_de_terminos_es_de_una_conversacion_y_un_juego_de_versiones() -> None:
+    import uuid
+
+    una, otra = uuid.uuid4(), uuid.uuid4()
+    assert token_de_terminos(una, "abc") == token_de_terminos(una, "abc")
+    assert token_de_terminos(una, "abc") != token_de_terminos(otra, "abc")
+    assert token_de_terminos(una, "abc") != token_de_terminos(una, "abd")

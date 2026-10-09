@@ -110,30 +110,26 @@ def test_ninguna_tool_se_llama_como_un_alta(tools: list) -> None:  # type: ignor
     assert [t.name for t in tools if _NOMBRE_DE_ALTA.search(t.name)] == []
 
 
-# La única ruta que llega al consumidor: aprobar o descartar un alta en revisión, solo el
-# master con su sesión humana (HU-SH-07, ADR-0125), como el alta manual de Plataforma.
-_RUTAS_DEL_MASTER = ("platform_altas.py",)
-
-
 def test_el_consumidor_solo_se_dispara_por_el_outbox() -> None:
     """El aprovisionamiento solo se registra como handler de `subscription.activated` en el
     despachador: ninguna ruta de la API lo importa (la API de plataforma del master sí usa
-    `core.alta_negocio`, con su sesión humana, y aprueba o descarta altas en revisión)."""
+    `core.alta_negocio`, con su sesión humana). Aprobar un alta en revisión (ADR-0125) emite
+    `provisioning.alta_aprobada` y la corre el worker."""
     from core.events import core_handlers
-    from core.provisioning.consumer import on_subscription_activated
-    from core.shared.events import ON_SUBSCRIPTION_ACTIVATED
+    from core.provisioning.consumer import on_alta_aprobada, on_subscription_activated
+    from core.shared.events import ON_ALTA_APROBADA, ON_SUBSCRIPTION_ACTIVATED
 
     assert (ON_SUBSCRIPTION_ACTIVATED, on_subscription_activated) in core_handlers._HANDLERS
     raiz = Path(__file__).resolve().parents[1] / "core" / "api"
+    assert (ON_ALTA_APROBADA, on_alta_aprobada) in core_handlers._HANDLERS
     for archivo in raiz.rglob("*.py"):
-        if archivo.name in _RUTAS_DEL_MASTER:
-            continue
         for prohibido in ("core.provisioning.consumer", "core.provisioning.owner"):
             assert not _importa(archivo, prohibido), f"{archivo} importa {prohibido}"
 
 
-def test_las_rutas_que_llegan_al_alta_son_solo_del_master() -> None:
-    """Cada ruta de `platform_altas` exige el rol master antes de hacer nada."""
+def test_las_rutas_del_alta_automatica_son_solo_del_master() -> None:
+    """Cada ruta de `platform_altas` (interruptor, documentos, aprobar, descartar) exige el
+    rol master antes de hacer nada."""
     from fastapi.routing import APIRoute
 
     from core.api.routers import platform_altas

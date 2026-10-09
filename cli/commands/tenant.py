@@ -824,10 +824,10 @@ def aprobar_alta(
 
     async def _run():  # type: ignore[no-untyped-def]
         from core.plugin_manager import plugin_manager
-        from core.provisioning.consumer import aprobar_alta as _aprobar
+        from core.provisioning.consumer import aprobar_y_procesar
 
         await plugin_manager.ensure_process_activation()
-        return await _aprobar(vendedor_id, referencia, por="cli")
+        return await aprobar_y_procesar(vendedor_id, referencia, por="cli")
 
     try:
         fila = asyncio.run(_run())
@@ -846,6 +846,11 @@ def interruptor_altas(
     """Interruptor del alta automática (HU-SH-07). Pausada, cada alta nueva queda en revisión.
     Sin --pausar ni --reanudar, muestra el estado."""
     vendedor_id = _uuid_del_vendedor(vendedor)
+    from core.provisioning.vendedores import vendedores_configurados
+
+    if vendedor_id not in vendedores_configurados():
+        console.print("[red]✗ Ese negocio no está en PROVISIONING_SELLER_TENANTS.[/red]")
+        raise typer.Exit(1)
     if pausar and not motivo.strip():
         console.print("[red]✗ Indica --motivo al pausar.[/red]")
         raise typer.Exit(1)

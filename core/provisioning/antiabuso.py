@@ -30,6 +30,8 @@ import hashlib
 import hmac
 import re
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -38,12 +40,21 @@ from typing import Any
 
 from sqlalchemy import func, or_, select, update
 
-from core.db.models import Customer, Message, PedidoDeAlta
+from core.db.models import Customer, Message, PedidoDeAlta, Tenant
 from core.db.session import get_session
 from core.provisioning import interruptor, legal
-from core.provisioning.vendedores import es_vendedor, vendedores_configurados
+from core.provisioning.vendedores import es_vendedor
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, tenant_scope
+
+
+@asynccontextmanager
+async def _sesion_del(vendedor: uuid.UUID) -> AsyncIterator[Any]:
+    """Sesión bajo el `tenant_scope` del vendedor, sea cual sea el de quien llama: si no,
+    la RLS devolvería 0 filas en silencio y las reglas dejarían pasar el alta."""
+    async with tenant_scope(vendedor):
+        async with get_session() as session:
+            yield session
 
 log = get_logger(__name__)
 
@@ -54,6 +65,7 @@ _NO_DIGITOS = re.compile(r"\D+")
 _NO_ALFANUM = re.compile(r"[^0-9A-Z]+")
 # NIT con dígito de verificación: «900.123.456-7» y «900123456» son el mismo.
 _NIT_CON_DV = re.compile(r"^[\d.\s]+-\s*\d$")
+_TIPO_DE_DOCUMENTO = re.compile(r"^(?:C\.?\s?C|C\.?\s?E|T\.?\s?I|NIT|P\.?\s?P|P\.?\s?A)[\s.:#-]*(?=\d)")
 
 # Señales de datos inconsistentes que se guardan (sin el dato).
 SENAL_DOCUMENTO = "documento_invalido"
@@ -77,12 +89,19 @@ def normalizar_telefono(valor: Any) -> str | None:
 
 
 def normalizar_documento(valor: Any) -> str | None:
-    """Mayúsculas y alfanuméricos, sin el dígito de verificación de un NIT. None si no
-    parece un documento (menos de 5 o más de 15 caracteres, o un solo carácter repetido)."""
+    """Mayúsculas y alfanuméricos, sin el tipo delante (CC, CE, TI, NIT, PP, PA), sin el
+    dígito de verificación de un NIT escrito con guion y sin ceros a la izquierda. None si
+    no parece un documento (menos de 5 o más de 15 caracteres, o un solo carácter repetido).
+
+    Un NIT con el dígito de verificación pegado (sin guion) no se puede distinguir de otro
+    número: queda como otra huella."""
     texto = str(valor or "").strip().upper()
+    texto = _TIPO_DE_DOCUMENTO.sub("", texto)
     if _NIT_CON_DV.match(texto):
         texto = texto.rsplit("-", 1)[0]
     limpio = _NO_ALFANUM.sub("", texto)
+    if limpio.isdigit():
+        limpio = limpio.lstrip("0")
     if not 5 <= len(limpio) <= 15 or len(set(limpio)) == 1:
         return None
     return limpio
@@ -142,32 +161,12 @@ class PedidoPreparado:
 async def _cliente(vendedor: uuid.UUID, customer_id: uuid.UUID | None) -> Customer | None:
     if customer_id is None:
         return None
-    async with get_session() as session:
+    async with _sesion_del(vendedor) as session:
         return (
             await session.execute(
                 select(Customer).where(Customer.tenant_id == vendedor, Customer.id == customer_id)
             )
         ).scalar_one_or_none()
-
-
-async def _ultimo_mensaje_del_cliente(vendedor: uuid.UUID, conversation_id: uuid.UUID | None) -> str | None:
-    """El último mensaje del comprador en la conversación: la evidencia de que aceptó."""
-    if conversation_id is None:
-        return None
-    async with get_session() as session:
-        mensaje = (
-            await session.execute(
-                select(Message.id)
-                .where(
-                    Message.tenant_id == vendedor,
-                    Message.conversation_id == conversation_id,
-                    Message.direction == "inbound",
-                )
-                .order_by(Message.created_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-    return str(mensaje) if mensaje else None
 
 
 def _huellas_y_senales(
@@ -221,7 +220,7 @@ async def free_previo(
     )
     if excluir_referencia:
         consulta = consulta.where(PedidoDeAlta.referencia != excluir_referencia)
-    async with get_session() as session:
+    async with _sesion_del(vendedor) as session:
         return (await session.execute(consulta.limit(1))).first() is not None
 
 
@@ -233,7 +232,7 @@ async def intentos_recientes(
     if misma is None:
         return 0
     desde = (ahora or datetime.now(UTC)) - VENTANA_INTENTOS
-    async with get_session() as session:
+    async with _sesion_del(vendedor) as session:
         return int(
             (
                 await session.execute(
@@ -248,18 +247,87 @@ async def intentos_recientes(
         )
 
 
-def _terminos_pendientes(vigentes: dict[str, legal.Documento], token: str) -> dict[str, Any]:
-    return {
-        "status": "terminos_pendientes",
-        "error": "Falta que el cliente acepte los términos, el aviso de privacidad y el DPA.",
-        "documentos": [vigentes[tipo].para_aceptar() for tipo in legal.TIPOS],
-        "acepta_terminos": token,
-        "hint": (
-            "Comparte con el cliente los tres enlaces y pregúntale si los acepta. Solo si "
-            "responde que sí, vuelve a llamar crear_pedido con los mismos datos y "
-            "customer_data.acepta_terminos con el valor de acepta_terminos."
-        ),
-    }
+# ------------------------------------------------------------------ resultados que frenan
+# El core decide; el pack que llama arma la respuesta de su tool (y su texto para el modelo).
+@dataclass(frozen=True)
+class TerminosPendientes:
+    """Falta que el cliente acepte el juego de versiones vigente. `token` es lo que la tool
+    tiene que recibir de vuelta cuando el cliente acepte, en esta misma conversación."""
+
+    documentos: list[dict[str, str]]
+    token: str
+
+
+@dataclass(frozen=True)
+class LimiteDeAltas:
+    """El origen superó el cupo de pedidos de alta de la última hora."""
+
+
+@dataclass(frozen=True)
+class FreeNoDisponible:
+    """Esta persona ya usó un Free en los últimos 12 meses: ofrecer un plan pago."""
+
+
+Frenado = TerminosPendientes | LimiteDeAltas | FreeNoDisponible
+
+_TTL_TERMINOS_S = 24 * 3600
+
+
+def token_de_terminos(conversation_id: uuid.UUID | None, version: str) -> str:
+    """Token de la aceptación: HMAC de la conversación y del juego de versiones. No sirve en
+    otra conversación ni para otro juego (si se publica una versión, cambia)."""
+    mensaje = f"terminos:{conversation_id}:{version}".encode()
+    return hmac.new(_clave(), mensaje, hashlib.sha256).hexdigest()[:16]
+
+
+def _clave_de_terminos(vendedor: uuid.UUID, conversation_id: uuid.UUID | None) -> str:
+    return f"alta:terminos:{vendedor}:{conversation_id}"
+
+
+async def _anotar_terminos_mostrados(vendedor: uuid.UUID, conversation_id: uuid.UUID | None) -> None:
+    """Cuándo se mostraron los enlaces en esta conversación: la aceptación tiene que venir
+    en un mensaje del cliente POSTERIOR."""
+    from core.memory.working import get_redis
+
+    try:
+        await get_redis().set(
+            _clave_de_terminos(vendedor, conversation_id), datetime.now(UTC).isoformat(), ex=_TTL_TERMINOS_S
+        )
+    except Exception:
+        log.warning("alta_terminos_sin_redis", tenant_id=str(vendedor), exc_info=True)
+
+
+async def _mensaje_que_acepta(vendedor: uuid.UUID, conversation_id: uuid.UUID | None) -> str | None:
+    """El primer mensaje del cliente posterior a que se mostraran los enlaces, o None. Sin
+    ese mensaje (el modelo repitió el token en el mismo turno, lo trajo de otra conversación
+    o Redis no responde), no hay aceptación: falla cerrado."""
+    from core.memory.working import get_redis
+
+    if conversation_id is None:
+        return None
+    try:
+        mostrado = await get_redis().get(_clave_de_terminos(vendedor, conversation_id))
+    except Exception:
+        log.warning("alta_terminos_sin_redis", tenant_id=str(vendedor), exc_info=True)
+        return None
+    if not mostrado:
+        return None
+    desde = datetime.fromisoformat(mostrado.decode() if isinstance(mostrado, bytes) else str(mostrado))
+    async with _sesion_del(vendedor) as session:
+        mensaje = (
+            await session.execute(
+                select(Message.id)
+                .where(
+                    Message.tenant_id == vendedor,
+                    Message.conversation_id == conversation_id,
+                    Message.direction == "inbound",
+                    Message.created_at > desde,
+                )
+                .order_by(Message.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    return str(mensaje) if mensaje else None
 
 
 async def _limite_por_origen(vendedor: uuid.UUID, origen: str) -> bool:
@@ -284,13 +352,15 @@ async def preparar_pedido_de_alta(
     documento: Any,
     gratis: bool,
     acepta_terminos: Any,
-) -> PedidoPreparado | dict[str, Any] | None:
+) -> PedidoPreparado | Frenado | None:
     """Antes de crear el pedido de un plan en el negocio actual.
 
     - None: el negocio no vende planes de la plataforma; nada que hacer.
-    - dict: el pedido no se crea; es la respuesta de la tool (términos pendientes, cupo
-      superado o Free no disponible).
+    - `TerminosPendientes`, `LimiteDeAltas` o `FreeNoDisponible`: el pedido no se crea; el
+      pack arma la respuesta de su tool.
     - `PedidoPreparado`: el pedido sigue; se registra con `registrar_pedido_de_alta`.
+
+    `gratis` lo decide quien llama según el plan de la plataforma de la línea (no el total).
     """
     vendedor = get_current_tenant_id()
     if vendedor is None or not await es_vendedor(vendedor):
@@ -302,40 +372,38 @@ async def preparar_pedido_de_alta(
     faltan = legal.faltantes(vigentes)
     aceptacion: dict[str, Any] | None = None
     if not faltan:
-        token = legal.version_legal(vigentes)
-        if str(acepta_terminos or "").strip() != token:
-            return _terminos_pendientes(vigentes, token)
+        version = legal.version_legal(vigentes)
+        token = token_de_terminos(conversation_id, version)
+        mensaje_id = None
+        if hmac.compare_digest(str(acepta_terminos or "").strip(), token):
+            mensaje_id = await _mensaje_que_acepta(vendedor, conversation_id)
+        if mensaje_id is None:
+            await _anotar_terminos_mostrados(vendedor, conversation_id)
+            return TerminosPendientes(
+                documentos=[vigentes[tipo].para_aceptar() for tipo in legal.TIPOS], token=token
+            )
         aceptacion = {
             "documentos": [vigentes[tipo].para_aceptar() for tipo in legal.TIPOS],
-            "version_legal": token,
-            "mensaje_id": await _ultimo_mensaje_del_cliente(vendedor, conversation_id),
+            "version_legal": version,
+            "mensaje_id": mensaje_id,
         }
     else:
         log.warning("alta_sin_documentos_legales", tenant_id=str(vendedor), faltan=faltan)
 
-    # 2. Cupo por origen (el cliente del chat). Cuenta cada pedido que llega hasta acá.
-    if await _limite_por_origen(vendedor, str(customer_id or conversation_id or "anonimo")):
+    # 2. Cupo por origen (el cliente del chat). Cuenta cada pedido que llega hasta acá. Sin
+    #    origen no hay cupo propio: se frena (falla cerrado) en vez de compartir uno.
+    origen = customer_id or conversation_id
+    if origen is None or await _limite_por_origen(vendedor, str(origen)):
         log.warning("alta_limite_por_origen", tenant_id=str(vendedor), customer_id=str(customer_id))
-        return {
-            "status": "limite_de_altas",
-            "error": "Se alcanzó el límite de pedidos de planes por ahora.",
-            "hint": "Explícale al cliente que puede intentarlo de nuevo en una hora.",
-        }
+        return LimiteDeAltas()
 
     cliente = await _cliente(vendedor, customer_id)
     huellas, senales = _huellas_y_senales(telefono_del_canal(cliente), telefono, documento)
 
-    # 3. Un Free por persona (12 meses).
+    # 3. Un Free por persona (12 meses). La respuesta no dice qué dato coincidió.
     if gratis and await free_previo(vendedor, huellas=huellas, customer_id=customer_id):
         log.info("alta_free_repetido", tenant_id=str(vendedor), customer_id=str(customer_id))
-        return {
-            "status": "free_no_disponible",
-            "error": "La prueba gratis ya se usó con estos datos en los últimos 12 meses.",
-            "hint": (
-                "No crees otro pedido Free. Ofrécele al cliente un plan pago: genera una "
-                "cotización nueva con ese plan."
-            ),
-        }
+        return FreeNoDisponible()
 
     return PedidoPreparado(
         vendedor=vendedor,
@@ -372,7 +440,7 @@ def registrar_pedido_de_alta(session: Any, pedido: PedidoPreparado, *, referenci
 
 # ------------------------------------------------------------------ al dar de alta
 async def pedido_de_alta(vendedor: uuid.UUID, referencia: str) -> PedidoDeAlta | None:
-    async with get_session() as session:
+    async with _sesion_del(vendedor) as session:
         return (
             await session.execute(
                 select(PedidoDeAlta).where(
@@ -437,9 +505,13 @@ async def olvidar_huellas_vencidas(ahora: datetime | None = None) -> int:
     regla. La fila (con la aceptación) se conserva: es la prueba del contrato."""
     limite = (ahora or datetime.now(UTC)) - DOCE_MESES
     total = 0
-    for vendedor in vendedores_configurados():
-        async with tenant_scope(vendedor):
-            async with get_session() as session:
+    # Todos los negocios, no solo la allowlist de hoy: uno que dejó de vender también
+    # tiene que olvidar sus huellas. `tenants` es tabla de sistema (sin RLS).
+    async with get_session() as session:
+        negocios = list((await session.execute(select(Tenant.id))).scalars().all())
+    for vendedor in negocios:
+        try:
+            async with _sesion_del(vendedor) as session:
                 total += (
                     await session.execute(
                         update(PedidoDeAlta)
@@ -451,6 +523,8 @@ async def olvidar_huellas_vencidas(ahora: datetime | None = None) -> int:
                         .values(huellas=[], updated_at=func.now())
                     )
                 ).rowcount or 0
+        except Exception:
+            log.exception("alta_huellas_retencion_fallida", tenant_id=str(vendedor))
     if total:
         log.info("alta_huellas_olvidadas", filas=total)
     return total
@@ -460,7 +534,11 @@ __all__ = [
     "DOCE_MESES",
     "SENAL_DOCUMENTO",
     "SENAL_TELEFONO",
+    "FreeNoDisponible",
+    "Frenado",
+    "LimiteDeAltas",
     "PedidoPreparado",
+    "TerminosPendientes",
     "aceptacion_del_pedido",
     "dominio_desechable",
     "free_previo",
@@ -474,4 +552,5 @@ __all__ = [
     "preparar_pedido_de_alta",
     "registrar_pedido_de_alta",
     "telefono_del_canal",
+    "token_de_terminos",
 ]

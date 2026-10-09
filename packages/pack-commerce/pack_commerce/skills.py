@@ -21,7 +21,14 @@ from sqlalchemy import or_, select, text
 from core.db.session import get_owned, get_session
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
-from core.provisioning.antiabuso import preparar_pedido_de_alta, registrar_pedido_de_alta
+from core.provisioning.antiabuso import (
+    FreeNoDisponible,
+    LimiteDeAltas,
+    PedidoPreparado,
+    TerminosPendientes,
+    preparar_pedido_de_alta,
+    registrar_pedido_de_alta,
+)
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from core.shared.texto_seguro import contiene_url
@@ -79,6 +86,31 @@ def _monto_alto_threshold(config: Any, es_plan: bool) -> float | None:
     if es_plan:
         return getattr(config, "monto_alto_planes_threshold", None)
     return getattr(config, "monto_alto_threshold", 1_000_000) or 1_000_000
+
+
+async def _incluye_un_free(session, variant_ids: list) -> bool:  # type: ignore[no-untyped-def]
+    """True si alguna línea es un plan gratis: el plan de la plataforma de la variante
+    (`precio_de_plan`) es Free, o el plan cuesta 0. No sale del total de la cotización: un
+    Free junto a un producto pago sigue siendo un Free (HU-SH-07, ADR-0125)."""
+    from core.billing.plans import get_plan
+    from pack_commerce.precios_de_plan import ATRIBUTO
+
+    if not variant_ids:
+        return False
+    variantes = (
+        await session.execute(
+            select(ProductVariant).where(
+                ProductVariant.tenant_id == get_current_tenant_id(),
+                ProductVariant.id.in_(variant_ids),
+                ProductVariant.billing_period.is_not(None),
+            )
+        )
+    ).scalars().all()
+    for variante in variantes:
+        plan = get_plan(str((variante.attributes or {}).get(ATRIBUTO) or "").strip().lower())
+        if (plan is not None and plan.is_free) or _float(variante.price) == 0:
+            return True
+    return False
 
 
 async def _es_pedido_de_plan(session, variant_ids: list) -> bool:  # type: ignore[no-untyped-def]
@@ -341,6 +373,37 @@ def _campos_requeridos(config, es_plan: bool, delivery_method: str) -> list[str]
 def _validar_checkout(campos_requeridos: list[str], data: dict[str, Any]) -> tuple[bool, list[str]]:
     missing = [f for f in campos_requeridos if not str(data.get(f, "")).strip()]
     return (not missing, missing)
+
+
+# ------------------------------------------------------------------ alta frenada (HU-SH-07)
+def _respuesta_del_alta_frenada(frenado: Any) -> dict[str, Any]:
+    """Respuesta de `crear_pedido` cuando el core frena el pedido de un plan de la plataforma
+    (ADR-0125). El comportamiento completo vive en el playbook de ventas del vendedor; el
+    `hint` solo dice el siguiente paso, como el resto de las respuestas de esta tool."""
+    if isinstance(frenado, TerminosPendientes):
+        return {
+            "status": "terminos_pendientes",
+            "error": "Falta que el cliente acepte los términos, el aviso de privacidad y el DPA.",
+            "documentos": frenado.documentos,
+            "acepta_terminos": frenado.token,
+            "hint": (
+                "Comparte los enlaces y espera la respuesta del cliente. Si acepta, repite "
+                "crear_pedido con customer_data.acepta_terminos."
+            ),
+        }
+    if isinstance(frenado, FreeNoDisponible):
+        return {
+            "status": "free_no_disponible",
+            "error": "La prueba gratis ya se usó con estos datos en los últimos 12 meses.",
+            "hint": "No crees otro pedido Free: ofrécele un plan pago.",
+        }
+    if isinstance(frenado, LimiteDeAltas):
+        return {
+            "status": "limite_de_altas",
+            "error": "Se alcanzó el límite de pedidos de planes por ahora.",
+            "hint": "Puede intentarlo de nuevo en una hora.",
+        }
+    return {"error": "No se pudo crear el pedido del plan."}
 
 
 # ------------------------------------------------------------------ datos del alta (HU-SH-03)
@@ -1381,6 +1444,8 @@ class OrderSkill(BaseSkill):
             # Free (D-16, HU-SUB-06): un pedido de planes en $0 no se cobra, así que
             # el mínimo del pago en línea no aplica.
             es_gratis = es_plan and _float(quote.total) == 0
+            # Para el antiabuso, Free es el plan, no el total (ADR-0125).
+            incluye_free = es_plan and await _incluye_un_free(session, [i.variant_id for i in items])
             min_online = getattr(config, "pago_en_linea_monto_minimo", 150_000) or 150_000
             if not es_gratis and payment_method == "pago_en_linea" and _float(quote.total) < min_online:
                 # Incidente real (tenant yopoldo, 2026-09-12): un pedido de
@@ -1449,17 +1514,18 @@ class OrderSkill(BaseSkill):
         # un vendedor, no hace nada.
         pedido_de_alta = None
         if es_plan:
-            pedido_de_alta = await preparar_pedido_de_alta(
+            preparado = await preparar_pedido_de_alta(
                 customer_id=context.customer_id,
                 conversation_id=context.conversation_id,
                 canal=context.channel,
                 telefono=customer_data.get("phone"),
                 documento=customer_data.get("id_document"),
-                gratis=es_gratis,
+                gratis=incluye_free,
                 acepta_terminos=customer_data.get("acepta_terminos"),
             )
-            if isinstance(pedido_de_alta, dict):
-                return pedido_de_alta
+            if preparado is not None and not isinstance(preparado, PedidoPreparado):
+                return _respuesta_del_alta_frenada(preparado)
+            pedido_de_alta = preparado
 
         # Guardar datos de entrega en la memoria de entidad del core (Capa 2)
         # SOLO con consentimiento (Ley 1581, D17): sin él, el pedido se crea

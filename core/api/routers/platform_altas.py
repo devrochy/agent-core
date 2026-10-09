@@ -6,7 +6,9 @@ la allowlist `PROVISIONING_SELLER_TENANTS` (cualquier otro id responde 404):
 - el estado de cada vendedor: interruptor, documentos legales vigentes y altas en revisión;
 - pausar o reanudar el alta automática (el interruptor ante un ataque);
 - publicar una versión nueva de términos, privacidad o DPA, y ver las anteriores;
-- la cola de altas en revisión: aprobar o descartar.
+- la cola de altas en revisión: aprobar o descartar. Aprobar no corre el alta acá: la deja
+  `en_curso` y emite `provisioning.alta_aprobada` por el outbox; la corre el worker. Ninguna
+  ruta de la API llega al consumidor (`tests/test_provisioning_sin_llm.py`).
 
 Nada de esto devuelve datos personales del comprador: ni correo ni teléfono ni documento.
 """
@@ -25,7 +27,7 @@ from core.api.deps import Principal, get_principal
 from core.api.errors import ApiError
 from core.db.models import ProvisioningRequest, Tenant
 from core.db.session import get_session
-from core.provisioning import interruptor, legal
+from core.provisioning import interruptor, legal, revision
 from core.provisioning.vendedores import vendedores_configurados
 from core.shared.tenant import tenant_scope
 
@@ -257,25 +259,14 @@ async def aprobar(
     referencia: str,
     principal: Annotated[Principal, Depends(get_principal)],
 ) -> AltaOut:
-    """Aprueba un alta en revisión: corre ya, sin los controles de riesgo que la frenaron."""
+    """Aprueba un alta en revisión: queda `en_curso` y el worker la corre en segundos, sin
+    los controles de riesgo que la frenaron (por el outbox, con sus reintentos)."""
     _require_master(principal)
     await _vendedor(vendedor_id)
-    from core.plugin_manager import plugin_manager
-    from core.provisioning import AltaOcupada, AltaTransitoria
-    from core.provisioning.consumer import aprobar_alta
-
-    # La fuente de los datos del pedido la registra commerce al activarse.
-    await plugin_manager.ensure_process_activation()
     try:
-        fila = await aprobar_alta(vendedor_id, referencia[:120], por=_actor(principal))
+        fila = await revision.aprobar_alta(vendedor_id, referencia[:120], por=_actor(principal))
     except ValueError as exc:
         raise ApiError(409, "alta_no_revisable", str(exc)[:180]) from exc
-    except AltaOcupada as exc:
-        raise ApiError(409, "alta_ocupada", "El alta se está procesando: intenta en un minuto.") from exc
-    except AltaTransitoria as exc:
-        raise ApiError(
-            409, "alta_transitoria", "El alta no terminó (el pedido aún no está listo): vuelve a aprobarla."
-        ) from exc
     return _alta_out(fila)
 
 
@@ -289,10 +280,8 @@ async def descartar(
     """Cierra un alta en revisión sin crear el negocio."""
     _require_master(principal)
     await _vendedor(vendedor_id)
-    from core.provisioning.consumer import descartar_alta
-
     try:
-        fila = await descartar_alta(vendedor_id, referencia[:120], payload.motivo, por=_actor(principal))
+        fila = await revision.descartar_alta(vendedor_id, referencia[:120], payload.motivo, por=_actor(principal))
     except ValueError as exc:
         raise ApiError(409, "alta_no_revisable", str(exc)[:180]) from exc
     return _alta_out(fila)

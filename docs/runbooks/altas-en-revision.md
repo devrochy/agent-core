@@ -65,10 +65,16 @@ agent-core tenant aprobar-alta <uuid-del-vendedor> <referencia>
 ```
 
 Una persona revisó el alta y la deja seguir: corre **sin** los controles de riesgo que la frenaron
-(interruptor, aceptación, un Free por persona, señales, Free repetido, recompra). Las validaciones de
-datos (plan, correo, pedido pagado, cliente, owner) siguen aplicando. Queda en `audit_log`
-(`aprovisionamiento_aprobado`) con quién aprobó y por qué estaba en revisión. Reintentar, en cambio, vuelve
-a aplicar todos los controles: sirve después de corregir un dato.
+(interruptor, aceptación, un Free por persona, señales, Free repetido, recompra). El motivo lista **todos**
+los controles que fallaron: leerlo entero antes de aprobar. Las validaciones de datos (plan, correo, pedido
+pagado, cliente, owner) siguen aplicando. Queda en `audit_log` (`aprovisionamiento_aprobado`) con quién
+aprobó y por qué estaba en revisión.
+
+- Solo se aprueba un alta en revisión.
+- Desde el panel, aprobar deja el alta `en_curso` y el worker la corre en segundos (evento
+  `provisioning.alta_aprobada` del outbox, con sus reintentos). Desde la CLI, además corre en el acto.
+- La aprobación es de un solo uso: si el alta vuelve a revisión por otro motivo, hay que aprobarla de
+  nuevo. Reintentar la borra y vuelve a aplicar todos los controles: sirve después de corregir un dato.
 
 ## 4. Descartar
 
@@ -130,4 +136,13 @@ que vio el comprador (`pedidos_de_alta.aceptacion`, y en el negocio creado,
 
 Mientras falte alguno de los tres, el asistente no pide la aceptación y **toda** alta va a revisión con "no hay
 aceptación registrada". Los textos de hoy son preliminares: cuando lleguen los del abogado (HU-GTM-02), se
-publica una versión nueva de cada uno, sin tocar código.
+publica una versión nueva de cada uno, sin tocar código. Una versión publicada no se edita ni se borra (la
+base lo impide): si tiene un error, se publica otra.
+
+## 9. Requisitos del vendedor para el antiabuso
+
+- `checkout_fields.plan` del vendedor (configuración de comercio) tiene que pedir `id_document` (por
+  defecto lo pide) y conviene que pida `phone`: "un Free por persona" usa esos datos además del número de
+  WhatsApp.
+- Un Free descartado sigue contando 12 meses para esa persona. Si alguien legítimo queda bloqueado
+  (`free_no_disponible` en el chat), crear el negocio a mano desde Plataforma.

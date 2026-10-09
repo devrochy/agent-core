@@ -11,9 +11,18 @@ ruta de la API lo acepta. Solo firma lo que hace el consumidor en `audit_log`.
 
 Módulos:
 
-- `fuentes`: contrato `DatosDeAlta` y registro de fuentes. Es lo ÚNICO de este paquete
-  que puede importar un pack (lo implementa `pack_commerce` con su pedido).
+- `fuentes`: contrato `DatosDeAlta` y registro de fuentes (lo implementa `pack_commerce`
+  con su pedido).
+- `antiabuso`: controles del pedido de un plan y motivos de revisión (HU-SH-07, ADR-0125).
+- `legal`: versiones de términos, privacidad y DPA del vendedor.
+- `interruptor`: pausa del alta automática por el master.
+- `revision`: aprobar o descartar un alta en revisión (aprobar emite un evento; no corre
+  el alta).
 - `vendedores`: la allowlist.
+
+Un pack puede importar `fuentes` y `antiabuso` (que usa `legal`, `interruptor` y
+`vendedores`); ninguno de esos llega al alta (contrato `antiabuso-sin-alta` de
+`.importlinter`).
 - `consumer`: el handler de `subscription.activated` y el alta.
 - `owner`: cuenta del owner, invitación, correo con el enlace y aviso por WhatsApp.
 

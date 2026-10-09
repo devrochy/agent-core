@@ -55,6 +55,9 @@ ON_SUBSCRIPTION_PAUSED = "subscription.paused"
 # referencia (el pedido; None si no hubo pedido), cambio_de_plan y variant_id (la línea del
 # pedido). En un negocio vendedor (ADR-0121) dispara el alta automática del comprador.
 ON_SUBSCRIPTION_ACTIVATED = "subscription.activated"
+# HU-SH-07 (ADR-0125): el master aprobó un alta en revisión; el consumidor la corre en el
+# worker. payload: referencia (del alta en el vendedor que emite).
+ON_ALTA_APROBADA = "provisioning.alta_aprobada"
 # HU-SH-02: citas. Al cliente: confirmación de una cita creada desde el panel,
 # recordatorios y oferta de reagendar si no asistió. Al equipo: creada/reagendada/cancelada.
 # payload: appointment_id, customer_id, titulo, fecha, hora, zona, enlace, texto…

@@ -123,7 +123,9 @@ async def _conversacion(tid: uuid.UUID, cliente: uuid.UUID) -> uuid.UUID:
             ).scalar_one()
 
 
-async def _cotizacion(tid: uuid.UUID, cliente: uuid.UUID, *, plan: str = "free", precio: int = 0) -> str:
+async def _cotizacion(
+    tid: uuid.UUID, cliente: uuid.UUID, *, plan: str = "free", precio: int = 0, extra: int = 0
+) -> str:
     from pack_commerce.models import Product, ProductVariant, Quote, QuoteItem
 
     from core.db.session import get_session
@@ -143,11 +145,22 @@ async def _cotizacion(tid: uuid.UUID, cliente: uuid.UUID, *, plan: str = "free",
             await s.flush()
             cotizacion = Quote(
                 tenant_id=tid, conversation_id=uuid.uuid4(), customer_id=cliente,
-                subtotal=precio, discount=0, total=precio, status="aceptada",
+                subtotal=precio + extra, discount=0, total=precio + extra, status="aceptada",
             )
             s.add(cotizacion)
             await s.flush()
             s.add(QuoteItem(tenant_id=tid, quote_id=cotizacion.id, variant_id=variante.id, quantity=1, unit_price=precio))
+            if extra:
+                # Un producto pago en la misma cotización: el Free sigue siendo un Free.
+                otro = Product(tenant_id=tid, name=f"Extra {uuid.uuid4().hex[:4]}")
+                s.add(otro)
+                await s.flush()
+                variante_extra = ProductVariant(
+                    tenant_id=tid, product_id=otro.id, sku=f"X-{uuid.uuid4().hex[:8]}", price=extra
+                )
+                s.add(variante_extra)
+                await s.flush()
+                s.add(QuoteItem(tenant_id=tid, quote_id=cotizacion.id, variant_id=variante_extra.id, quantity=1, unit_price=extra))
             return str(cotizacion.id)
 
 
@@ -164,7 +177,7 @@ def _datos(**extra: Any) -> dict[str, Any]:
 
 
 async def _pedir(
-    tid: uuid.UUID, cliente: uuid.UUID, datos: dict[str, Any], *, plan: str = "free", precio: int = 0
+    tid: uuid.UUID, cliente: uuid.UUID, datos: dict[str, Any], *, plan: str = "free", precio: int = 0, extra: int = 0
 ) -> dict[str, Any]:
     """`crear_pedido` de un plan, como lo llama el asistente."""
     from pack_commerce.skills import OrderSkill
@@ -172,7 +185,7 @@ async def _pedir(
     from core.mcp.types import ToolContext
     from core.shared.tenant import tenant_scope
 
-    quote = await _cotizacion(tid, cliente, plan=plan, precio=precio)
+    quote = await _cotizacion(tid, cliente, plan=plan, precio=precio, extra=extra)
     ctx = ToolContext(
         conversation_id=await _conversacion(tid, cliente), customer_id=cliente,
         idempotency_key=f"t:{uuid.uuid4().hex[:8]}", channel="whatsapp",
@@ -183,12 +196,53 @@ async def _pedir(
         )
 
 
+async def _mensaje_del_cliente(tid: uuid.UUID, cliente: uuid.UUID, texto: str = "Sí, acepto") -> uuid.UUID:
+    from core.db.models import Message
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    conversacion = await _conversacion(tid, cliente)
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            mensaje = Message(
+                tenant_id=tid, conversation_id=conversacion, direction="inbound", sender_type="customer", content=texto
+            )
+            s.add(mensaje)
+            await s.flush()
+            return mensaje.id
+
+
 async def _pedir_aceptando(tid: uuid.UUID, cliente: uuid.UUID, datos: dict[str, Any], **kw: Any) -> dict[str, Any]:
-    """Primero los términos pendientes; el cliente acepta y se vuelve a pedir con el token."""
+    """Primero los términos pendientes; el cliente responde que acepta (un mensaje suyo
+    posterior) y se vuelve a pedir con el token."""
     primero = await _pedir(tid, cliente, datos, **kw)
     if primero.get("status") != "terminos_pendientes":
         return primero
+    await _mensaje_del_cliente(tid, cliente)
     return await _pedir(tid, cliente, {**datos, "acepta_terminos": primero["acepta_terminos"]}, **kw)
+
+
+async def _entregar_aprobacion(tid: uuid.UUID, referencia: str) -> Any:
+    """Entrega `provisioning.alta_aprobada` al consumidor, como el despachador del outbox."""
+    from core.db.models import DomainEvent
+    from core.db.session import get_session
+    from core.events.outbox import payload_para_handlers
+    from core.provisioning.consumer import on_alta_aprobada
+    from core.provisioning.revision import por_referencia
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            eventos = (
+                await s.execute(
+                    select(DomainEvent).where(
+                        DomainEvent.tenant_id == tid, DomainEvent.topic == "provisioning.alta_aprobada"
+                    )
+                )
+            ).scalars().all()
+        [evento] = [e for e in eventos if e.payload.get("referencia") == referencia][-1:]
+        await on_alta_aprobada(**payload_para_handlers(evento.payload))
+    return await por_referencia(tid, referencia)
 
 
 async def _pedido_de_alta(tid: uuid.UUID, referencia: str) -> Any:
@@ -356,6 +410,45 @@ async def test_una_version_nueva_pide_aceptar_otra_vez(vendedores, silencio) -> 
         await legal.publicar(vendedor, tipo="terminos", version="v2", url="https://solvershub.test/x", por="test")
 
 
+async def test_el_token_solo_vale_con_un_mensaje_posterior_del_cliente_y_en_su_conversacion(vendedores, silencio) -> None:
+    """El modelo no puede aceptar por el cliente: repetir el token en el mismo turno (sin un
+    mensaje del cliente después de mostrar los enlaces) o traerlo de otra conversación no
+    crea el pedido."""
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    await publicar_documentos(vendedor)
+    cliente = await _cliente(vendedor)
+    datos = _datos()
+
+    primero = await _pedir(vendedor, cliente, datos)
+    mismo_turno = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": primero["acepta_terminos"]})
+    assert mismo_turno["status"] == "terminos_pendientes"
+
+    otro = await _cliente(vendedor)
+    await _pedir(vendedor, otro, _datos())
+    await _mensaje_del_cliente(vendedor, otro)
+    ajeno = await _pedir(vendedor, otro, {**_datos(), "acepta_terminos": primero["acepta_terminos"]})
+    assert ajeno["status"] == "terminos_pendientes"
+
+    mensaje = await _mensaje_del_cliente(vendedor, cliente)
+    aceptado = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": mismo_turno["acepta_terminos"]})
+    assert aceptado["status"] == "confirmed", aceptado
+    registro = await _pedido_de_alta(vendedor, aceptado["public_order_number"])
+    assert registro.aceptacion["mensaje_id"] == str(mensaje)
+
+
+async def test_un_free_con_un_producto_pago_al_lado_sigue_siendo_un_free(vendedores, silencio) -> None:
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    await publicar_documentos(vendedor)
+    datos = _datos()
+    mixto = await _pedir_aceptando(vendedor, await _cliente(vendedor), datos, extra=50_000)
+    assert mixto["status"] == "confirmed", mixto
+    assert (await _pedido_de_alta(vendedor, mixto["public_order_number"])).gratis is True
+    otra_vez = await _pedir_aceptando(vendedor, await _cliente(vendedor), _datos(id_document=datos["id_document"]))
+    assert otra_vez["status"] == "free_no_disponible"
+
+
 async def test_sin_documentos_publicados_el_alta_va_a_revision(vendedores, silencio) -> None:
     vendedor = await _vendedor()
     vendedores(vendedor)
@@ -373,6 +466,7 @@ async def test_sin_documentos_publicados_el_alta_va_a_revision(vendedores, silen
 async def test_un_documento_o_telefono_con_free_en_12_meses_no_saca_otro(vendedores, silencio) -> None:
     from core.db.models import PedidoDeAlta
     from core.db.session import get_session
+    from core.provisioning.antiabuso import olvidar_huellas_vencidas
     from core.shared.tenant import tenant_scope
 
     vendedor = await _vendedor()
@@ -395,14 +489,15 @@ async def test_un_documento_o_telefono_con_free_en_12_meses_no_saca_otro(vendedo
     pago = await _pedir_aceptando(vendedor, otro, mismo_doc, plan="basic", precio=150_000)
     assert pago["status"] == "confirmed", pago
 
-    # Pasados 12 meses, vuelve a poder.
+    # Pasados 12 meses, el cron vacía las huellas (la aceptación queda) y vuelve a poder.
+    assert await olvidar_huellas_vencidas(ahora=datetime.now(UTC) + timedelta(days=400)) >= 3
     async with tenant_scope(vendedor):
         async with get_session() as s:
-            await s.execute(
-                update(PedidoDeAlta)
-                .where(PedidoDeAlta.tenant_id == vendedor)
-                .values(created_at=datetime.now(UTC) - timedelta(days=400))
-            )
+            filas = (
+                await s.execute(select(PedidoDeAlta).where(PedidoDeAlta.tenant_id == vendedor))
+            ).scalars().all()
+    assert all(f.huellas == [] for f in filas)
+    assert all(f.aceptacion is not None for f in filas)
     despues = await _pedir_aceptando(vendedor, await _cliente(vendedor), mismo_doc)
     assert despues["status"] == "confirmed", despues
 
@@ -454,7 +549,8 @@ async def test_datos_inconsistentes_van_a_revision_y_el_master_la_aprueba(vended
     from core.db.models import AuditLog
     from core.db.session import get_session
     from core.provisioning.antiabuso import SENAL_DOCUMENTO
-    from core.provisioning.consumer import aprobar_alta
+    from core.provisioning.consumer import reintentar_alta
+    from core.provisioning.revision import aprobar_alta
     from core.shared.tenant import tenant_scope
 
     vendedor = await _vendedor()
@@ -465,14 +561,31 @@ async def test_datos_inconsistentes_van_a_revision_y_el_master_la_aprueba(vended
     assert alta.estado == "revision"
     assert "datos inconsistentes (documento_invalido)" in alta.motivo
 
-    aprobada = await aprobar_alta(vendedor, referencia, por="admin:master@test")
+    # Reintentar vuelve a aplicar todos los controles y borra una aprobación anterior.
+    marcada = await aprobar_alta(vendedor, referencia, por="admin:master@test")
+    assert marcada.estado == "en_curso"
+    vuelta = await reintentar_alta(vendedor, referencia)
+    assert vuelta.estado == "revision"
+    assert "aprobacion" not in vuelta.detalle
+
+    # Aprobar deja el alta en curso y la corre el worker (evento del outbox).
+    marcada = await aprobar_alta(vendedor, referencia, por="admin:master@test")
+    assert marcada.estado == "en_curso"
+    aprobada = await _entregar_aprobacion(vendedor, referencia)
     assert aprobada.estado == "completado", aprobada.motivo
+    with pytest.raises(ValueError, match="solo se aprueba una en revisión"):
+        await aprobar_alta(vendedor, referencia, por="admin:master@test")
     assert aprobada.detalle["aprobacion"]["por"] == "admin:master@test"
     async with tenant_scope(vendedor):
         async with get_session() as s:
-            [auditoria] = (
-                await s.execute(select(AuditLog).where(AuditLog.action == "aprovisionamiento_aprobado"))
-            ).scalars().all()
+            auditoria = (
+                await s.execute(
+                    select(AuditLog)
+                    .where(AuditLog.action == "aprovisionamiento_aprobado")
+                    .order_by(AuditLog.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one()
     assert auditoria.actor == "admin:master@test"
     assert "datos inconsistentes" in auditoria.input["motivo_revision"]
 
@@ -497,6 +610,26 @@ async def test_con_el_alta_pausada_las_altas_nuevas_quedan_en_revision(vendedore
     assert (await reintentar_alta(vendedor, referencia)).estado == "revision"
     await interruptor.fijar(vendedor, pausar=False, motivo=None, por="admin:master@test")
     assert (await reintentar_alta(vendedor, referencia)).estado == "completado"
+
+
+async def test_la_revision_muestra_todos_los_motivos(vendedores, silencio) -> None:
+    """Un alta frenada por el interruptor que además es un Free repetido (ADR-0121) muestra
+    los dos motivos: quien aprueba la cola después del ataque ve todo lo que se salta."""
+    from core.provisioning import interruptor
+
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    correo = f"{uniq('owner')}@correo-prueba.co"
+    primera = await _pedido_activado(vendedor, email=correo, plan="free", precio=0)
+    assert (await _entregar(vendedor, primera)).estado == "completado"
+    await interruptor.fijar(vendedor, pausar=True, motivo="ataque", por="admin:master@test")
+
+    segunda = await _pedido_activado(vendedor, email=correo, plan="free", precio=0)
+    alta = await _entregar(vendedor, segunda)
+
+    assert alta.estado == "revision"
+    assert "pausada por el master" in alta.motivo
+    assert "ya hubo un alta para este cliente o este correo" in alta.motivo
 
 
 # ------------------------------------------------------------------ límites de tasa
@@ -608,5 +741,43 @@ async def test_la_api_de_plataforma_es_solo_del_master_y_solo_de_vendedores(app_
     assert "email" not in cola[0]
     r = await app_client.post(f"{base}/{vendedor}/altas/{referencia}/aprobar", headers=master)
     assert r.status_code == 200, r.text
-    assert r.json()["estado"] == "completado"
+    assert r.json()["estado"] == "en_curso"  # la corre el worker
     assert r.json()["aprobada"] is True
+    assert (await _entregar_aprobacion(vendedor, referencia)).estado == "completado"
+    r = await app_client.post(f"{base}/{vendedor}/altas/{referencia}/aprobar", headers=master)
+    assert r.status_code == 409
+
+
+async def test_la_aceptacion_y_las_versiones_publicadas_no_se_editan_ni_se_borran(vendedores, silencio) -> None:
+    """Son la prueba del contrato: la base lo impide, no solo el código."""
+    from sqlalchemy import delete
+
+    from core.db.models import DocumentoLegal, PedidoDeAlta
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    referencia = await _pedido_activado(vendedor, documento="55667788")
+
+    cambios = [
+        update(PedidoDeAlta).where(PedidoDeAlta.referencia == referencia).values(aceptacion={"documentos": []}),
+        update(PedidoDeAlta).where(PedidoDeAlta.referencia == referencia).values(aceptado_en=datetime.now(UTC)),
+        delete(PedidoDeAlta).where(PedidoDeAlta.referencia == referencia),
+        update(DocumentoLegal).where(DocumentoLegal.tenant_id == vendedor).values(url="https://otro.test/x"),
+        delete(DocumentoLegal).where(DocumentoLegal.tenant_id == vendedor),
+    ]
+    for cambio in cambios:
+        with pytest.raises(Exception, match=r"no se edita|sin borrado"):
+            async with tenant_scope(vendedor):
+                async with get_session() as s:
+                    await s.execute(cambio)
+    # Lo que sí puede cambiar: las huellas (retención) y el borrado lógico.
+    async with tenant_scope(vendedor):
+        async with get_session() as s:
+            await s.execute(update(PedidoDeAlta).where(PedidoDeAlta.referencia == referencia).values(huellas=[]))
+            await s.execute(
+                update(DocumentoLegal)
+                .where(DocumentoLegal.tenant_id == vendedor, DocumentoLegal.tipo == "dpa")
+                .values(deleted_at=datetime.now(UTC))
+            )

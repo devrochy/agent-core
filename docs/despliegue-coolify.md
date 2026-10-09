@@ -267,7 +267,7 @@ dueño. Si se pierde el Coolify de `prod-app`, se reconstruye con este inventari
 
 | Secreto | Cómo se rota | Qué se redespliega | Efecto |
 | --- | --- | --- | --- |
-| `APP_SECRET_KEY` | generar y reemplazar | api, worker, beat | se cierran las sesiones del panel |
+| `APP_SECRET_KEY` | generar y reemplazar | api, worker, beat | se cierran las sesiones del panel; cambian las huellas del antiabuso del alta (ADR-0125): durante 12 meses un Free anterior deja de reconocerse por teléfono o documento |
 | Clave de `TOKEN_MASTER_KEYS` | agregar una clave con id nuevo y apuntar `TOKEN_ACTIVE_KEY_ID` a ella; la vieja **se queda** mientras haya filas cifradas con ella (no hay re-cifrado masivo: cada fila se re-cifra al guardarse) | api, worker, beat | ninguno |
 | Clave de `app_runtime` | `ALTER ROLE` con `\password` en `psql` y luego `DATABASE_URL` | api, worker, beat | corte breve |
 | Clave de `agent_core_migrations` | `ALTER ROLE` y `MIGRATIONS_DATABASE_URL` | api | ninguno |

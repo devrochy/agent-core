@@ -155,7 +155,8 @@ async def _actualizar_app_settings(manifest: PresetManifest, tenant_id: uuid.UUI
 
 async def _registrar(tenant_id: uuid.UUID, resultado: PresetResult) -> None:
     async with get_session() as session:
-        tenant = await session.get(Tenant, tenant_id)
+        # FOR UPDATE: no pisa una clave de `settings` escrita a la vez por otro proceso.
+        tenant = await session.get(Tenant, tenant_id, with_for_update=True)
         if tenant is not None:
             settings = dict(tenant.settings or {})
             settings["preset"] = {

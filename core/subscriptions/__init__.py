@@ -228,7 +228,9 @@ async def guardar_proveedor(tenant_id: uuid.UUID, provider: str | None) -> None:
     from core.db.session import get_session
 
     async with get_session() as session:
-        tenant = await session.get(Tenant, tenant_id)
+        # FOR UPDATE: otro escritor de `settings` (p. ej. el interruptor del alta automática,
+        # ADR-0125) no se pierde entre la lectura y la escritura.
+        tenant = await session.get(Tenant, tenant_id, with_for_update=True)
         if tenant is None:
             raise SubscriptionError("Negocio no encontrado.", code="sin_negocio")
         settings = dict(tenant.settings or {})

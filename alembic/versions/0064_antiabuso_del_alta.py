@@ -6,6 +6,11 @@
   de los documentos (versiones, cuándo, en qué mensaje) y las huellas HMAC del teléfono y
   del documento para «un Free por persona» y «muchos intentos». Nunca el dato en claro.
 
+Las dos guardan la prueba del contrato: un trigger impide cambiar una versión publicada (solo
+`deleted_at`) o la aceptación de un pedido (solo pueden cambiar las huellas, que se vacían a los
+12 meses, las señales, `updated_at` y `deleted_at`), y borrar filas. `purge_tenant` desactiva los
+triggers al purgar, así que no lo frena.
+
 Las dos son tablas de NEGOCIO del vendedor (`tenant_id`, RLS habilitada y forzada, policy de
 aislamiento, índices que empiezan por `tenant_id`). Tablas nuevas y vacías: sin reescritura
 ni bloqueo largo. `purge_tenant` las cubre solo (descubre las tablas con `tenant_id`).
@@ -50,6 +55,42 @@ def _rls(tabla: str) -> None:
         END $do$;
         """
     )
+
+
+_TRIGGERS = """
+CREATE OR REPLACE FUNCTION documentos_legales_inmutables() RETURNS trigger AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'documentos_legales: sin borrado físico (deleted_at)';
+    END IF;
+    IF (to_jsonb(NEW) - 'deleted_at') IS DISTINCT FROM (to_jsonb(OLD) - 'deleted_at') THEN
+        RAISE EXCEPTION 'documentos_legales: una versión publicada no se edita; publicar otra';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER documentos_legales_inmutables
+    BEFORE UPDATE OR DELETE ON documentos_legales
+    FOR EACH ROW EXECUTE FUNCTION documentos_legales_inmutables();
+
+CREATE OR REPLACE FUNCTION pedidos_de_alta_aceptacion_inmutable() RETURNS trigger AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'pedidos_de_alta: sin borrado físico (deleted_at)';
+    END IF;
+    IF (to_jsonb(NEW) - ARRAY['huellas', 'senales', 'updated_at', 'deleted_at'])
+        IS DISTINCT FROM (to_jsonb(OLD) - ARRAY['huellas', 'senales', 'updated_at', 'deleted_at']) THEN
+        RAISE EXCEPTION 'pedidos_de_alta: la aceptación y los datos del pedido no se editan';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER pedidos_de_alta_aceptacion_inmutable
+    BEFORE UPDATE OR DELETE ON pedidos_de_alta
+    FOR EACH ROW EXECUTE FUNCTION pedidos_de_alta_aceptacion_inmutable();
+"""
 
 
 def upgrade() -> None:
@@ -116,9 +157,14 @@ def upgrade() -> None:
         "ix_pedidos_de_alta_tenant_cliente", "pedidos_de_alta", ["tenant_id", "customer_id", "created_at"]
     )
     _rls("pedidos_de_alta")
+    op.execute(_TRIGGERS)
 
 
 def downgrade() -> None:
+    op.execute("DROP TRIGGER IF EXISTS pedidos_de_alta_aceptacion_inmutable ON pedidos_de_alta")
+    op.execute("DROP FUNCTION IF EXISTS pedidos_de_alta_aceptacion_inmutable()")
+    op.execute("DROP TRIGGER IF EXISTS documentos_legales_inmutables ON documentos_legales")
+    op.execute("DROP FUNCTION IF EXISTS documentos_legales_inmutables()")
     for tabla, indices in (
         (
             "pedidos_de_alta",

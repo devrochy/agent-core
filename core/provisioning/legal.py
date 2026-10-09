@@ -72,6 +72,10 @@ def url_valida(valor: str) -> str:
     texto = (valor or "").strip()
     if not texto or len(texto) > _MAX_URL or any(c.isspace() for c in texto):
         raise DocumentoInvalido("El enlace tiene que ser una URL https de hasta 500 caracteres.")
+    # Solo ASCII imprimible: sin dominios con letras parecidas (homógrafos) ni caracteres que
+    # invierten el texto (U+202E), que servirían para phishing en el chat del comprador.
+    if not all(33 <= ord(c) < 127 for c in texto):
+        raise DocumentoInvalido("El enlace solo puede llevar caracteres ASCII.")
     partes = urlsplit(texto)
     if partes.scheme != "https" or not partes.hostname or "." not in partes.hostname:
         raise DocumentoInvalido("El enlace tiene que ser una URL https con dominio.")

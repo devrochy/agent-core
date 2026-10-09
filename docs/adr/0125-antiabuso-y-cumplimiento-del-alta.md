@@ -35,16 +35,32 @@ son versiones publicadas desde Plataforma, no código.
 ### 2. Al pedir el plan: `crear_pedido` llama al core
 
 `core/provisioning/antiabuso.py` lo pueden importar los packs, igual que `fuentes`, porque no da de
-alta negocios. Si el negocio actual no es un vendedor (allowlist), no hace nada. Si lo es, la tool de
-commerce, antes de crear el pedido de un plan, aplica:
+alta negocios. El contrato `antiabuso-sin-alta` de `.importlinter` lo garantiza también de forma
+indirecta: ni `antiabuso` ni `legal`, `interruptor`, `revision`, `vendedores` o `fuentes` llegan al
+consumidor, al owner o a `alta_negocio`.
+
+Si el negocio actual no es un vendedor (allowlist), no hace nada. Si lo es, la tool de commerce, antes
+de crear el pedido de un plan, le pide la decisión al core:
+
+- el core devuelve un resultado tipado: `TerminosPendientes`, `LimiteDeAltas`, `FreeNoDisponible` o
+  el pedido preparado;
+- el pack arma con eso la respuesta de su tool, con un `hint` corto como el resto de sus respuestas;
+- el core no conoce el nombre ni los parámetros de la tool.
+
+Los controles son:
 
 1. **Términos aceptados.**
    - Con los tres documentos publicados, el pedido no se crea hasta que el cliente acepta.
-   - La tool responde `terminos_pendientes` con los tres enlaces y una huella corta del juego de
-     versiones (`acepta_terminos`). El asistente comparte los enlaces y, solo si el cliente dice que
-     sí, repite la llamada con `customer_data.acepta_terminos` = esa huella.
-   - Si entre que se mostró y que se aceptó se publica otra versión, la huella cambia y se vuelven a
-     mostrar.
+   - La tool responde `terminos_pendientes` con los tres enlaces y un token (`acepta_terminos`). El
+     asistente comparte los enlaces y, solo si el cliente dice que sí, repite la llamada con
+     `customer_data.acepta_terminos` = ese token.
+   - El token es un HMAC de la **conversación** y del juego de versiones. No sirve en otra
+     conversación, y si entre que se mostró y que se aceptó se publica otra versión, cambia y se
+     vuelven a mostrar.
+   - Al mostrar los enlaces se anota en Redis cuándo (24 h). El token solo vale si después hay un
+     **mensaje del cliente**, y ese mensaje es la evidencia que se guarda. Así, el modelo no puede
+     repetir el token en el mismo turno ni traerlo de otra conversación. Sin Redis, no hay aceptación
+     (falla cerrado) y se vuelven a mostrar los enlaces.
    - Sin los tres publicados, el pedido sigue sin aceptación y el alta va a revisión: un olvido del
      master no frena la venta, pero tampoco crea un negocio sin contrato.
 2. **Cupo por origen.**
@@ -52,12 +68,18 @@ commerce, antes de crear el pedido de un plan, aplica:
      del chat (en WhatsApp, el número). Pasado el cupo, `limite_de_altas`.
    - Usa `core/security/rate_limit.py` (Redis, ventana deslizante y *fail-open*). Si Redis se cae, el
      resto de los controles sigue en la base.
+   - Sin cliente ni conversación no hay un cupo propio: se frena, en vez de compartir uno entre todos.
    - El chat web ya tiene su cupo por IP y Turnstile.
 3. **Un Free por persona.**
    - Si el mismo cliente, el número de WhatsApp, el teléfono del checkout o el documento pidió un Free
      en los últimos 12 meses, la tool responde `free_no_disponible` y pide ofrecer un plan pago.
+   - Free es el **plan** de la línea (el plan de la plataforma de la variante es Free, o el plan cuesta
+     0), no el total de la cotización: un Free con un producto pago al lado sigue siendo un Free.
    - Va después del cupo, así probar documentos ajenos también gasta el cupo. El mensaje no dice cuál
      de los datos coincidió.
+   - Solo cubre el documento y el teléfono del checkout si el vendedor los pide en
+     `checkout_fields.plan` (por defecto pide el documento). Es configuración del vendedor y un
+     requisito para encender el alta.
 
 El registro del pedido (`pedidos_de_alta`, del vendedor) se escribe **en la misma transacción que el
 pedido**. Si el pedido no se crea, tampoco queda la aceptación. Guarda:
@@ -65,7 +87,7 @@ pedido**. Si el pedido no se crea, tampoco queda la aceptación. Guarda:
 - **Quién:** el cliente y la conversación.
 - **Cuándo:** `aceptado_en`.
 - **Qué versión:** tipo, versión y enlace de cada documento, y la huella del juego.
-- **Evidencia:** el id del último mensaje del cliente, que es el que dijo que acepta.
+- **Evidencia:** el id del mensaje del cliente posterior a los enlaces, que es el que dijo que acepta.
 - **Para las reglas:** si es Free, las huellas y las señales.
 
 ### 3. Datos mínimos
@@ -76,7 +98,9 @@ pedido**. Si el pedido no se crea, tampoco queda la aceptación. Guarda:
   no se puede.
 - Antes se normaliza:
   - teléfono: los últimos 10 dígitos, así `+57 300…` y `300…` son el mismo;
-  - documento: alfanuméricos en mayúsculas y un NIT sin su dígito de verificación.
+  - documento: alfanuméricos en mayúsculas, sin el tipo delante (CC, CE, TI, NIT, PP, PA), sin ceros a
+    la izquierda y un NIT escrito con guion sin su dígito de verificación. Un NIT con el dígito
+    pegado no se distingue de otro número y da otra huella.
 - Las señales se guardan como códigos (`documento_invalido`, `telefono_invalido`), sin el dato.
 - **Retención:** un cron diario (`core.alta_huellas_retencion`) vacía las huellas de más de 12 meses,
   porque ya no sirven para ninguna regla. La fila se conserva: es la prueba del contrato.
@@ -85,8 +109,10 @@ pedido**. Si el pedido no se crea, tampoco queda la aceptación. Guarda:
 
 ### 4. Al dar de alta: revisión humana
 
-El consumidor (ADR-0121 § 3), con los datos del pedido ya leídos, junta los motivos y, si hay alguno,
-deja el alta en `revision` con todos los motivos y avisa por push a los dueños del vendedor:
+El consumidor (ADR-0121 § 3), con los datos del pedido ya leídos, junta **todos** los motivos (también
+los de ADR-0121) y, si hay alguno, deja el alta en `revision` con la lista completa y avisa por push a
+los dueños del vendedor. Así quien la aprueba ve todo lo que se salta, por ejemplo que además de la
+pausa es una recompra. Los motivos son:
 
 - **Interruptor:** el master pausó el alta automática.
 - **Aceptación:** no hay aceptación registrada para el pedido. Pasa con un pedido creado a mano o sin
@@ -99,13 +125,14 @@ deja el alta en `revision` con todos los motivos y avisa por push a los dueños 
     24 h;
   - datos inconsistentes: las señales del checkout.
 
-Las reglas de ADR-0121 (Free repetido por cliente o correo, recompra) siguen igual.
+- **ADR-0121:** Free repetido por cliente o correo, y recompra.
 
 ### 5. Interruptor del master
 
 - Vive en `tenants.settings["aprovisionamiento"]` del vendedor. `tenants` es tabla de sistema: la
   escriben el master y el core, nunca un admin del negocio.
-- Se escribe con un UPDATE que solo toca esa clave.
+- Se escribe con un UPDATE que solo toca esa clave. Los otros que escriben `tenants.settings`
+  (proveedor de suscripciones, preset) leen la fila con `FOR UPDATE`, así no pisan una pausa.
 - Se pausa con un motivo obligatorio desde Plataforma
   (`PUT /api/v1/admin/platform/altas-automaticas/{vendedor}/interruptor`) o con
   `agent-core tenant interruptor-altas`. Queda en `audit_log` del vendedor.
@@ -116,26 +143,54 @@ Las reglas de ADR-0121 (Free repetido por cliente o correo, recompra) siguen igu
 
 ### 6. Aprobar un alta en revisión
 
-`aprobar_alta` la vuelve a correr **sin** los controles de riesgo que la frenaron:
+Solo se aprueba un alta **en revisión**. El alta aprobada corre **sin** los controles de riesgo que
+la frenaron:
 
 - se saltan el interruptor, la aceptación, un Free por persona, las señales, el Free repetido y la
   recompra;
 - siguen aplicando las validaciones de datos: plan, correo, pedido pagado, cliente y owner.
 
-Queda en `detalle.aprobacion` y en `audit_log` (`aprovisionamiento_aprobado`), con quién aprobó y el
-motivo por el que estaba en revisión.
+Cómo corre:
 
-`reintentar_alta` sigue existiendo para cuando se corrigió un dato. Vuelve a aplicar todos los
-controles.
+- `core/provisioning/revision.py` (`aprobar_alta`) deja la fila `en_curso` con `detalle.aprobacion`
+  (un UPDATE condicional sobre `estado = 'revision'`, que suma la clave sin pisar el detalle) y emite
+  `provisioning.alta_aprobada` por el outbox, en la misma transacción.
+- El consumidor (`on_alta_aprobada`) la corre en el worker, con los reintentos del outbox. Si algo
+  transitorio falla tres veces, vuelve a revisión.
+- Ninguna ruta de la API llega al consumidor (`tests/test_provisioning_sin_llm.py`), y la API no
+  necesita activar los plugins.
+
+La aprobación es **de un solo uso**:
+
+- si el alta vuelve a revisión por otro motivo, se borra y hay que volver a aprobarla mirando el
+  motivo nuevo;
+- `reintentar_alta`, que sirve para cuando se corrigió un dato, también la borra y vuelve a aplicar
+  todos los controles.
+
+Queda en `audit_log` (`aprovisionamiento_aprobado`), con quién aprobó y el motivo por el que estaba en
+revisión.
 
 Se aprueba de dos formas:
 
-- desde Plataforma, con `POST …/altas/{referencia}/aprobar` (y `…/descartar`);
-- con `agent-core tenant aprobar-alta`.
+- desde Plataforma, con `POST …/altas/{referencia}/aprobar` (y `…/descartar`), solo el master:
+  `tests/test_provisioning_sin_llm.py` comprueba que cada ruta de `platform_altas` empieza por
+  `_require_master`;
+- con `agent-core tenant aprobar-alta`, que además la corre en el acto.
 
-Es la única ruta de la API que llega al consumidor. Solo la usa el master, con su sesión humana, como
-el alta manual de Plataforma. `tests/test_provisioning_sin_llm.py` comprueba que cada ruta de
-`platform_altas` empieza por `_require_master`.
+### 8. La prueba no se edita
+
+`documentos_legales` y la aceptación de `pedidos_de_alta` son la prueba del contrato. Un trigger
+impide:
+
+- editar una versión publicada (solo `deleted_at`);
+- editar los datos y la aceptación de un pedido de alta (solo las huellas, las señales, `updated_at` y
+  `deleted_at`);
+- borrar filas.
+
+`purge_tenant` desactiva los triggers, así que la purga de un negocio no se frena.
+
+Los enlaces se validan como `https` con dominio y **solo ASCII**: sin homógrafos ni caracteres que
+invierten el texto, porque llegan al chat del comprador.
 
 ### 7. Plataforma
 
@@ -160,6 +215,9 @@ comprador.
 | Un control del Free solo en el consumidor | El comprador ya pagó o recibió el aviso; el criterio pide ofrecer un plan pago en la conversación |
 | `acepta_terminos: true` sin huella | El modelo podría aceptar una versión que nunca mostró; la huella ata la aceptación al juego de versiones vigente |
 | Aprobar un alta sin saltar los controles | Un alta frenada por el interruptor o por un Free repetido volvería a revisión cada vez |
+| Correr el alta aprobada dentro de la petición del master | Un fallo transitorio la deja `en_curso` sin nadie que la reintente, la API tiene que activar los plugins y una ruta de la API llega al consumidor |
+| Un token igual para todas las conversaciones (solo el juego de versiones) | El modelo podría traerlo de otra conversación o repetirlo en el mismo turno, sin que el cliente haya respondido |
+| Que el core arme la respuesta de la tool | El core conocería el nombre y los parámetros de una tool de un pack, y los textos para el modelo quedarían en el core |
 | Verificar el correo o el teléfono antes del alta (OTP) | Más fricción y otra integración; el enlace de acceso ya va solo por correo (ADR-0121), y las señales cubren lo demás. Se revisa si las señales no alcanzan |
 
 ## Consecuencias
@@ -172,17 +230,27 @@ comprador.
 - llega el texto del abogado y se publica sin tocar código.
 
 **Negativas / lo que aceptamos pagar:**
-- **Riesgo aceptado: la aceptación pasa por el modelo.** El asistente pasa la huella que le dio la
-  tool, así que un modelo que se equivoca podría pasarla sin que el cliente haya aceptado. Lo mitiga
-  la evidencia: el mensaje del cliente queda en la aceptación y la conversación se puede auditar. Es
-  el mismo nivel de garantía que `confirmar_cotizacion`.
+- **Riesgo aceptado: la aceptación pasa por el modelo.** El token exige un mensaje del cliente
+  posterior a los enlaces, pero no lee qué dijo: un modelo que se equivoca podría pasar el token
+  después de un "¿y cuánto cuesta?". Lo mitiga la evidencia: ese mensaje queda en la aceptación y la
+  conversación se puede auditar.
+- **Riesgo aceptado: oráculo y "squatting" del Free.** Con un número nuevo, `free_no_disponible`
+  revela que un documento o teléfono ajeno ya tuvo un Free (una consulta por víctima, dentro del
+  cupo). Quien conoce el documento de otro puede gastarle el Free. Lo mitigan el cupo y que la
+  respuesta no dice qué dato coincidió. Si alguien legítimo queda bloqueado, el master crea el negocio
+  a mano desde Plataforma.
+- Un Free descartado por el master sigue contando para la regla: el motivo más común de descarte es el
+  abuso.
 - Quien rota número, correo **y** documento sigue sacando un Free. Las señales y el cupo lo hacen más
   caro, pero no lo cierran. Verificar el documento es un trabajo aparte.
 - Rotar `APP_SECRET_KEY` cambia las huellas: durante 12 meses un Free anterior deja de reconocerse.
 - Los textos que hay hoy (landing `/terminos` y `/privacidad`) son preliminares y no hay DPA
   publicado. Hasta que el master publique las tres versiones, toda alta va a revisión.
 - El playbook de ventas (`solvershub-comercial`) tiene que contemplar `terminos_pendientes`,
-  `free_no_disponible` y `limite_de_altas`. Hasta entonces se guía por el `hint` de la tool.
+  `free_no_disponible` y `limite_de_altas`. Es requisito para encender el alta (ADR-0123 § 10), no un
+  "mientras tanto": el `hint` de la tool solo dice el siguiente paso.
+- Con `APP_SECRET_KEY` en su valor por defecto, las huellas se pueden revertir. Producción ya la exige
+  propia (`docs/despliegue-coolify.md`).
 
 **Qué haría que revisáramos esto:**
 - altas Free fraudulentas que pasan las reglas (habría que verificar el documento o el teléfono);
@@ -193,12 +261,18 @@ comprador.
 
 - `alembic/versions/0064_antiabuso_del_alta.py` y `core/db/models.py`: `documentos_legales` y
   `pedidos_de_alta`, con RLS forzada.
-- `core/provisioning/legal.py`, `interruptor.py`, `antiabuso.py` y `dominios_desechables.txt`.
+- `core/provisioning/legal.py`, `interruptor.py`, `antiabuso.py`, `revision.py` y
+  `dominios_desechables.txt`. `core/shared/events.py` y `core/events/core_handlers.py`: el topic
+  `provisioning.alta_aprobada`.
+- `.importlinter`: el contrato `antiabuso-sin-alta`.
+- `core/subscriptions/__init__.py` y `core/presets/apply.py`: leen el negocio con `FOR UPDATE` antes de
+  escribir `tenants.settings`.
 - `core/provisioning/consumer.py`:
   - los controles antes del alta;
   - la aceptación en el negocio nuevo;
-  - `aprobar_alta`;
-  - `descartar_alta` con actor.
+  - `on_alta_aprobada` y `aprobar_y_procesar` (CLI);
+  - `reintentar_alta` borra la aprobación;
+  - los motivos de ADR-0121 se juntan con los nuevos.
 - `packages/pack-commerce/pack_commerce/skills.py`: `crear_pedido` llama a los controles y registra
   el pedido de alta.
 - `core/api/routers/platform_altas.py` y `docs/openapi.json`.
