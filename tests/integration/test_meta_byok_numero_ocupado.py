@@ -100,12 +100,12 @@ async def test_numero_ya_de_otro_tenant_da_byok_error_limpio(monkeypatch) -> Non
 
 
 async def test_eliminar_conexion_libera_numero_y_waba(app_client) -> None:
-    """Eliminar (soft-delete) una conexión borra sus PhoneNumber/WabaAccount, para
-    que el número/WABA se puedan reclamar de nuevo."""
-    from sqlalchemy import select
+    """Eliminar una conexión deja sus números y WABAs con `deleted_at` (ADR-0122): ya no
+    rutean, así otro negocio los puede reclamar, pero sus plantillas se conservan."""
+    from sqlalchemy import select, text
 
     from core.alta_negocio import onboard_tenant
-    from core.db.models import MetaConnection, PhoneNumber, WabaAccount
+    from core.db.models import MessageTemplate, MetaConnection, PhoneNumber, WabaAccount
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -133,6 +133,12 @@ async def test_eliminar_conexion_libera_numero_y_waba(app_client) -> None:
                     phone_number_id=phone_id, registered=True,
                 )
             )
+            session.add(
+                MessageTemplate(
+                    tenant_id=tid, waba_account_id=waba.id, meta_template_id=_uniq("tpl"),
+                    name="aviso", language="es", status="APPROVED",
+                )
+            )
             connection_id = conn.id
 
     cookie = await _switch_tenant(app_client, await _login(app_client), tid)
@@ -153,6 +159,17 @@ async def test_eliminar_conexion_libera_numero_y_waba(app_client) -> None:
             ).scalars().all()
             conn_row = await session.get(MetaConnection, connection_id)
 
-    assert phones == [], "el número debe liberarse para poder reclamarlo de nuevo"
-    assert wabas == [], "el WABA debe liberarse (si no, resolve_tenant_for_waba rutea mal)"
+    assert [p.deleted_at is not None for p in phones] == [True], "el número queda eliminado, no borrado"
+    assert [w.deleted_at is not None for w in wabas] == [True], "la WABA queda eliminada, no borrada"
     assert conn_row is not None and conn_row.deleted_at is not None, "la conexión queda soft-deleted"
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            plantillas = (
+                await session.execute(select(MessageTemplate).where(MessageTemplate.waba_account_id == wabas[0].id))
+            ).scalars().all()
+    assert len(plantillas) == 1, "las plantillas de la WABA se conservan"
+
+    async with get_session() as session:
+        assert (await session.execute(text("select resolve_tenant_for_phone(:p)"), {"p": phone_id})).scalar() is None
+        assert (await session.execute(text("select resolve_tenant_for_waba(:w)"), {"w": waba_id})).scalar() is None

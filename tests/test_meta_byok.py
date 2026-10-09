@@ -85,7 +85,9 @@ class FakeSessionCM:
         for row in (existing_connection, existing_phone, existing_waba, tenant):
             if row is not None and getattr(row, "id", None) is not None:
                 self._known[row.id] = row
-        self._queue = [existing_connection, existing_phone, existing_waba]
+        # Orden de los selects del alta (ADR-0122): conexión, la WABA propia (y, si no hay,
+        # la eliminada a revivir) y el número.
+        self._queue = [existing_connection, existing_waba, *([] if existing_waba else [None]), existing_phone]
         self._first_use = True
 
     def __call__(self):
@@ -255,8 +257,8 @@ async def test_numero_de_otro_tenant_da_byok_error_limpio(monkeypatch):
 
         async def flush(self):
             self._n_flush += 1
-            # 1er flush: la MetaConnection. 2do: el PhoneNumber -> conflicto.
-            if self._n_flush >= 2:
+            # 1er flush: la MetaConnection. 2do: la WABA. 3ro: el PhoneNumber -> conflicto.
+            if self._n_flush >= 3:
                 raise IntegrityError(
                     "INSERT INTO phone_numbers",
                     {},
@@ -558,10 +560,12 @@ async def test_reentrante_actualiza_conexion_existente_en_vez_de_duplicar(monkey
 
 
 @pytest.mark.asyncio
-async def test_resolve_byok_token_acepta_degradada_y_error_pero_no_revocada(monkeypatch):
+async def test_resolve_byok_token_acepta_degradada_error_y_pausada_al_final(monkeypatch):
     """ADR-0101: un check de salud fallido (`degraded`/`error`) no le quita el secreto al
-    negocio; una conexión desactivada a mano (`revoked`) o sin alta (`draft`) sí lo pierde.
-    Primero las BYOK, con el tenant explícito, y las sanas antes que las degradadas."""
+    negocio; una sin alta (`draft`) sí lo pierde. ADR-0122: una pausada (`revoked`) presta su
+    secreto para que su entrada se guarde, pero siempre al final, detrás de cualquier viva sea
+    del origen que sea. Primero las BYOK, con el tenant explícito, y las sanas antes que las
+    degradadas."""
     from sqlalchemy.dialects import postgresql
 
     consultas: list[str] = []
@@ -591,11 +595,14 @@ async def test_resolve_byok_token_acepta_degradada_y_error_pero_no_revocada(monk
     where, _, order_by = consultas[0].partition("ORDER BY")
     assert "meta_connections.tenant_id =" in where
     assert "meta_connections.deleted_at IS NULL" in where
-    for estado in ("pending", "connected", "degraded", "error"):
+    for estado in ("pending", "connected", "degraded", "error", "revoked"):
         assert f"'{estado}'" in where
-    for estado in ("revoked", "draft"):
-        assert f"'{estado}'" not in where
-    # Primero las BYOK; después tres niveles: connected/pending, degraded (1), error (2).
+    assert "'draft'" not in where
+    # Primero cualquier viva antes que una pausada; después las BYOK; después tres niveles:
+    # connected/pending, degraded (1), error (2).
+    assert order_by.index("(meta_connections.status = 'revoked') THEN 1") < order_by.index(
+        "(meta_connections.origin = 'byok') THEN 0 ELSE 1"
+    )
     assert "(meta_connections.origin = 'byok') THEN 0 ELSE 1" in order_by
     assert "(meta_connections.status = 'degraded') THEN 1" in order_by
     assert "(meta_connections.status = 'error') THEN 2" in order_by

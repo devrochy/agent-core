@@ -113,7 +113,7 @@ def clean_param(valor: str, limite: int = MAX_PARAM) -> str:
 
 @dataclass(frozen=True)
 class NoticeResult:
-    modo: str  # "texto" | "plantilla" | "sin_plantilla" | "duplicado" | "no_enviado"
+    modo: str  # "texto" | "plantilla" | "sin_plantilla" | "duplicado" | "no_enviado" | "conexion_pausada"
     detalle: str = ""
 
 
@@ -248,6 +248,7 @@ async def approved_template_for(
                 .join(WabaAccount, WabaAccount.id == MessageTemplate.waba_account_id)
                 .where(
                     WabaAccount.connection_id == conversation.meta_connection_id,
+                    WabaAccount.deleted_at.is_(None),
                     WabaAccount.tenant_id == conversation.tenant_id,
                     MessageTemplate.tenant_id == conversation.tenant_id,
                     MessageTemplate.name == name,
@@ -269,6 +270,7 @@ async def approved_templates_for_conversation(conversation: Conversation) -> lis
                     .join(WabaAccount, WabaAccount.id == MessageTemplate.waba_account_id)
                     .where(
                         WabaAccount.connection_id == conversation.meta_connection_id,
+                        WabaAccount.deleted_at.is_(None),
                         WabaAccount.tenant_id == conversation.tenant_id,
                         MessageTemplate.tenant_id == conversation.tenant_id,
                         MessageTemplate.status == "APPROVED",
@@ -340,6 +342,31 @@ async def send_event_notice(
         conversation = await session.get(Conversation, conversation_id)
     if conversation is None or conversation.tenant_id != get_current_tenant_id():
         return NoticeResult("no_enviado", "conversación inexistente")
+
+    # Conexión pausada o eliminada (ADR-0122, enmienda a ADR-0108): el aviso no se
+    # reintenta. La pausa es a propósito y puede durar días; con `NoticeNotSentError` el
+    # outbox lo reintentaría 5 veces, dejando 5 mensajes fallidos, y lo perdería igual.
+    # Queda un solo `failed` con el motivo, con el id estable del aviso.
+    from core.gateway.meta_connection_state import motivo_pausa_de
+
+    if getattr(conversation, "connection_id", None) is None and (
+        motivo := await motivo_pausa_de(conversation.meta_connection_id)
+    ):
+        async with get_session() as session:
+            session.add(
+                Message(
+                    tenant_id=get_current_tenant_id(),
+                    conversation_id=conversation_id,
+                    direction="outbound",
+                    sender_type="agent",
+                    content=f"Aviso «{event_key}» sin enviar: {motivo}",
+                    status="failed",
+                    error_reason=motivo,
+                    client_message_id=notice_key,
+                )
+            )
+        log.info("event_notice_conexion_pausada", conversation_id=str(conversation_id), event_key=event_key)
+        return NoticeResult("conexion_pausada", motivo)
 
     entrada = (await load_templates_map(conversation.tenant_id)).get(event_key) or {}
     fallback = str(entrada.get("fallback_text") or default_fallback_text).strip()

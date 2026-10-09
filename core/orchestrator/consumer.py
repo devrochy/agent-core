@@ -392,6 +392,18 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
         content=effective_message,
     )
 
+    # Conexión de Meta pausada o eliminada (ADR-0122): el mensaje ya quedó guardado; no
+    # corre la IA (ni horario ni keywords, que también responden) y se avisa a los dueños.
+    from core.gateway.meta_connection_state import (
+        avisar_mensaje_en_conexion_pausada,
+        motivo_pausa_de_conversacion,
+    )
+
+    if (motivo := await motivo_pausa_de_conversacion(conversation)) is not None:
+        log.info("inbound_conexion_pausada", conversation_id=str(conversation.id), motivo=motivo)
+        await avisar_mensaje_en_conexion_pausada(conversation.tenant_id, conversation.meta_connection_id, motivo)
+        return
+
     if paused or conversation.status == "escalated":
         return
 
