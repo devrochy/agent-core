@@ -15,10 +15,12 @@ from sqlalchemy import select
 
 from core.db.models import Conversation, Customer
 from core.db.session import get_session
+from core.provisioning.consumer import on_subscription_activated
 from core.shared.events import (
     ON_APPOINTMENT_CONFIRMED,
     ON_APPOINTMENT_NO_SHOW,
     ON_APPOINTMENT_REMINDER,
+    ON_SUBSCRIPTION_ACTIVATED,
     ON_SUBSCRIPTION_CHARGE_CREATED,
     ON_SUBSCRIPTION_CHARGE_REMINDER,
     ON_SUBSCRIPTION_PAUSED,
@@ -193,6 +195,9 @@ _HANDLERS = (
     (ON_APPOINTMENT_CONFIRMED, on_appointment_confirmed),
     (ON_APPOINTMENT_REMINDER, on_appointment_reminder),
     (ON_APPOINTMENT_NO_SHOW, on_appointment_no_show),
+    # HU-SH-03 (ADR-0121): alta automática del negocio de quien compra un plan a un
+    # negocio vendedor (allowlist). Para el resto de los negocios no hace nada.
+    (ON_SUBSCRIPTION_ACTIVATED, on_subscription_activated),
 )
 
 

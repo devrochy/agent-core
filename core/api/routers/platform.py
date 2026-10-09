@@ -121,7 +121,7 @@ async def create_tenant(
 
     # Import local: la lógica de alta vive en el core; el slug se normaliza igual.
     from core.admin.views import _slugify
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = payload.slug.strip() or _slugify(payload.name)
     if not payload.name.strip() or not slug:

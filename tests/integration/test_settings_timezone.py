@@ -24,7 +24,7 @@ pytestmark = [
 
 
 async def _cookie_for_new_tenant(app_client, prefix: str) -> str:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = f"{prefix}-{os.urandom(3).hex()}"
     tid, _ = await onboard_tenant(

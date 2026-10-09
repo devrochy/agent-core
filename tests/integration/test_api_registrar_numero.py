@@ -23,10 +23,10 @@ pytestmark = [
 
 async def _negocio_con_byok() -> tuple[uuid.UUID, uuid.UUID, str, str]:
     """Negocio con una conexión BYOK lista (secreto y token) y un número suyo."""
+    from core.alta_negocio import onboard_tenant
     from core.db.models import MetaConnection, PhoneNumber, WabaAccount
     from core.db.session import get_session
     from core.gateway import meta_byok, meta_token_store
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = uniq("registrar")

@@ -48,9 +48,9 @@ async def test_numero_ya_de_otro_tenant_da_byok_error_limpio(monkeypatch) -> Non
     Desde ADR-0095 lo frena la comprobación de reclamo antes de tocar las tablas (el
     unique global de `phone_number_id` queda como segunda barrera): B no crea nada."""
     import core.gateway.meta_byok as byok_mod
+    from core.alta_negocio import onboard_tenant
     from core.db.models import MetaConnection, PhoneNumber
     from core.db.session import get_session
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     phone_id = _uniq("phone-dup")
@@ -104,9 +104,9 @@ async def test_eliminar_conexion_libera_numero_y_waba(app_client) -> None:
     que el número/WABA se puedan reclamar de nuevo."""
     from sqlalchemy import select
 
+    from core.alta_negocio import onboard_tenant
     from core.db.models import MetaConnection, PhoneNumber, WabaAccount
     from core.db.session import get_session
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = _uniq("whfree")

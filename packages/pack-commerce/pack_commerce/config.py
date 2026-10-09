@@ -10,7 +10,12 @@ from pydantic import Field, SecretStr, field_validator
 from core.mcp.types import BasePluginConfig
 
 _PREFIJO = re.compile(r"^[A-Za-z0-9]{1,8}$")
-_CAMPOS_VALIDOS = {"full_name", "id_document", "address", "municipality", "city", "phone", "email"}
+# `business_name` y `vertical` (HU-SH-03, ADR-0121): datos del alta del servicio que vende
+# un plan de la plataforma; `vertical` es un id de preset validado, no texto libre.
+_CAMPOS_VALIDOS = {
+    "full_name", "id_document", "address", "municipality", "city", "phone", "email",
+    "business_name", "vertical",
+}
 
 
 class CRMConfig(BasePluginConfig):
@@ -92,8 +97,10 @@ class CRMConfig(BasePluginConfig):
         },
         description=(
             "Campos que pide crear_pedido por tipo de entrega o producto "
-            "(claves: full_name, id_document, address, municipality, city, phone, email). "
-            "Los planes y el retiro en tienda no piden dirección."
+            "(claves: full_name, id_document, address, municipality, city, phone, email, "
+            "business_name, vertical). Los planes y el retiro en tienda no piden dirección. "
+            "business_name y vertical (tipo de negocio) sirven a quien vende planes de la "
+            "plataforma: el alta automática crea el negocio con ellos."
         ),
     )
 

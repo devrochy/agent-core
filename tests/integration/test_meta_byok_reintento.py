@@ -24,10 +24,10 @@ pytestmark = [
 
 async def _negocio_con_conexion_sana(*, deleted: bool = False):
     """Negocio con la conexión BYOK A (app A, conectada, con secreto) dueña del número."""
+    from core.alta_negocio import onboard_tenant
     from core.db.models import MetaConnection, PhoneNumber, WabaAccount, utcnow
     from core.db.session import get_session
     from core.gateway import meta_byok, meta_token_store
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = uniq("reintento")

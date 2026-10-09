@@ -147,7 +147,7 @@ class Contexto:
 async def preparar_negocio(definicion: dict[str, Any], pagos: PagoSimulado) -> uuid.UUID:
     """Negocio de prueba de la corrida: preset, plan, catálogo y config de packs."""
     from core.admin.views import set_pack_for_tenant
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
 

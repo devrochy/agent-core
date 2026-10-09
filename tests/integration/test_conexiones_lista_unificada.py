@@ -37,7 +37,7 @@ async def _switch_tenant(app_client, session_cookie: str, tenant_id: uuid.UUID) 
 
 
 async def _new_tenant():
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = _uniq("lista-unificada")
     tid, _ = await onboard_tenant(

@@ -143,7 +143,8 @@ class SubscriptionsModule(BaseModule):
 
                     aplicar_plan(sub, cargo.cambio_plan, datetime.now(UTC))
                     await session.flush()
-                    await _emitir_activada(session, sub, reference, cambio=True)
+                    # Un cargo de cambio de plan no es un pedido: referencia nula (ADR-0121).
+                    await _emitir_activada(session, sub, None, cambio=True)
                     log.info("subs_cambio_de_plan_pagado", reference=reference, plan=sub.concepto)
                     return
                 # Reactiva una vencida, una prueba o una pausada POR MORA (HU-SUB-05);

@@ -31,7 +31,7 @@ pytestmark = [
 
 # ------------------------------------------------------------------ helpers
 async def _new_tenant(prefix: str, *, phone_in_channel_connections: str | None = None) -> uuid.UUID:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = uniq(prefix)
     whatsapp = {"label": slug, "phone_number_id": phone_in_channel_connections} if phone_in_channel_connections else None

@@ -27,7 +27,7 @@ AHORA = datetime(2026, 11, 18, 14, 0, tzinfo=UTC)
 
 
 async def _negocio(config: dict | None = None) -> uuid.UUID:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
 

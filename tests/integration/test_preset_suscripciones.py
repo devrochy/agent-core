@@ -58,7 +58,7 @@ async def test_el_precio_del_plan_sale_de_billing_y_se_resincroniza(monkeypatch)
     from pack_commerce.seed import seed_catalog
 
     import core.billing.plans as plans
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     tid, _ = await onboard_tenant(name="Agencia", slug=uniq("plan"), packs=["pack_commerce"])
     await seed_catalog(tid, CATALOGO)
@@ -74,7 +74,7 @@ async def test_el_precio_del_plan_sale_de_billing_y_se_resincroniza(monkeypatch)
 async def test_preset_suscripciones_deja_el_proveedor_y_la_agenda_interna() -> None:
     """Gherkin «Reproducible»: packs del preset y proveedor `pack_subscriptions`."""
     from core.agents.spec import enabled_packs, load_active_spec
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
     from core.subscriptions import proveedor_configurado
@@ -94,9 +94,10 @@ async def test_preset_suscripciones_deja_el_proveedor_y_la_agenda_interna() -> N
 
 
 async def test_voz_de_marca_se_reemplaza_solo_si_se_pide(tmp_path, monkeypatch) -> None:
+    from core.alta_negocio import onboard_tenant
     from core.db.models import AppSettings
     from core.db.session import get_session
-    from core.onboarding import ensure_brand_voice, onboard_tenant
+    from core.onboarding import ensure_brand_voice
     from core.shared.tenant import tenant_scope
 
     slug = uniq("voz")
@@ -130,8 +131,8 @@ async def test_aplicar_preset_a_un_negocio_existente_no_mezcla_ejemplos() -> Non
     from pack_commerce.models import ProductVariant
     from pack_commerce.seed import seed_catalog
 
+    from core.alta_negocio import onboard_tenant
     from core.db.session import get_session
-    from core.onboarding import onboard_tenant
     from core.presets.apply import apply_preset
     from core.shared.tenant import tenant_scope
 

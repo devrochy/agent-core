@@ -38,7 +38,8 @@ core/                  monolito modular (todo el runtime en un proceso)
   mcp/                 host de skills/tools/guardrails
   plugin_manager.py    entry_points, registry, config por tenant
   agents/              AgentSpec (BD), playbooks (allowlist)
-  onboarding.py        alta de tenants (usado por CLI `tenant create` y el panel)
+  onboarding.py        artefactos por tenant en TENANTS_ROOT (tenant_dir, docs, voz de marca)
+  alta_negocio.py      alta de tenants: CLI `tenant create`, panel y aprovisionamiento (ADR-0121)
   memory/              working (Redis) + recall (pgvector)
   billing/             planes, cuotas, enforcement, cobro Wompi (ADR-0045/0046)
   admin/               panel SSR (en retiro progresivo, ADR-0076) + auth propia + data-table

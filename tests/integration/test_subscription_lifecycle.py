@@ -27,7 +27,7 @@ AHORA = datetime(2026, 11, 20, 12, 0, tzinfo=UTC)
 
 
 async def _negocio() -> uuid.UUID:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = uniq("subs")
     tid, _ = await onboard_tenant(name=f"Negocio {slug}", slug=slug, packs=["pack_subscriptions"])

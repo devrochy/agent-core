@@ -25,11 +25,11 @@ STORED_TOKEN = "token-guardado"
 
 
 async def _setup_connected_tenant() -> tuple[uuid.UUID, uuid.UUID, str]:
+    from core.alta_negocio import onboard_tenant
     from core.db.models import MetaConnection
     from core.db.session import get_session
     from core.gateway import meta_token_store
     from core.gateway.meta_byok import APP_SECRET_KIND, CLOUD_API_ACCESS_TOKEN_KIND
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = uniq("token-tools")

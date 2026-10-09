@@ -290,7 +290,7 @@ async def moto_setup():
     # pero sin AppSettings, de antes de que `escalation_config` existiera).
     # `seed_catalog` también es idempotente (docstring propio).
     from cli.commands.tenant import seed_catalog
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     moto_id, _ = await onboard_tenant(
         name="Tenant de ejemplo (moto)",

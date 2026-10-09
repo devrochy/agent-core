@@ -29,7 +29,7 @@ FREE = {"plan_code": "PLAN-FREE", "nombre": "Free", "precio": 0.0, "moneda": "CO
 
 
 async def _negocio(packs: list[str] | None = None) -> uuid.UUID:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     tid, _ = await onboard_tenant(name="Negocio", slug=uniq("cplan"), packs=packs or ["pack_subscriptions"], plan="premium")
     return tid

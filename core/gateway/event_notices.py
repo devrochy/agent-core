@@ -78,6 +78,13 @@ EVENTOS: dict[str, dict[str, str]] = {
         "suscripcion.concepto": "Plan o concepto de la suscripción",
         "prueba.termina": "Fecha en que termina la prueba",
     },
+    # HU-SH-03 (ADR-0121): el acceso al negocio comprado llega por correo. Sin enlace ni
+    # token: el enlace va SOLO por correo y el aviso es igual en todos los casos.
+    "provisioning.invitation": {
+        "cliente.nombre": "Nombre del cliente",
+        "negocio.nombre": "Nombre del negocio",
+        "invitacion.correo": "Correo al que llega el acceso (enmascarado)",
+    },
 }
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")

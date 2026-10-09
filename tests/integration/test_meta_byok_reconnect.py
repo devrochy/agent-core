@@ -26,9 +26,9 @@ pytestmark = [
 
 async def test_byok_reconecta_tras_soft_delete_crea_conexion_nueva(app_client, monkeypatch) -> None:
     import core.gateway.meta_byok as byok_mod
+    from core.alta_negocio import onboard_tenant
     from core.db.models import MetaConnection, PhoneNumber, utcnow
     from core.db.session import get_session
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = f"whreconn-{uuid.uuid4().hex[:6]}"

@@ -42,11 +42,11 @@ async def _switch_tenant(app_client, session_cookie: str, tenant_id: uuid.UUID) 
 async def _setup_connected_tenant():
     """Tenant con MetaConnection connected + WabaAccount + token guardado --
     salta el wizard, va directo al escenario de "ya conectado, gestionando números"."""
+    from core.alta_negocio import onboard_tenant
     from core.db.models import MetaConnection, WabaAccount
     from core.db.session import get_session
     from core.gateway import meta_token_store
     from core.gateway.meta_onboarding import TOKEN_KIND
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = _uniq("numeros-admin")

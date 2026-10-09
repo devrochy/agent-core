@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import UTC, datetime
+from functools import lru_cache
 from typing import Any
 
 from sqlalchemy import or_, select, text
@@ -22,6 +23,7 @@ from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from core.shared.texto_seguro import contiene_url
 from pack_commerce.models import (
     CategoryComplement,
     Inventory,
@@ -338,6 +340,62 @@ def _campos_requeridos(config, es_plan: bool, delivery_method: str) -> list[str]
 def _validar_checkout(campos_requeridos: list[str], data: dict[str, Any]) -> tuple[bool, list[str]]:
     missing = [f for f in campos_requeridos if not str(data.get(f, "")).strip()]
     return (not missing, missing)
+
+
+# ------------------------------------------------------------------ datos del alta (HU-SH-03)
+_ESPACIOS = re.compile(r"\s+")
+
+
+@lru_cache(maxsize=1)
+def _presets() -> tuple[tuple[str, str], ...]:
+    """(id, nombre) de los presets del core (ADR-0110). Son archivos del release, no datos de
+    un negocio: se leen una vez por proceso."""
+    from core.presets import list_presets
+
+    return tuple((p.id, p.nombre) for p in list_presets())
+
+
+def _verticales() -> list[dict[str, str]]:
+    """Tipos de negocio que acepta el checkout: los presets del core."""
+    from core.presets import PresetError
+
+    try:
+        return [{"id": pid, "nombre": nombre} for pid, nombre in _presets()]
+    except PresetError:
+        log.warning("verticales_no_disponibles", exc_info=True)
+        return []
+
+
+def _vertical_invalido(valor: Any) -> dict[str, Any] | None:
+    """Rechazo de un `vertical` que no es un preset, con las opciones; None si es válido o
+    no vino (solo es obligatorio si el negocio lo pide en `checkout_fields`). Así el tipo de
+    negocio llega al pedido como dato de una lista, no como texto libre (ADR-0121)."""
+    texto = str(valor or "").strip()
+    if not texto:
+        return None
+    opciones = _verticales()
+    if texto in {o["id"] for o in opciones}:
+        return None
+    return {
+        "status": "dato_invalido",
+        "error": "Tipo de negocio no válido.",
+        "field": "vertical",
+        "opciones": opciones,
+        "hint": "Pregúntale al cliente qué tipo de negocio tiene y usa el id de una de las opciones.",
+    }
+
+
+def _datos_alta(customer_data: dict[str, Any]) -> dict[str, str] | None:
+    """Lo que el alta del servicio de un plan necesita del checkout (ADR-0121): se guarda
+    en el pedido; el perfil del cliente solo se toca con su consentimiento (D17)."""
+    datos = {
+        "email": str(customer_data.get("email") or "").strip().lower()[:254],
+        "telefono": _ESPACIOS.sub(" ", str(customer_data.get("phone") or "")).strip()[:40],
+        "negocio": _ESPACIOS.sub(" ", str(customer_data.get("business_name") or "")).strip()[:120],
+        "vertical": str(customer_data.get("vertical") or "").strip(),
+    }
+    limpios = {clave: valor for clave, valor in datos.items() if valor}
+    return limpios or None
 
 
 # ------------------------------------------------------------------ LEADS
@@ -1348,17 +1406,41 @@ class OrderSkill(BaseSkill):
                     "hint": "Ofrecele transferencia o contraentrega en su lugar.",
                 }
 
-        complete, missing = _validar_checkout(
-            _campos_requeridos(config, es_plan, delivery_method), customer_data
-        )
+        requeridos = _campos_requeridos(config, es_plan, delivery_method)
+        complete, missing = _validar_checkout(requeridos, customer_data)
         if not complete:
-            return {
+            faltan: dict[str, Any] = {
                 "status": "faltan_datos_cliente",
                 "error": "Faltan datos del cliente",
                 "missing_fields": missing,
                 "existing_data": {k: v for k, v in customer_data.items() if str(v or "").strip()},
                 "hint": "Pide los datos que faltan uno a uno, sin repetir los que ya tenés.",
             }
+            if "vertical" in missing:
+                # El tipo de negocio va en customer_data.vertical como el id de una opción
+                # (ADR-0121): no está en el schema de la tool, que es la misma para todos.
+                faltan["opciones_vertical"] = _verticales()
+            return faltan
+        if es_plan and customer_data.get("business_name"):
+            # El nombre del negocio va en correos y avisos: un enlace ahí sirve para phishing.
+            if contiene_url(customer_data.get("business_name")):
+                if "business_name" in requeridos:
+                    return {
+                        "status": "dato_invalido",
+                        "error": "El nombre del negocio no puede llevar enlaces ni dominios.",
+                        "field": "business_name",
+                        "hint": "Pídele al cliente el nombre de su negocio, sin enlaces.",
+                    }
+                customer_data = {k: v for k, v in customer_data.items() if k != "business_name"}
+        if es_plan and customer_data.get("vertical"):
+            # El tipo de negocio es un id de preset (ADR-0121). Si el negocio lo pide y no es
+            # de la lista, se rechaza con las opciones; si no lo pide, un valor que no sirve
+            # se descarta y el pedido sigue (la tool es la misma para todos los negocios).
+            rechazo_vertical = _vertical_invalido(customer_data.get("vertical"))
+            if rechazo_vertical is not None:
+                if "vertical" in requeridos:
+                    return rechazo_vertical
+                customer_data = {k: v for k, v in customer_data.items() if k != "vertical"}
 
         # Guardar datos de entrega en la memoria de entidad del core (Capa 2)
         # SOLO con consentimiento (Ley 1581, D17): sin él, el pedido se crea
@@ -1400,6 +1482,8 @@ class OrderSkill(BaseSkill):
                 delivery_address=customer_data.get("address"),
                 delivery_municipality=customer_data.get("municipality"),
                 delivery_city=customer_data.get("city"),
+                # HU-SH-03: datos del alta del servicio que vende el plan (ADR-0121).
+                datos_alta=_datos_alta(customer_data) if es_plan else None,
                 status="abierto",
                 # transferencia/pago_en_linea se confirman después (comprobante manual o
                 # webhook de pack-payments); contraentrega de un producto se da por pagado
@@ -1531,6 +1615,25 @@ class OrderSkill(BaseSkill):
                     return {"error": f"No hay stock suficiente de {data['product'].name}."}
                 additions.append((data["variant"], quantity, data["price"]))
                 add_total += data["price"] * quantity
+
+            # Un plan va en su propio pedido: sumarle líneas a un Free (que nace pagado) dejaría
+            # cosas sin cobrar en un pedido "pagado", y el alta automática confía en ese
+            # estado (HU-SH-03, revisión del PR #345).
+            lineas = (
+                await session.execute(
+                    select(OrderItem.variant_id).where(
+                        OrderItem.tenant_id == get_current_tenant_id(),
+                        OrderItem.order_id == order.id,
+                    )
+                )
+            ).scalars().all()
+            if await _es_pedido_de_plan(session, list(lineas)) or await _es_pedido_de_plan(
+                session, [v.id for v, _q, _p in additions]
+            ):
+                return {
+                    "error": "Un plan va en su propio pedido: no se le agregan productos ni se agrega a otro pedido.",
+                    "hint": "Crea una cotización nueva con lo que el cliente quiere sumar.",
+                }
 
             new_total = _float(order.total) + add_total
             config = await _plugin_config()

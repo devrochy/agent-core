@@ -26,7 +26,7 @@ PW = "password123"
 
 
 async def _tenant_cobranza(nombre: str, slug: str, owner_email: str):
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     return await onboard_tenant(
         name=nombre,

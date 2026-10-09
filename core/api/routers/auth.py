@@ -8,6 +8,9 @@ guardan en almacenamiento seguro y lo envían como `Authorization: Bearer`.
 La recuperación de contraseña (ADR-0098) usa un código de un solo uso enviado
 por el correo de sistema; `forgot-password` responde siempre 202 sin filtrar si
 la cuenta existe.
+
+`accept-invitation` (ADR-0121) canjea el enlace de un solo uso con el que el dueño
+de un negocio creado por el alta automática define su contraseña y entra.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from fastapi.background import BackgroundTasks
 from pydantic import BaseModel, Field
 
 from core.admin.auth import SESSION_TTL_HOURS, admin_from_token, login, logout
+from core.admin.invitations_service import CUENTA_EXISTENTE, canjear_invitacion, partes_del_token
 from core.admin.password_reset_service import aplicar_reset, solicitar_reset
 from core.api.deps import Principal, get_principal
 from core.api.errors import ApiError
@@ -45,6 +49,14 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str = Field(description="Código de recuperación recibido por correo.")
     new_password: str = Field(min_length=8)
+
+
+class AcceptInvitationRequest(BaseModel):
+    token: str = Field(
+        max_length=200,
+        description="Token del enlace de la invitación: lo que va después de `#` en `/invitacion#…`.",
+    )
+    new_password: str = Field(min_length=8, description="Contraseña nueva de la cuenta (8+).")
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -99,3 +111,35 @@ async def post_reset_password(payload: ResetPasswordRequest) -> Response:
     if error is not None:
         raise ApiError(400, "invalid_token", error)
     return Response(status_code=204)
+
+
+@router.post("/accept-invitation", status_code=204)
+async def post_accept_invitation(payload: AcceptInvitationRequest, request: Request) -> Response:
+    """Canjea el enlace de un solo uso de una invitación (ADR-0121): define la contraseña de
+    una cuenta que el alta automática creó sin ella y la deja como miembro del negocio.
+    Luego se entra con `/auth/login`. Un enlace inválido, usado o vencido da 400 sin decir
+    cuál de los tres; una cuenta que ya existe (con contraseña, acceso a otro negocio u otra
+    invitación pendiente) da 409: entra y acepta en la app. Con el mismo bloqueo progresivo
+    del login (5 fallos en 10 min → 15 min), por IP y por invitación."""
+    from core.security.login_lockout import (
+        client_ip,
+        is_blocked,
+        register_failure,
+        register_success,
+    )
+
+    ip = client_ip(request)
+    partes = partes_del_token(payload.token)
+    identificador = str(partes[0]) if partes else None
+    if await is_blocked("invitacion", identificador, ip):
+        raise ApiError(
+            429, "auth_bloqueado", "Demasiados intentos. Espera unos minutos e inténtalo de nuevo."
+        )
+    error = await canjear_invitacion(payload.token, payload.new_password)
+    if error is None:
+        await register_success("invitacion", identificador, ip)
+        return Response(status_code=204)
+    await register_failure("invitacion", identificador, ip)
+    if error == CUENTA_EXISTENTE:
+        raise ApiError(409, "account_exists", error)
+    raise ApiError(400, "invalid_token", error)

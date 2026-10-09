@@ -51,7 +51,9 @@ ON_SUBSCRIPTION_PAST_DUE = "subscription.past_due"
 ON_SUBSCRIPTION_CHARGE_REMINDER = "subscription.charge_reminder"
 ON_SUBSCRIPTION_PAUSED = "subscription.paused"
 # HU-SUB-06: suscripción activada (alta o cambio de plan) y fin de la prueba de Free
-# (oferta de un plan pago). payload: subscription_id, customer_id, concepto…
+# (oferta de un plan pago). payload: subscription_id, customer_id, concepto, estado,
+# referencia (el pedido; None si no hubo pedido), cambio_de_plan y variant_id (la línea del
+# pedido). En un negocio vendedor (ADR-0121) dispara el alta automática del comprador.
 ON_SUBSCRIPTION_ACTIVATED = "subscription.activated"
 # HU-SH-02: citas. Al cliente: confirmación de una cita creada desde el panel,
 # recordatorios y oferta de reagendar si no asistió. Al equipo: creada/reagendada/cancelada.

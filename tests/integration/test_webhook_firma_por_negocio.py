@@ -49,11 +49,11 @@ async def _negocio(
 ) -> uuid.UUID:
     """Negocio con una conexión de Meta viva, su WABA y su número. Con `app_secret`, es
     BYOK (secreto propio); sin él, usa la app de la plataforma."""
+    from core.alta_negocio import onboard_tenant
     from core.db.models import MetaConnection, PhoneNumber, WabaAccount
     from core.db.session import get_session
     from core.gateway import meta_token_store
     from core.gateway.meta_byok import APP_SECRET_KIND
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = uniq(prefix)

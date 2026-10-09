@@ -385,7 +385,7 @@ async def _configure_flow(slug: str, skip_intro: bool) -> None:
 
 
 async def _create_minimal_tenant(slug: str):
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     name = await questionary.text("Nombre del negocio:", default=slug).ask_async()
     business = await questionary.text("Descripción del negocio:").ask_async()

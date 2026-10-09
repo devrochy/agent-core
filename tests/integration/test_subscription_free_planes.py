@@ -30,7 +30,7 @@ BASIC = {"nombre": "Basic", "precio": 99000, "moneda": "COP", "periodicidad": "m
 
 
 async def _negocio(packs: list[str] | None = None) -> uuid.UUID:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = uniq("free")
     tid, _ = await onboard_tenant(

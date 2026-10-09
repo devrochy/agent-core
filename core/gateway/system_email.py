@@ -53,7 +53,10 @@ async def send_system_email(to: str, subject: str, body: str) -> str | None:
     """
     settings = get_settings()
     if not settings.system_smtp_host or not settings.system_smtp_from:
-        log.warning("system_email_skipped", to=to[:64], subject=subject[:80])
+        from core.shared.texto_seguro import enmascarar_correo
+
+        # Sin SMTP el correo no sale: el log no expone la dirección entera (ADR-0121).
+        log.warning("system_email_skipped", to=enmascarar_correo(to), subject=subject[:80])
         return None
     return await asyncio.to_thread(
         _send_sync,

@@ -33,7 +33,7 @@ SIN_VERIFICAR = {"app_subscription_active": SIN_DATO, "billing": SIN_DATO}
 
 
 async def _tenant() -> uuid.UUID:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = f"recupera-{uuid.uuid4().hex[:6]}"
     tid, _ = await onboard_tenant(name=f"Recupera {slug}", slug=slug, persona={"tone": "cercano"})

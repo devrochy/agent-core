@@ -172,7 +172,7 @@ async def crear_suscripcion_para(
             existente.cambio_programado = None
             existente.referencia_origen = referencia or existente.referencia_origen
             await session.flush()
-            await _emitir_activada(session, existente, reference, cambio=True)
+            await _emitir_activada(session, existente, referencia, cambio=True)
             return existente
         trial_termina = (now + timedelta(days=trial_dias)) if trial_dias else None
         sub = Subscription(
@@ -196,11 +196,15 @@ async def crear_suscripcion_para(
         )
         session.add(sub)
         await session.flush()
-        await _emitir_activada(session, sub, reference, cambio=False)
+        await _emitir_activada(session, sub, referencia, cambio=False)
         return sub
 
 
-async def _emitir_activada(session, sub: Subscription, reference: str, *, cambio: bool) -> None:
+async def _emitir_activada(session, sub: Subscription, referencia: str | None, *, cambio: bool) -> None:
+    """`subscription.activated` por el outbox. `referencia` es el pedido que la activó, o
+    None si no hubo pedido (activación manual, journeys, cargo de cambio de plan): así el
+    alta automática de un negocio (HU-SH-03, ADR-0121) no tiene que adivinar cuáles son
+    referencias internas. `variant_id` dice qué línea del pedido se activó."""
     from core.events.outbox import emit_domain
     from core.shared.events import ON_SUBSCRIPTION_ACTIVATED
 
@@ -217,8 +221,9 @@ async def _emitir_activada(session, sub: Subscription, reference: str, *, cambio
             "valor_periodo": str(sub.valor_periodo),
             "periodicidad": sub.periodicidad,
             "trial_termina": sub.trial_termina.isoformat() if sub.trial_termina else None,
-            "referencia": reference,
+            "referencia": referencia,
             "cambio_de_plan": cambio,
+            "variant_id": str(sub.variante_id) if sub.variante_id else None,
         },
     )
 

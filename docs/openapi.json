@@ -166,6 +166,42 @@
         }
       }
     },
+    "/api/v1/auth/accept-invitation": {
+      "post": {
+        "tags": [
+          "api",
+          "auth"
+        ],
+        "summary": "Post Accept Invitation",
+        "description": "Canjea el enlace de un solo uso de una invitación (ADR-0121): define la contraseña de\nuna cuenta que el alta automática creó sin ella y la deja como miembro del negocio.\nLuego se entra con `/auth/login`. Un enlace inválido, usado o vencido da 400 sin decir\ncuál de los tres; una cuenta que ya existe (con contraseña, acceso a otro negocio u otra\ninvitación pendiente) da 409: entra y acepta en la app. Con el mismo bloqueo progresivo\ndel login (5 fallos en 10 min → 15 min), por IP y por invitación.",
+        "operationId": "post_accept_invitation_api_v1_auth_accept_invitation_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptInvitationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/me": {
       "get": {
         "tags": [
@@ -12414,6 +12450,28 @@
   },
   "components": {
     "schemas": {
+      "AcceptInvitationRequest": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Token",
+            "description": "Token del enlace de la invitación: lo que va después de `#` en `/invitacion#…`."
+          },
+          "new_password": {
+            "type": "string",
+            "minLength": 8,
+            "title": "New Password",
+            "description": "Contraseña nueva de la cuenta (8+)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "token",
+          "new_password"
+        ],
+        "title": "AcceptInvitationRequest"
+      },
       "AccessAttempt": {
         "properties": {
           "fecha": {

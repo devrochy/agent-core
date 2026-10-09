@@ -21,7 +21,7 @@ pytestmark = [
 
 
 async def _alta(preset: str, plan: str | None):
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = uniq("preset")
     return await onboard_tenant(name=f"Negocio {slug}", slug=slug, preset=preset, plan=plan)

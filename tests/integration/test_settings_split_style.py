@@ -31,7 +31,7 @@ def test_default_global_es_un_mensaje(monkeypatch) -> None:
 
 async def test_identity_guarda_y_devuelve_split_style(app_client) -> None:
     """PUT /settings/identity persiste split_style; GET lo devuelve."""
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = f"split-{os.urandom(3).hex()}"
     tid, _ = await onboard_tenant(
@@ -74,7 +74,7 @@ async def test_identity_guarda_y_devuelve_split_style(app_client) -> None:
 
 async def test_identity_guarda_y_devuelve_currency(app_client) -> None:
     """HU-UI-01: la moneda del negocio se guarda y se devuelve (default COP)."""
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = f"curr-{os.urandom(3).hex()}"
     tid, _ = await onboard_tenant(

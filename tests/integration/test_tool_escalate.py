@@ -65,7 +65,7 @@ class _Proveedor:
 async def _negocio() -> uuid.UUID:
     # Negocio propio por test: `tenant_setup` es compartido y otros tests le cambian las
     # políticas del spec (p. ej. `maxToolCallsPerTurn`).
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = f"escala-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"Escala {slug}", slug=slug, persona={"tone": "cercano"})
