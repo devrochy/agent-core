@@ -259,7 +259,7 @@ comprador.
 
 ## Impacto en el código
 
-- `alembic/versions/0064_antiabuso_del_alta.py` y `core/db/models.py`: `documentos_legales` y
+- `alembic/versions/0065_antiabuso_del_alta.py` y `core/db/models.py`: `documentos_legales` y
   `pedidos_de_alta`, con RLS forzada.
 - `core/provisioning/legal.py`, `interruptor.py`, `antiabuso.py`, `revision.py` y
   `dominios_desechables.txt`. `core/shared/events.py` y `core/events/core_handlers.py`: el topic

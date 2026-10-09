@@ -15,8 +15,8 @@ Las dos son tablas de NEGOCIO del vendedor (`tenant_id`, RLS habilitada y forzad
 aislamiento, índices que empiezan por `tenant_id`). Tablas nuevas y vacías: sin reescritura
 ni bloqueo largo. `purge_tenant` las cubre solo (descubre las tablas con `tenant_id`).
 
-Revision ID: 0064
-Revises: 0062
+Revision ID: 0065
+Revises: 0063
 Create Date: 2026-10-09
 """
 from __future__ import annotations
@@ -26,10 +26,10 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 
 from alembic import op
 
-revision = "0064"
-# 0063 es del PR #352 (ciclo de vida de conexiones Meta), todavía abierto. El que se mergee
-# segundo encadena su migración sobre la del otro: un solo head.
-down_revision = "0062"
+revision = "0065"
+# 0064 es del PR #354 (checklist de producción), todavía abierto y también sobre 0063. El que
+# se mergee segundo encadena su migración sobre la del otro: un solo head.
+down_revision = "0063"
 branch_labels = None
 depends_on = None
 

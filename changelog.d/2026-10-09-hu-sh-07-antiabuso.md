@@ -45,7 +45,7 @@
 - **API de Plataforma**, solo para el master y solo sobre vendedores:
   `/api/v1/admin/platform/altas-automaticas` (estado, interruptor, documentos, cola, aprobar y descartar).
 - **CLI:** `agent-core tenant aprobar-alta` y `agent-core tenant interruptor-altas`.
-- Migración `0064` (`documentos_legales` y `pedidos_de_alta`, RLS forzada, triggers de inmutabilidad).
+- Migración `0065` (`documentos_legales` y `pedidos_de_alta`, RLS forzada, triggers de inmutabilidad).
 - `test_despachador_entrega_con_el_tenant_del_evento` despacha por lotes hasta encontrar su evento: con la
   suite completa hay más de un lote pendiente.
 - `docs/openapi.json`, runbook `docs/runbooks/altas-en-revision.md` y `docs/despliegue-coolify.md` al día.
