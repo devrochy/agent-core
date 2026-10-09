@@ -71,6 +71,11 @@ async def entregar_evento(event_id: uuid.UUID, tenant_id: uuid.UUID, ahora: date
                 evento = await session.get(DomainEvent, event_id)
                 if evento is None or evento.status != "pendiente":
                     return False
+                if evento.tenant_id != tenant_id:
+                    # El par (evento, negocio) viene del llamador: sin esta guarda, una
+                    # conexión que salta la RLS entregaría el payload de otro negocio.
+                    log.warning("domain_event_tenant_no_coincide", event_id=str(event_id))
+                    return False
                 if not event_bus.has_subscribers(evento.topic):
                     # No es un fallo (un topic puede no tener handlers),
                     # pero se deja rastro: así se vio que el worker no

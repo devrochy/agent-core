@@ -190,6 +190,7 @@ async def sembrar_artefactos(tenant_id: uuid.UUID, slug: str, *, voz_de_marca: b
     """Lo que hace `agent-core tenant seed`: catálogo, seed de cada pack y voz de marca desde
     `TENANTS_ROOT/<slug>/` (HU-SH-01). Lo usan el CLI y el runner de journeys, que arma una
     réplica del asistente de un negocio con sus artefactos (HU-SH-08)."""
+    _validate_slug(slug)
     pasos: list[str] = []
     data = load_tenant_catalog(slug)
     if data is not None:

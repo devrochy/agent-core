@@ -165,22 +165,38 @@ class CorreosSimulados:
             return f"<journeys-{uuid.uuid4().hex}@example.com>"
 
         correo.send_system_email = enviar  # type: ignore[assignment]
+        # Quien lo importó a nivel de módulo guarda su propia referencia.
+        import core.admin.password_reset_service as reseteo
+
+        reseteo.send_system_email = enviar  # type: ignore[assignment]
 
 
 CORREOS = CorreosSimulados()
 
 
 # ------------------------------------------------------------------ réplica de un negocio
-def preparar_replica(origen: Path) -> tuple[str, Path]:
-    """Réplica de los artefactos de un negocio (HU-SH-08): copia `TENANTS_ROOT/<slug>/`
-    (sin `evals/`) a un `TENANTS_ROOT` temporal, con el slug del negocio de la corrida, y
-    apunta el proceso ahí. El negocio real y su directorio no se tocan; los overrides por
-    slug (ADR-0026) leen la copia. Devuelve el slug de la corrida y la raíz temporal."""
+def _sin_copiar(directorio: str, nombres: list[str]) -> set[str]:
+    """`evals/`, respaldos y symlinks: un symlink podría traer archivos de otro negocio."""
+    fuera = set(shutil.ignore_patterns("evals", "*.tgz")(directorio, nombres))
+    return fuera | {n for n in nombres if (Path(directorio) / n).is_symlink()}
+
+
+def preparar_replica(origen: Path | None) -> tuple[str, Path]:
+    """`TENANTS_ROOT` temporal de la corrida: los artefactos que escriben el negocio de prueba
+    y las altas automáticas nunca quedan en el real. Con `origen` (HU-SH-08), además copia
+    `TENANTS_ROOT/<slug>/` (sin `evals/` ni symlinks) con el slug del negocio de la corrida:
+    el negocio real y su directorio no se tocan y los overrides por slug (ADR-0026) leen la
+    copia. Devuelve el slug de la corrida y la raíz temporal."""
     from core.config import get_settings
 
     slug = f"journeys-{uuid.uuid4().hex[:8]}"
     raiz = Path(tempfile.mkdtemp(prefix="journeys-tenants-"))
-    shutil.copytree(origen, raiz / slug, ignore=shutil.ignore_patterns("evals", "*.tgz"))
+    try:
+        if origen is not None:
+            shutil.copytree(origen, raiz / slug, ignore=_sin_copiar)
+    except Exception:
+        shutil.rmtree(raiz, ignore_errors=True)
+        raise
     os.environ["TENANTS_ROOT"] = str(raiz)
     get_settings.cache_clear()
     return slug, raiz
@@ -736,7 +752,7 @@ async def main(argv: list[str] | None = None) -> int:
     k = max(1, args.k)
 
     _solo_bases_de_prueba()
-    slug, raiz = preparar_replica(carpeta.parent.parent) if carpeta else (None, None)
+    slug, raiz = preparar_replica(carpeta.parent.parent if carpeta else None)
     try:
         await _preparar_proceso()
         pagos = PagoSimulado(monto_minimo=float((negocio.get("pagos_simulados") or {}).get("monto_minimo", 0)))
@@ -744,8 +760,7 @@ async def main(argv: list[str] | None = None) -> int:
         tenant_id = await preparar_negocio(negocio, pagos, slug=slug, replica=carpeta is not None)
         return await _correr_set(args, set_id, rutas, k, tenant_id, pagos)
     finally:
-        if raiz is not None:
-            shutil.rmtree(raiz, ignore_errors=True)
+        shutil.rmtree(raiz, ignore_errors=True)
 
 
 async def _correr_set(args: argparse.Namespace, set_id: str, rutas: list[Path], k: int, tenant_id: uuid.UUID, pagos: PagoSimulado) -> int:
@@ -792,6 +807,14 @@ def _solo_bases_de_prueba() -> None:
     entorno = (get_settings().app_env or "").lower()
     if entorno not in ("development", "ci", "test"):
         raise SystemExit(f"Los journeys no corren con APP_ENV={entorno!r}: solo en bases de prueba.")
+    # Crean negocios (también por alta automática) y entregan eventos con parches del proceso:
+    # solo contra una base local (stack efímero o servicio del CI). Una base compartida tiene
+    # un worker que tomaría esos eventos sin los parches (correos y allowlist reales).
+    from sqlalchemy.engine import make_url
+
+    host = (make_url(get_settings().database_url).host or "").lower()
+    if host not in ("localhost", "127.0.0.1", "::1"):
+        raise SystemExit(f"Los journeys solo corren contra una base local, no contra {host!r}.")
 
 
 async def _guardar(tenant_id: uuid.UUID, set_id: str, resultados: list, k: int, simulador: dict) -> None:  # type: ignore[type-arg]

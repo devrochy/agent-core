@@ -79,3 +79,15 @@ async def test_el_paso_outbox_solo_entrega_los_eventos_del_negocio_del_journey()
         assert len(recibidos) == 1
     finally:
         event_bus.unsubscribe_all([handler])
+
+
+async def test_entregar_evento_con_el_negocio_equivocado_no_entrega() -> None:
+    from datetime import UTC, datetime
+
+    from core.tasks.domain_events_dispatch import entregar_evento
+
+    topic = f"journeys.cruzado.{uuid.uuid4().hex[:6]}"
+    propio, evento = await _negocio_con_evento(topic)
+    otro, _ = await _negocio_con_evento(topic)
+    assert await entregar_evento(evento, otro, datetime.now(UTC)) is False
+    assert await _estado(propio, evento) == "pendiente"

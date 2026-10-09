@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import sys
 import uuid
 from datetime import timedelta
@@ -129,6 +130,8 @@ def test_la_replica_copia_los_artefactos_sin_evals_y_apunta_el_proceso(monkeypat
     (origen / "playbooks" / "ventas.md").write_text("# ventas", encoding="utf-8")
     (origen / "evals" / "journeys" / "negocio.json").write_text("{}", encoding="utf-8")
     (origen / "solvershub-respaldo-1.tgz").write_text("x", encoding="utf-8")
+    (tmp_path / "otro-negocio.md").write_text("secreto", encoding="utf-8")
+    (origen / "enlace.md").symlink_to(tmp_path / "otro-negocio.md")
     monkeypatch.setenv("TENANTS_ROOT", str(tmp_path))
     try:
         slug, raiz = journeys.preparar_replica(origen)
@@ -137,6 +140,7 @@ def test_la_replica_copia_los_artefactos_sin_evals_y_apunta_el_proceso(monkeypat
         copia = sorted(p.relative_to(raiz / slug).as_posix() for p in (raiz / slug).rglob("*"))
         assert copia == ["flow.json", "playbooks", "playbooks/ventas.md"]
         assert (origen / "evals" / "journeys" / "negocio.json").exists(), "el negocio real no se toca"
+        shutil.rmtree(raiz, ignore_errors=True)
     finally:
         get_settings.cache_clear()
 
