@@ -62,7 +62,7 @@ hay que actualizar `docs/despliegue-coolify.md` y esta skill.
 ## 1. Mergear el PR
 
 Antes de mergear:
-- Comprobar que el CI está verde (o que lo que falla es una falla ya
+- Comprobar que el CI de la PR está verde (o que lo que falla es una falla ya
   conocida y documentada — el "Gate de evals" tiene 2-3 escenarios flaky por
   criterio del LLM, no por infraestructura; confirmarlo leyendo el log del
   job antes de asumir que es lo mismo de siempre).
@@ -73,6 +73,20 @@ Antes de mergear:
 ```bash
 gh pr merge <n> --merge
 ```
+
+Después del merge, **esperar el CI del push a develop** antes de desplegar. La PR
+corre el nivel rápido del CI (ADR-0120): solo el subconjunto `aislamiento` de
+integración, sin evals ni journeys. La integración completa y los gates de evals
+corren en el push a develop:
+
+```bash
+gh run list --workflow ci.yml --branch develop --event push --limit 1
+gh run watch <run-id> --exit-status
+```
+
+Si sale en rojo, **no desplegar**. Avisar al usuario con el paso que falló y el
+log del job `integracion`; las fallas flaky conocidas del gate de evals se tratan
+igual que arriba.
 
 ## 2. Lanzar el despliegue
 

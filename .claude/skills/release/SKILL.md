@@ -33,8 +33,11 @@ Semver:
 
 ## Checklist (todo en verde, o no hay release)
 
-1. **CI verde en `develop`**: ruff, migrar y sembrar, `pytest -q`, integración
-   (`AGENT_CORE_INTEGRATION=1`), gate de evals (`"06,07,08,21,22,23,24,25,26"`) y gitleaks.
+1. **CI verde en `develop`, nivel completo** (el del push, no el de las PRs; ADR-0120):
+   ruff, tipos, capas, `pytest -q`, migrar y sembrar, integración completa
+   (`AGENT_CORE_INTEGRATION=1`), gate de evals (`"06,07,08,21,22,23,24,25,26"`), journeys
+   y gitleaks sobre la historia. La PR develop → main vuelve a correr el nivel completo
+   y además exige `docs/openapi.json` sin drift.
    El nightly (`evals-nightly.yml`) sin regresiones nuevas.
 2. **Alcance**: `git log --oneline origin/main..origin/develop` y
    `git diff --stat origin/main..origin/develop`. Ningún 🔴 abierto en lo que entra.

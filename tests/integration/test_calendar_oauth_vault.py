@@ -112,6 +112,7 @@ async def test_get_access_token_cae_a_plugin_config_sin_conexion():
         await _cleanup(tenant_id)
 
 
+@pytest.mark.aislamiento  # subconjunto de las PRs a develop (ADR-0120)
 async def test_tokens_no_se_filtran_entre_tenants(monkeypatch):
     from pack_calendar import oauth
 

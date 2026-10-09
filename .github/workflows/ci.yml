@@ -1,68 +1,77 @@
 name: CI
 
+# CI por niveles (ADR-0120):
+#   - PR → develop (o cualquier rama que no sea main): nivel RÁPIDO. Lint, tipos,
+#     capas, unitarios y gitleaks sobre los commits de la PR; si la PR toca rutas
+#     que cubre la integración, además el subconjunto crítico `-m aislamiento`
+#     (RLS forzada, aislamiento entre tenants, webhooks, IDOR).
+#   - push → develop (post-merge), PR → main y push → main: nivel COMPLETO.
+#     Integración completa, gate de evals y journeys, gitleaks sobre toda la
+#     historia y, hacia main, drift de docs/openapi.json.
 on:
   push:
-    # `develop` recibe lotes por push directo además de PRs: se gatean igual.
+    # `develop` recibe lotes por push directo además de PRs: se gatean completos.
     branches: [main, develop]
   pull_request:
 
+# Mínimo privilegio: los jobs ejecutan código de la PR en un runner self-hosted.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Claves de prueba (no son secretos reales), comunes a unitarios e integración.
+  MASTER_ENCRYPTION_KEY: GpsiZ2sgMd4SvLHGp4Bs5xdaQLlQ1cByyK6DCNxVwL4=
+  TOKEN_MASTER_KEYS: '{"k1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}'
+  TOKEN_ACTIVE_KEY_ID: k1
+  APP_SECRET_KEY: ci-only-not-a-secret-app-key
+  # App Secret de Meta de prueba (HMAC del webhook). No es un secreto real.
+  WHATSAPP_APP_SECRET: ci-meta-app-secret-not-real
+  APP_ENV: development
+  # Rutas que cubren los tests de integración: si una PR rápida no toca ninguna,
+  # se salta el job de integración.
+  RUTAS_INTEGRACION: '^(core/|packages/|plugins/|alembic/|cli/|tests/integration/|tests/conftest\.py$|alembic\.ini$|scripts/init_db\.py$|scripts/install_plugins\.sh$|pyproject\.toml$|uv\.lock$|\.github/|docker/postgres/)'
+
 jobs:
-  gate:
+  rapido:
     runs-on: [self-hosted, linux, x64]
     # Seguridad: no ejecutar workflows de PRs de forks en el runner self-hosted.
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    concurrency:
-      group: ci-${{ github.ref }}
-      cancel-in-progress: true
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: agent_core
-          POSTGRES_PASSWORD: agent_core
-          POSTGRES_DB: agent_core
-        ports: ["55432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U agent_core"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-      redis:
-        image: redis:7-alpine
-        ports: ["56379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-retries 12
-    env:
-      DATABASE_URL: postgresql+asyncpg://app_runtime:app_runtime@localhost:55432/agent_core
-      MIGRATIONS_DATABASE_URL: postgresql+asyncpg://agent_core:agent_core@localhost:55432/agent_core
-      REDIS_URL: redis://localhost:56379/0
-      MASTER_ENCRYPTION_KEY: GpsiZ2sgMd4SvLHGp4Bs5xdaQLlQ1cByyK6DCNxVwL4=
-      TOKEN_MASTER_KEYS: '{"k1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}'
-      TOKEN_ACTIVE_KEY_ID: k1
-      APP_SECRET_KEY: ci-only-not-a-secret-app-key
-      # App Secret de Meta de prueba (HMAC del webhook). No es un secreto real.
-      WHATSAPP_APP_SECRET: ci-meta-app-secret-not-real
-      APP_ENV: development
+    outputs:
+      nivel: ${{ steps.nivel.outputs.nivel }}
+      relevante: ${{ steps.nivel.outputs.relevante }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Historia completa: gitleaks y el diff contra la rama base la necesitan.
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Entorno Python (self-hosted)
-        # El runner es Linux Mint: `actions/setup-python` no tiene builds para esa
-        # distro, así que se usa el Python del propio runner en un venv aislado.
+      - name: Nivel del CI y rutas tocadas
+        id: nivel
+        env:
+          BASE: ${{ github.base_ref }}
         run: |
-          python3 --version
-          python3 -c "import sys; assert sys.version_info >= (3, 12), 'Se requiere Python 3.12+'"
-          python3 -m venv .venv-ci
-          echo "$PWD/.venv-ci/bin" >> "$GITHUB_PATH"
-          .venv-ci/bin/python -m pip install --upgrade pip
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "$BASE" != "main" ]; then
+            echo "nivel=rapido" >> "$GITHUB_OUTPUT"
+            # Si el diff falla, el paso falla (`-e`): nunca se salta la integración a ciegas.
+            # `--no-renames`: mover un archivo fuera de `core/` también cuenta como tocarlo.
+            CAMBIOS="$(git diff --no-renames --name-only "origin/${BASE}...HEAD")"
+            if grep -E "$RUTAS_INTEGRACION" <<< "$CAMBIOS" > /dev/null; then
+              echo "relevante=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "relevante=false" >> "$GITHUB_OUTPUT"
+              echo "::notice title=Integración omitida::La PR no toca rutas que cubre la integración."
+            fi
+          else
+            echo "nivel=completo" >> "$GITHUB_OUTPUT"
+            echo "relevante=true" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Instalar (core + plugins)
-        run: |
-          pip install -e packages/contracts
-          pip install -e ".[dev]"
-          bash scripts/install_plugins.sh
+      - uses: ./.github/actions/preparar-entorno
 
       - name: Lint
         run: ruff check core cli scripts alembic evals tests packages
@@ -82,13 +91,88 @@ jobs:
           export PYTHONPATH="$(printf '%s:' packages/pack-*/ packages/contracts)"
           lint-imports
 
-      - name: Postgres del CI con PostGIS (lo exige pack-cobranza, ADR-0058)
-        # El servicio arranca de `pgvector/pgvector:pg16` (sin PostGIS). El pack
-        # de cobranza necesita la extensión, así que se instala en el contenedor
-        # antes de migrar. En producción se usa docker/postgres/Dockerfile.
+      - name: Tests unitarios
+        # Sin Postgres ni Redis: `tests/conftest.py` fija URLs falsas por defecto.
+        run: pytest -q
+
+      - name: Contrato OpenAPI sin drift (hacia main)
+        # Checklist de release: `docs/openapi.json` refleja `/api/v1` (ADR-0077).
+        if: github.base_ref == 'main' || github.ref == 'refs/heads/main'
         run: |
-          docker exec ${{ job.services.postgres.id }} \
-            bash -c "apt-get update -qq && apt-get install -y -qq postgresql-16-postgis-3"
+          python scripts/export_openapi.py
+          git diff --exit-code docs/openapi.json
+
+      - name: Gitleaks (secret scan)
+        # Falla si aparece una credencial real; las claves de prueba del repo están
+        # allowlisteadas en `.gitleaks.toml`. En el nivel rápido solo se escanean
+        # los commits de la PR; en el completo, toda la historia.
+        # Binario fijado en $RUNNER_TEMP: sin caché ni /tmp (que dejaba trabado
+        # a `gitleaks-action` en el runner self-hosted).
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          VER=8.24.3
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP"
+          if [ "${{ steps.nivel.outputs.nivel }}" = "rapido" ]; then
+            "$RUNNER_TEMP/gitleaks" detect --source . --redact -v --log-opts="origin/${BASE}..HEAD"
+          else
+            "$RUNNER_TEMP/gitleaks" detect --source . --redact -v
+          fi
+
+  integracion:
+    needs: rapido
+    # El filtro de forks se repite: no depender solo de `needs` para no correr
+    # código de un fork en el runner self-hosted.
+    if: ${{ needs.rapido.outputs.relevante == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: [self-hosted, linux, x64]
+    permissions:
+      contents: read
+      # Para bajar la imagen de Postgres del CI desde GHCR.
+      packages: read
+    services:
+      postgres:
+        # Misma imagen que producción (pg17 + pgvector + PostGIS, ADR-0058),
+        # publicada por `ci-postgres-image.yml`.
+        image: ghcr.io/${{ github.repository_owner }}/solvershub-postgres:pg17-postgis
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          POSTGRES_USER: agent_core
+          POSTGRES_PASSWORD: agent_core
+          POSTGRES_DB: agent_core
+        # Puerto del host dinámico: varios runners pueden compartir la máquina.
+        ports: ["5432"]
+        options: >-
+          --health-cmd "pg_isready -U agent_core"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: ["6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: URLs del stack (puertos dinámicos)
+        # El contexto `job` no está disponible en el `env` del job: se exportan aquí.
+        run: |
+          PG=${{ job.services.postgres.ports['5432'] }}
+          RD=${{ job.services.redis.ports['6379'] }}
+          {
+            echo "DATABASE_URL=postgresql+asyncpg://app_runtime:app_runtime@localhost:${PG}/agent_core"
+            echo "MIGRATIONS_DATABASE_URL=postgresql+asyncpg://agent_core:agent_core@localhost:${PG}/agent_core"
+            echo "REDIS_URL=redis://localhost:${RD}/0"
+          } >> "$GITHUB_ENV"
+
+      - uses: ./.github/actions/preparar-entorno
 
       - name: Migrar y sembrar
         env:
@@ -99,10 +183,14 @@ jobs:
           agent-core db migrate
           python scripts/init_db.py
 
-      - name: Tests unitarios
-        run: pytest -q
+      - name: Integración — subconjunto crítico (nivel rápido)
+        if: needs.rapido.outputs.nivel == 'rapido'
+        env:
+          AGENT_CORE_INTEGRATION: "1"
+        run: pytest tests/integration -q -m aislamiento
 
-      - name: Tests de integración (aislamiento multi-tenant, RLS, webhooks)
+      - name: Integración completa (aislamiento multi-tenant, RLS, webhooks)
+        if: needs.rapido.outputs.nivel == 'completo'
         env:
           AGENT_CORE_INTEGRATION: "1"
         run: pytest tests/integration -q
@@ -111,7 +199,7 @@ jobs:
         # Los runs de Dependabot no reciben los secretos de Actions, así que ahí no
         # hay LLM_API_KEY: los evals se saltan y se avisa (paso siguiente). Corren
         # igual en el push a `develop` después del merge y en el nightly.
-        if: github.actor != 'dependabot[bot]'
+        if: needs.rapido.outputs.nivel == 'completo' && github.actor != 'dependabot[bot]'
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         # Camino feliz + manipulación + escalamiento: las regresiones que importan.
@@ -121,29 +209,11 @@ jobs:
         # HU-SUB-12: conversación completa contra el loop real con pagos simulados (sin
         # red). 01 informa planes; 05 recorre cargo → recordatorio → vencida → pago →
         # reactivación con saltos de reloj. El set completo corre en el nightly.
-        if: github.actor != 'dependabot[bot]'
+        if: needs.rapido.outputs.nivel == 'completo' && github.actor != 'dependabot[bot]'
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: python evals/journeys.py "01,05" --umbral 1.0
 
       - name: Gate de evals no ejecutado (Dependabot)
-        if: github.actor == 'dependabot[bot]'
+        if: needs.rapido.outputs.nivel == 'completo' && github.actor == 'dependabot[bot]'
         run: echo "::notice title=Evals no ejecutados::Dependabot no tiene LLM_API_KEY. Corren en el push a develop después del merge y en el nightly."
-
-  # Escaneo de secretos sobre la historia (falla si aparece una credencial real).
-  # Las claves de prueba del repo están allowlisteadas en `.gitleaks.toml`.
-  secret-scan:
-    runs-on: [self-hosted, linux, x64]
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Gitleaks (secret scan)
-        # Binario fijado en $RUNNER_TEMP: sin caché ni /tmp (que dejaba trabado
-        # a `gitleaks-action` en el runner self-hosted).
-        run: |
-          VER=8.24.3
-          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP"
-          "$RUNNER_TEMP/gitleaks" detect --source . --redact -v

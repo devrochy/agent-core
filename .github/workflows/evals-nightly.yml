@@ -11,29 +11,35 @@ jobs:
     concurrency:
       group: evals-nightly
       cancel-in-progress: false
+    permissions:
+      contents: read
+      # Para bajar la imagen de Postgres del CI desde GHCR.
+      packages: read
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        # Misma imagen que producción y que `ci.yml` (pg17 + pgvector + PostGIS).
+        image: ghcr.io/${{ github.repository_owner }}/solvershub-postgres:pg17-postgis
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         env:
           POSTGRES_USER: agent_core
           POSTGRES_PASSWORD: agent_core
           POSTGRES_DB: agent_core
-        ports: ["55432:5432"]
+        # Puerto del host dinámico: no choca con un job del CI en otro runner del host.
+        ports: ["5432"]
         options: >-
           --health-cmd "pg_isready -U agent_core"
           --health-interval 5s
           --health-retries 12
       redis:
         image: redis:7-alpine
-        ports: ["56379:6379"]
+        ports: ["6379"]
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-retries 12
     env:
-      DATABASE_URL: postgresql+asyncpg://app_runtime:app_runtime@localhost:55432/agent_core
-      MIGRATIONS_DATABASE_URL: postgresql+asyncpg://agent_core:agent_core@localhost:55432/agent_core
-      REDIS_URL: redis://localhost:56379/0
       MASTER_ENCRYPTION_KEY: GpsiZ2sgMd4SvLHGp4Bs5xdaQLlQ1cByyK6DCNxVwL4=
       # Mismos que `ci.yml`: sin estas, los escenarios fallan al cifrar contenido.
       TOKEN_MASTER_KEYS: '{"k1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}'
@@ -42,24 +48,18 @@ jobs:
       APP_ENV: development
     steps:
       - uses: actions/checkout@v7
-      - name: Entorno Python (self-hosted)
-        # Mismo motivo que el gate: el runner es Linux Mint y setup-python no
-        # tiene builds para esa distro → venv con el Python del runner.
+
+      - name: URLs del stack (puertos dinámicos)
         run: |
-          python3 --version
-          python3 -c "import sys; assert sys.version_info >= (3, 12), 'Se requiere Python 3.12+'"
-          python3 -m venv .venv-ci
-          echo "$PWD/.venv-ci/bin" >> "$GITHUB_PATH"
-          .venv-ci/bin/python -m pip install --upgrade pip
-      - name: Instalar
-        run: |
-          pip install -e packages/contracts
-          pip install -e ".[dev]"
-          bash scripts/install_plugins.sh
-      - name: Postgres del CI con PostGIS (lo exige pack-cobranza, ADR-0058)
-        run: |
-          docker exec ${{ job.services.postgres.id }} \
-            bash -c "apt-get update -qq && apt-get install -y -qq postgresql-16-postgis-3"
+          PG=${{ job.services.postgres.ports['5432'] }}
+          RD=${{ job.services.redis.ports['6379'] }}
+          {
+            echo "DATABASE_URL=postgresql+asyncpg://app_runtime:app_runtime@localhost:${PG}/agent_core"
+            echo "MIGRATIONS_DATABASE_URL=postgresql+asyncpg://agent_core:agent_core@localhost:${PG}/agent_core"
+            echo "REDIS_URL=redis://localhost:${RD}/0"
+          } >> "$GITHUB_ENV"
+
+      - uses: ./.github/actions/preparar-entorno
 
       - name: Migrar y sembrar
         run: |

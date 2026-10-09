@@ -22,6 +22,7 @@ from _api_helpers import ADMIN_EMAIL, uniq
 from sqlalchemy import select
 
 pytestmark = [
+    pytest.mark.aislamiento,  # subconjunto de las PRs a develop (ADR-0120)
     pytest.mark.asyncio(loop_scope="session"),
     pytest.mark.skipif(
         os.environ.get("AGENT_CORE_INTEGRATION") != "1",
