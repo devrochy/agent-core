@@ -6,6 +6,7 @@ sesión de admin). Reemplaza el intake propuesto en ADR-0055 (que usaba
 
 `POST /leads/{slug}`:
 
+0. Rate limit por (tenant, IP) en Redis (`_rate_limited`): 429 `rate_limited`.
 1. Resuelve el tenant por `slug` (`core.tenants.resolve_tenant_by_slug`).
 2. Exige que el intake esté habilitado en la config del pack **de ese tenant**
    (`CRMConfig.lead_intake_enabled`).
@@ -23,11 +24,14 @@ Salida a red (ADR-0052): la validación de Turnstile no usa `httpx` directo, sin
 
 from __future__ import annotations
 
+import re
 import time
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
+from redis.exceptions import RedisError
 from sqlalchemy import select
 
 from core.agents.spec import enabled_packs, load_active_spec
@@ -35,7 +39,9 @@ from core.db.models import Customer
 from core.db.session import get_session
 from core.gateway.webhook_verify import constant_time_equal
 from core.mcp.types import plugin_http
+from core.memory.working import get_redis
 from core.plugin_manager import plugin_manager
+from core.security.login_lockout import client_ip
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from core.tenants import resolve_tenant_by_slug
@@ -52,19 +58,50 @@ TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverif
 NETWORK = ("challenges.cloudflare.com",)
 TURNSTILE_TIMEOUT = 8.0
 
-# Rate limit en proceso (por instancia). El intake es server→server; suficiente
-# como primera barrera. Un abuso sostenido se corta en el WAF/proxy externo.
+# Rate limit por (tenant, IP) en Redis, compartido entre instancias. La clave
+# lleva el `slug` (1:1 con el tenant) y no el `tenant_id` porque el límite
+# corre ANTES de tocar la base: resolver el tenant primero costaría una query
+# por request, justo lo que el límite protege. Ventana deslizante con un sorted
+# set; el `EXPIRE` borra la clave de una IP que deja de mandar (sin crecer en
+# memoria). El intake es server→server; un abuso sostenido se corta en el
+# WAF/proxy externo.
 _RATE_LIMIT = 30
 _RATE_WINDOW_S = 60
-_hits: dict[str, list[float]] = {}
+_RATE_KEY_PREFIX = "rl:pack_commerce:leads"
+_SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+_clock = time.time
 
 
-def _rate_limited(ip: str) -> bool:
-    now = time.time()
-    recent = [t for t in _hits.get(ip, []) if now - t < _RATE_WINDOW_S]
-    recent.append(now)
-    _hits[ip] = recent
-    return len(recent) > _RATE_LIMIT
+def _rate_key(slug: str, ip: str) -> str:
+    # Un slug que no puede ser de ningún tenant no entra a la clave tal cual:
+    # el path es input del cliente y no debe crear claves arbitrarias.
+    slug_part = slug if _SLUG_RE.fullmatch(slug or "") else "_invalid"
+    return f"{_RATE_KEY_PREFIX}:{slug_part}:{ip}"
+
+
+async def _rate_limited(slug: str, ip: str) -> bool:
+    """True si `ip` superó el cupo de este tenant en la ventana.
+
+    Los hits rechazados también cuentan (igual que antes). Si Redis no responde,
+    deja pasar (fail-open): el secreto del intake sigue siendo la barrera real
+    y perder leads por una caída de Redis sería peor.
+    """
+    now = _clock()
+    key = _rate_key(slug, ip)
+    try:
+        async with get_redis().pipeline(transaction=True) as pipe:
+            pipe.zremrangebyscore(key, "-inf", now - _RATE_WINDOW_S)
+            pipe.zadd(key, {f"{now:.6f}:{uuid.uuid4().hex}": now})
+            # Tope de tamaño: alcanza con guardar los `_RATE_LIMIT + 1` hits más
+            # recientes para decidir; una inundación no infla el set.
+            pipe.zremrangebyrank(key, 0, -(_RATE_LIMIT + 2))
+            pipe.zcard(key)
+            pipe.expire(key, _RATE_WINDOW_S)
+            _, _, _, count, _ = await pipe.execute()
+    except RedisError as exc:
+        log.warning("lead_intake_rate_limit_unavailable", error=str(exc))
+        return False
+    return int(count) > _RATE_LIMIT
 
 
 def _norm(value: Any) -> str:
@@ -124,8 +161,8 @@ async def intake_lead(
     request: Request,
     x_intake_secret: str | None = Header(default=None),
 ) -> JSONResponse:
-    ip = request.client.host if request.client else "unknown"
-    if _rate_limited(ip):
+    ip = client_ip(request)  # IP real detrás de proxies de confianza, no la del proxy
+    if await _rate_limited(slug, ip):
         return JSONResponse({"error": "rate_limited"}, status_code=429)
 
     try:
