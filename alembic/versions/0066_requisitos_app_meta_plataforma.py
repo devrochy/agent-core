@@ -13,7 +13,7 @@ exige el rol master. Sin `DELETE` para `app_runtime`: desmarcar es `done = false
 Tabla nueva y vacía: sin reescritura ni bloqueo largo.
 
 Revision ID: 0066
-Revises: 0063
+Revises: 0065
 Create Date: 2026-10-09
 """
 
@@ -25,7 +25,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from alembic import op
 
 revision = "0066"
-down_revision = "0063"
+down_revision = "0065"
 branch_labels = None
 depends_on = None
 

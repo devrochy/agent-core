@@ -113,16 +113,34 @@ def test_ninguna_tool_se_llama_como_un_alta(tools: list) -> None:  # type: ignor
 def test_el_consumidor_solo_se_dispara_por_el_outbox() -> None:
     """El aprovisionamiento solo se registra como handler de `subscription.activated` en el
     despachador: ninguna ruta de la API lo importa (la API de plataforma del master sí usa
-    `core.alta_negocio`, con su sesión humana)."""
+    `core.alta_negocio`, con su sesión humana). Aprobar un alta en revisión (ADR-0125) emite
+    `provisioning.alta_aprobada` y la corre el worker."""
     from core.events import core_handlers
-    from core.provisioning.consumer import on_subscription_activated
-    from core.shared.events import ON_SUBSCRIPTION_ACTIVATED
+    from core.provisioning.consumer import on_alta_aprobada, on_subscription_activated
+    from core.shared.events import ON_ALTA_APROBADA, ON_SUBSCRIPTION_ACTIVATED
 
     assert (ON_SUBSCRIPTION_ACTIVATED, on_subscription_activated) in core_handlers._HANDLERS
     raiz = Path(__file__).resolve().parents[1] / "core" / "api"
+    assert (ON_ALTA_APROBADA, on_alta_aprobada) in core_handlers._HANDLERS
     for archivo in raiz.rglob("*.py"):
         for prohibido in ("core.provisioning.consumer", "core.provisioning.owner"):
             assert not _importa(archivo, prohibido), f"{archivo} importa {prohibido}"
+
+
+def test_las_rutas_del_alta_automatica_son_solo_del_master() -> None:
+    """Cada ruta de `platform_altas` (interruptor, documentos, aprobar, descartar) exige el
+    rol master antes de hacer nada."""
+    from fastapi.routing import APIRoute
+
+    from core.api.routers import platform_altas
+
+    rutas = [r for r in platform_altas.router.routes if isinstance(r, APIRoute)]
+    assert rutas
+    for ruta in rutas:
+        fuente = inspect.getsource(ruta.endpoint)
+        cuerpo = fuente.split('"""')[-1] if '"""' in fuente else fuente
+        primera = next(linea.strip() for linea in cuerpo.splitlines()[1:] if linea.strip())
+        assert primera == "_require_master(principal)", f"{ruta.path}: {primera}"
 
 
 def test_onboard_tenant_ya_no_esta_en_core_onboarding() -> None:

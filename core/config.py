@@ -235,6 +235,13 @@ class Settings(BaseSettings):
     # Va en el worker (ahí corre el despachador del outbox). No hay token de servicio.
     # Desde HU-SH-04 (ADR-0123) también es el canal asistente del cobro de la plataforma.
     provisioning_seller_tenants: str = Field(default="", alias="PROVISIONING_SELLER_TENANTS")
+    # Antiabuso del alta (HU-SH-07, ADR-0125). Pedidos de planes de la plataforma por hora
+    # desde un mismo origen (el cliente del chat): pasado el cupo, se frenan. Va en la app,
+    # donde corren las tools.
+    alta_pedidos_por_hora: int = Field(default=3, ge=1, le=100, alias="ALTA_PEDIDOS_POR_HORA")
+    # Pedidos de alta de la misma persona (cliente, teléfono o documento) en 24 h a partir de
+    # los cuales el alta va a revisión humana («muchos intentos»). Va en el worker.
+    alta_intentos_revision: int = Field(default=3, ge=2, le=100, alias="ALTA_INTENTOS_REVISION")
 
     # --- Observabilidad ---
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")

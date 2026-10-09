@@ -32,6 +32,7 @@ from core.api.routers import (
     onboarding,
     plan,
     platform,
+    platform_altas,
     platform_meta_es,
     playground,
     plugins,
@@ -69,6 +70,7 @@ api_router.include_router(invitations.router)
 api_router.include_router(costs.router)
 api_router.include_router(plan.router)
 api_router.include_router(platform.router)
+api_router.include_router(platform_altas.router)
 api_router.include_router(platform_meta_es.router)
 api_router.include_router(settings.router)
 api_router.include_router(domain_events.router)

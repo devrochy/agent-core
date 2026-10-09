@@ -27,6 +27,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from _alta_helpers import aceptar_terminos
 from _api_helpers import uniq
 from sqlalchemy import func, select
 
@@ -112,6 +113,7 @@ async def _pedido_de_plan(
     customer_id: uuid.UUID | None = None,
     pagado: bool = True,
     activar: bool = True,
+    aceptar: bool = True,
 ) -> tuple[str, uuid.UUID]:
     """Variante de un plan de la plataforma + pedido pagado; activarlo emite el evento."""
     from pack_commerce.models import Order, OrderItem, Product, ProductVariant
@@ -160,7 +162,11 @@ async def _pedido_de_plan(
             await s.flush()
             if activar:
                 assert await activar_planes_del_pedido(s, order) == 1
-            return order.public_order_number, customer_id
+            referencia = order.public_order_number
+    if aceptar:
+        # HU-SH-07: como `crear_pedido`, el pedido lleva la aceptación de los términos.
+        await aceptar_terminos(tid, referencia, customer_id=customer_id, gratis=precio == 0)
+    return referencia, customer_id
 
 
 async def _cliente_con_whatsapp(tid: uuid.UUID) -> uuid.UUID:

@@ -236,10 +236,11 @@ En test se puede encender para verificar.
 - Un cambio de plan desde el asistente no cambia todavía el plan del negocio ni aplica su preset
   pendiente (HU-SH-04). Por eso no se enciende en producción antes (§ 6).
 - Faltan los controles de HU-SH-07 (términos, interruptor, límites de tasa). Hasta entonces, la allowlist
-  vacía es el interruptor.
+  vacía es el interruptor. *(Resuelto en ADR-0125: interruptor en Plataforma, aceptación registrada, un
+  Free por persona, señales de riesgo y cupo por origen.)*
 - **Un Free por cliente y por correo no frena a quien rota ambos.** Con un número de WhatsApp y un correo
   nuevos en cada alta se sigue pudiendo crear un Free tras otro. Cerrarlo (documento, verificación,
-  límites por origen) le toca a HU-SH-07.
+  límites por origen) le toca a HU-SH-07. *(ADR-0125 lo cierra por teléfono o documento.)*
 
 **Qué haría que revisáramos esto:**
 - un segundo vendedor con reglas distintas (pasaría a config por vendedor);

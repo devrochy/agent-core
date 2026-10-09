@@ -6108,6 +6108,517 @@
         }
       }
     },
+    "/api/v1/admin/platform/altas-automaticas": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Listar Vendedores",
+        "description": "Cada negocio de la allowlist con su interruptor, documentos y altas en revisión.",
+        "operationId": "listar_vendedores_api_v1_admin_platform_altas_automaticas_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/VendedorAltas"
+                  },
+                  "title": "Response Listar Vendedores Api V1 Admin Platform Altas Automaticas Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/altas-automaticas/{vendedor_id}/interruptor": {
+      "put": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Fijar Interruptor",
+        "description": "Pausa o reanuda el alta automática. Pausada, cada alta nueva queda en revisión.",
+        "operationId": "fijar_interruptor_api_v1_admin_platform_altas_automaticas__vendedor_id__interruptor_put",
+        "parameters": [
+          {
+            "name": "vendedor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Vendedor Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InterruptorIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VendedorAltas"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/altas-automaticas/{vendedor_id}/documentos": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Historial De Documentos",
+        "description": "Todas las versiones publicadas, la más nueva primero.",
+        "operationId": "historial_de_documentos_api_v1_admin_platform_altas_automaticas__vendedor_id__documentos_get",
+        "parameters": [
+          {
+            "name": "vendedor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Vendedor Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentoLegalOut"
+                  },
+                  "title": "Response Historial De Documentos Api V1 Admin Platform Altas Automaticas  Vendedor Id  Documentos Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Publicar Documento",
+        "description": "Publica una versión nueva de un documento legal, vigente desde ya. Las altas que\nse pidan desde ahora aceptan esta versión; las anteriores conservan la suya.",
+        "operationId": "publicar_documento_api_v1_admin_platform_altas_automaticas__vendedor_id__documentos_post",
+        "parameters": [
+          {
+            "name": "vendedor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Vendedor Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentoLegalIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentoLegalOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/altas-automaticas/{vendedor_id}/altas": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Listar Altas",
+        "description": "Altas del vendedor, las más nuevas primero (por defecto, las que están en revisión).",
+        "operationId": "listar_altas_api_v1_admin_platform_altas_automaticas__vendedor_id__altas_get",
+        "parameters": [
+          {
+            "name": "vendedor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Vendedor Id"
+            }
+          },
+          {
+            "name": "estado",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "en_curso",
+                    "completado",
+                    "revision",
+                    "omitido"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "const": "todas",
+                  "type": "string"
+                }
+              ],
+              "default": "revision",
+              "title": "Estado"
+            }
+          },
+          {
+            "name": "limite",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limite"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AltaOut"
+                  },
+                  "title": "Response Listar Altas Api V1 Admin Platform Altas Automaticas  Vendedor Id  Altas Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/altas-automaticas/{vendedor_id}/altas/{referencia}/aprobar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Aprobar",
+        "description": "Aprueba un alta en revisión: queda `en_curso` y el worker la corre en segundos, sin\nlos controles de riesgo que la frenaron (por el outbox, con sus reintentos).",
+        "operationId": "aprobar_api_v1_admin_platform_altas_automaticas__vendedor_id__altas__referencia__aprobar_post",
+        "parameters": [
+          {
+            "name": "vendedor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Vendedor Id"
+            }
+          },
+          {
+            "name": "referencia",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Referencia"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AltaOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/altas-automaticas/{vendedor_id}/altas/{referencia}/descartar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Descartar",
+        "description": "Cierra un alta en revisión sin crear el negocio.",
+        "operationId": "descartar_api_v1_admin_platform_altas_automaticas__vendedor_id__altas__referencia__descartar_post",
+        "parameters": [
+          {
+            "name": "vendedor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Vendedor Id"
+            }
+          },
+          {
+            "name": "referencia",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Referencia"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DescartarIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AltaOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/platform/meta-app": {
       "get": {
         "tags": [
@@ -13101,6 +13612,60 @@
         }
       }
     },
+    "/api/v1/admin/platform/meta-app/embedded-signup/step": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Embedded Signup Step",
+        "description": "Marca o desmarca un requisito manual (con nota), guardando quién y cuándo.",
+        "operationId": "embedded_signup_step_api_v1_admin_platform_meta_app_embedded_signup_step_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EsStepIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/meta/wizard/cancel": {
       "post": {
         "tags": [
@@ -13162,15 +13727,14 @@
         }
       }
     },
-    "/api/v1/admin/meta/wizard/resume": {
-      "post": {
+    "/api/v1/admin/platform/meta-app/embedded-signup": {
+      "get": {
         "tags": [
           "api",
-          "admin · wizard whatsapp"
+          "admin · plataforma"
         ],
-        "summary": "Wizard Resume",
-        "description": "Reintenta el alta desde el paso donde quedó (después del popup).",
-        "operationId": "wizard_resume_api_v1_admin_meta_wizard_resume_post",
+        "summary": "Embedded Signup Requirements",
+        "operationId": "embedded_signup_requirements_api_v1_admin_platform_meta_app_embedded_signup_get",
         "parameters": [
           {
             "name": "X-Tenant-Id",
@@ -13189,23 +13753,13 @@
             }
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WizardStepIn"
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WizardSessionOut"
+                  "$ref": "#/components/schemas/EmbeddedSignupRequirements"
                 }
               }
             }
@@ -13350,65 +13904,15 @@
         }
       }
     },
-    "/api/v1/admin/platform/meta-app/embedded-signup": {
-      "get": {
-        "tags": [
-          "api",
-          "admin · plataforma"
-        ],
-        "summary": "Embedded Signup Requirements",
-        "operationId": "embedded_signup_requirements_api_v1_admin_platform_meta_app_embedded_signup_get",
-        "parameters": [
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmbeddedSignupRequirements"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/platform/meta-app/embedded-signup/step": {
+    "/api/v1/admin/meta/wizard/resume": {
       "post": {
         "tags": [
           "api",
-          "admin · plataforma"
+          "admin · wizard whatsapp"
         ],
-        "summary": "Embedded Signup Step",
-        "description": "Marca o desmarca un requisito manual (con nota), guardando quién y cuándo.",
-        "operationId": "embedded_signup_step_api_v1_admin_platform_meta_app_embedded_signup_step_post",
+        "summary": "Wizard Resume",
+        "description": "Reintenta el alta desde el paso donde quedó (después del popup).",
+        "operationId": "wizard_resume_api_v1_admin_meta_wizard_resume_post",
         "parameters": [
           {
             "name": "X-Tenant-Id",
@@ -13432,14 +13936,21 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/EsStepIn"
+                "$ref": "#/components/schemas/WizardStepIn"
               }
             }
           }
         },
         "responses": {
-          "204": {
-            "description": "Successful Response"
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WizardSessionOut"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -24099,85 +24610,399 @@
         ],
         "title": "Payment"
       },
-      "EmbeddedSignupRequirements": {
+      "AltaOut": {
         "properties": {
-          "app_id": {
+          "referencia": {
             "type": "string",
-            "title": "App Id"
+            "title": "Referencia"
           },
-          "config_id": {
+          "estado": {
             "type": "string",
-            "title": "Config Id"
+            "title": "Estado"
           },
-          "graph_api_version": {
-            "type": "string",
-            "title": "Graph Api Version"
-          },
-          "ready": {
-            "type": "boolean",
-            "title": "Ready"
-          },
-          "automatic": {
-            "items": {
-              "$ref": "#/components/schemas/EsAutomaticCheck"
-            },
-            "type": "array",
-            "title": "Automatic"
-          },
-          "manual": {
-            "items": {
-              "$ref": "#/components/schemas/EsManualStep"
-            },
-            "type": "array",
-            "title": "Manual"
-          }
-        },
-        "type": "object",
-        "required": [
-          "app_id",
-          "config_id",
-          "graph_api_version",
-          "ready",
-          "automatic",
-          "manual"
-        ],
-        "title": "EmbeddedSignupRequirements",
-        "description": "`ready`: todo lo automático en verde y todo lo manual confirmado."
-      },
-      "EsAutomaticCheck": {
-        "properties": {
-          "key": {
-            "type": "string",
-            "title": "Key"
-          },
-          "label": {
-            "type": "string",
-            "title": "Label"
-          },
-          "ok": {
+          "motivo": {
             "anyOf": [
               {
-                "type": "boolean"
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Ok"
+            "title": "Motivo"
           },
-          "detail": {
+          "intentos": {
+            "type": "integer",
+            "title": "Intentos"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "negocio_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Negocio Slug"
+          },
+          "aprobada": {
+            "type": "boolean",
+            "title": "Aprobada"
+          },
+          "created_at": {
             "type": "string",
-            "title": "Detail"
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
           }
         },
         "type": "object",
         "required": [
-          "key",
-          "label",
-          "ok",
-          "detail"
+          "referencia",
+          "estado",
+          "motivo",
+          "intentos",
+          "plan_id",
+          "negocio_slug",
+          "aprobada",
+          "created_at",
+          "updated_at"
         ],
-        "title": "EsAutomaticCheck"
+        "title": "AltaOut"
+      },
+      "DescartarIn": {
+        "properties": {
+          "motivo": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 3,
+            "title": "Motivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "motivo"
+        ],
+        "title": "DescartarIn"
+      },
+      "DocumentoLegalIn": {
+        "properties": {
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "terminos",
+              "privacidad",
+              "dpa"
+            ],
+            "title": "Tipo"
+          },
+          "version": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Version"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 10,
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tipo",
+          "version",
+          "url"
+        ],
+        "title": "DocumentoLegalIn"
+      },
+      "DocumentoLegalOut": {
+        "properties": {
+          "tipo": {
+            "type": "string",
+            "title": "Tipo"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "vigente_desde": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Vigente Desde"
+          },
+          "publicado_por": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publicado Por"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tipo",
+          "nombre",
+          "version",
+          "url",
+          "vigente_desde"
+        ],
+        "title": "DocumentoLegalOut"
+      },
+      "Interruptor": {
+        "properties": {
+          "pausado": {
+            "type": "boolean",
+            "title": "Pausado"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo"
+          },
+          "por": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Por"
+          },
+          "en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "En"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pausado"
+        ],
+        "title": "Interruptor"
+      },
+      "InterruptorIn": {
+        "properties": {
+          "pausado": {
+            "type": "boolean",
+            "title": "Pausado"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pausado"
+        ],
+        "title": "InterruptorIn"
+      },
+      "VendedorAltas": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "activo": {
+            "type": "boolean",
+            "title": "Activo"
+          },
+          "interruptor": {
+            "$ref": "#/components/schemas/Interruptor"
+          },
+          "documentos": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentoLegalOut"
+            },
+            "type": "array",
+            "title": "Documentos"
+          },
+          "documentos_faltantes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Documentos Faltantes"
+          },
+          "en_revision": {
+            "type": "integer",
+            "title": "En Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "activo",
+          "interruptor",
+          "documentos",
+          "documentos_faltantes",
+          "en_revision"
+        ],
+        "title": "VendedorAltas"
+      },
+      "TestMessageOut": {
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "title": "Message Id"
+          },
+          "template": {
+            "$ref": "#/components/schemas/TestTemplate"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message_id",
+          "template"
+        ],
+        "title": "TestMessageOut"
+      },
+      "WizardCancel": {
+        "properties": {
+          "current_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Step"
+          },
+          "with_error": {
+            "type": "boolean",
+            "title": "With Error",
+            "default": false
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          }
+        },
+        "type": "object",
+        "title": "WizardCancel"
+      },
+      "WizardErrorOut": {
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "at_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At Step"
+          },
+          "fbtrace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fbtrace Id"
+          }
+        },
+        "type": "object",
+        "title": "WizardErrorOut",
+        "description": "Último error del wizard, sin nada sensible: código, mensaje y paso. `fbtrace_id` es el\nidentificador de Meta para soporte."
       },
       "EsManualStep": {
         "properties": {
@@ -24237,212 +25062,50 @@
         ],
         "title": "EsManualStep"
       },
-      "EsStepIn": {
+      "EmbeddedSignupRequirements": {
         "properties": {
-          "key": {
+          "app_id": {
             "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Key"
+            "title": "App Id"
           },
-          "done": {
+          "config_id": {
+            "type": "string",
+            "title": "Config Id"
+          },
+          "graph_api_version": {
+            "type": "string",
+            "title": "Graph Api Version"
+          },
+          "ready": {
             "type": "boolean",
-            "title": "Done"
+            "title": "Ready"
           },
-          "notes": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 500
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Notes"
-          }
-        },
-        "type": "object",
-        "required": [
-          "key",
-          "done"
-        ],
-        "title": "EsStepIn"
-      },
-      "TestMessageIn": {
-        "properties": {
-          "to": {
-            "type": "string",
-            "maxLength": 24,
-            "minLength": 8,
-            "title": "To"
-          },
-          "template_name": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 512
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Template Name"
-          },
-          "language": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 16
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Language"
-          }
-        },
-        "type": "object",
-        "required": [
-          "to"
-        ],
-        "title": "TestMessageIn"
-      },
-      "TestMessageOptions": {
-        "properties": {
-          "connection_id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Connection Id"
-          },
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "phone_number_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Phone Number Id"
-          },
-          "display_phone_number": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Display Phone Number"
-          },
-          "templates": {
+          "automatic": {
             "items": {
-              "$ref": "#/components/schemas/TestTemplate"
+              "$ref": "#/components/schemas/EsAutomaticCheck"
             },
             "type": "array",
-            "title": "Templates"
+            "title": "Automatic"
           },
-          "can_send": {
-            "type": "boolean",
-            "title": "Can Send"
-          },
-          "blocked_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Blocked Reason"
+          "manual": {
+            "items": {
+              "$ref": "#/components/schemas/EsManualStep"
+            },
+            "type": "array",
+            "title": "Manual"
           }
         },
         "type": "object",
         "required": [
-          "connection_id",
-          "status",
-          "phone_number_id",
-          "display_phone_number",
-          "templates",
-          "can_send",
-          "blocked_reason"
+          "app_id",
+          "config_id",
+          "graph_api_version",
+          "ready",
+          "automatic",
+          "manual"
         ],
-        "title": "TestMessageOptions"
-      },
-      "TestMessageOut": {
-        "properties": {
-          "message_id": {
-            "type": "string",
-            "title": "Message Id"
-          },
-          "template": {
-            "$ref": "#/components/schemas/TestTemplate"
-          }
-        },
-        "type": "object",
-        "required": [
-          "message_id",
-          "template"
-        ],
-        "title": "TestMessageOut"
-      },
-      "TestTemplate": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "language": {
-            "type": "string",
-            "title": "Language"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "language"
-        ],
-        "title": "TestTemplate"
-      },
-      "WizardCancel": {
-        "properties": {
-          "current_step": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Current Step"
-          },
-          "with_error": {
-            "type": "boolean",
-            "title": "With Error",
-            "default": false
-          },
-          "at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "At"
-          }
-        },
-        "type": "object",
-        "title": "WizardCancel"
+        "title": "EmbeddedSignupRequirements",
+        "description": "`ready`: todo lo automático en verde y todo lo manual confirmado."
       },
       "WizardCancelIn": {
         "properties": {
@@ -24519,56 +25182,197 @@
         "title": "WizardCancelIn",
         "description": "Evento `CANCEL` del popup (o el popup cerrado sin `code`). Los textos vienen de Meta a\ntravés del navegador: se guardan recortados, como dato."
       },
-      "WizardErrorOut": {
+      "EsStepIn": {
         "properties": {
-          "code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Code"
+          "key": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Key"
           },
-          "message": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Message"
+          "done": {
+            "type": "boolean",
+            "title": "Done"
           },
-          "at_step": {
+          "notes": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "maxLength": 500
               },
               {
                 "type": "null"
               }
             ],
-            "title": "At Step"
-          },
-          "fbtrace_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Fbtrace Id"
+            "title": "Notes"
           }
         },
         "type": "object",
-        "title": "WizardErrorOut",
-        "description": "Último error del wizard, sin nada sensible: código, mensaje y paso. `fbtrace_id` es el\nidentificador de Meta para soporte."
+        "required": [
+          "key",
+          "done"
+        ],
+        "title": "EsStepIn"
+      },
+      "EsAutomaticCheck": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "ok",
+          "detail"
+        ],
+        "title": "EsAutomaticCheck"
+      },
+      "TestMessageOptions": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "phone_number_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone Number Id"
+          },
+          "display_phone_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Phone Number"
+          },
+          "templates": {
+            "items": {
+              "$ref": "#/components/schemas/TestTemplate"
+            },
+            "type": "array",
+            "title": "Templates"
+          },
+          "can_send": {
+            "type": "boolean",
+            "title": "Can Send"
+          },
+          "blocked_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "status",
+          "phone_number_id",
+          "display_phone_number",
+          "templates",
+          "can_send",
+          "blocked_reason"
+        ],
+        "title": "TestMessageOptions"
+      },
+      "TestMessageIn": {
+        "properties": {
+          "to": {
+            "type": "string",
+            "maxLength": 24,
+            "minLength": 8,
+            "title": "To"
+          },
+          "template_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Name"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          }
+        },
+        "type": "object",
+        "required": [
+          "to"
+        ],
+        "title": "TestMessageIn"
+      },
+      "TestTemplate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "language"
+        ],
+        "title": "TestTemplate"
       }
     }
   }
