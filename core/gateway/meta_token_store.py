@@ -85,7 +85,7 @@ async def get_token(
             await session.execute(
                 select(MetaToken).where(
                     # Filtro explícito además de RLS y del AAD: el webhook elige con esta
-                    # lectura el secreto de cada grupo (ADR-0125).
+                    # lectura el secreto de cada grupo (ADR-0126).
                     MetaToken.tenant_id == tid,
                     MetaToken.connection_id == connection_id,
                     MetaToken.kind == kind,

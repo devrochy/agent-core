@@ -1,4 +1,4 @@
-"""Quién firmó el webhook y qué grupos autoriza (ADR-0100, ADR-0125 / HU-CONN-05).
+"""Quién firmó el webhook y qué grupos autoriza (ADR-0100, ADR-0126 / HU-CONN-05).
 
 Dos bugs reales que estos tests cuidan:
 - 2026-09-29: la ruta `POST /webhooks/whatsapp` validaba solo con el App Secret del
@@ -391,7 +391,7 @@ async def test_un_payload_que_no_es_objeto_se_ignora(monkeypatch) -> None:
     assert r.status_code == 200 and b"ignored" in r.body
 
 
-# ------------------------------------------------------------------ rechazo previo (ADR-0125)
+# ------------------------------------------------------------------ rechazo previo (ADR-0126)
 def _por_grupo(n: int) -> dict:
     return {(f"waba-{i}", f"phone-{i}"): [] for i in range(n)}
 

@@ -1,6 +1,6 @@
 ## Webhook y secreto por conexión (2026-10-09)
 
-- HU-CONN-05 (ADR-0125). Un negocio con varias conexiones de WhatsApp (una BYOK con su app y otra de
+- HU-CONN-05 (ADR-0126). Un negocio con varias conexiones de WhatsApp (una BYOK con su app y otra de
   Embedded Signup, o dos apps propias) recibe de todas: cada mensaje se verifica con el App Secret de la
   conexión dueña de su número o WABA (`core/gateway/webhook_secrets.py`). Antes había un solo secreto por
   negocio y la otra conexión daba 401.

@@ -222,7 +222,7 @@ def platform_app_secret() -> str:
     """App Secret de la app de la plataforma (`.env`): el único que puede autorizar
     eventos de cualquier negocio en el webhook (ADR-0100), porque ningún negocio lo
     conoce. Única fuente de este criterio. Los secretos propios se resuelven por
-    conexión, en `core/gateway/webhook_secrets.py` (HU-CONN-05, ADR-0125)."""
+    conexión, en `core/gateway/webhook_secrets.py` (HU-CONN-05, ADR-0126)."""
     settings = get_settings()
     return settings.whatsapp_app_secret or settings.meta_app_secret or ""
 

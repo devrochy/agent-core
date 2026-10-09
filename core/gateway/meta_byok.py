@@ -20,7 +20,7 @@ seguro.
 registra con `settings.whatsapp_verify_token` (global). Si el admin
 generó/escribió uno propio en el paso de webhook del wizard, se guarda acá
 y es el que se registra y el que el handshake acepta para esa conexión
-(`webhook_secrets.verify_tokens_aceptados`, ADR-0125).
+(`webhook_secrets.verify_tokens_aceptados`, ADR-0126).
 """
 
 from __future__ import annotations
@@ -396,7 +396,7 @@ async def _rollback_failed_alta(
 # el secreto de la app. `revoked` (pausada a mano) también, pero solo como último recurso
 # (ADR-0122): su entrada se verifica y se guarda sin IA en vez de dar 401. Fuera quedan
 # `draft` (sin credenciales) y las borradas (`deleted_at`). El webhook verifica cada grupo
-# con el secreto de las conexiones en estos estados dueñas de sus activos (ADR-0125).
+# con el secreto de las conexiones en estos estados dueñas de sus activos (ADR-0126).
 ESTADOS_CON_CREDENCIAL = ("pending", "connected", "degraded", "error", "revoked")
 
 
@@ -404,7 +404,7 @@ async def _resolve_byok_token(tenant_id: uuid.UUID, kind: str) -> str | None:
     """Token (del `kind` pedido) de UNA `MetaConnection` de WhatsApp del tenant: la que
     gana el orden de abajo. Hoy solo para el `verify_token` del self-check del preflight;
     la firma del webhook ya no sale de aquí sino de la conexión dueña de cada grupo
-    (`webhook_secrets`, ADR-0125), y el handshake acepta el token de cada conexión.
+    (`webhook_secrets`, ADR-0126), y el handshake acepta el token de cada conexión.
 
     `None` si el tenant no tiene una conexión (o está a mitad de guardarse) o si
     no guardó ese token -- el llamador decide el fallback. Filtra `tenant_id`

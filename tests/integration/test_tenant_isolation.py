@@ -239,7 +239,7 @@ async def test_meta_schema_nuevo_aislado_por_tenant(moto_setup) -> None:
         # RLS ya esconde la fila (recién verificado arriba); además, aunque
         # alguien pasara el connection_id correcto pero un tenant_id explícito
         # equivocado a get_token (ej. un bug de contexto), el WHERE filtra
-        # `tenant_id` (ADR-0125) y, si no, el AAD no matchea (tercer cinturón,
+        # `tenant_id` (ADR-0126) y, si no, el AAD no matchea (tercer cinturón,
         # tests/test_crypto_envelope.py::test_aad_ata_el_ciphertext_a_la_fila).
         async with tenant_scope(t1):
             leido = await meta_token_store.get_token(conn_id, "app_access", f"app-{suffix}", tenant_id=moto)

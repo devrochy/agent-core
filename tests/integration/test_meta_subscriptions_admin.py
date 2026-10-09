@@ -177,6 +177,6 @@ async def test_listado_no_expone_secretos(app_client) -> None:
     assert "app_secret" not in body
     assert "verify_token" not in body
     data = r.json()
-    # La URL de este negocio se muestra; la de otro negocio no (app BYOK compartida, ADR-0125).
+    # La URL de este negocio se muestra; la de otro negocio no (app BYOK compartida, ADR-0126).
     assert data["subscriptions"][0]["callback_url"] == url_propia
     assert data["subscriptions"][0]["active"] is True

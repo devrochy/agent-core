@@ -111,7 +111,7 @@ def uses_platform_app(connection: MetaConnection) -> bool:
     sí (ADR-0094). Decide quién puede tocar la suscripción de webhook de su app: la de la
     plataforma la comparten todos los negocios y solo la toca el master (HU-CONN-05).
 
-    Excepción deliberada a ADR-0094 §1 (ADR-0125): también una "BYOK" cuyo `meta_app_id` es
+    Excepción deliberada a ADR-0094 §1 (ADR-0126): también una "BYOK" cuyo `meta_app_id` es
     el de la plataforma. El wizard BYOK no lo impide, y sin esta guarda su dueño movería el
     callback de la app compartida a su slug y cortaría el webhook genérico a todos."""
     if connection.origin != "byok":
@@ -127,7 +127,7 @@ async def stored_app_secret(connection: MetaConnection) -> str | None:
     Es la única regla de dónde vive ese secreto. No es `credentials_for`: ese decide con qué
     app se LLAMA a Graph según el origen vigente, y para una BYOK tomada por Embedded Signup
     da el de la plataforma. El webhook necesita saber con qué secretos puede VENIR firmada
-    una conexión, y esa conserva el de su app vieja (ADR-0101, ADR-0125)."""
+    una conexión, y esa conserva el de su app vieja (ADR-0101, ADR-0126)."""
     return await meta_token_store.get_token(
         connection.id, APP_SECRET_KIND, connection.meta_app_id, tenant_id=connection.tenant_id
     )

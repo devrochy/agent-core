@@ -1,4 +1,4 @@
-# ADR-0125 — Webhook y secreto por conexión: cada grupo se verifica con la conexión dueña de sus activos
+# ADR-0126 — Webhook y secreto por conexión: cada grupo se verifica con la conexión dueña de sus activos
 
 - **Estado:** aceptado
 - **Fecha:** 2026-10-09

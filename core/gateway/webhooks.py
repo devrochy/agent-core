@@ -7,7 +7,7 @@ Flujo (patrón gateway -> queue -> consumer de agent-sale):
    App de Meta.
 2. Verificar la firma (HMAC-SHA256 con App Secret) y saber QUIÉN firmó: la
    plataforma autoriza cualquier grupo; el secreto de una conexión, solo los
-   grupos cuyos activos son de esa conexión (ADR-0100, ADR-0125). Un grupo que
+   grupos cuyos activos son de esa conexión (ADR-0100, ADR-0126). Un grupo que
    su conexión no firmó no se procesa.
 3. Registrar cada evento en `webhook_events` (auditoría + idempotencia por
    `(meta_app_id, external_id)`) -- si esto falla, 500 a propósito (Meta
@@ -110,7 +110,7 @@ class _Grupo:
 
 @dataclass(frozen=True)
 class Firmantes:
-    """Quién firmó el POST y qué grupos autoriza esa firma (ADR-0100, ADR-0125).
+    """Quién firmó el POST y qué grupos autoriza esa firma (ADR-0100, ADR-0126).
 
     La app de la plataforma autoriza cualquier grupo (ningún negocio conoce su secreto). El
     secreto de una conexión autoriza solo los grupos cuyos activos (número, WABA, página o
@@ -122,7 +122,7 @@ class Firmantes:
     grupos: frozenset[tuple[str, str | None]] = frozenset()
     negocios: frozenset[uuid.UUID] = frozenset()
     # ¿Algún grupo tenía un secreto propio contra el que verificar (o no se pudo leer)? Sin
-    # ninguno, un 401 es "grupo sin conexión dueña", no una firma inválida (ADR-0125).
+    # ninguno, un 401 es "grupo sin conexión dueña", no una firma inválida (ADR-0126).
     con_candidatos: bool = False
 
     def autoriza(self, grupo: _Grupo) -> bool:
@@ -167,7 +167,7 @@ def _firmo_la_plataforma(raw_body: bytes, firma: str) -> bool:
 async def _rechazo_previo(
     raw_body: bytes, firma: str, por_grupo: dict[tuple[str, str | None], list[FlattenedEvent]]
 ) -> Response | None:
-    """401 antes de rutear y de leer secretos (ADR-0125): sin un header de firma bien formado
+    """401 antes de rutear y de leer secretos (ADR-0126): sin un header de firma bien formado
     (salvo el escape de test), o con más grupos que el tope y sin la firma de la plataforma.
     Corta la amplificación: cada grupo cuesta consultas y descifrados antes del HMAC."""
     if not _FIRMA_RE.match(firma) and not _unsigned_allowed():
@@ -256,7 +256,7 @@ async def receive_whatsapp(request: Request) -> Response:
     """Endpoint genérico: puede recibir entries de VARIOS tenants en un solo POST
     (todos los que estén suscritos a la misma App de Meta). Se rutea cada grupo
     (entry, número) por separado, y cada uno se procesa solo si lo firmó la
-    plataforma o la conexión dueña de sus activos (ADR-0100, ADR-0125)."""
+    plataforma o la conexión dueña de sus activos (ADR-0100, ADR-0126)."""
     raw_body = await request.body()
     headers = {k.lower(): v for k, v in request.headers.items()}
 
@@ -422,7 +422,7 @@ async def receive_whatsapp_tenant(request: Request, slug: str) -> Response:
             # Ningún grupo es de una conexión del negocio (un número sin sincronizar, un
             # evento de prueba del panel de Meta): no hay secreto que verificar y no es una
             # firma inválida, no suma a la alerta de spoofing (contador compartido). 401 para
-            # que Meta reintente y entre cuando el número se sincronice (ADR-0125).
+            # que Meta reintente y entre cuando el número se sincronice (ADR-0126).
             log.warning("webhook_grupo_sin_conexion", tenant_id=str(tenant_id), grupos=len(grupos))
             return Response(status_code=401)
         log.warning("webhook_signature_invalid", tenant_id=str(tenant_id), grupos=len(grupos))
@@ -451,7 +451,7 @@ async def _process_payload(
 
     `firmantes` es obligatorio (falla cerrado por construcción): un grupo solo se
     procesa si lo firmó la plataforma o la conexión dueña de sus activos (ADR-0100,
-    ADR-0125). `known_tenant_id` (el negocio del slug) no atribuye nada: solo rechaza
+    ADR-0126). `known_tenant_id` (el negocio del slug) no atribuye nada: solo rechaza
     los grupos que resuelven a otro negocio; uno sin negocio resuelto no se procesa.
     `grupos`: los ya ruteados por el llamador, para no rutear dos veces.
 
@@ -542,7 +542,7 @@ async def _process_payload(
             continue
 
         if not firmantes.autoriza(grupo):
-            # Lo firmó otra conexión (ADR-0100, ADR-0125): no se procesa ni se le atribuye
+            # Lo firmó otra conexión (ADR-0100, ADR-0126): no se procesa ni se le atribuye
             # a nadie. Va antes del chequeo de facturación, que registraría la fila a
             # nombre de este negocio (`tenant_not_operational`) aunque no la mandó.
             # De otro negocio: intento de inyección o WABA suscrita a una app ajena, con

@@ -1,4 +1,4 @@
-"""HU-CONN-05: webhook y secreto por conexión (ADR-0125).
+"""HU-CONN-05: webhook y secreto por conexión (ADR-0126).
 
 Un negocio con dos conexiones de orígenes distintos (una BYOK con su app y otra de
 Embedded Signup con la app de la plataforma) recibe de las dos: cada mensaje se verifica
@@ -496,7 +496,7 @@ async def test_un_colaborador_no_registra_el_webhook(app_client, meta_falso) -> 
 
 
 async def test_una_byok_con_la_app_de_la_plataforma_solo_la_registra_el_master(app_client, meta_falso) -> None:
-    """Excepción a ADR-0094 §1 (ADR-0125): una "BYOK" con el `META_APP_ID` de la plataforma
+    """Excepción a ADR-0094 §1 (ADR-0126): una "BYOK" con el `META_APP_ID` de la plataforma
     movería el callback de la app compartida a su slug."""
     tid, _ = await _negocio("reg-byok-plat")
     cid, _, _ = await _conexion(tid, origin="byok", app_id=PLATAFORMA_APP, app_secret=PLATAFORMA_SECRETO)

@@ -3,7 +3,7 @@
 Genérico: se crea un tenant desechable, se registra su webhook (handshake GET) y
 se verifica que los mensajes POST se procesan con el tenant resuelto por slug.
 
-Desde HU-CONN-05 (ADR-0125) la firma de cada número se verifica con el secreto de SU
+Desde HU-CONN-05 (ADR-0126) la firma de cada número se verifica con el secreto de SU
 conexión, y un número que no es de ninguna conexión del negocio no se procesa: los
 payloads de estos tests usan números registrados.
 """
@@ -371,7 +371,7 @@ async def test_tone_invalido_rechazado() -> None:
         )
 
 
-# ------------------------------------------------------------------ firma por conexión (ADR-0125)
+# ------------------------------------------------------------------ firma por conexión (ADR-0126)
 async def _tenant_con_byok(
     prefix: str, *, status: str, app_id: str, app_secret: str | None = None, verify_token: str | None = None,
     connected_at=None, origin: str = "byok", phone: str | None = None,

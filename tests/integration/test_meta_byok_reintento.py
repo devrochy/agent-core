@@ -130,7 +130,7 @@ async def test_un_reintento_con_otra_app_que_falla_devuelve_el_numero_y_se_da_de
     assert intento.status == "error" and "Fallo" in (intento.status_reason or "")
     # Borrado lógico (ADR-0122): la WABA del intento queda con `deleted_at`, no se borra.
     assert wabas_intento and all(w.deleted_at is not None for w in wabas_intento)
-    # Los mensajes de ese número se siguen verificando con el secreto de la sana (ADR-0125).
+    # Los mensajes de ese número se siguen verificando con el secreto de la sana (ADR-0126).
     assert await secretos_del_grupo(
         tid, object_type="whatsapp_business_account", entry_id=waba, sub_id=phone_id
     ) == ("secreto-a",)

@@ -1,4 +1,4 @@
-"""Con qué secretos se verifica un grupo del webhook de Meta (HU-CONN-05, ADR-0125).
+"""Con qué secretos se verifica un grupo del webhook de Meta (HU-CONN-05, ADR-0126).
 
 Un negocio puede tener varias conexiones a la vez: una BYOK con su propia app y otra de
 Embedded Signup con la app de la plataforma, o dos apps propias. Cada app firma sus
