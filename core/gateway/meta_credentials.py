@@ -38,6 +38,7 @@ from core.gateway.meta_byok import (
     APP_SECRET_KIND,
     CLOUD_API_ACCESS_TOKEN_KIND,
     WEBHOOK_VERIFY_TOKEN_KIND,
+    es_app_de_la_plataforma,
 )
 from core.gateway.meta_onboarding import TOKEN_KIND
 from core.shared.logger import get_logger
@@ -116,8 +117,7 @@ def uses_platform_app(connection: MetaConnection) -> bool:
     callback de la app compartida a su slug y cortaría el webhook genérico a todos."""
     if connection.origin != "byok":
         return True
-    platform_app_id = get_settings().meta_app_id
-    return bool(platform_app_id) and connection.meta_app_id == platform_app_id
+    return es_app_de_la_plataforma(connection.meta_app_id)
 
 
 async def stored_app_secret(connection: MetaConnection) -> str | None:

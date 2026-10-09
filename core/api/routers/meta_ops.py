@@ -51,7 +51,7 @@ from core.admin.waweb_service import (
 from core.admin.waweb_service import (
     session_state as waweb_session_state,
 )
-from core.api.deps import Principal, require
+from core.api.deps import Principal, es_owner_o_master, require, require_owner_or_master
 from core.api.errors import ApiError
 from core.api.schemas import ReadinessRun, readiness_run_out
 from core.db.session import get_session
@@ -77,6 +77,9 @@ class HealthConnection(BaseModel):
     id: uuid.UUID
     channel: str
     environment: str
+    # Modo de credenciales (`byok` | `embedded_signup` | `manual`, ADR-0094): el panel ofrece
+    # "Pasar a producción" a las BYOK de prueba (HU-CONN-06).
+    origin: str = ""
     status: str
     status_reason: str | None
     last_health_check_at: datetime | None
@@ -126,18 +129,8 @@ class RegisterRequest(BaseModel):
     connection_id: uuid.UUID | None = None
 
 
-def _es_owner_o_master(principal: Principal) -> bool:
-    if principal.admin.role == "master":
-        return True
-    role = next((role for (tid, _name, role) in principal.tenants if tid == principal.tenant_id), None)
-    return role == "owner"
-
-
-def _require_owner_or_master(principal: Principal) -> None:
-    if not _es_owner_o_master(principal):
-        raise ApiError.forbidden(
-            "Se requiere ser propietario del negocio o admin de plataforma."
-        )
+_es_owner_o_master = es_owner_o_master
+_require_owner_or_master = require_owner_or_master
 
 
 def _api_error(exc: WebhookRegistroError) -> ApiError:

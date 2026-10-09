@@ -62,13 +62,21 @@ los cobros por turno. Por defecto, **una burbuja por respuesta** (HU-ARCH-11).
   (`/oauth/access_token`); nunca confiar en tokens que llegan del frontend.
 - Guardar `meta_app_id`, `meta_config_id`, WABA id y número; el resolver de credenciales
   por conexión decide qué token usar (HU-CONN-01/05).
-- Estado actual: Embedded Signup **no está conectado** y BYOK queda fijado en sandbox
-  (N-10). HU-SH-05 y HU-CONN-06 cierran eso.
+- Estado actual: Embedded Signup **no está conectado** (HU-SH-05). BYOK ya no queda fijado en
+  sandbox: el wizard elige entorno y una BYOK de prueba se pasa a producción (HU-CONN-06,
+  ADR-0127).
 
 ## BYOK y ciclo de vida del número
 
 - BYOK: el negocio trae app id/secret y token propios; registrar el número y resolver
   webhook y secreto **por conexión** (dos negocios no comparten credenciales).
+- BYOK de producción (ADR-0127): `environment` lo elige el wizard; en producción se rechaza el
+  número de prueba (`account_mode = SANDBOX`) y el App ID de la plataforma. Registrado es
+  `platform_type = CLOUD_API`; si no, la conexión queda `pending` con
+  `MOTIVO_NUMERO_SIN_REGISTRAR` hasta el PIN (`register_number`). "Pasar a producción"
+  (`meta_byok_promocion`) crea la conexión de producción de la misma app con
+  `save_byok_connection` y, con los chequeos de la app del negocio en verde
+  (`checks_de_su_app`), da de baja la de prueba: sus conversaciones nunca pasan al número real.
 - Un número que ya está en otra WABA no se puede registrar; manejar el error explícito
   (el repo ya tiene `test_meta_byok_numero_ocupado.py`).
 - Baja/baja lógica: nunca borrar en duro números, WABA ni costos (invariante 8, N-19).

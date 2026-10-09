@@ -19,7 +19,7 @@ from sqlalchemy import select, text
 
 from core.db.models import MetaConnection, utcnow
 from core.db.session import get_session
-from core.gateway.meta_connection_state import get_live_meta_connection
+from core.gateway.meta_connection_state import esperando_registro, get_live_meta_connection
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
@@ -50,6 +50,7 @@ async def health_overview(tenant_id: uuid.UUID) -> list[dict[str, Any]]:
                 "id": c.id,
                 "channel": c.channel,
                 "environment": c.environment,
+                "origin": c.origin,
                 "status": c.status,
                 "status_reason": c.status_reason,
                 "last_health_check_at": c.last_health_check_at,
@@ -107,7 +108,20 @@ async def diagnose_connection(tenant_id: uuid.UUID, connection_id: str) -> str |
             # secreto (ADR-0101); solo se reactiva a propósito, desde `set_connection_status`.
             # Y solo mejora con el diagnóstico verificado (ADR-0102): un alta fallida sin
             # token no pasa a `connected` ni le quita el secreto a la conexión sana.
-            if db_connection.status not in _ESTADOS_SIN_DIAGNOSTICO and db_connection.deleted_at is None:
+            if db_connection.status in _ESTADOS_SIN_DIAGNOSTICO or db_connection.deleted_at is not None:
+                pass
+            elif esperando_registro(db_connection):
+                # Solo espera el registro del número (ADR-0127): la deja `connected` el registro
+                # con el PIN, no el diagnóstico. Pero empeorar siempre se puede (ADR-0102): sin
+                # el check del número (que falla por definición), un token muerto la pasa a
+                # `error`.
+                sin_numero = {k: v for k, v in checks.items() if not k.startswith("number_registered")}
+                nuevo, motivo = next_status(
+                    db_connection.status, db_connection.status_reason, db_connection.origin, sin_numero
+                )
+                if nuevo == "error":
+                    db_connection.status, db_connection.status_reason = nuevo, motivo
+            else:
                 db_connection.status, db_connection.status_reason = next_status(
                     db_connection.status, db_connection.status_reason, db_connection.origin, checks
                 )

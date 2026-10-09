@@ -115,3 +115,18 @@ def require(section: str, *, write: bool = False) -> Callable[..., AsyncIterator
         yield principal
 
     return dependency
+
+
+def es_owner_o_master(principal: Principal) -> bool:
+    """¿Propietario del negocio activo o admin de plataforma?"""
+    if principal.admin.role == "master":
+        return True
+    role = next((role for (tid, _name, role) in principal.tenants if tid == principal.tenant_id), None)
+    return role == "owner"
+
+
+def require_owner_or_master(principal: Principal) -> None:
+    """Para acciones que cambian lo que atiende a clientes reales (registrar el webhook, BYOK
+    de producción, pasar a producción): 403 si no es propietario ni master."""
+    if not es_owner_o_master(principal):
+        raise ApiError.forbidden("Se requiere ser propietario del negocio o admin de plataforma.")

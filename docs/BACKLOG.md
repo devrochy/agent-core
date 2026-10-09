@@ -200,11 +200,21 @@ scrubber por clave no tapa. Arreglo: `except httpx.TransportError` → `GraphErr
 - `save_byok_connection` tiene un branch de "tenant mismatch" inalcanzable (RLS lo filtra antes).
 
 **Pendientes tras HU-CONN-01 (credenciales por conexión, ADR-0094)**
-- Seguimientos de HU-CONN-05 (ADR-0126): rechazar en el wizard BYOK el `META_APP_ID` de la plataforma (y quitar la
-  guarda por `meta_app_id` de `uses_platform_app`); generar un `verify_token` propio por conexión BYOK en vez del
-  global; revisar los `subscribed_apps` de la WABA al reclamarla (pendiente de ADR-0122); dos negocios con la misma
-  app BYOK se pisan el callback al registrar; mover al master el re-registro de la app de la plataforma que hace el
-  alta de Embedded Signup.
+- Seguimientos de HU-CONN-05 (ADR-0126): ~~rechazar en el wizard BYOK el `META_APP_ID` de la plataforma~~ y
+  ~~generar un `verify_token` propio por conexión BYOK~~ (resueltos en HU-CONN-06, ADR-0127). Quitar la guarda por
+  `meta_app_id` de `uses_platform_app` cuando la consulta previa al despliegue confirme que no hay filas BYOK con
+  ese App ID. Siguen: revisar los `subscribed_apps` de la WABA al reclamarla (pendiente de ADR-0122); dos negocios
+  con la misma app BYOK se pisan el callback al registrar; mover al master el re-registro de la app de la
+  plataforma que hace el alta de Embedded Signup.
+- Seguimientos de HU-CONN-06 (ADR-0127): alta BYOK de producción contra Meta real documentada por el dueño en test
+  (app en modo Live, token de System User, número real con PIN, "Pasar a producción"); cuando entre HU-CONN-07
+  (#354), `terminar_promocion` consume su checklist por conexión (sumándole `own_app` y "WABA suscrita a su app") y
+  `checks_de_su_app` se borra; `meta_production_readiness.check_app_subscriptions_complete` (ruta vieja del
+  checklist del negocio) sigue mirando la app de la plataforma hasta #354; `check_token_valid` no compara el
+  `app_id` que devuelve `debug_token` con el de la conexión y su `detail` lleva el texto de la excepción de red;
+  el `verify_token` que escribe el admin no tiene largo mínimo, y si el alta falla después de guardarlo el rollback
+  no restaura el anterior; una WABA del alta BYOK que ya está viva en otra conexión del negocio queda con dos filas
+  (preexistente en el alta, señalado por `auditor-multitenant`).
 - ~~Webhook y "Registrar webhook" eligiendo "la" conexión del tenant~~: resuelto en HU-CONN-05 (ADR-0126).
   Queda `meta_preflight.resolve_app_credentials` (preflight y checklist viejos), que sigue eligiendo una
   conexión por negocio.

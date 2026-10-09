@@ -16,18 +16,30 @@ el token que emite el flujo OAuth de Embedded Signup) -- no hay ningún
 candado de `kind` en el store, así que reusarlo con un string propio es
 seguro.
 
-`WEBHOOK_VERIFY_TOKEN_KIND`: por defecto la suscripción de la app se
-registra con `settings.whatsapp_verify_token` (global). Si el admin
-generó/escribió uno propio en el paso de webhook del wizard, se guarda acá
-y es el que se registra y el que el handshake acepta para esa conexión
-(`webhook_secrets.verify_tokens_aceptados`, ADR-0126).
+`WEBHOOK_VERIFY_TOKEN_KIND`: el `verify_token` con el que se registra la
+suscripción de la app y que el handshake acepta para esa conexión
+(`webhook_secrets.verify_tokens_aceptados`, ADR-0126). El que escriba el admin
+en el wizard o, si lo deja vacío, uno aleatorio propio de la conexión
+(HU-CONN-06, ADR-0127): antes se registraba el global, que el handshake de
+cualquier negocio acepta.
+
+Entorno (HU-CONN-06, ADR-0127): el wizard elige `sandbox` (número de prueba de
+Meta) o `production` (número real). En producción se rechaza un número de
+prueba (`account_mode = SANDBOX`). En los dos, un número que Meta no reporta
+registrado en la Cloud API (`platform_type` distinto de `CLOUD_API`) deja la
+conexión `pending` con `MOTIVO_NUMERO_SIN_REGISTRAR` hasta que se registra con
+su PIN (`meta_numbers_service.register_number`). Antes se marcaba registrado a
+ciegas. Tampoco se acepta el App ID de la app de la plataforma: esa app la
+comparten todos los negocios y se conecta con Embedded Signup (ADR-0126 §7).
 """
 
 from __future__ import annotations
 
 import asyncio
+import secrets
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 from sqlalchemy import case, select, update
@@ -46,6 +58,7 @@ from core.gateway.meta_asset_claims import (
     verify_waba_and_phone,
     waba_para_conexion,
 )
+from core.gateway.meta_connection_state import MOTIVO_NUMERO_SIN_REGISTRAR
 from core.gateway.meta_errors import GraphError
 from core.gateway.meta_graph import graph_fetch
 from core.shared.exceptions import AgentCoreError
@@ -55,8 +68,49 @@ CLOUD_API_ACCESS_TOKEN_KIND = "cloud_api_access_token"
 WEBHOOK_VERIFY_TOKEN_KIND = "webhook_verify_token"
 
 
+ENVIRONMENTS = ("sandbox", "production")
+
+PLATFORM_APP_MESSAGE = (
+    "Ese App ID es el de la app de Meta de la plataforma, que comparten todos los negocios: "
+    "para usarla conecta con Facebook (Embedded Signup). Con BYOK va el App ID de tu propia app."
+)
+TEST_NUMBER_IN_PRODUCTION_MESSAGE = (
+    "Ese número es el de prueba de Meta: elige «Prueba» o usa tu número real para producción."
+)
+
+
 class ByokError(AgentCoreError):
     """Credenciales BYOK rechazadas por Meta o incompletas."""
+
+
+def numero_registrado(info: dict[str, Any]) -> bool:
+    """¿Meta reporta el número registrado en la Cloud API? (`GET /{phone_number_id}`).
+
+    `platform_type = CLOUD_API` es el registro; `NOT_APPLICABLE` (sin registrar) u
+    `ON_PREMISE` piden registrarlo con el PIN. Sin `platform_type` se mira `status`, y sin
+    ninguno de los dos (respuestas viejas) se asume registrado, como antes."""
+    platform_type = info.get("platform_type")
+    if platform_type is not None:
+        return platform_type == "CLOUD_API"
+    status = info.get("status")
+    if status is not None:
+        return status == "CONNECTED"
+    return True
+
+
+def es_numero_de_prueba(info: dict[str, Any]) -> bool:
+    """¿Es un número de prueba de Meta? (`account_mode = SANDBOX`). Sin el campo, no."""
+    return info.get("account_mode") == "SANDBOX"
+
+
+def es_app_de_la_plataforma(app_id: str) -> bool:
+    platform_app_id = get_settings().meta_app_id
+    return bool(platform_app_id) and app_id == platform_app_id
+
+
+def nuevo_verify_token() -> str:
+    """`verify_token` propio de una conexión: aleatorio, nunca el global (ADR-0127)."""
+    return secrets.token_urlsafe(32)
 
 
 async def _token_expiry(app_id: str, app_secret: str, access_token: str) -> datetime | None:
@@ -109,16 +163,27 @@ async def save_byok_connection(
 ) -> MetaConnection:
     """Verifica las credenciales contra Graph API y recién después
     persiste -- nunca guarda a ciegas. Reentrante: volver a correrlo con
-    el mismo `app_id` actualiza la conexión existente en vez de duplicar
-    (respeta `uq_meta_connections_tenant_app`)."""
+    el mismo `app_id` y entorno actualiza la conexión existente en vez de
+    duplicar (respeta `uq_meta_connections_tenant_app`).
+
+    Termina `connected`, o `pending` con `MOTIVO_NUMERO_SIN_REGISTRAR` si Meta no
+    reporta el número registrado en la Cloud API (falta el PIN, HU-CONN-06)."""
     if not app_id or not app_secret:
         raise ByokError("Faltan App ID o App Secret")
     if not waba_id:
         raise ByokError("Falta el ID de la cuenta de WhatsApp Business (WABA)")
+    if environment not in ENVIRONMENTS:
+        raise ByokError("El entorno tiene que ser «sandbox» o «production»")
+    if es_app_de_la_plataforma(app_id):
+        raise ByokError(PLATFORM_APP_MESSAGE)
+    verify_token = verify_token or nuevo_verify_token()
 
     ok, message, info = await verify_meta_credentials(phone_number_id, access_token, app_secret)
     if not ok:
         raise ByokError(message)
+    if environment == "production" and es_numero_de_prueba(info):
+        raise ByokError(TEST_NUMBER_IN_PRODUCTION_MESSAGE)
+    registrado = numero_registrado(info)
     # El número existe para este token; falta que sea de ESA WABA y que el token la vea
     # (ADR-0095): el webhook rutea por la WABA cuando el evento no trae número.
     try:
@@ -194,7 +259,9 @@ async def save_byok_connection(
             ) from exc
         phone.display_phone_number = info.get("display_phone_number")
         phone.verified_name = info.get("verified_name")
-        phone.registered = True
+        phone.platform_type = info.get("platform_type")
+        phone.raw = {**(phone.raw or {}), **info}
+        phone.registered = registrado
 
         # Ninguna WABA de la conexión cuenta como suscrita hasta que el `POST /subscribed_apps`
         # de abajo salga bien: al reconectar se reusa la conexión (y la fila, si es la misma
@@ -215,10 +282,9 @@ async def save_byok_connection(
             connection_id, CLOUD_API_ACCESS_TOKEN_KIND, app_id, access_token,
             tenant_id=tenant_id, expires_at=token_expires_at,
         )
-        if verify_token:
-            await meta_token_store.put_token(
-                connection_id, WEBHOOK_VERIFY_TOKEN_KIND, app_id, verify_token, tenant_id=tenant_id
-            )
+        await meta_token_store.put_token(
+            connection_id, WEBHOOK_VERIFY_TOKEN_KIND, app_id, verify_token, tenant_id=tenant_id
+        )
 
         settings = get_settings()
         subscribed = await _subscribe_waba_to_app(
@@ -264,7 +330,7 @@ async def save_byok_connection(
                 await upsert_app_subscription(
                     config, "whatsapp_business_account",
                     callback_url=tenant_webhook_url(tenant.slug),
-                    verify_token=verify_token or settings.whatsapp_verify_token,
+                    verify_token=verify_token,
                 )
             except (SubscriptionError, GraphError) as exc:
                 # `upsert_app_subscription` re-lanza el `GraphError` de Meta (p.ej.
@@ -302,7 +368,12 @@ async def save_byok_connection(
                 )
             )
         ).scalar_one()
-        db_connection.status = "connected"
+        if registrado:
+            db_connection.status = "connected"
+        else:
+            # Falta el PIN: el registro (`register_number`) la deja `connected`.
+            db_connection.status = "pending"
+            db_connection.status_reason = MOTIVO_NUMERO_SIN_REGISTRAR
         return db_connection
 
 
