@@ -172,7 +172,7 @@ async def crear_suscripcion_para(
             existente.cambio_programado = None
             existente.referencia_origen = referencia or existente.referencia_origen
             await session.flush()
-            await _emitir_activada(session, existente, reference, cambio=True)
+            await _emitir_activada(session, existente, reference, cambio=True, plan_code=plan.get("plan_code"))
             return existente
         trial_termina = (now + timedelta(days=trial_dias)) if trial_dias else None
         sub = Subscription(
@@ -196,11 +196,16 @@ async def crear_suscripcion_para(
         )
         session.add(sub)
         await session.flush()
-        await _emitir_activada(session, sub, reference, cambio=False)
+        await _emitir_activada(session, sub, reference, cambio=False, plan_code=plan.get("plan_code"))
         return sub
 
 
-async def _emitir_activada(session, sub: Subscription, reference: str, *, cambio: bool) -> None:
+async def _emitir_activada(
+    session, sub: Subscription, reference: str, *, cambio: bool, plan_code: str | None = None
+) -> None:
+    """`subscription.activated` por el outbox. `plan_code` (SKU del snapshot) y `variant_id`
+    dicen qué línea del pedido se activó: el alta automática de un negocio (HU-SH-03,
+    ADR-0120) los usa para leer el plan de la plataforma de esa línea."""
     from core.events.outbox import emit_domain
     from core.shared.events import ON_SUBSCRIPTION_ACTIVATED
 
@@ -219,6 +224,8 @@ async def _emitir_activada(session, sub: Subscription, reference: str, *, cambio
             "trial_termina": sub.trial_termina.isoformat() if sub.trial_termina else None,
             "referencia": reference,
             "cambio_de_plan": cambio,
+            "plan_code": str(plan_code or ""),
+            "variant_id": str(sub.variante_id) if sub.variante_id else None,
         },
     )
 

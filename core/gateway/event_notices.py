@@ -78,6 +78,14 @@ EVENTOS: dict[str, dict[str, str]] = {
         "suscripcion.concepto": "Plan o concepto de la suscripción",
         "prueba.termina": "Fecha en que termina la prueba",
     },
+    # HU-SH-03 (ADR-0120): el negocio del cliente se creó solo; invitación al dueño.
+    "provisioning.invitation": {
+        "cliente.nombre": "Nombre del cliente",
+        "negocio.nombre": "Nombre del negocio creado",
+        "invitacion.enlace": "Enlace para entrar (o el panel, si ya tiene cuenta)",
+        "invitacion.vence": "Fecha en que vence el enlace",
+        "invitacion.correo": "Correo de la cuenta del dueño",
+    },
 }
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
