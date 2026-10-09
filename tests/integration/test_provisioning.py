@@ -349,11 +349,16 @@ async def test_alta_automatica_premium_con_preset_e_invitacion(vendedores, corre
 
     sub = await _suscripcion_de(negocio.id)
     assert (sub.plan_id, sub.status, sub.trial_ends_at) == ("premium", "active", None)
-    assert timedelta(days=29, hours=23) < sub.period_end - datetime.now(UTC) <= timedelta(days=30)
-    assert sub.provider_reference == f"plat-{negocio.slug}-{datetime.now(UTC):%Y%m}"
+    # HU-SH-04 (ADR-0123): el período corta por calendario el mismo día que la suscripción del
+    # cliente en el vendedor (antes, +30 días: los dos lados se desalineaban).
+    from core.subscriptions.periodos import sumar_periodo
+
+    assert sub.period_end == sumar_periodo(sub.period_start, "mensual", sub.dia_ancla)
+    assert timedelta(days=27) < sub.period_end - datetime.now(UTC) <= timedelta(days=31)
+    assert sub.provider_reference == f"plat-{negocio.slug}-{sub.period_start:%Y%m}"
     [pago] = await _pagos(negocio.id)
     assert (pago.status, pago.plan_id, int(pago.amount_cop)) == ("aprobado", "premium", 600_000)
-    assert pago.provider_reference == sub.provider_reference
+    assert pago.provider_reference == sub.provider_reference == pago.periodo
 
     assert negocio.settings["preset"]["id"] == "restaurante"
     async with tenant_scope(negocio.id):
