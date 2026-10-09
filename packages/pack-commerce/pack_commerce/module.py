@@ -1108,6 +1108,11 @@ class CRMModule(BaseModule):
         from pack_commerce.planes import CatalogoDePlanes
 
         plan_catalog_registry.register("pack_commerce", CatalogoDePlanes())
+        # Datos del pedido para el alta automática de negocios (HU-SH-03, ADR-0120).
+        from core.provisioning.fuentes import fuentes_de_alta
+        from pack_commerce.altas import DatosDeAltaDelPedido
+
+        fuentes_de_alta.register("pack_commerce", DatosDeAltaDelPedido())
 
         # Vistas por descriptor (Fase D, Sprint 4): la del panel se sirve con HTML
         # genérico — cero plantillas/rutas propias del pack.

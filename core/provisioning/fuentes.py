@@ -1,0 +1,75 @@
+"""Contrato de los datos de un alta y registro de fuentes (HU-SH-03, ADR-0120 § 3.4).
+
+El core no lee tablas de los packs. Un pack que vende planes de la plataforma (hoy
+`pack_commerce`) registra una `FuenteDeAltas`: dada la referencia de SU pedido, devuelve
+los `DatosDeAlta`. Mismo patrón que el catálogo de planes (ADR-0111). Los datos son del
+pedido que arma el servidor, no del texto del LLM: el vertical es un id de preset validado
+en el checkout.
+
+Este módulo es lo único de `core.provisioning` que un pack puede importar.
+"""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass, field
+from typing import Protocol, TypedDict, runtime_checkable
+
+
+class DatosDeAlta(TypedDict, total=False):
+    """Lo que el consumidor necesita del pedido para dar de alta el negocio."""
+
+    plan: str | None  # id del plan de la plataforma (core/billing/plans.py); None = la línea no vende uno
+    vertical: str | None  # id de preset (core/presets) elegido en el checkout
+    negocio: str | None  # nombre del negocio del comprador
+    email: str | None  # correo del owner
+    telefono: str | None
+    nombre: str | None  # nombre de la persona que compró
+    pagado: bool  # el pedido está pagado (Free nace pagado, D-16)
+
+
+@runtime_checkable
+class FuenteDeAltas(Protocol):
+    """Fuente de los datos de un alta (implementada por un pack que vende planes)."""
+
+    provider_id: str
+
+    async def datos_de_alta(
+        self, referencia: str, *, variant_id: str | None = None
+    ) -> DatosDeAlta | None:
+        """Datos del pedido `referencia` del negocio actual (`tenant_scope`), o None si no
+        existe todavía. `variant_id` elige la línea de un pedido con varios planes."""
+        ...
+
+
+@dataclass
+class FuentesDeAltasRegistry:
+    _fuentes: dict[str, FuenteDeAltas] = field(default_factory=dict)
+
+    def register(self, provider_id: str, fuente: FuenteDeAltas) -> None:
+        """Idempotente: registrar dos veces el mismo pack reemplaza la entrada."""
+        self._fuentes[provider_id] = fuente
+
+    def unregister(self, provider_id: str) -> None:
+        self._fuentes.pop(provider_id, None)
+
+    def provider_ids(self) -> list[str]:
+        return sorted(self._fuentes)
+
+    async def para_negocio(self, tenant_id: uuid.UUID) -> FuenteDeAltas | None:
+        """Fuente de un pack habilitado en el AgentSpec del negocio (la primera por id)."""
+        from core.agents.spec import enabled_packs, load_active_spec
+        from core.shared.tenant import tenant_scope
+
+        async with tenant_scope(tenant_id):
+            spec = await load_active_spec(tenant_id)
+        packs = enabled_packs(spec)
+        for pid in sorted(self._fuentes):
+            if pid in packs:
+                return self._fuentes[pid]
+        return None
+
+
+fuentes_de_alta = FuentesDeAltasRegistry()
+
+__all__ = ["DatosDeAlta", "FuenteDeAltas", "FuentesDeAltasRegistry", "fuentes_de_alta"]
