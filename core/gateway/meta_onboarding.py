@@ -38,6 +38,7 @@ from core.db.models import (
 )
 from core.db.session import get_owned, get_session
 from core.gateway import meta_token_store
+from core.gateway.meta_connection_state import get_live_meta_connection
 from core.gateway.meta_errors import GraphError, classify_and_build_error
 from core.gateway.meta_graph import graph_fetch
 from core.shared.exceptions import AgentCoreError
@@ -150,6 +151,7 @@ async def start_or_resume_wizard(
                     MetaConnection.channel == channel,
                     MetaConnection.environment == environment,
                     MetaConnection.status == "connected",
+                    MetaConnection.deleted_at.is_(None),
                 )
                 .order_by(MetaConnection.created_at.desc())
             )
@@ -272,7 +274,13 @@ async def _attach_finish_assets(
     """Guarda la WABA y el número que dio el popup, solo si el token recién canjeado los
     ve en Meta y ningún otro negocio los tiene (ADR-0095). Los IDs del popup los manda el
     navegador: sin esta verificación, cualquiera podría ocupar la WABA de otro."""
-    from core.gateway.meta_asset_claims import MetaAssetError, claim_assets, verify_waba_and_phone
+    from core.gateway.meta_asset_claims import (
+        MetaAssetError,
+        claim_assets,
+        numero_para_conexion,
+        verify_waba_and_phone,
+        waba_para_conexion,
+    )
 
     if not waba_id:
         if phone_number_id:
@@ -294,37 +302,24 @@ async def _attach_finish_assets(
             # Las filas de una conexión en `draft` no cuentan para el ruteo ni el reclamo
             # (migración 0052): sale de `draft` en la misma transacción que las inserta, o
             # un alta simultánea de la misma WABA no las vería.
-            connection = await session.get(MetaConnection, connection_id)
-            if connection is not None and connection.status == "draft":
-                connection.status = "pending"
-            waba = (
-                await session.execute(
-                    select(WabaAccount).where(WabaAccount.waba_id == waba_id, WabaAccount.connection_id == connection_id)
+            # La conexión pudo eliminarse mientras el asistente estaba abierto: sin esto, el
+            # número y la WABA quedarían vivos colgando de una conexión borrada y bloquearían
+            # el número para cualquier otro negocio (auditor-multitenant, ADR-0122).
+            connection = await get_live_meta_connection(session, connection_id, tenant_id, for_update=True)
+            if connection is None:
+                raise MetaAssetError(
+                    "La conexión se eliminó mientras se completaba el alta: empieza de nuevo.",
+                    code="connection_deleted",
                 )
-            ).scalar_one_or_none()
-            if waba is None:
-                waba = WabaAccount(tenant_id=tenant_id, connection_id=connection_id, waba_id=waba_id)
-                session.add(waba)
-                await session.flush()
-
+            if connection.status == "draft":
+                connection.status = "pending"
+            # Revive la WABA y el número si el negocio los tenía en una conexión eliminada, y
+            # le pasa el número a esta conexión si lo tenía otra (ADR-0122).
+            waba = await waba_para_conexion(session, tenant_id, connection_id, waba_id)
             if phone_number_id:
-                # tenant_id explícito, no solo la unicidad global de
-                # phone_number_id (defensa en profundidad -- hallazgo
-                # auditor-multitenant, 2026-09-22).
-                existing_phone = (
-                    await session.execute(
-                        select(PhoneNumber).where(
-                            PhoneNumber.phone_number_id == phone_number_id, PhoneNumber.tenant_id == tenant_id
-                        )
-                    )
-                ).scalar_one_or_none()
-                if existing_phone is None:
-                    session.add(
-                        PhoneNumber(
-                            tenant_id=tenant_id, connection_id=connection_id,
-                            waba_account_id=waba.id, phone_number_id=phone_number_id,
-                        )
-                    )
+                await numero_para_conexion(
+                    session, tenant_id, connection_id, phone_number_id, waba_account_id=waba.id
+                )
     except MetaAssetError as exc:
         async with get_session() as session:
             wizard = await get_owned(session, ConnectionWizard, wizard_id, tenant_id)

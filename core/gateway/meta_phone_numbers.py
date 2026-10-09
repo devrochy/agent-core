@@ -102,7 +102,13 @@ async def sync_phone_numbers(
 
     async with get_session() as session:
         waba_row = (
-            await session.execute(select(WabaAccount).where(WabaAccount.waba_id == waba_id, WabaAccount.connection_id == connection_id))
+            await session.execute(
+                select(WabaAccount).where(
+                    WabaAccount.waba_id == waba_id,
+                    WabaAccount.connection_id == connection_id,
+                    WabaAccount.deleted_at.is_(None),
+                )
+            )
         ).scalar_one_or_none()
         waba_account_id = waba_row.id if waba_row else None
 
@@ -138,6 +144,17 @@ async def sync_phone_numbers(
                     )
                 )
             else:
+                if existing.deleted_at is not None:
+                    # El negocio lo tuvo en una conexión eliminada: vuelve con esta (ADR-0122),
+                    # salvo que otro negocio lo haya tomado mientras tanto.
+                    from core.gateway.meta_asset_claims import MetaAssetError, numero_para_conexion
+
+                    try:
+                        await numero_para_conexion(
+                            session, tenant_id, connection_id, phone_number_id, waba_account_id=waba_account_id
+                        )
+                    except MetaAssetError:
+                        continue
                 existing.display_phone_number = item.get("display_phone_number")
                 existing.verified_name = item.get("verified_name")
                 existing.quality_rating = item.get("quality_rating")
@@ -186,11 +203,14 @@ async def add_phone_number(
 
         if await claimed_elsewhere(session, tenant_id, phone_number_id=phone_number_id, source="add_phone_number"):
             raise MetaAssetError(CLAIMED_MESSAGE, code="asset_claimed")
-        row = PhoneNumber(
-            tenant_id=tenant_id, connection_id=connection_id, waba_account_id=waba_row.id if waba_row else None,
-            phone_number_id=phone_number_id, display_phone_number=f"+{cc}{phone_number}", verified_name=verified_name,
+        from core.gateway.meta_asset_claims import numero_para_conexion
+
+        # Revive la fila si el negocio ya tuvo este número (ADR-0122).
+        row, _anterior = await numero_para_conexion(
+            session, tenant_id, connection_id, phone_number_id, waba_account_id=waba_row.id if waba_row else None
         )
-        session.add(row)
+        row.display_phone_number = f"+{cc}{phone_number}"
+        row.verified_name = verified_name
         await session.flush()
         return row
 

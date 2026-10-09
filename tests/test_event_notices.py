@@ -31,6 +31,17 @@ COMPONENTES_POSICIONALES = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _conexion_activa(monkeypatch):
+    """Estos tests no tienen BD: la conexión de la conversación cuenta como activa (la pausa
+    se prueba en `tests/integration/test_conexion_pausada.py`)."""
+
+    async def _sin_pausa(_meta_connection_id):
+        return None
+
+    monkeypatch.setattr("core.gateway.meta_connection_state.motivo_pausa_de", _sin_pausa)
+
+
 def _plantilla(components=None, parameter_format="POSITIONAL", name="aviso_cobro", language="es"):
     return SimpleNamespace(
         id=uuid.uuid4(),

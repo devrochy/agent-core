@@ -171,6 +171,17 @@ async def _fire_conversation(conversation_id: uuid.UUID, payload: dict[str, Any]
             if not await is_tenant_active(uuid.UUID(tenant_id)):
                 log.info("debounce_tenant_not_active", conversation_id=str(conversation_id))
                 return
+            # La conexión se pausó o eliminó después de agendar el turno (ADR-0122): no se
+            # gasta el LLM ni se escala por un envío que no puede salir.
+            from core.db.models import Conversation
+            from core.db.session import get_session
+            from core.gateway.meta_connection_state import motivo_pausa_de_conversacion
+
+            async with get_session() as session:
+                conversation = await session.get(Conversation, conversation_id)
+            if conversation is not None and (motivo := await motivo_pausa_de_conversacion(conversation)):
+                log.info("debounce_conexion_pausada", conversation_id=str(conversation_id), motivo=motivo)
+                return
             result = await process_conversation(conversation_id, latest_message)
             if result is not None and result.text:
                 delivered = await send_to_conversation(

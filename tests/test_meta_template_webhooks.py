@@ -63,21 +63,21 @@ def _row(**overrides):
 
 
 def _patch_for_row(monkeypatch, row):
-    """Simula que la fila existe (`_resolve_tenant_for_template` la
-    encuentra, `get_session` la trae para el UPDATE)."""
+    """Simula que la fila existe en el negocio de la fila (`_plantilla_es_del_negocio`) y
+    `get_session` la trae para el UPDATE."""
 
-    async def _fake_resolve(_meta_template_id):
-        return row.tenant_id
+    async def _fake_es_del_negocio(_meta_template_id, tenant_id, **_k):
+        return str(tenant_id) == str(row.tenant_id)
 
-    monkeypatch.setattr(tpl_webhooks_mod, "_resolve_tenant_for_template", _fake_resolve)
+    monkeypatch.setattr(tpl_webhooks_mod, "_plantilla_es_del_negocio", _fake_es_del_negocio)
     monkeypatch.setattr(tpl_webhooks_mod, "get_session", FakeSessionCM(row))
 
 
 def _patch_no_row(monkeypatch):
-    async def _fake_resolve(_meta_template_id):
-        return None
+    async def _fake_es_del_negocio(_meta_template_id, _tenant_id, **_k):
+        return False
 
-    monkeypatch.setattr(tpl_webhooks_mod, "_resolve_tenant_for_template", _fake_resolve)
+    monkeypatch.setattr(tpl_webhooks_mod, "_plantilla_es_del_negocio", _fake_es_del_negocio)
 
 
 @pytest.mark.asyncio

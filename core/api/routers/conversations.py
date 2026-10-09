@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field
@@ -198,6 +198,18 @@ async def get_conversation(
     )
 
 
+async def _rechazar_si_conexion_pausada(conversation: Any) -> None:
+    """409 si la conexión de WhatsApp de la conversación está desactivada o eliminada
+    (ADR-0122): el operador lo ve en el acto, en vez de un mensaje fallido."""
+    from core.gateway.meta_connection_state import motivo_pausa_de
+
+    if getattr(conversation, "connection_id", None) is not None:
+        return
+    motivo = await motivo_pausa_de(conversation.meta_connection_id)
+    if motivo is not None:
+        raise ApiError(409, "connection_paused", f"{motivo}: reactívala en Conexiones para responder.")
+
+
 @router.post("/{conversation_id}/messages", status_code=204)
 async def send_human_message(
     conversation_id: uuid.UUID,
@@ -211,6 +223,7 @@ async def send_human_message(
 
     from core.gateway.sender import send_to_conversation
 
+    await _rechazar_si_conexion_pausada(conversation)
     try:
         await send_to_conversation(
             conversation_id, payload.content, sender_type="human", raise_on_window_expired=True
@@ -272,6 +285,7 @@ async def send_template_message(
     conversation = await _owned_conversation(conversation_id, principal.tenant_id)
     if conversation.channel == TEST_CHANNEL:
         raise ApiError.bad_request("Las conversaciones de prueba no envían mensajes.", "test_channel")
+    await _rechazar_si_conexion_pausada(conversation)
     plantilla = next(
         (
             t
