@@ -681,6 +681,35 @@ async def test_las_tablas_del_antiabuso_no_se_ven_desde_otro_negocio(vendedores,
 
 
 @pytest.mark.aislamiento
+async def test_el_token_de_terminos_de_un_negocio_no_vale_en_otro(vendedores, silencio) -> None:
+    """`acepta_terminos` está en el schema de `crear_pedido` (ADR-0129): un token que el
+    modelo trae de la conversación de otro vendedor no acepta nada ni crea el pedido."""
+    from pack_commerce.models import Order
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    vendedor = await _vendedor()
+    otro = await _vendedor()
+    vendedores(vendedor, otro)
+    await publicar_documentos(vendedor)
+    await publicar_documentos(otro)
+    cliente = await _cliente(vendedor)
+    ajeno = await _cliente(otro)
+    token = (await _pedir(vendedor, cliente, _datos()))["acepta_terminos"]
+    await _pedir(otro, ajeno, _datos())
+    await _mensaje_del_cliente(otro, ajeno)
+
+    resultado = await _pedir(otro, ajeno, _datos(acepta_terminos=token))
+
+    assert resultado["status"] == "terminos_pendientes"
+    assert resultado["acepta_terminos"] != token
+    async with tenant_scope(otro):
+        async with get_session() as s:
+            assert (await s.execute(select(Order).where(Order.customer_id == ajeno))).all() == []
+
+
+@pytest.mark.aislamiento
 async def test_la_api_de_plataforma_es_solo_del_master_y_solo_de_vendedores(app_client, vendedores, silencio) -> None:
     from core.admin.auth import hash_password
     from core.db.models import Admin, TenantUser
