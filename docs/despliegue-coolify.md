@@ -122,7 +122,9 @@ Notas aprendidas en vivo (2026-09-30):
 | `MIGRATIONS_DATABASE_URL` | `…agent_core_migrations:<pw>@huvhzaxim2notqkcxqa5930a:5432/agent_core` | `…postgres:<pw>@48h2r2laml64eyrggfg6eqld:5432/agent_core` |
 | `REDIS_URL` | `redis://default:<pw>@gk9bagcojtdrtofcx8tdxkiq:6379/0` | `redis://default:<pw>@rqkxxnen7ysp7xmqhocrbidw:6379/0` |
 | `AGENT_CORE_ROLE` | `api` | `api` |
-| `PROVISIONING_SELLER_TENANTS` | *(vacío: apagada hasta HU-SH-04)* | UUID de `solvershub` (para verificar HU-SH-03) |
+| `PROVISIONING_SELLER_TENANTS` | *(vacío hasta verificar HU-SH-04 en test; después, UUID de `solvershub`)* | UUID de `solvershub` (para verificar HU-SH-03 y HU-SH-04) |
+| `BILLING_WOMPI_EVENTOS_TENANT` | UUID de `solvershub` si comparte la cuenta de Wompi con la plataforma; si no, vacío | Igual que producción, con la cuenta del sandbox |
+| `BILLING_DIAS_RENOVACION` | `5` (default) | `5` |
 
 Notas:
 
@@ -137,11 +139,18 @@ Notas:
   los negocios que venden negocios. Solo un `subscription.activated` de uno de ellos crea un
   negocio nuevo; vacía, el alta automática está apagada. Tiene que estar en el **worker**
   (ahí corre el despachador del outbox); en la app no hace daño. No hay token de servicio
-  que configurar. **No encenderla en producción antes de HU-SH-04 (renovación y cambio de
-  plan):** el plan pago nace con un período que nada renueva, el paso de Free a pago solo se
-  audita y `past_due`/`expired` bloquean en duro (`core/billing/enforcement.py:30`). Para el
-  correo con el acceso hace falta `SYSTEM_SMTP_*`. Altas en revisión:
-  `docs/runbooks/altas-en-revision.md`.
+  que configurar. Desde HU-SH-04 (ADR-0123) el plan pago del alta se renueva, el paso de Free a
+  pago cambia el plan del negocio y pagar desbloquea en el acto: se puede encender en
+  producción **después de verificar HU-SH-04 en test**. Para el correo con el acceso hace falta
+  `SYSTEM_SMTP_*`. Altas en revisión: `docs/runbooks/altas-en-revision.md`.
+- **`BILLING_WOMPI_EVENTOS_TENANT`** (ADR-0123, riesgo R-05): Wompi admite **una** URL de eventos
+  por cuenta y ambiente. Si la plataforma (`WOMPI_BILLING_*`) y el pack de pagos de `solvershub`
+  usan la misma cuenta, la URL de eventos de esa cuenta es `https://<host>/webhooks/billing/wompi`
+  y esta variable lleva el UUID de `solvershub`: los eventos que no son de un pago de la
+  plataforma se le reenvían (su pack los verifica con su secreto). Va en la **app** (recibe el
+  webhook). Con cuentas separadas, vacía. Ver `docs/runbooks/cobro-de-plataforma.md`.
+- **`BILLING_DIAS_RENOVACION`**: días antes del fin del período en que el job de renovación
+  (worker/beat) genera el cobro del período siguiente y avisa por el canal preferido.
 
 ## Persistencia de artefactos de tenant (`TENANTS_ROOT`)
 

@@ -359,7 +359,7 @@ de artefactos de tenant).
   si no aparece en 3 intentos queda en revisión), pero la suscripción huérfana queda. → que el
   proveedor use la sesión del llamador o que commerce active después del commit. Visto en HU-SH-03
   (2026-10-09). [Media]
-- **Un cambio de plan desde el asistente no cambia el plan del negocio aprovisionado** — Free →
+- ✅ **[Cerrado por HU-SH-04, ADR-0123: el plan cambia en el mismo negocio con su preset, se renueva y se paga por los dos canales]** ~~Un cambio de plan desde el asistente no cambia el plan del negocio aprovisionado~~ — Free →
   Premium cambia la suscripción en `solvershub`, pero el consumidor de ADR-0121 solo lo audita
   (`aprovisionamiento_cambio_de_plan`): el negocio sigue en Free y vence a los 30 días. Tampoco aplica
   el preset que quedó pendiente porque no cabía en Free (ADR-0110 § 3.1). El plan pago aprovisionado
@@ -371,6 +371,13 @@ de artefactos de tenant).
   acceso hasta que una persona lo corrija (`docs/runbooks/altas-en-revision.md`). Es un ajuste del playbook de
   ventas del tenant `solvershub` (`solvershub-comercial`): repetir el correo y pedir confirmación antes de
   `crear_pedido`. [Media]
+- **Volver a comprar después de cancelar crea otro negocio** — con la suscripción `cancelada` en
+  `solvershub`, un pedido nuevo crea otra suscripción y el alta automática (ADR-0121) otro negocio. HU-SH-04
+  resolvió el caso de la Free vencida (se reusa la suscripción), no el de la cancelada. → reusar el negocio
+  del mismo cliente y correo, o mandarlo a revisión. [Media]
+- **Cambio de plan desde `/plan` para un negocio del asistente** — HU-SH-04 lo bloquea (409
+  `cambio_en_el_asistente`, ADR-0123 § 6): cambiar el plan en el vendedor sin cobrarlo de nuevo exige otra
+  operación del contrato, y el prorrateo es de HU-BILL-12. [Media]
 
 **Calendario / demos**
 - **Calendario interno (ADR-0084)** — las 5 tools requieren `google_calendar`

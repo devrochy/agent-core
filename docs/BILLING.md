@@ -1,6 +1,7 @@
 # Planes, cuotas y facturación de tenants
 
-Última actualización: 2026-09-22 · ADR-0045 (planes/cuotas/enforcement) · ADR-0046 (cobro Wompi)
+Última actualización: 2026-10-09 · ADR-0045 (planes/cuotas/enforcement) · ADR-0046 (cobro Wompi) ·
+ADR-0123 (dos canales de cobro con fuente única, renovación y conciliación)
 
 Este documento describe cómo agent-core vende y limita el servicio a cada tenant. Es el
 equivalente de `MULTITENANT.md` para el plano comercial: aquí vive qué es un plan, cómo
@@ -13,7 +14,9 @@ se mide el consumo, qué pasa al llegar al límite y cómo paga un tenant.
 - **Suscripción:** relación de un tenant con un plan (`tenant_subscriptions`, con RLS).
   Una activa por tenant.
 - **Período:** ventana mensual de la suscripción (`period_start` → `period_end`). El
-  trial del plan free termina en `trial_ends_at`.
+  trial del plan free termina en `trial_ends_at`. Desde ADR-0123 un período pago se corta
+  **por calendario** (mismo día del mes siguiente, con `dia_ancla`) y tiene una referencia
+  `plat-<slug>-<AAAAMM>`, la misma en los dos canales de cobro (§ 6b).
 - **Cuota:** límite de una métrica dentro del período (o lifetime, según la métrica).
 - **Métrica:** unidad medible del consumo (clientes, conversaciones, audio, OCR, packs,
   mensajes, costo LLM).
@@ -92,8 +95,9 @@ nuevas unidades, no un apagado a mitad de una charla. El panel avisa desde el 80
 marca en rojo el 100%, para que el bloqueo no sea sorpresa.
 
 El cron diario `core/tasks/billing_lifecycle.py` normaliza estados (`trialing` vencido →
-`expired`, período vencido → `past_due`) y alimenta los avisos del panel. Si el cron no
-corre, el enforcement igual bloquea porque se evalúa al momento.
+`expired`, período vencido → `past_due`) y alimenta los avisos del panel. También pasa al
+período que empezó hoy si estaba pagado por adelantado (ventana de las cuotas y plan). Si el
+cron no corre, el enforcement igual bloquea porque se evalúa al momento.
 
 ## 5. Alta y ciclo de vida
 
@@ -101,10 +105,11 @@ corre, el enforcement igual bloquea porque se evalúa al momento.
    suscripción `free` con `trial_ends_at = now() + 30d`.
 2. El tenant opera gratis 30 días con las cuotas de `free`.
 3. Al vencer el trial: no operacional. El panel invita a suscribirse.
-4. `POST /admin/plan/subscribe` con un plan pago → link Wompi → webhook → `active` por
-   el período.
-5. Antes de `period_end`: el panel ofrece **Renovar** (nuevo link). Sin pago, al vencer
-   pasa a `past_due`/`expired` y se corta.
+4. `POST /admin/plan/subscribe` con un plan pago → link Wompi del período que toca → webhook →
+   `active` por el período.
+5. Cinco días antes de `period_end` (`BILLING_DIAS_RENOVACION`), el job de renovación genera el
+   cobro del período siguiente y avisa por el canal preferido (§ 6b). Sin pago, al vencer pasa
+   a `past_due` y se corta; pagar (por cualquier canal) lo reactiva en el acto.
 
 Un admin `master` puede cambiar el plan o extender el período desde `/admin/tenants`
 (soporte); la acción se registra en `audit_log`.
@@ -131,6 +136,41 @@ WOMPI_BILLING_PRIVATE_KEY=
 WOMPI_BILLING_EVENTS_SECRET=
 WOMPI_BILLING_SANDBOX=true
 BILLING_TRIAL_DAYS=30
+```
+
+## 6b. Dos canales con fuente única (HU-SH-04, ADR-0123)
+
+Un negocio creado por el alta automática (ADR-0121) paga su plan por dos caminos:
+
+| | Canal asistente | Canal panel |
+|---|---|---|
+| Quién genera el cobro | La suscripción del cliente en el negocio vendedor (`solvershub`, `pack_subscriptions`) | `/plan` → `core/billing/checkout.start_subscription` |
+| Referencia | `plat-<slug>-<AAAAMM>` (cargo `AAAA-MM`) | La misma |
+| Pago | `payment.confirmed` → cargo pagado → `subscription.charge_paid` → `aplicar_pago_de_periodo` | Webhook de billing → `aplicar_pago_de_periodo` |
+| Sincronización | — | `platform.period_paid` → el cargo del asistente queda pagado (`registrar_pago_externo`) |
+
+- **Fuente única:** `tenant_subscriptions` del negocio. Un período se aplica una sola vez (índice
+  único de `subscription_payments` sobre `(tenant_id, periodo)` de los `aprobado`). Un segundo pago
+  del mismo período queda `duplicado` y se alerta.
+- **Sin doble cobro:** si el período ya está pagado, el asistente (`sub_link_pago`) y el panel
+  (409 `ya_pagado`) responden «ya pagado». Con el plan al día, el panel no adelanta períodos.
+- **Cambio de plan:** un negocio del asistente cambia de plan en el asistente; el panel solo paga
+  su plan actual (409 `cambio_en_el_asistente`). Un Free que compra un plan pago cambia de plan en
+  el mismo negocio y recibe el preset que le faltaba.
+- **Renovación** (`core/billing/renovacion.py`, diaria): cobro del período siguiente y aviso por el
+  canal del último pago: WhatsApp con plantilla (asistente) o correo con el enlace a `/plan`.
+- **Conciliación** (`core/billing/conciliacion.py`, diaria): compara los dos lados y alerta cada
+  diferencia con su detalle. Qué hacer con cada una: `docs/runbooks/cobro-de-plataforma.md`.
+- **Una URL de eventos por cuenta de Wompi (R-05):** si la plataforma y el pack de pagos de
+  `solvershub` comparten la cuenta, su URL es `/webhooks/billing/wompi` y
+  `BILLING_WOMPI_EVENTOS_TENANT` dice a qué negocio se reenvían los eventos que no son de la
+  plataforma.
+
+Variables:
+
+```
+BILLING_DIAS_RENOVACION=5          # días antes del fin del período en que se cobra el siguiente
+BILLING_WOMPI_EVENTOS_TENANT=      # UUID del negocio que comparte la cuenta de Wompi (vacío: cuentas separadas)
 ```
 
 ## 7. Cómo extender
@@ -162,7 +202,8 @@ Queda versionado en git y auditado.
 ## 9. Pendiente (fuera de esta entrega)
 
 - Débito recurrente automático (ADR-0046, punto 4).
-- Prorrateo al cambiar de plan a mitad de período.
+- Prorrateo al cambiar de plan a mitad de período en el panel, y cambio de plan desde el panel
+  para un negocio del asistente (HU-BILL-12).
 - Excedentes (overage) y planes por volumen.
 - Stripe u otro proveedor internacional.
 
