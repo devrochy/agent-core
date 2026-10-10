@@ -77,3 +77,27 @@ Un pack puede aportar las **referencias vigentes** de la conversación: los ids 
 - `core/mcp/types.py` (`Referencia`, `ReferenciasFn`) y `core/mcp/host.py` (`register_referencias`).
 - `core/orchestrator/referencias.py`, `core/orchestrator/loop.py` y `core/llm/prompt_builder.py` (`PromptContext.referencias`).
 - `packages/pack-commerce/pack_commerce/skills.py` (`_cotizacion_vigente`, `referencias_vigentes` y los errores con `quote_id_vigente`), `module.py` (registro y patrones de `cotizacion_aceptada`/`cotizacion_generada`) y `playbooks/ventas.md`.
+
+## Adenda (2026-10-10): pedido de otra compra
+
+Revisada por el agente `arquitecto` antes de escribir código.
+
+**Incidente** (test, tenant `solvershub`, 2026-10-10, 19:34–19:49 UTC). La clienta compró el Basic el 2026-10-05 (pedido `OC-0001`, pagado). En la misma conversación intentó comprar el Premium: había cotización vigente y ningún pedido nuevo. La fuente mostraba `OC-0001` como "pedido" junto a la cotización, y el modelo los unió:
+- "te genero uno nuevo para tu pedido OC-0001 por $600.000";
+- con el `ya_pagado` de `generar_link_pago` (referencia `OC-0001`): "ya figura como pagado, así que no hace falta generar otro";
+- "el pedido figura como cancelado, aunque el pago sí quedó registrado".
+
+**Decisión** (reemplaza el punto 8 en lo que expone pack-commerce):
+1. **El más nuevo es la compra en curso.** Entre la cotización vigente y el último pedido de la conversación, gana el más nuevo (`created_at`). Una cotización vigente nunca tiene pedido: `crear_pedido` la pasa a `convertida` en la misma transacción. Por eso `order.quote_id` no sirve para relacionarlos.
+   - **Cotización más nueva:** `- cotizacion: quote_id, estado, total, pedido=ninguno`. Si hay un pedido, sale como `pedido_anterior`.
+   - **Pedido más nuevo:** la cotización vieja no se expone (§3: invitaría a confirmar algo viejo).
+2. **`- pedido:`** solo para un pedido de la compra en curso y activo (`abierto`, `despachado`; pagado y abierto cuenta). Lleva `order_id`, número, estado, estado de pago y total, como antes.
+3. **`- pedido_anterior:`** para un pedido de otra compra o cerrado (`cancelado`, `entregado`, `expirado`). Lleva `order_id`, número, estado y estado de pago, **sin total**: no se cita como el total actual. El `order_id` se queda porque un pedido pendiente sigue cobrable con `confirmar_pago_pedido`, que toma el monto del pedido.
+4. **Sin datos que son instrucciones.** Se descartó `siguiente=crear_pedido` (invariante 3) y también `cubre_compra_actual=no`, que repite lo que ya dicen el tipo y `pedido=ninguno`. La regla está en `ventas.md` y en el override de solvershub (ADR-0026).
+5. **Verificador:** afirmación `pago_registrado` de pack-commerce ("figura como pagado", "el pago quedó registrado", "ya pagaste", "recibimos tu pago"). La respalda `consultar_estado_pedido` o `sub_consultar` en el turno. El `ya_pagado` de `generar_link_pago` es un error y no respalda nada. **No cambia el core** (sin `Afirmacion.respaldo` ni `niega`): los dos casos del incidente se detectan solo con `tools`.
+6. **`ya_pagado` (pack-payments)** dice que ese pago cubre solo lo de esa referencia, no otra compra. Si el monto pedido es otro, dice que ese monto NO está pagado. **Sin cifras**: el modelo las repetiría y no son evidencia.
+
+**Lo que aceptamos pagar:**
+- Una frase verdadera después del pago ("tu pago quedó registrado") dicha sin consultar el estado en ese turno pide un reintento. Las referencias no son evidencia (ADR-0119). En el set etiquetado es 1 de 218 correctas (0,5 %). Un negocio la apaga con `completion_claims_disabled`.
+- **Hueco que no cubre el verificador:** si el modelo consulta `OC-0001` (pagado) y después dice "ya está pagado" refiriéndose al Premium, la frase tiene respaldo. Lo cubren las referencias y el playbook.
+- Con el pack de suscripciones y el Basic activo, comprar el Premium es un cambio de plan (`sub_cambiar_plan`), no un pedido nuevo (`crear_pedido` responde `ya_tiene_suscripcion`). Esta adenda no cambia ese camino.

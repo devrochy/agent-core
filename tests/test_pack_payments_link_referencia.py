@@ -18,6 +18,7 @@ contra Postgres están en `tests/integration/test_pack_payments_link_idempotente
 
 from __future__ import annotations
 
+import re
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -124,9 +125,25 @@ async def test_referencia_pagada_devuelve_error_sin_link(entorno):
     resultado = await _llamar(amount=600_000)
 
     assert resultado["status"] == "ya_pagado"
-    assert "error" in resultado
     assert "_safe_append" not in resultado
     assert entorno.links_creados == []
+    # Con este error el modelo le dijo a la clienta que "no hace falta generar otro":
+    # el texto dice que el monto pedido NO está pagado y que ese pago no cubre otra compra.
+    assert "otro monto" in resultado["error"] and "NO está pagado" in resultado["error"]
+    assert "no otra compra" in resultado["error"]
+    # Sin cifras: el modelo las repetiría y no son evidencia del verificador.
+    assert not re.search(r"\d{3}", resultado["error"].replace("OC-0001", ""))
+
+
+@pytest.mark.asyncio
+async def test_referencia_pagada_por_el_mismo_monto_no_dice_otro_monto(entorno):
+    entorno.respuestas = [None, [_transaccion(status="aprobado", created_at=datetime(2026, 10, 5, tzinfo=UTC))]]
+
+    resultado = await _llamar(amount=200_000)
+
+    assert resultado["status"] == "ya_pagado"
+    assert "otro monto" not in resultado["error"]
+    assert "no otra compra" in resultado["error"]
 
 
 @pytest.mark.asyncio

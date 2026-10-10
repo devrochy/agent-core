@@ -260,12 +260,20 @@ def _referencia_no_cobrable(
 
     Sin `_safe_append`: el modelo no debe ofrecer un link que no corresponde.
     """
-    if any(t.status == "aprobado" for t in transacciones):
+    aprobadas = [t for t in transacciones if t.status == "aprobado"]
+    if aprobadas:
+        # Ese pago cubre solo lo de esa referencia. En test (solvershub, 2026-10-10) el modelo
+        # cobró el Premium con la referencia del Basic ya pagado y, con este error, le dijo a
+        # la clienta que "no hace falta generar otro". Sin cifras en el texto: el modelo las
+        # repetiría y no son evidencia para el verificador.
+        otro_monto = all(abs(Decimal(str(t.amount)) - Decimal(str(amount))) > Decimal("0.01") for t in aprobadas)
         return {
             "error": (
                 f"La referencia {reference} ya está pagada: no se puede volver a cobrar. "
-                "Si el cliente quiere comprar otra cosa, primero hay que crear un pedido nuevo "
-                "y cobrar con su referencia."
+                + ("Ese pago fue por otro monto: lo que pediste cobrar NO está pagado. " if otro_monto else "")
+                + "Ese pago cubre solo lo de esa referencia, no otra compra: no le digas al cliente "
+                "que ya está pagado ni que no hace falta pagar lo que compra ahora. Si el cliente "
+                "quiere comprar otra cosa, primero hay que crear un pedido nuevo y cobrar con su referencia."
             ),
             "status": "ya_pagado",
         }

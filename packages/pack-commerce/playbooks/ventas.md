@@ -59,6 +59,10 @@ description: Reglas del proceso de venta
 - Si "Referencias vigentes" ya trae una cotización con los productos y el total que el
   cliente está aceptando, seguí con esa: no llames `generar_cotizacion` otra vez. Generá una
   nueva solo si el cliente cambió productos o cantidades.
+- `pedido_anterior` es otra compra: su pago no cubre la cotización en curso. Con
+  `pedido=ninguno` la compra actual no tiene pedido ni pago: seguí con `confirmar_cotizacion`
+  y `crear_pedido`, y cobrá con la referencia nueva. Nunca digas "ya está pagado" ni "no hace
+  falta pagar" por el pago de otro pedido.
 - Si una tool responde "Cotización no encontrada" con `quote_id_vigente`, compará
   `total_vigente` con el total que el cliente aceptó: si coincide, repetí la llamada con ese
   `quote_id`; si no, mostrale el total y pedile confirmación antes de seguir.
