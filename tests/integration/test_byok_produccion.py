@@ -78,7 +78,8 @@ def _instalar(monkeypatch, graph: GraphFalso, tokens_validados: list | None = No
     from core.config import get_settings
     from core.gateway.meta_preflight import PreflightCheck
 
-    for mod in (byok_mod, promo_mod, graph_mod, phones_mod):
+    # `health_mod`: el checklist por conexión de HU-CONN-07, que usa "Pasar a producción".
+    for mod in (byok_mod, promo_mod, graph_mod, phones_mod, health_mod):
         monkeypatch.setattr(mod, "graph_fetch", graph.fetch)
 
     async def _sin_vencimiento(*_args):
@@ -433,7 +434,13 @@ async def test_pasar_a_produccion_guia_el_cambio_y_al_terminar_cambia_el_entorno
     assert r.status_code == 200, r.text
     assert r.json()["promoted"] is False
     fallan = {c["key"] for c in r.json()["checks"] if c["ok"] is False}
-    assert {"number_registered", "templates"} <= fallan
+    assert {"number_registered", "templates_approved"} <= fallan
+    # Son los ítems del checklist por conexión (HU-CONN-07), con su etiqueta, más los de la promoción.
+    claves = [c["key"] for c in r.json()["checks"]]
+    assert claves == [
+        "own_app", "token", "number_registered", "real_number", "waba_subscribed", "webhook", "templates_approved",
+    ]
+    assert all(c["label"] and c["label"] != c["key"] for c in r.json()["checks"])
     assert (await _fila(tid, cid)).deleted_at is None
 
     # Paso 2: registro con el PIN, en la conexión de producción.
@@ -463,7 +470,7 @@ async def test_pasar_a_produccion_guia_el_cambio_y_al_terminar_cambia_el_entorno
     # Paso 4: verificar con la app del negocio y pasar a producción (pasado el límite de 10 s).
     from core.memory.working import get_redis
 
-    await get_redis().delete(f"promocion_chequeos:{tid}:{cid}")
+    await get_redis().delete(f"promocion_chequeos:{tid}")
     tokens_validados.clear()
     graph.llamadas.clear()
     r = await app_client.post(_url(cid, "/finish"), headers=headers)
@@ -529,7 +536,13 @@ async def test_una_byok_creada_en_produccion_se_verifica_con_su_app(app_client, 
     checks = {c["key"]: c for c in r.json()["checks"]}
     assert checks["own_app"]["ok"] is True
     assert checks["real_number"]["ok"] is True
-    assert checks["waba_subscribed_to_own_app"]["ok"] is False
+    # El checklist por conexión ve "alguna app" suscrita; la promoción exige que sea la suya.
+    assert checks["waba_subscribed"]["ok"] is False
+    assert "otra app" in checks["waba_subscribed"]["detail"]
+    assert tokens_validados == [(app_id, "secreto-del-negocio")]
+    # Un "Verificar" a la vez por negocio y 10 s de espera después: no se repite en seguida.
+    otra = await app_client.post(_url(cid, "/verify"), headers=headers)
+    assert otra.status_code == 429, otra.text
     assert tokens_validados == [(app_id, "secreto-del-negocio")]
     estado = await app_client.get(_url(cid), headers=headers)
     assert estado.json()["environment"] == "production"

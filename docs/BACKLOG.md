@@ -207,10 +207,9 @@ scrubber por clave no tapa. Arreglo: `except httpx.TransportError` → `GraphErr
   con la misma app BYOK se pisan el callback al registrar. (Mover al master el re-registro de la app de la
   plataforma que hacía el alta de Embedded Signup: resuelto en HU-SH-05, ADR-0128.)
 - Seguimientos de HU-CONN-06 (ADR-0127): alta BYOK de producción contra Meta real documentada por el dueño en test
-  (app en modo Live, token de System User, número real con PIN, "Pasar a producción"); cuando entre HU-CONN-07
-  (#354), `terminar_promocion` consume su checklist por conexión (sumándole `own_app` y "WABA suscrita a su app") y
-  `checks_de_su_app` se borra; `meta_production_readiness.check_app_subscriptions_complete` (ruta vieja del
-  checklist del negocio) sigue mirando la app de la plataforma hasta #354; `check_token_valid` no compara el
+  (app en modo Live, token de System User, número real con PIN, "Pasar a producción"); ~~`terminar_promocion` sobre
+  el checklist por conexión de HU-CONN-07 y borrar `checks_de_su_app`~~ (hecho 2026-10-09: `checks_de_produccion`);
+  `check_token_valid` no compara el
   `app_id` que devuelve `debug_token` con el de la conexión y su `detail` lleva el texto de la excepción de red;
   el `verify_token` que escribe el admin no tiene largo mínimo, y si el alta falla después de guardarlo el rollback
   no restaura el anterior; una WABA del alta BYOK que ya está viva en otra conexión del negocio queda con dos filas
@@ -245,10 +244,9 @@ scrubber por clave no tapa. Arreglo: `except httpx.TransportError` → `GraphErr
   agregar el dominio del panel en "Allowed domains for the JavaScript SDK"; registrar el webhook de la app como
   master; y hacer un alta real de un número de prueba de punta a punta con video o capturas (criterio de la HU y el
   de Embedded Signup de HU-CONN-01). Marcar los requisitos en "Plataforma → App de Meta".
-- HU-CONN-07 (#354) ya está en `develop`: al rebasar esta rama, enlazar los requisitos de Embedded Signup
-  (`/admin/platform/meta-app/embedded-signup`) desde su página "Plataforma → App de Meta" y sacar de aquí los tres
-  datos del servidor que su revisión de plataforma ya corre (variables, HTTPS, webhook), para que `ready` no dé
-  verde con su checklist en rojo. Re-encadenar la migración 0066 después de 0064/0065.
+- ~~Enlazar los requisitos de Embedded Signup desde "Plataforma → App de Meta" y sacar los tres datos del servidor~~
+  (hecho 2026-10-09: los revisa la corrida de la plataforma, que suma `meta_app_configured` y HTTPS en el webhook, y
+  `ready` exige esa corrida sin rojos y de hace menos de 30 días).
 - La cadena del alta corre en el request (varias llamadas a Graph después del canje). Si la latencia molesta con
   Meta real, pasarla a un job de Celery: el estado ya está en `connection_wizards` y el panel puede consultar
   `GET /wizard/session`.

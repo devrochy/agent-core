@@ -109,7 +109,7 @@ Un tenant nace `active` y puede transitar a `suspended` y a `eliminado`:
 |---|---|---|
 | `active` | Procesa mensajes normalmente | alta (`tenant create`) o reactivación |
 | `suspended` | Deja de procesar mensajes (webhook y consumer lo rechazan), **conserva sus datos** y sigue visible en el panel | `tenant deactivate` (CLI) o botón en `/admin/tenants` |
-| eliminado | Borrado físico **irreversible** de todo su dato (core + packs + Redis + fila `tenants`) | `tenant purge` o `/admin/tenants` (modal) |
+| eliminado | Borrado físico **irreversible** de todo su dato (core + packs + Redis + fila `tenants`) | solo desde `suspended`: `tenant purge` o `/admin/tenants` (modal) |
 
 **Suspensión** (`tenant deactivate`): reversible (`tenant activate`). Útil para
 bajas temporales, impago, o incidentes. La enforcement es defensa en profundidad:
@@ -126,13 +126,26 @@ pago. Ver `docs/BILLING.md`. El backfill de la migración `0034` dio a todos los
 tenants existentes una suscripción `free` con 30 días desde la migración (no
 desde `created_at`), para no cortarles el servicio de golpe.
 
-**Eliminación** (`tenant purge`): exige confirmar exactamente la frase
-`ELIMINAR <slug>` y rol `master`. Es la **excepción deliberada a la invariante #8**
+**Eliminación** (`tenant purge`): exige que el tenant esté **suspendido**
+(`tenants.status = 'suspended'`, con `tenant deactivate`), confirmar exactamente la
+frase `ELIMINAR <slug>` y rol `master`. Un tenant activo no se purga: la CLI lo
+rechaza antes de pedir la frase, el panel solo habilita "Eliminar" en los
+suspendidos, la API responde 409 `tenant_not_suspended` y la función SQL lo vuelve
+a exigir (defensa en profundidad: falla sin borrar nada). Cuenta la suspensión del
+ciclo de vida, no la falta de pago (ADR-0045): un tenant `active` no operativo por
+billing tampoco se purga. Es la **excepción deliberada a la invariante #8**
 (sin borrado físico): el ciclo de vida del tenant la requiere (tipo GDPR /
 right-to-erasure). La función SQL `purge_tenant(tid)` (SECURITY DEFINER, dueño,
-transaccional) descubre dinámicamente todas las tablas con `tenant_id` — core y
-packs — y las vacía; además se limpia el estado Redis. Destruye también el
-historial inmutable (`usage_ledger`, `audit_log`) del tenant.
+transaccional) descubre dinámicamente todas las tablas con `tenant_id` — core,
+packs y `meta_private` — y las vacía; además se limpia el estado Redis. Destruye también el
+historial inmutable (`usage_ledger`, `audit_log`) del tenant. Mientras corre, la
+función fija `session_replication_role = replica` (cláusula `SET`, se restaura al
+salir), así que no disparan los triggers de las FKs ni los de inmutabilidad; la fila
+`tenants` se borra con las FKs encendidas, para que las referencias desde otros
+negocios (`provisioning_requests.negocio_tenant_id`, `ON DELETE SET NULL`) se
+apliquen. El dueño no es superusuario: necesita `GRANT SET ON PARAMETER
+session_replication_role` (migración `0072`, runbook de producción 4.3). `EXECUTE`
+solo para `app_runtime`.
 
 ## Referencias
 
