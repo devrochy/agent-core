@@ -176,7 +176,7 @@ async def test_un_id_que_no_existe_devuelve_la_vigente_sin_usarla(quote_id: str)
 
 
 async def test_sin_cotizacion_vigente_el_error_de_siempre() -> None:
-    from pack_commerce.skills import OrderSkill
+    from pack_commerce.skills import OrderSkill, _sin_cotizacion_vigente
 
     from core.shared.tenant import tenant_scope
 
@@ -189,7 +189,9 @@ async def test_sin_cotizacion_vigente_el_error_de_siempre() -> None:
         resultado = await OrderSkill().crear_pedido(
             {"quote_id": "PLAN-PREMIUM", "payment_method": "transferencia", "customer_data": DATOS}, _ctx(conv, cliente)
         )
-    assert resultado == {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
+    # Sin cotización vigente, el error de siempre con la pista de no inventar el quote_id (#414).
+    assert resultado == _sin_cotizacion_vigente()
+    assert "quote_id_vigente" not in resultado
 
 
 # ------------------------------------------------------------------ journey con el loop

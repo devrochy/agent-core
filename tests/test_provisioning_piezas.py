@@ -274,15 +274,21 @@ def test_checkout_de_un_plan_acepta_negocio_y_vertical() -> None:
     assert "vertical" in cfg.checkout_fields["plan"]
 
 
-def test_la_tool_crear_pedido_no_crece_con_los_datos_del_alta() -> None:
-    """`business_name` y `vertical` no van en el schema (la tool es la misma para todos los
-    negocios con comercio): los pide `missing_fields` según `checkout_fields.plan`."""
+def test_la_tool_crear_pedido_declara_los_datos_del_alta_sin_cambiar_con_los_presets() -> None:
+    """ADR-0129 (enmienda ADR-0121): `business_name`, `vertical` y `acepta_terminos` van en el
+    schema, opcionales y sin enum: la tool es la misma para todos los negocios y no cambia con
+    los presets. Qué es obligatorio lo decide `checkout_fields.plan` y la tool los valida."""
     from pack_commerce.skills import OrderSkill
 
     tool = next(t for t in OrderSkill().get_tools() if t.name == "crear_pedido")
-    props = tool.parameters["properties"]["customer_data"]["properties"]
-    assert "vertical" not in props and "business_name" not in props
-    assert tool.parameters["properties"]["customer_data"].get("additionalProperties") is not False
+    datos = tool.parameters["properties"]["customer_data"]
+    for campo in ("business_name", "vertical", "acepta_terminos"):
+        assert datos["properties"][campo]["type"] == "string"
+        assert datos["properties"][campo]["description"]
+        assert "enum" not in datos["properties"][campo]
+    assert "required" not in datos
+    assert datos.get("additionalProperties") is not False
+    assert tool.parameters["required"] == ["quote_id", "payment_method", "customer_data"]
 
 
 def test_datos_alta_del_checkout_solo_guarda_lo_que_hay() -> None:

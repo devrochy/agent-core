@@ -196,7 +196,7 @@ async def _pedir(
         )
 
 
-async def _mensaje_del_cliente(tid: uuid.UUID, cliente: uuid.UUID, texto: str = "Sí, acepto") -> uuid.UUID:
+async def _mensaje(tid: uuid.UUID, cliente: uuid.UUID, texto: str, *, direccion: str = "inbound", **campos: Any) -> uuid.UUID:
     from core.db.models import Message
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -205,19 +205,30 @@ async def _mensaje_del_cliente(tid: uuid.UUID, cliente: uuid.UUID, texto: str = 
     async with tenant_scope(tid):
         async with get_session() as s:
             mensaje = Message(
-                tenant_id=tid, conversation_id=conversacion, direction="inbound", sender_type="customer", content=texto
+                tenant_id=tid, conversation_id=conversacion, direction=direccion,
+                sender_type="customer" if direccion == "inbound" else "agent", content=texto, **campos,
             )
             s.add(mensaje)
             await s.flush()
             return mensaje.id
 
 
+async def _mensaje_del_cliente(tid: uuid.UUID, cliente: uuid.UUID, texto: str = "Sí, acepto") -> uuid.UUID:
+    return await _mensaje(tid, cliente, texto)
+
+
+async def _respuesta_con_enlaces(tid: uuid.UUID, cliente: uuid.UUID, **campos: Any) -> uuid.UUID:
+    """La respuesta del turno que mostró los enlaces, como la guarda el envío."""
+    return await _mensaje(tid, cliente, "Antes de crear el pedido, ¿aceptas estos documentos?", direccion="outbound", **campos)
+
+
 async def _pedir_aceptando(tid: uuid.UUID, cliente: uuid.UUID, datos: dict[str, Any], **kw: Any) -> dict[str, Any]:
-    """Primero los términos pendientes; el cliente responde que acepta (un mensaje suyo
-    posterior) y se vuelve a pedir con el token."""
+    """Primero los términos pendientes; los enlaces salen al cliente, el cliente responde que
+    acepta (un mensaje suyo posterior) y se vuelve a pedir con el token."""
     primero = await _pedir(tid, cliente, datos, **kw)
     if primero.get("status") != "terminos_pendientes":
         return primero
+    await _respuesta_con_enlaces(tid, cliente)
     await _mensaje_del_cliente(tid, cliente)
     return await _pedir(tid, cliente, {**datos, "acepta_terminos": primero["acepta_terminos"]}, **kw)
 
@@ -391,21 +402,37 @@ async def test_la_aceptacion_queda_registrada_y_llega_al_negocio_nuevo(vendedore
 
 
 async def test_una_version_nueva_pide_aceptar_otra_vez(vendedores, silencio) -> None:
+    """Si entre que se mostraron los enlaces y que el cliente aceptó se publica otra versión, el
+    «sí» que ya llegó no acepta la nueva: hace falta un mensaje posterior a los enlaces nuevos
+    (el marcador es por juego de versiones)."""
     from core.provisioning import legal
 
     vendedor = await _vendedor()
     vendedores(vendedor)
     await publicar_documentos(vendedor, version="v1")
     cliente = await _cliente(vendedor)
-    primero = await _pedir(vendedor, cliente, _datos())
+    datos = _datos()
+    primero = await _pedir(vendedor, cliente, datos)
+    await _respuesta_con_enlaces(vendedor, cliente)
+    await _mensaje_del_cliente(vendedor, cliente)  # acepta la v1...
 
-    # Llega el texto del abogado: se publica otra versión, sin tocar código.
+    # ...pero antes llega el texto del abogado: otra versión, sin tocar código.
     await legal.publicar(vendedor, tipo="terminos", version="v2", url="https://solvershub.test/terminos/v2", por="test")
-    segundo = await _pedir(vendedor, cliente, _datos(acepta_terminos=primero["acepta_terminos"]))
+    segundo = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": primero["acepta_terminos"]})
 
     assert segundo["status"] == "terminos_pendientes"
     assert segundo["acepta_terminos"] != primero["acepta_terminos"]
     assert {d["tipo"]: d["version"] for d in segundo["documentos"]}["terminos"] == "v2"
+    mismo_turno = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": segundo["acepta_terminos"]})
+    assert mismo_turno["status"] == "terminos_pendientes"
+
+    await _respuesta_con_enlaces(vendedor, cliente)
+    acepta_v2 = await _mensaje_del_cliente(vendedor, cliente)
+    aceptado = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": segundo["acepta_terminos"]})
+    assert aceptado["status"] == "confirmed", aceptado
+    registro = await _pedido_de_alta(vendedor, aceptado["public_order_number"])
+    assert registro.aceptacion["mensaje_id"] == str(acepta_v2)
+    assert {d["tipo"]: d["version"] for d in registro.aceptacion["documentos"]}["terminos"] == "v2"
     with pytest.raises(legal.VersionRepetida):
         await legal.publicar(vendedor, tipo="terminos", version="v2", url="https://solvershub.test/x", por="test")
 
@@ -426,15 +453,103 @@ async def test_el_token_solo_vale_con_un_mensaje_posterior_del_cliente_y_en_su_c
 
     otro = await _cliente(vendedor)
     await _pedir(vendedor, otro, _datos())
+    await _respuesta_con_enlaces(vendedor, otro)
     await _mensaje_del_cliente(vendedor, otro)
     ajeno = await _pedir(vendedor, otro, {**_datos(), "acepta_terminos": primero["acepta_terminos"]})
     assert ajeno["status"] == "terminos_pendientes"
 
+    await _respuesta_con_enlaces(vendedor, cliente)
     mensaje = await _mensaje_del_cliente(vendedor, cliente)
     aceptado = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": mismo_turno["acepta_terminos"]})
     assert aceptado["status"] == "confirmed", aceptado
     registro = await _pedido_de_alta(vendedor, aceptado["public_order_number"])
     assert registro.aceptacion["mensaje_id"] == str(mensaje)
+
+
+@pytest.mark.aislamiento
+async def test_en_el_turno_que_acepta_una_llamada_sin_token_no_invalida_la_aceptacion(vendedores, silencio) -> None:
+    """La secuencia real del loop (journey 05): el historial entre turnos es solo texto, así que
+    en el turno en que el cliente acepta el modelo suele llamar primero sin el token (o con
+    `true`) y después con el token que le devuelve esa misma llamada. El marcador de «hasta qué
+    mensaje se mostraron los enlaces» es fijo por juego de versiones: esas llamadas no lo mueven
+    y el mensaje que acepta sigue siendo posterior."""
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    await publicar_documentos(vendedor, version="v3")
+    cliente = await _cliente(vendedor)
+    datos = _datos()
+
+    # Turno 1: el cliente pide el plan; la tool devuelve los enlaces.
+    primero = await _pedir(vendedor, cliente, datos)
+    assert primero["status"] == "terminos_pendientes"
+    await _respuesta_con_enlaces(vendedor, cliente)
+
+    # Turno 2: el cliente acepta; el modelo llama sin token, con `true` y luego con el token.
+    acepta = await _mensaje_del_cliente(vendedor, cliente, "Sí, acepto los términos, la privacidad y el DPA.")
+    sin_token = await _pedir(vendedor, cliente, datos)
+    assert sin_token["status"] == "terminos_pendientes"
+    assert sin_token["acepta_terminos"] == primero["acepta_terminos"]  # el token es estable
+    con_true = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": True})
+    assert con_true["status"] == "terminos_pendientes"
+    aceptado = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": sin_token["acepta_terminos"]})
+
+    assert aceptado["status"] == "confirmed", aceptado
+    registro = await _pedido_de_alta(vendedor, aceptado["public_order_number"])
+    assert registro.aceptacion["mensaje_id"] == str(acepta)
+    assert {d["version"] for d in registro.aceptacion["documentos"]} == {"v3"}
+
+
+@pytest.mark.aislamiento
+async def test_un_mensaje_que_llega_antes_de_enviar_los_enlaces_no_acepta(vendedores, silencio) -> None:
+    """Ráfaga: un mensaje del cliente que se guarda mientras corre el turno que muestra los
+    enlaces es posterior al marcador, pero el cliente todavía no los vio. La aceptación vale
+    solo después del primer mensaje saliente posterior al marcador (uno fallido no cuenta)."""
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    await publicar_documentos(vendedor)
+    cliente = await _cliente(vendedor)
+    datos = _datos()
+
+    primero = await _pedir(vendedor, cliente, datos)
+    await _mensaje_del_cliente(vendedor, cliente, "mi cédula es 1020304050")  # llega durante el turno
+    token = {**datos, "acepta_terminos": primero["acepta_terminos"]}
+    assert (await _pedir(vendedor, cliente, token))["status"] == "terminos_pendientes"
+
+    await _respuesta_con_enlaces(vendedor, cliente, status="failed")  # la respuesta no salió
+    assert (await _pedir(vendedor, cliente, token))["status"] == "terminos_pendientes"
+    await _respuesta_con_enlaces(vendedor, cliente)  # ahora sí salen los enlaces
+    assert (await _pedir(vendedor, cliente, token))["status"] == "terminos_pendientes"
+
+    acepta = await _mensaje_del_cliente(vendedor, cliente)
+    aceptado = await _pedir(vendedor, cliente, token)
+    assert aceptado["status"] == "confirmed", aceptado
+    registro = await _pedido_de_alta(vendedor, aceptado["public_order_number"])
+    assert registro.aceptacion["mensaje_id"] == str(acepta)
+
+
+@pytest.mark.aislamiento
+async def test_la_aceptacion_es_por_pedido(vendedores, silencio) -> None:
+    """Al crear el pedido se borra el marcador: otro pedido de un plan en la misma conversación
+    vuelve a mostrar los enlaces y pide un «sí» nuevo."""
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    await publicar_documentos(vendedor)
+    cliente = await _cliente(vendedor)
+    datos = _datos()
+    primero = await _pedir_aceptando(vendedor, cliente, datos)
+    assert primero["status"] == "confirmed", primero
+
+    otro_plan = {**datos, "acepta_terminos": (await _pedir(vendedor, cliente, datos, plan="basic", precio=150_000))["acepta_terminos"]}
+    await _mensaje_del_cliente(vendedor, cliente, "y quiero también el Basic")
+    sin_enlaces = await _pedir(vendedor, cliente, otro_plan, plan="basic", precio=150_000)
+    assert sin_enlaces["status"] == "terminos_pendientes"
+
+    await _respuesta_con_enlaces(vendedor, cliente)
+    acepta = await _mensaje_del_cliente(vendedor, cliente)
+    segundo = await _pedir(vendedor, cliente, otro_plan, plan="basic", precio=150_000)
+    assert segundo["status"] == "confirmed", segundo
+    registro = await _pedido_de_alta(vendedor, segundo["public_order_number"])
+    assert registro.aceptacion["mensaje_id"] == str(acepta)
 
 
 async def test_un_free_con_un_producto_pago_al_lado_sigue_siendo_un_free(vendedores, silencio) -> None:
@@ -678,6 +793,43 @@ async def test_las_tablas_del_antiabuso_no_se_ven_desde_otro_negocio(vendedores,
                     )
                 )
                 await s.flush()
+
+
+@pytest.mark.aislamiento
+async def test_el_token_de_terminos_de_un_negocio_no_vale_en_otro(vendedores, silencio) -> None:
+    """`acepta_terminos` está en el schema de `crear_pedido` (ADR-0129): un token que el
+    modelo trae de la conversación de otro vendedor no acepta nada ni crea el pedido."""
+    from pack_commerce.models import Order
+
+    from core.db.models import PedidoDeAlta
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    vendedor = await _vendedor()
+    otro = await _vendedor()
+    vendedores(vendedor, otro)
+    await publicar_documentos(vendedor)
+    await publicar_documentos(otro)
+    cliente = await _cliente(vendedor)
+    ajeno = await _cliente(otro)
+    token = (await _pedir(vendedor, cliente, _datos()))["acepta_terminos"]
+    await _pedir(otro, ajeno, _datos())
+    await _mensaje_del_cliente(otro, ajeno)
+
+    resultado = await _pedir(otro, ajeno, _datos(acepta_terminos=token))
+
+    assert resultado["status"] == "terminos_pendientes"
+    assert resultado["acepta_terminos"] != token
+    async with tenant_scope(otro):
+        async with get_session() as s:
+            assert (await s.execute(select(Order).where(Order.customer_id == ajeno))).all() == []
+            assert (await s.execute(select(PedidoDeAlta).where(PedidoDeAlta.customer_id == ajeno))).all() == []
+    # Control: con su propio token, los enlaces enviados y un mensaje suyo después, el mismo
+    # cliente sí compra (la aceptación vale solo después del envío de los enlaces, #406).
+    await _respuesta_con_enlaces(otro, ajeno)
+    await _mensaje_del_cliente(otro, ajeno)
+    propio = await _pedir(otro, ajeno, _datos(acepta_terminos=resultado["acepta_terminos"]))
+    assert propio["status"] == "confirmed", propio
 
 
 @pytest.mark.aislamiento

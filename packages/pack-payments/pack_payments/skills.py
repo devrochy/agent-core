@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from core.db.session import get_session
 from core.mcp.types import BaseSkill, MCPTool, ScopedHttp, ToolContext
@@ -12,13 +14,17 @@ from core.shared.exceptions import PluginError
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from pack_payments.config import PaymentsConfig
-from pack_payments.models import PaymentTransaction
+from pack_payments.models import PaymentTransaction, utcnow
 from pack_payments.providers.base import PaymentRequestRejected
 from pack_payments.providers.wompi import WompiProvider
 
 log = get_logger(__name__)
 
 PLUGIN_ID = "pack_payments"
+
+# Estado de una transacción cuyo pago llegó por otro monto (lo pone el webhook,
+# `module.MONTO_DISTINTO`; acá se repite para no importar el módulo).
+MONTO_DISTINTO = "monto_distinto"
 
 
 async def tenant_config() -> PaymentsConfig:
@@ -61,7 +67,9 @@ class PaymentSkill(BaseSkill):
                     "correctos (nunca inventes el monto: usá el que devolvió la tool que creó el "
                     "pedido/cotización). Wompi tiene un monto mínimo por cobro (más alto en el "
                     "ambiente de pruebas): si el total es menor, esta tool devuelve un error -- "
-                    "ofrecé transferencia o contraentrega en vez de reintentar."
+                    "ofrecé transferencia o contraentrega en vez de reintentar. Si devuelve un "
+                    "error (referencia ya pagada, monto distinto al de la referencia), NO hay link: "
+                    "no digas que lo generaste."
                 ),
                 parameters={
                     "type": "object",
@@ -114,22 +122,36 @@ class PaymentSkill(BaseSkill):
 
         # Idempotencia por REFERENCE (un pedido = una transacción): si el modelo
         # llama esta tool dos veces para el MISMO pedido en turnos distintos (no
-        # el mismo tool_call -- eso ya lo cubre el chequeo de arriba), hay que
-        # devolver el resultado existente en vez de reventar contra el índice
-        # único (tenant_id, reference) -- mismo patrón de bug ya corregido en
+        # el mismo tool_call -- eso ya lo cubre el chequeo de arriba), se reusa la
+        # transacción existente en vez de reventar contra el índice único
+        # (tenant_id, reference) -- mismo patrón de bug ya corregido en
         # pack_commerce (excepción no manejada -> PluginError -> auto_disable).
+        # Reusarla a ciegas también falla (test, 2026-10-10: se devolvió el link
+        # vencido de un pedido ya pagado y por otro monto, y el asistente lo
+        # ofreció como nuevo): antes se mira el estado, el monto y el vencimiento.
         async with get_session() as session:
-            existing_by_reference = (
-                await session.execute(
-                    select(PaymentTransaction).where(
-                        PaymentTransaction.tenant_id == get_current_tenant_id(),
-                        PaymentTransaction.reference == reference,
-                        PaymentTransaction.deleted_at.is_(None),
+            de_la_referencia = (
+                (
+                    await session.execute(
+                        select(PaymentTransaction).where(
+                            PaymentTransaction.tenant_id == get_current_tenant_id(),
+                            PaymentTransaction.reference == reference,
+                        )
                     )
                 )
-            ).scalar_one_or_none()
-            if existing_by_reference is not None:
-                return _result(existing_by_reference)
+                .scalars()
+                .all()
+            )
+        reemplaza: PaymentTransaction | None = None
+        if de_la_referencia:
+            rechazo = _referencia_no_cobrable(reference, amount, de_la_referencia)
+            if rechazo is not None:
+                return rechazo
+            viva = next((t for t in de_la_referencia if t.deleted_at is None), None)
+            if viva is not None:
+                if not link_vencido(viva, config.link_expira_horas):
+                    return _result(viva)
+                reemplaza = viva
 
         try:
             link = await provider.create_payment_link(
@@ -147,6 +169,56 @@ class PaymentSkill(BaseSkill):
             return {"error": str(exc)}
 
         async with get_session() as session:
+            if reemplaza is not None:
+                # La transacción del link vencido queda borrada (auditoría y webhook
+                # tardío por `provider_reference`), nunca dos vivas por referencia.
+                # El `where` exige que siga como se leyó: si otra llamada ya la
+                # regeneró o un webhook le cambió el estado, no se toca y se decide
+                # de nuevo con lo que hay ahora.
+                borrada = await session.execute(
+                    update(PaymentTransaction)
+                    .where(
+                        PaymentTransaction.tenant_id == get_current_tenant_id(),
+                        PaymentTransaction.id == reemplaza.id,
+                        PaymentTransaction.deleted_at.is_(None),
+                        PaymentTransaction.status == reemplaza.status,
+                    )
+                    .values(
+                        deleted_at=utcnow(),
+                        status="expirado" if reemplaza.status == "pendiente" else reemplaza.status,
+                    )
+                )
+                if borrada.rowcount == 0:
+                    # El link recién creado en Wompi queda sin usar (vence solo).
+                    log.warning(
+                        "wompi_payment_link_regenerado_en_paralelo",
+                        reference=reference,
+                        provider_reference_sin_usar=link.provider_reference,
+                    )
+                    actuales = (
+                        (
+                            await session.execute(
+                                select(PaymentTransaction).where(
+                                    PaymentTransaction.tenant_id == get_current_tenant_id(),
+                                    PaymentTransaction.reference == reference,
+                                )
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    rechazo = _referencia_no_cobrable(reference, amount, actuales)
+                    if rechazo is not None:
+                        return rechazo
+                    viva = next((t for t in actuales if t.deleted_at is None), None)
+                    if viva is not None and not link_vencido(viva, config.link_expira_horas):
+                        return _result(viva)
+                    return {"error": "No se pudo generar el link de pago ahora. Intentá de nuevo en un momento."}
+                log.info(
+                    "wompi_payment_link_regenerado",
+                    reference=reference,
+                    provider_reference_anterior=reemplaza.provider_reference,
+                )
             transaction = PaymentTransaction(
                 reference=reference,
                 provider=provider.provider_name,
@@ -161,6 +233,65 @@ class PaymentSkill(BaseSkill):
             await session.flush()
             await session.refresh(transaction)
             return _result(transaction)
+
+
+# Un link que vence en minutos no sirve para mandárselo al cliente: se trata como vencido.
+MARGEN_VENCIMIENTO = timedelta(minutes=15)
+
+
+def link_vencido(transaction: PaymentTransaction, horas_vigencia: int, ahora: datetime | None = None) -> bool:
+    """El link de la transacción ya no sirve para cobrar (o está por vencer).
+
+    La tabla no guarda el vencimiento: se calcula con `created_at` y la vigencia
+    configurada HOY (`link_expira_horas`). Si el negocio la cambió después de crear el
+    link, el cálculo se corre en esa diferencia.
+    """
+    if transaction.status == "expirado" or not transaction.payment_link_url:
+        return True
+    ahora = ahora or utcnow()
+    vence = transaction.created_at + timedelta(hours=horas_vigencia)
+    return ahora >= vence - MARGEN_VENCIMIENTO
+
+
+def _referencia_no_cobrable(
+    reference: str, amount: float, transacciones: list[PaymentTransaction]
+) -> dict[str, Any] | None:
+    """Error recuperable si esta referencia no admite el cobro pedido; `None` si sí.
+
+    Sin `_safe_append`: el modelo no debe ofrecer un link que no corresponde.
+    """
+    if any(t.status == "aprobado" for t in transacciones):
+        return {
+            "error": (
+                f"La referencia {reference} ya está pagada: no se puede volver a cobrar. "
+                "Si el cliente quiere comprar otra cosa, primero hay que crear un pedido nuevo "
+                "y cobrar con su referencia."
+            ),
+            "status": "ya_pagado",
+        }
+    # También en una transacción ya reemplazada: un webhook tardío del link viejo
+    # puede haber dejado plata en revisión.
+    if any(t.status == MONTO_DISTINTO for t in transacciones):
+        return {
+            "error": (
+                f"La referencia {reference} tiene un pago en revisión manual (llegó por otro "
+                "monto). No generes otro link: el negocio lo está revisando."
+            ),
+            "status": "en_revision",
+        }
+    viva = next((t for t in transacciones if t.deleted_at is None), None)
+    if viva is None:
+        return None
+    if abs(Decimal(str(viva.amount)) - Decimal(str(amount))) > Decimal("0.01"):
+        return {
+            "error": (
+                f"La referencia {reference} es un cobro por ${float(viva.amount):,.0f} {viva.currency}, "
+                f"no por ${amount:,.0f}. No se generó ningún link. Si es otro pedido, crealo primero "
+                "y cobrá con su referencia; si no, usá el monto correcto."
+            ),
+            "status": "monto_no_coincide",
+        }
+    return None
 
 
 def _result(transaction: PaymentTransaction) -> dict[str, Any]:

@@ -26,6 +26,7 @@ from core.provisioning.antiabuso import (
     LimiteDeAltas,
     PedidoPreparado,
     TerminosPendientes,
+    cerrar_aceptacion,
     preparar_pedido_de_alta,
     registrar_pedido_de_alta,
 )
@@ -367,6 +368,19 @@ async def _order_del_cliente(session, order_id, customer_id) -> Order | None:  #
     ).scalar_one_or_none()
 
 
+def _sin_cotizacion_vigente() -> dict[str, Any]:
+    """Error cuando no hay una cotización en curso a la cual apuntar. Ajena o inexistente responden igual (ver `_quote_del_cliente`). Entre turnos el modelo solo
+    ve texto y pierde el `quote_id`: en test (2026-10-10) inventó `confirmar_cotizacion("Q-0001")`
+    después de que la clienta aceptó. El `hint` le dice cómo recuperarlo en el mismo turno."""
+    return {
+        "error": "Cotización no encontrada.",
+        "hint": (
+            "El quote_id es el id que devuelve generar_cotizacion; no lo inventes. Si no lo tienes "
+            "en este turno, genera la cotización otra vez con los mismos productos."
+        ),
+    }
+
+
 async def _transfer_safe_append() -> str:
     """Arma el bloque de datos de transferencia (nunca lo escribe el LLM)."""
     config = await _plugin_config()
@@ -479,9 +493,12 @@ def _respuesta_del_alta_frenada(frenado: Any) -> dict[str, Any]:
             "error": "Falta que el cliente acepte los términos, el aviso de privacidad y el DPA.",
             "documentos": frenado.documentos,
             "acepta_terminos": frenado.token,
+            # El token es el mismo en cada respuesta de esta conversación: en el turno en que
+            # el cliente acepta, el modelo lo recupera llamando sin él (ADR-0125, adenda).
             "hint": (
-                "Comparte los enlaces y espera la respuesta del cliente. Si acepta, repite "
-                "crear_pedido con customer_data.acepta_terminos."
+                "Si el último mensaje del cliente ya acepta los documentos, repite crear_pedido "
+                "ahora con el mismo quote_id, los mismos datos y customer_data.acepta_terminos. "
+                "Si no, comparte los enlaces y espera su respuesta."
             ),
         }
     if isinstance(frenado, FreeNoDisponible):
@@ -1094,6 +1111,17 @@ class OrderSkill(BaseSkill):
                                 "city": {"type": "string"},
                                 "phone": {"type": "string"},
                                 "email": {"type": "string"},
+                                # Solo los usan los planes (ADR-0121, ADR-0125, ADR-0129). La
+                                # tool los valida; sin enum para no cambiar con los presets.
+                                "business_name": {"type": "string", "description": "Nombre del negocio (planes)."},
+                                "vertical": {
+                                    "type": "string",
+                                    "description": "Tipo de negocio (planes): id de opciones_vertical.",
+                                },
+                                "acepta_terminos": {
+                                    "type": "string",
+                                    "description": "Token de terminos_pendientes, si el cliente aceptó.",
+                                },
                             },
                         },
                         "guardar_datos_cliente": {
@@ -1260,12 +1288,12 @@ class OrderSkill(BaseSkill):
     async def aplicar_promocion(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         quote_id = str(arguments.get("quote_id", ""))
         if _parse_uuid(quote_id) is None:
-            return await _cotizacion_no_encontrada(context, {"error": "Cotización no encontrada."})
+            return await _cotizacion_no_encontrada(context, _sin_cotizacion_vigente())
         async with get_session() as session:
             tenant_id = get_current_tenant_id()
             quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             if quote is None:
-                return await _cotizacion_no_encontrada(context, {"error": "Cotización no encontrada."}, session)
+                return await _cotizacion_no_encontrada(context, _sin_cotizacion_vigente(), session)
             items = (
                 await session.execute(
                     select(QuoteItem).where(
@@ -1395,7 +1423,7 @@ class OrderSkill(BaseSkill):
         pero ningún código lo escribía jamás)."""
         quote_id = str(arguments.get("quote_id", ""))
         if _parse_uuid(quote_id) is None:
-            return await _cotizacion_no_encontrada(context, {"error": "Cotización no encontrada."})
+            return await _cotizacion_no_encontrada(context, _sin_cotizacion_vigente())
         async with get_session() as session:
             # Defensa en profundidad además de RLS (mismo criterio que
             # calificar_lead/actualizar_lead, auditor-multitenant 2026-09-12):
@@ -1403,7 +1431,7 @@ class OrderSkill(BaseSkill):
             # customer_id para que no se pueda confirmar la de otro cliente.
             quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             if quote is None:
-                return await _cotizacion_no_encontrada(context, {"error": "Cotización no encontrada."}, session)
+                return await _cotizacion_no_encontrada(context, _sin_cotizacion_vigente(), session)
             if quote.status == "convertida":
                 return {"error": "Esta cotización ya se convirtió en un pedido."}
             if quote.status == "expirada":
@@ -1475,7 +1503,7 @@ class OrderSkill(BaseSkill):
             return {"error": "Método de entrega no válido. Usa 'domicilio' o 'recoger_en_tienda'."}
         if _parse_uuid(quote_id) is None:
             return await _cotizacion_no_encontrada(
-                context, {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
+                context, _sin_cotizacion_vigente()
             )
 
         async with get_session() as session:
@@ -1484,7 +1512,7 @@ class OrderSkill(BaseSkill):
             quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             if quote is None:
                 return await _cotizacion_no_encontrada(
-                    context, {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}, session
+                    context, _sin_cotizacion_vigente(), session
                 )
             existing_order = (
                 await session.execute(
@@ -1581,7 +1609,7 @@ class OrderSkill(BaseSkill):
             }
             if "vertical" in missing:
                 # El tipo de negocio va en customer_data.vertical como el id de una opción
-                # (ADR-0121): no está en el schema de la tool, que es la misma para todos.
+                # (ADR-0121): las opciones van en la respuesta, no en el schema de la tool.
                 faltan["opciones_vertical"] = _verticales()
             return faltan
         if es_plan and customer_data.get("business_name"):
@@ -1708,6 +1736,11 @@ class OrderSkill(BaseSkill):
                             order_id=order.id,
                         )
                     )
+
+        if pedido_de_alta is not None:
+            # El pedido ya se guardó con su aceptación: es por pedido (ADR-0125), otro pedido
+            # en esta conversación vuelve a pedirla.
+            await cerrar_aceptacion(pedido_de_alta)
 
         result: dict[str, Any] = {
             "order_id": order_id,

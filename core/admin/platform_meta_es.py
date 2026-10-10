@@ -1,27 +1,25 @@
 """Requisitos de Meta de la app de la plataforma para Embedded Signup (HU-SH-05, ADR-0128).
 
-"Plataforma → App de Meta" (solo master). Dos partes:
+"Plataforma → App de Meta → Embedded Signup" (solo master). Son los pasos **manuales**, que
+Meta no expone de forma fiable a la propia app y el master confirma con el enlace a cada
+pantalla: verificación del negocio, acceso de Tech Provider, App Review de los permisos, la
+configuración de Embedded Signup de producción (la del `config_id`), el dominio del panel en el
+SDK de JavaScript y la app en modo Live.
 
-- **Automáticas**, con lo que ya está en el servidor, sin llamar a Meta: las variables de
-  entorno de la app (`META_APP_ID`, `META_APP_SECRET`, `META_CONFIG_ID`), la URL pública en
-  HTTPS y la suscripción del webhook de la app guardada por el cron de suscripciones.
-- **Manuales**, que Meta no expone de forma fiable a la propia app y el master confirma con
-  el enlace a cada pantalla: verificación del negocio, acceso de Tech Provider, App Review de
-  los permisos, la configuración de Embedded Signup de producción (la del `config_id`), el
-  dominio del panel en el SDK de JavaScript y la app en modo Live.
-
-Punto de integración con HU-CONN-07 (#354, en `develop` pero no en la base apilada de esta
-rama): su página "Plataforma → App de Meta" (`/admin/platform/meta-app`) corre los chequeos de
-infraestructura de la app; esta lista es la parte de Embedded Signup y se enlaza desde ella. Al
-rebasar, los tres datos automáticos de aquí salen (los corre su revisión) para que `ready` no
-dé verde con su checklist en rojo (BACKLOG).
+Lo que se revisa en el servidor (las variables `META_APP_ID`, `META_APP_SECRET` y
+`META_CONFIG_ID`, el webhook en HTTPS y la suscripción de la app) no se repite aquí: es la
+revisión de la plataforma de HU-CONN-07 ("Plataforma → App de Meta", que enlaza a esta lista).
+`ready` exige su última corrida terminada hace menos de `VIGENCIA_REVISION_PLATAFORMA` (30 días),
+sin ningún ítem en rojo y con esos tres en verde: la lista nunca queda "lista" con el checklist de
+la app en rojo ni con una revisión vieja.
 """
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select
 
@@ -90,14 +88,6 @@ _CLAVES = {m.key for m in MANUALES}
 
 
 @dataclass(frozen=True)
-class ChequeoAutomatico:
-    key: str
-    label: str
-    ok: bool | None
-    detail: str
-
-
-@dataclass(frozen=True)
 class RequisitoManual:
     key: str
     label: str
@@ -108,13 +98,36 @@ class RequisitoManual:
     updated_at: datetime | None
 
 
+# Cuánto vale la última revisión de "App de Meta" para dar los requisitos por listos (decisión del
+# dueño, 2026-10-10): pasado el plazo, la lista vuelve a pendiente hasta revisar de nuevo.
+VIGENCIA_REVISION_PLATAFORMA = timedelta(days=30)
+
+# Ítems de la revisión de la plataforma (HU-CONN-07) que Embedded Signup necesita en verde.
+CHEQUEOS_DE_PLATAFORMA = ("meta_app_configured", "webhook_handshake", "app_subscriptions_complete")
+
+
+@dataclass(frozen=True)
+class RevisionPlataforma:
+    """La última revisión de "Plataforma → App de Meta", vista desde Embedded Signup. `ok`: la
+    corrida terminó hace menos de `VIGENCIA_REVISION_PLATAFORMA`, ningún ítem está en rojo y los de
+    `CHEQUEOS_DE_PLATAFORMA` están en verde. `pending`: las etiquetas de los ítems que lo impiden.
+    `expired`: la corrida terminada ya venció (hay que revisar de nuevo); `expires_at`: cuándo vence."""
+
+    status: str
+    finished_at: datetime | None
+    ok: bool
+    pending: list[str]
+    expired: bool = False
+    expires_at: datetime | None = None
+
+
 @dataclass(frozen=True)
 class EstadoAppMeta:
     app_id: str
     config_id: str
     graph_api_version: str
     ready: bool
-    automatic: list[ChequeoAutomatico]
+    platform_check: RevisionPlataforma
     manual: list[RequisitoManual]
 
 
@@ -124,64 +137,40 @@ def _exigir_master(role: str) -> None:
         raise RequisitoError("Solo el admin de plataforma puede ver esto.", code="forbidden", status=403)
 
 
-async def _automaticos() -> list[ChequeoAutomatico]:
-    from core.gateway.meta_subscriptions import list_app_subscriptions
+async def _revision_de_plataforma(admin: Any) -> RevisionPlataforma:
+    from core.admin.production_readiness_service import effective_status, latest_platform_run
+    from core.gateway.meta_production_readiness import PLATFORM_CHECK_LABELS
 
-    settings = get_settings()
-    app_ok = bool(settings.meta_app_id and settings.meta_app_secret)
-    chequeos = [
-        ChequeoAutomatico(
-            "app_configured",
-            "META_APP_ID y META_APP_SECRET",
-            app_ok,
-            "Configurados." if app_ok else "Faltan en el entorno del servidor.",
-        ),
-        ChequeoAutomatico(
-            "config_id_configured",
-            "META_CONFIG_ID",
-            bool(settings.meta_config_id),
-            "Configurado." if settings.meta_config_id else "Falta el config_id de Embedded Signup.",
-        ),
+    run = await latest_platform_run(admin)
+    if run is None:
+        return RevisionPlataforma(status="never", finished_at=None, ok=False, pending=[])
+    status, _error = effective_status(run.status, run.requested_at, run.error)
+    if status != "done":
+        return RevisionPlataforma(status=status, finished_at=run.finished_at, ok=False, pending=[])
+    items = [item for item in (run.checks or []) if isinstance(item, dict)]
+    por_clave = {item.get("key"): item for item in items}
+    pendientes = [
+        str(item.get("label") or item.get("key"))
+        for item in items
+        if item.get("ok") is False or (item.get("key") in CHEQUEOS_DE_PLATAFORMA and item.get("ok") is not True)
     ]
-    https = str(settings.public_base_url or "").startswith("https://")
-    chequeos.append(
-        ChequeoAutomatico(
-            "public_https",
-            "URL pública en HTTPS",
-            https,
-            "El webhook y el panel están en HTTPS." if https else "PUBLIC_BASE_URL no es HTTPS: Meta no la acepta.",
-        )
+    # Una corrida anterior a uno de los ítems que se necesitan no alcanza: hay que revisar de nuevo.
+    pendientes += [PLATFORM_CHECK_LABELS.get(c, c) for c in CHEQUEOS_DE_PLATAFORMA if c not in por_clave]
+    # Sin fecha de fin no se sabe cuándo se revisó: cuenta como vencida (falla cerrado).
+    vence = run.finished_at + VIGENCIA_REVISION_PLATAFORMA if run.finished_at is not None else None
+    vencida = vence is None or utcnow() >= vence
+    return RevisionPlataforma(
+        status=status,
+        finished_at=run.finished_at,
+        ok=not pendientes and not vencida,
+        pending=pendientes,
+        expired=vencida,
+        expires_at=vence,
     )
-    if not settings.meta_app_id:
-        chequeos.append(ChequeoAutomatico("platform_webhook", "Webhook de la app", None, "Sin app configurada."))
-        return chequeos
-    filas = await list_app_subscriptions(settings.meta_app_id)
-    fila = next((f for f in filas if f.object == "whatsapp_business_account"), None)
-    if fila is None or fila.active is None:
-        chequeos.append(
-            ChequeoAutomatico(
-                "platform_webhook",
-                "Webhook de la app",
-                None,
-                "Sin datos: regístralo en «Salud de Meta → Registrar webhook» (solo master) o espera el cron.",
-            )
-        )
-    else:
-        chequeos.append(
-            ChequeoAutomatico(
-                "platform_webhook",
-                "Webhook de la app",
-                fila.active,
-                "Suscripción activa a whatsapp_business_account."
-                if fila.active
-                else (fila.last_error or "Meta desactivó la suscripción de la app.")[:200],
-            )
-        )
-    return chequeos
 
 
-async def estado_app_meta(role: str) -> EstadoAppMeta:
-    _exigir_master(role)
+async def estado_app_meta(admin: Any) -> EstadoAppMeta:
+    _exigir_master(getattr(admin, "role", ""))
     settings = get_settings()
     async with get_session() as session:
         filas = {
@@ -202,14 +191,13 @@ async def estado_app_meta(role: str) -> EstadoAppMeta:
         )
         for m in MANUALES
     ]
-    automaticos = await _automaticos()
-    listo = all(c.ok is True for c in automaticos) and all(m.done for m in manuales)
+    revision = await _revision_de_plataforma(admin)
     return EstadoAppMeta(
         app_id=app_id,
         config_id=settings.meta_config_id or "",
         graph_api_version=settings.graph_api_version,
-        ready=listo,
-        automatic=automaticos,
+        ready=revision.ok and all(m.done for m in manuales),
+        platform_check=revision,
         manual=manuales,
     )
 

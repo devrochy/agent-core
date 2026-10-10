@@ -27,6 +27,9 @@ from core.shared.logger import get_logger
 log = get_logger(__name__)
 
 DEFAULT_TIMEZONE = "America/Bogota"
+# Encabezado del dato de fecha y hora (ADR-0091). Lo usa también la normalización de las
+# grabaciones de evals (`core/llm/cassette.py`) para ignorar la parte que cambia cada minuto.
+CURRENT_DATETIME_HEADER = "## Fecha y hora actual"
 
 _NEXT_DAYS = {"es": "Próximos días", "en": "Next days", "pt": "Próximos dias"}
 _TOMORROW = {"es": "mañana", "en": "tomorrow", "pt": "amanhã"}
@@ -107,7 +110,7 @@ def _current_datetime_part(ctx: PromptContext) -> str:
         line = f"Hoje é {weekday}, {local.day} de {month} de {local.year} — {hour} ({tz_name})."
     else:
         line = f"Hoy es {weekday}, {local.day} de {month} de {local.year} — {hour} ({tz_name})."
-    return f"## Fecha y hora actual\n{line}\n{_next_days_line(local.date(), lang)}"
+    return f"{CURRENT_DATETIME_HEADER}\n{line}\n{_next_days_line(local.date(), lang)}"
 
 
 def _next_days_line(today: date, lang: str) -> str:

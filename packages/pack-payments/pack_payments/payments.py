@@ -111,6 +111,8 @@ async def _transaccion(reference: str) -> PaymentTransaction | None:
                 select(PaymentTransaction).where(
                     PaymentTransaction.tenant_id == get_current_tenant_id(),
                     PaymentTransaction.reference == reference,
+                    # La viva: una regenerada por vencimiento deja la vieja borrada.
+                    PaymentTransaction.deleted_at.is_(None),
                 )
             )
         ).scalar_one_or_none()

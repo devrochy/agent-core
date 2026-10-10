@@ -140,6 +140,12 @@ async def _crear_pedido(quote_id: str, ctx) -> dict:
         )
 
 
+def _cotizacion_no_encontrada() -> dict:
+    """Ajena o inexistente responden igual: no se revela que la cotización existe."""
+    from pack_commerce.skills import _sin_cotizacion_vigente as respuesta
+
+    return respuesta()
+
 async def test_no_confirma_la_cotizacion_de_otro_cliente() -> None:
     from pack_commerce.skills import OrderSkill
 
@@ -150,7 +156,7 @@ async def test_no_confirma_la_cotizacion_de_otro_cliente() -> None:
     async with tenant_scope(T1):
         result = await OrderSkill().confirmar_cotizacion({"quote_id": quote_id}, _ctx(uuid.uuid4()))
 
-    assert result == {"error": "Cotización no encontrada."}
+    assert result == _cotizacion_no_encontrada()
     assert await _estado_quote(quote_id) == "draft"
 
 
@@ -159,7 +165,7 @@ async def test_no_convierte_en_pedido_la_cotizacion_de_otro_cliente() -> None:
 
     result = await _crear_pedido(quote_id, _ctx(uuid.uuid4()))
 
-    assert result == {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
+    assert result == _cotizacion_no_encontrada()
     assert await _pedidos_de_la_quote(quote_id) == 0
     assert await _estado_quote(quote_id) == "aceptada"
 
@@ -174,7 +180,7 @@ async def test_no_aplica_promocion_a_la_cotizacion_de_otro_cliente() -> None:
     async with tenant_scope(T1):
         result = await OrderSkill().aplicar_promocion({"quote_id": quote_id}, _ctx(uuid.uuid4()))
 
-    assert result == {"error": "Cotización no encontrada."}
+    assert result == _cotizacion_no_encontrada()
 
 
 async def test_no_toca_el_pedido_de_otro_cliente() -> None:

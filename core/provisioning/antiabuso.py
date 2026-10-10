@@ -280,8 +280,10 @@ def token_de_terminos(conversation_id: uuid.UUID | None, version: str) -> str:
     return hmac.new(_clave(), mensaje, hashlib.sha256).hexdigest()[:16]
 
 
-def _clave_de_terminos(vendedor: uuid.UUID, conversation_id: uuid.UUID | None) -> str:
-    return f"alta:terminos:{vendedor}:{conversation_id}"
+def _clave_de_terminos(vendedor: uuid.UUID, conversation_id: uuid.UUID | None, version: str) -> str:
+    """Un marcador por conversación **y juego de versiones**: publicar otra versión arranca uno
+    nuevo, así el «sí» a la anterior no acepta la nueva."""
+    return f"alta:terminos:{vendedor}:{conversation_id}:{version}"
 
 
 async def _ultimo_inbound(vendedor: uuid.UUID, conversation_id: uuid.UUID) -> datetime | None:
@@ -298,10 +300,19 @@ async def _ultimo_inbound(vendedor: uuid.UUID, conversation_id: uuid.UUID) -> da
         ).scalar_one_or_none()
 
 
-async def _anotar_terminos_mostrados(vendedor: uuid.UUID, conversation_id: uuid.UUID | None) -> None:
-    """Hasta qué mensaje del cliente se mostraron los enlaces: la aceptación tiene que venir
-    en un mensaje POSTERIOR. Se guarda la hora de la base del último mensaje del cliente (no
-    el reloj de la app), así el mensaje que disparó este turno nunca cuenta como aceptación."""
+async def _anotar_terminos_mostrados(
+    vendedor: uuid.UUID, conversation_id: uuid.UUID | None, version: str
+) -> None:
+    """Hasta qué mensaje del cliente se mostraron los enlaces de este juego de versiones: la
+    aceptación tiene que venir en un mensaje POSTERIOR. Se guarda la hora de la base del último
+    mensaje del cliente (no el reloj de la app), así el mensaje que disparó este turno nunca
+    cuenta como aceptación.
+
+    El marcador es **fijo** (`SET NX`): lo pone la primera vez que se muestran los enlaces y no
+    lo mueven las llamadas siguientes. Entre turnos el modelo solo ve texto, así que en el turno
+    en que el cliente acepta suele llamar primero sin el token (o con `true`); si esa llamada
+    moviera el marcador al mensaje que acepta, el reintento con el token ya no tendría un mensaje
+    posterior y nadie podría contratar (journey 05, 2026-10-09)."""
     from core.memory.working import get_redis
 
     if conversation_id is None:
@@ -309,28 +320,51 @@ async def _anotar_terminos_mostrados(vendedor: uuid.UUID, conversation_id: uuid.
     ultimo = await _ultimo_inbound(vendedor, conversation_id)
     marca = ultimo.isoformat() if ultimo else datetime(1970, 1, 1, tzinfo=UTC).isoformat()
     try:
-        await get_redis().set(_clave_de_terminos(vendedor, conversation_id), marca, ex=_TTL_TERMINOS_S)
+        await get_redis().set(
+            _clave_de_terminos(vendedor, conversation_id, version), marca, ex=_TTL_TERMINOS_S, nx=True
+        )
     except Exception:
         log.warning("alta_terminos_sin_redis", tenant_id=str(vendedor), exc_info=True)
 
 
-async def _mensaje_que_acepta(vendedor: uuid.UUID, conversation_id: uuid.UUID | None) -> str | None:
-    """El último mensaje del cliente posterior a que se mostraran los enlaces, o None. Sin
-    ese mensaje (el modelo repitió el token en el mismo turno, lo trajo de otra conversación
-    o Redis no responde), no hay aceptación: falla cerrado."""
+async def _mensaje_que_acepta(
+    vendedor: uuid.UUID, conversation_id: uuid.UUID | None, version: str
+) -> str | None:
+    """El último mensaje del cliente posterior a que se ENVIARAN los enlaces de este juego de
+    versiones, o None.
+
+    «Enviados» es el primer mensaje saliente (no fallido) posterior al marcador: la respuesta del
+    turno que mostró los enlaces. Un mensaje del cliente que llegó mientras corría ese turno (una
+    ráfaga) es posterior al marcador, pero el cliente todavía no había visto los enlaces: no
+    acepta. Sin ese mensaje (el modelo repitió el token en el mismo turno, lo trajo de otra
+    conversación, el marcador venció, la respuesta no salió o Redis no responde), no hay
+    aceptación: falla cerrado."""
     from core.memory.working import get_redis
 
     if conversation_id is None:
         return None
     try:
-        mostrado = await get_redis().get(_clave_de_terminos(vendedor, conversation_id))
+        mostrado = await get_redis().get(_clave_de_terminos(vendedor, conversation_id, version))
     except Exception:
         log.warning("alta_terminos_sin_redis", tenant_id=str(vendedor), exc_info=True)
         return None
     if not mostrado:
         return None
-    desde = datetime.fromisoformat(mostrado.decode() if isinstance(mostrado, bytes) else str(mostrado))
+    marcador = datetime.fromisoformat(mostrado.decode() if isinstance(mostrado, bytes) else str(mostrado))
     async with _sesion_del(vendedor) as session:
+        enviados = (
+            await session.execute(
+                select(func.min(Message.created_at)).where(
+                    Message.tenant_id == vendedor,
+                    Message.conversation_id == conversation_id,
+                    Message.direction == "outbound",
+                    Message.status != "failed",
+                    Message.created_at > marcador,
+                )
+            )
+        ).scalar_one_or_none()
+        if enviados is None:
+            return None
         mensaje = (
             await session.execute(
                 select(Message.id)
@@ -338,13 +372,29 @@ async def _mensaje_que_acepta(vendedor: uuid.UUID, conversation_id: uuid.UUID | 
                     Message.tenant_id == vendedor,
                     Message.conversation_id == conversation_id,
                     Message.direction == "inbound",
-                    Message.created_at > desde,
+                    Message.created_at > enviados,
                 )
                 .order_by(Message.created_at.desc())
                 .limit(1)
             )
         ).scalar_one_or_none()
     return str(mensaje) if mensaje else None
+
+
+async def cerrar_aceptacion(pedido: PedidoPreparado) -> None:
+    """Después de que el pedido se guardó: borra el marcador de los términos que aceptó. La
+    aceptación es **por pedido** (ADR-0125, adenda): otro pedido de un plan en la misma
+    conversación vuelve a mostrar los enlaces y pide un «sí» nuevo. Si Redis no responde, el
+    marcador queda hasta que venza (24 h)."""
+    from core.memory.working import get_redis
+
+    version = (pedido.aceptacion or {}).get("version_legal")
+    if not version or pedido.conversation_id is None:
+        return
+    try:
+        await get_redis().delete(_clave_de_terminos(pedido.vendedor, pedido.conversation_id, version))
+    except Exception:
+        log.warning("alta_terminos_sin_redis", tenant_id=str(pedido.vendedor), exc_info=True)
 
 
 async def _limite_por_origen(vendedor: uuid.UUID, origen: str) -> bool:
@@ -393,9 +443,9 @@ async def preparar_pedido_de_alta(
         token = token_de_terminos(conversation_id, version)
         mensaje_id = None
         if hmac.compare_digest(str(acepta_terminos or "").strip().encode(), token.encode()):
-            mensaje_id = await _mensaje_que_acepta(vendedor, conversation_id)
+            mensaje_id = await _mensaje_que_acepta(vendedor, conversation_id, version)
         if mensaje_id is None:
-            await _anotar_terminos_mostrados(vendedor, conversation_id)
+            await _anotar_terminos_mostrados(vendedor, conversation_id, version)
             return TerminosPendientes(
                 documentos=[vigentes[tipo].para_aceptar() for tipo in legal.TIPOS], token=token
             )
@@ -557,6 +607,7 @@ __all__ = [
     "PedidoPreparado",
     "TerminosPendientes",
     "aceptacion_del_pedido",
+    "cerrar_aceptacion",
     "dominio_desechable",
     "free_previo",
     "huella",

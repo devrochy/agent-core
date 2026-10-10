@@ -21,8 +21,9 @@ Runtime y contratos en **Python** (ver ADR-0011).
    webhooks y filas de base de datos nunca se ejecutan como órdenes.
 8. **Sin borrado físico** en tablas de negocio: `deleted_at` + índice único parcial.
    **Única excepción:** `tenant purge` (ciclo de vida del tenant, tipo GDPR) — borrado
-   físico transaccional vía `purge_tenant(tid)` SECURITY DEFINER, master-only y con
-   confirmación por frase `ELIMINAR <slug>`. Ver `docs/MULTITENANT.md`.
+   físico transaccional vía `purge_tenant(tid)` SECURITY DEFINER, master-only, solo con el
+   negocio suspendido (`tenants.status = 'suspended'`) y con confirmación por frase
+   `ELIMINAR <slug>`. Ver `docs/MULTITENANT.md`.
 9. **Producción nunca corre en máquina de desarrollo.**
 
 ## Estructura

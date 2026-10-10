@@ -912,3 +912,55 @@ async def test_listado_devuelve_hora_local_y_fecha_escrita() -> None:
     assert cita["start"] == f"{FECHA}T15:00:00-05:00"
     assert cita["fecha"] == "lunes 15 de marzo de 2027"
     assert cita["hora"] == "15:00"
+
+
+async def test_listado_incluye_las_pasadas_de_las_ultimas_24h() -> None:
+    """Test 2026-10-10: a las 23:49 la clienta preguntó por su cita de las 10:00 de
+    ese día (seguía en `scheduled`), la tool devolvió `total: 0` y el asistente
+    negó que existiera. Las de las últimas 24 h salen con `ya_paso` y sin índice;
+    "cancelá la 1" sigue resolviendo la primera FUTURA."""
+    from datetime import UTC, datetime, timedelta
+
+    from pack_calendar.models import Appointment
+    from pack_calendar.skills import CalendarSkill
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tenant_id = await _tenant_calendario()
+    await _configurar(tenant_id)
+    skill = CalendarSkill()
+    ctx = _contexto()
+    await _seed_email(tenant_id, ctx.conversation_id, "hoy@ejemplo.com")
+    ahora = datetime.now(UTC)
+    async with tenant_scope(tenant_id):
+        async with get_session() as s:
+            def _cita(title: str, horas: float) -> Appointment:
+                inicio = ahora + timedelta(hours=horas)
+                return Appointment(
+                    tenant_id=tenant_id, conversation_id=ctx.conversation_id, title=title,
+                    start_at=inicio, end_at=inicio + timedelta(hours=1), timezone="America/Bogota",
+                )
+
+            vieja, hoy = _cita("Demo de antier", -30), _cita("Demo de hoy", -14)
+            s.add_all([vieja, hoy])
+            await s.flush()
+            hoy_id = str(hoy.id)
+        futura = await skill.create_event(
+            {"title": "Demo futura", "start_datetime": f"{FECHA}T10:00:00", "attendee_email": "hoy@ejemplo.com"},
+            ctx,
+        )
+        assert futura["status"] == "created", futura
+        listed = await skill.list_appointments({}, ctx)
+
+        assert listed["total"] == 2 and listed["proximas"] == 1
+        pasada, proxima = listed["appointments"]
+        assert pasada["event_id"] == hoy_id and pasada["ya_paso"] is True and "index" not in pasada
+        assert proxima["event_id"] == futura["event_id"] and proxima["ya_paso"] is False
+        assert proxima["index"] == 1
+
+        res = await skill.cancel_event({"event_id": "1"}, ctx)
+        assert res["status"] == "cancelled", res
+        assert res["cancelled"] == [futura["event_id"]]
+        restantes = await skill.list_appointments({}, ctx)
+        assert [c["event_id"] for c in restantes["appointments"]] == [hoy_id]

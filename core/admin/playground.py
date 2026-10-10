@@ -5,10 +5,11 @@ sobre una conversación sintética marcada con `channel == TEST_CHANNEL`. El loo
 GENERA y DEVUELVE la respuesta (`TurnResult`); acá se devuelve al navegador --
 nunca se llama a `send_to_conversation`, así que no toca Meta ni waweb.
 
-Historial: vive en working memory (Redis) igual que una conversación real; NO se
-persisten filas en `messages` (así el playground no consume la métrica
-`mensajes` ni contamina el hilo del negocio). El canal `test` queda excluido de
-las métricas de cuota y del escalamiento (`core/shared/test_mode.py`).
+Historial: vive en working memory (Redis) igual que una conversación real. Además, como
+el consumidor y el envío, se guardan en `messages` el mensaje de la prueba y la respuesta:
+lo que depende de ellos (la aceptación de los términos del alta, ADR-0125) tiene que poder
+probarse desde el panel. Son de la conversación `test`, que queda fuera de las métricas
+de cuota (también `mensajes`), de las listas y del escalamiento (`core/shared/test_mode.py`).
 
 Aislamiento: cada operación corre bajo el `tenant_scope` del admin
 (middleware del panel); todas las queries filtran `tenant_id` explícito además
@@ -123,6 +124,7 @@ async def run_test_turn(tenant_id: uuid.UUID, text: str) -> TestTurn:
     from core.orchestrator.loop import process_conversation
 
     conversation = await get_or_create_test_conversation(tenant_id)
+    await _guardar_mensaje(tenant_id, conversation.id, "inbound", text)
     try:
         result = await process_conversation(conversation.id, text)
     except ValueError as exc:
@@ -133,4 +135,24 @@ async def run_test_turn(tenant_id: uuid.UUID, text: str) -> TestTurn:
             "No se pudo procesar el turno. Verificá que el tenant tenga un AgentSpec "
             "activo y que el bot no esté pausado."
         )
+    if result.text:
+        await _guardar_mensaje(tenant_id, conversation.id, "outbound", result.text)
     return TestTurn(text=result.text, image_url=result.image_url, escalated=result.escalated)
+
+
+async def _guardar_mensaje(tenant_id: uuid.UUID, conversation_id: uuid.UUID, direccion: str, texto: str) -> None:
+    """Como `consumer._persist_inbound` (entrante) y el envío (saliente, ya entregado: el
+    playground responde en el navegador)."""
+    from core.db.models import Message
+
+    async with get_session() as session:
+        session.add(
+            Message(
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+                direction=direccion,
+                sender_type="customer" if direccion == "inbound" else "agent",
+                content=texto,
+                status="sent",
+            )
+        )
