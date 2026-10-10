@@ -13,6 +13,10 @@ negocio.
 - Inmutable salvo `yanked` (retirada por seguridad): trigger con `prevent_mutation('yanked')`
   (función de 0067). La retirada es irreversible (`true` → `false` se rechaza).
 - `manifest.provides.agent_templates`, si está, es un array (si no, la vista fallaría entera).
+- TRUNCATE también se rechaza (trigger por sentencia). La vista es `security_invoker`.
+- `plugins.owner_tenant_id` (NULL = plataforma): base para que un negocio no instale el plugin
+  privado de otro (trigger en `pack_installations`, 0069). `app_runtime` sigue escribiendo
+  `plugins`: el plugin manager la sincroniza al arrancar.
 - `agent_templates` no tiene columna `tenant_id`: `purge_tenant` (0011) recorre
   `information_schema.columns` y trataría como tabla a una vista que la tuviera.
 
@@ -52,9 +56,13 @@ def upgrade() -> None:
         );
         CREATE TRIGGER pack_versions_immutable BEFORE UPDATE OR DELETE ON pack_versions
             FOR EACH ROW EXECUTE FUNCTION prevent_mutation('yanked');
+        CREATE TRIGGER pack_versions_no_truncate BEFORE TRUNCATE ON pack_versions
+            FOR EACH STATEMENT EXECUTE FUNCTION prevent_mutation();
 
         -- La retirada por seguridad no se deshace: una versión yanked no vuelve a ser instalable.
-        CREATE OR REPLACE FUNCTION pack_versions_yank_irreversible() RETURNS trigger LANGUAGE plpgsql AS $$
+        CREATE OR REPLACE FUNCTION pack_versions_yank_irreversible() RETURNS trigger LANGUAGE plpgsql
+        SET search_path = pg_catalog, public, pg_temp
+        AS $$
         BEGIN
             IF OLD.yanked AND NOT NEW.yanked THEN
                 RAISE EXCEPTION 'pack_versions: % % está retirada (yanked) y no se restaura', OLD.pack_id, OLD.version;
@@ -64,12 +72,19 @@ def upgrade() -> None:
         CREATE TRIGGER pack_versions_yank_irreversible BEFORE UPDATE OF yanked ON pack_versions
             FOR EACH ROW EXECUTE FUNCTION pack_versions_yank_irreversible();
 
-        CREATE VIEW agent_templates AS
+        -- security_invoker: la vista consulta con los permisos de quien la lee, no del dueño.
+        CREATE VIEW agent_templates WITH (security_invoker = true) AS
         SELECT pv.pack_id, pv.version, t->>'key' AS template_key, t->>'name' AS name,
                t->>'description' AS description, t AS template
           FROM pack_versions pv,
                jsonb_array_elements(coalesce(pv.manifest->'provides'->'agent_templates', '[]'::jsonb)) t
          WHERE NOT pv.yanked;
+
+        -- Dueño de un plugin: NULL = de la plataforma (packages/pack-*); un uuid = plugin privado de ese
+        -- negocio (ADR-0089). pack_installations rechaza instalar el plugin privado de otro negocio.
+        -- Sin FK a tenants: purge_tenant borra el negocio y una FK la frenaría (o, con SET NULL,
+        -- volvería "de plataforma" un plugin privado).
+        ALTER TABLE plugins ADD COLUMN owner_tenant_id uuid;
 
         DO $$
         BEGIN
@@ -85,4 +100,5 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DROP VIEW IF EXISTS agent_templates")
     op.execute("DROP TABLE IF EXISTS pack_versions")
+    op.execute("ALTER TABLE plugins DROP COLUMN IF EXISTS owner_tenant_id")
     op.execute("DROP FUNCTION IF EXISTS pack_versions_yank_irreversible()")

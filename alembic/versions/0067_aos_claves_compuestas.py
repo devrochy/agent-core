@@ -5,8 +5,11 @@
   es imposible a nivel de esquema, ADR-0116 §4). Son tablas grandes: el índice se crea con
   `CREATE UNIQUE INDEX CONCURRENTLY` fuera de la transacción y después se ata como constraint
   con `ADD CONSTRAINT … USING INDEX` (lock breve, sin escaneo).
-- `prevent_mutation()`: función genérica nueva (ADR-0114 §1). Rechaza DELETE y todo UPDATE salvo
-  las columnas que recibe como argumento del trigger (`TG_ARGV`). Sin argumentos, la tabla es
+- `UNIQUE (tenant_id, id)` también en `agent_specs` y `eval_runs` (chicas), destino de las FKs
+  compuestas de `agent_versions.legacy_agent_spec_id` e `improvement_proposals.eval_run_id`.
+- `prevent_mutation()`: función genérica nueva (ADR-0114 §1). Rechaza DELETE, TRUNCATE y todo
+  UPDATE salvo las columnas que recibe como argumento del trigger (`TG_ARGV`), con `search_path`
+  fijo. Sin argumentos, la tabla es
   append-only estricta. `purge_tenant` (0011) la salta al desactivar los triggers.
 
 Sin cambio de conducta: nada en runtime usa la función ni las constraints nuevas (el `id` ya es
@@ -39,17 +42,27 @@ _CLAVES = {
     "conversations": ("uq_conv_tenant_id", "uq_conversations_tenant_id"),
     "customers": ("uq_cust_tenant_id", "uq_customers_tenant_id"),
     "meta_connections": ("uq_meta_tenant_id", "uq_meta_connections_tenant_id"),
+    # Destinos de FKs compuestas desde tablas nuevas (ADR-0116 §4): versión legacy y corrida de evals.
+    "agent_specs": ("uq_agent_specs_tenant_id_idx", "uq_agent_specs_tenant_id"),
+    "eval_runs": ("uq_eval_runs_tenant_id_idx", "uq_eval_runs_tenant_id"),
+}
+# índice → (tabla, único, columnas, parcial)
+_ESPERADO = {
+    indice: (tabla, True, "(tenant_id, id)", False) for tabla, (indice, _c) in _CLAVES.items()
 }
 
 _PREVENT_MUTATION = """
-CREATE OR REPLACE FUNCTION prevent_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION prevent_mutation() RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, public, pg_temp
+AS $$
 DECLARE
     v_old jsonb;
     v_new jsonb;
     v_col text;
 BEGIN
-    IF TG_OP = 'DELETE' THEN
-        RAISE EXCEPTION '% es append-only (DELETE)', TG_TABLE_NAME;
+    -- TRUNCATE llega por un trigger BEFORE TRUNCATE ... FOR EACH STATEMENT (sin OLD/NEW).
+    IF TG_OP IN ('DELETE', 'TRUNCATE') THEN
+        RAISE EXCEPTION '% es append-only (%)', TG_TABLE_NAME, TG_OP;
     END IF;
     v_old := to_jsonb(OLD);
     v_new := to_jsonb(NEW);
@@ -67,26 +80,64 @@ END $$;
 """
 
 
-def _indice_unico_concurrente(indice: str, tabla: str) -> None:
+def _indice_existente(nombre: str) -> bool | None:
+    """None si no existe; False si quedó INVALID; True si existe válido y es EL MISMO índice.
+
+    Un índice con el mismo nombre pero otra tabla, columnas, unicidad o parcialidad no se salta en
+    silencio: la migración falla para que alguien lo mire.
+    """
+    tabla, unico, columnas, parcial = _ESPERADO[nombre]
+    fila = (
+        op.get_bind()
+        .exec_driver_sql(
+            "SELECT i.indisvalid, t.relname, i.indisunique, pg_get_indexdef(i.indexrelid), "
+            "i.indpred IS NOT NULL "
+            "FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+            "JOIN pg_class t ON t.oid = i.indrelid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'public' AND c.relname = %(nombre)s",
+            {"nombre": nombre},
+        )
+        .first()
+    )
+    if fila is None:
+        return None
+    valido, tabla_real, unico_real, definicion, parcial_real = fila
+    if not valido:
+        return False
+    if (tabla_real, unico_real, parcial_real) != (tabla, unico, parcial) or (
+        f"USING btree {columnas}" not in definicion
+    ):
+        raise RuntimeError(f"Ya existe un índice {nombre} distinto del esperado: {definicion}")
+    return True
+
+
+def _indice_unico_concurrente(indice: str, tabla: str, constraint: str) -> None:
     """Crea el índice sin bloquear escrituras; idempotente ante un intento fallido."""
-    conn = op.get_bind()
-    valido = conn.exec_driver_sql(
-        "SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
-        "JOIN pg_namespace n ON n.oid = c.relnamespace "
-        "WHERE n.nspname = 'public' AND c.relname = %(indice)s",
-        {"indice": indice},
-    ).scalar()
-    if valido:
+    # `ADD CONSTRAINT … USING INDEX` renombra el índice al nombre de la constraint: si la
+    # constraint ya existe, el índice también (con otro nombre) y no hay nada que crear.
+    ya_atado = (
+        op.get_bind()
+        .exec_driver_sql(
+            "SELECT 1 FROM pg_constraint WHERE conname = %(c)s AND conrelid = %(t)s::regclass",
+            {"c": constraint, "t": f"public.{tabla}"},
+        )
+        .first()
+    )
+    if ya_atado:
         return
-    if valido is False:  # quedó INVALID de un CONCURRENTLY interrumpido
+    estado = _indice_existente(indice)
+    if estado:
+        return
+    if estado is False:  # quedó INVALID de un CONCURRENTLY interrumpido
         op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {indice}")
     op.execute(f"CREATE UNIQUE INDEX CONCURRENTLY {indice} ON {tabla} (tenant_id, id)")
 
 
 def upgrade() -> None:
     with op.get_context().autocommit_block():
-        for tabla, (indice, _constraint) in _CLAVES.items():
-            _indice_unico_concurrente(indice, tabla)
+        for tabla, (indice, constraint) in _CLAVES.items():
+            _indice_unico_concurrente(indice, tabla, constraint)
         # ACCESS EXCLUSIVE de milisegundos por tabla, cada una en su propia transacción; sin
         # esperar detrás de una transacción larga.
         op.execute("SET lock_timeout = '5s'")
@@ -96,7 +147,7 @@ def upgrade() -> None:
                 DO $$
                 BEGIN
                     IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                                    WHERE conname = '{constraint}' AND conrelid = '{tabla}'::regclass) THEN
+                                    WHERE conname = '{constraint}' AND conrelid = 'public.{tabla}'::regclass) THEN
                         ALTER TABLE {tabla} ADD CONSTRAINT {constraint} UNIQUE USING INDEX {indice};
                     END IF;
                 END $$;

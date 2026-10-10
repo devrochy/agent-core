@@ -3,7 +3,8 @@
 Todo fuera de la transacción (`autocommit_block`), sin bloquear escrituras:
 
 - `uq_cc_webchat_key`: índice único parcial GLOBAL de la clave pública del widget (`external_id`)
-  para `type_id = 'webchat'` (ADR-0115 §4: el endpoint público resuelve sin negocio). El aislamiento
+  para `type_id = 'webchat'` (ADR-0115 §4: el endpoint público resuelve sin negocio). Incluye las
+  filas borradas: una clave pública nunca se reutiliza, tampoco en otro negocio. El aislamiento
   lo cubre aparte `uq_connection_tenant_provider_external`, que empieza por `tenant_id`. Hoy no hay
   filas `webchat`: el tipo llega con HU-AOS-11.
 - `ix_messages_turn`, `ix_usage_ledger_conn`, `ix_usage_ledger_agent`, `ix_usage_ledger_turn` y
@@ -33,7 +34,7 @@ depends_on = None
 _INDICES = {
     "uq_cc_webchat_key": (
         "UNIQUE",
-        "channel_connections (external_id) WHERE type_id = 'webchat' AND deleted_at IS NULL",
+        "channel_connections (external_id) WHERE type_id = 'webchat'",
     ),
     "ix_messages_turn": ("", "messages (tenant_id, turn_id) WHERE turn_id IS NOT NULL"),
     "ix_usage_ledger_conn": (
@@ -47,19 +48,55 @@ _INDICES = {
     "ix_usage_ledger_turn": ("", "usage_ledger (tenant_id, turn_id) WHERE turn_id IS NOT NULL"),
     "ix_audit_log_turn": ("", "audit_log (tenant_id, turn_id) WHERE turn_id IS NOT NULL"),
 }
+# índice → (tabla, único, columnas, parcial)
+_ESPERADO = {
+    nombre: (
+        definicion.split()[0],
+        unico == "UNIQUE",
+        definicion[definicion.index("(") : definicion.index(")") + 1],
+        " WHERE " in definicion,
+    )
+    for nombre, (unico, definicion) in _INDICES.items()
+}
+
+
+def _indice_existente(nombre: str) -> bool | None:
+    """None si no existe; False si quedó INVALID; True si existe válido y es EL MISMO índice.
+
+    Un índice con el mismo nombre pero otra tabla, columnas, unicidad o parcialidad no se salta en
+    silencio: la migración falla para que alguien lo mire.
+    """
+    tabla, unico, columnas, parcial = _ESPERADO[nombre]
+    fila = (
+        op.get_bind()
+        .exec_driver_sql(
+            "SELECT i.indisvalid, t.relname, i.indisunique, pg_get_indexdef(i.indexrelid), "
+            "i.indpred IS NOT NULL "
+            "FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+            "JOIN pg_class t ON t.oid = i.indrelid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'public' AND c.relname = %(nombre)s",
+            {"nombre": nombre},
+        )
+        .first()
+    )
+    if fila is None:
+        return None
+    valido, tabla_real, unico_real, definicion, parcial_real = fila
+    if not valido:
+        return False
+    if (tabla_real, unico_real, parcial_real) != (tabla, unico, parcial) or (
+        f"USING btree {columnas}" not in definicion
+    ):
+        raise RuntimeError(f"Ya existe un índice {nombre} distinto del esperado: {definicion}")
+    return True
 
 
 def _indice_concurrente(nombre: str, unico: str, definicion: str) -> None:
-    conn = op.get_bind()
-    valido = conn.exec_driver_sql(
-        "SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
-        "JOIN pg_namespace n ON n.oid = c.relnamespace "
-        "WHERE n.nspname = 'public' AND c.relname = %(nombre)s",
-        {"nombre": nombre},
-    ).scalar()
-    if valido:
+    estado = _indice_existente(nombre)
+    if estado:
         return
-    if valido is False:  # quedó INVALID de un CONCURRENTLY interrumpido
+    if estado is False:  # quedó INVALID de un CONCURRENTLY interrumpido
         op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {nombre}")
     op.execute(f"CREATE {unico} INDEX CONCURRENTLY {nombre} ON {definicion}")
 

@@ -17,6 +17,13 @@ aislamiento (`nullif` en USING y WITH CHECK), índices que empiezan por `tenant_
 (tenant_id, id)` en las que son padre y FKs compuestas `(tenant_id, …)` en TODA referencia a otra
 entidad del negocio: una referencia entre negocios es imposible a nivel de esquema (ADR-0116 §4).
 
+Referencias que faltaban en el diseño, también compuestas (ADR-0116 §4): la versión legacy
+(`agent_specs`), la corrida de evals (`eval_runs`) y el turno (`core_decisions`) desde
+`conversation_tasks.started_turn_id`, `task_events.turn_id` y `memory_facts.source_turn_id`, estas
+diferidas al COMMIT. Las append-only también rechazan TRUNCATE; las funciones de trigger fijan
+`search_path`. `pack_installations` solo guarda texto cifrado y rechaza el plugin privado de otro
+negocio.
+
 Permisos de `app_runtime` (los default privileges de 0003 dan SELECT, INSERT, UPDATE y DELETE: se
 revoca todo y se otorga lo mínimo):
 - append-only (`prevent_mutation()` sin argumentos, 0067): solo SELECT e INSERT;
@@ -123,6 +130,10 @@ def _rls(tabla: str) -> None:
             f"CREATE TRIGGER {tabla}_immutable BEFORE UPDATE OR DELETE ON {tabla} "
             "FOR EACH ROW EXECUTE FUNCTION prevent_mutation()"
         )
+        op.execute(
+            f"CREATE TRIGGER {tabla}_no_truncate BEFORE TRUNCATE ON {tabla} "
+            "FOR EACH STATEMENT EXECUTE FUNCTION prevent_mutation()"
+        )
 
 
 def _ddl(dim: int) -> dict[str, str]:
@@ -157,6 +168,7 @@ def _ddl(dim: int) -> dict[str, str]:
               updated_by      uuid,
               created_at      timestamptz NOT NULL DEFAULT now(),
               updated_at      timestamptz NOT NULL DEFAULT now(),
+              deleted_at      timestamptz,
               PRIMARY KEY (tenant_id, agent_id),
               FOREIGN KEY (tenant_id, agent_id) REFERENCES agents (tenant_id, id),
               FOREIGN KEY (tenant_id, agent_id, base_version_id) REFERENCES agent_versions (tenant_id, agent_id, id)
@@ -180,7 +192,8 @@ def _ddl(dim: int) -> dict[str, str]:
               CONSTRAINT uq_agent_versions_number    UNIQUE (tenant_id, agent_id, version),
               CONSTRAINT uq_agent_versions_hash      UNIQUE (tenant_id, agent_id, content_hash),
               CONSTRAINT uq_agent_versions_agent_id  UNIQUE (tenant_id, agent_id, id),
-              FOREIGN KEY (tenant_id, agent_id) REFERENCES agents (tenant_id, id)
+              FOREIGN KEY (tenant_id, agent_id) REFERENCES agents (tenant_id, id),
+              FOREIGN KEY (tenant_id, legacy_agent_spec_id) REFERENCES agent_specs (tenant_id, id)
             );
             -- Backfill B2 idempotente por la versión de agent_specs de la que sale (ADR-0113 §5).
             CREATE UNIQUE INDEX uq_agent_versions_legacy ON agent_versions (tenant_id, agent_id, legacy_agent_spec_id)
@@ -217,7 +230,9 @@ def _ddl(dim: int) -> dict[str, str]:
               WHERE is_default AND deleted_at IS NULL;
             CREATE INDEX ix_agent_instances_agent ON agent_instances (tenant_id, agent_id);
 
-            CREATE OR REPLACE FUNCTION agent_instance_checks() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION agent_instance_checks() RETURNS trigger LANGUAGE plpgsql
+            SET search_path = pg_catalog, public, pg_temp
+            AS $$
             DECLARE
               v_conv boolean;
             BEGIN
@@ -311,6 +326,9 @@ def _ddl(dim: int) -> dict[str, str]:
               CONSTRAINT uq_pack_installations_tenant_id UNIQUE (tenant_id, id),
               CONSTRAINT ck_pack_installations_scope CHECK ((scope = 'tenant' AND connection_id IS NULL)
                                                          OR (scope = 'connection' AND connection_id IS NOT NULL)),
+              -- Solo texto cifrado (core/shared/crypto.py: AES-GCM "gcm:v1:" o Fernet legado "gAAAAA").
+              CONSTRAINT ck_pack_installations_config_cifrada
+                CHECK (config_encrypted IS NULL OR config_encrypted ~ '^(gcm:v1:|gAAAAA)'),
               FOREIGN KEY (tenant_id, connection_id) REFERENCES channel_connections (tenant_id, id)
             );
             CREATE UNIQUE INDEX uq_pack_installations_scope ON pack_installations
@@ -318,6 +336,21 @@ def _ddl(dim: int) -> dict[str, str]:
               WHERE deleted_at IS NULL;
             CREATE INDEX ix_pack_installations_connection ON pack_installations (tenant_id, connection_id)
               WHERE connection_id IS NOT NULL;
+
+            -- Un negocio no instala el plugin privado de otro (plugins.owner_tenant_id, 0068).
+            CREATE OR REPLACE FUNCTION pack_installation_owner_check() RETURNS trigger LANGUAGE plpgsql
+            SET search_path = pg_catalog, public, pg_temp
+            AS $$
+            DECLARE v_owner uuid;
+            BEGIN
+              SELECT p.owner_tenant_id INTO v_owner FROM plugins p WHERE p.id = NEW.pack_id;
+              IF v_owner IS NOT NULL AND v_owner <> NEW.tenant_id THEN
+                RAISE EXCEPTION 'el plugin % es privado de otro negocio', NEW.pack_id;
+              END IF;
+              RETURN NEW;
+            END $$;
+            CREATE TRIGGER pack_installations_owner BEFORE INSERT OR UPDATE OF pack_id, tenant_id
+              ON pack_installations FOR EACH ROW EXECUTE FUNCTION pack_installation_owner_check();
         """,
         # ------------------------------------------------------------- releases
         "connection_releases": """
@@ -609,6 +642,7 @@ def _ddl(dim: int) -> dict[str, str]:
               embedding_model text NOT NULL,
               embedding       vector({dim}) NOT NULL,
               created_at      timestamptz NOT NULL DEFAULT now(),
+              deleted_at      timestamptz,
               PRIMARY KEY (tenant_id, release_id, procedure_id, exemplar_hash, embedding_model),
               FOREIGN KEY (tenant_id, release_id) REFERENCES connection_releases (tenant_id, id)
             );
@@ -654,12 +688,22 @@ def _ddl(dim: int) -> dict[str, str]:
               CONSTRAINT ck_improvement_scope CHECK ((scope = 'tenant' AND connection_id IS NULL)
                                                   OR (scope = 'connection' AND connection_id IS NOT NULL)),
               FOREIGN KEY (tenant_id, connection_id) REFERENCES channel_connections (tenant_id, id),
-              FOREIGN KEY (tenant_id, agent_id)      REFERENCES agents (tenant_id, id)
+              FOREIGN KEY (tenant_id, agent_id)      REFERENCES agents (tenant_id, id),
+              FOREIGN KEY (tenant_id, eval_run_id)   REFERENCES eval_runs (tenant_id, id)
             );
             CREATE INDEX ix_improvement_status ON improvement_proposals (tenant_id, status, created_at)
               WHERE deleted_at IS NULL;
         """,
     }
+
+
+# Referencias al turno (`core_decisions.id`) desde tablas creadas antes que él o escritas en el mismo
+# turno: diferidas al COMMIT (el registro del turno puede escribirse después de la fila).
+_FKS_TURNO = {
+    "conversation_tasks": ("fk_conversation_tasks_started_turn", "started_turn_id"),
+    "task_events": ("fk_task_events_turn", "turn_id"),
+    "memory_facts": ("fk_memory_facts_source_turn", "source_turn_id"),
+}
 
 
 def upgrade() -> None:
@@ -668,20 +712,32 @@ def upgrade() -> None:
     # vez y en el orden en que las escribe el consumer (customers → conversations), para no cerrar
     # un deadlock con un turno en curso.
     op.execute(
-        "LOCK TABLE customers, conversations, channel_connections IN SHARE ROW EXCLUSIVE MODE"
+        "LOCK TABLE customers, conversations, channel_connections, agent_specs, eval_runs, plugins "
+        "IN SHARE ROW EXCLUSIVE MODE"
     )
     ddl = _ddl(get_settings().embedding_dimensions)
     assert set(ddl) == set(TABLAS), "cada tabla nueva tiene su DDL"
     for tabla in TABLAS:
         op.execute(ddl[tabla])
         _rls(tabla)
+    for tabla, (nombre, columna) in _FKS_TURNO.items():
+        op.execute(
+            f"ALTER TABLE {tabla} ADD CONSTRAINT {nombre} FOREIGN KEY (tenant_id, {columna}) "
+            "REFERENCES core_decisions (tenant_id, id) DEFERRABLE INITIALLY DEFERRED"
+        )
 
 
 def downgrade() -> None:
     op.execute("SET LOCAL lock_timeout = '5s'")
     # DROP TABLE de cada hija quita los triggers RI del padre con lock exclusivo: mismo orden.
-    op.execute("LOCK TABLE customers, conversations, channel_connections IN ACCESS EXCLUSIVE MODE")
+    op.execute(
+        "LOCK TABLE customers, conversations, channel_connections, agent_specs, eval_runs, plugins "
+        "IN ACCESS EXCLUSIVE MODE"
+    )
+    for tabla, (nombre, _columna) in _FKS_TURNO.items():
+        op.execute(f"ALTER TABLE IF EXISTS {tabla} DROP CONSTRAINT IF EXISTS {nombre}")
     for tabla in reversed(TABLAS):
         # DROP TABLE se lleva policy, triggers, índices y FKs de la tabla.
         op.execute(f"DROP TABLE IF EXISTS {tabla}")
     op.execute("DROP FUNCTION IF EXISTS agent_instance_checks()")
+    op.execute("DROP FUNCTION IF EXISTS pack_installation_owner_check()")

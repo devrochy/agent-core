@@ -13,6 +13,11 @@ Columnas nuevas, todas nullables o con default constante/estable (PG ≥ 11: sin
   `turn_id`, `connection_id`, `agent_instance_id`, `agent_version_id`, `release_id`,
   `a2a_call_id`, `trace_id`.
 - `audit_log`: `turn_id`, `connection_id`, `agent_instance_id`.
+- Toda referencia nueva es FK compuesta `(tenant_id, …)` `NOT VALID` (ADR-0116 §4): al turno
+  (`core_decisions`, diferida al COMMIT: el registro del turno puede escribirse después), a la
+  conexión, a la instancia, a la versión y a la release. Con NULL (todo lo que escribe hoy el
+  runtime) no se verifica nada; `ck_usage_release_conn` evita que una release sin conexión se
+  salte la FK.
 - `tenants` (ADR-0112): banderas por negocio `aos_runtime` (`legacy` | `v3`) y `aos_procedures`,
   con el CHECK de orden (`aos_procedures` exige `v3`). Tabla de sistema chica: los CHECKs entran
   validados. Va AL FINAL, para no tener `tenants` bloqueada mientras se alteran las demás.
@@ -80,7 +85,7 @@ def _alter(tabla: str, columnas: list[str], constraints: dict[str, str]) -> str:
     for nombre, definicion in constraints.items():
         sentencias.append(
             f"IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '{nombre}' "
-            f"AND conrelid = '{tabla}'::regclass) THEN\n"
+            f"AND conrelid = 'public.{tabla}'::regclass) THEN\n"
             f"  ALTER TABLE {tabla} ADD CONSTRAINT {nombre} {definicion};\nEND IF;"
         )
     return "DO $$\nBEGIN\n" + "\n".join(sentencias) + "\nEND $$;"
@@ -137,7 +142,16 @@ _CAMBIOS: list[tuple[str, list[str], dict[str, str]]] = [
         },
     ),
     # ------------------------------------------------ mensajes, uso y auditoría
-    ("messages", ["turn_id uuid", "agent_instance_id uuid"], {}),
+    (
+        "messages",
+        ["turn_id uuid", "agent_instance_id uuid"],
+        {
+            "fk_messages_turn": "FOREIGN KEY (tenant_id, turn_id) REFERENCES core_decisions (tenant_id, id) "
+            "DEFERRABLE INITIALLY DEFERRED NOT VALID",
+            "fk_messages_agent_instance": "FOREIGN KEY (tenant_id, agent_instance_id) "
+            "REFERENCES agent_instances (tenant_id, id) NOT VALID",
+        },
+    ),
     (
         "usage_ledger",
         [
@@ -153,13 +167,37 @@ _CAMBIOS: list[tuple[str, list[str], dict[str, str]]] = [
         {
             "ck_usage_kind": "CHECK (kind IN ('turn','agent_run','classifier','composer',"
             "'embedding','eval')) NOT VALID",
+            "ck_usage_release_conn": "CHECK (release_id IS NULL OR connection_id IS NOT NULL) NOT VALID",
+            "fk_usage_turn": "FOREIGN KEY (tenant_id, turn_id) REFERENCES core_decisions (tenant_id, id) "
+            "DEFERRABLE INITIALLY DEFERRED NOT VALID",
+            "fk_usage_connection": "FOREIGN KEY (tenant_id, connection_id) "
+            "REFERENCES channel_connections (tenant_id, id) NOT VALID",
+            "fk_usage_agent_instance": "FOREIGN KEY (tenant_id, agent_instance_id) "
+            "REFERENCES agent_instances (tenant_id, id) NOT VALID",
+            "fk_usage_agent_version": "FOREIGN KEY (tenant_id, agent_version_id) "
+            "REFERENCES agent_versions (tenant_id, id) NOT VALID",
+            "fk_usage_release": "FOREIGN KEY (tenant_id, connection_id, release_id) "
+            "REFERENCES connection_releases (tenant_id, connection_id, id) NOT VALID",
         },
     ),
-    ("audit_log", ["turn_id uuid", "connection_id uuid", "agent_instance_id uuid"], {}),
+    (
+        "audit_log",
+        ["turn_id uuid", "connection_id uuid", "agent_instance_id uuid"],
+        {
+            "fk_audit_turn": "FOREIGN KEY (tenant_id, turn_id) REFERENCES core_decisions (tenant_id, id) "
+            "DEFERRABLE INITIALLY DEFERRED NOT VALID",
+            "fk_audit_connection": "FOREIGN KEY (tenant_id, connection_id) "
+            "REFERENCES channel_connections (tenant_id, id) NOT VALID",
+            "fk_audit_agent_instance": "FOREIGN KEY (tenant_id, agent_instance_id) "
+            "REFERENCES agent_instances (tenant_id, id) NOT VALID",
+        },
+    ),
 ]
 
 _TRIGGERS_COORDINADOR = """
-CREATE OR REPLACE FUNCTION connection_requires_core() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION connection_requires_core() RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, public, pg_temp
+AS $$
 DECLARE
   v_release uuid;
   v_deleted timestamptz;
@@ -182,7 +220,9 @@ BEGIN
   RETURN NULL;
 END $$;
 
-CREATE OR REPLACE FUNCTION core_instance_required() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION core_instance_required() RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, public, pg_temp
+AS $$
 DECLARE
   v_release uuid;
   v_deleted timestamptz;
@@ -206,7 +246,8 @@ END $$;
 
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'channel_connections_requires_core') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'channel_connections_requires_core'
+                  AND tgrelid = 'public.channel_connections'::regclass) THEN
     CREATE CONSTRAINT TRIGGER channel_connections_requires_core
       AFTER INSERT OR UPDATE OF deleted_at, active_release_id ON channel_connections
       DEFERRABLE INITIALLY DEFERRED
@@ -218,7 +259,8 @@ END $$;
 
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'agent_instances_core_required') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'agent_instances_core_required'
+                  AND tgrelid = 'public.agent_instances'::regclass) THEN
     CREATE CONSTRAINT TRIGGER agent_instances_core_required
       AFTER UPDATE OF enabled, deleted_at OR DELETE ON agent_instances
       DEFERRABLE INITIALLY DEFERRED

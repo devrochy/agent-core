@@ -81,6 +81,16 @@ async def _owner() -> AsyncIterator[Any]:
     engine = create_async_engine(settings.migrations_database_url or settings.database_url)
     try:
         async with engine.connect() as conn:
+            # Si el rol no se salta RLS, los conteos "vacíos" de abajo no probarían nada.
+            puede = (
+                await conn.execute(
+                    text(
+                        "select rolsuper or rolbypassrls from pg_roles where rolname = current_user"
+                    )
+                )
+            ).scalar_one()
+            assert puede, "el rol de migraciones debe ser superusuario o BYPASSRLS para estos tests"
+            await conn.rollback()
             yield conn
     finally:
         await engine.dispose()
@@ -230,6 +240,15 @@ async def _sembrar(tid: uuid.UUID) -> dict[str, uuid.UUID]:
             "values (:t, :turn, :conv, 'owner', 'thumbs_down', 'system')",
             "insert into improvement_proposals (tenant_id, scope, connection_id, agent_id, kind, evidence, change) "
             "values (:t, 'connection', :cc, :ventas_a, 'trigger_examples', '{}', '{}')",
+            # Columnas nuevas de tablas existentes, con sus FKs compuestas (la del turno, diferida).
+            "insert into messages (id, tenant_id, conversation_id, direction, sender_type, content, "
+            "turn_id, agent_instance_id) values (gen_random_uuid(), :t, :conv, 'outbound', 'bot', 'hola', "
+            ":turn, :ventas_i)",
+            "insert into usage_ledger (id, tenant_id, conversation_id, model, kind, turn_id, connection_id, "
+            "agent_instance_id, agent_version_id, release_id) values (gen_random_uuid(), :t, :conv, 'test', "
+            "'agent_run', :turn, :cc, :ventas_i, :ventas_v, :release)",
+            "insert into audit_log (id, tenant_id, conversation_id, actor, action, turn_id, connection_id, "
+            "agent_instance_id) values (gen_random_uuid(), :t, :conv, 'agent', 'test', :turn, :cc, :ventas_i)",
         ):
             await s.execute(text(sql), p)
         await s.execute(
@@ -688,6 +707,136 @@ async def test_banderas_por_negocio_respetan_el_orden(dos_negocios: dict[str, An
                 await conn.execute(
                     text("update tenants set aos_procedures = true where id = :t"), {"t": a}
                 )
+
+
+async def test_turno_de_otro_negocio_se_rechaza_al_confirmar(dos_negocios: dict[str, Any]) -> None:
+    """La FK al turno es diferida: el rechazo llega en el COMMIT."""
+    b, ids_a, ids_b = dos_negocios["b"], dos_negocios["ids_a"], dos_negocios["ids_b"]
+    with pytest.raises(IntegrityError, match="ForeignKeyViolation"):
+        async with _scope(b) as s:
+            await s.execute(
+                text(
+                    "insert into messages (id, tenant_id, conversation_id, direction, sender_type, "
+                    "content, turn_id) values (gen_random_uuid(), :t, :conv, 'outbound', 'bot', 'x', :turn)"
+                ),
+                {"t": b, "conv": ids_b["conv"], "turn": ids_a["turn"]},
+            )
+            await s.commit()
+
+
+async def test_plugin_privado_de_otro_negocio_no_se_instala(dos_negocios: dict[str, Any]) -> None:
+    a, b = dos_negocios["a"], dos_negocios["b"]
+    plugin = _uniq("plugin_privado").replace("-", "_")
+    async with _owner() as conn:
+        async with conn.begin():
+            await conn.execute(
+                text(
+                    "insert into plugins (id, name, version, status, owner_tenant_id) "
+                    "values (:p, :p, '0.0.0', 'detected', :a)"
+                ),
+                {"p": plugin, "a": a},
+            )
+    try:
+        with pytest.raises(DBAPIError, match="privado de otro negocio"):
+            async with _scope(b) as s:
+                await s.execute(
+                    text(
+                        "insert into pack_installations (tenant_id, pack_id, scope) values (:t, :p, 'tenant')"
+                    ),
+                    {"t": b, "p": plugin},
+                )
+        async with _scope(a) as s:  # su dueño sí lo instala
+            await s.execute(
+                text(
+                    "insert into pack_installations (tenant_id, pack_id, scope) values (:t, :p, 'tenant')"
+                ),
+                {"t": a, "p": plugin},
+            )
+            await s.rollback()
+    finally:
+        async with _owner() as conn:
+            async with conn.begin():
+                await conn.execute(text("delete from plugins where id = :p"), {"p": plugin})
+
+
+async def test_la_configuracion_de_una_instalacion_va_cifrada(dos_negocios: dict[str, Any]) -> None:
+    a = dos_negocios["a"]
+    with pytest.raises(IntegrityError, match="ck_pack_installations_config_cifrada"):
+        async with _scope(a) as s:
+            await s.execute(
+                text(
+                    "insert into pack_installations (tenant_id, pack_id, scope, connection_id, config_encrypted) "
+                    "values (:t, 'pack_commerce', 'connection', :cc, '{\"api_key\": \"en claro\"}')"
+                ),
+                {"t": a, "cc": dos_negocios["ids_a"]["cc"]},
+            )
+
+
+async def test_clave_de_webchat_no_se_reutiliza_ni_borrada(dos_negocios: dict[str, Any]) -> None:
+    """El índice global incluye las filas borradas: una clave pública no pasa a otro negocio."""
+    a, b = dos_negocios["a"], dos_negocios["b"]
+    clave = _uniq("widget")
+    async with _scope(a) as s:
+        await s.execute(
+            text(
+                "insert into channel_connections (id, tenant_id, channel, provider, external_id, type_id, "
+                "category, deleted_at) values (gen_random_uuid(), :t, 'web', 'web', :k, 'webchat', "
+                "'comunicacion', now())"
+            ),
+            {"t": a, "k": clave},
+        )
+        await s.commit()
+    with pytest.raises(IntegrityError, match="uq_cc_webchat_key"):
+        async with _scope(b) as s:
+            await s.execute(
+                text(
+                    "insert into channel_connections (id, tenant_id, channel, provider, external_id, "
+                    "type_id, category) values (gen_random_uuid(), :t, 'web', 'web', :k, 'webchat', "
+                    "'comunicacion')"
+                ),
+                {"t": b, "k": clave},
+            )
+
+
+async def test_truncate_tambien_se_rechaza_en_las_append_only() -> None:
+    """Siempre en una transacción que se revierte: si el trigger faltara, no se borra nada."""
+    async with _owner() as conn:
+        for tabla in ("task_events", "a2a_events", "pack_versions"):
+            tx = await conn.begin()
+            try:
+                with pytest.raises(DBAPIError, match="append-only"):
+                    await conn.execute(text(f"truncate {tabla}"))
+            finally:
+                await tx.rollback()
+
+
+async def test_funciones_de_trigger_con_search_path_y_vista_security_invoker() -> None:
+    from core.db.session import get_session
+
+    funciones = (
+        "prevent_mutation",
+        "agent_instance_checks",
+        "connection_requires_core",
+        "core_instance_required",
+        "pack_versions_yank_irreversible",
+        "pack_installation_owner_check",
+    )
+    async with get_session() as s:
+        filas = (
+            await s.execute(
+                text("select proname, proconfig from pg_proc where proname = any(:f)"),
+                {"f": list(funciones)},
+            )
+        ).all()
+        opciones = (
+            await s.execute(
+                text("select reloptions from pg_class where relname = 'agent_templates'")
+            )
+        ).scalar_one()
+    assert sorted(f[0] for f in filas) == sorted(funciones)
+    for nombre, config in filas:
+        assert config and "search_path=pg_catalog, public, pg_temp" in config, nombre
+    assert opciones and "security_invoker=true" in opciones
 
 
 # ---------------------------------------------------------------- purge_tenant
