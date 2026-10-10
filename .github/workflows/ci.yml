@@ -97,6 +97,12 @@ jobs:
         # Sin Postgres ni Redis: `tests/conftest.py` fija URLs falsas por defecto.
         run: pytest -q
 
+      - name: Linter de procedimientos (procedure/1)
+        # ADR-0113 / HU-AOS-03: el mismo validador y linter del CLI y de la API, contra las
+        # acciones del binario. Hoy cubre los procedimientos críticos de ejemplo; los de las
+        # habilidades se suman cuando las publiquen (HU-AOS-07/16).
+        run: agent-core procedures lint tests/fixtures/procedures/*.json
+
       - name: Contrato OpenAPI sin drift (hacia main)
         # Checklist de release: `docs/openapi.json` refleja `/api/v1` (ADR-0077).
         if: github.base_ref == 'main' || github.ref == 'refs/heads/main'

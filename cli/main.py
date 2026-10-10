@@ -10,6 +10,7 @@ Comandos:
   agent-core db migrate|seed
   agent-core sdd update|show
   agent-core meta doctor                  Diagnóstico de WhatsApp Cloud API (Meta)
+  agent-core procedures lint <archivos>   Validador y linter de procedure/1 (ADR-0113)
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from cli.commands.flow import app as flow_app
 from cli.commands.init import init_command
 from cli.commands.meta import app as meta_app
 from cli.commands.plugin import app as plugin_app
+from cli.commands.procedures import app as procedures_app
 from cli.commands.sdd import app as sdd_app
 from cli.commands.tenant import app as tenant_app
 
@@ -46,6 +48,7 @@ app.add_typer(sdd_app, name="sdd", help="System Design Document vivo")
 app.add_typer(agent_app, name="agent", help="Releases y rollback del AgentSpec (ADR-0009/0016)")
 app.add_typer(tenant_app, name="tenant", help="Alta y operación de tenants (multi-tenant, ADR-0001)")
 app.add_typer(flow_app, name="flow", help="Flujo de atención por pack/tenant (ADR-0054)")
+app.add_typer(procedures_app, name="procedures", help="Validador y linter de procedure/1 (ADR-0113)")
 app.add_typer(admin_app, name="admin", help="Admins del panel: alta y permisos (ADR-0047)")
 app.add_typer(meta_app, name="meta", help="Diagnóstico de WhatsApp Cloud API (Meta)")
 
