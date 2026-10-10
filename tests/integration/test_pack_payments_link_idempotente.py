@@ -195,3 +195,144 @@ async def test_generar_link_pago_mismo_reference_no_cruza_tenant():
             await session.execute(
                 PaymentTransaction.__table__.delete().where(PaymentTransaction.reference == reference)
             )
+
+
+# --- La referencia existente no se reusa a ciegas (test, 2026-10-10) -----------------
+# El modelo llamó `generar_link_pago(600000, "OC-0001")` sobre un pedido ya pagado por
+# $200.000 y la tool devolvió el link vencido como si fuera nuevo. Acá contra Postgres:
+# el índice único parcial (migración pack_payments_0003) y el borrado lógico.
+
+
+async def _filas(reference: str):
+    from pack_payments.models import PaymentTransaction
+    from sqlalchemy import select
+
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        return (
+            (
+                await session.execute(
+                    select(PaymentTransaction)
+                    .where(
+                        PaymentTransaction.tenant_id == T1,
+                        PaymentTransaction.reference == reference,
+                    )
+                    .order_by(PaymentTransaction.created_at)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+
+async def _limpiar(reference: str) -> None:
+    from pack_payments.models import PaymentTransaction
+
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        await session.execute(
+            PaymentTransaction.__table__.delete().where(
+                PaymentTransaction.tenant_id == T1, PaymentTransaction.reference == reference
+            )
+        )
+
+
+async def _con_link(reference: str, amount: float) -> dict:
+    from pack_payments.skills import PaymentSkill
+
+    from core.plugin_manager import plugin_manager
+
+    plugin_manager.scan()
+    await _save_test_config()
+    return await PaymentSkill().generar_link_pago(
+        {"reference": reference, "amount": amount}, await _tool_context()
+    )
+
+
+async def _cambiar(reference: str, **valores) -> None:
+    from pack_payments.models import PaymentTransaction
+    from sqlalchemy import update
+
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        await session.execute(
+            update(PaymentTransaction)
+            .where(PaymentTransaction.tenant_id == T1, PaymentTransaction.reference == reference)
+            .values(**valores)
+        )
+
+
+async def test_referencia_pagada_no_devuelve_link():
+    from core.shared.tenant import tenant_scope
+
+    reference = f"OC-{uuid.uuid4().hex[:8]}"
+    async with tenant_scope(T1):
+        try:
+            assert "error" not in await _con_link(reference, 200_000)
+            await _cambiar(reference, status="aprobado")
+
+            resultado = await _con_link(reference, 600_000)
+
+            assert resultado["status"] == "ya_pagado"
+            assert "_safe_append" not in resultado
+            assert len(await _filas(reference)) == 1
+        finally:
+            await _limpiar(reference)
+
+
+async def test_monto_distinto_no_devuelve_link():
+    from core.shared.tenant import tenant_scope
+
+    reference = f"OC-{uuid.uuid4().hex[:8]}"
+    async with tenant_scope(T1):
+        try:
+            assert "error" not in await _con_link(reference, 200_000)
+
+            resultado = await _con_link(reference, 600_000)
+
+            assert resultado["status"] == "monto_no_coincide"
+            assert "200,000" in resultado["error"]
+            assert "_safe_append" not in resultado
+            (fila,) = await _filas(reference)
+            assert float(fila.amount) == 200_000.0
+        finally:
+            await _limpiar(reference)
+
+
+async def test_link_vencido_se_regenera_con_una_sola_transaccion_viva():
+    from datetime import UTC, datetime, timedelta
+
+    from core.shared.tenant import tenant_scope
+
+    reference = f"OC-{uuid.uuid4().hex[:8]}"
+    async with tenant_scope(T1):
+        try:
+            assert "error" not in await _con_link(reference, 200_000)
+            # Creado hace 30 h con vigencia de 24 h: el link ya no sirve.
+            await _cambiar(
+                reference,
+                created_at=datetime.now(UTC) - timedelta(hours=30),
+                provider_reference="link-viejo",
+            )
+
+            resultado = await _con_link(reference, 200_000)
+
+            assert "error" not in resultado, resultado
+            assert resultado["status"] == "pendiente"
+            vieja, nueva = await _filas(reference)
+            assert vieja.provider_reference == "link-viejo"
+            assert vieja.deleted_at is not None
+            assert vieja.status == "expirado"
+            assert nueva.deleted_at is None
+            assert nueva.status == "pendiente"
+            assert float(nueva.amount) == 200_000.0
+
+            # La siguiente llamada reusa la nueva (vigente), no crea una tercera.
+            otra = await _con_link(reference, 200_000)
+            assert otra["_safe_append"] == resultado["_safe_append"]
+            assert len(await _filas(reference)) == 2
+        finally:
+            await _limpiar(reference)
