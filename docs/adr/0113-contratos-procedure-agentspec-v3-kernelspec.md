@@ -98,3 +98,25 @@ Los textos del clasificador y del compositor viven en playbooks del core (invari
 - Editores: `core/admin/advanced_service.py` y `core/api/routers/settings.py` (identidad, modelo, guardrails), más `docs/openapi.json` y `panel-web`. Las vistas SSR de `core/admin/views.py` que editan `extensions` no se migran: se retiran. El editor de tools declarativas hoy solo existe en SSR, así que se crea su ruta en `/api/v1`.
 - `packages/pack-*/`: procedimientos en el manifiesto.
 - Linter y validador en `cli/`, en CI y en la API.
+
+## Adenda de implementación (2026-10-10, HU-AOS-12): forma concreta de `agentspec/3` y `kernelspec/1`
+
+**Estado:** propuesta; requiere la aprobación del dueño antes del merge (fija la forma de un contrato congelado).
+
+`agentcore-contracts` pasa a **3.0.0**. El espejo TS de `packages/contracts/src/` se retira. Los nombres que quedan congelados:
+
+- **Clases.** `AgentSpecV3` (`agentspec.py`) y `KernelSpec` (`kernelspec.py`). `AgentSpec` sigue siendo el **v2** con el mismo nombre: lo leen el loop legacy, los presets y el alta hasta HU-AOS-46. Se renombra cuando se retire v2.
+- **Todos los modelos v3 rechazan campos desconocidos** (`extra="forbid"`), como `procedure/1`. Por eso `id`, `tenantId`, `version`, `kind`, `key` y `packs` no validan dentro de un AgentSpec v3: los da la fila.
+- **Rango de versión de un procedimiento:** `^1.0`, `~1.2.3`, `=X.Y.Z` o `X.Y.Z`. `=0.0.0` está reservado al procedimiento abierto que arma el lector tolerante desde el flujo v2.
+- **`procedures[].overrides`:** `examples` (frases, como `triggers.examples`) y `description`.
+- **`playbooks[]`:** `{name, description, pack?}`. `description` conserva el índice de v2.
+- **Headers sensibles:** `Authorization`, `Cookie` y `X-Api-Key`, sin distinguir mayúsculas. Solo admiten `{"secret": "<nombre>"}`, con nombre `^[a-z0-9_]{1,60}$`. El rechazo vive en el propio contrato. Limitación conocida: un secreto en la URL o en el `body` de una declarativa no está cubierto.
+- **`guardrails[]`:** la forma que hoy normaliza `validate_custom_rules`, es decir `{name, kind, action, phrases?, tool?, value?}`.
+- **`declarativeTools[]`:** `{name, description, method, url, allowedDomains, headers, parameters, body}`. Es la forma de ADR-0052 con `allowed_domains` en camelCase.
+- **KernelSpec:** reglas de enrutamiento con al menos una condición y exactamente un destino (`agent` o `start`). `withinHours` se escribe `{"from": "HH:MM", "to": "HH:MM"}`, en la zona del negocio, y cruza la medianoche si `from` > `to`. Ningún default es un id de modelo: `coprocessor.model` y `modelPolicy.highRiskStage.model` en `null` heredan el del agente (ADR-0086).
+- **Keys reservadas:** `general` (el agente General del lector tolerante) y `coordinador` (el Coordinador del backfill de HU-AOS-13). La API de agentes no deja crearlas.
+- **Campos nuevos en v3:**
+  - Un campo **opcional con default** es *minor*. Un documento viejo sigue validando, y lo único que no lo lee es un binario viejo, que no existe porque el contrato viaja con el binario.
+  - Quitar un campo, volverlo obligatorio o cambiar su tipo o su semántica es *major*.
+
+El validador y el linter únicos están en `core/agents/contrato_v3.py`. Los usan `agent-core agent lint`, el CI y la API al guardar o publicar. El lector tolerante está en `core/agents/tolerante.py`. Su salida pasa siempre el validador: lo que hoy está muerto se poda con un aviso, y los secretos literales salen como `SecretStr` hacia la instalación `core`.

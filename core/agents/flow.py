@@ -409,10 +409,13 @@ def flow_to_procedures(
       negocio. El procedimiento abierto las hereda en `confirmActions` de su etapa, que
       el linter acepta como confirmación (ADR-0113 §5).
 
-    La entrada debe ser el flujo ya resuelto y filtrado (`ResolvedFlow.sections`), así el
-    procedimiento no ofrece acciones que el loop no ofrece. Es total: toda sección que
-    `_parse_sections` acepta se convierte (los formatos del contrato son un superconjunto
-    de los del flujo). Sin cambio de conducta: hoy nadie la llama en runtime.
+    La entrada debe ser el flujo ya resuelto (`ResolvedFlow.sections`), así el procedimiento
+    no ofrece acciones que el loop no ofrece. El lector tolerante (HU-AOS-12) lo resuelve
+    contra las candidatas SIN los filtros transitorios del turno (salud del plugin y
+    conexiones activas): la versión del agente es inmutable y conectar Google después no
+    puede exigir una versión nueva. Es total: toda sección que `_parse_sections` acepta se
+    convierte (los formatos del contrato son un superconjunto de los del flujo). Sin cambio
+    de conducta: hoy nadie la llama en runtime.
     """
     from agentcore_contracts import Procedure, Stage, Triggers
 

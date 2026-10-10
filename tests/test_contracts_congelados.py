@@ -11,8 +11,8 @@ from agentcore_contracts import (
 
 
 def test_version_congelada() -> None:
-    # 2.1.0: `procedure/1` aditivo (ADR-0113); el 3.0.0 llega con AgentSpec v3 (HU-AOS-12).
-    assert __version__ == "2.1.0"
+    # 3.0.0: `agentspec/3` y `kernelspec/1` (ADR-0113, HU-AOS-12); `AgentSpec` sigue siendo v2.
+    assert __version__ == "3.0.0"
 
 
 def test_inbound_message_shape() -> None:
