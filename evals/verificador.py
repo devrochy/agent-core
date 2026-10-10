@@ -7,6 +7,11 @@ asistente, cada uno con los resultados de tools de su turno, y compara:
   reintento y, si reincide, escalaría una venta válida);
 - **falso negativo**: una afirmación falsa que el verificador deja pasar.
 
+Un link sin respaldo no rechaza el borrador: se quita del texto (ADR-0119). Por eso una
+respuesta correcta a la que el verificador le quita un link también es un falso positivo
+(el cliente recibe "Términos y condiciones:" sin el enlace, incidente del 2026-10-10), y una
+falsa con links inventados (`urls_sin_respaldo`) cuenta como detectada si se quitaron.
+
 Umbral de la HU: falsos positivos ≤ 2 % y ningún falso negativo. Sin LLM, sin base
 y sin red: corre en la suite unitaria (`tests/test_verificador_set.py`).
 
@@ -19,7 +24,8 @@ Uso:
 Formato del set (JSON Lines): `id`, `origen`, `texto` (el borrador), `resultados`
 (los de tools del turno, con `_tool_name`, `_ok` y `_current_turn` como los estampa
 el loop), `contexto` (opcional: prompt y mensajes del cliente), `etiqueta`
-(`correcta` o `falsa`) y `nota`.
+(`correcta` o `falsa`), `nota` y, en las falsas por un link inventado, `urls_sin_respaldo`
+(cuántos links del borrador no tienen respaldo).
 """
 
 from __future__ import annotations
@@ -78,14 +84,21 @@ def medir(casos: list[dict[str, Any]]) -> Medicion:
     for caso in casos:
         evidencia = Evidencia.desde(caso.get("resultados") or [], caso.get("contexto") or "")
         veredicto = verificar(caso["texto"], evidencia, afirmaciones)
-        detalle = {"id": caso["id"], "motivo": veredicto.motivo, "afirmacion": veredicto.afirmacion}
+        detalle = {
+            "id": caso["id"],
+            "motivo": veredicto.motivo,
+            "afirmacion": veredicto.afirmacion,
+            "urls_quitadas": veredicto.urls_quitadas,
+        }
         if caso["etiqueta"] == "correcta":
             medicion.correctas += 1
-            if not veredicto.passed:
+            if not veredicto.passed or veredicto.urls_quitadas:
                 medicion.falsos_positivos.append(detalle)
         else:
             medicion.falsas += 1
-            if veredicto.passed:
+            inventadas = int(caso.get("urls_sin_respaldo") or 0)
+            links_quitados = bool(inventadas) and veredicto.urls_quitadas >= inventadas
+            if veredicto.passed and not links_quitados:
                 medicion.falsos_negativos.append(detalle)
     return medicion
 

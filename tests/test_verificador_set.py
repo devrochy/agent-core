@@ -31,3 +31,27 @@ def test_falsos_positivos_y_negativos_dentro_del_umbral() -> None:
     medicion = medir(cargar())
     assert medicion.tasa_falsos_positivos <= UMBRAL_FALSOS_POSITIVOS, medicion.falsos_positivos
     assert medicion.falsos_negativos == []
+
+
+def test_los_incidentes_reales_no_se_repiten() -> None:
+    """Un caso de incidente (`origen: incidente`) no puede fallar aunque el total quede bajo el
+    umbral: con 200 correctas, un falso positivo es 0,5 % y el gate del 2 % no lo vería."""
+    incidentes = [c for c in cargar() if c["origen"] == "incidente"]
+    assert incidentes
+    medicion = medir(incidentes)
+    assert medicion.falsos_positivos == [] and medicion.falsos_negativos == []
+
+
+def test_quitar_un_link_de_una_respuesta_correcta_es_un_falso_positivo() -> None:
+    """El link sin respaldo no rechaza el borrador, se quita: el set lo cuenta igual."""
+    caso = {
+        "id": "x",
+        "etiqueta": "correcta",
+        "resultados": [],
+        "texto": "Términos y condiciones: https://www.solvershub.site/terminos",
+    }
+    medicion = medir([caso])
+    assert [fp["urls_quitadas"] for fp in medicion.falsos_positivos] == [1]
+    falsa = {**caso, "etiqueta": "falsa", "urls_sin_respaldo": 1}
+    assert medir([falsa]).falsos_negativos == []
+    assert medir([{**falsa, "urls_sin_respaldo": 0}]).falsos_negativos != [], "sin links inventados, nada lo detecta"

@@ -105,6 +105,16 @@ repetir un argumento con una URL que inventó el modelo. Una tool fallida sigue 
 `urls_enlace` («te envío el link de pago»). Una URL que no devolvió ninguna tool se sigue quitando,
 y las de turnos anteriores tampoco cuentan.
 
+
+**Set etiquetado (2026-10-10).** Un link sin respaldo no rechaza el borrador, se quita, así que el
+set no veía el caso de arriba. Desde ahora `evals/verificador.py` cuenta como falso positivo una
+respuesta correcta a la que se le quitó un link. Una falsa por un link inventado
+(`urls_sin_respaldo`) cuenta como detectada si se quitó. El incidente de test del 2026-10-10
+(`incidente-2026-10-10-terminos-pendientes`) entró al set con `origen: incidente`. Un test exige
+que ningún caso de incidente falle, aunque el total quede bajo el umbral del 2 %. Medición: 206
+correctas con 0 falsos positivos y 17 falsas con 0 falsos negativos. Sin esta adenda, el caso del
+incidente es un falso positivo (0,5 %).
+
 ## Adenda (2026-10-10): grabar y reproducir el LLM de las evals
 
 El dueño la aprobó el 2026-10-09 para no gastar saldo del proveedor en pruebas. La revisó el agente `arquitecto` antes
