@@ -4,7 +4,9 @@ name: CI
 #   - PR → develop (o cualquier rama que no sea main): nivel RÁPIDO. Lint, tipos,
 #     capas, unitarios y gitleaks sobre los commits de la PR; si la PR toca rutas
 #     que cubre la integración, además el subconjunto crítico `-m aislamiento`
-#     (RLS forzada, aislamiento entre tenants, webhooks, IDOR).
+#     (RLS forzada, aislamiento entre tenants, webhooks, IDOR). Además, el gate de
+#     evals y journeys en REPLAY (job `evals-replay`): desde las grabaciones de
+#     `evals/cassettes/`, sin red ni LLM_API_KEY (adenda 2026-10-10 de ADR-0120).
 #   - push → develop (post-merge), PR → main y push → main: nivel COMPLETO.
 #     Integración completa, gate de evals y journeys, gitleaks sobre toda la
 #     historia y, hacia main, drift de docs/openapi.json.
@@ -125,6 +127,74 @@ jobs:
           else
             "$RUNNER_TEMP/gitleaks" detect --source . --redact -v
           fi
+
+  evals-replay:
+    # Gate de evals y journeys en replay (adenda 2026-10-10 de ADR-0120, adenda de ADR-0119):
+    # las respuestas del LLM salen de `evals/cassettes/`, sin red ni LLM_API_KEY, así que corre
+    # en TODAS las PRs a develop (también las de Dependabot). Si la PR cambia un prompt, una tool
+    # o el flujo sin regrabar, falla con exit 3, el diff y el comando para regrabar
+    # (`bash scripts/gate_evals.sh record`, con OK del dueño). No mide el modelo: eso lo hace
+    # el gate en vivo del push a develop y el nightly.
+    needs: rapido
+    if: ${{ needs.rapido.outputs.nivel == 'rapido' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, linux, x64]
+    permissions:
+      contents: read
+      # Para bajar la imagen de Postgres del CI desde GHCR.
+      packages: read
+    services:
+      postgres:
+        image: ghcr.io/${{ github.repository_owner }}/solvershub-postgres:pg17-postgis
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          POSTGRES_USER: agent_core
+          POSTGRES_PASSWORD: agent_core
+          POSTGRES_DB: agent_core
+        ports: ["5432"]
+        options: >-
+          --health-cmd "pg_isready -U agent_core"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: ["6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-retries 12
+    env:
+      # Sin clave a propósito: replay nunca llama al LLM real.
+      LLM_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: URLs del stack (puertos dinámicos)
+        run: |
+          PG=${{ job.services.postgres.ports['5432'] }}
+          RD=${{ job.services.redis.ports['6379'] }}
+          {
+            echo "DATABASE_URL=postgresql+asyncpg://app_runtime:app_runtime@localhost:${PG}/agent_core"
+            echo "MIGRATIONS_DATABASE_URL=postgresql+asyncpg://agent_core:agent_core@localhost:${PG}/agent_core"
+            echo "REDIS_URL=redis://localhost:${RD}/0"
+          } >> "$GITHUB_ENV"
+
+      - uses: ./.github/actions/preparar-entorno
+
+      - name: Migrar y sembrar (base nueva, igual que al grabar)
+        env:
+          ADMIN_PASSWORD: admin123
+        run: |
+          agent-core db migrate
+          python scripts/init_db.py
+
+      - name: Gate de evals y journeys (replay, sin LLM)
+        # Mismos argumentos que el gate en vivo del push a develop (scripts/gate_evals.sh).
+        run: bash scripts/gate_evals.sh replay
 
   integracion:
     needs: rapido

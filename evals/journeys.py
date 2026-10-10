@@ -12,8 +12,10 @@ Uso:
   python evals/journeys.py --set comercio           # otro set de evals/journeys/<set>/
   python evals/journeys.py --umbral 0.95 --reporte evals/reportes/journeys.json
   python evals/journeys.py --tenant solvershub      # set de un negocio: TENANTS_ROOT/<slug>/evals/journeys/
+  python evals/journeys.py 01,05 --grabacion replay # desde las grabaciones, sin red ni LLM_API_KEY
+  python evals/journeys.py 05 --grabacion record    # regraba (LLM real: OK del dueño)
 
-Requiere LLM_API_KEY y la base migrada (crea un negocio de prueba por corrida). El
+Requiere la base migrada y, sin `--grabacion replay`, LLM_API_KEY (crea un negocio de prueba por corrida). El
 formato de los journeys está en `evals/journeys/README.md`.
 """
 
@@ -33,6 +35,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from core.llm import cassette
 
 EVALS_DIR = Path(__file__).resolve().parent
 JOURNEYS_DIR = EVALS_DIR / "journeys"
@@ -655,6 +659,11 @@ async def correr_journey(ruta: Path, tenant_id: uuid.UUID, pagos: PagoSimulado, 
     registro: list[str] = []
     customer_id, conversation_id = await nuevo_cliente(tenant_id, journey.get("cliente", "Cliente de prueba"))
     ctx = Contexto(tenant_id, customer_id, conversation_id, pagos, semilla=int(journey.get("semilla", 0)) + semilla)
+    with cassette.intento(ctx.semilla):  # la semilla del intento es parte de la clave de la grabación
+        return await _correr_pasos(journey, nombre, ctx, inicio, registro)
+
+
+async def _correr_pasos(journey: dict[str, Any], nombre: str, ctx: Contexto, inicio: float, registro: list[str]) -> Resultado:
     for numero, paso in enumerate(journey["pasos"], start=1):
         registro.append(f"  paso {numero}: {paso.get('nota', next(iter(paso)))}")
         try:
@@ -676,6 +685,8 @@ async def correr_journey(ruta: Path, tenant_id: uuid.UUID, pagos: PagoSimulado, 
                 await paso_outbox(ctx, paso, registro)
             else:
                 raise FallaJourney(f"paso sin tipo conocido: {sorted(paso)}")
+        except cassette.ErrorGrabacion:
+            raise  # la grabación falta o cambió: corta la corrida, no es un fallo del journey
         except FallaJourney as exc:
             return Resultado(nombre, False, f"paso {numero}: {exc}", time.monotonic() - inicio, registro, ctx)
         except Exception as exc:  # un error del sistema bajo prueba también es una falla del journey
@@ -740,7 +751,19 @@ async def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--umbral", type=float, default=1.0, help="pass@1 mínimo (0..1) para salir con 0")
     parser.add_argument("--reporte", default="", help="Ruta del reporte JSON (opcional)")
     parser.add_argument("--detalle", action="store_true", help="Imprimir la conversación de cada intento")
+    sys.path.insert(0, str(EVALS_DIR))
+    import grabaciones
+
+    grabaciones.agregar_argumentos(parser)
+    from core.shared.logger import configure_console_logging
+
+    configure_console_logging()  # tracebacks sin variables locales: nunca imprimen la config
     args = parser.parse_args(argv)
+    try:
+        grabaciones.activar(args.grabacion)
+    except cassette.ErrorGrabacion as exc:
+        print(f"\n{exc}")
+        return grabaciones.SALIDA_GRABACION
 
     patrones = [p.strip() for p in args.patron.split(",") if p.strip()] or [""]
     carpeta = carpeta_del_negocio(args.tenant) if args.tenant else None
@@ -750,6 +773,10 @@ async def main(argv: list[str] | None = None) -> int:
         print(f"No hay journeys que matcheen '{args.patron}' en {carpeta or JOURNEYS_DIR / args.set}")
         return 1
     k = max(1, args.k)
+    # Antes de la réplica: `preparar_replica` cambia TENANTS_ROOT a un temporal que se borra.
+    args.raiz_grabaciones = grabaciones.raiz(args.grabaciones, carpeta.parent if carpeta else None) / "journeys"
+    if not carpeta:
+        args.raiz_grabaciones = args.raiz_grabaciones / args.set
 
     _solo_bases_de_prueba()
     slug, raiz = preparar_replica(carpeta.parent.parent if carpeta else None)
@@ -759,6 +786,9 @@ async def main(argv: list[str] | None = None) -> int:
         CORREOS.instalar()
         tenant_id = await preparar_negocio(negocio, pagos, slug=slug, replica=carpeta is not None)
         return await _correr_set(args, set_id, rutas, k, tenant_id, pagos)
+    except cassette.ErrorGrabacion as exc:
+        print(f"\n{exc}")
+        return grabaciones.SALIDA_GRABACION
     finally:
         shutil.rmtree(raiz, ignore_errors=True)
 
@@ -776,23 +806,31 @@ async def _correr_set(args: argparse.Namespace, set_id: str, rutas: list[Path], 
 
     print(f"Corriendo {len(rutas)} journeys del set {set_id} con k={k} (negocio {tenant_id})...\n")
 
+    import grabaciones
+
     resultados: list[ResultadoEscenario] = []
+    extra = f"--tenant {args.tenant}" if args.tenant else ("" if args.set == "suscripciones" else f"--set {args.set}")
+    raiz_grabaciones: Path = getattr(args, "raiz_grabaciones", grabaciones.CASSETTES_DIR / "journeys" / args.set)
     for ruta in rutas:
         escenario = ResultadoEscenario(nombre=ruta.stem)
-        for intento in range(k):
-            resultado = await correr_journey(ruta, tenant_id, pagos, semilla=intento)
-            escenario.nombre = resultado.nombre
-            escenario.intentos.append(resultado.intento())
-            if args.detalle or not resultado.ok:
-                print(f"  — intento {intento + 1}/{k} {'ok' if resultado.ok else 'falló'} ({resultado.segundos:.0f}s)")
-                print("\n".join(resultado.registro))
+        regrabar = grabaciones.comando_regrabar("evals/journeys.py", ruta.stem, f"{extra} --k {k}".strip())
+        with cassette.escena(raiz_grabaciones / f"{ruta.stem}.json", regrabar=regrabar):
+            for intento in range(k):
+                resultado = await correr_journey(ruta, tenant_id, pagos, semilla=intento)
+                escenario.nombre = resultado.nombre
+                escenario.intentos.append(resultado.intento())
+                if args.detalle or not resultado.ok:
+                    print(f"  — intento {intento + 1}/{k} {'ok' if resultado.ok else 'falló'} ({resultado.segundos:.0f}s)")
+                    print("\n".join(resultado.registro))
         resultados.append(escenario)
         print(linea(escenario))
 
     resumen = resumir(resultados, k)
     print("\n" + texto_resumen(f"Journeys {set_id}", resumen, args.umbral))
     simulador = {"k": k, "semillas": list(range(k))}
-    await _guardar(tenant_id, set_id, resultados, k, simulador)
+    # En replay se repite lo grabado: no mide la consistencia del modelo y no se guarda (ADR-0119).
+    if cassette.modo_activo() != "replay":
+        await _guardar(tenant_id, set_id, resultados, k, simulador)
     if args.reporte:
         escribir_reporte(args.reporte, reporte(set_id, resultados, k, simulador))
     # El gate del 0A no cambia (ADR-0119): se mide sobre pass@1; pass^k se reporta.
