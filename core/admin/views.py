@@ -995,10 +995,13 @@ def _parse_business_ranges(text: str) -> list[dict[str, Any]]:
 
 
 def _declarative_tools_json(spec) -> str:  # type: ignore[no-untyped-def]
-    """Definiciones declarativas del tenant a JSON editable (ADR-0052)."""
+    """Definiciones declarativas del tenant a JSON editable (ADR-0052). Los headers sensibles
+    literales salen enmascarados: el panel nunca muestra un secreto (HU-AOS-12)."""
     import json as _json
 
-    tools = (spec.extensions or {}).get("tools") or []
+    from core.agents.declarativas import enmascarar
+
+    tools = enmascarar((spec.extensions or {}).get("tools") or [])
     return _json.dumps(tools, indent=2, ensure_ascii=False) if tools else ""
 
 
@@ -2843,7 +2846,11 @@ async def settings_skills_save(request: Request):
         import json as _json
         from urllib.parse import quote
 
-        from core.mcp.declarative import rejected_domains, validate_declarative_tools
+        from core.agents.declarativas import preparar
+        from core.agents.secretos import guardar_secretos_declarativos, secretos_configurados
+        from core.kernel.procedures import catalogo_de_acciones
+        from core.mcp.declarative import rejected_domains
+        from core.plugin_manager import plugin_manager
 
         extensions = dict(data.get("extensions") or {})
         raw = str(form.get("declarative_tools_json") or "").strip()
@@ -2865,7 +2872,28 @@ async def settings_skills_save(request: Request):
                 f"/admin/configuracion?tab=habilidades&flash={quote(msg)}&flash_type=danger",
                 status_code=303,
             )
-        extensions["tools"] = validate_declarative_tools(parsed)
+        # Mismo validador que `/api/v1` (HU-AOS-12): sin literales en headers sensibles (los
+        # enmascarados se migran a la instalación `core`). Los secretos nuevos se cargan desde
+        # el panel nuevo: el SSR no tiene campo para valores.
+        tenant_id = get_current_tenant_id()
+        if tenant_id is None:
+            return _login_redirect()
+        preparadas = preparar(
+            parsed,
+            extensions.get("tools"),
+            {},
+            await secretos_configurados(tenant_id),
+            set(catalogo_de_acciones(plugin_manager.list_modules())),
+        )
+        if preparadas.errores:
+            ruta, msg = next(iter(preparadas.errores.items()))
+            return RedirectResponse(
+                f"/admin/configuracion?tab=habilidades&flash={quote(f'{ruta}: {msg}'[:200])}&flash_type=danger",
+                status_code=303,
+            )
+        if preparadas.secretos:
+            await guardar_secretos_declarativos(tenant_id, preparadas.secretos)
+        extensions["tools"] = preparadas.tools
         data["extensions"] = extensions
     return await _save_spec_from_form(request, data, "habilidades")
 

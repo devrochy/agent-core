@@ -16,6 +16,4 @@
   ofrece el loop. Saca los secretos literales como `SecretStr` y deriva el KernelSpec de la
   `persona` v2. `cargar_como_v3` lista las conexiones conversacionales. Nadie lo llama en
   runtime: es la base del backfill (HU-AOS-13) y de las releases (HU-AOS-14).
-- Pendiente (parte 2): tablas y API de agentes (borrador con `lock_version`, publicación con
-  hash), editor de tools declarativas en `/api/v1` y secretos en la instalación `core`. Las
-  versiones viejas de `agent_specs` conservan los literales en claro; quedan fuera de alcance.
+- Las versiones viejas de `agent_specs` conservan los literales en claro: fuera de alcance.

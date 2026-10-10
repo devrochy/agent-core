@@ -11,13 +11,20 @@ Forma de cada entrada:
       "method": "GET" | "POST",
       "url": "https://api.negocio.com/orders/{order_id}",
       "allowed_domains": ["api.negocio.com"],
-      "headers": {"Authorization": "Bearer ..."},   # opcional
+      "headers": {"Authorization": {"secret": "token_api"}, "X-Cliente": "abc"},  # opcional
       "parameters": { JSON Schema },                 # opcional
       "body": {"order_id": "{order_id}"}             # opcional (POST)
     }
 
 Los `{placeholders}` se interpolan con los argumentos de la tool (validados y
 escapados), nunca con texto del LLM sin pasar por argumentos.
+
+Headers sensibles (ADR-0113 §2, HU-AOS-12): un header puede declararse por referencia,
+`{"secret": "<nombre>"}`, y su valor se resuelve AL EJECUTAR desde la configuración cifrada
+de la instalación `core` del negocio (`core.agents.secretos`). Si falta el secreto, la tool
+devuelve un error sin llamar a nadie. Los valores literales de specs v2 viejos siguen
+funcionando igual; los editores ya no dejan guardar literales en `Authorization`, `Cookie`
+ni `X-Api-Key` (`core.agents.declarativas`).
 
 `allowed_domains` solo admite FQDN públicos (`public_fqdn`): ni IPs, ni hosts de
 una etiqueta (`redis`), ni sufijos internos. Al ejecutar, `ScopedHttp` además
@@ -28,7 +35,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from core.mcp.types import MCPTool, ScopedHttp, ToolContext, public_fqdn
 from core.shared.logger import get_logger
@@ -38,6 +45,20 @@ log = get_logger(__name__)
 PLUGIN_ID = "declarative"
 _NAME_RE = re.compile(r"^[a-zA-Z0-9_]{1,60}$")
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z0-9_]+)\}")
+_SECRET_NAME_RE = re.compile(r"^[a-z0-9_]{1,60}$")
+
+
+def secret_ref(value: Any) -> str | None:
+    """Nombre del secreto si `value` es una referencia `{"secret": "<nombre>"}` válida."""
+    if isinstance(value, dict) and set(value) == {"secret"} and isinstance(value["secret"], str):
+        nombre = value["secret"]
+        return nombre if _SECRET_NAME_RE.match(nombre) else None
+    return None
+
+
+def _clean_header(value: Any) -> Any:
+    nombre = secret_ref(value)
+    return {"secret": nombre} if nombre is not None else str(value)
 
 
 def _clean_domains(raw: Any) -> list[str]:
@@ -83,7 +104,7 @@ def validate_declarative_tools(raw: Any) -> list[dict[str, Any]]:
             "url": url,
             "allowed_domains": _clean_domains(item.get("allowed_domains")),
             "headers": {
-                str(k): str(v) for k, v in (item.get("headers") or {}).items()
+                str(k): _clean_header(v) for k, v in (item.get("headers") or {}).items()
             }
             if isinstance(item.get("headers"), dict)
             else {},
@@ -111,14 +132,20 @@ def build_tool(definition: dict[str, Any]) -> MCPTool:
     allowed = definition["allowed_domains"]
 
     async def _handler(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        http = context.http or ScopedHttp(allowed)
         url = _interpolate(definition["url"], arguments)
+        headers, faltan = await _resolve_headers(definition.get("headers") or {}, urlsplit(url).hostname or "")
+        if faltan:
+            # Sin el secreto (o hacia un dominio al que no puede viajar) no se llama: es un
+            # error de configuración del negocio, no del plugin.
+            log.warning("declarative_secret_missing", tool=definition["name"], secretos=faltan)
+            return {"error": f"La herramienta '{definition['name']}' no tiene configuradas sus credenciales."}
+        http = context.http or ScopedHttp(allowed)
         body = {k: _raw_or_interpolated(v, arguments) for k, v in (definition.get("body") or {}).items()}
         result = await http.request(
             definition["method"],
             url,
             json_body=body or None,
-            headers=definition.get("headers") or None,
+            headers=headers or None,
         )
         return result
 
@@ -133,6 +160,23 @@ def build_tool(definition: dict[str, Any]) -> MCPTool:
     # La allowlist viaja con la tool para que el loop arme el ScopedHttp del turno.
     tool._allowed_domains = list(allowed)  # type: ignore[attr-defined]
     return tool
+
+
+async def _resolve_headers(headers: dict[str, Any], host: str) -> tuple[dict[str, str], list[str]]:
+    """Headers con las referencias resueltas desde la instalación `core` del negocio en
+    contexto, y los nombres de los secretos que faltan (o que no pueden viajar a `host`).
+    Sin referencias no toca la base."""
+    refs = {k: n for k, v in headers.items() if (n := secret_ref(v)) is not None}
+    literales = {k: str(v) for k, v in headers.items() if k not in refs}
+    if not refs:
+        return literales, []
+    from core.agents.secretos import resolver_secretos
+    from core.shared.tenant import get_current_tenant_id
+
+    tenant_id = get_current_tenant_id()
+    valores = await resolver_secretos(tenant_id, refs.values(), host) if tenant_id is not None else {}
+    faltan = sorted({n for n in refs.values() if n not in valores})
+    return literales | {k: valores[n] for k, n in refs.items() if n in valores}, faltan
 
 
 def _raw_or_interpolated(value: Any, arguments: dict[str, Any]) -> Any:

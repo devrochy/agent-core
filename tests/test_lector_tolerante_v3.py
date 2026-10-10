@@ -356,3 +356,17 @@ def test_header_con_salto_de_linea_se_descarta(catalogo) -> None:
     c, _, _ = convertir(raw, catalogo)
     assert c.general.declarativeTools[0].headers == {}
     assert c.secretos == {}
+
+
+def test_referencias_ya_escritas_por_el_editor_se_conservan(catalogo) -> None:
+    raw = v2_completo()
+    raw["extensions"]["tools"][0]["headers"] = {
+        "Authorization": {"secret": "consultar_envio_authorization"},
+        "Cookie": "sid=literal",
+    }
+    c, _, _ = convertir(raw, catalogo)
+    headers = c.general.declarativeTools[0].headers
+    assert headers["Authorization"] == SecretRef(secret="consultar_envio_authorization")
+    # El literal nuevo no pisa el nombre de la referencia existente.
+    assert headers["Cookie"] == SecretRef(secret="consultar_envio_cookie")
+    assert list(c.secretos) == ["consultar_envio_cookie"]

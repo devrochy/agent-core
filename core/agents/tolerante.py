@@ -145,7 +145,7 @@ def acciones_ofrecidas(
 def _declarativas(
     raw: Any, catalogo: Catalogo, avisos: list[str]
 ) -> tuple[list[dict[str, Any]], dict[str, SecretStr]]:
-    from core.mcp.declarative import rejected_domains, validate_declarative_tools
+    from core.mcp.declarative import rejected_domains, secret_ref, validate_declarative_tools
 
     crudas = raw if isinstance(raw, list) else []
     normalizadas = validate_declarative_tools(crudas)
@@ -157,7 +157,10 @@ def _declarativas(
     if rejected_domains(crudas):
         avisos.append("extensions.tools: dominios no públicos descartados de allowed_domains (hoy tampoco se usan)")
 
-    usados: set[str] = set()
+    # Nombres ya usados por referencias existentes: un secreto extraído no los pisa.
+    usados: set[str] = {
+        n for t in normalizadas for v in t["headers"].values() if (n := secret_ref(v)) is not None
+    }
     secretos: dict[str, SecretStr] = {}
     salida: list[dict[str, Any]] = []
     nombres: set[str] = set()
@@ -177,6 +180,11 @@ def _declarativas(
             # Antes de extraer secretos: ninguno queda huérfano (sin tool que lo use).
             avisos.append(f"extensions.tools '{nombre}': más de 30 headers, se conservan los primeros")
         for header, valor in list(tool["headers"].items())[:30]:
+            ref = secret_ref(valor)
+            if ref is not None and _HEADER_NAME_RE.fullmatch(header):
+                # Ya es una referencia (la escribió el editor): el valor está en la instalación.
+                headers[header] = {"secret": ref}
+                continue
             if (
                 not _HEADER_NAME_RE.fullmatch(header)
                 or not isinstance(valor, str)
@@ -529,6 +537,35 @@ async def cargar_como_v3(tenant_id: uuid.UUID | None = None, *, modules: Iterabl
     )
 
 
+async def migrar_secretos(tenant_id: uuid.UUID, conversion: ConversionV3) -> list[str]:
+    """Mueve los secretos literales que sacó el lector a la instalación `core` del negocio,
+    cada uno atado a los dominios de las tools que lo usan (ADR-0113 §2). Es el paso que el
+    backfill (HU-AOS-13) corre ANTES de crear la primera `agent_version`, que es inmutable.
+
+    Idempotente: reescribir un secreto con el mismo valor no cambia nada visible. Devuelve
+    avisos (sin valores) de los que no se pudieron mover: una tool sin `allowedDomains` hoy
+    tampoco puede llamar a nadie (ScopedHttp cierra todo sin allowlist)."""
+    from agentcore_contracts import SecretRef
+
+    from core.agents.secretos import SecretoDeclarativo, guardar_secretos_declarativos
+
+    dominios: dict[str, set[str]] = {}
+    for tool in conversion.general.declarativeTools:
+        for valor in tool.headers.values():
+            if isinstance(valor, SecretRef):
+                dominios.setdefault(valor.secret, set()).update(tool.allowedDomains)
+    avisos: list[str] = []
+    a_guardar: dict[str, SecretoDeclarativo] = {}
+    for nombre, valor in conversion.secretos.items():
+        if not dominios.get(nombre):
+            avisos.append(f"secreto '{nombre}': su tool no tiene allowedDomains, no se migra")
+            continue
+        a_guardar[nombre] = SecretoDeclarativo(valor=valor, dominios=tuple(sorted(dominios[nombre])))
+    if a_guardar:
+        await guardar_secretos_declarativos(tenant_id, a_guardar)
+    return avisos
+
+
 __all__ = [
     "KEYS_RESERVADAS",
     "KEY_COORDINADOR",
@@ -541,4 +578,5 @@ __all__ = [
     "candidatas_del_spec",
     "cargar_como_v3",
     "convertir_v2",
+    "migrar_secretos",
 ]
