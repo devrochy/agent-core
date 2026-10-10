@@ -27,7 +27,11 @@ Con `neutral`:
 4. Cierra el turno con `_finish_turn(resolved=False)`: suma a `turnos_sin_resolver`, y el
    autoescalado de ADR-0051 (`auto_escalate_after_turns`) sigue siendo la red.
 
-Un valor desconocido se trata como `escalate`. Se expone en Configuración → Identidad junto a
+Un valor desconocido se trata como `escalate`.
+
+*Adenda de ADR-0050 (2026-10-10):* `persona.maxLength` ya no dispara `guardrail_fail_action` ni gasta
+`guardrail_max_retries`: es un tope blando con un reintento propio y nunca escala ni responde neutral.
+`forbiddenPhrases` sigue con este mecanismo. Se expone en Configuración → Identidad junto a
 `guardrail_max_retries`, que pasa a validarse 0-5 en la API igual que en el loop.
 
 ## Alternativas consideradas

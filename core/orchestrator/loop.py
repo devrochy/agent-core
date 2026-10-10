@@ -82,6 +82,13 @@ QUOTA_EXHAUSTED_REPLY = (
     "Un asesor humano puede continuar la atención."
 )
 
+# Respaldo del reintento por `persona.maxLength` si el playbook `respuestas` no trae
+# `## persona_max_length` (mismo patrón que `INSTRUCCION_GENERICA` del verificador).
+INSTRUCCION_LARGO = (
+    "Tu respuesta supera el largo máximo permitido ({max_length} "
+    "caracteres). Resumila sin perder información importante."
+)
+
 # WhatsApp y canales similares no interpretan Markdown: un cliente ve
 # "**Pollo Broaster**" literal, asteriscos incluidos, no negrita. La regla ya
 # está en core/playbooks/reglas-operacion.md, pero confiar solo en que el LLM
@@ -377,6 +384,10 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         messages.append(LLMMessage(role="user", content=latest_message))
     all_tool_results: list[dict[str, Any]] = []
     guardrail_retries = 0
+    # Borrador que ya pasó todo salvo el largo (`persona.maxLength`, adenda de ADR-0050):
+    # si el texto de su único reintento falla una verificación dura, se entrega este.
+    largo_guardado: tuple[str, Any] | None = None
+    entrega_guardada = False
     # Verificador de afirmaciones (ADR-0119, HU-ARCH-29). Las URLs que el negocio o
     # el cliente ya pusieron en la conversación son evidencia; las del asistente no.
     # El último bloque del prompt es el dinámico (perfil del cliente, memorias y
@@ -530,11 +541,10 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # turno actual) porque ese sí alimenta `extract_safe_extras` más abajo --
         # si se mezclara ahí, un _safe_append viejo (ej. un link de pago vencido)
         # podría reaparecer en la respuesta de un turno nuevo sin relación.
-        # v2.0.0 (ADR-0050): validaciones de persona del spec, ANTES de los
-        # guardrails de packs. `forbiddenPhrases` (frases prohibidas) y
-        # `maxLength` (tope de longitud) usan el mismo mecanismo de reintento
-        # correctivo -> escalar.
-        persona_verdict = _persona_guard(response.content, spec)
+        # v2.0.0 (ADR-0050): `forbiddenPhrases` del spec, ANTES de los guardrails de
+        # packs, con el mismo mecanismo de reintento correctivo -> escalar. El largo
+        # (`maxLength`) es un tope blando y se mira al final, cuando todo lo demás pasó.
+        persona_verdict = _persona_frase_prohibida(response.content, spec)
         # Se verifica el texto como llegará al cliente: `strip_markdown` puede rearmar
         # una URL partida con asteriscos (`**https**://…`).
         borrador = strip_markdown(response.content)
@@ -571,7 +581,18 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                     disabled_guardrails,
                     custom_rules=custom_rules,
                 )
-        if not verdict.passed:
+        if not verdict.passed and largo_guardado is not None:
+            # El texto del reintento de largo falló una verificación dura: se entrega el
+            # borrador largo, que ya la había pasado. El reintento de largo nunca empeora
+            # el resultado ni gasta reintentos de veracidad (adenda de ADR-0050).
+            log.warning(
+                "persona_largo_reintento_descartado",
+                conversation_id=str(conversation_id),
+                guardrail=verdict.reason.split(":", 1)[0][:120],
+            )
+            borrador, veredicto = largo_guardado
+            entrega_guardada = True
+        elif not verdict.passed:
             if guardrail_retries < guardrail_max_retries:
                 guardrail_retries += 1
                 messages.append(LLMMessage(role="assistant", content=response.content))
@@ -618,16 +639,38 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             await _write_usage_ledger(conversation_id, spec, usage, turn_span)
             escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
             return TurnResult(text=escalation_text, escalated=True)
+        elif (
+            largo_guardado is None
+            and _persona_excede_largo(borrador, spec)
+            # Sin una vuelta libre, el reintento terminaría en `max_iterations` y
+            # escalaría; sin presupuesto, en el cierre por presupuesto.
+            and _iteration + 1 < max_iterations
+            and (budget is None or await conversation_spent(conversation_id) + turn_cost < budget)
+        ):
+            # Tope blando (adenda de ADR-0050): un solo reintento propio, que no toca
+            # `guardrail_retries` ni `guardrail_fail_action`. El borrador ya verificado
+            # queda guardado por si el texto del reintento sale peor.
+            largo_guardado = (borrador, veredicto)
+            messages.append(LLMMessage(role="assistant", content=response.content))
+            messages.append(LLMMessage(role="user", content=f"[SISTEMA] {await _instruccion_largo(spec)}"))
+            continue
 
         # ---- respuesta final
+        intentos = guardrail_retries + (2 if largo_guardado is not None else 1)
         if veredicto is not None and (veredicto.extrajo_algo or motivos_verificador or veredicto.error):
             await registrar_veredicto(
                 conversation_id,
                 veredicto,
                 resultado="error" if veredicto.error else ("reintento" if motivos_verificador else "ok"),
-                intentos=guardrail_retries + 1,
+                intentos=intentos,
                 motivos=motivos_verificador,
             )
+        if _persona_excede_largo(borrador, spec):
+            if largo_guardado is None:
+                entregado = "sin_reintento"
+            else:
+                entregado = "guardado" if entrega_guardada else "reintento"
+            await _registrar_largo_excedido(conversation_id, spec, len(borrador), entregado)
         extras = extract_safe_extras(all_tool_results)
         final_text = apply_safe_extras(borrador, extras)
         return await _close_turn(
@@ -654,13 +697,9 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
 
 
 # ------------------------------------------------------------------ helpers
-def _persona_guard(response_text: str, spec) -> GuardrailResult | None:  # type: ignore[no-untyped-def]
-    """Validaciones de persona del spec (ADR-0050): frases prohibidas y longitud.
-
-    Devuelve un `GuardrailResult` fallido (con instrucción correctiva) o None si
-    la respuesta pasa. Es barato y determinista, por eso corre antes de los
-    guardrails de packs.
-    """
+def _persona_frase_prohibida(response_text: str, spec) -> GuardrailResult | None:  # type: ignore[no-untyped-def]
+    """`forbiddenPhrases` del spec (ADR-0050): guardrail duro, comparte el reintento y
+    `guardrail_fail_action` con el verificador. None si la respuesta pasa."""
     lowered = response_text.lower()
     for idx, phrase in enumerate(spec.persona.forbiddenPhrases):
         if phrase and phrase.lower() in lowered:
@@ -675,16 +714,44 @@ def _persona_guard(response_text: str, spec) -> GuardrailResult | None:  # type:
                     f"(la #{idx + 1} de la lista). Reformulala sin frases prohibidas."
                 ),
             )
-    if spec.persona.maxLength and len(response_text) > spec.persona.maxLength:
-        return GuardrailResult(
-            passed=False,
-            reason="persona_max_length",
-            retry_instruction=(
-                f"Tu respuesta supera el largo máximo permitido ({spec.persona.maxLength} "
-                "caracteres). Resumila sin perder información importante."
-            ),
-        )
     return None
+
+
+def _persona_excede_largo(texto: str, spec) -> bool:  # type: ignore[no-untyped-def]
+    """`persona.maxLength` (adenda de ADR-0050) es un tope blando: pedir que se acorte,
+    nunca escalar. `0` lo apaga. Se mide el texto que escribió el modelo, sin los
+    `_safe_append` del servidor."""
+    return bool(spec.persona.maxLength) and len(texto) > spec.persona.maxLength
+
+
+async def _instruccion_largo(spec) -> str:  # type: ignore[no-untyped-def]
+    """Instrucción del reintento de largo: sección `persona_max_length` del playbook
+    `respuestas` (invariante 3). `{max_length}` es un entero del spec."""
+    texto = await load_response(spec, "persona_max_length") or INSTRUCCION_LARGO
+    return texto.replace("{max_length}", str(spec.persona.maxLength))
+
+
+async def _registrar_largo_excedido(
+    conversation_id: uuid.UUID, spec, largo: int, entregado: str  # type: ignore[no-untyped-def]
+) -> None:
+    """Rastro de una respuesta entregada por encima de `persona.maxLength`, sin texto.
+    `entregado`: `reintento` (el texto acortado seguía largo), `guardado` (el reintento
+    falló una verificación y se entregó el borrador original) o `sin_reintento` (no
+    quedaba vuelta ni presupuesto). Dato por turno: HU-AOS-10 lo mueve a
+    `turn_outcomes` cambiando solo esta función, como `registrar_veredicto`."""
+    log.warning(
+        "persona_max_length_excedido",
+        conversation_id=str(conversation_id),
+        largo=largo,
+        tope=spec.persona.maxLength,
+        entregado=entregado,
+    )
+    await record_audit(
+        actor="core:persona",
+        action="persona_max_length_excedido",
+        conversation_id=conversation_id,
+        input_data={"largo": largo, "tope": spec.persona.maxLength, "entregado": entregado},
+    )
 
 
 def _http_for_tool(tool_name: str, declarative: dict[str, Any]) -> ScopedHttp:
