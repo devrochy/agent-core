@@ -1,0 +1,33 @@
+{
+  "contract": "procedure/1",
+  "id": "pack_calendar.agendar_cita",
+  "version": "1.0.0",
+  "title": "Agendar una cita",
+  "triggers": {
+    "description": "El cliente quiere agendar una cita, una demo o una reunión",
+    "examples": ["quiero agendar una demo", "tienen espacio el jueves", "me das una cita"]
+  },
+  "slots": {
+    "tipo_cita": { "type": "string", "required": true, "setBy": "interactive:tipo:",
+                   "candidates": { "source": "action:list_appointment_types.types", "max": 10 } },
+    "hora": { "type": "datetime", "required": true, "confirm": true, "setBy": "interactive:hora:",
+              "candidates": { "source": "action:check_availability.slots", "max": 10 } },
+    "nombre": { "type": "string", "required": true, "dataClass": "pii" },
+    "cita_id": { "type": "string", "setBy": "action:create_calendar_event" }
+  },
+  "stages": [
+    { "id": "elegir_tipo", "goal": "Que el cliente elija el tipo de cita de la lista",
+      "actions": ["list_appointment_types"], "exitWhen": { "slots": ["tipo_cita"] } },
+    { "id": "elegir_hora", "goal": "Ofrecer hasta 10 horarios libres y que el cliente elija uno",
+      "actions": ["check_availability", "find_next_available"],
+      "exitWhen": { "slots": ["hora", "nombre"], "confirmed": ["hora"] } },
+    { "id": "agendar", "goal": "Crear la cita con el horario confirmado", "risk": "high",
+      "actions": ["create_calendar_event"], "confirmation": "explicit",
+      "exitWhen": { "slots": ["cita_id"] } }
+  ],
+  "recovery": { "actionError": "explicar_y_reintentar_una_vez", "timeout": "relevo_humano" },
+  "claims": [
+    { "kind": "status", "phrases": ["quedó agendada", "tu cita está confirmada"], "requires": "slot:cita_id" }
+  ],
+  "evals": ["agenda-elige-de-la-lista", "agenda-sin-horarios"]
+}

@@ -114,3 +114,46 @@ respuesta correcta a la que se le quitó un link. Una falsa por un link inventad
 que ningún caso de incidente falle, aunque el total quede bajo el umbral del 2 %. Medición: 206
 correctas con 0 falsos positivos y 17 falsas con 0 falsos negativos. Sin esta adenda, el caso del
 incidente es un falso positivo (0,5 %).
+
+## Adenda (2026-10-10): grabar y reproducir el LLM de las evals
+
+El dueño la aprobó el 2026-10-09 para no gastar saldo del proveedor en pruebas. La revisó el agente `arquitecto` antes
+de escribir código.
+
+- **Qué es:** `core/llm/cassette.py` envuelve al proveedor que resuelve `resolve_provider`, tanto el del asistente
+  como el del cliente simulado. Hay tres modos:
+  - `off`: el de siempre.
+  - `record`: llama al proveedor real y guarda el request normalizado y la respuesta, en un JSON por escenario o
+    journey.
+  - `replay`: responde desde ese JSON **sin construir el proveedor real**. Si no hay coincidencia, falla con
+    `GrabacionDesactualizada` y dice qué cambió. Nunca cae a la red.
+
+  El cableado está en `evals/grabaciones.py` (`--grabacion`, `LLM_CASSETTE`).
+- **Guard de producción:** el modo es un estado del proceso que solo encienden los runners de evals
+  (`cassette.activar`). El servidor no lee la variable. `activar` falla fuera de `APP_ENV` development o test. El
+  error no hereda de `LLMProviderError`, para que el loop no lo convierta en fallback o escalamiento; los runners
+  cortan la corrida con el código de salida 3.
+- **Normalización:** la clave quita lo volátil:
+  - el bloque de fecha y hora de ADR-0091;
+  - UUIDs, hex de 32 y tokens de 16 hex, slugs de la corrida, timestamps y fechas ISO, e ids de tool_calls.
+
+  Los valores se cambian por marcadores numerados, y la respuesta grabada se rehidrata con los valores de la corrida
+  actual. La semilla del intento es parte de la clave. Los requests idénticos (k del golden) se guardan como
+  secuencia. El detalle está en `evals/README.md`.
+- **Sin secretos:** antes de escribir se rechaza la grabación si aparece la API key usada (`.env` o BYOK), un valor
+  secreto de la configuración o algo con forma de credencial. Al cargarla se valida como dato no confiable: una
+  respuesta grabada no puede llamar una tool que no se ofreció.
+- **Replay no es medición:** repite lo grabado, así que no mide la consistencia del modelo. Una corrida en replay no
+  se guarda en `eval_runs`. El umbral de esta ADR y pass^k se miden siempre en vivo (push a `develop` y nightly).
+- **Dónde viven las grabaciones:**
+  - las del framework, en `evals/cassettes/`;
+  - las de un negocio, junto a su golden en el repo del negocio (`TENANTS_ROOT/<slug>/evals/cassettes/`), nunca
+    en el framework.
+
+  En la v1 el replay apunta a los sets del framework. Un cambio de playbook del core invalida las grabaciones de
+  todos los negocios.
+- **Regrabar:** `record` gasta saldo, así que solo se hace con OK del dueño. Se regraba por escenario
+  (`python evals/runner.py 06 --grabacion record`). En record y replay los embeddings de memoria se apagan, porque
+  saldrían a la red y cambiarían el prompt.
+- **CI:** el gate de las PRs a `develop` corre en replay sin `LLM_API_KEY` (job `evals-replay`). Lo fija la adenda del
+  2026-10-10 de ADR-0120.

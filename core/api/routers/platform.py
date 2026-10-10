@@ -228,12 +228,17 @@ async def purge_tenant_endpoint(
     payload: PurgeRequest,
     principal: Annotated[Principal, Depends(get_principal)],
 ) -> Response:
-    """Eliminación física IRREVERSIBLE: exige la frase `ELIMINAR <slug>` (invariante 8)."""
+    """Eliminación física IRREVERSIBLE (invariante 8).
+
+    Exige el tenant suspendido (409 `tenant_not_suspended`) y la frase `ELIMINAR <slug>`.
+    """
     _require_master(principal)
-    from core.tenants import purge_tenant
+    from core.tenants import TenantNotSuspendedError, purge_tenant
 
     try:
         await purge_tenant(str(tenant_id), payload.confirm_phrase)
+    except TenantNotSuspendedError as exc:
+        raise ApiError(409, "tenant_not_suspended", str(exc)[:240]) from exc
     except ValueError as exc:
         raise ApiError.bad_request(str(exc)[:180], "purge_confirmation") from exc
     except Exception as exc:

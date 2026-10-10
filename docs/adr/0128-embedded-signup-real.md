@@ -12,6 +12,8 @@
   - enmienda ADR-0126, consecuencia "el alta de Embedded Signup sigue re-registrando la suscripción de la app de la
     plataforma": ya no (§4);
   - extiende ADR-0127 §2 a Embedded Signup: PIN obligatorio en producción y `pending` → `connected` al registrar (§3).
+- **Seguimiento (2026-10-09):** con HU-CONN-07 (#354) ya en `develop`, los requisitos de Embedded Signup dejan de
+  revisar los datos del servidor y toman la corrida de "Plataforma → App de Meta", que los enlaza (§8).
 - **Contexto:** HU-SH-05 (issue agent-core #340), SPEC-07 · Hito 0A (D-30). Cierra en código el criterio de Embedded
   Signup de HU-CONN-01. Revisado por `arquitecto`, `auditor-multitenant` y `security-reviewer` (2026-10-09); sus
   hallazgos están corregidos (ver "Revisión").
@@ -110,8 +112,13 @@
    `GET /api/v1/admin/platform/meta-app/embedded-signup` y `POST .../step`. Manuales, confirmados por el master con
    quién y cuándo: verificación del negocio, acceso de Tech Provider, App Review de `whatsapp_business_management` y
    `whatsapp_business_messaging`, la configuración de Embedded Signup del `config_id`, el dominio del panel en el SDK
-   de JavaScript y la app en modo Live. Más tres datos del servidor (variables de entorno, URL pública en HTTPS y el
-   webhook de la app). Tabla de **sistema** `platform_meta_app_requirements` (migración 0066): es de la app de la
+   de JavaScript y la app en modo Live. Los datos del servidor (variables de entorno, URL pública en HTTPS y el
+   webhook de la app) no se repiten aquí: los revisa la corrida de "Plataforma → App de Meta" de HU-CONN-07
+   (`meta_app_configured`, `webhook_handshake` con HTTPS y `app_subscriptions_complete`). `ready` exige su última
+   corrida terminada hace menos de 30 días (`VIGENCIA_REVISION_PLATAFORMA`, decisión del dueño del 2026-10-10), sin
+   ítems en rojo y con esos tres en verde (`platform_check`, con `expired` y `expires_at`), así que la lista nunca
+   queda lista con el checklist de la app en rojo ni con una revisión vieja: pasado el plazo vuelve a pendiente
+   hasta revisar de nuevo. Tabla de **sistema** `platform_meta_app_requirements` (migración 0066): es de la app de la
    plataforma, no de un negocio; solo la escribe `core/admin/platform_meta_es.py`, que exige master (un test lo
    hace cumplir), y `app_runtime` no tiene `DELETE`. Los chequeos de infraestructura de la app son de HU-CONN-07
    (`/admin/platform/meta-app`, ya en `develop`); esta lista es la parte de Embedded Signup y se enlaza desde allí.

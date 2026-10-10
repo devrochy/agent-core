@@ -12,6 +12,10 @@ python evals/journeys.py 10,11 --k 4           # cada journey 4 veces: pass@1, p
 python evals/journeys.py --tenant solvershub    # set de un negocio contra una réplica de sus artefactos
 ```
 
+Con `--grabacion replay` corren sin red ni `LLM_API_KEY` desde las grabaciones de
+`evals/cassettes/journeys/<set>/`, y `--grabacion record` las regraba (gasta saldo: con OK del dueño).
+Ver [Grabar y reproducir el LLM](../README.md#grabar-y-reproducir-el-llm).
+
 **Solo en bases de prueba** (CI, nightly o un stack efímero local): cada corrida deja un negocio
 `journeys-*` y reemplaza la pasarela dentro del proceso. Con `APP_ENV=production` no arranca. Los
 jobs corren **solo sobre el negocio del journey**, nunca sobre otros negocios de la base.

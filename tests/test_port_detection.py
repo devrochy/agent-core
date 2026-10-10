@@ -129,9 +129,12 @@ def test_choose_port_conserva_el_puerto_del_propio_asistente() -> None:
     assert elegido == 5435
 
 
-def test_choose_port_ignora_un_previo_que_ya_no_es_nuestro() -> None:
+def test_choose_port_ignora_un_previo_que_ya_no_es_nuestro(monkeypatch: pytest.MonkeyPatch) -> None:
+    import cli.preflight
     from cli.preflight import choose_port
 
+    # Determinista: en el runner compartido el 49600 puede estar ocupado por otro proceso.
+    monkeypatch.setattr(cli.preflight, "port_available", lambda *a, **k: True)
     elegido = choose_port(
         start=49600, label="API", previous=49999,
         own_ports=set(), reserved=set(), docker_ports={},
