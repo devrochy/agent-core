@@ -1,9 +1,14 @@
-name: Eval nightly (set completo)
+name: Evals con LLM real (set completo, a demanda)
 
+# Decisión del dueño (2026-10-10): develop no gasta LLM. Ya no hay corrida nocturna: el set
+# completo se lanza a mano (Actions → Run workflow) cuando haga falta medir, por ejemplo antes
+# de una release, con el k que se elija (cada intento llama al LLM real). Adenda de ADR-0120.
 on:
-  schedule:
-    - cron: "0 3 * * *"
   workflow_dispatch:
+    inputs:
+      k:
+        description: "Intentos por escenario (cada intento gasta saldo del LLM)"
+        default: "2"
 
 jobs:
   evals-full:
@@ -71,14 +76,14 @@ jobs:
       - name: Golden set completo
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-        run: python evals/runner.py --k 4 --umbral 0.95 --reporte evals/reportes/golden.json
+        run: python evals/runner.py --k ${{ inputs.k }} --umbral 0.95 --reporte evals/reportes/golden.json
       - name: Journeys (HU-SUB-12)
         # Conversaciones completas con pagos simulados y reloj, y clientes simulados
         # (HU-ARCH-28); el reporte queda como artefacto para comparar noches.
         if: always()
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-        run: python evals/journeys.py --k 4 --umbral 0.95 --reporte evals/reportes/journeys.json
+        run: python evals/journeys.py --k ${{ inputs.k }} --umbral 0.95 --reporte evals/reportes/journeys.json
       - name: Reporte de evals
         if: always()
         uses: actions/upload-artifact@v4

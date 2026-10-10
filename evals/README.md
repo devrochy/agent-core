@@ -162,7 +162,11 @@ y reproducido. ADR-0120 (adenda del 2026-10-10) lo fija así:
 
 1. **PR a `develop`:** el job `evals-replay` levanta una base nueva, la migra y la siembra, y corre
    `bash scripts/gate_evals.sh replay` **sin** `LLM_API_KEY`. No gasta saldo.
-2. **Push a `develop` y nightly:** con el LLM real, como antes. Es la medición de ADR-0119.
+2. **Push a `develop`:** también en replay (job `evals-replay`), sin costo.
+3. **PR de release hacia `main`:** el gate con el LLM real, una vez por release (~0,01–0,03 USD). Es la
+   medición de ADR-0119.
+4. **Set completo:** `evals-nightly.yml` ya no corre solo: se lanza a mano desde Actions con el `k` que se
+   elija (2 por defecto), por ejemplo antes de una release. Cada intento gasta saldo.
 
 **Si cambias un prompt** (un playbook, la descripción de una tool, el flujo o la persona) y el job
 `evals-replay` falla con «Grabación desactualizada»:
