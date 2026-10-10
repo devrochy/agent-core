@@ -151,9 +151,10 @@ async def is_ready(tenant_id: str) -> bool:
 async def request_reset(tenant_id: str, ttl_s: int = 300) -> None:
     """Pide al connector que recicle la sesión (para re-emitir QR).
 
-    La escribe el panel (`reset_session`); el manager la consume y cierra el
-    socket, de modo que `run_session` vuelve a arrancar en `pending_qr`, limpia
-    credenciales y publica un QR nuevo. Sin esta señal, un reset con el socket
+    La escribe el panel (`reset_session`); el manager la consume, cierra el
+    socket sin persistir el directorio de trabajo y el siguiente ciclo de
+    `run_session` limpia credenciales (blob y `session.db` local) y publica un
+    QR nuevo, aunque la tarea hubiera arrancado con la sesión vinculada. Sin esta señal, un reset con el socket
     vivo no surte efecto (incidente 2026-10-04: el panel no mostraba QR).
     """
     await _redis().set(reset_key(tenant_id), "1", ex=ttl_s)

@@ -624,3 +624,139 @@ async def test_sweep_limpia_el_estado_conectado_de_una_tarea_muerta(tmp_path: Pa
 
     assert ctx.tenant_id not in connector._connected
     assert ctx.tenant_id not in connector._linked
+
+
+class StoreConBlob(FakeStore):
+    """Store que simula el blob cifrado de `waweb_sessions.creds_encrypted`.
+
+    `persist` copia el `session.db` del directorio de trabajo al blob y
+    `materialize` lo restaura, como `DbEncryptedSessionStore`. `eventos` guarda
+    el orden de las llamadas.
+    """
+
+    def __init__(self, base: Path, blob: str | None) -> None:
+        super().__init__(base)
+        self.blob = blob
+        self.eventos: list[str] = []
+
+    async def materialize(self, tenant_id: uuid.UUID, work_dir: Path) -> bool:
+        self.eventos.append("materialize")
+        if not self.blob:
+            return False
+        work_dir.mkdir(parents=True, exist_ok=True)
+        (work_dir / "session.db").write_text(self.blob)
+        return True
+
+    async def persist(self, tenant_id: uuid.UUID, work_dir: Path) -> None:
+        self.eventos.append("persist")
+        await super().persist(tenant_id, work_dir)
+        db = work_dir / "session.db"
+        if db.exists():
+            self.blob = db.read_text()
+
+    async def clear(self, tenant_id: uuid.UUID) -> None:
+        self.eventos.append("clear")
+        await super().clear(tenant_id)
+        self.blob = None
+
+
+async def test_reset_del_panel_con_sesion_vinculada_vuelve_a_pedir_qr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """El reset pedido desde el panel debe surtir efecto aunque la tarea del
+    connector haya arrancado con la sesión ya vinculada (`ctx.status=connected`).
+
+    Bug: el `finally` de `run_session` volvía a persistir el directorio de
+    trabajo (pisando el `creds_encrypted=None` que deja `reset_session`) y el
+    siguiente ciclo no limpiaba porque `ctx` sigue diciendo `connected`: el
+    connector reconectaba con la sesión vieja y nunca emitía QR.
+    """
+
+    async def _clear(_: uuid.UUID) -> None:
+        return None
+
+    monkeypatch.setattr(manager_mod.limits, "clear_disconnects", _clear)
+
+    ctx = SessionContext(
+        tenant_id=uuid.UUID(int=1),
+        connection_id=uuid.UUID(int=2),
+        connection_external_id="waweb:1",
+        status=status.CONNECTED,
+    )
+    registry = FakeRegistry([ctx])
+    store = StoreConBlob(tmp_path, blob="creds-viejas")
+    holder: dict[str, Any] = {}
+    sockets: list[Any] = []
+    vistos: list[tuple[bool, str | None]] = []
+
+    class SocketNeonize(FakeSocket):
+        async def connect(self, *, session_dir, on_qr, on_status, on_message):
+            self.session_dir = session_dir
+            db = session_dir / "session.db"
+            # Lo que encuentra este socket al abrir el store de Neonize.
+            vistos.append((db.exists(), store.blob))
+            if db.exists():
+                await on_status("connected", None)
+            else:
+                # Sin credenciales Neonize empieza a vincular: emite QR.
+                session_dir.mkdir(parents=True, exist_ok=True)
+                db.write_text("sin-vincular")
+                await on_qr("QR-NUEVO")
+
+    def factory() -> Any:
+        sock = SocketNeonize()
+        sockets.append(sock)
+        if len(sockets) >= 2:
+            holder["connector"]._stop.add(ctx.tenant_id)
+        return sock
+
+    resets = {"pendientes": 1}
+
+    async def _consume_reset(_tenant_id: str) -> bool:
+        if resets["pendientes"]:
+            resets["pendientes"] -= 1
+            # Lo que hace `reset_session` en el panel: la fila queda sin creds.
+            store.blob = None
+            store.eventos.append("reset")
+            return True
+        return False
+
+    monkeypatch.setattr(manager_mod.handoff, "consume_reset", _consume_reset)
+
+    async def _sleep(_: float) -> None:
+        return None
+
+    async def _noop_drain(*a: Any, **k: Any) -> bool:
+        return False
+
+    async def _alert(*a: Any, **k: Any) -> None:
+        return None
+
+    async def _policy(_tenant_id: uuid.UUID) -> WaWebPolicy:
+        return WaWebPolicy()
+
+    connector = WaWebConnector(
+        registry=registry,
+        store=store,
+        socket_factory=factory,
+        policy_loader=_policy,
+        drainer=_noop_drain,
+        sleep=_sleep,
+        alert=_alert,
+    )
+    holder["connector"] = connector
+
+    await asyncio.wait_for(connector.run_session(ctx), timeout=3)
+
+    assert len(sockets) == 2
+    assert vistos[0] == (True, "creds-viejas")
+    tras_reset = store.eventos[store.eventos.index("reset") :]
+    segundo_materialize = tras_reset.index("materialize")
+    assert "persist" not in tras_reset[:segundo_materialize], (
+        f"no debe persistir el directorio viejo tras el reset: {store.eventos}"
+    )
+    assert "clear" in tras_reset[:segundo_materialize], (
+        f"debe limpiar la sesión antes del siguiente ciclo: {store.eventos}"
+    )
+    assert vistos[1] == (False, None), "el socket nuevo debe arrancar sin credenciales"
+    assert registry.statuses[ctx.tenant_id] == status.PENDING_QR
