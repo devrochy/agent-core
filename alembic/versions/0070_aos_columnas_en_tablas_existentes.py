@@ -33,6 +33,17 @@ actual (sin releases) no se encole ningún evento:
 - `agent_instances_core_required`: deshabilitar o borrar (lógico) el core de una conexión con
   release activa se rechaza si no queda otro. No mira la pausa de ADR-0122: una conexión pausada
   conserva su Coordinador, solo que no lo ejecuta.
+Ambos leen la conexión con `FOR SHARE` (contra el *write skew* de dos transacciones concurrentes
+que cumplen cada una por separado) y fallan cerrados si la conexión no es visible (RLS de otro
+negocio en contexto): nunca dan por buena una conexión que no pudieron leer.
+
+`conversations`: el dueño tras un handoff es una instancia de ESA conexión (FK
+`(tenant_id, connection_id, active_agent_instance_id)`), y `release_id`, `release_lane` y el dueño
+exigen `connection_id` (con NULL la FK compuesta no se verificaría). Por eso el camino anterior,
+al reescribir `connection_id`, limpia `release_id` y `active_agent_instance_id` (ADR-0115 §6).
+
+`channel_connections.updated_at` nace con la hora de la migración y nadie lo actualiza hasta la HU
+que escriba estas columnas (HU-AOS-11/14).
 
 Fuera de este expand: el contract (índice único de conversación abierta por conexión,
 `connection_id` NOT NULL, `VALIDATE`), la memoria por scope (`memory_vectors`, HU-AOS-36: su CHECK
@@ -40,8 +51,10 @@ Fuera de este expand: el contract (índice único de conversación abierta por c
 `eval_runs`/`eval_results` del gate (HU-AOS-21). Sin cambios en los modelos SQLAlchemy: el runtime
 no selecciona columnas que todavía no usa, y el `downgrade` no rompe al código desplegado.
 
-`lock_timeout`: cada `ALTER` toma ACCESS EXCLUSIVE por milisegundos; si no lo consigue en 5 s, la
-migración falla y se reintenta, en vez de frenar el inbound detrás de una transacción larga.
+Locks: cada tabla se altera en SU PROPIA transacción (`autocommit_block`, un `DO` por tabla) con
+`lock_timeout` de 5 s. Así nunca hay dos tablas grandes con ACCESS EXCLUSIVE a la vez ni se espera
+por una teniendo otra bloqueada (sin deadlocks con el consumer). `tenants` va al final, sola. Es
+re-ejecutable: `ADD COLUMN IF NOT EXISTS` y cada constraint o trigger se crea solo si falta.
 
 Revision ID: 0070
 Revises: 0069
@@ -57,15 +70,110 @@ down_revision = "0069"
 branch_labels = None
 depends_on = None
 
+
+def _alter(tabla: str, columnas: list[str], constraints: dict[str, str]) -> str:
+    """Un `DO` (una transacción) que agrega columnas y constraints a UNA tabla, idempotente."""
+    sentencias = []
+    if columnas:
+        adds = ",\n  ".join(f"ADD COLUMN IF NOT EXISTS {c}" for c in columnas)
+        sentencias.append(f"ALTER TABLE {tabla}\n  {adds};")
+    for nombre, definicion in constraints.items():
+        sentencias.append(
+            f"IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '{nombre}' "
+            f"AND conrelid = '{tabla}'::regclass) THEN\n"
+            f"  ALTER TABLE {tabla} ADD CONSTRAINT {nombre} {definicion};\nEND IF;"
+        )
+    return "DO $$\nBEGIN\n" + "\n".join(sentencias) + "\nEND $$;"
+
+
+_CAMBIOS: list[tuple[str, list[str], dict[str, str]]] = [
+    # ------------------------------------------------ channel_connections (ADR-0115, ADR-0117)
+    (
+        "channel_connections",
+        [
+            "meta_connection_id uuid",
+            "settings jsonb NOT NULL DEFAULT '{}'::jsonb",
+            "active_release_id uuid",
+            "canary_release_id uuid",
+            "canary_percent smallint NOT NULL DEFAULT 0",
+            "updated_at timestamptz NOT NULL DEFAULT now()",
+        ],
+        {
+            "ck_cc_canary": "CHECK (canary_percent BETWEEN 0 AND 50 "
+            "AND (canary_percent = 0 OR canary_release_id IS NOT NULL)) NOT VALID",
+            # Las filas con cuenta de Meta no guardan credenciales (ADR-0094, ADR-0115 §1).
+            "ck_cc_meta_sin_credenciales": "CHECK (meta_connection_id IS NULL "
+            "OR credentials_encrypted IS NULL) NOT VALID",
+            "fk_cc_meta": "FOREIGN KEY (tenant_id, meta_connection_id) "
+            "REFERENCES meta_connections (tenant_id, id) NOT VALID",
+            # El puntero de la conexión solo apunta a SUS releases.
+            "fk_cc_active_release": "FOREIGN KEY (tenant_id, id, active_release_id) "
+            "REFERENCES connection_releases (tenant_id, connection_id, id) NOT VALID",
+            "fk_cc_canary_release": "FOREIGN KEY (tenant_id, id, canary_release_id) "
+            "REFERENCES connection_releases (tenant_id, connection_id, id) NOT VALID",
+        },
+    ),
+    # ------------------------------------------------ conversations (ADR-0117 §2 y §4)
+    (
+        "conversations",
+        [
+            "release_id uuid",
+            "episode_started_at timestamptz",
+            "release_lane text",
+            "active_agent_instance_id uuid",
+            "owner_since timestamptz",
+        ],
+        {
+            "ck_conv_lane": "CHECK (release_lane IS NULL OR "
+            "(release_lane IN ('stable','canary') AND release_id IS NOT NULL)) NOT VALID",
+            "ck_conv_aos_requiere_conexion": "CHECK (connection_id IS NOT NULL "
+            "OR (release_id IS NULL AND active_agent_instance_id IS NULL)) NOT VALID",
+            "fk_conv_connection": "FOREIGN KEY (tenant_id, connection_id) "
+            "REFERENCES channel_connections (tenant_id, id) NOT VALID",
+            "fk_conv_release": "FOREIGN KEY (tenant_id, connection_id, release_id) "
+            "REFERENCES connection_releases (tenant_id, connection_id, id) NOT VALID",
+            "fk_conv_owner": "FOREIGN KEY (tenant_id, connection_id, active_agent_instance_id) "
+            "REFERENCES agent_instances (tenant_id, connection_id, id) NOT VALID",
+        },
+    ),
+    # ------------------------------------------------ mensajes, uso y auditoría
+    ("messages", ["turn_id uuid", "agent_instance_id uuid"], {}),
+    (
+        "usage_ledger",
+        [
+            "kind text NOT NULL DEFAULT 'turn'",
+            "turn_id uuid",
+            "connection_id uuid",
+            "agent_instance_id uuid",
+            "agent_version_id uuid",
+            "release_id uuid",
+            "a2a_call_id uuid",
+            "trace_id text",
+        ],
+        {
+            "ck_usage_kind": "CHECK (kind IN ('turn','agent_run','classifier','composer',"
+            "'embedding','eval')) NOT VALID",
+        },
+    ),
+    ("audit_log", ["turn_id uuid", "connection_id uuid", "agent_instance_id uuid"], {}),
+]
+
 _TRIGGERS_COORDINADOR = """
 CREATE OR REPLACE FUNCTION connection_requires_core() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_release uuid;
+  v_deleted timestamptz;
 BEGIN
-  -- Se relee la fila: al COMMIT pudo cambiar otra vez dentro de la misma transacción.
-  IF EXISTS (
-       SELECT 1 FROM channel_connections cc
-        WHERE cc.tenant_id = NEW.tenant_id AND cc.id = NEW.id
-          AND cc.active_release_id IS NOT NULL AND cc.deleted_at IS NULL)
-     AND NOT EXISTS (
+  -- Se relee la fila al COMMIT (pudo cambiar dentro de la transacción) y se bloquea en modo
+  -- compartido contra el write skew con agent_instances_core_required.
+  SELECT cc.active_release_id, cc.deleted_at INTO v_release, v_deleted
+    FROM channel_connections cc
+   WHERE cc.tenant_id = NEW.tenant_id AND cc.id = NEW.id
+     FOR SHARE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'conexión % no visible al validar su Coordinador (¿otro negocio en contexto?)', NEW.id;
+  END IF;
+  IF v_release IS NOT NULL AND v_deleted IS NULL AND NOT EXISTS (
        SELECT 1 FROM agent_instances ai
         WHERE ai.tenant_id = NEW.tenant_id AND ai.connection_id = NEW.id
           AND ai.role = 'core' AND ai.enabled AND ai.deleted_at IS NULL) THEN
@@ -74,20 +182,20 @@ BEGIN
   RETURN NULL;
 END $$;
 
-CREATE CONSTRAINT TRIGGER channel_connections_requires_core
-  AFTER INSERT OR UPDATE OF deleted_at, active_release_id ON channel_connections
-  DEFERRABLE INITIALLY DEFERRED
-  FOR EACH ROW
-  WHEN (NEW.active_release_id IS NOT NULL AND NEW.deleted_at IS NULL)
-  EXECUTE FUNCTION connection_requires_core();
-
 CREATE OR REPLACE FUNCTION core_instance_required() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_release uuid;
+  v_deleted timestamptz;
 BEGIN
-  IF EXISTS (
-       SELECT 1 FROM channel_connections cc
-        WHERE cc.tenant_id = OLD.tenant_id AND cc.id = OLD.connection_id
-          AND cc.active_release_id IS NOT NULL AND cc.deleted_at IS NULL)
-     AND NOT EXISTS (
+  SELECT cc.active_release_id, cc.deleted_at INTO v_release, v_deleted
+    FROM channel_connections cc
+   WHERE cc.tenant_id = OLD.tenant_id AND cc.id = OLD.connection_id
+     FOR SHARE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'conexión % no visible al validar su Coordinador (¿otro negocio en contexto?)',
+      OLD.connection_id;
+  END IF;
+  IF v_release IS NOT NULL AND v_deleted IS NULL AND NOT EXISTS (
        SELECT 1 FROM agent_instances ai
         WHERE ai.tenant_id = OLD.tenant_id AND ai.connection_id = OLD.connection_id
           AND ai.role = 'core' AND ai.enabled AND ai.deleted_at IS NULL) THEN
@@ -96,156 +204,76 @@ BEGIN
   RETURN NULL;
 END $$;
 
-CREATE CONSTRAINT TRIGGER agent_instances_core_required
-  AFTER UPDATE OF enabled, deleted_at OR DELETE ON agent_instances
-  DEFERRABLE INITIALLY DEFERRED
-  FOR EACH ROW
-  WHEN (OLD.role = 'core' AND OLD.enabled AND OLD.deleted_at IS NULL)
-  EXECUTE FUNCTION core_instance_required();
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'channel_connections_requires_core') THEN
+    CREATE CONSTRAINT TRIGGER channel_connections_requires_core
+      AFTER INSERT OR UPDATE OF deleted_at, active_release_id ON channel_connections
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW
+      WHEN (NEW.active_release_id IS NOT NULL AND NEW.deleted_at IS NULL)
+      EXECUTE FUNCTION connection_requires_core();
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'agent_instances_core_required') THEN
+    CREATE CONSTRAINT TRIGGER agent_instances_core_required
+      AFTER UPDATE OF enabled, deleted_at OR DELETE ON agent_instances
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW
+      WHEN (OLD.role = 'core' AND OLD.enabled AND OLD.deleted_at IS NULL)
+      EXECUTE FUNCTION core_instance_required();
+  END IF;
+END $$;
 """
+
+# Banderas por negocio (ADR-0112). tenants es chica: los CHECK entran validados.
+_TENANTS = _alter(
+    "tenants",
+    ["aos_runtime text NOT NULL DEFAULT 'legacy'", "aos_procedures boolean NOT NULL DEFAULT false"],
+    {
+        "ck_tenants_aos_runtime": "CHECK (aos_runtime IN ('legacy','v3'))",
+        "ck_tenants_aos_order": "CHECK (NOT aos_procedures OR aos_runtime = 'v3')",
+    },
+)
 
 
 def upgrade() -> None:
-    op.execute("SET LOCAL lock_timeout = '5s'")
+    with op.get_context().autocommit_block():
+        op.execute("SET lock_timeout = '5s'")
+        for tabla, columnas, constraints in _CAMBIOS:
+            op.execute(_alter(tabla, columnas, constraints))
+        op.execute(_TRIGGERS_COORDINADOR)
+        op.execute(_TENANTS)
+        op.execute("RESET lock_timeout")
 
-    # ------------------------------------------------ channel_connections (ADR-0115, ADR-0117)
-    op.execute(
-        """
-        ALTER TABLE channel_connections
-          ADD COLUMN meta_connection_id uuid,
-          ADD COLUMN settings           jsonb    NOT NULL DEFAULT '{}'::jsonb,
-          ADD COLUMN active_release_id  uuid,
-          ADD COLUMN canary_release_id  uuid,
-          ADD COLUMN canary_percent     smallint NOT NULL DEFAULT 0,
-          ADD COLUMN updated_at         timestamptz NOT NULL DEFAULT now();
-        ALTER TABLE channel_connections
-          ADD CONSTRAINT ck_cc_canary CHECK (canary_percent BETWEEN 0 AND 50
-                                          AND (canary_percent = 0 OR canary_release_id IS NOT NULL)) NOT VALID,
-          ADD CONSTRAINT ck_cc_meta_sin_credenciales
-                         CHECK (meta_connection_id IS NULL OR credentials_encrypted IS NULL) NOT VALID,
-          ADD CONSTRAINT fk_cc_meta FOREIGN KEY (tenant_id, meta_connection_id)
-                         REFERENCES meta_connections (tenant_id, id) NOT VALID,
-          ADD CONSTRAINT fk_cc_active_release FOREIGN KEY (tenant_id, id, active_release_id)
-                         REFERENCES connection_releases (tenant_id, connection_id, id) NOT VALID,
-          ADD CONSTRAINT fk_cc_canary_release FOREIGN KEY (tenant_id, id, canary_release_id)
-                         REFERENCES connection_releases (tenant_id, connection_id, id) NOT VALID;
-        """
-    )
 
-    # ------------------------------------------------ conversations (ADR-0117 §2 y §4)
-    op.execute(
-        """
-        ALTER TABLE conversations
-          ADD COLUMN release_id               uuid,
-          ADD COLUMN episode_started_at       timestamptz,
-          ADD COLUMN release_lane             text,
-          ADD COLUMN active_agent_instance_id uuid,
-          ADD COLUMN owner_since              timestamptz;
-        ALTER TABLE conversations
-          ADD CONSTRAINT ck_conv_lane CHECK (release_lane IS NULL OR release_lane IN ('stable','canary')) NOT VALID,
-          ADD CONSTRAINT fk_conv_connection FOREIGN KEY (tenant_id, connection_id)
-                         REFERENCES channel_connections (tenant_id, id) NOT VALID,
-          ADD CONSTRAINT fk_conv_release FOREIGN KEY (tenant_id, connection_id, release_id)
-                         REFERENCES connection_releases (tenant_id, connection_id, id) NOT VALID,
-          ADD CONSTRAINT fk_conv_owner FOREIGN KEY (tenant_id, active_agent_instance_id)
-                         REFERENCES agent_instances (tenant_id, id) NOT VALID;
-        """
-    )
-
-    # ------------------------------------------------ mensajes, uso y auditoría
-    op.execute(
-        """
-        ALTER TABLE messages
-          ADD COLUMN turn_id           uuid,
-          ADD COLUMN agent_instance_id uuid;
-        ALTER TABLE usage_ledger
-          ADD COLUMN kind              text NOT NULL DEFAULT 'turn',
-          ADD COLUMN turn_id           uuid,
-          ADD COLUMN connection_id     uuid,
-          ADD COLUMN agent_instance_id uuid,
-          ADD COLUMN agent_version_id  uuid,
-          ADD COLUMN release_id        uuid,
-          ADD COLUMN a2a_call_id       uuid,
-          ADD COLUMN trace_id          text;
-        ALTER TABLE usage_ledger ADD CONSTRAINT ck_usage_kind
-          CHECK (kind IN ('turn','agent_run','classifier','composer','embedding','eval')) NOT VALID;
-        ALTER TABLE audit_log
-          ADD COLUMN turn_id           uuid,
-          ADD COLUMN connection_id     uuid,
-          ADD COLUMN agent_instance_id uuid;
-        """
-    )
-
-    # ------------------------------------------------ Coordinador por conexión (ADR-0112 §1)
-    op.execute(_TRIGGERS_COORDINADOR)
-
-    # ------------------------------------------------ banderas por negocio (ADR-0112), al final
-    op.execute(
-        """
-        ALTER TABLE tenants
-          ADD COLUMN aos_runtime    text    NOT NULL DEFAULT 'legacy',
-          ADD COLUMN aos_procedures boolean NOT NULL DEFAULT false,
-          ADD CONSTRAINT ck_tenants_aos_runtime CHECK (aos_runtime IN ('legacy','v3')),
-          ADD CONSTRAINT ck_tenants_aos_order   CHECK (NOT aos_procedures OR aos_runtime = 'v3');
-        """
-    )
+def _drop(tabla: str, columnas: list[str], constraints: dict[str, str]) -> str:
+    partes = [f"DROP CONSTRAINT IF EXISTS {n}" for n in reversed(list(constraints))]
+    partes += [f"DROP COLUMN IF EXISTS {c.split()[0]}" for c in reversed(columnas)]
+    return f"ALTER TABLE {tabla} " + ", ".join(partes)
 
 
 def downgrade() -> None:
-    op.execute("SET LOCAL lock_timeout = '5s'")
-    op.execute(
-        """
-        ALTER TABLE tenants
-          DROP CONSTRAINT IF EXISTS ck_tenants_aos_order,
-          DROP CONSTRAINT IF EXISTS ck_tenants_aos_runtime,
-          DROP COLUMN IF EXISTS aos_procedures,
-          DROP COLUMN IF EXISTS aos_runtime;
-
-        DROP TRIGGER IF EXISTS agent_instances_core_required ON agent_instances;
-        DROP TRIGGER IF EXISTS channel_connections_requires_core ON channel_connections;
-        DROP FUNCTION IF EXISTS core_instance_required();
-        DROP FUNCTION IF EXISTS connection_requires_core();
-
-        ALTER TABLE audit_log
-          DROP COLUMN IF EXISTS agent_instance_id,
-          DROP COLUMN IF EXISTS connection_id,
-          DROP COLUMN IF EXISTS turn_id;
-        ALTER TABLE usage_ledger
-          DROP CONSTRAINT IF EXISTS ck_usage_kind,
-          DROP COLUMN IF EXISTS trace_id,
-          DROP COLUMN IF EXISTS a2a_call_id,
-          DROP COLUMN IF EXISTS release_id,
-          DROP COLUMN IF EXISTS agent_version_id,
-          DROP COLUMN IF EXISTS agent_instance_id,
-          DROP COLUMN IF EXISTS connection_id,
-          DROP COLUMN IF EXISTS turn_id,
-          DROP COLUMN IF EXISTS kind;
-        ALTER TABLE messages
-          DROP COLUMN IF EXISTS agent_instance_id,
-          DROP COLUMN IF EXISTS turn_id;
-
-        ALTER TABLE conversations
-          DROP CONSTRAINT IF EXISTS fk_conv_owner,
-          DROP CONSTRAINT IF EXISTS fk_conv_release,
-          DROP CONSTRAINT IF EXISTS fk_conv_connection,
-          DROP CONSTRAINT IF EXISTS ck_conv_lane,
-          DROP COLUMN IF EXISTS owner_since,
-          DROP COLUMN IF EXISTS active_agent_instance_id,
-          DROP COLUMN IF EXISTS release_lane,
-          DROP COLUMN IF EXISTS episode_started_at,
-          DROP COLUMN IF EXISTS release_id;
-
-        ALTER TABLE channel_connections
-          DROP CONSTRAINT IF EXISTS fk_cc_canary_release,
-          DROP CONSTRAINT IF EXISTS fk_cc_active_release,
-          DROP CONSTRAINT IF EXISTS fk_cc_meta,
-          DROP CONSTRAINT IF EXISTS ck_cc_meta_sin_credenciales,
-          DROP CONSTRAINT IF EXISTS ck_cc_canary,
-          DROP COLUMN IF EXISTS updated_at,
-          DROP COLUMN IF EXISTS canary_percent,
-          DROP COLUMN IF EXISTS canary_release_id,
-          DROP COLUMN IF EXISTS active_release_id,
-          DROP COLUMN IF EXISTS settings,
-          DROP COLUMN IF EXISTS meta_connection_id;
-        """
-    )
+    with op.get_context().autocommit_block():
+        op.execute("SET lock_timeout = '5s'")
+        op.execute(
+            _drop(
+                "tenants",
+                ["aos_runtime", "aos_procedures"],
+                {"ck_tenants_aos_runtime": "", "ck_tenants_aos_order": ""},
+            )
+        )
+        op.execute(
+            """
+            DROP TRIGGER IF EXISTS agent_instances_core_required ON agent_instances;
+            DROP TRIGGER IF EXISTS channel_connections_requires_core ON channel_connections;
+            DROP FUNCTION IF EXISTS core_instance_required();
+            DROP FUNCTION IF EXISTS connection_requires_core();
+            """
+        )
+        for tabla, columnas, constraints in reversed(_CAMBIOS):
+            op.execute(_drop(tabla, columnas, constraints))
+        op.execute("RESET lock_timeout")

@@ -11,7 +11,8 @@ negocio.
   INSERT, UPDATE y DELETE: se revocan explícitamente. El sync del arranque (HU-AOS-14) insertará con
   una función SECURITY DEFINER propia.
 - Inmutable salvo `yanked` (retirada por seguridad): trigger con `prevent_mutation('yanked')`
-  (función de 0067).
+  (función de 0067). La retirada es irreversible (`true` → `false` se rechaza).
+- `manifest.provides.agent_templates`, si está, es un array (si no, la vista fallaría entera).
 - `agent_templates` no tiene columna `tenant_id`: `purge_tenant` (0011) recorre
   `information_schema.columns` y trataría como tabla a una vista que la tuviera.
 
@@ -44,10 +45,24 @@ def upgrade() -> None:
             manifest_hash text NOT NULL CHECK (manifest_hash ~ '^[0-9a-f]{64}$'),
             published_at  timestamptz NOT NULL DEFAULT now(),
             yanked        boolean NOT NULL DEFAULT false,
-            PRIMARY KEY (pack_id, version)
+            PRIMARY KEY (pack_id, version),
+            -- Un manifest mal formado haría fallar la vista agent_templates para TODAS las filas.
+            CONSTRAINT ck_pack_versions_templates CHECK (
+                jsonb_typeof(coalesce(manifest->'provides'->'agent_templates', '[]'::jsonb)) = 'array')
         );
         CREATE TRIGGER pack_versions_immutable BEFORE UPDATE OR DELETE ON pack_versions
             FOR EACH ROW EXECUTE FUNCTION prevent_mutation('yanked');
+
+        -- La retirada por seguridad no se deshace: una versión yanked no vuelve a ser instalable.
+        CREATE OR REPLACE FUNCTION pack_versions_yank_irreversible() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            IF OLD.yanked AND NOT NEW.yanked THEN
+                RAISE EXCEPTION 'pack_versions: % % está retirada (yanked) y no se restaura', OLD.pack_id, OLD.version;
+            END IF;
+            RETURN NEW;
+        END $$;
+        CREATE TRIGGER pack_versions_yank_irreversible BEFORE UPDATE OF yanked ON pack_versions
+            FOR EACH ROW EXECUTE FUNCTION pack_versions_yank_irreversible();
 
         CREATE VIEW agent_templates AS
         SELECT pv.pack_id, pv.version, t->>'key' AS template_key, t->>'name' AS name,
@@ -70,3 +85,4 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DROP VIEW IF EXISTS agent_templates")
     op.execute("DROP TABLE IF EXISTS pack_versions")
+    op.execute("DROP FUNCTION IF EXISTS pack_versions_yank_irreversible()")

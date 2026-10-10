@@ -8,7 +8,8 @@ Todo fuera de la transacción (`autocommit_block`), sin bloquear escrituras:
   filas `webchat`: el tipo llega con HU-AOS-11.
 - `ix_messages_turn`, `ix_usage_ledger_conn`, `ix_usage_ledger_agent`, `ix_usage_ledger_turn` y
   `ix_audit_log_turn`: atribución por turno, conexión y agente (diseño §4.5). Todos empiezan por
-  `tenant_id`; los de `turn_id` son parciales (las filas viejas no tienen turno).
+  `tenant_id` y son parciales: las filas viejas (sin turno, conexión ni agente) no entran y no
+  suman escritura al camino caliente del ledger.
 - `VALIDATE CONSTRAINT ck_usage_kind`: toma SHARE UPDATE EXCLUSIVE (no frena lecturas ni
   escrituras); todas las filas tienen `kind = 'turn'` por el default.
 
@@ -35,8 +36,14 @@ _INDICES = {
         "channel_connections (external_id) WHERE type_id = 'webchat' AND deleted_at IS NULL",
     ),
     "ix_messages_turn": ("", "messages (tenant_id, turn_id) WHERE turn_id IS NOT NULL"),
-    "ix_usage_ledger_conn": ("", "usage_ledger (tenant_id, connection_id, created_at)"),
-    "ix_usage_ledger_agent": ("", "usage_ledger (tenant_id, agent_instance_id, created_at)"),
+    "ix_usage_ledger_conn": (
+        "",
+        "usage_ledger (tenant_id, connection_id, created_at) WHERE connection_id IS NOT NULL",
+    ),
+    "ix_usage_ledger_agent": (
+        "",
+        "usage_ledger (tenant_id, agent_instance_id, created_at) WHERE agent_instance_id IS NOT NULL",
+    ),
     "ix_usage_ledger_turn": ("", "usage_ledger (tenant_id, turn_id) WHERE turn_id IS NOT NULL"),
     "ix_audit_log_turn": ("", "audit_log (tenant_id, turn_id) WHERE turn_id IS NOT NULL"),
 }
@@ -65,7 +72,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # La constraint vuelve a NOT VALID no hace falta: la borra el downgrade de 0070.
+    # `ck_usage_kind` validada no se "des-valida": la borra el downgrade de 0070.
     with op.get_context().autocommit_block():
         for nombre in reversed(list(_INDICES)):
             op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {nombre}")

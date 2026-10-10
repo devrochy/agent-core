@@ -23,9 +23,13 @@ revoca todo y se otorga lo mínimo):
 - el resto: SELECT, INSERT y UPDATE. Ninguna tiene DELETE (invariante 8: borrado lógico;
   `purge_tenant` es SECURITY DEFINER y desactiva los triggers).
 
-`agent_instance_checks()`: en INSERT, el rol coincide con el `kind` del agente y la conexión es
-conversacional; si el agente o la conexión no existen EN ESE NEGOCIO, no lanza y deja que la FK
-compuesta lo rechace. En UPDATE, `tenant_id`, `connection_id`, `agent_id` y `role` son inmutables:
+Integridad entre entidades, además del negocio: el rol de una instancia coincide con el `kind`
+de su agente (FK a `agents (tenant_id, id, kind)`); `release_components` exige que la instancia
+sea de la conexión de la release y que la versión sea de su agente; el dueño de una decisión o el
+iniciador de un A2A es una instancia de ESA conexión.
+
+`agent_instance_checks()`: en INSERT, la conexión es conversacional (si no existe EN ESE NEGOCIO,
+no lanza y deja que la FK compuesta lo rechace). En UPDATE, `tenant_id`, `connection_id`, `agent_id` y `role` son inmutables:
 `release_components` fija instancia → versión y mover una instancia corrompería releases viejas.
 Los triggers del Coordinador ("release activa ⇒ core habilitado") van en 0070, con las columnas
 de `channel_connections` que miran.
@@ -35,8 +39,9 @@ Ninguna VISTA nueva con `tenant_id` en `public` (`purge_tenant` las trataría co
 
 Sin cambio de conducta: nada en runtime lee ni escribe estas tablas, y no hay modelo SQLAlchemy
 hasta la HU que primero las use (HU-AOS-04, 10, 12…): un modelo sin consumidor es código muerto.
-Tablas nuevas y vacías: las FKs hacia `conversations`, `customers` y `channel_connections` toman
-SHARE ROW EXCLUSIVE sobre ellas por milisegundos (con `lock_timeout`).
+Tablas nuevas y vacías: las FKs hacia `customers`, `conversations` y `channel_connections` toman
+SHARE ROW EXCLUSIVE sobre ellas (frena escrituras, no lecturas) hasta el COMMIT de esta revisión;
+se toman al principio, juntas y en el orden del consumer, con `lock_timeout`.
 
 Revision ID: 0069
 Revises: 0068
@@ -71,8 +76,8 @@ _APPEND_ONLY = (
 )
 TABLAS = (
     "agents",
-    "agent_drafts",
     "agent_versions",
+    "agent_drafts",
     "agent_instances",
     "a2a_graphs",
     "a2a_graph_versions",
@@ -137,7 +142,8 @@ def _ddl(dim: int) -> dict[str, str]:
               created_at      timestamptz NOT NULL DEFAULT now(),
               updated_at      timestamptz NOT NULL DEFAULT now(),
               deleted_at      timestamptz,
-              CONSTRAINT uq_agents_tenant_id UNIQUE (tenant_id, id)
+              CONSTRAINT uq_agents_tenant_id      UNIQUE (tenant_id, id),
+              CONSTRAINT uq_agents_tenant_id_kind UNIQUE (tenant_id, id, kind)  -- la instancia fija su rol por FK
             );
             CREATE UNIQUE INDEX uq_agents_tenant_key ON agents (tenant_id, key) WHERE deleted_at IS NULL;
         """,
@@ -152,7 +158,8 @@ def _ddl(dim: int) -> dict[str, str]:
               created_at      timestamptz NOT NULL DEFAULT now(),
               updated_at      timestamptz NOT NULL DEFAULT now(),
               PRIMARY KEY (tenant_id, agent_id),
-              FOREIGN KEY (tenant_id, agent_id) REFERENCES agents (tenant_id, id)
+              FOREIGN KEY (tenant_id, agent_id) REFERENCES agents (tenant_id, id),
+              FOREIGN KEY (tenant_id, agent_id, base_version_id) REFERENCES agent_versions (tenant_id, agent_id, id)
             );
         """,
         "agent_versions": """
@@ -172,8 +179,12 @@ def _ddl(dim: int) -> dict[str, str]:
               CONSTRAINT uq_agent_versions_tenant_id UNIQUE (tenant_id, id),
               CONSTRAINT uq_agent_versions_number    UNIQUE (tenant_id, agent_id, version),
               CONSTRAINT uq_agent_versions_hash      UNIQUE (tenant_id, agent_id, content_hash),
+              CONSTRAINT uq_agent_versions_agent_id  UNIQUE (tenant_id, agent_id, id),
               FOREIGN KEY (tenant_id, agent_id) REFERENCES agents (tenant_id, id)
             );
+            -- Backfill B2 idempotente por la versión de agent_specs de la que sale (ADR-0113 §5).
+            CREATE UNIQUE INDEX uq_agent_versions_legacy ON agent_versions (tenant_id, agent_id, legacy_agent_spec_id)
+              WHERE legacy_agent_spec_id IS NOT NULL;
         """,
         "agent_instances": """
             CREATE TABLE agent_instances (
@@ -189,10 +200,14 @@ def _ddl(dim: int) -> dict[str, str]:
               created_at    timestamptz NOT NULL DEFAULT now(),
               updated_at    timestamptz NOT NULL DEFAULT now(),
               deleted_at    timestamptz,
-              CONSTRAINT uq_agent_instances_tenant_id UNIQUE (tenant_id, id),
+              CONSTRAINT uq_agent_instances_tenant_id  UNIQUE (tenant_id, id),
+              -- Destino de las FKs que exigen "instancia de ESTA conexión" (y de este agente).
+              CONSTRAINT uq_agent_instances_conn_id    UNIQUE (tenant_id, connection_id, id),
+              CONSTRAINT uq_agent_instances_conn_agent UNIQUE (tenant_id, connection_id, agent_id, id),
               CONSTRAINT ck_agent_instances_default CHECK (NOT is_default OR role = 'specialist'),
-              FOREIGN KEY (tenant_id, connection_id) REFERENCES channel_connections (tenant_id, id),
-              FOREIGN KEY (tenant_id, agent_id)      REFERENCES agents (tenant_id, id)
+              FOREIGN KEY (tenant_id, connection_id)  REFERENCES channel_connections (tenant_id, id),
+              -- El rol coincide con el tipo del agente: FK, así un cambio de agents.kind también se rechaza.
+              FOREIGN KEY (tenant_id, agent_id, role) REFERENCES agents (tenant_id, id, kind)
             );
             CREATE UNIQUE INDEX uq_agent_instances_agent    ON agent_instances (tenant_id, connection_id, agent_id)
               WHERE deleted_at IS NULL;
@@ -204,7 +219,6 @@ def _ddl(dim: int) -> dict[str, str]:
 
             CREATE OR REPLACE FUNCTION agent_instance_checks() RETURNS trigger LANGUAGE plpgsql AS $$
             DECLARE
-              v_kind text;
               v_conv boolean;
             BEGIN
               IF TG_OP = 'UPDATE' THEN
@@ -214,12 +228,7 @@ def _ddl(dim: int) -> dict[str, str]:
                 END IF;
                 RETURN NEW;
               END IF;
-              -- Si no existe en ESTE negocio, la FK compuesta lo rechaza (ForeignKeyViolation).
-              SELECT a.kind INTO v_kind FROM agents a
-               WHERE a.tenant_id = NEW.tenant_id AND a.id = NEW.agent_id;
-              IF FOUND AND v_kind <> NEW.role THEN
-                RAISE EXCEPTION 'el rol % no coincide con el agente (%)', NEW.role, v_kind;
-              END IF;
+              -- Si la conexión no existe en ESTE negocio, la FK compuesta lo rechaza (ForeignKeyViolation).
               SELECT ct.produces_conversations INTO v_conv
                 FROM channel_connections cc LEFT JOIN connection_types ct ON ct.id = cc.type_id
                WHERE cc.tenant_id = NEW.tenant_id AND cc.id = NEW.connection_id;
@@ -334,14 +343,20 @@ def _ddl(dim: int) -> dict[str, str]:
         "release_components": """
             CREATE TABLE release_components (
               tenant_id         uuid NOT NULL,
+              connection_id     uuid NOT NULL,
               release_id        uuid NOT NULL,
               agent_instance_id uuid NOT NULL,
+              agent_id          uuid NOT NULL,
               agent_version_id  uuid NOT NULL,
               created_at        timestamptz NOT NULL DEFAULT now(),
               PRIMARY KEY (tenant_id, release_id, agent_instance_id),
-              FOREIGN KEY (tenant_id, release_id)        REFERENCES connection_releases (tenant_id, id),
-              FOREIGN KEY (tenant_id, agent_instance_id) REFERENCES agent_instances (tenant_id, id),
-              FOREIGN KEY (tenant_id, agent_version_id)  REFERENCES agent_versions (tenant_id, id)
+              -- Coherencia: la instancia es de la conexión de la release y la versión es de su agente.
+              FOREIGN KEY (tenant_id, connection_id, release_id)
+                REFERENCES connection_releases (tenant_id, connection_id, id),
+              FOREIGN KEY (tenant_id, connection_id, agent_id, agent_instance_id)
+                REFERENCES agent_instances (tenant_id, connection_id, agent_id, id),
+              FOREIGN KEY (tenant_id, agent_id, agent_version_id)
+                REFERENCES agent_versions (tenant_id, agent_id, id)
             );
         """,
         "release_events": """
@@ -445,10 +460,14 @@ def _ddl(dim: int) -> dict[str, str]:
               created_at          timestamptz NOT NULL DEFAULT now(),
               CONSTRAINT uq_core_decisions_tenant_id UNIQUE (tenant_id, id),
               CONSTRAINT ck_core_decisions_routed CHECK (outcome = 'routed' OR route_source IS NULL),
+              -- Sin conexión, las FKs de abajo (MATCH SIMPLE) no se verificarían.
+              CONSTRAINT ck_core_decisions_conn CHECK (connection_id IS NOT NULL
+                                                       OR (release_id IS NULL AND active_instance_id IS NULL)),
               FOREIGN KEY (tenant_id, connection_id)             REFERENCES channel_connections (tenant_id, id),
               FOREIGN KEY (tenant_id, connection_id, release_id) REFERENCES connection_releases (tenant_id, connection_id, id),
               FOREIGN KEY (tenant_id, conversation_id)           REFERENCES conversations (tenant_id, id),
-              FOREIGN KEY (tenant_id, active_instance_id)        REFERENCES agent_instances (tenant_id, id),
+              FOREIGN KEY (tenant_id, connection_id, active_instance_id)
+                REFERENCES agent_instances (tenant_id, connection_id, id),
               FOREIGN KEY (tenant_id, focus_task_id)             REFERENCES conversation_tasks (tenant_id, id)
             );
             CREATE INDEX ix_core_decisions_conv ON core_decisions (tenant_id, conversation_id, created_at);
@@ -505,7 +524,8 @@ def _ddl(dim: int) -> dict[str, str]:
               FOREIGN KEY (tenant_id, connection_id)         REFERENCES channel_connections (tenant_id, id),
               FOREIGN KEY (tenant_id, turn_id)               REFERENCES core_decisions (tenant_id, id),
               FOREIGN KEY (tenant_id, conversation_id)       REFERENCES conversations (tenant_id, id),
-              FOREIGN KEY (tenant_id, initiator_instance_id) REFERENCES agent_instances (tenant_id, id)
+              FOREIGN KEY (tenant_id, connection_id, initiator_instance_id)
+                REFERENCES agent_instances (tenant_id, connection_id, id)
             );
             CREATE INDEX ix_a2a_conversations_turn ON a2a_conversations (tenant_id, turn_id);
             CREATE INDEX ix_a2a_conversations_conn ON a2a_conversations (tenant_id, connection_id, started_at);
@@ -644,6 +664,12 @@ def _ddl(dim: int) -> dict[str, str]:
 
 def upgrade() -> None:
     op.execute("SET LOCAL lock_timeout = '5s'")
+    # Las FKs nuevas toman SHARE ROW EXCLUSIVE sobre estas tablas hasta el COMMIT. Se toman de una
+    # vez y en el orden en que las escribe el consumer (customers → conversations), para no cerrar
+    # un deadlock con un turno en curso.
+    op.execute(
+        "LOCK TABLE customers, conversations, channel_connections IN SHARE ROW EXCLUSIVE MODE"
+    )
     ddl = _ddl(get_settings().embedding_dimensions)
     assert set(ddl) == set(TABLAS), "cada tabla nueva tiene su DDL"
     for tabla in TABLAS:
@@ -653,6 +679,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("SET LOCAL lock_timeout = '5s'")
+    # DROP TABLE de cada hija quita los triggers RI del padre con lock exclusivo: mismo orden.
+    op.execute("LOCK TABLE customers, conversations, channel_connections IN ACCESS EXCLUSIVE MODE")
     for tabla in reversed(TABLAS):
         # DROP TABLE se lleva policy, triggers, índices y FKs de la tabla.
         op.execute(f"DROP TABLE IF EXISTS {tabla}")

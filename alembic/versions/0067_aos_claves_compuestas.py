@@ -12,8 +12,12 @@
 Sin cambio de conducta: nada en runtime usa la función ni las constraints nuevas (el `id` ya es
 único, así que `(tenant_id, id)` también lo es).
 
-Los índices concurrentes van PRIMERO: si la parte transaccional falla, la migración se puede
-volver a correr (un índice válido se salta; uno INVALID de un intento anterior se rehace).
+Todo lo que toca tablas grandes corre fuera de la transacción de la migración
+(`autocommit_block`): el índice concurrente y después cada `ADD CONSTRAINT` como sentencia propia,
+con `lock_timeout` de sesión. Así cada tabla toma su ACCESS EXCLUSIVE de milisegundos y lo suelta
+enseguida, sin acumular locks de varias tablas (el consumer escribe `customers` y luego
+`conversations`: retenerlas juntas podía cerrar un deadlock). Es re-ejecutable: un índice válido
+se salta, uno INVALID de un intento anterior se rehace y la constraint se ata solo si falta.
 
 Revision ID: 0067
 Revises: 0066
@@ -83,26 +87,30 @@ def upgrade() -> None:
     with op.get_context().autocommit_block():
         for tabla, (indice, _constraint) in _CLAVES.items():
             _indice_unico_concurrente(indice, tabla)
-
-    # ACCESS EXCLUSIVE de milisegundos por tabla; sin esperar detrás de una transacción larga.
-    op.execute("SET LOCAL lock_timeout = '5s'")
-    for tabla, (indice, constraint) in _CLAVES.items():
-        op.execute(
-            f"""
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '{constraint}') THEN
-                    ALTER TABLE {tabla} ADD CONSTRAINT {constraint} UNIQUE USING INDEX {indice};
-                END IF;
-            END $$;
-            """
-        )
+        # ACCESS EXCLUSIVE de milisegundos por tabla, cada una en su propia transacción; sin
+        # esperar detrás de una transacción larga.
+        op.execute("SET lock_timeout = '5s'")
+        for tabla, (indice, constraint) in _CLAVES.items():
+            op.execute(
+                f"""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                                    WHERE conname = '{constraint}' AND conrelid = '{tabla}'::regclass) THEN
+                        ALTER TABLE {tabla} ADD CONSTRAINT {constraint} UNIQUE USING INDEX {indice};
+                    END IF;
+                END $$;
+                """
+            )
+        op.execute("RESET lock_timeout")
     op.execute(_PREVENT_MUTATION)
 
 
 def downgrade() -> None:
-    op.execute("SET LOCAL lock_timeout = '5s'")
     op.execute("DROP FUNCTION IF EXISTS prevent_mutation()")
-    # Soltar la constraint borra también su índice.
-    for tabla, (_indice, constraint) in _CLAVES.items():
-        op.execute(f"ALTER TABLE {tabla} DROP CONSTRAINT IF EXISTS {constraint}")
+    with op.get_context().autocommit_block():
+        op.execute("SET lock_timeout = '5s'")
+        # Soltar la constraint borra también su índice. Una tabla por transacción.
+        for tabla, (_indice, constraint) in _CLAVES.items():
+            op.execute(f"ALTER TABLE {tabla} DROP CONSTRAINT IF EXISTS {constraint}")
+        op.execute("RESET lock_timeout")

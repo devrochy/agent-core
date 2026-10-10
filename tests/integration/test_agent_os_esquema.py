@@ -200,8 +200,10 @@ async def _sembrar(tid: uuid.UUID) -> dict[str, uuid.UUID]:
             "insert into pack_installations (tenant_id, pack_id, scope) values (:t, 'pack_commerce', 'tenant')",
             "insert into connection_releases (id, tenant_id, connection_id, number, graph_version_id, manifest, manifest_hash) "
             "values (:release, :t, :cc, 1, :graph_v, '{}', :h)",
-            "insert into release_components (tenant_id, release_id, agent_instance_id, agent_version_id) "
-            "values (:t, :release, :core_i, :core_v)",
+            "insert into release_components (tenant_id, connection_id, release_id, agent_instance_id, "
+            "agent_id, agent_version_id) values (:t, :cc, :release, :core_i, :core_a, :core_v)",
+            "insert into release_components (tenant_id, connection_id, release_id, agent_instance_id, "
+            "agent_id, agent_version_id) values (:t, :cc, :release, :ventas_i, :ventas_a, :ventas_v)",
             "insert into release_events (tenant_id, connection_id, release_id, type, actor) "
             "values (:t, :cc, :release, 'built', 'system:test')",
             "update channel_connections set active_release_id = :release where id = :cc",
@@ -424,12 +426,96 @@ async def test_puntero_de_release_solo_apunta_a_releases_de_su_conexion(
             )
 
 
+async def test_el_kind_del_agente_no_cambia_si_tiene_instancias(
+    dos_negocios: dict[str, Any],
+) -> None:
+    a, ids_a = dos_negocios["a"], dos_negocios["ids_a"]
+    with pytest.raises(IntegrityError, match="ForeignKeyViolation"):
+        async with _scope(a) as s:
+            await s.execute(
+                text("update agents set kind = 'backoffice' where id = :ag"),
+                {"ag": ids_a["ventas_a"]},
+            )
+
+
+async def test_componente_de_release_es_de_su_conexion_y_de_su_agente(
+    dos_negocios: dict[str, Any],
+) -> None:
+    """La versión de otro agente o la instancia de otra conexión no entran en la release."""
+    a, ids_a = dos_negocios["a"], dos_negocios["ids_a"]
+    with pytest.raises(IntegrityError, match="ForeignKeyViolation"):
+        async with _scope(a) as s:
+            nueva = uuid.uuid4()  # release 2 (se revierte con la transacción)
+            await s.execute(
+                text(
+                    "insert into connection_releases (id, tenant_id, connection_id, number, "
+                    "manifest, manifest_hash) values (:r, :t, :cc, 2, '{}', :h)"
+                ),
+                {"r": nueva, "t": a, "cc": ids_a["cc"], "h": "b" * 64},
+            )
+            await s.execute(
+                text(
+                    "insert into release_components (tenant_id, connection_id, release_id, "
+                    "agent_instance_id, agent_id, agent_version_id) "
+                    "values (:t, :cc, :nueva, :ventas_i, :ventas_a, :core_v)"
+                ),
+                {**ids_a, "t": a, "nueva": nueva},
+            )
+    with pytest.raises(IntegrityError, match="ForeignKeyViolation"):
+        async with _scope(a) as s:
+            otra = await _conexion(s, a)
+            instancia = uuid.uuid4()
+            await s.execute(
+                text(
+                    "insert into agent_instances (id, tenant_id, connection_id, agent_id, role) "
+                    "values (:i, :t, :cc, :ag, 'specialist')"
+                ),
+                {"i": instancia, "t": a, "cc": otra, "ag": ids_a["general_a"]},
+            )
+            await s.execute(
+                text(
+                    "insert into release_components (tenant_id, connection_id, release_id, "
+                    "agent_instance_id, agent_id, agent_version_id) "
+                    "values (:t, :cc, :release, :i, :ag, :v)"
+                ),
+                {
+                    "t": a,
+                    "cc": ids_a["cc"],
+                    "release": ids_a["release"],
+                    "i": instancia,
+                    "ag": ids_a["general_a"],
+                    "v": ids_a["ventas_v"],
+                },
+            )
+
+
+async def test_el_duenio_de_la_conversacion_es_una_instancia_de_su_conexion(
+    dos_negocios: dict[str, Any],
+) -> None:
+    a, ids_a = dos_negocios["a"], dos_negocios["ids_a"]
+    with pytest.raises(IntegrityError, match="ForeignKeyViolation"):
+        async with _scope(a) as s:
+            otra = await _conexion(s, a)
+            instancia = uuid.uuid4()
+            await s.execute(
+                text(
+                    "insert into agent_instances (id, tenant_id, connection_id, agent_id, role) "
+                    "values (:i, :t, :cc, :ag, 'specialist')"
+                ),
+                {"i": instancia, "t": a, "cc": otra, "ag": ids_a["general_a"]},
+            )
+            await s.execute(
+                text("update conversations set active_agent_instance_id = :i where id = :conv"),
+                {"i": instancia, "conv": ids_a["conv"]},
+            )
+
+
 # ---------------------------------------------------------------- triggers
 
 
 async def test_rol_de_la_instancia_coincide_con_el_agente(dos_negocios: dict[str, Any]) -> None:
     a, ids_a = dos_negocios["a"], dos_negocios["ids_a"]
-    with pytest.raises(DBAPIError, match="no coincide con el agente"):
+    with pytest.raises(IntegrityError, match="ForeignKeyViolation"):
         async with _scope(a) as s:
             otra = await _conexion(s, a)
             await s.execute(
@@ -577,6 +663,12 @@ async def test_pack_versions_solo_cambia_yanked() -> None:
                     text("select count(*) from agent_templates where version = :v"), {"v": version}
                 )
             ).scalar_one() == 0, "una versión retirada no ofrece plantillas"
+            with pytest.raises(DBAPIError, match="no se restaura"):
+                async with conn.begin_nested():
+                    await conn.execute(
+                        text("update pack_versions set yanked = false where version = :v"),
+                        {"v": version},
+                    )
         finally:
             await tx.rollback()
 
