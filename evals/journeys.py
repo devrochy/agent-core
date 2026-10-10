@@ -305,26 +305,34 @@ async def nuevo_cliente(tenant_id: uuid.UUID, nombre: str) -> tuple[uuid.UUID, u
 
 # ------------------------------------------------------------------ pasos
 async def _turno(ctx: Contexto, mensaje: str) -> Any:
-    """Un turno del cliente como en producción: el consumidor guarda el mensaje entrante y
-    después corre el loop. Sin ese mensaje en la base, lo que depende de él (la aceptación de
-    los términos del alta, ADR-0125) nunca pasaría en un journey."""
-    from core.db.models import Message
-    from core.db.session import get_session
+    """Un turno del cliente como en producción: el consumidor guarda el mensaje entrante, corre
+    el loop y el envío guarda la respuesta. Sin esos mensajes en la base, lo que depende de ellos
+    (la aceptación de los términos del alta, ADR-0125) nunca pasaría en un journey."""
     from core.orchestrator.loop import process_conversation
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(ctx.tenant_id):
-        async with get_session() as session:
-            session.add(
-                Message(
-                    tenant_id=ctx.tenant_id,
-                    conversation_id=ctx.conversation_id,
-                    direction="inbound",
-                    sender_type="customer",
-                    content=mensaje,
-                )
+        await _guardar_mensaje(ctx, "inbound", mensaje)
+        resultado = await process_conversation(ctx.conversation_id, mensaje)
+        if resultado is not None and resultado.text:
+            await _guardar_mensaje(ctx, "outbound", resultado.text)
+        return resultado
+
+
+async def _guardar_mensaje(ctx: Contexto, direccion: str, texto: str) -> None:
+    from core.db.models import Message
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        session.add(
+            Message(
+                tenant_id=ctx.tenant_id,
+                conversation_id=ctx.conversation_id,
+                direction=direccion,
+                sender_type="customer" if direccion == "inbound" else "agent",
+                content=texto,
             )
-        return await process_conversation(ctx.conversation_id, mensaje)
+        )
 
 
 async def _herramientas_desde(ctx: Contexto, desde: datetime) -> list[dict[str, Any]]:

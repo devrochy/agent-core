@@ -17,8 +17,8 @@ python evals/journeys.py --tenant solvershub    # set de un negocio contra una r
 jobs corren **solo sobre el negocio del journey**, nunca sobre otros negocios de la base.
 
 Cada corrida crea **un negocio de prueba** (`negocio.json` del set) y **un cliente nuevo por
-journey**. Los turnos usan el canal `test`: nada sale por WhatsApp. Como el consumidor, el runner
-guarda cada mensaje del cliente en `messages` antes de correr el loop. La corrida se guarda en
+journey**. Los turnos usan el canal `test`: nada sale por WhatsApp. Como el consumidor y el envío,
+el runner guarda en `messages` cada mensaje del cliente y cada respuesta. La corrida se guarda en
 `eval_runs` del negocio (`journeys:<set>@<versión del spec>`) y, con `--reporte`, en un JSON.
 
 ## Un set

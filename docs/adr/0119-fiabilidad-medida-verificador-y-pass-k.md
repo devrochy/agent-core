@@ -91,3 +91,17 @@ Lo que fijó la implementación del verificador, revisada por el agente `arquite
   un test de la suite unitaria. Medición del 2026-10-09: 205 correctas con 0 falsos positivos y 14 falsas con 0 falsos
   negativos; en los mismos borradores, los guardrails viejos tenían 16,7 % de falsos positivos. `calendar_completion_check` sigue registrado: no tuvo falsos positivos medidos y su
   respaldo depende del `status` de cada acción. Se mide y se retira en una HU siguiente.
+
+## Adenda (2026-10-09): URLs de una tool que terminó con error (HU-SH-07)
+
+Aprobada por el dueño el 2026-10-09. Las URLs que devuelve una tool **del turno actual** cuentan
+como evidencia de links aunque la tool haya terminado con error (`_ok=False`): las dio el servidor,
+no las inventó el modelo. Caso: `crear_pedido` responde `terminos_pendientes` con `error` y los
+enlaces de términos, privacidad y DPA (ADR-0125). El verificador los quitaba todos y el cliente
+aceptaba sin verlos.
+
+De una tool fallida no cuentan las URLs de su texto libre (`error`, `hint`, `message`): podrían
+repetir un argumento con una URL que inventó el modelo. Una tool fallida sigue sin respaldar nada más: no entra en `acciones_ok` (cierres) ni en
+`urls_enlace` («te envío el link de pago»). Una URL que no devolvió ninguna tool se sigue quitando,
+y las de turnos anteriores tampoco cuentan.
+

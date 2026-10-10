@@ -289,38 +289,42 @@ comprador.
 
 ## Adenda (2026-10-09): el marcador de los términos es fijo por juego de versiones
 
-Aprobada por el dueño el 2026-10-09 (opción «marcador fijo por versión»). Cambia el § 2.1:
+Aprobada por el dueño el 2026-10-09: la opción «marcador fijo por versión» y sus puntos abiertos.
+Cambia el § 2.1.
 
 - **Defecto.** Entre turnos el modelo solo ve texto, no el token. En el turno en que el cliente
   acepta, llama `crear_pedido` primero sin el token (o con `true`). Esa llamada volvía a anotar el
   marcador, ahora en el mensaje que acepta, así que el reintento con el token del mismo turno ya no
   tenía un mensaje posterior. Con los documentos publicados, nadie podía contratar por chat (journey
   05: 0/6).
-- **Decisión.**
-  - La clave en Redis lleva la huella del juego de versiones:
-    `alta:terminos:<vendedor>:<conversación>:<huella>`.
+- **Marcador fijo por juego de versiones.**
+  - La clave en Redis lleva la huella del juego: `alta:terminos:<vendedor>:<conversación>:<huella>`.
   - Se escribe con `SET NX` (24 h): la anota la primera vez que se muestran los enlaces de ese juego,
     y las llamadas siguientes no la mueven.
-  - Un juego de versiones nuevo arranca su propio marcador. El «sí» a la versión anterior no acepta
-    la nueva: hace falta un mensaje del cliente posterior a los enlaces nuevos.
-- **Sigue fallando cerrado.** Sin marcador (vencido o sin Redis), o sin un mensaje del cliente
-  posterior, no hay aceptación. `true` o cualquier valor distinto del token no acepta.
+  - Un juego de versiones nuevo arranca su propio marcador: el «sí» a la versión anterior no acepta
+    la nueva.
+- **Los enlaces tienen que haber salido.** La aceptación es el último mensaje del cliente posterior
+  al **primer mensaje saliente** (no fallido) posterior al marcador: la respuesta que llevó los
+  enlaces. Un mensaje que llegó mientras corría ese turno (una ráfaga) no acepta.
+- **Aceptación por pedido.** Al guardar el pedido, `cerrar_aceptacion` borra el marcador. Otro pedido
+  de un plan en la misma conversación vuelve a mostrar los enlaces y pide un «sí» nuevo. No se
+  consume al validar (`GETDEL`): un pedido que después se frena (Free repetido, cupo) obligaría a
+  aceptar otra vez. Dos `crear_pedido` simultáneos de la misma conversación podrían usar la misma
+  aceptación; queda dentro de esa conversación y de ese cliente.
+- **Los enlaces llegan al cliente.** `terminos_pendientes` trae `error`, y el verificador quitaba sus
+  URLs. Ahora cuentan como evidencia de links (ADR-0119, adenda del 2026-10-09).
+- **Sigue fallando cerrado.** No hay aceptación sin marcador (vencido o sin Redis), sin una respuesta
+  enviada después de él o sin un mensaje del cliente posterior a esa respuesta. `true` o cualquier
+  valor distinto del token no acepta.
 - **El token se reemite.** No cambia mientras no cambien la conversación y el juego de versiones:
   cada `terminos_pendientes` devuelve el mismo. El `hint` de la tool lo dice: si el último mensaje
   del cliente ya acepta, repetir `crear_pedido` con el token en ese mismo turno. El token no es
   evidencia de consentimiento: solo ata la aceptación a la conversación y al juego de versiones. La
-  evidencia es el mensaje del cliente posterior al marcador.
-- **Lo que aceptamos.** Mientras el marcador vive (24 h), cualquier mensaje posterior del cliente
-  sirve de evidencia, aunque entre los enlaces y la aceptación haya otros mensajes. Antes pasaba lo
-  mismo hasta la siguiente llamada sin token. El riesgo aceptado del § Consecuencias no cambia: el
-  modelo decide si el mensaje dice que sí, y ese mensaje queda en la aceptación.
-- **Ráfagas.** No hay un candado de turnos por conversación. Un mensaje del cliente que se guarda
-  mientras corre el turno que muestra los enlaces es posterior al marcador, aunque el cliente todavía
-  no los haya visto. Antes, una llamada sin token de un turno paralelo volvía a anclar el marcador;
-  ahora no. Para cerrarlo habría que exigir que el mensaje que acepta sea posterior al primer
-  mensaje saliente después del marcador. Queda pendiente de decisión.
-- **Un pedido posterior.** El marcador no se borra al crear el pedido. Durante 24 h, otro pedido de un
-  plan en la misma conversación, con el mismo juego de versiones, se acepta con un mensaje nuevo del
-  cliente: ya aceptó esas versiones en esa conversación.
-- **Journeys.** El runner guarda cada mensaje del cliente en `messages`, como el consumidor. Sin eso,
-  en un journey nunca había un mensaje posterior a los enlaces.
+  evidencia es el mensaje del cliente.
+- **Lo que aceptamos.** Mientras el marcador vive (24 h), cualquier mensaje del cliente posterior a
+  los enlaces sirve de evidencia, aunque haya otros en el medio. El riesgo aceptado del
+  § Consecuencias no cambia: el modelo decide si el mensaje dice que sí, y ese mensaje queda en la
+  aceptación.
+- **Journeys y playground.** El runner de journeys y el playground guardan en `messages` el mensaje
+  del cliente y la respuesta, como el consumidor y el envío. Sin eso no podía haber aceptación. Los
+  de la conversación `test` no cuentan para la cuota de `mensajes` ni para el tablero.

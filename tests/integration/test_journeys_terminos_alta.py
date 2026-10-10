@@ -86,7 +86,8 @@ class _ModeloGuionado:
         if "acepto" not in str(mensajes[ultimo].content).lower():
             if not resultados:
                 return self._crear_pedido()
-            return _Respuesta("end_turn", content="Antes de seguir, revisa y acepta los términos, la privacidad y el DPA.")
+            enlaces = "\n".join(d["url"] for d in resultados[-1].get("documentos", []))
+            return _Respuesta("end_turn", content=f"Antes de seguir, revisa y acepta estos documentos:\n{enlaces}")
         if not resultados:
             return self._crear_pedido()
         if len(resultados) == 1:
@@ -134,12 +135,28 @@ async def _salidas_de_crear_pedido(ctx: Any) -> list[dict[str, Any]]:
     return list(filas)
 
 
-async def test_el_cliente_acepta_en_el_turno_siguiente_y_el_alta_queda_confirmada(vendedor, monkeypatch) -> None:
-    from core.db.models import Message
+async def _urls_quitadas(ctx: Any) -> list[int]:
+    from core.db.models import AuditLog
     from core.db.session import get_session
-    from core.provisioning.antiabuso import pedido_de_alta
     from core.shared.tenant import tenant_scope
 
+    async with tenant_scope(ctx.tenant_id):
+        async with get_session() as s:
+            filas = (
+                await s.execute(
+                    select(AuditLog.input)
+                    .where(
+                        AuditLog.tenant_id == ctx.tenant_id,
+                        AuditLog.conversation_id == ctx.conversation_id,
+                        AuditLog.actor == "core:verificador",
+                    )
+                    .order_by(AuditLog.created_at)
+                )
+            ).scalars().all()
+    return [int(f.get("urls_quitadas", 0)) for f in filas]
+
+
+async def _documentos_de_prueba(vendedor: uuid.UUID) -> None:
     await journeys.publicar_documentos_legales(
         vendedor,
         [
@@ -147,6 +164,15 @@ async def test_el_cliente_acepta_en_el_turno_siguiente_y_el_alta_queda_confirmad
             for tipo in ("terminos", "privacidad", "dpa")
         ],
     )
+
+
+async def test_el_cliente_acepta_en_el_turno_siguiente_y_el_alta_queda_confirmada(vendedor, monkeypatch) -> None:
+    from core.db.models import Message
+    from core.db.session import get_session
+    from core.provisioning.antiabuso import pedido_de_alta
+    from core.shared.tenant import tenant_scope
+
+    await _documentos_de_prueba(vendedor)
     customer_id, conversation_id = await journeys.nuevo_cliente(vendedor, "Ana")
     ctx = journeys.Contexto(vendedor, customer_id, conversation_id, journeys.PagoSimulado())
     datos = _datos(id_document=ctx.valor("cliente.documento"), phone=ctx.valor("cliente.celular"))
@@ -158,6 +184,8 @@ async def test_el_cliente_acepta_en_el_turno_siguiente_y_el_alta_queda_confirmad
         ctx, {"usuario": "Quiero activar el Plan Free con mis datos.", "hasta_herramienta": "crear_pedido"}, registro
     )
     assert [s["status"] for s in await _salidas_de_crear_pedido(ctx)] == ["terminos_pendientes"]
+    # El verificador (ADR-0119) deja pasar los enlaces legales aunque la tool respondió con `error`.
+    assert await _urls_quitadas(ctx) == [0]
 
     await journeys.paso_usuario(ctx, {"usuario": ACEPTA, "hasta_herramienta": "crear_pedido"}, registro)
 
@@ -173,15 +201,46 @@ async def test_el_cliente_acepta_en_el_turno_siguiente_y_el_alta_queda_confirmad
         async with get_session() as s:
             mensajes = (
                 await s.execute(
-                    select(Message.id, Message.content)
+                    select(Message.id, Message.content, Message.direction)
                     .where(Message.tenant_id == vendedor, Message.conversation_id == conversation_id)
                     .order_by(Message.created_at)
                 )
             ).all()
         registro_alta = await pedido_de_alta(vendedor, salidas[-1]["public_order_number"])
-    # El runner guarda cada mensaje del cliente, como el consumidor.
-    assert [m.content for m in mensajes] == ["Quiero activar el Plan Free con mis datos.", ACEPTA]
+    # El runner guarda cada mensaje del cliente y cada respuesta, como el consumidor y el envío.
+    assert [m.direction for m in mensajes] == ["inbound", "outbound", "inbound", "outbound"]
+    assert [mensajes[0].content, mensajes[2].content] == ["Quiero activar el Plan Free con mis datos.", ACEPTA]
+    assert all(f"https://solvershub.test/legal/{t}" in mensajes[1].content for t in ("terminos", "privacidad", "dpa"))
     assert registro_alta.customer_id == customer_id
-    assert registro_alta.aceptacion["mensaje_id"] == str(mensajes[-1].id)
+    assert registro_alta.aceptacion["mensaje_id"] == str(mensajes[2].id)
     assert {d["version"] for d in registro_alta.aceptacion["documentos"]} == {"journeys"}
 
+
+async def test_desde_el_playground_se_pueden_aceptar_los_terminos(vendedor, monkeypatch) -> None:
+    """El playground guarda el mensaje de la prueba y la respuesta como el consumidor y el
+    envío: la prueba desde el panel de un vendedor puede aceptar los términos. Esos mensajes no
+    consumen la cuota de `mensajes`."""
+    from core.admin import playground
+    from core.billing.metrics import count_metric
+    from core.provisioning.antiabuso import pedido_de_alta
+    from core.shared.tenant import tenant_scope
+
+    await _documentos_de_prueba(vendedor)
+    async with tenant_scope(vendedor):
+        conversacion = await playground.get_or_create_test_conversation(vendedor)
+        mensajes_antes = await count_metric(vendedor, "mensajes")
+    modelo = _ModeloGuionado(await _cotizacion(vendedor, conversacion.customer_id), _datos())
+    monkeypatch.setattr("core.orchestrator.loop.resolve_provider", lambda *a, **k: modelo)
+
+    async with tenant_scope(vendedor):
+        pide = await playground.run_test_turn(vendedor, "Quiero activar el Plan Free con mis datos.")
+        assert "https://solvershub.test/legal/dpa" in pide.text
+        await playground.run_test_turn(vendedor, ACEPTA)
+        assert await count_metric(vendedor, "mensajes") == mensajes_antes
+
+    ctx = types.SimpleNamespace(tenant_id=vendedor, conversation_id=conversacion.id)
+    salidas = await _salidas_de_crear_pedido(ctx)
+    assert salidas[-1]["status"] == "confirmed", salidas
+    async with tenant_scope(vendedor):
+        registro = await pedido_de_alta(vendedor, salidas[-1]["public_order_number"])
+    assert registro.aceptacion is not None and registro.aceptacion["mensaje_id"]
