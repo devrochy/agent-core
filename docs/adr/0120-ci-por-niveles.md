@@ -54,3 +54,24 @@ Detalle:
 - **Tests:** marker `aislamiento` en `pyproject.toml` y en 12 archivos de `tests/integration/`.
 - **Skills:** `desplegar-test-agent-core` y `release`.
 - **Documentación:** `docs/WORKFLOW.md`, sección "CI".
+
+## Adenda (2026-10-10): gate de evals en replay en las PRs a develop
+
+El dueño la aprobó el 2026-10-10. Usa el modo grabar/reproducir de la adenda del 2026-10-10 de ADR-0119.
+
+- **Nivel rápido:** suma el job `evals-replay`. Corre en todas las PRs a `develop`, también las de Dependabot, porque no
+  necesita secretos. Hace lo siguiente:
+  - levanta su propia base nueva (pg17 + PostGIS de GHCR), migrada y sembrada como al grabar;
+  - corre el mismo gate que el push a develop (golden `06,07,08,21,22,23,24,25,26` y journeys `01,05` con umbral
+    1.0) con `bash scripts/gate_evals.sh replay`;
+  - toma las respuestas del LLM de `evals/cassettes/`, sin red y con `LLM_API_KEY` vacía.
+- **Si la PR cambia un prompt, una tool o el flujo sin regrabar:** el job falla con exit 3, el diff y el comando para
+  regrabar. Quien hizo el cambio regraba el gate con OK del dueño (`bash scripts/gate_evals.sh record`, unas 9 llamadas,
+  ~0,01 USD) y commitea los JSON en la misma PR.
+- **Nivel completo y nightly:** sin cambios. El gate del push a develop y el nightly siguen con el LLM real: son la
+  medición de ADR-0119. El replay no mide el modelo, solo detecta antes del merge que el código determinista o el
+  prompt cambiaron.
+- **Costo:** la PR suma un job de unos 2–3 min en el runner self-hosted, en paralelo a la integración. No gasta saldo
+  del proveedor.
+- **Qué haría que revisáramos esto:** regrabaciones tan frecuentes que el costo o la fricción superen al de correr el
+  gate en vivo en la PR, o grabaciones que no coinciden entre la máquina local y el CI.
