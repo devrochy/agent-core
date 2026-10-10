@@ -143,7 +143,29 @@ def test_campo_por_campo_segun_adr_0113(catalogo) -> None:
     por_tool = {b.tool: b for b in g.tools}
     assert por_tool["crear_pedido"].requiresConfirmation and por_tool["crear_pedido"].maxCallsPerConversation == 3
     assert not por_tool["send_email"].enabled and por_tool["send_email"].scopes == ["correo"]
-    assert c.avisos == []
+    assert c.avisos == ["extensions.nota_interna: se conserva en extensions (reservado, sin semántica)"]
+
+
+def test_el_negocio_de_la_fila_gana_sobre_el_tenant_id_del_json(catalogo) -> None:
+    spec = AgentSpec.model_validate(v2_completo())
+    candidatas, siempre = candidatas_del_spec(spec, catalogo)
+    c = convertir_v2(
+        spec, tenant_id="22222222-2222-2222-2222-222222222222", catalogo=catalogo,
+        secciones=None, candidatas=candidatas, siempre=siempre,
+    )
+    assert c.identidad.tenant_id == "22222222-2222-2222-2222-222222222222"
+    assert any("distinto del negocio de la fila" in a for a in c.avisos)
+
+
+def test_header_con_pinta_de_credencial_avisa_sin_valor(catalogo) -> None:
+    raw = v2_completo()
+    raw["extensions"]["tools"][0]["headers"]["X-Client-Secret"] = "tok-literal-123"
+    raw["extensions"]["tools"][0]["headers"]["X-Auth-Token"] = "tok-movido-456"
+    c, _, _ = convertir(raw, catalogo)
+    # X-Auth-Token es sensible (adenda): se mueve a secreto; X-Client-Secret solo avisa.
+    assert c.secretos["consultar_envio_x_auth_token"].get_secret_value() == "tok-movido-456"
+    aviso = next(a for a in c.avisos if "X-Client-Secret" in a)
+    assert "tok-literal-123" not in aviso
 
 
 def test_ningun_campo_v2_queda_sin_destino() -> None:
@@ -318,3 +340,19 @@ def test_default_spec_del_alta(catalogo) -> None:
     c, _, _ = convertir(raw, catalogo, con_flujo=False)
     assert revisar_spec(c.general.model_dump(mode="json", by_alias=True), catalogo) == []
     assert c.avisos == []
+
+
+def test_credencial_por_http_pasa_a_https(catalogo) -> None:
+    raw = v2_completo()
+    raw["extensions"]["tools"][0]["url"] = "http://api.transportadora.co/v1/guias/{guia}"
+    c, _, _ = convertir(raw, catalogo)
+    assert c.general.declarativeTools[0].url == "https://api.transportadora.co/v1/guias/{guia}"
+    assert any("pasa a https" in a for a in c.avisos)
+
+
+def test_header_con_salto_de_linea_se_descarta(catalogo) -> None:
+    raw = v2_completo()
+    raw["extensions"]["tools"][0]["headers"] = {"Authorization\n": "x", "X-Cliente": "a\r\nX-Inyectado: 1"}
+    c, _, _ = convertir(raw, catalogo)
+    assert c.general.declarativeTools[0].headers == {}
+    assert c.secretos == {}

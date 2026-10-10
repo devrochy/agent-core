@@ -210,3 +210,33 @@ def test_cli_agent_lint(tmp_path: Path) -> None:
     assert mal.exit_code == 1
     assert "declarativeTools[0].headers" in mal.output
     assert "secreto-literal" not in mal.output
+
+
+def test_secreto_solo_por_https_y_sin_saltos_de_linea() -> None:
+    raw = fixture("ventas.agentspec.json")
+    raw["declarativeTools"][0]["url"] = "http://api.transportadora.co/v1/guias/{guia}"
+    assert "https" in validar_spec(raw)[1][0].message
+    raw = fixture("ventas.agentspec.json")
+    raw["declarativeTools"][0]["headers"]["X-Trace"] = "a\r\nX-Inyectado: 1"
+    assert validar_spec(raw)[0] is None
+
+
+@pytest.mark.parametrize("header", ["Proxy-Authorization", "X-Auth-Token", "Api-Key", "Private-Token"])
+def test_variantes_de_credencial_tambien_son_sensibles(header: str) -> None:
+    raw = fixture("ventas.agentspec.json")
+    raw["declarativeTools"][0]["headers"] = {header: "literal"}
+    assert validar_spec(raw)[0] is None
+
+
+def test_documento_muy_anidado_o_con_nan() -> None:
+    raw = fixture("ventas.agentspec.json")
+    anidado: dict[str, Any] = {}
+    cursor = anidado
+    for _ in range(40):
+        cursor["x"] = {}
+        cursor = cursor["x"]
+    raw["extensions"] = anidado
+    assert "anida" in validar_spec(raw)[1][0].message
+    raw = fixture("ventas.agentspec.json")
+    raw["extensions"] = {"x": float("nan")}
+    assert "no finitos" in validar_spec(raw)[1][0].message

@@ -109,6 +109,9 @@ async def test_general_por_conexion_conversacional_y_kernel_derivado() -> None:
 
     async with tenant_scope(tid):
         vista = await cargar_como_v3(tid, modules=modules)
+        # Nunca se lee un negocio desde el scope de otro.
+        with pytest.raises(PermissionError):
+            await cargar_como_v3(otro, modules=modules)
 
     assert vista.conexiones == [wa, ig]
     assert ajena not in vista.conexiones
@@ -126,3 +129,31 @@ async def test_general_por_conexion_conversacional_y_kernel_derivado() -> None:
     catalogo = catalogo_de_acciones(modules)
     assert revisar_spec(vista.general.model_dump(mode="json", by_alias=True), catalogo) == []
     assert revisar_spec(vista.kernel.model_dump(mode="json", by_alias=True), catalogo) == []
+
+
+async def test_tenant_id_ajeno_en_el_json_no_cambia_el_negocio() -> None:
+    """El `tenantId` del JSON v2 lo puede editar el negocio: la identidad y las conexiones
+    salen del `tenant_scope`, no de él."""
+    from core.agents.tolerante import cargar_como_v3
+    from core.plugin_manager import plugin_manager
+    from core.shared.tenant import tenant_scope
+
+    victima = await _negocio(_spec_v2())
+    await _conexion(victima, "whatsapp_meta")
+    atacante = await _negocio(_spec_v2())
+    propia = await _conexion(atacante, "whatsapp_meta")
+    async with tenant_scope(atacante):
+        from core.db.session import get_session
+
+        async with get_session() as session:
+            await session.execute(
+                text(
+                    "update agent_specs set spec = jsonb_set(spec, '{tenantId}', to_jsonb(cast(:v as text))) "
+                    "where tenant_id = :t"
+                ),
+                {"v": str(victima), "t": atacante},
+            )
+        vista = await cargar_como_v3(modules=plugin_manager.scan())
+    assert vista.identidad.tenant_id == str(atacante)
+    assert vista.conexiones == [propia]
+    assert any("distinto del negocio de la fila" in a for a in vista.avisos)

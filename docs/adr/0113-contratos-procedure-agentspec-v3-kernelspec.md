@@ -110,10 +110,16 @@ Los textos del clasificador y del compositor viven en playbooks del core (invari
 - **Rango de versión de un procedimiento:** `^1.0`, `~1.2.3`, `=X.Y.Z` o `X.Y.Z`. `=0.0.0` está reservado al procedimiento abierto que arma el lector tolerante desde el flujo v2.
 - **`procedures[].overrides`:** `examples` (frases, como `triggers.examples`) y `description`.
 - **`playbooks[]`:** `{name, description, pack?}`. `description` conserva el índice de v2.
-- **Headers sensibles:** `Authorization`, `Cookie` y `X-Api-Key`, sin distinguir mayúsculas. Solo admiten `{"secret": "<nombre>"}`, con nombre `^[a-z0-9_]{1,60}$`. El rechazo vive en el propio contrato. Limitación conocida: un secreto en la URL o en el `body` de una declarativa no está cubierto.
+- **Headers sensibles:** `Authorization`, `Cookie` y `X-Api-Key`, más las variantes habituales de credencial por header: `Proxy-Authorization`, `Api-Key`, `X-Auth-Token`, `X-Access-Token`, `X-Api-Token` y `Private-Token`. No se distinguen mayúsculas.
+  - Solo admiten `{"secret": "<nombre>"}`, con nombre `^[a-z0-9_]{1,60}$`.
+  - Una tool con secretos solo llama por `https://`.
+  - Ningún valor de header lleva CR, LF ni NUL.
+  - El rechazo vive en el propio contrato. Los demás headers con pinta de credencial dejan un aviso del lector tolerante.
+  - Limitación conocida: un secreto en la URL o en el `body` no está cubierto.
 - **`guardrails[]`:** la forma que hoy normaliza `validate_custom_rules`, es decir `{name, kind, action, phrases?, tool?, value?}`.
 - **`declarativeTools[]`:** `{name, description, method, url, allowedDomains, headers, parameters, body}`. Es la forma de ADR-0052 con `allowed_domains` en camelCase.
 - **KernelSpec:** reglas de enrutamiento con al menos una condición y exactamente un destino (`agent` o `start`). `withinHours` se escribe `{"from": "HH:MM", "to": "HH:MM"}`, en la zona del negocio, y cruza la medianoche si `from` > `to`. Ningún default es un id de modelo: `coprocessor.model` y `modelPolicy.highRiskStage.model` en `null` heredan el del agente (ADR-0086).
+- **Documento:** el validador rechaza más de 32 niveles de anidación y los números no finitos (`NaN`, `Infinity`) antes de validar la forma.
 - **Keys reservadas:** `general` (el agente General del lector tolerante) y `coordinador` (el Coordinador del backfill de HU-AOS-13). La API de agentes no deja crearlas.
 - **Campos nuevos en v3:**
   - Un campo **opcional con default** es *minor*. Un documento viejo sigue validando, y lo único que no lo lee es un binario viejo, que no existe porque el contrato viaja con el binario.

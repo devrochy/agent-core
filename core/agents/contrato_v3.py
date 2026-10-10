@@ -17,6 +17,7 @@ Puro: no lee base, red ni entorno. El catálogo lo arma quien llama
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 from typing import Any, Literal
 
@@ -52,6 +53,28 @@ def _mensaje_v3(error: Any, contrato: str) -> str:
     return _mensaje(error, contrato)
 
 
+# Profundidad máxima del documento: los campos libres (`parameters`, `body`, `outputSchema`,
+# `extensions`) no pueden anidar sin tope (RecursionError, respuestas enormes).
+MAX_PROFUNDIDAD = 32
+
+
+def _estructura(raw: Any) -> str | None:
+    """Recorre el documento sin recursión: profundidad y números no finitos (NaN o
+    Infinity, que `json.loads` acepta y JSONB rechaza)."""
+    pila: list[tuple[Any, int]] = [(raw, 1)]
+    while pila:
+        valor, nivel = pila.pop()
+        if nivel > MAX_PROFUNDIDAD:
+            return f"El documento anida más de {MAX_PROFUNDIDAD} niveles."
+        if isinstance(valor, float) and not math.isfinite(valor):
+            return "El documento tiene números no finitos (NaN o Infinity)."
+        if isinstance(valor, dict):
+            pila.extend((v, nivel + 1) for v in valor.values())
+        elif isinstance(valor, list):
+            pila.extend((v, nivel + 1) for v in valor)
+    return None
+
+
 def validar_spec(
     raw: Any, esperado: Contrato | None = None
 ) -> tuple[AgentSpecV3 | KernelSpec | None, list[Issue]]:
@@ -61,6 +84,9 @@ def validar_spec(
     su `kind`); sin él, se elige por el campo `contract`."""
     if not isinstance(raw, dict):
         return None, [Issue("forma", "(raíz)", "El spec debe ser un objeto JSON.")]
+    problema = _estructura(raw)
+    if problema is not None:
+        return None, [Issue("forma", "(raíz)", problema)]
     contrato = raw.get("contract", esperado)
     if esperado is not None and contrato != esperado:
         return None, [Issue("contrato", "contract", f"Se espera el contrato {esperado}.")]
@@ -177,6 +203,7 @@ def revisar_spec(raw: Any, catalogo: Catalogo, esperado: Contrato | None = None)
 
 __all__ = [
     "CONTRATOS",
+    "MAX_PROFUNDIDAD",
     "MAX_SPEC_BYTES",
     "Contrato",
     "lint_agentspec",

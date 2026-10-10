@@ -54,8 +54,21 @@ HEADER_NAME_PATTERN = r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,80}$"
 # Playbook: el mismo criterio que `core/agents/playbooks.py` (`_SAFE_PLAYBOOK_NAME`), con tope.
 PLAYBOOK_NAME_PATTERN = r"^[a-zA-Z0-9_-]{1,80}$"
 
-# Headers que nunca llevan un valor literal: solo `{"secret": "<nombre>"}` (ADR-0113 §2).
-SENSITIVE_HEADERS: frozenset[str] = frozenset({"authorization", "cookie", "x-api-key"})
+# Headers que nunca llevan un valor literal: solo `{"secret": "<nombre>"}` (ADR-0113 §2 y su
+# adenda: los tres del ADR más las variantes habituales de credencial por header).
+SENSITIVE_HEADERS: frozenset[str] = frozenset(
+    {
+        "authorization",
+        "cookie",
+        "x-api-key",
+        "proxy-authorization",
+        "api-key",
+        "x-auth-token",
+        "x-access-token",
+        "x-api-token",
+        "private-token",
+    }
+)
 
 ReadScope = Literal["customer", "connection", "tenant"]
 GuardrailKind = Literal["forbidden_phrase", "required_tool", "max_length"]
@@ -184,7 +197,8 @@ class SecretRef(_Strict):
     secret: str = Field(pattern=SECRET_NAME_PATTERN)
 
 
-HeaderValue = Annotated[str, StringConstraints(max_length=8000)] | SecretRef
+# Sin CR, LF ni NUL: un salto de línea en un header es inyección de headers.
+HeaderValue = Annotated[str, StringConstraints(max_length=8000, pattern=r"^[^\r\n\x00]*$")] | SecretRef
 
 
 class DeclarativeTool(_Strict):
@@ -215,6 +229,12 @@ class DeclarativeTool(_Strict):
                 'decláralos como {"secret": "<nombre>"}'
             )
         return headers
+
+    @model_validator(mode="after")
+    def _secreto_solo_por_https(self) -> DeclarativeTool:
+        if self.url.startswith("http://") and any(isinstance(v, SecretRef) for v in self.headers.values()):
+            raise ValueError("una tool con secretos solo llama por https://: la credencial no viaja en claro")
+        return self
 
 
 # ─────────────────────────────────────────────────────────────

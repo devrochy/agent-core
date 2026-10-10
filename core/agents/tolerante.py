@@ -7,9 +7,12 @@ Coordinador se deriva en memoria de la `persona` v2 y de los valores por defecto
 - `convertir_v2(spec, ...)`: puro. Aplica la tabla campo por campo de ADR-0113 y devuelve el
   General, el KernelSpec, los procedimientos abiertos del flujo, los secretos literales que
   hay que mover a la configuración cifrada y los avisos de lo que se normalizó.
-- `cargar_como_v3(tenant_id)`: arma las entradas como el loop (acciones de los packs
-  habilitados, declarativas, flujo compuesto) y lista las conexiones conversacionales.
-  No persiste nada y no devuelve secretos.
+- `cargar_como_v3()`: arma las entradas como el loop (acciones de los packs habilitados,
+  declarativas, flujo compuesto) para el negocio del `tenant_scope` activo y lista sus
+  conexiones conversacionales. No crea filas propias ni devuelve secretos (`load_active_spec`
+  conserva su conducta de siempre: puede sembrar el spec default del negocio).
+- El negocio es SIEMPRE el del `tenant_scope`, nunca el `tenantId` del JSON v2 (un negocio
+  puede editar ese campo): la identidad, el slug del flujo y las conexiones salen de él.
 
 Garantías:
 - **Sin cambio de conducta:** las acciones que hoy ofrece el loop (las del flujo, las
@@ -67,8 +70,17 @@ _HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,80}$")
 _ACTION_RE = re.compile(r"^[a-zA-Z0-9_]{1,80}$")
 _PLAYBOOK_RE = re.compile(r"^[a-zA-Z0-9_-]{1,80}$")
 _SECRET_UNSAFE_RE = re.compile(r"[^a-z0-9_]+")
+# Headers con pinta de credencial fuera de los tres sensibles del contrato: no se mueven
+# (el contrato solo exige esos tres), pero se avisa sin el valor.
+_PINTA_DE_SECRETO_RE = re.compile(r"(auth|token|secret|key|password|session)", re.IGNORECASE)
 _MAX_DECLARATIVAS = 50
 _MAX_GUARDRAILS = 100
+
+
+class ConversionFallida(ValueError):
+    """El v2 no cupo en v3 ni normalizado. El mensaje lleva solo rutas, nunca valores, y
+    se lanza sin la excepción de pydantic encadenada ni el spec en las variables locales
+    (Sentry captura los locales de cada frame)."""
 
 
 @dataclass(frozen=True)
@@ -101,7 +113,7 @@ def _acotar(valor: Any, lo: float, hi: float, campo: str, avisos: list[str]) -> 
 
 
 def _nombre_secreto(tool: str, header: str, usados: set[str]) -> str:
-    base = _SECRET_UNSAFE_RE.sub("_", f"{tool}_{header}".lower()).strip("_")[:56] or "secreto"
+    base = _SECRET_UNSAFE_RE.sub("_", f"{tool}_{header}".lower()).strip("_")[:52] or "secreto"
     nombre, n = base, 2
     while nombre in usados:
         nombre = f"{base}_{n}"
@@ -157,12 +169,20 @@ def _declarativas(
         if nombre in nombres:
             avisos.append(f"extensions.tools '{nombre}': repetida, queda la primera")
             continue
-        if len(salida) >= _MAX_DECLARATIVAS or len(tool["url"]) > 2000 or not _DECLARATIVE_NAME_RE.match(nombre):
+        if len(salida) >= _MAX_DECLARATIVAS or len(tool["url"]) > 2000 or not _DECLARATIVE_NAME_RE.fullmatch(nombre):
             avisos.append(f"extensions.tools '{nombre}': excede los topes del contrato, se descarta")
             continue
         headers: dict[str, Any] = {}
-        for header, valor in tool["headers"].items():
-            if not _HEADER_NAME_RE.match(header) or len(valor) > 8000:
+        if len(tool["headers"]) > 30:
+            # Antes de extraer secretos: ninguno queda huérfano (sin tool que lo use).
+            avisos.append(f"extensions.tools '{nombre}': más de 30 headers, se conservan los primeros")
+        for header, valor in list(tool["headers"].items())[:30]:
+            if (
+                not _HEADER_NAME_RE.fullmatch(header)
+                or not isinstance(valor, str)
+                or len(valor) > 8000
+                or any(c in valor for c in "\r\n\x00")
+            ):
                 avisos.append(f"extensions.tools '{nombre}': header inválido descartado")
                 continue
             if header.lower() in SENSITIVE_HEADERS:
@@ -170,17 +190,24 @@ def _declarativas(
                 secretos[ref] = SecretStr(valor)
                 headers[header] = {"secret": ref}
             else:
+                if _PINTA_DE_SECRETO_RE.search(header):
+                    avisos.append(
+                        f"extensions.tools '{nombre}': el header {header} parece una credencial y queda literal; "
+                        "conviene pasarlo a un secreto"
+                    )
                 headers[header] = valor
-        if len(headers) > 30:
-            avisos.append(f"extensions.tools '{nombre}': más de 30 headers, se conservan los primeros")
-            headers = dict(list(headers.items())[:30])
+        url = tool["url"]
+        if url.startswith("http://") and any(isinstance(v, dict) for v in headers.values()):
+            # La credencial no viaja en claro (adenda de ADR-0113): misma URL por https.
+            url = "https://" + url.removeprefix("http://")
+            avisos.append(f"extensions.tools '{nombre}': lleva credenciales por http://, pasa a https://")
         nombres.add(nombre)
         salida.append(
             {
                 "name": nombre,
                 "description": tool["description"],
                 "method": tool["method"],
-                "url": tool["url"],
+                "url": url,
                 "allowedDomains": tool["allowed_domains"][:20],
                 "headers": headers,
                 "parameters": tool["parameters"],
@@ -204,7 +231,7 @@ def _guardrails(raw: Any, existentes: set[str], avisos: list[str]) -> list[dict[
     for regla in reglas:
         regla = dict(regla)
         if regla["kind"] == "required_tool" and (
-            regla["tool"] not in existentes or not _ACTION_RE.match(regla["tool"])
+            regla["tool"] not in existentes or not _ACTION_RE.fullmatch(regla["tool"])
         ):
             # La acción no existe: hoy la regla falla siempre que aparece la frase.
             avisos.append(
@@ -233,7 +260,7 @@ def _bindings(
     binding, con los scopes que la acción exige (hoy corre sin binding: fail-open)."""
     por_tool: dict[str, dict[str, Any]] = {}
     for b in spec.tools:
-        if b.tool not in existentes or not _ACTION_RE.match(b.tool):
+        if b.tool not in existentes or not _ACTION_RE.fullmatch(b.tool):
             avisos.append(f"tools '{b.tool[:80]}': la acción ya no existe en el binario, se descarta el binding")
             continue
         binding = {
@@ -303,6 +330,7 @@ def _kernel(spec: AgentSpec, avisos: list[str]) -> KernelSpec:
 def convertir_v2(
     spec: AgentSpec,
     *,
+    tenant_id: str | None = None,
     catalogo: Catalogo,
     secciones: list[FlowSection] | None,
     candidatas: Iterable[str],
@@ -316,13 +344,20 @@ def convertir_v2(
       None si el negocio no tiene flujo.
     - `candidatas`: acciones de los packs habilitados más las declarativas, como en el loop.
     - `siempre`: las acciones `always_available` (las del core).
+    - `tenant_id`: el negocio de la fila (el del `tenant_scope`). Gana sobre el `tenantId`
+      del JSON, que el negocio puede editar; si difieren, queda un aviso.
     """
     avisos: list[str] = []
     ext = dict(spec.extensions or {})
+    negocio = tenant_id or spec.tenantId
+    if tenant_id is not None and spec.tenantId != tenant_id:
+        avisos.append("tenantId del AgentSpec v2 distinto del negocio de la fila: se usa el de la fila")
 
     declarativas, secretos = _declarativas(ext.pop("tools", None), catalogo, avisos)
     existentes = set(catalogo) | {t["name"] for t in declarativas}
     guardrails = _guardrails(ext.pop("guardrails", None), existentes, avisos)
+    for clave in sorted(ext):
+        avisos.append(f"extensions.{str(clave)[:60]}: se conserva en extensions (reservado, sin semántica)")
 
     ofrecidas = acciones_ofrecidas(secciones, candidatas, siempre)
     secciones = list(secciones or [])
@@ -333,54 +368,65 @@ def convertir_v2(
     persona = spec.persona
     playbooks: list[dict[str, Any]] = []
     for ref in spec.playbooks:
-        if not _PLAYBOOK_RE.match(ref.name):
+        if not _PLAYBOOK_RE.fullmatch(ref.name):
             avisos.append(f"playbooks '{ref.name[:80]}': nombre inválido (hoy no se carga), se descarta")
             continue
         playbooks.append({"name": ref.name, "description": ref.description[:300]})
 
     rag = spec.memory.rag
-    general = AgentSpecV3.model_validate(
-        {
-            "description": "Agente General: el AgentSpec v2 del negocio (lector tolerante, ADR-0113 §5).",
-            "persona": {
-                "inheritConnectionVoice": True,
-                "maxLength": _acotar(persona.maxLength, 0, 10_000, "persona.maxLength", avisos),
-                "forbiddenPhrases": [f[:1000] for f in persona.forbiddenPhrases][:100],
-            },
-            "model": {
-                "primary": spec.model.primary[:100],
-                "fallback": spec.model.fallback[:100] if spec.model.fallback else None,
-                "router": spec.model.router[:100] if spec.model.router else None,
-                "temperature": _acotar(float(spec.model.temperature), 0.0, 2.0, "model.temperature", avisos),
-            },
-            "playbooks": playbooks[:60],
-            "procedures": [{"id": p.id, "version": f"={OPEN_PROCEDURE_VERSION}"} for p in procedimientos],
-            "memory": {
-                "shortTermTurns": _acotar(spec.memory.shortTermTurns, 1, 500, "memory.shortTermTurns", avisos),
-                "rag": {
-                    "topK": _acotar(rag.topK, 1, 100, "memory.rag.topK", avisos),
-                    "minScore": _acotar(float(rag.minScore), 0.0, 1.0, "memory.rag.minScore", avisos),
-                }
-                if rag is not None
-                else None,
-            },
-            "tools": _bindings(spec, ofrecidas, existentes, catalogo, avisos),
-            "guardrails": guardrails,
-            "declarativeTools": declarativas,
-            "policies": {
-                "maxToolCallsPerTurn": _acotar(
-                    spec.policies.maxToolCallsPerTurn, 1, 100, "policies.maxToolCallsPerTurn", avisos
-                )
-            },
-            "extensions": ext,
-        }
-    )
+    primario = spec.model.primary.strip()[:100]
+    if not primario:
+        from core.agents.spec import DEFAULT_SPEC
+
+        primario = str(DEFAULT_SPEC["model"]["primary"])
+        avisos.append("model.primary vacío: queda el modelo por defecto del alta")
+    contenido: dict[str, Any] = {
+        "description": "Agente General: el AgentSpec v2 del negocio (lector tolerante, ADR-0113 §5).",
+        "persona": {
+            "inheritConnectionVoice": True,
+            "maxLength": _acotar(persona.maxLength, 0, 10_000, "persona.maxLength", avisos),
+            "forbiddenPhrases": [f[:1000] for f in persona.forbiddenPhrases][:100],
+        },
+        "model": {
+            "primary": primario,
+            "fallback": spec.model.fallback[:100] if spec.model.fallback else None,
+            "router": spec.model.router[:100] if spec.model.router else None,
+            "temperature": _acotar(float(spec.model.temperature), 0.0, 2.0, "model.temperature", avisos),
+        },
+        "playbooks": playbooks[:60],
+        "procedures": [{"id": p.id, "version": f"={OPEN_PROCEDURE_VERSION}"} for p in procedimientos],
+        "memory": {
+            "shortTermTurns": _acotar(spec.memory.shortTermTurns, 1, 500, "memory.shortTermTurns", avisos),
+            "rag": {
+                "topK": _acotar(rag.topK, 1, 100, "memory.rag.topK", avisos),
+                "minScore": _acotar(float(rag.minScore), 0.0, 1.0, "memory.rag.minScore", avisos),
+            }
+            if rag is not None
+            else None,
+        },
+        "tools": _bindings(spec, ofrecidas, existentes, catalogo, avisos),
+        "guardrails": guardrails,
+        "declarativeTools": declarativas,
+        "policies": {
+            "maxToolCallsPerTurn": _acotar(
+                spec.policies.maxToolCallsPerTurn, 1, 100, "policies.maxToolCallsPerTurn", avisos
+            )
+        },
+        "extensions": ext,
+    }
+    try:
+        general = AgentSpecV3.model_validate(contenido)
+    except ValueError as exc:
+        rutas = sorted({".".join(str(p) for p in e["loc"]) for e in getattr(exc, "errors", lambda: [])()})
+        # Fuera de los locales antes de lanzar: el spec y lo extraído llevan secretos.
+        del spec, ext, declarativas, secretos, contenido, exc
+        raise ConversionFallida(f"el AgentSpec v2 no cabe en agentspec/3: {', '.join(rutas)[:500]}") from None
     return ConversionV3(
         general=general,
         kernel=_kernel(spec, avisos),
         procedimientos=procedimientos,
         secretos=secretos,
-        identidad=IdentidadLegacy(id=spec.id, version=spec.version, tenant_id=spec.tenantId),
+        identidad=IdentidadLegacy(id=spec.id, version=spec.version, tenant_id=negocio),
         avisos=avisos,
     )
 
@@ -436,30 +482,40 @@ async def _conexiones_conversacionales(tenant_id: uuid.UUID, avisos: list[str]) 
 
 
 async def cargar_como_v3(tenant_id: uuid.UUID | None = None, *, modules: Iterable[Any] | None = None) -> VistaV3:
-    """Carga el AgentSpec v2 activo del negocio como v3 (dentro de su `tenant_scope`).
+    """Carga el AgentSpec v2 activo del negocio del `tenant_scope` activo como v3.
 
-    `modules`: los módulos del binario para el catálogo; por defecto, los ya cargados
-    (`plugin_manager.list_modules()`, como la API de procedimientos)."""
+    `tenant_id`, si se pasa, debe ser el del scope (si no, `PermissionError`): el lector no
+    lee un negocio desde el contexto de otro. `modules`: los módulos del binario para el
+    catálogo; por defecto, los ya cargados (`plugin_manager.list_modules()`)."""
     from core.agents.flow import resolve_flow
     from core.agents.spec import load_active_spec
     from core.kernel.procedures import catalogo_de_acciones
     from core.plugin_manager import plugin_manager
-    from core.shared.tenant import get_current_tenant_id
+    from core.shared.tenant import get_current_tenant_id, tenant_slug
 
-    tid = tenant_id or get_current_tenant_id()
+    tid = get_current_tenant_id()
     if tid is None:
-        raise ValueError("No hay negocio para cargar el AgentSpec")
+        raise ValueError("cargar_como_v3 corre dentro del tenant_scope del negocio")
+    if tenant_id is not None and tenant_id != tid:
+        raise PermissionError("cargar_como_v3: el negocio pedido no es el del tenant_scope")
     spec = await load_active_spec(tid)
     catalogo = catalogo_de_acciones(modules if modules is not None else plugin_manager.list_modules())
     candidatas, siempre = candidatas_del_spec(spec, catalogo)
-    flujo = await resolve_flow(spec, available=set(candidatas))
-    conversion = convertir_v2(
-        spec,
-        catalogo=catalogo,
-        secciones=flujo.sections if flujo is not None else None,
-        candidatas=candidatas,
-        siempre=siempre,
-    )
+    # El slug sale del negocio del scope, nunca del `tenantId` del JSON.
+    slug = await tenant_slug(tid)
+    flujo = await resolve_flow(spec, slug=slug, available=set(candidatas)) if slug else None
+    try:
+        conversion = convertir_v2(
+            spec,
+            tenant_id=str(tid),
+            catalogo=catalogo,
+            secciones=flujo.sections if flujo is not None else None,
+            candidatas=candidatas,
+            siempre=siempre,
+        )
+    except ConversionFallida:
+        del spec  # el v2 lleva los secretos literales: fuera de los locales del frame
+        raise
     avisos = list(conversion.avisos)
     conexiones = await _conexiones_conversacionales(tid, avisos)
     return VistaV3(
@@ -477,6 +533,7 @@ __all__ = [
     "KEYS_RESERVADAS",
     "KEY_COORDINADOR",
     "KEY_GENERAL",
+    "ConversionFallida",
     "ConversionV3",
     "IdentidadLegacy",
     "VistaV3",
