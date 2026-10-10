@@ -189,6 +189,13 @@ class Settings(BaseSettings):
     max_agent_iterations: int = Field(default=6, alias="MAX_AGENT_ITERATIONS")
     message_split_style: SplitStyle = Field(default="un_mensaje", alias="MESSAGE_SPLIT_STYLE")
 
+    # --- Agent OS (ADR-0112) ---
+    # Ruteo por (conexión, cliente) de ADR-0115: global por entorno porque su *contract* es
+    # global. Apagada, el consumer usa la conversación abierta del cliente (la de siempre).
+    # Se enciende antes que `tenants.aos_runtime = 'v3'` y se apaga después de volver todos a
+    # `legacy`.
+    aos_connection_routing: bool = Field(default=False, alias="AOS_CONNECTION_ROUTING")
+
     # --- Modo demo (SOLO desarrollo) ---
     # Activa un LLM fake determinístico y un envío de canal no-op para probar el
     # pipeline sin API key ni credenciales reales. Prohibido en producción.
