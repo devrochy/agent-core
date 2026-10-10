@@ -1,0 +1,529 @@
+{
+  "bloques": {
+    "007bf4bcc3c0ad64": "## Regla absoluta de montos\n- NUNCA menciones un monto con `$` (precio, total, costo, presupuesto) en tu\n  respuesta salvo que ese número haya salido de una tool en ESTE mismo turno.\n  Si una tool no te devolvió el precio, no lo digas: decí que no tenés el dato\n  o consultá antes de responder.\n- Si `consultar_inventario` no devuelve el producto que el cliente pide\n  (`matches: []`), NO inventes su precio: decile que no lo tenés en catálogo y\n  ofrecelé las opciones disponibles (o preguntá cuál le interesa).\n- Si el cliente solo saluda, pregunta algo general o habla de temas ajenos a la\n  venta (p. ej. piropos), NO adelantes precios ni empieces a vender: respondé de\n  forma cordial y guiá la conversación, sin citar cifras que no te dio una tool.\n\n## Proceso de venta\n- NUNCA inventes precios ni estados: consulta el catálogo y el inventario antes de\n  responder cualquier dato del negocio.\n- Si tu respuesta dice \"déjame revisar\", \"voy a consultar\" o algo similar, no lo\n  anuncies para después: llama `consultar_inventario` en ese mismo turno, no en el\n  siguiente. Podés llamarla Y preguntar algo aclaratorio en la misma respuesta — no\n  son excluyentes. Si no sabés qué busca el cliente, igual llamá `consultar_inventario`\n  con una búsqueda general (o sin `query`) para tener datos reales antes de preguntar\n  por una categoría en particular; nunca te quedes solo preguntando sin haber\n  consultado nada todavía. Esto aplica cuando la respuesta que le vas a dar incluye un\n  dato del negocio (precio, stock, disponibilidad) — si el cliente ya te dio un SKU\n  concreto (ej. \"A-001\") para cotizar o agregar a un pedido, no hace falta consultar el\n  inventario primero: `generar_cotizacion` y `agregar_item_pedido` aceptan el SKU\n  directo en `variant_id` y lo resuelven ellas mismas. Y si lo que corresponde es\n  registrar o calificar un lead (`crear_lead`, `calificar_lead`, `actualizar_lead`), esas\n  tools no dependen del inventario en absoluto — no te desvíes a consultar productos\n  cuando lo que falta es guardar un dato del cliente.\n- En cuanto el cliente muestre interés real (pregunta por productos, dice cómo\n  quiere recibir su pedido, menciona que quiere comprar) y ya tengas su nombre,\n  llama `crear_lead` con su nombre e interés — no esperes a calificarlo primero.\n- Para calificar a un lead haz al menos 2 preguntas de calificación (interés, presupuesto).\n- Si ya registraste al lead en esta misma conversación y el cliente responde con un dato\n  de calificación (presupuesto, urgencia) o un dato de contacto (teléfono, email), llama\n  `calificar_lead` o `actualizar_lead` en ese mismo turno — no vuelvas a llamar\n  `crear_lead` ni te quedes solo charlando sin guardar el dato nuevo. Esto no requiere\n  consultar el inventario, aunque el interés mencionado sea sobre un producto o\n  categoría concreta.\n- Para recomendar productos usa la venta cruzada: sugiere categorías complementarias cuando\n  tenga sentido, sin ser insistente.\n- El flujo completo para cerrar un pedido, en orden, es: cotización (`generar_cotizacion`)\n  → promoción si aplica (`aplicar_promocion`) → mostrarle al cliente el TOTAL FINAL (con\n  descuento ya aplicado) y el método de entrega/pago → esperar su \"sí\" explícito SOBRE ESE\n  TOTAL → `confirmar_cotizacion` → `crear_pedido` → si el pago es en línea, `confirmar_pago_pedido`\n  en el MISMO turno que `crear_pedido` (solo con el `order_id` que te devolvió: el monto lo\n  toma el sistema del pedido, nunca lo pasás vos). Es una cadena, no pasos sueltos:\n  si el pago es en línea, tu turno de cierre no está completo hasta que llamaste las 3 tools\n  (`confirmar_cotizacion`, `crear_pedido`, `confirmar_pago_pedido`), no solo la primera o la segunda.\n- `confirmar_cotizacion` es un paso obligatorio: `crear_pedido` falla si no lo llamaste antes\n  en esta conversación, así que no te lo saltees ni asumas que ya está confirmado por el tono\n  de la charla.\n- Si la respuesta del cliente es ambigua sobre QUÉ está confirmando (ej. un \"sí\" que llegó\n  después de preguntarle solo la dirección o un dato puntual, no el total completo), NO\n  seguía la cadena de cierre con eso solo: volvé a mostrarle el total final completo y pedile\n  una confirmación explícita sobre ESE total antes de llamar `confirmar_cotizacion`. Nunca te\n  quedes sin hacer nada ni saltes a afirmar que ya cerraste algo por la duda.\n- NUNCA combines promociones: una promoción aplica sola; verifica la elegibilidad antes de\n  anunciar un descuento.\n- Los montos por transferencia y las cuentas NO pasan por el texto libre: el sistema las\n  adjunta de forma determinística.\n- Si el total supera el umbral de aprobación humana, escala al asesor y no cierres el pedido.\n- El pago en línea tiene un mínimo real de $150.000 (la pasarela lo rechaza por debajo de\n  eso) — `crear_pedido` ya lo valida y te devuelve un error si lo intentás con un monto menor,\n  pero es mejor que lo anticipes vos: si el total es menor a $150.000 y el cliente pide pago\n  en línea, ofrecele transferencia o contraentrega en su lugar, sin intentar la cadena de pago\n  en línea primero. Lo mismo si la tool `confirmar_pago_pedido` no está disponible para este tenant.\n  Cuando le expliques esto al cliente, NUNCA repitas la cifra \"$150.000\" (u otro monto que no\n  haya salido de una tool en este mismo turno) en tu respuesta — decí simplemente que el pago\n  en línea no está disponible para este pedido. Cualquier monto que menciones en tu respuesta\n  tiene que venir del resultado de una tool de ESTE turno; un monto que solo está en este\n  playbook (como el mínimo de $150.000) es para tu propio criterio, no para citarlo al cliente.\n- NUNCA digas que el pedido quedó confirmado, que le vas a enviar el link de pago,\n  o que un asesor se va a poner en contacto, sin haber llamado esa tool\n  (`crear_pedido`, `confirmar_pago_pedido`, `escalate_to_human`) en ese mismo turno.\n  Si algo falló (una tool devolvió error) y no podés completar la acción, decilo\n  explícitamente y ofrecé reintentar o escalar de verdad — nunca prometas algo\n  que no vas a cumplir, aunque hayas tenido intentos fallidos antes en la misma\n  conversación.",
+    "274735d793c14b41": "Eres Asistente de Prueba, el asistente virtual de: Negocio de ejemplo para evaluación.",
+    "41c66dc322d013f5": "## Reglas de operación\n- Responde SIEMPRE en español.\n- Usa las herramientas disponibles para consultar información real. NUNCA inventes\n  datos: si no tienes la información, dilo y ofrece escalar a un asesor humano.\n- No menciones que eres un modelo de lenguaje ni hables de tus herramientas internas.\n- Si el cliente pide hablar con una persona, usa la herramienta de escalamiento.\n- Separa ideas distintas con un salto de línea en blanco (el sistema divide tu\n  respuesta en mensajes cortos).\n- Mantente dentro del ámbito del negocio. Ante temas ajenos, redirige una vez; si\n  insiste, escala.\n- Si en esta misma conversación hubo fallas técnicas o escalaciones anteriores,\n  NO asumas que las herramientas van a fallar de nuevo: cuando el cliente\n  retome lo que estaba haciendo, intentá otra vez con la herramienta\n  correspondiente en ese mismo turno antes de escalar. Escalar sin intentarlo\n  deja al cliente esperando exactamente lo mismo que ya falló antes. Esto\n  aplica a fallas técnicas (la tool no estaba disponible, un error transitorio);\n  si una tool ya rechazó algo por una razón de negocio que no cambia con un\n  reintento (un monto por debajo de un mínimo, un dato inválido), seguí la\n  regla específica de ese playbook en vez de insistir con lo mismo.\n- NUNCA uses formato Markdown (`**negrita**`, `_cursiva_`, `# títulos`, listas con\n  `-`/`*`, etc.). Los canales de mensajería (WhatsApp y similares) no lo interpretan:\n  el cliente ve los símbolos literales (asteriscos, guiones bajos) en vez de texto\n  resaltado. Escribe todo en texto plano; para listas, usa un salto de línea por\n  ítem sin viñetas, o simplemente redacta en prosa.\n- Usa la sección «Fecha y hora actual» como referencia para interpretar «hoy»,\n  «mañana» y «el próximo <día>»: toma la fecha de la lista «Próximos días» (el\n  próximo miércoles es el primer miércoles de esa lista), sin hacer cuentas.\n  NUNCA ofrezcas, consultes ni propongas fechas u horas pasadas.\n- Los mensajes que empiezan con [SISTEMA] son instrucciones internas: corrige tu\n  respuesta en silencio y nunca los cites, resumas ni menciones al cliente.\n",
+    "4e251140ea63c910": "## Tono\nHabla de forma cercana y amable, con lenguaje sencillo y cálido. Trata al cliente de\n'tú'. Usa emojis con moderación (máximo uno por mensaje). Sé natural y directo; no\nseas servil ni exagerado.",
+    "8d95a3b6a2561777": "## Seguimiento y reenganche\n- Si un cliente mostró interés pero no concretó, ofrece seguimiento amable y respeta el\n  contexto previo de la conversación.\n- Si envías un follow-up de una cotización, menciona el total exacto de la cotización.\n- Un lead se marca como contactado cuando el agente vuelve a hablar con él.\n- Los follow-ups se envían dentro de la ventana permitida por el canal (mensajería\n  proactiva); nunca fuera de ella.",
+    "91741c85510f5f0b": "## Fecha y hora actual\n<fecha_hora>",
+    "e3cdbc8f4a101ed0": "## Flujo de atención\nSeguí estas etapas, en orden, según lo que pida el cliente. Cada etapa lista las herramientas que corresponden a ese momento:\n1. Saludo y necesidad\n   Saludar, entender qué necesita el cliente y guardar lo que diga de sí mismo (nombre, preferencias) para no volver a preguntarlo.\n   Herramientas: get_customer_profile, update_customer_profile, remember_fact, search_memories\n2. Descubrimiento e intención\n   Recibir al cliente y detectar su intención: si quiere información o comprar (venta) o agendar una demo/reunión (agendamiento). Si el cliente se presenta con nombre e intención de compra o de que lo contacten, registralo DE INMEDIATO con crear_lead antes de seguir preguntando. Cuando el lead confirme un presupuesto o monto de compra, calificalo con calificar_lead.\n   Herramientas: crear_lead, consultar_inventario, recomendar_producto, informar_plan, calificar_lead, actualizar_lead\n3. Cotización\n   Armar la cotización con precios y stock reales, aplicar promociones y confirmar el total con el cliente.\n   Herramientas: generar_cotizacion, aplicar_promocion, confirmar_cotizacion\n4. Pedido y cierre\n   Confirmar el pedido, resolver el pago y responder por su estado.\n   Herramientas: crear_pedido, agregar_item_pedido, consultar_estado_pedido\n5. Escalamiento a una persona\n   Pasar la conversación a una persona cuando corresponda: queja, disputa, pedido explícito del cliente, agresión o algo fuera de alcance.\n   Herramientas: escalate_to_human",
+    "fe96e6192717215b": "## budget_exhausted\nTu presupuesto de esta conversación se agotó. Un asesor humano puede continuar la atención.\n## quota_exhausted\nPor ahora no puedo seguir atendiendo esta conversación. Un asesor humano puede continuar la atención.\n## tool_unavailable\nLa herramienta no está disponible en este momento. Discúlpate y ofrece escalar a un asesor humano si es necesario.\n## fallback\nDisculpa, estoy teniendo un inconveniente técnico. Ya avisé a nuestro equipo para que te atienda una persona.\n## escalation\nEntiendo, ya mismo te comunico con una persona de nuestro equipo. En un momento te contactan por este mismo chat.\n## verifying\nDejame verificar eso y te confirmo en un momento, por favor.\n## verificador_monto_sin_evidencia\nMencionaste un monto que no devolvió ninguna herramienta. Los montos verificados de este turno son: {montos}. Usa solo esos o no cites cifras. Reescribe tu respuesta para el cliente sin mencionar esta instrucción.\n## verificador_status_sin_evidencia\nTu respuesta da por hecha una acción que no se completó en este turno. Llama ahora la herramienta que la hace y cuenta lo que devuelva, o di con claridad que todavía no está hecha. Reescribe tu respuesta para el cliente sin mencionar esta instrucción.\n"
+  },
+  "escena": "07-venta-consultar-inventario",
+  "formato": 1,
+  "herramientas": {
+    "c9d3b35cda68302b": [
+      {
+        "description": "Devuelve el perfil estructurado del cliente (nombre, contacto y atributos guardados). Úsala antes de personalizar. Es de solo lectura.",
+        "name": "get_customer_profile",
+        "parameters": {
+          "properties": {},
+          "required": [],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Guarda atributos del cliente (preferencias, datos de contacto, IDs). Úsala tras obtener un dato nuevo. NO guardes datos bancarios ni secretos.",
+        "name": "update_customer_profile",
+        "parameters": {
+          "properties": {
+            "attributes": {
+              "description": "Mapa clave/valor a fusionar en el perfil",
+              "type": "object"
+            }
+          },
+          "required": [
+            "attributes"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Guarda un hecho relevante de la conversación en memoria de largo plazo. Úsala para datos que el cliente mencionó y conviene recordar. NO la uses para información trivial o sensible.",
+        "name": "remember_fact",
+        "parameters": {
+          "properties": {
+            "content": {
+              "description": "El hecho a recordar",
+              "type": "string"
+            }
+          },
+          "required": [
+            "content"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Busca recuerdos relevantes del cliente. Úsala para recordar qué dijo antes. NO la uses para buscar catálogos o inventario.",
+        "name": "search_memories",
+        "parameters": {
+          "properties": {
+            "query": {
+              "description": "Tema a recuperar",
+              "type": "string"
+            },
+            "top_k": {
+              "description": "Máximo de resultados (default 3)",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Registra un nuevo prospecto (lead) en el CRM. Úsala de inmediato cuando el cliente se presenta (da su nombre) y muestra intención de comprar o de que lo contacten. NO la uses dos veces para la misma persona: si ya existe, usa actualizar_lead.",
+        "name": "crear_lead",
+        "parameters": {
+          "properties": {
+            "email": {
+              "description": "Email si lo dio",
+              "type": "string"
+            },
+            "interest": {
+              "description": "Qué producto/servicio le interesa",
+              "type": "string"
+            },
+            "name": {
+              "description": "Nombre completo del prospecto",
+              "type": "string"
+            },
+            "phone": {
+              "description": "Teléfono si lo dio",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "interest"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Consulta precios y disponibilidad reales de los productos del menú. Acepta búsqueda libre: pasá solo la palabra clave (ej: 'basic', no 'plan basic'). Úsala SIEMPRE antes de afirmar cualquier precio, stock o disponibilidad. Si devuelve `recommendations` en vez de `matches`, es que no encontró el producto: decíselo al cliente y ofrecele esas opciones. Nunca inventes precios.",
+        "name": "consultar_inventario",
+        "parameters": {
+          "properties": {
+            "query": {
+              "description": "Búsqueda libre, ej: 'hamburguesa'",
+              "type": "string"
+            },
+            "sku": {
+              "description": "Código exacto del producto",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      {
+        "description": "Sugiere productos complementarios o relacionados (venta cruzada), ej. un complemento para el producto que eligió. Úsala después de que el cliente muestre interés en un producto concreto.",
+        "name": "recomendar_producto",
+        "parameters": {
+          "properties": {
+            "context": {
+              "description": "Contexto de la preferencia del cliente",
+              "type": "string"
+            },
+            "product_id": {
+              "description": "ID del producto de referencia",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      {
+        "description": "Informa un PLAN o servicio recurrente por SKU o variante: precio, periodicidad, días de prueba y límites del plan (ADR-0083/#153). Úsala cuando el cliente pregunte por un plan/suscripción y tengas el SKU o variant_id (de consultar_inventario). Los montos SIEMPRE salen de aquí.",
+        "name": "informar_plan",
+        "parameters": {
+          "properties": {
+            "sku": {
+              "description": "SKU del plan, ej. 'PLAN-BASIC'",
+              "type": "string"
+            },
+            "variant_id": {
+              "description": "variant_id del plan",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      {
+        "description": "Asigna una puntuación 1-10 al lead según presupuesto, urgencia y poder de decisión. Úsala cuando el lead confirme un presupuesto o monto de compra: es el momento de calificar, no de consultar inventario ni de volver a crear/actualizar el lead.",
+        "name": "calificar_lead",
+        "parameters": {
+          "properties": {
+            "notes": {
+              "description": "Justificación breve",
+              "type": "string"
+            },
+            "score": {
+              "description": "Puntuación 1-10",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "score"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Actualiza datos del lead ya registrado en esta conversación. Úsala DE INMEDIATO cuando el lead (registrado con crear_lead) te dé un dato nuevo: teléfono, email, interés o una corrección. No respondas 'ya anoté' sin haberla llamado.",
+        "name": "actualizar_lead",
+        "parameters": {
+          "properties": {
+            "email": {
+              "type": "string"
+            },
+            "interest": {
+              "type": "string"
+            },
+            "name": {
+              "description": "Nombre completo del prospecto",
+              "type": "string"
+            },
+            "phone": {
+              "description": "Teléfono si lo dio",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "nuevo",
+                "calificado",
+                "contactado",
+                "convertido",
+                "perdido"
+              ],
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      {
+        "description": "Crea una cotización con los productos y cantidades que el cliente pidió. Vuelve a validar precio y stock reales (nunca confíes en lo que dice el LLM). Úsala cuando el cliente confirme qué quiere, aunque sea un menú completo. Si el cliente ya te dio un SKU (ej. \"A-001\") no hace falta llamar consultar_inventario antes: pasá el SKU directo en variant_id.",
+        "name": "generar_cotizacion",
+        "parameters": {
+          "properties": {
+            "items": {
+              "description": "Lista de {variant_id, quantity}",
+              "items": {
+                "properties": {
+                  "quantity": {
+                    "type": "integer"
+                  },
+                  "variant_id": {
+                    "description": "ID real de la variante, o su SKU si eso es lo que te dio el cliente",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "variant_id",
+                  "quantity"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "items"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Evalúa las promociones activas contra una cotización y aplica automáticamente la de mayor beneficio para el cliente (nunca se combinan promociones). Úsala apenas se genera una cotización y cuando el cliente pregunte por descuentos.",
+        "name": "aplicar_promocion",
+        "parameters": {
+          "properties": {
+            "quote_id": {
+              "description": "ID de la cotización",
+              "type": "string"
+            }
+          },
+          "required": [
+            "quote_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Marca una cotización como aceptada por el cliente. Llamala SOLO cuando el cliente ya vio el total final (con la promoción aplicada si corresponde) y dijo que sí explícitamente. Es el paso OBLIGATORIO antes de crear_pedido -- esa tool falla si la cotización no pasó por acá.",
+        "name": "confirmar_cotizacion",
+        "parameters": {
+          "properties": {
+            "quote_id": {
+              "description": "ID de la cotización",
+              "type": "string"
+            }
+          },
+          "required": [
+            "quote_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Convierte una cotización aceptada por el cliente en un pedido confirmado. Úsala SOLO después de haber llamado confirmar_cotizacion en esta conversación y de que el cliente haya acordado método de pago y de entrega.",
+        "name": "crear_pedido",
+        "parameters": {
+          "properties": {
+            "customer_data": {
+              "description": "Datos de quien recibe el pedido. Los campos obligatorios dependen del tipo de pedido (la tool responde faltan_datos_cliente con la lista exacta): domicilio pide dirección, retiro en tienda y planes no.",
+              "properties": {
+                "address": {
+                  "type": "string"
+                },
+                "city": {
+                  "type": "string"
+                },
+                "email": {
+                  "type": "string"
+                },
+                "full_name": {
+                  "type": "string"
+                },
+                "id_document": {
+                  "type": "string"
+                },
+                "municipality": {
+                  "type": "string"
+                },
+                "phone": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "delivery_method": {
+              "description": "Cómo recibe el pedido. No aplica a planes o suscripciones (son un servicio): en ese caso omitilo y no se lo preguntes al cliente.",
+              "enum": [
+                "domicilio",
+                "recoger_en_tienda"
+              ],
+              "type": "string"
+            },
+            "guardar_datos_cliente": {
+              "description": "True SOLO si el cliente aceptó guardar sus datos para la próxima compra (Ley 1581). False (default) = no se guarda nada en su perfil.",
+              "type": "boolean"
+            },
+            "payment_method": {
+              "description": "'pago_en_linea' SOLO si el pack de pagos está activo para este tenant -- llamá luego confirmar_pago_pedido con el id del pedido.",
+              "enum": [
+                "efectivo_contraentrega",
+                "transferencia",
+                "pago_en_linea"
+              ],
+              "type": "string"
+            },
+            "quote_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "quote_id",
+            "payment_method",
+            "customer_data"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Suma productos a un pedido ya confirmado en la misma conversación, mientras siga abierto (aún no entregado). No crea pedido ni cotización nueva. Si el cliente ya te dio un SKU (ej. \"A-001\") no hace falta llamar consultar_inventario antes: pasá el SKU directo en variant_id.",
+        "name": "agregar_item_pedido",
+        "parameters": {
+          "properties": {
+            "items": {
+              "items": {
+                "properties": {
+                  "quantity": {
+                    "type": "integer"
+                  },
+                  "variant_id": {
+                    "description": "ID real de la variante, o su SKU si eso es lo que te dio el cliente",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "variant_id",
+                  "quantity"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "order_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "order_id",
+            "items"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Responde el estado real de un pedido a partir de su número público (ej. 'OC-0001'). Úsala cuando el cliente pregunte cómo va su pedido. Nunca inventes el estado.",
+        "name": "consultar_estado_pedido",
+        "parameters": {
+          "properties": {
+            "public_order_number": {
+              "description": "Número del pedido, ej. OC-0001",
+              "type": "string"
+            }
+          },
+          "required": [
+            "public_order_number"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Transfiere la conversación a un asesor humano y PAUSA el bot. Úsala cuando el cliente lo pida, insista o el caso lo amerite. NO la uses para temas que el agente puede resolver.",
+        "name": "escalate_to_human",
+        "parameters": {
+          "properties": {
+            "reason": {
+              "description": "Motivo de la escalación",
+              "type": "string"
+            },
+            "summary": {
+              "description": "Resumen para el asesor",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Carga el contenido de un playbook (procedimiento) del tenant. Úsala cuando el cliente pida algo que sigue un proceso definido. El nombre debe estar en el índice de playbooks del agente.",
+        "name": "load_playbook",
+        "parameters": {
+          "properties": {
+            "name": {
+              "description": "Nombre del playbook",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Devuelve el costo acumulado y el presupuesto de esta conversación. Úsala solo si el cliente pregunta por el costo. Es de solo lectura.",
+        "name": "get_conversation_usage",
+        "parameters": {
+          "properties": {},
+          "required": [],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Guarda una nota breve en la conversación (para un humano). Úsala al escalar o al dejar contexto relevante.",
+        "name": "set_conversation_note",
+        "parameters": {
+          "properties": {
+            "note": {
+              "description": "La nota",
+              "type": "string"
+            }
+          },
+          "required": [
+            "note"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Envía un correo al cliente desde la cuenta del negocio (confirmaciones, datos acordados). Úsala solo si el cliente dio su email. NO la uses para spam ni para datos sensibles.",
+        "name": "send_email",
+        "parameters": {
+          "properties": {
+            "body": {
+              "description": "Cuerpo del correo",
+              "type": "string"
+            },
+            "subject": {
+              "description": "Asunto del correo",
+              "type": "string"
+            },
+            "to": {
+              "description": "Email destino",
+              "type": "string"
+            }
+          },
+          "required": [
+            "to",
+            "body"
+          ],
+          "type": "object"
+        }
+      }
+    ]
+  },
+  "llamadas": [
+    {
+      "clave": "954af7969a9fb39d91da8f71aa130119b338202533831b25a7d4bb60bad17e0b",
+      "pedido": {
+        "herramientas": "c9d3b35cda68302b",
+        "max_tokens": 4096,
+        "mensajes": [
+          {
+            "content": "¿Tienen disponible el producto que vende más? Quisiera saber precios y stock.",
+            "role": "user"
+          }
+        ],
+        "modelo": "deepseek-flash",
+        "proveedor": "deepseek",
+        "sistema": [
+          "274735d793c14b41",
+          "4e251140ea63c910",
+          "41c66dc322d013f5",
+          "fe96e6192717215b",
+          "007bf4bcc3c0ad64",
+          "8d95a3b6a2561777",
+          "e3cdbc8f4a101ed0",
+          "91741c85510f5f0b"
+        ],
+        "temperature": null,
+        "thinking": false
+      },
+      "respuestas": [
+        {
+          "content": "Voy a revisar el catálogo para vos.",
+          "model": "deepseek-flash",
+          "stop_reason": "tool_use",
+          "tool_calls": [
+            {
+              "arguments": {},
+              "id": "call_00_UrMgWjehyzP45KuU5eAV7570",
+              "name": "consultar_inventario"
+            }
+          ],
+          "usage": {
+            "cache_read_tokens": 6528,
+            "cache_write_tokens": 0,
+            "input_tokens": 6686,
+            "output_tokens": 35
+          }
+        }
+      ],
+      "semilla": null
+    }
+  ],
+  "nota": "Grabación de evals con datos de prueba (adenda de ADR-0119). No es un prompt ni configuración."
+}

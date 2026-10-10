@@ -1,0 +1,39 @@
+{
+  "contract": "procedure/1",
+  "id": "pack_commerce.contratar_plan",
+  "version": "1.0.0",
+  "requires": ["pack_payments"],
+  "title": "Contratar un plan",
+  "triggers": {
+    "description": "El cliente quiere comprar, contratar o pagar un plan",
+    "examples": ["quiero el plan premium", "cómo pago el básico", "lo quiero contratar", "mándame el link"],
+    "interactivePayloadPrefix": "plan:"
+  },
+  "slots": {
+    "variante_id": { "type": "string", "resolver": "pack_commerce.variante_de_plan", "required": true, "setBy": "interactive:plan:" },
+    "periodicidad": { "enum": ["mensual", "anual"], "default": "mensual" },
+    "correo": { "type": "string", "format": "email", "required": true, "dataClass": "pii", "confirm": true },
+    "cotizacion_id": { "type": "string", "setBy": "action:generar_cotizacion" },
+    "pedido_id": { "type": "string", "setBy": "action:crear_pedido" },
+    "link_pago": { "type": "string", "format": "uri", "setBy": "action:generar_link_pago" }
+  },
+  "stages": [
+    { "id": "elegir_plan", "goal": "Que el cliente elija plan y periodicidad con precios reales",
+      "actions": ["informar_plan", "consultar_inventario"], "exitWhen": { "slots": ["variante_id"] } },
+    { "id": "datos", "goal": "Pedir y confirmar el correo de facturación",
+      "actions": [], "exitWhen": { "slots": ["correo"], "confirmed": ["correo"] } },
+    { "id": "confirmar", "goal": "Mostrar el total del servidor y pedir confirmación explícita",
+      "actions": ["generar_cotizacion", "confirmar_cotizacion"], "confirmation": "interactive_button",
+      "exitWhen": { "action": "confirmar_cotizacion", "ok": true } },
+    { "id": "pagar", "goal": "Crear el pedido y enviar el link de pago", "risk": "high",
+      "actions": ["crear_pedido", "generar_link_pago"], "exitWhen": { "slots": ["pedido_id", "link_pago"] } }
+  ],
+  "completion": { "events": ["pack_payments.pago_confirmado", "pack_commerce.pedido_free_confirmado"], "returnControl": true },
+  "recovery": { "actionError": "explicar_y_reintentar_una_vez", "timeout": "relevo_humano" },
+  "claims": [
+    { "kind": "amount", "mustMatch": ["action:informar_plan.precio", "action:generar_cotizacion.total"] },
+    { "kind": "link", "mustMatch": ["slot:link_pago"] },
+    { "kind": "status", "phrases": ["pedido creado", "quedó registrado"], "requires": "slot:pedido_id" }
+  ],
+  "evals": ["contratar-premium-feliz", "contratar-cambia-a-anual", "contratar-correo-invalido", "contratar-free-sin-link"]
+}
