@@ -39,10 +39,18 @@ def test_la_tabla_solo_se_usa_desde_su_servicio():
 
 def test_solo_las_rutas_de_plataforma_piden_o_leen_las_corridas():
     permitidos = {SERVICE, ROOT / "core" / "api" / "routers" / "platform.py"}
+    # Los requisitos de Embedded Signup (solo master) LEEN la última corrida para no dar "lista"
+    # con el checklist de la app de Meta en rojo (HU-SH-05 sobre HU-CONN-07); no piden corridas.
+    solo_lectura = ROOT / "core" / "admin" / "platform_meta_es.py"
     offenders = [
         str(p.relative_to(ROOT))
         for p in _python_files()
-        if p not in permitidos and _FUNCIONES.search(p.read_text(encoding="utf-8", errors="ignore"))
+        if p not in permitidos
+        and (
+            re.search(r"\brequest_platform_run\b", p.read_text(encoding="utf-8", errors="ignore"))
+            if p == solo_lectura
+            else _FUNCIONES.search(p.read_text(encoding="utf-8", errors="ignore"))
+        )
     ]
     assert offenders == [], f"corridas de plataforma pedidas fuera de las rutas master: {offenders}"
 

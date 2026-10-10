@@ -7,7 +7,8 @@
 - `purge_tenant`: borrado físico IRREVERSIBLE de todos los datos del tenant
   (core + packs + Redis + fila `tenants`). Es la excepción deliberada a la
   invariante #8 (sin borrado físico) del ciclo de vida del tenant (tipo GDPR):
-  exige confirmación por frase (`ELIMINAR <slug>`) y rol master.
+  exige que el tenant esté suspendido (`status='suspended'`), confirmación por
+  frase (`ELIMINAR <slug>`) y rol master.
 """
 
 from __future__ import annotations
@@ -23,6 +24,35 @@ from core.shared.logger import get_logger
 log = get_logger(__name__)
 
 PURGE_PHRASE_PREFIX = "ELIMINAR"
+
+
+class TenantNotSuspendedError(ValueError):
+    """Se intentó purgar un tenant que no está suspendido (`status != 'suspended'`)."""
+
+    def __init__(self, slug: str) -> None:
+        super().__init__(
+            f"El negocio {slug} no está suspendido: suspéndelo primero "
+            f"(agent-core tenant deactivate {slug}, o Desactivar en el panel) y vuelve a intentarlo."
+        )
+        self.slug = slug
+
+
+def require_suspended_for_purge(tenant: Tenant) -> None:
+    """Solo se purga un tenant suspendido (ciclo de vida, `tenants.status`).
+
+    Es la suspensión del ciclo de vida (`deactivate_tenant`), no la falta de pago
+    (`tenant_subscriptions`, ADR-0045): un tenant `active` sin pago no es purgable.
+    La función SQL `purge_tenant` lo vuelve a exigir (defensa en profundidad).
+    """
+    if tenant.status != "suspended":
+        raise TenantNotSuspendedError(tenant.slug)
+
+
+async def ensure_purgeable(ref: str) -> Tenant:
+    """Resuelve el tenant y exige que se pueda purgar (para avisar antes de pedir la frase)."""
+    tenant = await _resolve_tenant(ref)
+    require_suspended_for_purge(tenant)
+    return tenant
 
 
 def _validate_slug(slug: str) -> None:
@@ -156,12 +186,14 @@ async def _clean_redis_for_tenant(tenant_id: uuid.UUID) -> None:
 async def purge_tenant(ref: str, confirm_phrase: str) -> None:
     """Borra TODO el tenant de forma irreversible.
 
-    Exige que `confirm_phrase` sea exactamente `ELIMINAR <slug>`. Borra datos de
+    Exige que el tenant esté suspendido (`TenantNotSuspendedError` si no) y que
+    `confirm_phrase` sea exactamente `ELIMINAR <slug>`. Borra datos de
     todas las tablas con `tenant_id` (core + packs), la fila `tenants`, y el
     estado Redis. La función SQL `purge_tenant(tid)` es SECURITY DEFINER (dueño,
     omite RLS) y transaccional: si algo falla, no queda a medias.
     """
     tenant = await _resolve_tenant(ref)
+    require_suspended_for_purge(tenant)
     expected = f"{PURGE_PHRASE_PREFIX} {tenant.slug}"
     if confirm_phrase.strip() != expected:
         raise ValueError(f"Frase de confirmación incorrecta. Escribe exactamente: {expected}")

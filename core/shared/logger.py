@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from typing import Any
 
 import structlog
 
@@ -43,6 +44,29 @@ def configure_logging() -> None:
         ],
         wrapper_class=structlog.make_filtering_bound_logger(level),
         cache_logger_on_first_use=True,
+    )
+
+
+def configure_console_logging() -> None:
+    """Consola legible para procesos de línea de comandos (runners de evals, scripts).
+
+    Igual que el default de structlog, pero los tracebacks van SIN variables locales. El default
+    usa rich con `show_locals=True`, que imprimía el objeto `settings` entero (API key, claves de
+    cifrado) y cualquier otro objeto del frame ante una excepción.
+    """
+    try:
+        formateador: Any = structlog.dev.RichTracebackFormatter(show_locals=False)
+    except (AttributeError, ModuleNotFoundError):  # sin rich: traceback plano, sin locals
+        formateador = structlog.dev.plain_traceback
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
+            structlog.processors.StackInfoRenderer(),
+            structlog.dev.set_exc_info,
+            structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S", utc=False),
+            structlog.dev.ConsoleRenderer(exception_formatter=formateador),
+        ],
     )
 
 
