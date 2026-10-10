@@ -50,4 +50,14 @@ class WaWebSocket(Protocol):
         """Envía un texto (o imagen con caption) y devuelve el wamid."""
         ...
 
+    async def alive(self) -> bool:
+        """True si el socket sigue conectado y autenticado según el backend.
+
+        Chequeo de vida independiente de los eventos: si el auto-reconnect
+        interno falla sin emitir `DisconnectedEv`, `closed` nunca se marca y el
+        socket queda sordo. Ante la duda (backend ocupado o sin respuesta)
+        devuelve True: solo un False es evidencia de socket muerto.
+        """
+        ...
+
     async def disconnect(self) -> None: ...
