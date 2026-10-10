@@ -246,7 +246,7 @@ scrubber por clave no tapa. Arreglo: `except httpx.TransportError` → `GraphErr
   de Embedded Signup de HU-CONN-01). Marcar los requisitos en "Plataforma → App de Meta".
 - ~~Enlazar los requisitos de Embedded Signup desde "Plataforma → App de Meta" y sacar los tres datos del servidor~~
   (hecho 2026-10-09: los revisa la corrida de la plataforma, que suma `meta_app_configured` y HTTPS en el webhook, y
-  `ready` exige esa corrida sin rojos).
+  `ready` exige esa corrida sin rojos y de hace menos de 30 días).
 - La cadena del alta corre en el request (varias llamadas a Graph después del canje). Si la latencia molesta con
   Meta real, pasarla a un job de Celery: el estado ya está en `connection_wizards` y el panel puede consultar
   `GET /wizard/session`.

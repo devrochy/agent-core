@@ -25204,6 +25204,22 @@
             },
             "type": "array",
             "title": "Pending"
+          },
+          "expired": {
+            "type": "boolean",
+            "title": "Expired"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
           }
         },
         "type": "object",
@@ -25211,10 +25227,12 @@
           "status",
           "finished_at",
           "ok",
-          "pending"
+          "pending",
+          "expired",
+          "expires_at"
         ],
         "title": "EsPlatformCheck",
-        "description": "Última revisión de \"Plataforma → App de Meta\" (HU-CONN-07). `ok`: terminó, sin ítems en\nrojo y con las variables de la app, el webhook y la suscripción en verde. `pending`: las\netiquetas de los ítems que lo impiden."
+        "description": "Última revisión de \"Plataforma → App de Meta\" (HU-CONN-07). `ok`: terminó, sin ítems en\nrojo, con las variables de la app, el webhook y la suscripción en verde, y no vencida (vale\n30 días). `pending`: las etiquetas de los ítems que lo impiden. `expired`: la corrida terminada\nvenció y hay que revisar de nuevo; `expires_at`: cuándo vence (o venció)."
       },
       "TestMessageOptions": {
         "properties": {

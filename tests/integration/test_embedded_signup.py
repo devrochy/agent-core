@@ -557,7 +557,7 @@ async def test_requisitos_de_la_app_de_meta_solo_master(app_client, monkeypatch)
     assert estado["config_id"] == "config-es-prod" and estado["ready"] is False
     # Lo del servidor no se repite aquí: es la revisión de "Plataforma → App de Meta" (HU-CONN-07).
     assert "automatic" not in estado
-    assert set(estado["platform_check"]) == {"status", "finished_at", "ok", "pending"}
+    assert set(estado["platform_check"]) == {"status", "finished_at", "ok", "pending", "expired", "expires_at"}
     claves = {m["key"] for m in estado["manual"]}
     assert {"business_verification", "app_review", "es_configuration"} <= claves
     assert all(PLATFORM_SECRET not in str(v) for v in estado.values())
@@ -579,9 +579,10 @@ async def test_requisitos_de_la_app_de_meta_solo_master(app_client, monkeypatch)
     assert (await app_client.post(f"{url}/step", json={"key": "app_review", "done": False}, headers=dueno)).status_code == 403
 
 
-async def _corrida_de_plataforma(items: dict[str, bool | None]) -> None:
-    """La última corrida terminada de "Plataforma → App de Meta" (la tabla es global)."""
-    from datetime import UTC, datetime
+async def _corrida_de_plataforma(items: dict[str, bool | None], *, hace_dias: int = 0) -> None:
+    """La última corrida terminada de "Plataforma → App de Meta" (la tabla es global). `hace_dias`:
+    cuándo terminó (la vigencia se cuenta desde ahí); se pide ahora para que sea la última."""
+    from datetime import UTC, datetime, timedelta
 
     from core.db.models import PlatformReadinessRun
     from core.db.session import get_session
@@ -591,7 +592,8 @@ async def _corrida_de_plataforma(items: dict[str, bool | None]) -> None:
     async with get_session() as session:
         session.add(
             PlatformReadinessRun(
-                status="done", requested_at=ahora, started_at=ahora, finished_at=ahora,
+                status="done", requested_at=ahora, started_at=ahora,
+                finished_at=ahora - timedelta(days=hace_dias),
                 ready=bool(items) and all(ok is True for ok in items.values()),
                 checks=[
                     {"key": k, "label": PLATFORM_CHECK_LABELS.get(k, k), "ok": ok, "detail": "", "checked_at": None}
@@ -628,6 +630,16 @@ async def test_requisitos_listos_solo_con_la_revision_de_la_plataforma_sin_rojos
         estado = (await app_client.get(url, headers=master)).json()
         assert estado["ready"] is False
         assert estado["platform_check"]["pending"] == [PLATFORM_CHECK_LABELS["worker_heartbeat_and_dlq"]]
+
+        # La revisión vale 30 días (decisión del dueño, 2026-10-10): a los 29 sigue lista, a los 31 no.
+        await _corrida_de_plataforma(verde, hace_dias=29)
+        estado = (await app_client.get(url, headers=master)).json()
+        assert estado["ready"] is True and estado["platform_check"]["expired"] is False
+        await _corrida_de_plataforma(verde, hace_dias=31)
+        estado = (await app_client.get(url, headers=master)).json()
+        assert estado["ready"] is False
+        assert estado["platform_check"]["expired"] is True and estado["platform_check"]["pending"] == []
+        assert estado["platform_check"]["expires_at"] is not None
 
         # Los tres datos que antes revisaba esta lista tienen que estar en verde, no "sin dato".
         await _corrida_de_plataforma(verde | {"meta_app_configured": None})

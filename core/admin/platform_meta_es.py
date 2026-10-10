@@ -9,15 +9,16 @@ SDK de JavaScript y la app en modo Live.
 Lo que se revisa en el servidor (las variables `META_APP_ID`, `META_APP_SECRET` y
 `META_CONFIG_ID`, el webhook en HTTPS y la suscripción de la app) no se repite aquí: es la
 revisión de la plataforma de HU-CONN-07 ("Plataforma → App de Meta", que enlaza a esta lista).
-`ready` exige su última corrida terminada, sin ningún ítem en rojo y con esos tres en verde: la
-lista nunca queda "lista" con el checklist de la app en rojo.
+`ready` exige su última corrida terminada hace menos de `VIGENCIA_REVISION_PLATAFORMA` (30 días),
+sin ningún ítem en rojo y con esos tres en verde: la lista nunca queda "lista" con el checklist de
+la app en rojo ni con una revisión vieja.
 """
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -97,6 +98,10 @@ class RequisitoManual:
     updated_at: datetime | None
 
 
+# Cuánto vale la última revisión de "App de Meta" para dar los requisitos por listos (decisión del
+# dueño, 2026-10-10): pasado el plazo, la lista vuelve a pendiente hasta revisar de nuevo.
+VIGENCIA_REVISION_PLATAFORMA = timedelta(days=30)
+
 # Ítems de la revisión de la plataforma (HU-CONN-07) que Embedded Signup necesita en verde.
 CHEQUEOS_DE_PLATAFORMA = ("meta_app_configured", "webhook_handshake", "app_subscriptions_complete")
 
@@ -104,13 +109,16 @@ CHEQUEOS_DE_PLATAFORMA = ("meta_app_configured", "webhook_handshake", "app_subsc
 @dataclass(frozen=True)
 class RevisionPlataforma:
     """La última revisión de "Plataforma → App de Meta", vista desde Embedded Signup. `ok`: la
-    corrida terminó, ningún ítem está en rojo y los de `CHEQUEOS_DE_PLATAFORMA` están en verde.
-    `pending`: las etiquetas de los ítems que lo impiden."""
+    corrida terminó hace menos de `VIGENCIA_REVISION_PLATAFORMA`, ningún ítem está en rojo y los de
+    `CHEQUEOS_DE_PLATAFORMA` están en verde. `pending`: las etiquetas de los ítems que lo impiden.
+    `expired`: la corrida terminada ya venció (hay que revisar de nuevo); `expires_at`: cuándo vence."""
 
     status: str
     finished_at: datetime | None
     ok: bool
     pending: list[str]
+    expired: bool = False
+    expires_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -148,7 +156,17 @@ async def _revision_de_plataforma(admin: Any) -> RevisionPlataforma:
     ]
     # Una corrida anterior a uno de los ítems que se necesitan no alcanza: hay que revisar de nuevo.
     pendientes += [PLATFORM_CHECK_LABELS.get(c, c) for c in CHEQUEOS_DE_PLATAFORMA if c not in por_clave]
-    return RevisionPlataforma(status=status, finished_at=run.finished_at, ok=not pendientes, pending=pendientes)
+    # Sin fecha de fin no se sabe cuándo se revisó: cuenta como vencida (falla cerrado).
+    vence = run.finished_at + VIGENCIA_REVISION_PLATAFORMA if run.finished_at is not None else None
+    vencida = vence is None or utcnow() >= vence
+    return RevisionPlataforma(
+        status=status,
+        finished_at=run.finished_at,
+        ok=not pendientes and not vencida,
+        pending=pendientes,
+        expired=vencida,
+        expires_at=vence,
+    )
 
 
 async def estado_app_meta(admin: Any) -> EstadoAppMeta:

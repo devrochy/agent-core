@@ -11,4 +11,5 @@
   el HTTPS ni el webhook: la revisión de "Plataforma → App de Meta" suma el ítem `meta_app_configured`
   (`META_APP_ID`, `META_APP_SECRET`, `META_CONFIG_ID`) y el webhook falla si `PUBLIC_BASE_URL` no es HTTPS. Los
   requisitos solo quedan "listos" con los pasos manuales confirmados y la última revisión de la plataforma sin ítems
-  en rojo (`platform_check` reemplaza a `automatic`).
+  en rojo y de hace menos de 30 días (`platform_check` reemplaza a `automatic`; `expired` y `expires_at` dicen si
+  venció). Pasado el plazo vuelven a pendiente y la página pide revisar de nuevo.

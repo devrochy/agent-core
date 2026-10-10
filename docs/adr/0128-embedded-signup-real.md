@@ -115,8 +115,10 @@
    de JavaScript y la app en modo Live. Los datos del servidor (variables de entorno, URL pública en HTTPS y el
    webhook de la app) no se repiten aquí: los revisa la corrida de "Plataforma → App de Meta" de HU-CONN-07
    (`meta_app_configured`, `webhook_handshake` con HTTPS y `app_subscriptions_complete`). `ready` exige su última
-   corrida terminada, sin ítems en rojo y con esos tres en verde (`platform_check`), así que la lista nunca queda
-   lista con el checklist de la app en rojo. Tabla de **sistema** `platform_meta_app_requirements` (migración 0066): es de la app de la
+   corrida terminada hace menos de 30 días (`VIGENCIA_REVISION_PLATAFORMA`, decisión del dueño del 2026-10-10), sin
+   ítems en rojo y con esos tres en verde (`platform_check`, con `expired` y `expires_at`), así que la lista nunca
+   queda lista con el checklist de la app en rojo ni con una revisión vieja: pasado el plazo vuelve a pendiente
+   hasta revisar de nuevo. Tabla de **sistema** `platform_meta_app_requirements` (migración 0066): es de la app de la
    plataforma, no de un negocio; solo la escribe `core/admin/platform_meta_es.py`, que exige master (un test lo
    hace cumplir), y `app_runtime` no tiene `DELETE`. Los chequeos de infraestructura de la app son de HU-CONN-07
    (`/admin/platform/meta-app`, ya en `develop`); esta lista es la parte de Embedded Signup y se enlaza desde allí.
