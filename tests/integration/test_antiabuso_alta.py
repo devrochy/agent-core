@@ -824,7 +824,9 @@ async def test_el_token_de_terminos_de_un_negocio_no_vale_en_otro(vendedores, si
         async with get_session() as s:
             assert (await s.execute(select(Order).where(Order.customer_id == ajeno))).all() == []
             assert (await s.execute(select(PedidoDeAlta).where(PedidoDeAlta.customer_id == ajeno))).all() == []
-    # Control: con su propio token y un mensaje suyo después, el mismo cliente sí compra.
+    # Control: con su propio token, los enlaces enviados y un mensaje suyo después, el mismo
+    # cliente sí compra (la aceptación vale solo después del envío de los enlaces, #406).
+    await _respuesta_con_enlaces(otro, ajeno)
     await _mensaje_del_cliente(otro, ajeno)
     propio = await _pedir(otro, ajeno, _datos(acepta_terminos=resultado["acepta_terminos"]))
     assert propio["status"] == "confirmed", propio
