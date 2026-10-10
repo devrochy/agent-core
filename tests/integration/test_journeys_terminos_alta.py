@@ -244,3 +244,128 @@ async def test_desde_el_playground_se_pueden_aceptar_los_terminos(vendedor, monk
     async with tenant_scope(vendedor):
         registro = await pedido_de_alta(vendedor, salidas[-1]["public_order_number"])
     assert registro.aceptacion is not None and registro.aceptacion["mensaje_id"]
+
+
+class _ModeloQuePierdeLaCotizacion(_ModeloGuionado):
+    """El incidente de test (solvershub, 2026-10-10): la clienta contesta «Si» a los enlaces y el
+    modelo ya no tiene el `quote_id` (ni el token) porque el historial solo trae texto. Primero
+    inventa una cotización (`confirmar_cotizacion("Q-0001")`); con el `hint` de la tool la vuelve
+    a generar con los mismos productos, la confirma y repite `crear_pedido` hasta aceptar."""
+
+    def __init__(self, quote_id: str, datos: dict[str, Any], sku: str) -> None:
+        super().__init__(quote_id, datos)
+        self.sku = sku
+        self.herramientas: list[tuple[str, dict[str, Any]]] = []
+
+    def _tool(self, nombre: str, argumentos: dict[str, Any]) -> _Respuesta:
+        self.herramientas.append((nombre, argumentos))
+        llamada = types.SimpleNamespace(id=f"c-{uuid.uuid4().hex[:8]}", name=nombre, arguments=argumentos)
+        return _Respuesta("tool_use", tool_calls=[llamada])
+
+    async def generate(self, **kwargs: Any) -> _Respuesta:
+        mensajes = kwargs.get("messages") or []
+        ultimo = max(i for i, m in enumerate(mensajes) if m.role == "user")
+        resultados = [json.loads(m.content) for m in mensajes[ultimo + 1 :] if m.role == "tool"]
+        if str(mensajes[ultimo].content).strip().lower() != "si":
+            if not resultados:
+                return self._crear_pedido()
+            enlaces = "\n".join(f"{d['nombre']}: {d['url']}" for d in resultados[-1].get("documentos", []))
+            return _Respuesta("end_turn", content=f"Antes de activar tu plan, revisa y acepta:\n\n{enlaces}")
+        pasos = len(resultados)
+        if pasos == 0:
+            return self._tool("confirmar_cotizacion", {"quote_id": "Q-0001"})
+        if pasos == 1:
+            return self._tool("generar_cotizacion", {"items": [{"variant_id": self.sku, "quantity": 1}]})
+        if pasos == 2:
+            self.quote_id = resultados[1]["quote_id"]
+            return self._tool("confirmar_cotizacion", {"quote_id": self.quote_id})
+        if pasos == 3:
+            return self._crear_pedido()
+        if pasos == 4:
+            return self._crear_pedido(acepta_terminos=resultados[3]["acepta_terminos"])
+        return _Respuesta("end_turn", content="¡Listo! Tu plan quedó en proceso de activación.")
+
+
+async def _sku_de(vendedor: uuid.UUID, quote_id: str) -> str:
+    from pack_commerce.models import ProductVariant, QuoteItem
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(vendedor):
+        async with get_session() as s:
+            return (
+                await s.execute(
+                    select(ProductVariant.sku)
+                    .join(QuoteItem, QuoteItem.variant_id == ProductVariant.id)
+                    .where(
+                        QuoteItem.tenant_id == vendedor,
+                        ProductVariant.tenant_id == vendedor,
+                        QuoteItem.quote_id == uuid.UUID(quote_id),
+                    )
+                )
+            ).scalar_one()
+
+
+async def test_con_un_si_y_sin_la_cotizacion_el_modelo_la_regenera_y_el_alta_se_acepta(vendedor, monkeypatch) -> None:
+    """Incidente de test (2026-10-10): los enlaces llegan con su URL, el `quote_id` inventado
+    responde con el camino para recuperarlo y el token sirve con la cotización nueva (es de la
+    conversación, no de la cotización)."""
+    from core.db.models import Message
+    from core.db.session import get_session
+    from core.provisioning.antiabuso import pedido_de_alta
+    from core.shared.tenant import tenant_scope
+
+    await _documentos_de_prueba(vendedor)
+    customer_id, conversation_id = await journeys.nuevo_cliente(vendedor, "Ana")
+    ctx = journeys.Contexto(vendedor, customer_id, conversation_id, journeys.PagoSimulado())
+    datos = _datos(id_document=ctx.valor("cliente.documento"), phone=ctx.valor("cliente.celular"))
+    primera = await _cotizacion(vendedor, customer_id)
+    modelo = _ModeloQuePierdeLaCotizacion(primera, datos, await _sku_de(vendedor, primera))
+    monkeypatch.setattr("core.orchestrator.loop.resolve_provider", lambda *a, **k: modelo)
+    registro: list[str] = []
+
+    await journeys.paso_usuario(
+        ctx, {"usuario": "Quiero activar el Plan Free con mis datos.", "hasta_herramienta": "crear_pedido"}, registro
+    )
+    await journeys.paso_usuario(ctx, {"usuario": "Si", "hasta_herramienta": "crear_pedido"}, registro)
+
+    salidas = await _salidas_de_crear_pedido(ctx)
+    assert [s["status"] for s in salidas] == ["terminos_pendientes", "terminos_pendientes", "confirmed"], registro
+    assert salidas[0]["acepta_terminos"] == salidas[1]["acepta_terminos"], "el token no depende de la cotización"
+    # Solo el turno con los enlaces deja veredicto (el segundo no extrae nada): no quitó ninguno.
+    assert await _urls_quitadas(ctx) == [0]
+    nombre, argumentos = modelo.herramientas[0]
+    assert (nombre, argumentos["quote_id"]) == ("confirmar_cotizacion", "Q-0001")
+    assert modelo.quote_id != primera
+    async with tenant_scope(vendedor):
+        async with get_session() as s:
+            mensajes = (
+                await s.execute(
+                    select(Message.id, Message.content, Message.direction)
+                    .where(Message.tenant_id == vendedor, Message.conversation_id == conversation_id)
+                    .order_by(Message.created_at)
+                )
+            ).all()
+        registro_alta = await pedido_de_alta(vendedor, salidas[-1]["public_order_number"])
+    assert [m.direction for m in mensajes] == ["inbound", "outbound", "inbound", "outbound"]
+    for tipo in ("terminos", "privacidad", "dpa"):
+        assert f": https://solvershub.test/legal/{tipo}" in mensajes[1].content, mensajes[1].content
+    assert registro_alta.aceptacion["mensaje_id"] == str(mensajes[2].id)
+
+
+async def test_un_quote_id_inventado_responde_como_recuperarlo(vendedor) -> None:
+    from pack_commerce.skills import OrderSkill
+
+    from core.mcp.types import ToolContext
+    from core.shared.tenant import tenant_scope
+
+    customer_id, conversation_id = await journeys.nuevo_cliente(vendedor, "Ana")
+    ctx = ToolContext(conversation_id=conversation_id, customer_id=customer_id, idempotency_key="t:q", channel="test")
+    async with tenant_scope(vendedor):
+        confirmar = await OrderSkill().confirmar_cotizacion({"quote_id": "Q-0001"}, ctx)
+        crear = await OrderSkill().crear_pedido(
+            {"quote_id": str(uuid.uuid4()), "payment_method": "transferencia", "customer_data": _datos()}, ctx
+        )
+    assert confirmar == crear
+    assert "generar_cotizacion" in confirmar["hint"] and "no lo inventes" in confirmar["hint"]

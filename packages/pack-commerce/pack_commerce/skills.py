@@ -275,6 +275,19 @@ async def _order_del_cliente(session, order_id, customer_id) -> Order | None:  #
     ).scalar_one_or_none()
 
 
+def _cotizacion_no_encontrada() -> dict[str, Any]:
+    """Ajena o inexistente responden igual (ver `_quote_del_cliente`). Entre turnos el modelo solo
+    ve texto y pierde el `quote_id`: en test (2026-10-10) inventó `confirmar_cotizacion("Q-0001")`
+    después de que la clienta aceptó. El `hint` le dice cómo recuperarlo en el mismo turno."""
+    return {
+        "error": "Cotización no encontrada.",
+        "hint": (
+            "El quote_id es el id que devuelve generar_cotizacion; no lo inventes. Si no lo tienes "
+            "en este turno, genera la cotización otra vez con los mismos productos."
+        ),
+    }
+
+
 async def _transfer_safe_append() -> str:
     """Arma el bloque de datos de transferencia (nunca lo escribe el LLM)."""
     config = await _plugin_config()
@@ -391,8 +404,8 @@ def _respuesta_del_alta_frenada(frenado: Any) -> dict[str, Any]:
             # el cliente acepta, el modelo lo recupera llamando sin él (ADR-0125, adenda).
             "hint": (
                 "Si el último mensaje del cliente ya acepta los documentos, repite crear_pedido "
-                "ahora con customer_data.acepta_terminos. Si no, comparte los enlaces y espera "
-                "su respuesta."
+                "ahora con el mismo quote_id, los mismos datos y customer_data.acepta_terminos. "
+                "Si no, comparte los enlaces y espera su respuesta."
             ),
         }
     if isinstance(frenado, FreeNoDisponible):
@@ -1171,12 +1184,12 @@ class OrderSkill(BaseSkill):
     async def aplicar_promocion(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         quote_id = str(arguments.get("quote_id", ""))
         if _parse_uuid(quote_id) is None:
-            return {"error": "Cotización no encontrada."}
+            return _cotizacion_no_encontrada()
         async with get_session() as session:
             tenant_id = get_current_tenant_id()
             quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             if quote is None:
-                return {"error": "Cotización no encontrada."}
+                return _cotizacion_no_encontrada()
             items = (
                 await session.execute(
                     select(QuoteItem).where(
@@ -1306,7 +1319,7 @@ class OrderSkill(BaseSkill):
         pero ningún código lo escribía jamás)."""
         quote_id = str(arguments.get("quote_id", ""))
         if _parse_uuid(quote_id) is None:
-            return {"error": "Cotización no encontrada."}
+            return _cotizacion_no_encontrada()
         async with get_session() as session:
             # Defensa en profundidad además de RLS (mismo criterio que
             # calificar_lead/actualizar_lead, auditor-multitenant 2026-09-12):
@@ -1314,7 +1327,7 @@ class OrderSkill(BaseSkill):
             # customer_id para que no se pueda confirmar la de otro cliente.
             quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             if quote is None:
-                return {"error": "Cotización no encontrada."}
+                return _cotizacion_no_encontrada()
             if quote.status == "convertida":
                 return {"error": "Esta cotización ya se convirtió en un pedido."}
             if quote.status == "expirada":
@@ -1385,14 +1398,14 @@ class OrderSkill(BaseSkill):
         if delivery_method and delivery_method not in DELIVERY_METHODS:
             return {"error": "Método de entrega no válido. Usa 'domicilio' o 'recoger_en_tienda'."}
         if _parse_uuid(quote_id) is None:
-            return {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
+            return _cotizacion_no_encontrada()
 
         async with get_session() as session:
             # Defensa en profundidad además de RLS (auditor-multitenant 2026-09-12);
             # solo la cotización del cliente de la conversación (HU-SUB-07).
             quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             if quote is None:
-                return {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
+                return _cotizacion_no_encontrada()
             existing_order = (
                 await session.execute(
                     select(Order).where(
