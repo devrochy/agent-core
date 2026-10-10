@@ -75,3 +75,20 @@ El dueño la aprobó el 2026-10-10. Usa el modo grabar/reproducir de la adenda d
   del proveedor.
 - **Qué haría que revisáramos esto:** regrabaciones tan frecuentes que el costo o la fricción superen al de correr el
   gate en vivo en la PR, o grabaciones que no coinciden entre la máquina local y el CI.
+
+## Adenda (2026-10-10): develop no gasta LLM
+
+Decisión del dueño: **develop no genera costos de LLM y producción los mínimos.**
+
+- **Push a `develop`:** el gate de evals y journeys corre en replay (job `evals-replay`, base nueva, sin
+  `LLM_API_KEY`), igual que en las PRs a `develop`. Antes corría en vivo en cada merge.
+- **PR de release hacia `main`:** el único punto del CI que llama al LLM real: el mismo gate (golden
+  `06,07,08,21,22,23,24,25,26` y journeys `01,05`, k = 1), una vez por release. El push a `main` ya no lo repite.
+- **Set completo (`evals-nightly.yml`):** sin `schedule`. Se lanza a mano (`workflow_dispatch`, `k` = 2 por
+  defecto) cuando haga falta medir pass^k, por ejemplo antes de una release. Antes corría todas las noches con
+  k = 4 (~0,5–0,8 USD por noche).
+- **Lo que se pierde:** la señal diaria de inestabilidad del modelo y el criterio «≥ 95 % tres noches seguidas»
+  (HU-SUB-12, ADR-0119): pasa a medirse en corridas a demanda antes de la release.
+- **Qué haría que revisáramos esto:** una regresión del modelo que llegue a una release porque nadie lanzó la
+  medición a demanda, o un cambio de proveedor o modelo (eso siempre se mide en vivo antes de activarlo).
+

@@ -144,7 +144,7 @@ de escribir código.
   secreto de la configuración o algo con forma de credencial. Al cargarla se valida como dato no confiable: una
   respuesta grabada no puede llamar una tool que no se ofreció.
 - **Replay no es medición:** repite lo grabado, así que no mide la consistencia del modelo. Una corrida en replay no
-  se guarda en `eval_runs`. El umbral de esta ADR y pass^k se miden siempre en vivo (push a `develop` y nightly).
+  se guarda en `eval_runs`. El umbral de esta ADR y pass^k se miden siempre en vivo: desde el 2026-10-10, en la PR de release hacia `main` y en las corridas a demanda de `evals-nightly.yml` (adenda de ADR-0120: develop no gasta LLM).
 - **Dónde viven las grabaciones:**
   - las del framework, en `evals/cassettes/`;
   - las de un negocio, junto a su golden en el repo del negocio (`TENANTS_ROOT/<slug>/evals/cassettes/`), nunca

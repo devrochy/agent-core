@@ -8,8 +8,10 @@ name: CI
 #     evals y journeys en REPLAY (job `evals-replay`): desde las grabaciones de
 #     `evals/cassettes/`, sin red ni LLM_API_KEY (adenda 2026-10-10 de ADR-0120).
 #   - push → develop (post-merge), PR → main y push → main: nivel COMPLETO.
-#     Integración completa, gate de evals y journeys, gitleaks sobre toda la
-#     historia y, hacia main, drift de docs/openapi.json.
+#     Integración completa, gitleaks sobre toda la historia y, hacia main, drift de
+#     docs/openapi.json. El gate de evals y journeys con el LLM REAL corre SOLO en la
+#     PR → main (una vez por release). En el push a develop corre en REPLAY, sin costo
+#     (decisión del dueño 2026-10-10: develop no gasta LLM; adenda de ADR-0120).
 on:
   push:
     # `develop` recibe lotes por push directo además de PRs: se gatean completos.
@@ -133,10 +135,10 @@ jobs:
     # las respuestas del LLM salen de `evals/cassettes/`, sin red ni LLM_API_KEY, así que corre
     # en TODAS las PRs a develop (también las de Dependabot). Si la PR cambia un prompt, una tool
     # o el flujo sin regrabar, falla con exit 3, el diff y el comando para regrabar
-    # (`bash scripts/gate_evals.sh record`, con OK del dueño). No mide el modelo: eso lo hace
-    # el gate en vivo del push a develop y el nightly.
+    # (`bash scripts/gate_evals.sh record`, con OK del dueño). También corre en el push a
+    # develop (sin costo). No mide el modelo: eso lo hace el gate en vivo de la PR → main.
     needs: rapido
-    if: ${{ needs.rapido.outputs.nivel == 'rapido' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ (needs.rapido.outputs.nivel == 'rapido' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/develop') }}
     runs-on: [self-hosted, linux, x64]
     permissions:
       contents: read
@@ -271,11 +273,10 @@ jobs:
           AGENT_CORE_INTEGRATION: "1"
         run: pytest tests/integration -q
 
-      - name: Gate de evals (subconjunto crítico)
-        # Los runs de Dependabot no reciben los secretos de Actions, así que ahí no
-        # hay LLM_API_KEY: los evals se saltan y se avisa (paso siguiente). Corren
-        # igual en el push a `develop` después del merge y en el nightly.
-        if: needs.rapido.outputs.nivel == 'completo' && github.actor != 'dependabot[bot]'
+      - name: Gate de evals (subconjunto crítico, LLM real)
+        # Solo en la PR → main (la release): el único punto del CI que gasta LLM. En el
+        # push a develop el gate corre en replay (job `evals-replay`), sin costo.
+        if: needs.rapido.outputs.nivel == 'completo' && github.event_name == 'pull_request' && github.base_ref == 'main' && github.actor != 'dependabot[bot]'
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         # Camino feliz + manipulación + escalamiento: las regresiones que importan.
@@ -284,12 +285,12 @@ jobs:
       - name: Gate de journeys (subconjunto estable)
         # HU-SUB-12: conversación completa contra el loop real con pagos simulados (sin
         # red). 01 informa planes; 05 recorre cargo → recordatorio → vencida → pago →
-        # reactivación con saltos de reloj. El set completo corre en el nightly.
-        if: needs.rapido.outputs.nivel == 'completo' && github.actor != 'dependabot[bot]'
+        # reactivación con saltos de reloj. Solo en la PR → main, como el paso anterior.
+        if: needs.rapido.outputs.nivel == 'completo' && github.event_name == 'pull_request' && github.base_ref == 'main' && github.actor != 'dependabot[bot]'
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: python evals/journeys.py "01,05" --umbral 1.0
 
       - name: Gate de evals no ejecutado (Dependabot)
-        if: needs.rapido.outputs.nivel == 'completo' && github.actor == 'dependabot[bot]'
-        run: echo "::notice title=Evals no ejecutados::Dependabot no tiene LLM_API_KEY. Corren en el push a develop después del merge y en el nightly."
+        if: needs.rapido.outputs.nivel == 'completo' && github.event_name == 'pull_request' && github.base_ref == 'main' && github.actor == 'dependabot[bot]'
+        run: echo "::notice title=Evals no ejecutados::Dependabot no tiene LLM_API_KEY. El gate en vivo corre en la PR de release hacia main."
