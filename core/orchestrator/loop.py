@@ -27,6 +27,7 @@ from core.agents.spec import enabled_packs, load_active_spec
 from core.config import get_settings
 from core.db.models import AppSettings, AuditLog, Conversation, Customer, Message, UsageLedger
 from core.db.session import get_session
+from core.kernel.tarjeta import tarjeta_del_turno
 from core.llm import resolve_provider
 from core.llm.difficulty_router import (
     DIFFICULTY_SCORE_THRESHOLD,
@@ -287,6 +288,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # Ids vigentes de la conversación (ADR-0130): el historial es solo texto y el modelo
     # no ve el `quote_id` que devolvió una tool en un turno anterior.
     referencias = await cargar_referencias(enabled, disabled_for_tenant, conversation_id, customer.id)
+    # Tarjeta de estado (ADR-0114, HU-AOS-04): "" salvo con `tenants.aos_procedures` encendida.
+    state_card = await tarjeta_del_turno(conversation_id)
 
     prompt_ctx = PromptContext(
         assistant_name=app_settings.assistant_name if app_settings else settings.app_name,
@@ -302,6 +305,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         recalled_memories=recalled,
         entity_profile=entity_memory.profile_to_prompt(profile),
         referencias=referencias,
+        state_card=state_card,
         # Zona del negocio para la fecha y hora actual del prompt (ADR-0091).
         timezone=(getattr(app_settings, "timezone", None) if app_settings else None) or DEFAULT_TIMEZONE,
     )
