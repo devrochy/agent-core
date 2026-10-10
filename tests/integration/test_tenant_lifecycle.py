@@ -294,6 +294,218 @@ async def test_purge_borra_core_packs_redis_y_tenant() -> None:
         assert str(tid) not in ids, "tras el purge, el admin no puede ver el tenant"
 
 
+# ------------------------------------------------------------------ purga sin superusuario
+_DUENO_SIN_SUPER = "purge_dueno_sin_superusuario"
+
+
+def _url_dueno() -> str:
+    url = os.environ.get("MIGRATIONS_DATABASE_URL", "")
+    if not url:
+        pytest.skip("requiere MIGRATIONS_DATABASE_URL (el rol dueño de las tablas)")
+    return url.replace("+asyncpg", "", 1)
+
+
+async def _limpiar_dueno_de_prueba(conn) -> None:
+    """Devuelve la función al rol que migra y borra el rol de prueba, si quedó de una corrida
+    anterior que murió a medias."""
+    if not await conn.fetchval("select 1 from pg_roles where rolname = $1", _DUENO_SIN_SUPER):
+        return
+    dueno = await conn.fetchval(
+        "select proowner::regrole::text from pg_proc "
+        "where oid = 'public.purge_tenant(uuid)'::regprocedure"
+    )
+    if dueno == _DUENO_SIN_SUPER:
+        await conn.execute("alter function public.purge_tenant(uuid) owner to current_user")
+    # DROP OWNED revoca también el permiso sobre el parámetro (es un objeto compartido).
+    await conn.execute(f"drop owned by {_DUENO_SIN_SUPER}")
+    await conn.execute(f"drop role {_DUENO_SIN_SUPER}")
+
+
+@pytest.fixture
+async def purge_con_dueno_sin_superusuario():
+    """`purge_tenant` en manos de un dueño NOSUPERUSER BYPASSRLS, como en producción.
+
+    En producción el dueño es `agent_core_migrations` (runbook de producción, 4.3); en el CI y
+    en local las migraciones corren como superusuario y el bug de la `0011` no se veía. Con el
+    superusuario de `MIGRATIONS_DATABASE_URL` se crea un rol sin superusuario con lo que tiene el
+    dueño en producción (BYPASSRLS, borrar en las tablas, `SET` sobre `session_replication_role`)
+    y se le pasa la función; al final se devuelve al dueño original. Si la base ya se migró con
+    un dueño sin superusuario, se usa tal cual.
+
+    Devuelve una función para quitar y reponer el permiso sobre el parámetro, o `None` si la
+    base ya venía migrada así (el dueño real no se toca).
+    """
+    import asyncpg
+
+    conn = await asyncpg.connect(_url_dueno())
+    try:
+        if await conn.fetchval("select rolsuper from pg_roles where rolname = current_user"):
+            await _limpiar_dueno_de_prueba(conn)
+        dueno, dueno_es_super = await conn.fetchrow(
+            "select quote_ident(r.rolname), r.rolsuper from pg_proc p "
+            "join pg_roles r on r.oid = p.proowner "
+            "where p.oid = 'public.purge_tenant(uuid)'::regprocedure"
+        )
+        if not dueno_es_super:
+            yield None
+            return
+        if not await conn.fetchval("select rolsuper from pg_roles where rolname = current_user"):
+            pytest.skip("el rol de MIGRATIONS_DATABASE_URL no es superusuario: no puede crear roles")
+
+        rol = _DUENO_SIN_SUPER
+        try:
+            await conn.execute(
+                f"create role {rol} nologin nosuperuser bypassrls nocreatedb nocreaterole"
+            )
+            await conn.execute(f"grant usage on schema public, meta_private to {rol}")
+            await conn.execute(
+                f"grant select, update, delete on all tables in schema public, meta_private to {rol}"
+            )
+            await conn.execute(f"grant set on parameter session_replication_role to {rol}")
+            await conn.execute(f"alter function public.purge_tenant(uuid) owner to {rol}")
+
+            async def permiso(conceder: bool) -> None:
+                accion, prep = ("grant", "to") if conceder else ("revoke", "from")
+                await conn.execute(
+                    f"{accion} set on parameter session_replication_role {prep} {rol}"
+                )
+
+            yield permiso
+        finally:
+            await conn.execute(f"alter function public.purge_tenant(uuid) owner to {dueno}")
+            await _limpiar_dueno_de_prueba(conn)
+    finally:
+        await conn.close()
+
+
+async def _sembrar_conversacion(tid: uuid.UUID) -> None:
+    """Cadena de FKs dentro del tenant: customer ← conversation ← message."""
+    from core.db.models import Conversation, Customer, Message
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            customer = Customer(tenant_id=tid, channel="whatsapp", external_id=f"wa-{tid.hex[:6]}")
+            session.add(customer)
+            await session.flush()
+            conv = Conversation(tenant_id=tid, customer_id=customer.id, channel="whatsapp")
+            session.add(conv)
+            await session.flush()
+            session.add(
+                Message(
+                    tenant_id=tid, conversation_id=conv.id, direction="inbound",
+                    sender_type="customer", content="hola",
+                )
+            )
+            await session.commit()
+
+
+async def _todas_las_tablas_con_tenant(conn) -> list[str]:
+    """Como `_tenant_tables`, pero en todos los esquemas propios (incluye `meta_private`)."""
+    return [
+        r[0]
+        for r in await conn.fetch(
+            "select format('%I.%I', n.nspname, c.relname) from pg_class c "
+            "join pg_namespace n on n.oid = c.relnamespace "
+            "join pg_attribute a on a.attrelid = c.oid "
+            "where a.attname = 'tenant_id' and not a.attisdropped and c.relkind in ('r', 'p') "
+            "and not c.relispartition and n.nspname not in ('pg_catalog', 'information_schema') "
+            "and n.nspname not like 'pg\\_%' order by 1"
+        )
+    ]
+
+
+async def _conteos(conn, tablas: list[str], tid: uuid.UUID) -> dict[str, int]:
+    # El dueño (BYPASSRLS) o el superusuario cuentan sin `tenant_scope`.
+    return {
+        t: await conn.fetchval(f"select count(*) from {t} where tenant_id = $1", tid)
+        for t in tablas
+    }
+
+
+async def test_purge_funciona_con_dueno_sin_superusuario(purge_con_dueno_sin_superusuario) -> None:
+    """Con la `0011`, un dueño sin superusuario no podía apagar los triggers de las FKs.
+
+    Además: borra `meta_private` (tokens de Meta), deja intacto a otro negocio, aplica el
+    `ON DELETE SET NULL` de `provisioning_requests.negocio_tenant_id` del vendedor, hace rollback
+    completo si falla y no filtra `session_replication_role` al llamador.
+    """
+    import asyncpg
+    import sqlalchemy.exc
+
+    from core.db.session import get_session
+    from core.tenants import purge_tenant
+
+    tid, slug = await _onboard(_uniq("purge-nosuper"))
+    await _seed_catalog(tid)
+    await _sembrar_conversacion(tid)
+    otro, _ = await _onboard(_uniq("purge-otro"))
+    await _seed_catalog(otro)
+    await _sembrar_conversacion(otro)
+
+    conn = await asyncpg.connect(_url_dueno())
+    try:
+        # Un token de Meta del negocio (meta_private) y una solicitud de alta del otro negocio
+        # (el vendedor) que apunta al que se purga.
+        conexion = uuid.uuid4()
+        await conn.execute(
+            "insert into public.meta_connections (id, tenant_id, channel, meta_app_id, origin) "
+            "values ($1, $2, 'whatsapp', 'app-prueba', 'manual')",
+            conexion, tid,
+        )
+        await conn.execute(
+            "insert into meta_private.meta_tokens (id, tenant_id, connection_id, kind, subject_id, "
+            "ciphertext, iv, auth_tag, key_id, token_hash) "
+            "values ($1, $2, $3, 'system_user', 's', '\\x00', '\\x00', '\\x00', 'k1', 'h')",
+            uuid.uuid4(), tid, conexion,
+        )
+        solicitud = uuid.uuid4()
+        await conn.execute(
+            "insert into public.provisioning_requests (id, tenant_id, referencia, "
+            "negocio_tenant_id) values ($1, $2, $3, $4)",
+            solicitud, otro, f"ref-{solicitud.hex[:8]}", tid,
+        )
+
+        tablas = await _todas_las_tablas_con_tenant(conn)
+        assert "meta_private.meta_tokens" in tablas
+        antes = await _conteos(conn, tablas, tid)
+        assert antes["meta_private.meta_tokens"] == 1
+        otro_antes = await _conteos(conn, tablas, otro)
+        assert sum(otro_antes.values()) > 0, "el otro negocio debe tener datos"
+
+        permiso = purge_con_dueno_sin_superusuario
+        if permiso is not None:
+            # Sin el permiso sobre el parámetro la purga falla entera: rollback, nada borrado.
+            await permiso(False)
+            try:
+                with pytest.raises(sqlalchemy.exc.DBAPIError, match="session_replication_role"):
+                    await purge_tenant(str(tid), f"ELIMINAR {slug}")
+            finally:
+                await permiso(True)
+            assert await _conteos(conn, tablas, tid) == antes
+            assert await conn.fetchval("select count(*) from public.tenants where id = $1", tid)
+
+        await purge_tenant(str(tid), f"ELIMINAR {slug}")
+
+        despues = await _conteos(conn, tablas, tid)
+        assert {t: n for t, n in despues.items() if n} == {}, "quedaron filas del negocio"
+        assert not await conn.fetchval("select count(*) from public.tenants where id = $1", tid)
+        assert await _conteos(conn, tablas, otro) == otro_antes, "el otro negocio no se toca"
+        assert await conn.fetchval(
+            "select negocio_tenant_id from public.provisioning_requests where id = $1", solicitud
+        ) is None, "ON DELETE SET NULL de la solicitud del vendedor"
+    finally:
+        await conn.close()
+
+    # La cláusula SET de la función no se filtra a la transacción del llamador.
+    async with get_session() as session:
+        await session.execute(text("select purge_tenant(:tid)"), {"tid": str(uuid.uuid4())})
+        rol = (await session.execute(text("show session_replication_role"))).scalar()
+        await session.rollback()
+    assert rol == "origin"
+
+
 # ------------------------------------------------------------------ panel
 async def _login(app_client) -> str:
     r = await app_client.post("/admin/login", data={"email": "admin@local", "password": "admin123"})

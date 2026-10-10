@@ -105,9 +105,16 @@ desde `created_at`), para no cortarles el servicio de golpe.
 `ELIMINAR <slug>` y rol `master`. Es la **excepción deliberada a la invariante #8**
 (sin borrado físico): el ciclo de vida del tenant la requiere (tipo GDPR /
 right-to-erasure). La función SQL `purge_tenant(tid)` (SECURITY DEFINER, dueño,
-transaccional) descubre dinámicamente todas las tablas con `tenant_id` — core y
-packs — y las vacía; además se limpia el estado Redis. Destruye también el
-historial inmutable (`usage_ledger`, `audit_log`) del tenant.
+transaccional) descubre dinámicamente todas las tablas con `tenant_id` — core,
+packs y `meta_private` — y las vacía; además se limpia el estado Redis. Destruye también el
+historial inmutable (`usage_ledger`, `audit_log`) del tenant. Mientras corre, la
+función fija `session_replication_role = replica` (cláusula `SET`, se restaura al
+salir), así que no disparan los triggers de las FKs ni los de inmutabilidad; la fila
+`tenants` se borra con las FKs encendidas, para que las referencias desde otros
+negocios (`provisioning_requests.negocio_tenant_id`, `ON DELETE SET NULL`) se
+apliquen. El dueño no es superusuario: necesita `GRANT SET ON PARAMETER
+session_replication_role` (migración `0067`, runbook de producción 4.3). `EXECUTE`
+solo para `app_runtime`.
 
 ## Referencias
 
