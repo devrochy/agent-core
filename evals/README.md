@@ -154,29 +154,34 @@ encontraste una regresión del prompt.
 - Las grabaciones de un negocio no se aceptan dentro del repo del framework (salvo `tenants/`, que
   está en `.gitignore`).
 
-### Propuesta de CI (no aplicada; decide el dueño)
+### En el CI y flujo para regrabar
 
-Hoy el PR a `develop` corre solo el nivel rápido, y el gate de evals y journeys corre con el LLM
-real en el push a `develop` y en el nightly. La propuesta:
+`scripts/gate_evals.sh off|record|replay` tiene los argumentos del gate en un solo lugar: golden
+`06,07,08,21,22,23,24,25,26` y journeys `01,05` con umbral 1.0. Es el mismo gate en vivo, grabado
+y reproducido. ADR-0120 (adenda del 2026-10-10) lo fija así:
 
-1. **PR a `develop`:** sumar el gate en `replay` y **sin** `LLM_API_KEY`, en el job que ya tiene
-   Postgres y Redis:
+1. **PR a `develop`:** el job `evals-replay` levanta una base nueva, la migra y la siembra, y corre
+   `bash scripts/gate_evals.sh replay` **sin** `LLM_API_KEY`. No gasta saldo.
+2. **Push a `develop` y nightly:** con el LLM real, como antes. Es la medición de ADR-0119.
 
-   ```yaml
-   - name: Gate de evals (replay, sin LLM)
-     env:
-       LLM_CASSETTE: replay
-     run: |
-       python evals/runner.py "06,07,08,21,22,23,24,25,26"
-       python evals/journeys.py "01,05" --umbral 1.0
+**Si cambias un prompt** (un playbook, la descripción de una tool, el flujo o la persona) y el job
+`evals-replay` falla con «Grabación desactualizada»:
+
+1. Revisa el diff. Si el cambio no era intencional, es una regresión: arréglala.
+2. Si era intencional, pide **OK al dueño** para regrabar. Son unas 9 llamadas, ~0,01 USD.
+3. Regraba en una **base recién migrada y sembrada**, igual que el CI:
+
+   ```bash
+   # stack efímero propio con las variables de ci.yml, base vacía
+   agent-core db migrate && ADMIN_PASSWORD=admin123 python scripts/init_db.py
+   LLM_API_KEY=… bash scripts/gate_evals.sh record
    ```
 
-   Un PR que cambia un prompt, una tool o el flujo sin regrabar falla con exit 3 y el diff. El
-   autor pide el OK, regraba y commitea el JSON.
-2. **Push a `develop` y nightly:** sin cambios, con el LLM real (`off`). Es la medición de verdad
-   (pass@1, pass^4 y el umbral de ADR-0119).
-3. Opcional: en el nightly, `record` en vez de `off` y un artefacto con las grabaciones nuevas, para
-   regrabar sin gastar otra corrida.
+   En `record`, un escenario que falla por la respuesta del modelo igual queda grabado y la
+   corrida sigue. Un error de grabación (exit 3) la corta sin más llamadas.
+4. Verifica sin red en otra base nueva: `bash scripts/gate_evals.sh replay` con `LLM_API_KEY=`
+   vacía. Revisa que los JSON no tengan secretos ni datos reales y commitéalos en la misma PR.
 
-Si el gate del PR pasa a replay, cambia la tabla de niveles de ADR-0120. Eso requiere una adenda
-a ADR-0120 en ese mismo PR.
+Un replay sobre una base **ya usada** no coincide: en la segunda corrida el flujo ofrece las tools
+`sub_*`, que en la primera no estaban. Por eso el CI y la grabación parten siempre de una base
+nueva.

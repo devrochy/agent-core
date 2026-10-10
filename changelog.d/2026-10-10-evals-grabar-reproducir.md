@@ -1,4 +1,4 @@
-## Evals: grabar y reproducir el LLM (2026-10-10)
+## Evals: grabar y reproducir el LLM, y gate en replay en las PRs (2026-10-10)
 
 - Modo grabar/reproducir del LLM para las evals (`core/llm/cassette.py`, adenda de ADR-0119). `evals/runner.py` y
   `evals/journeys.py` aceptan `--grabacion off|record|replay` (o `LLM_CASSETTE`) y `--grabaciones DIR` (o
@@ -9,4 +9,6 @@
 - La clave normaliza la fecha y hora del prompt (ADR-0091), los UUIDs, los timestamps y los ids generados. La
   respuesta grabada se rehidrata con los ids de la corrida actual.
 - El modo solo se enciende en development o test. Una corrida en replay no se guarda en `eval_runs`.
-- Guía y propuesta de CI en `evals/README.md`. El CI no cambia.
+- CI (adenda de ADR-0120): nuevo job `evals-replay` en las PRs a `develop`. Corre el gate de evals y journeys en replay
+  sin `LLM_API_KEY`, con `scripts/gate_evals.sh`. El push a develop y el nightly siguen con el LLM real.
+- Guía y flujo para regrabar en `evals/README.md`.

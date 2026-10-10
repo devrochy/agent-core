@@ -132,5 +132,5 @@ de escribir código.
 - **Regrabar:** `record` gasta saldo, así que solo se hace con OK del dueño. Se regraba por escenario
   (`python evals/runner.py 06 --grabacion record`). En record y replay los embeddings de memoria se apagan, porque
   saldrían a la red y cambiarían el prompt.
-- **CI:** no cambia en esta adenda. La propuesta (gate del PR en replay sin `LLM_API_KEY`) está en `evals/README.md`.
-  Si se adopta, requiere una adenda a ADR-0120.
+- **CI:** el gate de las PRs a `develop` corre en replay sin `LLM_API_KEY` (job `evals-replay`). Lo fija la adenda del
+  2026-10-10 de ADR-0120.
