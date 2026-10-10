@@ -41,6 +41,8 @@ _MONTH_NAMES = (
 # `find_next_available`: rango de búsqueda y tope de días con cupo devueltos.
 _NEXT_AVAILABLE_MAX_DAYS = 14
 _NEXT_AVAILABLE_MAX_RESULTS = 5
+# `list_client_appointments`: cuánto hacia atrás muestra las citas que ya pasaron.
+_RECENT_PAST = timedelta(hours=24)
 
 
 def _long_date(value: date) -> str:
@@ -487,7 +489,11 @@ class CalendarSkill(BaseSkill):
                     "Lista las citas AGENDADAS (scheduled) del cliente, ordenadas por fecha, con un "
                     "índice numerado y su event_id. Úsala cuando el cliente pregunte 'qué citas tengo' "
                     "o quiera cancelar VARIAS o TODAS sus citas: mostrá la lista numerada al cliente "
-                    "y pedile que elija por número o 'todas'."
+                    "y pedile que elija por número o 'todas'. Incluye también las citas de las últimas "
+                    "24 h que ya pasaron, marcadas con ya_paso=true y sin índice (no se cancelan): si el "
+                    "cliente pregunta por una de ellas, decile que esa cita ya pasó (con su fecha y hora) "
+                    "y ofrecé agendar otra. NUNCA digas que no tiene cita o que no aparece si la lista "
+                    "trae una con ya_paso=true."
                 ),
                 parameters={
                     "type": "object",
@@ -859,14 +865,14 @@ class CalendarSkill(BaseSkill):
             get_logger(__name__).warning("calendar_event_record_failed", exc_info=True)
 
     async def _client_appointments(
-        self, arguments: dict[str, Any], context: ToolContext, *, upcoming_only: bool = False
+        self, arguments: dict[str, Any], context: ToolContext, *, since: datetime | None = None
     ) -> list[Any]:
         """Citas `scheduled` del cliente (tenant actual), ordenadas por fecha.
 
         SIEMPRE acotado al cliente o a la conversación del contexto (auditoría HU-SH-02):
         antes, un título o email del LLM podía traer citas de OTROS clientes del negocio
         y reagendarlas o cancelarlas. Dentro de ese conjunto, `event_id` (google o id
-        local), `attendee_email` y título afinan. Con `upcoming_only`, solo las futuras.
+        local), `attendee_email` y título afinan. Con `since`, solo las que empiezan desde ahí.
         """
         from sqlalchemy import or_, select
 
@@ -895,8 +901,8 @@ class CalendarSkill(BaseSkill):
                 Appointment.status == "scheduled",
                 or_(*propias),
             )
-            if upcoming_only:
-                q = q.where(Appointment.start_at >= datetime.now(UTC))
+            if since is not None:
+                q = q.where(Appointment.start_at >= since)
             if event_id:
                 cond = Appointment.google_event_id == event_id
                 eid = _as_uuid(event_id)
@@ -922,21 +928,43 @@ class CalendarSkill(BaseSkill):
         return future[0] if future else rows[0]
 
     async def list_appointments(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        """Enumera las citas agendadas (futuras) del cliente, numeradas y con id,
-        con el inicio en la zona del negocio y la fecha escrita."""
-        rows = await self._client_appointments(arguments, context, upcoming_only=True)
+        """Enumera las citas agendadas del cliente, numeradas y con id, con el inicio
+        en la zona del negocio y la fecha escrita.
+
+        Trae las futuras y las de las últimas 24 h ya pasadas (`ya_paso`). Test
+        2026-10-10: a las 23:49 la clienta preguntó por su cita de las 10:00 de ese
+        día (seguía en `scheduled`); la tool solo miraba las futuras, devolvió
+        `total: 0` y el asistente negó que la cita existiera.
+        """
+        now = datetime.now(UTC)
+        rows = await self._client_appointments(arguments, context, since=now - _RECENT_PAST)
         tz = ZoneInfo(await self._timezone_name())
+        pasadas = [r for r in rows if r.start_at < now]
+        futuras = [r for r in rows if r.start_at >= now]
+        # Las pasadas van sin `index`: la numeración es la misma que resuelve
+        # `cancel_calendar_event` ("cancelá la 2"), que solo mira las futuras.
         return {
             "appointments": [
+                {
+                    "event_id": r.google_event_id or str(r.id),
+                    "title": r.title,
+                    **_local_when(r.start_at, tz),
+                    "ya_paso": True,
+                }
+                for r in pasadas
+            ]
+            + [
                 {
                     "index": i + 1,
                     "event_id": r.google_event_id or str(r.id),
                     "title": r.title,
                     **_local_when(r.start_at, tz),
+                    "ya_paso": False,
                 }
-                for i, r in enumerate(rows)
+                for i, r in enumerate(futuras)
             ],
             "total": len(rows),
+            "proximas": len(futuras),
         }
 
     async def _send_client_notice(self, conversation_id: uuid.UUID | None, template: str, **values: str) -> bool:
@@ -1180,7 +1208,7 @@ class CalendarSkill(BaseSkill):
           a ciegas: devuelve [] y el llamador pide aclaración.
         """
         fallback = {k: v for k, v in arguments.items() if k not in ("event_id", "event_ids")}
-        rows = await self._client_appointments(fallback, context, upcoming_only=True)
+        rows = await self._client_appointments(fallback, context, since=datetime.now(UTC))
         if len(references) == 1 and references[0].strip().isdigit():
             index = int(references[0].strip())
             if 1 <= index <= len(rows):
@@ -1202,9 +1230,9 @@ class CalendarSkill(BaseSkill):
 
         rows: list[Any] = []
         if cancel_all:
-            rows = await self._client_appointments(arguments, context, upcoming_only=True)
+            rows = await self._client_appointments(arguments, context, since=datetime.now(UTC))
         elif event_ids or single_id:
-            client_rows = await self._client_appointments(arguments, context, upcoming_only=True)
+            client_rows = await self._client_appointments(arguments, context, since=datetime.now(UTC))
             wanted = set(event_ids) | ({single_id} if single_id else set())
             rows = [r for r in client_rows if (r.google_event_id in wanted) or (str(r.id) in wanted)]
             if not rows:

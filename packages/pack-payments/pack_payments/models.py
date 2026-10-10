@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Index, Numeric, Text
+from sqlalchemy import DateTime, Index, Numeric, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -46,7 +46,15 @@ class PaymentTransaction(TenantMixin, Base):
 
     __tablename__ = "pack_payments_transactions"
     __table_args__ = (
-        Index("uq_pack_payments_tenant_reference", "tenant_id", "reference", unique=True),
+        # Una sola transacción VIVA por referencia: al regenerar un link vencido, la
+        # vieja se marca `deleted_at` y queda para auditoría (migración 0003).
+        Index(
+            "uq_pack_payments_tenant_reference_viva",
+            "tenant_id",
+            "reference",
+            unique=True,
+            postgresql_where=text("deleted_at is null"),
+        ),
         Index("uq_pack_payments_tenant_idem", "tenant_id", "idempotency_key", unique=True),
         Index("ix_pack_payments_tenant_provider_ref", "tenant_id", "provider", "provider_reference"),
     )
