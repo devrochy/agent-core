@@ -58,15 +58,22 @@ _HEARTBEAT_MAX_AGE_S = 180
 async def check_webhook_handshake(callback_url: str, verify_token: str) -> PreflightCheck:
     """VIVE DE PRODUCCIÓN REAL: hace un GET real por red contra la URL
     pública -- no llama a la función del handler local, porque el punto es
-    verificar lo que Meta vería de verdad (DNS, TLS, proxy/middleware)."""
+    verificar lo que Meta vería de verdad (DNS, TLS, proxy/middleware). Una URL
+    sin HTTPS falla sin llamar: Meta no la acepta."""
     now = datetime.now(UTC)
+    if not callback_url.startswith("https://"):
+        # Meta no registra un webhook sin HTTPS: aunque responda, no sirve (HU-SH-05).
+        return PreflightCheck(
+            key="webhook_handshake", ok=False,
+            detail="PUBLIC_BASE_URL no es HTTPS: Meta no acepta el webhook.", checked_at=now,
+        )
     challenge = uuid.uuid4().hex
     params = {"hub.mode": "subscribe", "hub.verify_token": verify_token, "hub.challenge": challenge}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(callback_url, params=params)
     except httpx.HTTPError as exc:
-        return PreflightCheck(key="webhook_handshake", ok=False, detail=f"No se pudo contactar {callback_url}: {exc}", checked_at=now)
+        return PreflightCheck(key="webhook_handshake", ok=False, detail=f"No se pudo contactar {callback_url} ({type(exc).__name__})", checked_at=now)
 
     content_type = response.headers.get("content-type", "")
     if response.status_code == 200 and response.text == challenge and content_type.startswith("text/plain"):
@@ -128,6 +135,32 @@ async def check_app_subscriptions_complete(
     return PreflightCheck(
         key="app_subscriptions_complete", ok=True,
         detail=f"Activos con fields completos: {', '.join(required_objects)}.{optional}", checked_at=now,
+    )
+
+
+def check_meta_app_configured() -> PreflightCheck:
+    """Las variables de la app de Meta de la plataforma están en el entorno del servidor:
+    `META_APP_ID` y `META_APP_SECRET` (webhook, suscripciones, Embedded Signup) y
+    `META_CONFIG_ID` (la configuración de Embedded Signup, HU-SH-05). No muestra valores."""
+    now = datetime.now(UTC)
+    settings = get_settings()
+    faltan = [
+        nombre
+        for nombre, valor in (
+            ("META_APP_ID", settings.meta_app_id),
+            ("META_APP_SECRET", settings.meta_app_secret),
+            ("META_CONFIG_ID", settings.meta_config_id),
+        )
+        if not valor
+    ]
+    if faltan:
+        return PreflightCheck(
+            key="meta_app_configured", ok=False,
+            detail=f"Faltan en el entorno del servidor: {', '.join(faltan)}.", checked_at=now,
+        )
+    return PreflightCheck(
+        key="meta_app_configured", ok=True, detail="META_APP_ID, META_APP_SECRET y META_CONFIG_ID configurados.",
+        checked_at=now,
     )
 
 
@@ -351,7 +384,8 @@ async def check_connections_health_except_billing(tenant_id: uuid.UUID) -> Prefl
 # Checks de la app de Meta de la PLATAFORMA y de la infraestructura: los ve solo el master
 # ("Plataforma → App de Meta") y corren en el worker de Celery, nunca en el request.
 PLATFORM_CHECK_LABELS: dict[str, str] = {
-    "webhook_handshake": "El webhook de la plataforma responde la verificación de Meta",
+    "meta_app_configured": "Variables de la app de Meta (META_APP_ID, META_APP_SECRET, META_CONFIG_ID)",
+    "webhook_handshake": "El webhook de la plataforma (HTTPS) responde la verificación de Meta",
     "app_subscriptions_complete": "Suscripciones de la app de Meta (WhatsApp)",
     "prod_secret_differs_from_dev": "App Secret distinto al de desarrollo",
     "token_keys_configured": "Claves de cifrado de tokens",
@@ -362,7 +396,7 @@ PLATFORM_CHECK_LABELS: dict[str, str] = {
 }
 
 
-async def _safe(key: str, check: Callable[[], Awaitable[PreflightCheck] | PreflightCheck]) -> PreflightCheck:
+async def safe_check(key: str, check: Callable[[], Awaitable[PreflightCheck] | PreflightCheck]) -> PreflightCheck:
     """Un check que revienta queda en `None` con el tipo de error: no tumba la corrida."""
     try:
         result = check()
@@ -382,14 +416,15 @@ async def run_platform_checks() -> list[PreflightCheck]:
     settings = get_settings()
     callback_url = f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp"
     return [
-        await _safe("webhook_handshake", lambda: check_webhook_handshake(callback_url, settings.whatsapp_verify_token)),
-        await _safe("app_subscriptions_complete", lambda: check_app_subscriptions_complete(settings.meta_app_id)),
-        await _safe("prod_secret_differs_from_dev", lambda: check_prod_secret_differs_from_dev(settings.meta_app_secret)),
-        await _safe("token_keys_configured", check_token_keys_configured),
-        await _safe("worker_heartbeat_and_dlq", check_worker_heartbeat_and_dlq),
-        await _safe("rls_forced", check_rls_forced),
-        await _safe("rls_tests_pass", check_rls_tests_pass),
-        await _safe("no_secret_leak_in_templates", check_no_secret_leak_in_templates),
+        await safe_check("meta_app_configured", check_meta_app_configured),
+        await safe_check("webhook_handshake", lambda: check_webhook_handshake(callback_url, settings.whatsapp_verify_token)),
+        await safe_check("app_subscriptions_complete", lambda: check_app_subscriptions_complete(settings.meta_app_id)),
+        await safe_check("prod_secret_differs_from_dev", lambda: check_prod_secret_differs_from_dev(settings.meta_app_secret)),
+        await safe_check("token_keys_configured", check_token_keys_configured),
+        await safe_check("worker_heartbeat_and_dlq", check_worker_heartbeat_and_dlq),
+        await safe_check("rls_forced", check_rls_forced),
+        await safe_check("rls_tests_pass", check_rls_tests_pass),
+        await safe_check("no_secret_leak_in_templates", check_no_secret_leak_in_templates),
     ]
 
 
@@ -552,7 +587,7 @@ async def run_connection_production_checks(connection: Any, tenant_id: uuid.UUID
             repair_action="reauthorize",
         )
     else:
-        token = await _safe("token", lambda: meta_health.check_token_valid(
+        token = await safe_check("token", lambda: meta_health.check_token_valid(
             creds.access_token, creds.app_id, creds.app_secret, creds.graph_api_version,
             connection_id=connection.id, tenant_id=tenant_id,
         ))
@@ -569,7 +604,7 @@ async def run_connection_production_checks(connection: Any, tenant_id: uuid.UUID
         else:
             checks = []
             for phone in phones:
-                check = await _safe("number_registered", lambda phone=phone: meta_health.check_number_registered(
+                check = await safe_check("number_registered", lambda phone=phone: meta_health.check_number_registered(
                     phone.phone_number_id, creds.access_token, creds.app_secret, creds.graph_api_version,
                     connection.id, tenant_id=tenant_id,
                 ))
@@ -586,7 +621,7 @@ async def run_connection_production_checks(connection: Any, tenant_id: uuid.UUID
             items["waba_subscribed"] = _sin_credenciales("waba_subscribed")
         else:
             checks = [
-                await _safe("waba_subscribed", lambda: meta_health.check_webhook_subscribed(
+                await safe_check("waba_subscribed", lambda: meta_health.check_webhook_subscribed(
                     waba.waba_id, creds.access_token, creds.app_secret, creds.graph_api_version, connection.id
                 ))
             ]
@@ -596,17 +631,17 @@ async def run_connection_production_checks(connection: Any, tenant_id: uuid.UUID
 
     # Webhook: la suscripción de la app de ESTA conexión al objeto de su canal (estado que
     # guarda el cron de 15 min) y, por número, que un override de webhook responda.
-    webhook = [await _safe("webhook", lambda: meta_health.check_app_subscription(connection))]
+    webhook = [await safe_check("webhook", lambda: meta_health.check_app_subscription(connection))]
     if creds is not None and connection.channel == "whatsapp":
         for phone in phones:
-            check = await _safe("webhook", lambda phone=phone: meta_health.check_webhook_override(
+            check = await safe_check("webhook", lambda phone=phone: meta_health.check_webhook_override(
                 phone.phone_number_id, creds.access_token, creds.app_secret, creds.graph_api_version, connection.id
             ))
             webhook.append(_with_number(check, phone.display_phone_number if len(phones) > 1 else None))
     items["webhook"] = combine_checks("webhook", webhook)
 
     if "templates_approved" in keys:
-        items["templates_approved"] = await _safe(
+        items["templates_approved"] = await safe_check(
             "templates_approved", lambda: check_minimum_templates(connection.id, tenant_id, [w.id for w in wabas])
         )
 

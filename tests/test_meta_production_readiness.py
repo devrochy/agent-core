@@ -15,6 +15,7 @@ import pytest
 
 import core.gateway.meta_production_readiness as readiness_mod
 from core.gateway.meta_production_readiness import (
+    check_meta_app_configured,
     check_no_secret_leak_in_templates,
     check_prod_secret_differs_from_dev,
     check_rls_tests_pass,
@@ -43,6 +44,45 @@ class _FakeClient:
 
     async def get(self, url, params=None):
         return self._response
+
+
+@pytest.mark.asyncio
+async def test_handshake_sin_https_falla_sin_llamar(monkeypatch):
+    def _prohibido(**_k):
+        raise AssertionError("no debe llamar a una URL sin HTTPS")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _prohibido)
+
+    check = await check_webhook_handshake("http://example.test/webhooks/whatsapp", "verify-tok")
+
+    assert check.ok is False
+    assert "HTTPS" in check.detail
+
+
+def _settings_meta(monkeypatch, **valores):
+    from core.config import get_settings
+
+    for nombre, valor in valores.items():
+        monkeypatch.setattr(get_settings(), nombre, valor)
+
+
+def test_variables_de_la_app_de_meta_completas(monkeypatch):
+    _settings_meta(monkeypatch, meta_app_id="app", meta_app_secret="s3cr3t-no-sale", meta_config_id="cfg")
+
+    check = check_meta_app_configured()
+
+    assert check.ok is True
+    assert "s3cr3t-no-sale" not in check.detail
+
+
+def test_variables_de_la_app_de_meta_nombra_las_que_faltan(monkeypatch):
+    _settings_meta(monkeypatch, meta_app_id="app", meta_app_secret="", meta_config_id="")
+
+    check = check_meta_app_configured()
+
+    assert check.ok is False
+    assert "META_APP_SECRET" in check.detail and "META_CONFIG_ID" in check.detail
+    assert "META_APP_ID" not in check.detail.replace("META_APP_SECRET", "")
 
 
 @pytest.mark.asyncio

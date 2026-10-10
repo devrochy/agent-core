@@ -3560,7 +3560,7 @@
           "admin · meta"
         ],
         "summary": "Promotion Verify",
-        "description": "Chequeos de producción con la app del negocio (nunca la de la plataforma), sin cambiar\nnada.",
+        "description": "Chequeos de producción con la app del negocio (nunca la de la plataforma), sin cambiar\nnada: el checklist por conexión de HU-CONN-07 más `own_app` y `real_number`.",
         "operationId": "promotion_verify_api_v1_admin_meta_connections__connection_id__promotion_verify_post",
         "parameters": [
           {
@@ -21385,53 +21385,11 @@
         ],
         "title": "PromiseStatusUpdate"
       },
-      "PromotionCheck": {
-        "properties": {
-          "key": {
-            "type": "string",
-            "title": "Key"
-          },
-          "ok": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ok"
-          },
-          "detail": {
-            "type": "string",
-            "title": "Detail"
-          },
-          "checked_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Checked At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "key",
-          "ok",
-          "detail"
-        ],
-        "title": "PromotionCheck"
-      },
       "PromotionChecks": {
         "properties": {
           "checks": {
             "items": {
-              "$ref": "#/components/schemas/PromotionCheck"
+              "$ref": "#/components/schemas/ReadinessItem"
             },
             "type": "array",
             "title": "Checks"
@@ -21441,7 +21399,8 @@
         "required": [
           "checks"
         ],
-        "title": "PromotionChecks"
+        "title": "PromotionChecks",
+        "description": "Los ítems del checklist por conexión (HU-CONN-07) más los de la promoción, con el mismo\nformato que \"Producción\" de la conexión."
       },
       "PromotionNumberIn": {
         "properties": {
@@ -21611,7 +21570,7 @@
           },
           "checks": {
             "items": {
-              "$ref": "#/components/schemas/PromotionCheck"
+              "$ref": "#/components/schemas/ReadinessItem"
             },
             "type": "array",
             "title": "Checks"
@@ -25080,12 +25039,8 @@
             "type": "boolean",
             "title": "Ready"
           },
-          "automatic": {
-            "items": {
-              "$ref": "#/components/schemas/EsAutomaticCheck"
-            },
-            "type": "array",
-            "title": "Automatic"
+          "platform_check": {
+            "$ref": "#/components/schemas/EsPlatformCheck"
           },
           "manual": {
             "items": {
@@ -25101,11 +25056,11 @@
           "config_id",
           "graph_api_version",
           "ready",
-          "automatic",
+          "platform_check",
           "manual"
         ],
         "title": "EmbeddedSignupRequirements",
-        "description": "`ready`: todo lo automático en verde y todo lo manual confirmado."
+        "description": "`ready`: la revisión de la plataforma en verde (`platform_check.ok`) y todo lo manual\nconfirmado."
       },
       "WizardCancelIn": {
         "properties": {
@@ -25214,40 +25169,52 @@
         ],
         "title": "EsStepIn"
       },
-      "EsAutomaticCheck": {
+      "EsPlatformCheck": {
         "properties": {
-          "key": {
+          "status": {
             "type": "string",
-            "title": "Key"
+            "enum": [
+              "never",
+              "queued",
+              "running",
+              "done",
+              "failed"
+            ],
+            "title": "Status"
           },
-          "label": {
-            "type": "string",
-            "title": "Label"
-          },
-          "ok": {
+          "finished_at": {
             "anyOf": [
               {
-                "type": "boolean"
+                "type": "string",
+                "format": "date-time"
               },
               {
                 "type": "null"
               }
             ],
+            "title": "Finished At"
+          },
+          "ok": {
+            "type": "boolean",
             "title": "Ok"
           },
-          "detail": {
-            "type": "string",
-            "title": "Detail"
+          "pending": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Pending"
           }
         },
         "type": "object",
         "required": [
-          "key",
-          "label",
+          "status",
+          "finished_at",
           "ok",
-          "detail"
+          "pending"
         ],
-        "title": "EsAutomaticCheck"
+        "title": "EsPlatformCheck",
+        "description": "Última revisión de \"Plataforma → App de Meta\" (HU-CONN-07). `ok`: terminó, sin ítems en\nrojo y con las variables de la app, el webhook y la suscripción en verde. `pending`: las\netiquetas de los ítems que lo impiden."
       },
       "TestMessageOptions": {
         "properties": {
