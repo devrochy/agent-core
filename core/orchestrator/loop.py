@@ -45,6 +45,7 @@ from core.memory import working as working_memory
 from core.observability.tracing import get_tracer, span_attributes
 from core.orchestrator.escalation import ESCALATION_REPLY, VERIFYING_REPLY, escalate
 from core.orchestrator.guardrails import MAX_GUARDRAIL_RETRIES, run_guardrails
+from core.orchestrator.referencias import cargar_referencias
 from core.orchestrator.safe_renderer import (
     TOOL_NAME_KEY,
     apply_safe_extras,
@@ -276,6 +277,10 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
 
     active_tools = [t for t in active_tools if await _connections_ok(t, connected_types)]
 
+    # Ids vigentes de la conversación (ADR-0130): el historial es solo texto y el modelo
+    # no ve el `quote_id` que devolvió una tool en un turno anterior.
+    referencias = await cargar_referencias(enabled, disabled_for_tenant, conversation_id, customer.id)
+
     prompt_ctx = PromptContext(
         assistant_name=app_settings.assistant_name if app_settings else settings.app_name,
         business_description=app_settings.business_description if app_settings else "",
@@ -289,6 +294,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         active_skills_summary=skills_summary(active_tools),
         recalled_memories=recalled,
         entity_profile=entity_memory.profile_to_prompt(profile),
+        referencias=referencias,
         # Zona del negocio para la fecha y hora actual del prompt (ADR-0091).
         timezone=(getattr(app_settings, "timezone", None) if app_settings else None) or DEFAULT_TIMEZONE,
     )

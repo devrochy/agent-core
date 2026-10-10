@@ -142,7 +142,7 @@ async def _crear_pedido(quote_id: str, ctx) -> dict:
 
 def _cotizacion_no_encontrada() -> dict:
     """Ajena o inexistente responden igual: no se revela que la cotización existe."""
-    from pack_commerce.skills import _cotizacion_no_encontrada as respuesta
+    from pack_commerce.skills import _sin_cotizacion_vigente as respuesta
 
     return respuesta()
 

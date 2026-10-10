@@ -19,7 +19,7 @@ from typing import Any
 from sqlalchemy import or_, select, text
 
 from core.db.session import get_owned, get_session
-from core.mcp.types import BaseSkill, MCPTool, ToolContext
+from core.mcp.types import BaseSkill, MCPTool, Referencia, ToolContext
 from core.memory import entity as entity_memory
 from core.provisioning.antiabuso import (
     FreeNoDisponible,
@@ -58,6 +58,8 @@ CUSTOMER_SEGMENTS = ("nuevo", "ocasional", "frecuente", "fiel", "inactivo")
 log = get_logger(__name__)
 
 ORDER_STATUS_ACTIVE = ("abierto", "despachado")
+# Una cotización "en curso": se puede confirmar o convertir en pedido (ADR-0130).
+QUOTE_STATUS_VIGENTE = ("draft", "aceptada")
 
 PAYMENT_METHODS = ("efectivo_contraentrega", "transferencia", "pago_en_linea")
 DELIVERY_METHODS = ("domicilio", "recoger_en_tienda")
@@ -262,6 +264,97 @@ async def _quote_del_cliente(session, quote_id, customer_id) -> Quote | None:  #
     ).scalar_one_or_none()
 
 
+async def _cotizacion_vigente(session, conversation_id, customer_id) -> Quote | None:  # type: ignore[no-untyped-def]
+    """La última cotización en curso de ESTA conversación y de ESTE cliente (ADR-0130).
+
+    Los ids salen del `ToolContext`, nunca del LLM: no se puede llegar a la cotización
+    de otro cliente ni a la de otra conversación del mismo cliente (un draft de hace
+    días no es lo que el cliente está aceptando ahora)."""
+    return (
+        await session.execute(
+            select(Quote)
+            .where(
+                Quote.tenant_id == get_current_tenant_id(),
+                Quote.customer_id == customer_id,
+                Quote.conversation_id == conversation_id,
+                Quote.status.in_(QUOTE_STATUS_VIGENTE),
+            )
+            .order_by(Quote.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def _cotizacion_no_encontrada(
+    context: ToolContext, sin_vigente: dict[str, Any], session=None  # type: ignore[no-untyped-def]
+) -> dict[str, Any]:
+    """Error de un `quote_id` que no existe (o no es del cliente). Si la conversación tiene
+    una cotización en curso, el error trae su id y su total para que el modelo reintente
+    con ella; nunca se usa en silencio, porque confirmar es aceptar un total concreto
+    (incidente en test, tenant solvershub, 2026-10-10: el modelo pasó el SKU, el número
+    de un pedido viejo y "Q-0001", y generó 6 cotizaciones sin cerrar el pedido)."""
+    if session is None:
+        async with get_session() as propia:
+            vigente = await _cotizacion_vigente(propia, context.conversation_id, context.customer_id)
+    else:
+        vigente = await _cotizacion_vigente(session, context.conversation_id, context.customer_id)
+    if vigente is None:
+        return sin_vigente
+    return {
+        "error": "Cotización no encontrada.",
+        "quote_id_vigente": str(vigente.id),
+        "estado_vigente": vigente.status,
+        "total_vigente": round(_float(vigente.total), 2),
+        "hint": (
+            "Esta conversación ya tiene una cotización en curso (quote_id_vigente). Si su "
+            "total es el que el cliente aceptó, repetí la llamada con ese quote_id; no "
+            "generes otra cotización."
+        ),
+    }
+
+
+async def referencias_vigentes(conversation_id: uuid.UUID, customer_id: uuid.UUID) -> list[Referencia]:
+    """Lo que el cliente está negociando en esta conversación, para el prompt (ADR-0130):
+    la cotización en curso y el último pedido. Estado actual de las tablas, no texto."""
+    tenant_id = get_current_tenant_id()
+    async with get_session() as session:
+        quote = await _cotizacion_vigente(session, conversation_id, customer_id)
+        order = (
+            await session.execute(
+                select(Order)
+                .where(
+                    Order.tenant_id == tenant_id,
+                    Order.customer_id == customer_id,
+                    Order.conversation_id == conversation_id,
+                )
+                .order_by(Order.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    referencias: list[Referencia] = []
+    if quote is not None:
+        referencias.append(
+            Referencia(
+                tipo="cotizacion",
+                datos=(("quote_id", quote.id), ("estado", quote.status), ("total", _float(quote.total))),
+            )
+        )
+    if order is not None:
+        referencias.append(
+            Referencia(
+                tipo="pedido",
+                datos=(
+                    ("order_id", order.id),
+                    ("numero", order.public_order_number),
+                    ("estado", order.status),
+                    ("estado_pago", order.payment_status),
+                    ("total", _float(order.total)),
+                ),
+            )
+        )
+    return referencias
+
+
 async def _order_del_cliente(session, order_id, customer_id) -> Order | None:  # type: ignore[no-untyped-def]
     """El pedido SOLO si es del cliente de la conversación (ver `_quote_del_cliente`)."""
     return (
@@ -275,8 +368,8 @@ async def _order_del_cliente(session, order_id, customer_id) -> Order | None:  #
     ).scalar_one_or_none()
 
 
-def _cotizacion_no_encontrada() -> dict[str, Any]:
-    """Ajena o inexistente responden igual (ver `_quote_del_cliente`). Entre turnos el modelo solo
+def _sin_cotizacion_vigente() -> dict[str, Any]:
+    """Error cuando no hay una cotización en curso a la cual apuntar. Ajena o inexistente responden igual (ver `_quote_del_cliente`). Entre turnos el modelo solo
     ve texto y pierde el `quote_id`: en test (2026-10-10) inventó `confirmar_cotizacion("Q-0001")`
     después de que la clienta aceptó. El `hint` le dice cómo recuperarlo en el mismo turno."""
     return {
@@ -1195,12 +1288,12 @@ class OrderSkill(BaseSkill):
     async def aplicar_promocion(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         quote_id = str(arguments.get("quote_id", ""))
         if _parse_uuid(quote_id) is None:
-            return _cotizacion_no_encontrada()
+            return await _cotizacion_no_encontrada(context, _sin_cotizacion_vigente())
         async with get_session() as session:
             tenant_id = get_current_tenant_id()
             quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             if quote is None:
-                return _cotizacion_no_encontrada()
+                return await _cotizacion_no_encontrada(context, _sin_cotizacion_vigente(), session)
             items = (
                 await session.execute(
                     select(QuoteItem).where(
@@ -1330,7 +1423,7 @@ class OrderSkill(BaseSkill):
         pero ningún código lo escribía jamás)."""
         quote_id = str(arguments.get("quote_id", ""))
         if _parse_uuid(quote_id) is None:
-            return _cotizacion_no_encontrada()
+            return await _cotizacion_no_encontrada(context, _sin_cotizacion_vigente())
         async with get_session() as session:
             # Defensa en profundidad además de RLS (mismo criterio que
             # calificar_lead/actualizar_lead, auditor-multitenant 2026-09-12):
@@ -1338,7 +1431,7 @@ class OrderSkill(BaseSkill):
             # customer_id para que no se pueda confirmar la de otro cliente.
             quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             if quote is None:
-                return _cotizacion_no_encontrada()
+                return await _cotizacion_no_encontrada(context, _sin_cotizacion_vigente(), session)
             if quote.status == "convertida":
                 return {"error": "Esta cotización ya se convirtió en un pedido."}
             if quote.status == "expirada":
@@ -1409,14 +1502,18 @@ class OrderSkill(BaseSkill):
         if delivery_method and delivery_method not in DELIVERY_METHODS:
             return {"error": "Método de entrega no válido. Usa 'domicilio' o 'recoger_en_tienda'."}
         if _parse_uuid(quote_id) is None:
-            return _cotizacion_no_encontrada()
+            return await _cotizacion_no_encontrada(
+                context, _sin_cotizacion_vigente()
+            )
 
         async with get_session() as session:
             # Defensa en profundidad además de RLS (auditor-multitenant 2026-09-12);
             # solo la cotización del cliente de la conversación (HU-SUB-07).
             quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             if quote is None:
-                return _cotizacion_no_encontrada()
+                return await _cotizacion_no_encontrada(
+                    context, _sin_cotizacion_vigente(), session
+                )
             existing_order = (
                 await session.execute(
                     select(Order).where(

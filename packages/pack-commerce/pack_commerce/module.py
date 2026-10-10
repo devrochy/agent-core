@@ -50,7 +50,13 @@ from pack_commerce.models import (
     Promotion,
     Quote,
 )
-from pack_commerce.skills import CatalogSkill, LeadSkill, OrderSkill, classify_customer
+from pack_commerce.skills import (
+    CatalogSkill,
+    LeadSkill,
+    OrderSkill,
+    classify_customer,
+    referencias_vigentes,
+)
 
 if TYPE_CHECKING:
     from core.mcp.host import MCPHost
@@ -106,7 +112,10 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
     "cotizacion_generada": (
         re.compile(
             r"\b(?:arm|gener)[eé]\s+(?:de\s+nuevo\s+)?(?:tu|la)\s+cotizaci[oó]n|"
-            r"\bcotizaci[oó]n\b(?:\W+\w+){0,2}\W+(?:armad|generad)\w*",
+            r"\bcotizaci[oó]n\b(?:\W+\w+){0,2}\W+(?:armad|generad)\w*|"
+            # El participio antes del sustantivo, anclado a un auxiliar: "quedó generada
+            # la cotización" afirma; "una vez generada la cotización…" no (2026-10-10).
+            r"\b(?:qued[oó]|est[aá]|fue)\s+(?:ya\s+)?(?:armad|generad)a\s+(?:tu|la)\s+cotizaci[oó]n",
             re.IGNORECASE,
         ),
         {"generar_cotizacion"},
@@ -114,7 +123,10 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
     "cotizacion_aceptada": (
         re.compile(
             r"\b(?:acept|confirm)[eé]\s+(?:tu|la)\s+cotizaci[oó]n|"
-            r"\bcotizaci[oó]n\b(?:\W+\w+){0,2}\W+(?:aceptad|confirmad)\w*",
+            r"\bcotizaci[oó]n\b(?:\W+\w+){0,2}\W+(?:aceptad|confirmad)\w*|"
+            # Test, tenant solvershub (2026-10-10): "ya quedó confirmada la cotización"
+            # sin `confirmar_cotizacion` pasó el verificador (`cierres: 0`).
+            r"\b(?:qued[oó]|est[aá]|fue)\s+(?:ya\s+)?(?:aceptad|confirmad)a\s+(?:tu|la)\s+cotizaci[oó]n",
             re.IGNORECASE,
         ),
         {"confirmar_cotizacion"},
@@ -1054,6 +1066,9 @@ class CRMModule(BaseModule):
         # Montos y afirmaciones de cierre los verifica el core (ADR-0119, HU-ARCH-29);
         # reemplaza a `crm_amount_check` y `crm_completion_check`.
         host.register_afirmaciones(self._afirmaciones)
+        # La cotización en curso y el último pedido de la conversación, para el prompt
+        # (ADR-0130): sin esto el modelo no ve el `quote_id` en el turno siguiente.
+        host.register_referencias(referencias_vigentes)
         # Catálogo de planes para el cambio de plan del core (HU-SUB-07, ADR-0111).
         from core.subscriptions import plan_catalog_registry
         from pack_commerce.planes import CatalogoDePlanes

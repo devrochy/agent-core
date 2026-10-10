@@ -23,6 +23,7 @@ from core.mcp.types import (
     GuardrailFn,
     MCPResource,
     MCPTool,
+    ReferenciasFn,
     ScopedHttp,
     SkillInfo,
     ToolContext,
@@ -42,6 +43,9 @@ class MCPHost:
         # Fuentes de afirmaciones de cierre por plugin (ADR-0119): el verificador
         # del core las pide en cada turno, solo de los packs habilitados.
         self._afirmaciones: dict[str, AfirmacionesFn] = {}
+        # Fuentes de referencias vigentes por plugin (ADR-0130): el loop las pide en cada
+        # turno, solo de los packs habilitados y sanos para el negocio.
+        self._referencias: dict[str, ReferenciasFn] = {}
         self._resources: dict[str, MCPResource] = {}
         self._plugin_handlers: dict[str, list[EventHandler]] = {}
         self._active_plugin: str = ""  # plugin en proceso de activación
@@ -102,6 +106,20 @@ class MCPHost:
         """Fuentes de afirmaciones por `plugin_id` (el loop filtra por packs habilitados)."""
         return dict(self._afirmaciones)
 
+    def register_referencias(self, fn: ReferenciasFn) -> None:
+        """Registra la fuente de referencias vigentes del plugin que se activa (ADR-0130).
+
+        `fn(conversation_id, customer_id)` se llama en cada turno dentro del
+        `tenant_scope` del negocio. Una por plugin."""
+        plugin_id = self._active_plugin
+        if plugin_id in self._referencias:
+            raise PluginError(plugin_id, "Referencias ya registradas")
+        self._referencias[plugin_id] = fn
+
+    def get_referencias(self) -> dict[str, ReferenciasFn]:
+        """Fuentes de referencias por `plugin_id` (el loop filtra por packs habilitados)."""
+        return dict(self._referencias)
+
     def register_resource(self, resource: MCPResource) -> None:
         resource.plugin_id = self._active_plugin
         self._resources[resource.uri] = resource
@@ -123,6 +141,7 @@ class MCPHost:
         self._skills = {k: v for k, v in self._skills.items() if v[1] != plugin_id}
         self._guardrails = [g for g in self._guardrails if g.plugin_id != plugin_id]
         self._afirmaciones.pop(plugin_id, None)
+        self._referencias.pop(plugin_id, None)
         self._resources = {k: v for k, v in self._resources.items() if v.plugin_id != plugin_id}
         handlers = self._plugin_handlers.pop(plugin_id, [])
         event_bus.unsubscribe_all(handlers)
