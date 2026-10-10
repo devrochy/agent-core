@@ -12,12 +12,17 @@ python evals/journeys.py 10,11 --k 4           # cada journey 4 veces: pass@1, p
 python evals/journeys.py --tenant solvershub    # set de un negocio contra una réplica de sus artefactos
 ```
 
+Con `--grabacion replay` corren sin red ni `LLM_API_KEY` desde las grabaciones de
+`evals/cassettes/journeys/<set>/`, y `--grabacion record` las regraba (gasta saldo: con OK del dueño).
+Ver [Grabar y reproducir el LLM](../README.md#grabar-y-reproducir-el-llm).
+
 **Solo en bases de prueba** (CI, nightly o un stack efímero local): cada corrida deja un negocio
 `journeys-*` y reemplaza la pasarela dentro del proceso. Con `APP_ENV=production` no arranca. Los
 jobs corren **solo sobre el negocio del journey**, nunca sobre otros negocios de la base.
 
 Cada corrida crea **un negocio de prueba** (`negocio.json` del set) y **un cliente nuevo por
-journey**. Los turnos usan el canal `test`: nada sale por WhatsApp. La corrida se guarda en
+journey**. Los turnos usan el canal `test`: nada sale por WhatsApp. Como el consumidor y el envío,
+el runner guarda en `messages` cada mensaje del cliente y cada respuesta. La corrida se guarda en
 `eval_runs` del negocio (`journeys:<set>@<versión del spec>`) y, con `--reporte`, en un JSON.
 
 ## Un set
@@ -28,7 +33,10 @@ journey**. Los turnos usan el canal `test`: nada sale por WhatsApp. La corrida s
   - `preset` y `plan` del negocio (o `packs` sueltos);
   - `catalogo` de commerce, que reemplaza los ejemplos del preset;
   - `config` por pack (sin secretos reales);
-  - `pagos_simulados.monto_minimo`, el mínimo de la pasarela real.
+  - `pagos_simulados.monto_minimo`, el mínimo de la pasarela real;
+  - `documentos_legales`: versiones de prueba de `terminos`, `privacidad` y `dpa`
+    (`[{"tipo", "version", "url"}]`), publicadas como desde Plataforma (`legal.publicar`). En un
+    vendedor, con los tres el pedido de un plan pide aceptarlos antes de crearse (ADR-0125).
 - `NN-nombre.json`: un journey con `nombre`, `descripcion`, `cliente` (opcional) y `pasos`.
 
 ## Set de un negocio (`--tenant`)
@@ -51,7 +59,9 @@ estar en `negocio.json` **y** en el runbook del negocio; si no, la réplica no e
 
 Los correos de sistema (invitación del alta, avisos) nunca salen: se guardan y el journey los lee
 como `{correos.ultimo.para}`, `{correos.ultimo.asunto}`. Para que cada intento sea un cliente nuevo
-(un Free por correo, cuentas globales), usa correos únicos: `ana+{cliente.id}@example.com`.
+(un Free por correo, cuentas globales), usa correos únicos: `ana+{cliente.id}@example.com`. Las
+reglas del alta también cuentan por documento y teléfono (un Free por persona, ADR-0125): usa
+`{cliente.documento}` y `{cliente.celular}`, únicos por intento.
 
 ## Pagos simulados
 
@@ -80,7 +90,8 @@ camino real del pack (capacidad, tool `generar_link_pago`, transacciones) sin re
 
 Las herramientas salen de `audit_log`. Sus resultados quedan como `{herramientas.<tool>.<campo>}`.
 
-Variables en strings: `{cliente.id}`, `{negocio.id}`, `{ahora}`, `{pagos.ultimo.reference}`,
+Variables en strings: `{cliente.id}`, `{cliente.documento}`, `{cliente.celular}` (10 dígitos,
+derivados del id del cliente), `{negocio.id}`, `{ahora}`, `{pagos.ultimo.reference}`,
 `{suscripcion.subscription_id}` y las filas guardadas.
 
 ## Consistencia (pass^k)

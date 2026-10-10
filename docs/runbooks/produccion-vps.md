@@ -226,6 +226,10 @@ docker exec -it <uuid-postgres> psql -U postgres -d agent_core
 -- sin superusuario, sin CREATEROLE ni CREATEDB.
 CREATE ROLE agent_core_migrations LOGIN NOSUPERUSER BYPASSRLS NOCREATEDB NOCREATEROLE;
 \password agent_core_migrations
+-- purge_tenant (borrado de un negocio) apaga los triggers con session_replication_role, que es
+-- de superusuario: la 0072 aborta sin este permiso. El dueño no puede concedérselo a sí mismo.
+-- Vale en todo el clúster (no por base). Nunca concederlo a app_runtime.
+GRANT SET ON PARAMETER session_replication_role TO agent_core_migrations;
 -- Runtime (API, worker y beat): RLS lo frena. Creado antes de migrar, la 0003 no le pone la
 -- clave de desarrollo.
 CREATE ROLE app_runtime LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
@@ -242,6 +246,16 @@ COMMENT ON DATABASE agent_core IS 'solvershub-produccion-vps';
 
 Con esas claves se arman `MIGRATIONS_DATABASE_URL` (solo la API) y `DATABASE_URL` (API, worker y
 beat). Si una clave tiene caracteres especiales (`@ : / ? # %`), va codificada en la URL.
+
+**Base que ya pasó por este paso sin el `GRANT SET ON PARAMETER`** (se agregó con la migración
+`0072`): correrlo como superusuario antes de desplegar la versión que trae la `0072`; si no, la API
+no arranca porque la migración aborta. Es un permiso del clúster: `pg_dump` de la base no lo lleva.
+Comprobación (tiene que dar `t`):
+
+```sql
+SELECT rolsuper OR has_parameter_privilege('agent_core_migrations', 'session_replication_role', 'SET')
+FROM pg_roles WHERE rolname = 'agent_core_migrations';
+```
 
 ### 4.4 Recurso Redis
 

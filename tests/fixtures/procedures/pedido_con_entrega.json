@@ -1,0 +1,41 @@
+{
+  "contract": "procedure/1",
+  "id": "pack_commerce.pedido_con_entrega",
+  "version": "1.0.0",
+  "requires": ["pack_payments"],
+  "title": "Pedido con entrega",
+  "triggers": {
+    "description": "El cliente quiere comprar productos y recibirlos a domicilio o recogerlos",
+    "examples": ["quiero pedir dos camisetas", "me lo envían a la casa", "lo recojo en la tienda"]
+  },
+  "slots": {
+    "cotizacion_id": { "type": "string", "setBy": "action:generar_cotizacion" },
+    "metodo_entrega": { "enum": ["domicilio", "recoger_en_tienda"], "required": true },
+    "ubicacion": { "type": "location", "setBy": "content:location", "dataClass": "pii" },
+    "direccion": { "type": "string", "requiredWhen": { "slot": "metodo_entrega", "equals": "domicilio" },
+                   "confirm": true, "dataClass": "pii" },
+    "pedido_id": { "type": "string", "setBy": "action:crear_pedido" },
+    "link_pago": { "type": "string", "format": "uri", "setBy": "action:generar_link_pago" }
+  },
+  "stages": [
+    { "id": "elegir_productos", "goal": "Armar la cotización con precios y stock reales",
+      "actions": ["consultar_inventario", "recomendar_producto", "generar_cotizacion", "aplicar_promocion"],
+      "exitWhen": { "slots": ["cotizacion_id"] } },
+    { "id": "entrega", "goal": "Saber cómo recibe el pedido y, si es a domicilio, confirmar la dirección",
+      "actions": [], "exitWhen": { "slots": ["metodo_entrega", "direccion"], "confirmed": ["direccion"] } },
+    { "id": "confirmar", "goal": "Mostrar el total del servidor y pedir confirmación explícita",
+      "actions": ["confirmar_cotizacion"], "confirmation": "interactive_button",
+      "exitWhen": { "action": "confirmar_cotizacion", "ok": true } },
+    { "id": "pagar", "goal": "Crear el pedido y enviar el link de pago", "risk": "high",
+      "actions": ["crear_pedido", "agregar_item_pedido", "generar_link_pago"],
+      "exitWhen": { "slots": ["pedido_id", "link_pago"] } }
+  ],
+  "completion": { "events": ["pack_payments.pago_confirmado"], "returnControl": true },
+  "recovery": { "actionError": "explicar_y_reintentar_una_vez", "timeout": "relevo_humano" },
+  "claims": [
+    { "kind": "amount", "mustMatch": ["action:generar_cotizacion.total"] },
+    { "kind": "link", "mustMatch": ["slot:link_pago"] },
+    { "kind": "status", "phrases": ["pedido creado", "tu pedido quedó"], "requires": "slot:pedido_id" }
+  ],
+  "evals": ["pedido-domicilio-sin-direccion", "pedido-recoger-en-tienda"]
+}

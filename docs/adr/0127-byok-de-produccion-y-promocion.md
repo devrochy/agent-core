@@ -10,6 +10,8 @@
     BYOK guarda un `verify_token` propio, el que escribe el admin o uno aleatorio;
   - enmienda ADR-0102 (mejorar solo con diagnóstico verificado): una conexión `pending` que solo esperaba el
     registro del número pasa a `connected` cuando Meta acepta el registro.
+- **Seguimiento (2026-10-09):** con HU-CONN-07 (#354) ya en `develop`, "Verificar y terminar" usa su checklist por
+  conexión y `checks_de_su_app` se borró (§4).
 - **Extendido por:** [ADR-0128](0128-embedded-signup-real.md) (HU-SH-05): el PIN obligatorio en producción (§2) y el
   paso de `pending` a `connected` al registrar también rigen para Embedded Signup.
 - **Contexto:** HU-CONN-06 (issue agent-core #338), SPEC-08 · Hito 0A (D-30). Depende de HU-CONN-01 (ADR-0094) y
@@ -68,7 +70,7 @@
       toca**: sus testers siguen funcionando;
    2. **Registro** con el PIN en la conexión de producción, la misma ruta del punto 2;
    3. **Plantillas**: al menos una `APPROVED` en la WABA del número real;
-   4. **Verificar y terminar** (`terminar_promocion`): corre `checks_de_su_app` sobre la de producción y, si pasan
+   4. **Verificar y terminar** (`terminar_promocion`): corre `checks_de_produccion` (§4) sobre la de producción y, si pasan
       (`puede_terminar`), da de baja la de prueba con `soft_delete_connection` (ADR-0122: tokens revocados,
       números y WABAs con `deleted_at`, razón "Reemplazada por la conexión de producción de la misma app"). No
       cambia el estado de la de producción (ADR-0102). No hay candado entre los chequeos y la baja: lo peor de
@@ -80,25 +82,30 @@
 
    El estado (`GET .../promotion`) se calcula con lo guardado, sin llamar a Meta: la "pareja" de producción es la
    conexión viva de producción con la misma app. Leer el estado pide la sección `connections`; cargar el número y
-   terminar, además, propietario o master. "Verificar" y "Terminar" se limitan a uno cada 10 s por conexión
-   (varias llamadas a Graph con la cuota del negocio) y responden 404 antes del límite si la conexión es ajena.
-4. **Chequeos con la app del negocio** (`checks_de_su_app`). Todo sale de `credentials_for` (ADR-0094): el token,
-   el App ID y el App Secret de la conexión. Revisa que la app sea propia (`own_app`), el token con `debug_token`
-   de **su** app, la suscripción guardada de **su** app al objeto `whatsapp_business_account`, cada número
-   (`account_mode = LIVE` y registrado), que la WABA esté suscrita a **su** app (no basta "alguna app", ADR-0102)
-   y las plantillas aprobadas. Nada usa `META_APP_ID`/`META_APP_SECRET`. Para terminar, ninguno puede dar `False`
-   y `own_app`, `token_valid`, `real_number`, `number_registered` y `waba_subscribed_to_own_app` tienen que dar
-   `True` (un `None` porque Meta no respondió no alcanza). `/promotion/verify` también acepta una BYOK creada
-   directo en producción: es su propia pareja (criterio 4 de la HU).
+   terminar, además, propietario o master. "Verificar" y "Terminar" se limitan a uno a la vez por negocio, con
+   10 s de espera después y un tope de 60 s (varias llamadas a Graph con la cuota del negocio, en el request), y
+   responden 404 antes del límite si la conexión es ajena.
+4. **Chequeos con la app del negocio** (`checks_de_produccion`). La base es el checklist por conexión de HU-CONN-07
+   (`meta_production_readiness.run_connection_production_checks`): token, número registrado, WABA suscrita, webhook
+   (la suscripción de **su** app y el override de cada número) y plantillas mínimas aprobadas (al menos una y las de
+   los avisos), todo con `credentials_for` (ADR-0094): el token, el App ID y el App Secret de la conexión. La
+   promoción le suma lo que ese checklist no mira: que la app sea propia (`own_app`), que cada número sea real
+   (`real_number`, `account_mode = LIVE`), el registro de este ADR (`platform_type = CLOUD_API`) dentro del ítem
+   `number_registered`, y que la WABA esté suscrita a **su** app según Meta (no basta "alguna app", ADR-0102)
+   dentro del ítem `waba_subscribed`. Nada usa `META_APP_ID`/`META_APP_SECRET`. Para terminar, ninguno puede dar
+   `False` y `own_app`, `token`, `number_registered`, `real_number`, `waba_subscribed` y `templates_approved`
+   tienen que dar `True` (un `None` porque Meta no respondió no alcanza; el webhook puede quedar sin dato hasta que
+   el cron lea la suscripción). La API devuelve los ítems con el formato del checklist (`ReadinessItem`: etiqueta y
+   acción de reparación). `/promotion/verify` también acepta una BYOK creada directo en producción: es su propia
+   pareja (criterio 4 de la HU).
 5. **`verify_token` propio en cada alta BYOK.** Si el admin no escribe uno, se genera con `secrets.token_urlsafe`
    y se guarda (`webhook_verify_token`). Es el que se registra en la app del negocio y el que acepta el handshake
    de esa conexión (ADR-0126 §4). El admin no lo necesita: la suscripción se registra por API.
 
 No hay migración: `environment`, `phone_numbers.raw`/`registered`/`platform_type` y los estados ya existen.
 
-**Cuando entre HU-CONN-07 (#354)**, su checklist por conexión pasa a ser la fuente: `terminar_promocion` debe
-consumirlo (sumándole `own_app` y "WABA suscrita a su app" si no los tiene) y `checks_de_su_app` se borra. Queda
-en el BACKLOG.
+El checklist por conexión de HU-CONN-07 (#354) es la fuente de los chequeos: `checks_de_su_app`, la lista propia
+que tenía la promoción mientras #354 no estaba en `develop`, se borró.
 
 ## Alternativas consideradas
 
@@ -126,7 +133,9 @@ en el BACKLOG.
 - La pantalla de estado no llama a Meta: muestra el último dato guardado. "Verificar" y "Terminar" sí consultan.
 - La guarda de `uses_platform_app` por `meta_app_id` sigue: puede haber filas viejas con el App ID de la
   plataforma. Sale cuando la consulta previa al despliegue de ADR-0126 confirme que no hay.
-- Hasta que entre #354 conviven dos listas de chequeos por conexión (esta y la de HU-CONN-07).
+- "Verificar" corre el checklist en el request (como antes su lista propia), no como job: lo limitan el candado
+  por negocio, la espera de 10 s y el tope de 60 s. El número se consulta dos veces en Graph (el checklist y
+  `real_number`).
 - El alta BYOK de producción contra Meta real (app en modo Live, System User, PIN) la documenta el dueño en test;
   los tests usan un Graph falso.
 

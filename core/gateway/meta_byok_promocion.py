@@ -12,10 +12,10 @@ nunca se responden desde el número real (ADR-0122 §3). El panel guía cuatro p
    `MOTIVO_NUMERO_SIN_REGISTRAR` si falta el PIN. Mientras tanto la de prueba sigue igual.
 2. **Registro** con el PIN (`meta_numbers_service.register_number`, la ruta de "Números").
 3. **Plantillas**: al menos una aprobada en la WABA del número real.
-4. **Verificar y terminar** (`terminar_promocion`): `checks_de_su_app` sobre la conexión de
-   producción, con la app del negocio (nunca la de la plataforma). Si pasan, se da de baja la
-   de prueba. No cambia el estado de la de producción (ADR-0102: mejorar lo decide el
-   diagnóstico o el registro).
+4. **Verificar y terminar** (`terminar_promocion`): `checks_de_produccion` sobre la conexión
+   de producción: el checklist por conexión de HU-CONN-07 con la app del negocio (nunca la de la
+   plataforma), más lo propio de la promoción. Si pasan, se da de baja la de prueba. No cambia
+   el estado de la de producción (ADR-0102: mejorar lo decide el diagnóstico o el registro).
 
 El estado sale de lo guardado: la "pareja" de producción es la conexión viva de WhatsApp del
 negocio con la misma app y `environment = production` (el índice único
@@ -25,6 +25,7 @@ negocio con la misma app y `environment = production` (el índice único
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -45,6 +46,9 @@ from core.shared.logger import get_logger
 log = get_logger(__name__)
 
 ACCOUNT_MODE_LIVE = "LIVE"
+# Tope de los chequeos de "Verificar"/"Terminar", que corren en el request (varias llamadas a
+# Graph y el GET al override de webhook de cada número).
+TOPE_CHEQUEOS_S = 60
 MOTIVO_REEMPLAZADA = "Reemplazada por la conexión de producción de la misma app"
 
 
@@ -278,11 +282,15 @@ async def cargar_numero_real(
     return produccion
 
 
-def _check(key: str, ok: bool | None, detail: str) -> PreflightCheck:
-    return PreflightCheck(key=key, ok=ok, detail=detail, checked_at=datetime.now(UTC))
+def _check(key: str, ok: bool | None, detail: str, repair_action: str | None = None) -> PreflightCheck:
+    return PreflightCheck(key=key, ok=ok, detail=detail, checked_at=datetime.now(UTC), repair_action=repair_action)
 
 
-async def _checks_del_numero(phone: PhoneNumber, creds: Any) -> list[PreflightCheck]:
+async def _checks_del_numero(phone: PhoneNumber, creds: Any) -> tuple[PreflightCheck, PreflightCheck]:
+    """`(real_number, registro)` de un número, con una sola llamada a Graph.
+
+    El registro es el de ADR-0127 (`numero_registrado`: `platform_type = CLOUD_API`) y se
+    suma al ítem `number_registered` del checklist, que mira `status`."""
     try:
         data = await graph_fetch(
             f"/{phone.phone_number_id}", token=creds.access_token, app_secret=creds.app_secret,
@@ -290,7 +298,7 @@ async def _checks_del_numero(phone: PhoneNumber, creds: Any) -> list[PreflightCh
             connection_id=creds.connection_id, tenant_id=creds.tenant_id,
         )
     except GraphError as exc:
-        return [_check("real_number", False, exc.message)]
+        return _check("real_number", False, exc.message), _check("number_registered", None, exc.message)
     data = data or {}
     modo = data.get("account_mode")
     real = _check(
@@ -299,109 +307,154 @@ async def _checks_del_numero(phone: PhoneNumber, creds: Any) -> list[PreflightCh
         "Número real" if modo == ACCOUNT_MODE_LIVE else f"account_mode={modo!r}: no es un número de producción",
     )
     registrado = numero_registrado(data)
-    return [
-        real,
-        _check(
-            "number_registered",
-            registrado,
-            "Registrado en la Cloud API" if registrado else "Falta registrarlo en la Cloud API con su PIN",
-        ),
-    ]
+    return real, _check(
+        "number_registered",
+        registrado,
+        "Registrado en la Cloud API" if registrado else "Falta registrarlo en la Cloud API con su PIN",
+        None if registrado else "add_number",
+    )
 
 
 async def _check_waba_en_su_app(waba_id: str, creds: Any) -> PreflightCheck:
     """La WABA está suscrita a la app DEL NEGOCIO (no basta "alguna app": ADR-0102)."""
+    key = "waba_subscribed"
     try:
         data = await graph_fetch(
             f"/{waba_id}/subscribed_apps", token=creds.access_token, app_secret=creds.app_secret,
             version=creds.graph_api_version, connection_id=creds.connection_id, tenant_id=creds.tenant_id,
         )
     except GraphError as exc:
-        return _check("waba_subscribed_to_own_app", False, exc.message)
+        return _check(key, False, exc.message, "subscribe_waba")
     apps = [item for item in (data or {}).get("data") or [] if isinstance(item, dict)]
     ids = {
         str((item.get("whatsapp_business_api_data") or {}).get("id") or item.get("id") or "") for item in apps
     } - {""}
     if creds.app_id in ids:
-        return _check("waba_subscribed_to_own_app", True, f"La WABA está suscrita a tu app {creds.app_id}")
+        return _check(key, True, f"La WABA está suscrita a tu app {creds.app_id}")
     if ids:
-        return _check(
-            "waba_subscribed_to_own_app", False, "La WABA está suscrita a otra app, no a la tuya: suscríbela"
-        )
+        return _check(key, False, "La WABA está suscrita a otra app, no a la tuya: suscríbela", "subscribe_waba")
     if apps:
-        return _check("waba_subscribed_to_own_app", None, "Meta no dijo a qué app está suscrita la WABA")
-    return _check("waba_subscribed_to_own_app", False, "La WABA no está suscrita a ninguna app: suscríbela")
+        return _check(key, None, "Meta no dijo a qué app está suscrita la WABA")
+    return _check(key, False, "La WABA no está suscrita a ninguna app: suscríbela", "subscribe_waba")
 
 
-async def checks_de_su_app(connection: MetaConnection) -> list[PreflightCheck]:
-    """Chequeos de producción de una conexión BYOK con la app DEL NEGOCIO (HU-CONN-06).
+# Lo que la promoción suma al checklist por conexión (HU-CONN-07): que la app sea propia y que
+# el número sea real (no el de prueba de Meta).
+PROMOCION_ITEM_LABELS: dict[str, str] = {
+    "own_app": "Tu propia app de Meta",
+    "real_number": "Número real (no el de prueba de Meta)",
+}
 
-    Todo sale de `credentials_for` (su token, su App ID y su App Secret, ADR-0094); nada usa
-    `META_APP_ID`/`META_APP_SECRET` de la plataforma. Para terminar la promoción, ninguno
-    puede dar `False` y los de `CHECKS_OBLIGATORIOS` tienen que dar `True` (`puede_terminar`).
-    Sirve también para una BYOK creada directo en producción (criterio 4 de HU-CONN-06)."""
+
+def promotion_item_labels() -> dict[str, str]:
+    from core.gateway.meta_production_readiness import CONNECTION_ITEM_LABELS
+
+    return {**CONNECTION_ITEM_LABELS, **PROMOCION_ITEM_LABELS}
+
+
+async def _chequear_con_tope(connection: MetaConnection) -> list[PreflightCheck]:
+    try:
+        return await asyncio.wait_for(checks_de_produccion(connection), TOPE_CHEQUEOS_S)
+    except TimeoutError as exc:
+        log.warning("promocion_chequeos_tope", tenant_id=str(connection.tenant_id), connection_id=str(connection.id))
+        raise PromocionError(
+            "Meta tardó demasiado en responder los chequeos: vuelve a intentarlo en unos minutos",
+            code="checks_timeout",
+            status=504,
+        ) from exc
+
+
+async def checks_de_produccion(connection: MetaConnection) -> list[PreflightCheck]:
+    """Chequeos para pasar a producción una conexión BYOK (HU-CONN-06 sobre HU-CONN-07).
+
+    La base es el checklist por conexión de HU-CONN-07 (`run_connection_production_checks`:
+    token, número registrado, WABA suscrita, webhook y plantillas mínimas), con las
+    credenciales de ESA conexión (`credentials_for`, ADR-0094): nada usa `META_APP_ID`/
+    `META_APP_SECRET`. La promoción le suma lo que ese checklist no mira (ADR-0127):
+
+    - `own_app`: la conexión usa su propia app, no la de la plataforma;
+    - `real_number`: cada número está en `account_mode = LIVE`;
+    - al ítem `number_registered`, el registro de ADR-0127 (`platform_type = CLOUD_API`);
+    - al ítem `waba_subscribed`, que la WABA esté suscrita a **su** app según Meta (el checklist
+      solo pide "alguna app" más la marca local del alta).
+
+    Para terminar, ninguno puede dar `False` y los de `CHECKS_OBLIGATORIOS` tienen que dar `True`
+    (`puede_terminar`). Sirve también para una BYOK creada directo en producción."""
     from core.gateway.meta_credentials import (
         CredentialsUnavailable,
         credentials_for,
         uses_platform_app,
     )
-    from core.gateway.meta_health import check_app_subscription, check_token_valid
+    from core.gateway.meta_production_readiness import (
+        combine_checks,
+        run_connection_production_checks,
+        safe_check,
+    )
 
     if uses_platform_app(connection):
-        return [_check("own_app", False, "La conexión usa la app de la plataforma, no una propia")]
+        return [_check("own_app", False, "La conexión usa la app de la plataforma, no una propia", "reauthorize")]
+
+    checklist = await run_connection_production_checks(connection, connection.tenant_id)
     try:
         creds = await credentials_for(connection)
-    except CredentialsUnavailable as exc:
-        return [_check("token_valid", False, exc.message)]
+    except CredentialsUnavailable:
+        # Sin credenciales el checklist ya deja `token` en rojo y lo que depende de Meta sin dato.
+        creds = None
 
-    checks = [
-        _check("own_app", True, f"Se evalúa tu app de Meta {creds.app_id}"),
-        await check_token_valid(
-            creds.access_token, creds.app_id, creds.app_secret, creds.graph_api_version,
-            connection_id=connection.id, tenant_id=connection.tenant_id,
-        ),
-        # Estado de la suscripción de SU app (la guarda el alta y el cron de 15 min).
-        await check_app_subscription(connection),
-    ]
     async with get_session() as session:
         numeros = await _numeros_vivos(session, connection)
         wabas = list(
             (
                 await session.execute(
-                    select(WabaAccount).where(
+                    select(WabaAccount)
+                    .where(
                         WabaAccount.tenant_id == connection.tenant_id,
                         WabaAccount.connection_id == connection.id,
                         WabaAccount.deleted_at.is_(None),
                     )
+                    .order_by(WabaAccount.created_at)
                 )
             ).scalars()
         )
-        aprobadas = 0
-        for waba in wabas:
-            aprobadas += await _plantillas_aprobadas(session, connection.tenant_id, waba.id)
 
-    if not numeros:
-        checks.append(_check("real_number", False, "La conexión no tiene número: carga el número real"))
-    for numero in numeros:
-        checks.extend(await _checks_del_numero(numero, creds))
-    if not wabas:
-        checks.append(_check("waba_subscribed_to_own_app", False, "Falta la WABA del número real"))
-    for waba in wabas:
-        checks.append(await _check_waba_en_su_app(waba.waba_id, creds))
-    checks.append(
-        _check(
-            "templates",
-            aprobadas > 0,
-            f"{aprobadas} plantilla{'s' if aprobadas != 1 else ''} aprobada{'s' if aprobadas != 1 else ''}"
-            if aprobadas
-            else "Sin plantillas aprobadas: crea una o sincronízalas en Plantillas",
-        )
-    )
+    reales: list[PreflightCheck] = []
+    registros: list[PreflightCheck] = []
+    en_su_app: list[PreflightCheck] = []
+    if creds is not None:
+        for numero in numeros:
+            try:
+                real, registro = await _checks_del_numero(numero, creds)
+            except Exception as exc:
+                # Un error de red que no llega como `GraphError`: sin dato (bloquea, es obligatorio),
+                # nunca un 500 con el texto de la excepción.
+                log.warning("promocion_numero_sin_dato", connection_id=str(connection.id), error=type(exc).__name__)
+                sin_dato = f"No se pudo consultar a Meta ({type(exc).__name__})"
+                real, registro = _check("real_number", None, sin_dato), _check("number_registered", None, sin_dato)
+            reales.append(real)
+            registros.append(registro)
+        for waba in wabas:
+            en_su_app.append(
+                await safe_check("waba_subscribed", lambda waba=waba: _check_waba_en_su_app(waba.waba_id, creds))
+            )
+
+    sumados = {"number_registered": registros, "waba_subscribed": en_su_app}
+    checks = [_check("own_app", True, f"Se evalúa tu app de Meta {connection.meta_app_id}")]
+    for item in checklist:
+        extra = sumados.get(item.key) or []
+        checks.append(combine_checks(item.key, [item, *extra]) if extra else item)
+        if item.key == "number_registered":
+            if reales:
+                checks.append(combine_checks("real_number", reales))
+            elif not numeros:
+                checks.append(_check("real_number", False, "La conexión no tiene número: carga el número real", "add_number"))
+            else:
+                checks.append(_check("real_number", None, "No se pudo revisar: la conexión no tiene credenciales utilizables."))
     return checks
 
 
-# Sin estos en `True` no se pasa a producción: un `None` (Meta no respondió) no alcanza.
-CHECKS_OBLIGATORIOS = ("own_app", "token_valid", "real_number", "number_registered", "waba_subscribed_to_own_app")
+# Sin estos en `True` no se pasa a producción: un `None` (Meta no respondió) no alcanza. El
+# webhook puede quedar sin dato (el cron de 15 min todavía no leyó la suscripción de la app).
+CHECKS_OBLIGATORIOS = ("own_app", "token", "number_registered", "real_number", "waba_subscribed", "templates_approved")
 
 
 def puede_terminar(checks: list[PreflightCheck]) -> bool:
@@ -425,7 +478,7 @@ async def verificar_promocion(tenant_id: uuid.UUID, connection_id: uuid.UUID) ->
         pareja = await _pareja_de_produccion(session, connection)
     if pareja is None:
         raise PromocionError("Primero carga el número real", code="missing_real_number")
-    return await checks_de_su_app(pareja)
+    return await _chequear_con_tope(pareja)
 
 
 async def terminar_promocion(
@@ -443,7 +496,7 @@ async def terminar_promocion(
         pareja = await _pareja_de_produccion(session, connection)
         if pareja is None:
             raise PromocionError("Primero carga el número real", code="missing_real_number")
-    checks = await checks_de_su_app(pareja)
+    checks = await _chequear_con_tope(pareja)
     if not puede_terminar(checks):
         return False, checks, pareja.id
 
