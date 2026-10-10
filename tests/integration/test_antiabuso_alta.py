@@ -391,21 +391,35 @@ async def test_la_aceptacion_queda_registrada_y_llega_al_negocio_nuevo(vendedore
 
 
 async def test_una_version_nueva_pide_aceptar_otra_vez(vendedores, silencio) -> None:
+    """Si entre que se mostraron los enlaces y que el cliente aceptó se publica otra versión, el
+    «sí» que ya llegó no acepta la nueva: hace falta un mensaje posterior a los enlaces nuevos
+    (el marcador es por juego de versiones)."""
     from core.provisioning import legal
 
     vendedor = await _vendedor()
     vendedores(vendedor)
     await publicar_documentos(vendedor, version="v1")
     cliente = await _cliente(vendedor)
-    primero = await _pedir(vendedor, cliente, _datos())
+    datos = _datos()
+    primero = await _pedir(vendedor, cliente, datos)
+    await _mensaje_del_cliente(vendedor, cliente)  # acepta la v1...
 
-    # Llega el texto del abogado: se publica otra versión, sin tocar código.
+    # ...pero antes llega el texto del abogado: otra versión, sin tocar código.
     await legal.publicar(vendedor, tipo="terminos", version="v2", url="https://solvershub.test/terminos/v2", por="test")
-    segundo = await _pedir(vendedor, cliente, _datos(acepta_terminos=primero["acepta_terminos"]))
+    segundo = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": primero["acepta_terminos"]})
 
     assert segundo["status"] == "terminos_pendientes"
     assert segundo["acepta_terminos"] != primero["acepta_terminos"]
     assert {d["tipo"]: d["version"] for d in segundo["documentos"]}["terminos"] == "v2"
+    mismo_turno = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": segundo["acepta_terminos"]})
+    assert mismo_turno["status"] == "terminos_pendientes"
+
+    acepta_v2 = await _mensaje_del_cliente(vendedor, cliente)
+    aceptado = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": segundo["acepta_terminos"]})
+    assert aceptado["status"] == "confirmed", aceptado
+    registro = await _pedido_de_alta(vendedor, aceptado["public_order_number"])
+    assert registro.aceptacion["mensaje_id"] == str(acepta_v2)
+    assert {d["tipo"]: d["version"] for d in registro.aceptacion["documentos"]}["terminos"] == "v2"
     with pytest.raises(legal.VersionRepetida):
         await legal.publicar(vendedor, tipo="terminos", version="v2", url="https://solvershub.test/x", por="test")
 
@@ -435,6 +449,38 @@ async def test_el_token_solo_vale_con_un_mensaje_posterior_del_cliente_y_en_su_c
     assert aceptado["status"] == "confirmed", aceptado
     registro = await _pedido_de_alta(vendedor, aceptado["public_order_number"])
     assert registro.aceptacion["mensaje_id"] == str(mensaje)
+
+
+@pytest.mark.aislamiento
+async def test_en_el_turno_que_acepta_una_llamada_sin_token_no_invalida_la_aceptacion(vendedores, silencio) -> None:
+    """La secuencia real del loop (journey 05): el historial entre turnos es solo texto, así que
+    en el turno en que el cliente acepta el modelo suele llamar primero sin el token (o con
+    `true`) y después con el token que le devuelve esa misma llamada. El marcador de «hasta qué
+    mensaje se mostraron los enlaces» es fijo por juego de versiones: esas llamadas no lo mueven
+    y el mensaje que acepta sigue siendo posterior."""
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    await publicar_documentos(vendedor, version="v3")
+    cliente = await _cliente(vendedor)
+    datos = _datos()
+
+    # Turno 1: el cliente pide el plan; la tool devuelve los enlaces.
+    primero = await _pedir(vendedor, cliente, datos)
+    assert primero["status"] == "terminos_pendientes"
+
+    # Turno 2: el cliente acepta; el modelo llama sin token, con `true` y luego con el token.
+    acepta = await _mensaje_del_cliente(vendedor, cliente, "Sí, acepto los términos, la privacidad y el DPA.")
+    sin_token = await _pedir(vendedor, cliente, datos)
+    assert sin_token["status"] == "terminos_pendientes"
+    assert sin_token["acepta_terminos"] == primero["acepta_terminos"]  # el token es estable
+    con_true = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": True})
+    assert con_true["status"] == "terminos_pendientes"
+    aceptado = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": sin_token["acepta_terminos"]})
+
+    assert aceptado["status"] == "confirmed", aceptado
+    registro = await _pedido_de_alta(vendedor, aceptado["public_order_number"])
+    assert registro.aceptacion["mensaje_id"] == str(acepta)
+    assert {d["version"] for d in registro.aceptacion["documentos"]} == {"v3"}
 
 
 async def test_un_free_con_un_producto_pago_al_lado_sigue_siendo_un_free(vendedores, silencio) -> None:

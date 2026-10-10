@@ -280,8 +280,10 @@ def token_de_terminos(conversation_id: uuid.UUID | None, version: str) -> str:
     return hmac.new(_clave(), mensaje, hashlib.sha256).hexdigest()[:16]
 
 
-def _clave_de_terminos(vendedor: uuid.UUID, conversation_id: uuid.UUID | None) -> str:
-    return f"alta:terminos:{vendedor}:{conversation_id}"
+def _clave_de_terminos(vendedor: uuid.UUID, conversation_id: uuid.UUID | None, version: str) -> str:
+    """Un marcador por conversación **y juego de versiones**: publicar otra versión arranca uno
+    nuevo, así el «sí» a la anterior no acepta la nueva."""
+    return f"alta:terminos:{vendedor}:{conversation_id}:{version}"
 
 
 async def _ultimo_inbound(vendedor: uuid.UUID, conversation_id: uuid.UUID) -> datetime | None:
@@ -298,10 +300,19 @@ async def _ultimo_inbound(vendedor: uuid.UUID, conversation_id: uuid.UUID) -> da
         ).scalar_one_or_none()
 
 
-async def _anotar_terminos_mostrados(vendedor: uuid.UUID, conversation_id: uuid.UUID | None) -> None:
-    """Hasta qué mensaje del cliente se mostraron los enlaces: la aceptación tiene que venir
-    en un mensaje POSTERIOR. Se guarda la hora de la base del último mensaje del cliente (no
-    el reloj de la app), así el mensaje que disparó este turno nunca cuenta como aceptación."""
+async def _anotar_terminos_mostrados(
+    vendedor: uuid.UUID, conversation_id: uuid.UUID | None, version: str
+) -> None:
+    """Hasta qué mensaje del cliente se mostraron los enlaces de este juego de versiones: la
+    aceptación tiene que venir en un mensaje POSTERIOR. Se guarda la hora de la base del último
+    mensaje del cliente (no el reloj de la app), así el mensaje que disparó este turno nunca
+    cuenta como aceptación.
+
+    El marcador es **fijo** (`SET NX`): lo pone la primera vez que se muestran los enlaces y no
+    lo mueven las llamadas siguientes. Entre turnos el modelo solo ve texto, así que en el turno
+    en que el cliente acepta suele llamar primero sin el token (o con `true`); si esa llamada
+    moviera el marcador al mensaje que acepta, el reintento con el token ya no tendría un mensaje
+    posterior y nadie podría contratar (journey 05, 2026-10-09)."""
     from core.memory.working import get_redis
 
     if conversation_id is None:
@@ -309,21 +320,26 @@ async def _anotar_terminos_mostrados(vendedor: uuid.UUID, conversation_id: uuid.
     ultimo = await _ultimo_inbound(vendedor, conversation_id)
     marca = ultimo.isoformat() if ultimo else datetime(1970, 1, 1, tzinfo=UTC).isoformat()
     try:
-        await get_redis().set(_clave_de_terminos(vendedor, conversation_id), marca, ex=_TTL_TERMINOS_S)
+        await get_redis().set(
+            _clave_de_terminos(vendedor, conversation_id, version), marca, ex=_TTL_TERMINOS_S, nx=True
+        )
     except Exception:
         log.warning("alta_terminos_sin_redis", tenant_id=str(vendedor), exc_info=True)
 
 
-async def _mensaje_que_acepta(vendedor: uuid.UUID, conversation_id: uuid.UUID | None) -> str | None:
-    """El último mensaje del cliente posterior a que se mostraran los enlaces, o None. Sin
-    ese mensaje (el modelo repitió el token en el mismo turno, lo trajo de otra conversación
-    o Redis no responde), no hay aceptación: falla cerrado."""
+async def _mensaje_que_acepta(
+    vendedor: uuid.UUID, conversation_id: uuid.UUID | None, version: str
+) -> str | None:
+    """El último mensaje del cliente posterior a que se mostraran los enlaces de este juego de
+    versiones, o None. Sin ese mensaje (el modelo repitió el token en el mismo turno, lo trajo de
+    otra conversación, el marcador venció o Redis no responde), no hay aceptación: falla
+    cerrado."""
     from core.memory.working import get_redis
 
     if conversation_id is None:
         return None
     try:
-        mostrado = await get_redis().get(_clave_de_terminos(vendedor, conversation_id))
+        mostrado = await get_redis().get(_clave_de_terminos(vendedor, conversation_id, version))
     except Exception:
         log.warning("alta_terminos_sin_redis", tenant_id=str(vendedor), exc_info=True)
         return None
@@ -393,9 +409,9 @@ async def preparar_pedido_de_alta(
         token = token_de_terminos(conversation_id, version)
         mensaje_id = None
         if hmac.compare_digest(str(acepta_terminos or "").strip().encode(), token.encode()):
-            mensaje_id = await _mensaje_que_acepta(vendedor, conversation_id)
+            mensaje_id = await _mensaje_que_acepta(vendedor, conversation_id, version)
         if mensaje_id is None:
-            await _anotar_terminos_mostrados(vendedor, conversation_id)
+            await _anotar_terminos_mostrados(vendedor, conversation_id, version)
             return TerminosPendientes(
                 documentos=[vigentes[tipo].para_aceptar() for tipo in legal.TIPOS], token=token
             )

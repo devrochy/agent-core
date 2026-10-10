@@ -99,6 +99,18 @@ class PagoSimulado:
 
 
 # ------------------------------------------------------------------ contexto
+def datos_unicos(customer_id: uuid.UUID) -> dict[str, str]:
+    """Documento y celular propios de cada intento, derivados del id del cliente: las reglas del
+    alta (un Free por persona, intentos por persona; ADR-0125) cuentan por documento y teléfono, y
+    los k intentos comparten el negocio de la corrida. Tienen forma válida (10 dígitos; el celular
+    empieza por 3) y salen de bits distintos del id."""
+    n = customer_id.int
+    return {
+        "documento": str(1_000_000_000 + n % 9_000_000_000),
+        "celular": f"3{(n // 10**10) % 10**9:09d}",
+    }
+
+
 @dataclass
 class Contexto:
     tenant_id: uuid.UUID
@@ -122,7 +134,7 @@ class Contexto:
         actual: Any = {
             **self.variables,
             "negocio": {"id": str(self.tenant_id)},
-            "cliente": {"id": str(self.customer_id)},
+            "cliente": {"id": str(self.customer_id), **datos_unicos(self.customer_id)},
             "ahora": self.ahora.isoformat(),
             "pagos": {"ultimo": self.pagos.links[-1] if self.pagos.links else {}},
             "correos": {"ultimo": CORREOS.enviados[-1] if CORREOS.enviados else {}},
@@ -248,8 +260,25 @@ async def preparar_negocio(
         await seed_catalog(tenant_id, definicion["catalogo"])
     if definicion.get("vendedor"):
         _como_vendedor(tenant_id)
+    await publicar_documentos_legales(tenant_id, definicion.get("documentos_legales") or [])
     pagos.instalar()
     return tenant_id
+
+
+async def publicar_documentos_legales(tenant_id: uuid.UUID, documentos: list[dict[str, Any]]) -> None:
+    """Términos, privacidad y DPA de prueba (ADR-0125), publicados por la misma vía que usa
+    Plataforma (`legal.publicar`, con su validación de tipo, versión y enlace): con los tres, el
+    pedido de un plan pide aceptarlos antes de crearse, como en el vendedor real."""
+    from core.provisioning import legal
+
+    for documento in documentos:
+        await legal.publicar(
+            tenant_id,
+            tipo=str(documento["tipo"]),
+            version=str(documento["version"]),
+            url=str(documento["url"]),
+            por="journeys",
+        )
 
 
 async def nuevo_cliente(tenant_id: uuid.UUID, nombre: str) -> tuple[uuid.UUID, uuid.UUID]:
@@ -275,6 +304,29 @@ async def nuevo_cliente(tenant_id: uuid.UUID, nombre: str) -> tuple[uuid.UUID, u
 
 
 # ------------------------------------------------------------------ pasos
+async def _turno(ctx: Contexto, mensaje: str) -> Any:
+    """Un turno del cliente como en producción: el consumidor guarda el mensaje entrante y
+    después corre el loop. Sin ese mensaje en la base, lo que depende de él (la aceptación de
+    los términos del alta, ADR-0125) nunca pasaría en un journey."""
+    from core.db.models import Message
+    from core.db.session import get_session
+    from core.orchestrator.loop import process_conversation
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(ctx.tenant_id):
+        async with get_session() as session:
+            session.add(
+                Message(
+                    tenant_id=ctx.tenant_id,
+                    conversation_id=ctx.conversation_id,
+                    direction="inbound",
+                    sender_type="customer",
+                    content=mensaje,
+                )
+            )
+        return await process_conversation(ctx.conversation_id, mensaje)
+
+
 async def _herramientas_desde(ctx: Contexto, desde: datetime) -> list[dict[str, Any]]:
     """Herramientas ejecutadas en la conversación desde `desde` (fuente: `audit_log`)."""
     from sqlalchemy import select
@@ -333,9 +385,6 @@ def _revisar_turno(texto: str, herramientas: list[str], escalo: bool, espera: di
 async def paso_usuario(ctx: Contexto, paso: dict[str, Any], registro: list[str]) -> None:
     """Uno o más turnos del cliente. Con `hasta_herramienta`, insiste con `insistir`
     (hasta `max_turnos`) mientras el asistente no haya llamado esa herramienta."""
-    from core.orchestrator.loop import process_conversation
-    from core.shared.tenant import tenant_scope
-
     espera = paso.get("espera", {})
     objetivo = paso.get("hasta_herramienta")
     objetivos = set([objetivo] if isinstance(objetivo, str) else (objetivo or []))
@@ -344,8 +393,7 @@ async def paso_usuario(ctx: Contexto, paso: dict[str, Any], registro: list[str])
     textos: list[str] = []
     escalo = False
     for turno in range(int(paso.get("max_turnos", 1 if not objetivo else 3))):
-        async with tenant_scope(ctx.tenant_id):
-            resultado = await process_conversation(ctx.conversation_id, mensaje)
+        resultado = await _turno(ctx, mensaje)
         if resultado is None:
             raise FallaJourney("el loop no devolvió respuesta (conversación pausada o escalada)")
         textos.append(resultado.text)
@@ -477,7 +525,6 @@ async def paso_simulado(ctx: Contexto, paso: dict[str, Any], registro: list[str]
     from simulador import CUMPLIDO, RINDE, ClienteSimulado
 
     from core.llm import resolve_provider
-    from core.orchestrator.loop import process_conversation
     from core.shared.tenant import tenant_scope
 
     datos = ctx.render(paso["simulado"])
@@ -501,8 +548,7 @@ async def paso_simulado(ctx: Contexto, paso: dict[str, Any], registro: list[str]
             fin = "se_rindio"
             break
         cliente.anotar("cliente", mensaje)
-        async with tenant_scope(ctx.tenant_id):
-            resultado = await process_conversation(ctx.conversation_id, mensaje)
+        resultado = await _turno(ctx, mensaje)
         if resultado is None:
             fin = "relevo"
             break
