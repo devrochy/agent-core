@@ -91,7 +91,8 @@ los cobros por turno. Por defecto, **una burbuja por respuesta** (HU-ARCH-11).
   `MOTIVO_NUMERO_SIN_REGISTRAR` hasta el PIN (`register_number`). "Pasar a producción"
   (`meta_byok_promocion`) crea la conexión de producción de la misma app con
   `save_byok_connection` y, con los chequeos de la app del negocio en verde
-  (`checks_de_su_app`), da de baja la de prueba: sus conversaciones nunca pasan al número real.
+  (`checks_de_produccion`: el checklist por conexión de HU-CONN-07 más `own_app` y `real_number`),
+  da de baja la de prueba: sus conversaciones nunca pasan al número real.
 - Un número que ya está en otra WABA no se puede registrar; manejar el error explícito
   (el repo ya tiene `test_meta_byok_numero_ocupado.py`).
 - Baja/baja lógica: nunca borrar en duro números, WABA ni costos (invariante 8, N-19).

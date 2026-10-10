@@ -91,6 +91,12 @@ async def get_dashboard(
                 select(func.count(Message.id)).where(
                     Message.tenant_id == tenant_id,
                     Message.created_at >= week_ago,
+                    # Sin los del playground, como `conversations_7d`.
+                    ~Message.conversation_id.in_(
+                        select(Conversation.id).where(
+                            Conversation.tenant_id == tenant_id, Conversation.channel == TEST_CHANNEL
+                        )
+                    ),
                 )
             )
         ).scalar() or 0

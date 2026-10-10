@@ -45,12 +45,13 @@ def test_platform_meta_app_requirements_solo_desde_su_modulo():
 def test_el_servicio_exige_master():
     import asyncio
     import uuid
+    from types import SimpleNamespace
 
     import pytest
 
     from core.admin.platform_meta_es import RequisitoError, estado_app_meta, marcar_requisito
 
     with pytest.raises(RequisitoError):
-        asyncio.run(estado_app_meta("colaborador"))
+        asyncio.run(estado_app_meta(SimpleNamespace(role="colaborador")))
     with pytest.raises(RequisitoError):
         asyncio.run(marcar_requisito("owner", uuid.uuid4(), "app_review", done=True, notes=None))

@@ -1,0 +1,22 @@
+{
+  "contract": "procedure/1",
+  "id": "pack_commerce.consultar_planes",
+  "version": "1.0.0",
+  "title": "Consultar los planes",
+  "triggers": {
+    "description": "El cliente pregunta qué planes hay, qué incluyen o cuánto cuestan",
+    "examples": ["qué planes tienen", "cuánto vale el premium", "qué incluye el básico"]
+  },
+  "stages": [
+    {
+      "id": "informar",
+      "goal": "Responder con los planes y precios reales del catálogo",
+      "actions": ["informar_plan", "consultar_inventario"]
+    }
+  ],
+  "recovery": { "actionError": "explicar_y_reintentar_una_vez", "timeout": "relevo_humano" },
+  "claims": [
+    { "kind": "amount", "mustMatch": ["action:informar_plan.precio"] }
+  ],
+  "evals": ["planes-precio-premium", "planes-compara-basico-premium"]
+}

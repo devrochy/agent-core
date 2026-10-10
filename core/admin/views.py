@@ -640,15 +640,22 @@ async def tenants_activate(request: Request, tenant_id: uuid.UUID):
 async def tenants_purge(request: Request, tenant_id: uuid.UUID, confirm_phrase: str = Form(default="")):
     """Eliminación física IRREVERSIBLE (excepción a la invariante #8).
 
-    Exige que `confirm_phrase` sea exactamente "ELIMINAR <slug>". Solo master.
+    Exige el tenant suspendido y que `confirm_phrase` sea exactamente "ELIMINAR <slug>".
+    Solo master.
     """
     if not await _require_master(request):
         return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
-    from core.tenants import purge_tenant
+    from urllib.parse import quote
+
+    from core.tenants import TenantNotSuspendedError, purge_tenant
 
     ref = str(tenant_id)
     try:
         await purge_tenant(ref, confirm_phrase)
+    except TenantNotSuspendedError as exc:
+        return RedirectResponse(
+            f"/admin/tenants?flash={quote(str(exc))}&flash_type=danger", status_code=303
+        )
     except ValueError as exc:
         return RedirectResponse(
             f"/admin/tenants?flash={str(exc)[:140]}&flash_type=danger", status_code=303
