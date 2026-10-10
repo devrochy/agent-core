@@ -561,6 +561,12 @@ docker exec 48h2r2laml64eyrggfg6eqld psql -U postgres -d agent_core -tAc "SELECT
   las extensiones y `app_runtime` creados antes.
 - **El rol de migraciones necesita `BYPASSRLS` (o ser superusuario).** La `0034` falla con un
   dueño sin bypass y la `0052` aborta a propósito (`docs/BACKLOG.md`).
+- **El rol de migraciones necesita poder fijar `session_replication_role` (o ser superusuario).**
+  `purge_tenant` lo usa para apagar los triggers de las FKs mientras borra un negocio (antes usaba
+  `DISABLE TRIGGER ALL`, que exige superusuario y fallaba siempre con el dueño de producción). Lo
+  concede el superusuario: `GRANT SET ON PARAMETER session_replication_role TO
+  agent_core_migrations;` (runbook de producción, 4.3). Sin eso la `0067` aborta a propósito. En
+  test las migraciones corren como `postgres` (superusuario): no hace falta.
 - **`app_runtime` nace con la clave de desarrollo** si no existe cuando corre la migración 0003
   (`alembic/versions/0003_multitenant_core.py:226-249`). En producción se crea antes, con clave
   propia; `scripts/verificar_aislamiento.py` falla si la URL del runtime trae la de desarrollo.

@@ -170,10 +170,15 @@ async def _count_metric_in_session(session, tenant_id: uuid.UUID, key: str, peri
     if key == "conversaciones_ocr":
         return await _count_media(session, tenant_id, "image/%", period_start)
     if key == "mensajes":
+        # Las respuestas del playground (conversación `test`) no consumen la cuota.
+        de_prueba = select(Conversation.id).where(
+            Conversation.tenant_id == tenant_id, Conversation.channel == TEST_CHANNEL
+        )
         query = select(func.count(Message.id)).where(
             Message.tenant_id == tenant_id,
             Message.direction == "outbound",
             Message.deleted_at.is_(None),
+            ~Message.conversation_id.in_(de_prueba),
         )
         if period_start is not None:
             query = query.where(Message.created_at >= period_start)
@@ -197,7 +202,9 @@ async def _count_cost(session, tenant_id: uuid.UUID, period_start) -> float:
     # consumir la cuota de costo del cliente. Se excluyen las filas atadas a una
     # conversación de prueba; las filas sin `conversation_id` se conservan
     # (`NOT IN` con NULL descartaría filas legítimas).
-    test_conversations = select(Conversation.id).where(Conversation.channel == TEST_CHANNEL)
+    test_conversations = select(Conversation.id).where(
+        Conversation.tenant_id == tenant_id, Conversation.channel == TEST_CHANNEL
+    )
     query = query.where(
         or_(
             UsageLedger.conversation_id.is_(None),

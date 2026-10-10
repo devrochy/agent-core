@@ -1,14 +1,15 @@
 """Plataforma → App de Meta: requisitos de Embedded Signup (solo master, HU-SH-05).
 
 `GET /api/v1/admin/platform/meta-app/embedded-signup` y `POST .../embedded-signup/step`. La
-lógica vive en `core.admin.platform_meta_es`. Los chequeos de infraestructura de la app
-(webhook, secretos, RLS, worker) son de HU-CONN-07 (`/admin/platform/meta-app`).
+lógica vive en `core.admin.platform_meta_es`. Los chequeos del servidor (variables de la app,
+webhook en HTTPS, suscripción, secretos, RLS, worker) son de HU-CONN-07
+(`/admin/platform/meta-app`): aquí solo se resume su última corrida en `platform_check`.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, Field
@@ -20,11 +21,18 @@ from core.api.errors import ApiError
 router = APIRouter(prefix="/admin/platform/meta-app", tags=["admin · plataforma"])
 
 
-class EsAutomaticCheck(BaseModel):
-    key: str
-    label: str
-    ok: bool | None
-    detail: str
+class EsPlatformCheck(BaseModel):
+    """Última revisión de "Plataforma → App de Meta" (HU-CONN-07). `ok`: terminó, sin ítems en
+    rojo, con las variables de la app, el webhook y la suscripción en verde, y no vencida (vale
+    30 días). `pending`: las etiquetas de los ítems que lo impiden. `expired`: la corrida terminada
+    venció y hay que revisar de nuevo; `expires_at`: cuándo vence (o venció)."""
+
+    status: Literal["never", "queued", "running", "done", "failed"]
+    finished_at: datetime | None
+    ok: bool
+    pending: list[str]
+    expired: bool
+    expires_at: datetime | None
 
 
 class EsManualStep(BaseModel):
@@ -38,13 +46,14 @@ class EsManualStep(BaseModel):
 
 
 class EmbeddedSignupRequirements(BaseModel):
-    """`ready`: todo lo automático en verde y todo lo manual confirmado."""
+    """`ready`: la revisión de la plataforma en verde (`platform_check.ok`) y todo lo manual
+    confirmado."""
 
     app_id: str
     config_id: str
     graph_api_version: str
     ready: bool
-    automatic: list[EsAutomaticCheck]
+    platform_check: EsPlatformCheck
     manual: list[EsManualStep]
 
 
@@ -73,7 +82,8 @@ async def embedded_signup_requirements(
     principal: Annotated[Principal, Depends(get_principal)],
 ) -> EmbeddedSignupRequirements:
     try:
-        estado = await estado_app_meta(_master(principal))
+        _master(principal)
+        estado = await estado_app_meta(principal.admin)
     except RequisitoError as exc:
         raise _error(exc) from exc
     return EmbeddedSignupRequirements(
@@ -81,7 +91,7 @@ async def embedded_signup_requirements(
         config_id=estado.config_id,
         graph_api_version=estado.graph_api_version,
         ready=estado.ready,
-        automatic=[EsAutomaticCheck(**c.__dict__) for c in estado.automatic],
+        platform_check=EsPlatformCheck(**estado.platform_check.__dict__),
         manual=[EsManualStep(**m.__dict__) for m in estado.manual],
     )
 

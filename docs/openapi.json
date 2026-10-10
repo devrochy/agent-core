@@ -1919,6 +1919,78 @@
         }
       }
     },
+    "/api/v1/admin/procedures/validate": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · procedimientos"
+        ],
+        "summary": "Validate Procedure",
+        "description": "Valida un procedimiento `procedure/1` y aplica el linter.",
+        "operationId": "validate_procedure_api_v1_admin_procedures_validate_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcedureValidateOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "procedure"
+                ],
+                "properties": {
+                  "procedure": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Procedimiento procedure/1 (ADR-0113)."
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/connections": {
       "get": {
         "tags": [
@@ -3560,7 +3632,7 @@
           "admin · meta"
         ],
         "summary": "Promotion Verify",
-        "description": "Chequeos de producción con la app del negocio (nunca la de la plataforma), sin cambiar\nnada.",
+        "description": "Chequeos de producción con la app del negocio (nunca la de la plataforma), sin cambiar\nnada: el checklist por conexión de HU-CONN-07 más `own_app` y `real_number`.",
         "operationId": "promotion_verify_api_v1_admin_meta_connections__connection_id__promotion_verify_post",
         "parameters": [
           {
@@ -21187,6 +21259,50 @@
         ],
         "title": "PrimerosPasosResponse"
       },
+      "ProcedureIssue": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "path",
+          "message"
+        ],
+        "title": "ProcedureIssue"
+      },
+      "ProcedureValidateOut": {
+        "properties": {
+          "valid": {
+            "type": "boolean",
+            "title": "Valid"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/ProcedureIssue"
+            },
+            "type": "array",
+            "title": "Errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "valid",
+          "errors"
+        ],
+        "title": "ProcedureValidateOut"
+      },
       "ProductOut": {
         "properties": {
           "id": {
@@ -21385,53 +21501,11 @@
         ],
         "title": "PromiseStatusUpdate"
       },
-      "PromotionCheck": {
-        "properties": {
-          "key": {
-            "type": "string",
-            "title": "Key"
-          },
-          "ok": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ok"
-          },
-          "detail": {
-            "type": "string",
-            "title": "Detail"
-          },
-          "checked_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Checked At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "key",
-          "ok",
-          "detail"
-        ],
-        "title": "PromotionCheck"
-      },
       "PromotionChecks": {
         "properties": {
           "checks": {
             "items": {
-              "$ref": "#/components/schemas/PromotionCheck"
+              "$ref": "#/components/schemas/ReadinessItem"
             },
             "type": "array",
             "title": "Checks"
@@ -21441,7 +21515,8 @@
         "required": [
           "checks"
         ],
-        "title": "PromotionChecks"
+        "title": "PromotionChecks",
+        "description": "Los ítems del checklist por conexión (HU-CONN-07) más los de la promoción, con el mismo\nformato que \"Producción\" de la conexión."
       },
       "PromotionNumberIn": {
         "properties": {
@@ -21611,7 +21686,7 @@
           },
           "checks": {
             "items": {
-              "$ref": "#/components/schemas/PromotionCheck"
+              "$ref": "#/components/schemas/ReadinessItem"
             },
             "type": "array",
             "title": "Checks"
@@ -25080,12 +25155,8 @@
             "type": "boolean",
             "title": "Ready"
           },
-          "automatic": {
-            "items": {
-              "$ref": "#/components/schemas/EsAutomaticCheck"
-            },
-            "type": "array",
-            "title": "Automatic"
+          "platform_check": {
+            "$ref": "#/components/schemas/EsPlatformCheck"
           },
           "manual": {
             "items": {
@@ -25101,11 +25172,11 @@
           "config_id",
           "graph_api_version",
           "ready",
-          "automatic",
+          "platform_check",
           "manual"
         ],
         "title": "EmbeddedSignupRequirements",
-        "description": "`ready`: todo lo automático en verde y todo lo manual confirmado."
+        "description": "`ready`: la revisión de la plataforma en verde (`platform_check.ok`) y todo lo manual\nconfirmado."
       },
       "WizardCancelIn": {
         "properties": {
@@ -25214,40 +25285,70 @@
         ],
         "title": "EsStepIn"
       },
-      "EsAutomaticCheck": {
+      "EsPlatformCheck": {
         "properties": {
-          "key": {
+          "status": {
             "type": "string",
-            "title": "Key"
+            "enum": [
+              "never",
+              "queued",
+              "running",
+              "done",
+              "failed"
+            ],
+            "title": "Status"
           },
-          "label": {
-            "type": "string",
-            "title": "Label"
-          },
-          "ok": {
+          "finished_at": {
             "anyOf": [
               {
-                "type": "boolean"
+                "type": "string",
+                "format": "date-time"
               },
               {
                 "type": "null"
               }
             ],
+            "title": "Finished At"
+          },
+          "ok": {
+            "type": "boolean",
             "title": "Ok"
           },
-          "detail": {
-            "type": "string",
-            "title": "Detail"
+          "pending": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Pending"
+          },
+          "expired": {
+            "type": "boolean",
+            "title": "Expired"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
           }
         },
         "type": "object",
         "required": [
-          "key",
-          "label",
+          "status",
+          "finished_at",
           "ok",
-          "detail"
+          "pending",
+          "expired",
+          "expires_at"
         ],
-        "title": "EsAutomaticCheck"
+        "title": "EsPlatformCheck",
+        "description": "Última revisión de \"Plataforma → App de Meta\" (HU-CONN-07). `ok`: terminó, sin ítems en\nrojo, con las variables de la app, el webhook y la suscripción en verde, y no vencida (vale\n30 días). `pending`: las etiquetas de los ítems que lo impiden. `expired`: la corrida terminada\nvenció y hay que revisar de nuevo; `expires_at`: cuándo vence (o venció)."
       },
       "TestMessageOptions": {
         "properties": {

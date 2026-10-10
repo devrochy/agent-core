@@ -163,3 +163,21 @@ async def test_los_correos_de_sistema_no_salen(monkeypatch) -> None:
     correos.instalar()
     message_id = await correo.send_system_email("ana+1@example.com", "Tu acceso", "enlace")
     assert message_id and correos.enviados == [{"para": "ana+1@example.com", "asunto": "Tu acceso", "cuerpo": "enlace"}]
+
+
+def test_documento_y_celular_unicos_por_intento() -> None:
+    from core.provisioning.antiabuso import normalizar_documento, normalizar_telefono
+
+    # Las reglas del alta cuentan por documento y teléfono: cada intento (k ≥ 2) es otra persona.
+    uno, otro = journeys.datos_unicos(uuid.uuid4()), journeys.datos_unicos(uuid.uuid4())
+    assert uno != otro
+    assert journeys.datos_unicos(uuid.UUID(int=12345)) == journeys.datos_unicos(uuid.UUID(int=12345))
+    for datos in (uno, otro):
+        assert normalizar_documento(datos["documento"]) == datos["documento"]
+        assert normalizar_telefono(datos["celular"]) == datos["celular"]
+        assert datos["celular"].startswith("3") and len(datos["celular"]) == 10
+    ctx = _ctx()
+    assert ctx.render("cédula {cliente.documento}, celular {cliente.celular}") == (
+        f"cédula {journeys.datos_unicos(ctx.customer_id)['documento']}, "
+        f"celular {journeys.datos_unicos(ctx.customer_id)['celular']}"
+    )
