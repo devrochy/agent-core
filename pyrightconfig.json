@@ -1,5 +1,5 @@
 {
-  "include": ["core/config.py", "core/memory/vector.py"],
+  "include": ["core/config.py", "core/memory/vector.py", "core/kernel", "packages/contracts/agentcore_contracts/procedure.py"],
   "pythonVersion": "3.12",
   "typeCheckingMode": "basic",
   "reportMissingImports": "none"
