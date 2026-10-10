@@ -4,8 +4,11 @@ Uso:
   python evals/runner.py                       # golden set genérico del framework
   python evals/runner.py 03                    # solo los que matcheen "03"
   python evals/runner.py --tenant <slug>       # golden set del tenant (TENANTS_ROOT/<slug>/evals/)
+  python evals/runner.py 06 --grabacion replay # desde la grabación, sin red ni LLM_API_KEY
+  python evals/runner.py 06 --grabacion record # regraba el escenario (LLM real: OK del dueño)
 
-Requiere LLM_API_KEY configurada (hace llamadas reales al proveedor activo).
+Sin `--grabacion` requiere LLM_API_KEY (hace llamadas reales al proveedor activo). Las
+grabaciones viven en `evals/cassettes/golden/` (ver `evals/README.md`).
 Criterio (heredado de agent-sale ADR-012): assertions duras bloquean; el tono
 se revisa manualmente. Correr antes de cada deploy, no en cada commit.
 
@@ -18,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 import time
 import uuid
@@ -174,13 +178,13 @@ async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tup
 
     # Escenarios con LLM real
     from core.config import get_settings
-    from core.llm import resolve_provider
+    from core.llm import cassette, resolve_provider
     from core.llm.prompt_builder import PromptContext, build_system_blocks
     from core.mcp.host import mcp_host
     from core.mcp.translator import to_llm_schemas
 
     settings = get_settings()
-    if not settings.llm_api_key:
+    if not settings.llm_api_key and cassette.modo_activo() != "replay":
         return name, False, "LLM_API_KEY no configurada (skip)"
 
     required = scenario.get("requires_plugins", [])
@@ -284,8 +288,27 @@ async def main() -> int:
         help="pass@1 mínimo (0..1) para salir con 0; con 1.0 cualquier falla rompe el gate",
     )
     parser.add_argument("--reporte", default="", help="Ruta del reporte JSON (opcional)")
-    args = parser.parse_args()
     sys.path.insert(0, str(Path(__file__).parent))
+    import grabaciones
+
+    grabaciones.agregar_argumentos(parser)
+    from core.shared.logger import configure_console_logging
+
+    configure_console_logging()  # tracebacks sin variables locales: nunca imprimen la config
+    args = parser.parse_args()
+    from core.llm import cassette
+
+    try:
+        grabaciones.activar(args.grabacion)
+    except cassette.ErrorGrabacion as exc:
+        print(f"\n{exc}")
+        return grabaciones.SALIDA_GRABACION
+    if args.tenant and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", args.tenant):
+        print(f"Slug inválido: {args.tenant!r}")
+        return 1
+    raiz_grabaciones = grabaciones.raiz(
+        args.grabaciones, tenants_root() / args.tenant / "evals" if args.tenant else None
+    ) / "golden"
     from consistencia import (
         Intento,
         ResultadoEscenario,
@@ -324,24 +347,34 @@ async def main() -> int:
     k = max(1, args.k)
     print(f"Corriendo {len(paths)} escenarios con k={k} ({label}, ref {_git_ref()})...\n")
     results: list[ResultadoEscenario] = []
-    for path in paths:
-        escenario = ResultadoEscenario(nombre=path.stem)
-        for _ in range(k):
-            inicio = time.monotonic()
-            try:
-                name, ok, detail = await run_scenario(path, spec, tenant_id)
-            except Exception as exc:
-                name, ok, detail = path.stem, False, f"excepción: {exc}"
-            escenario.nombre = name
-            escenario.intentos.append(Intento(ok=ok, detalle=detail, segundos=round(time.monotonic() - inicio, 1)))
-        print(linea(escenario))
-        results.append(escenario)
+    extra = f"--tenant {args.tenant}" if args.tenant else ""
+    try:
+        for path in paths:
+            escenario = ResultadoEscenario(nombre=path.stem)
+            regrabar = grabaciones.comando_regrabar("evals/runner.py", path.stem, f"{extra} --k {k}".strip())
+            with cassette.escena(raiz_grabaciones / f"{path.stem}.json", regrabar=regrabar):
+                for _ in range(k):
+                    inicio = time.monotonic()
+                    try:
+                        name, ok, detail = await run_scenario(path, spec, tenant_id)
+                    except cassette.ErrorGrabacion:
+                        raise  # la grabación falta o cambió: se corta la corrida, no es un fallo del modelo
+                    except Exception as exc:
+                        name, ok, detail = path.stem, False, f"excepción: {exc}"
+                    escenario.nombre = name
+                    escenario.intentos.append(Intento(ok=ok, detalle=detail, segundos=round(time.monotonic() - inicio, 1)))
+            print(linea(escenario))
+            results.append(escenario)
+    except cassette.ErrorGrabacion as exc:
+        print(f"\n{exc}")
+        return grabaciones.SALIDA_GRABACION
     resumen = resumir(results, k)
     print(f"\n{texto_resumen('Golden set', resumen, args.umbral)} · spec {label} · ref {_git_ref()}")
 
     # Persistir la corrida atada a la versión del AgentSpec (ADR-0051). Solo con
     # tenant real (el framework no escribe en la BD de un cliente).
-    if args.tenant:
+    # En replay no se mide la consistencia del modelo (se repite lo grabado): no se guarda.
+    if args.tenant and cassette.modo_activo() != "replay":
         await _persist_run(tenant_id, spec.version, results, k)
     if args.reporte:
         escribir_reporte(args.reporte, reporte(f"golden:{label}", results, k))

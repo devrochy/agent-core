@@ -6,8 +6,10 @@ Regla: el core NUNCA lee os.environ directamente; siempre a través de `settings
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterator
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,8 +26,29 @@ DEBOUNCE_DELAY_MS: dict[str, int] = {
 }
 
 
+# Campos cuyo valor nunca se muestra en `repr` (ni en tracebacks con variables locales de rich
+# o typer, que imprimen el objeto entero) y contraseñas dentro de URLs.
+_CAMPOS_SECRETOS = ("key", "secret", "token", "password", "dsn")
+_CLAVE_EN_URL = re.compile(r"(://[^/\s:@]+:)[^@\s/]+@")
+OCULTO = "**********"
+
+
+def _ocultar(nombre: str | None, valor: Any) -> Any:
+    if not isinstance(valor, str) or not valor:
+        return valor
+    if nombre and any(p in nombre.lower() for p in _CAMPOS_SECRETOS):
+        return OCULTO
+    return _CLAVE_EN_URL.sub(rf"\g<1>{OCULTO}@", valor)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    def __repr_args__(self) -> Iterator[tuple[str | None, Any]]:  # type: ignore[override]
+        """`repr`/`str`/rich nunca muestran secretos: un traceback con variables locales que
+        pase por un frame con `settings` (el loop, los runners) imprimía la API key."""
+        for nombre, valor in super().__repr_args__():
+            yield nombre, _ocultar(nombre, valor)
 
     # --- Aplicación ---
     app_name: str = Field(default="Agent Core", alias="APP_NAME")

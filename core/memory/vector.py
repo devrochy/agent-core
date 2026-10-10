@@ -69,6 +69,11 @@ _provider_resolved = False
 
 def get_embedding_provider() -> EmbeddingProvider | None:
     global _provider, _provider_resolved
+    from core.llm import cassette
+
+    if cassette.modo_activo() != "off":
+        # Evals en record/replay: sin red y sin recuerdo que cambie el prompt (adenda de ADR-0119).
+        return None
     if _provider_resolved:
         return _provider
     _provider_resolved = True
