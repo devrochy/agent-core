@@ -58,9 +58,12 @@ class FakeClient:
     conectado = True
     autenticado = True
 
+    demora_s = 0.0
+
     @property
     def is_connected(self):
         async def _valor() -> bool:
+            await asyncio.sleep(self.demora_s)
             return self.conectado
 
         return _valor()
@@ -173,4 +176,17 @@ async def test_alive_con_puente_ocupado_no_declara_muerto(tmp_path: Path) -> Non
 
     async with backend_neonize._BRIDGE_LOCK:
         assert await socket.alive() is True
+    await socket.disconnect()
+
+
+async def test_alive_no_cancela_una_llamada_al_puente_en_curso(tmp_path: Path) -> None:
+    """El tope solo aplica a esperar el lock: una llamada lenta a Go no se corta
+    (cortarla soltaría el lock con el hilo aún dentro del puente)."""
+    socket = await _conectado(tmp_path)
+    socket._client.conectado = False
+    socket._client.demora_s = 0.1
+    socket.alive_timeout_s = 0.02
+
+    assert await socket.alive() is False
+    assert not backend_neonize._BRIDGE_LOCK.locked()
     await socket.disconnect()

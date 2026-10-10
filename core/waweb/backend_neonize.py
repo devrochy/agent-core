@@ -225,21 +225,26 @@ class NeonizeSocket:
             # `idle()` espera la tarea de conexión de Neonize: si terminó, el
             # puente Go ya no mantiene el socket.
             return False
+        # El tope cubre SOLO la espera del lock: cancelar una llamada al puente
+        # ya en curso soltaría el lock con el hilo todavía dentro de Go, y el
+        # próximo en entrar reproduciría el `concurrent map writes`.
         try:
-            async with asyncio.timeout(self.alive_timeout_s):
-                async with _BRIDGE_LOCK:
-                    # En `neonize.aioze` estas propiedades devuelven una corutina
-                    # (`asyncio.to_thread` sobre el puente Go), no un bool:
-                    # evaluarlas sin `await` daría siempre True.
-                    connected = await _resolve(self._client.is_connected)
-                    logged_in = await _resolve(self._client.is_logged_in)
+            await asyncio.wait_for(_BRIDGE_LOCK.acquire(), self.alive_timeout_s)
         except TimeoutError:
             # Puente ocupado (otro tenant enviando o conectando): no es evidencia.
             log.warning("waweb_neonize_alive_timeout")
             return True
+        try:
+            # En `neonize.aioze` estas propiedades devuelven una corutina
+            # (`asyncio.to_thread` sobre el puente Go), no un bool: evaluarlas
+            # sin `await` daría siempre True.
+            connected = await _resolve(self._client.is_connected)
+            logged_in = await _resolve(self._client.is_logged_in)
         except Exception:
             log.warning("waweb_neonize_alive_failed", exc_info=True)
             return True
+        finally:
+            _BRIDGE_LOCK.release()
         return bool(connected) and bool(logged_in)
 
     async def disconnect(self) -> None:

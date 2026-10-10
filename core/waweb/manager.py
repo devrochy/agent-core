@@ -113,6 +113,10 @@ class WaWebConnector:
                 self._pairing_trips.pop(tenant_id, None)
                 self._qr_cycles.discard(tenant_id)
                 self._linked.discard(tenant_id)
+                # Una tarea que muere sin pasar por `_on_status` no debe dejar
+                # `connected` a la siguiente: el chequeo de vida reciclaría un
+                # socket que todavía se está vinculando.
+                self._connected.discard(tenant_id)
         for ctx in contexts:
             if ctx.tenant_id not in self._tasks and ctx.tenant_id not in self._stop:
                 self._tasks[ctx.tenant_id] = asyncio.create_task(self.run_session(ctx))

@@ -609,3 +609,18 @@ async def test_chequeo_de_vida_solo_con_sesion_conectada(tmp_path: Path) -> None
 
     assert consultas == []
     assert alerts == []
+
+
+async def test_sweep_limpia_el_estado_conectado_de_una_tarea_muerta(tmp_path: Path) -> None:
+    ctx = _ctx()
+    connector = _connector(tmp_path, FakeRegistry([]))
+    tarea = asyncio.create_task(asyncio.sleep(0))
+    await tarea
+    connector._tasks[ctx.tenant_id] = tarea
+    connector._connected.add(ctx.tenant_id)
+    connector._linked.add(ctx.tenant_id)
+
+    await connector.sweep()
+
+    assert ctx.tenant_id not in connector._connected
+    assert ctx.tenant_id not in connector._linked
