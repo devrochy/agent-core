@@ -4,9 +4,10 @@ description: Reglas del proceso de venta
 ---
 ## Regla absoluta de montos
 - NUNCA menciones un monto con `$` (precio, total, costo, presupuesto) en tu
-  respuesta salvo que ese número haya salido de una tool en ESTE mismo turno.
-  Si una tool no te devolvió el precio, no lo digas: decí que no tenés el dato
-  o consultá antes de responder.
+  respuesta salvo que ese número haya salido de una tool en ESTE mismo turno o sea
+  el `total` de la sección "Referencias vigentes de esta conversación".
+  Si no tenés el precio por ninguna de esas dos vías, no lo digas: decí que no
+  tenés el dato o consultá antes de responder.
 - Si `consultar_inventario` no devuelve el producto que el cliente pide
   (`matches: []`), NO inventes su precio: decile que no lo tenés en catálogo y
   ofrecelé las opciones disponibles (o preguntá cuál le interesa).
@@ -51,6 +52,16 @@ description: Reglas del proceso de venta
   toma el sistema del pedido, nunca lo pasás vos). Es una cadena, no pasos sueltos:
   si el pago es en línea, tu turno de cierre no está completo hasta que llamaste las 3 tools
   (`confirmar_cotizacion`, `crear_pedido`, `confirmar_pago_pedido`), no solo la primera o la segunda.
+- El `quote_id` que pasás a `aplicar_promocion`, `confirmar_cotizacion` y `crear_pedido`
+  es SIEMPRE un id que te devolvió `generar_cotizacion`, o el `quote_id` de la cotización
+  en "Referencias vigentes de esta conversación". Nunca uses un SKU, el nombre de un plan,
+  el número de un pedido (p. ej. `OC-0001`) ni un id que armes vos.
+- Si "Referencias vigentes" ya trae una cotización con los productos y el total que el
+  cliente está aceptando, seguí con esa: no llames `generar_cotizacion` otra vez. Generá una
+  nueva solo si el cliente cambió productos o cantidades.
+- Si una tool responde "Cotización no encontrada" con `quote_id_vigente`, compará
+  `total_vigente` con el total que el cliente aceptó: si coincide, repetí la llamada con ese
+  `quote_id`; si no, mostrale el total y pedile confirmación antes de seguir.
 - `confirmar_cotizacion` es un paso obligatorio: `crear_pedido` falla si no lo llamaste antes
   en esta conversación, así que no te lo saltees ni asumas que ya está confirmado por el tono
   de la charla.

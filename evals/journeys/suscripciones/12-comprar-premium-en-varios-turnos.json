@@ -1,0 +1,115 @@
+{
+  "nombre": "comprar-premium-en-varios-turnos",
+  "descripcion": "Compra del Premium repartida en turnos (cotización, confirmación del total, datos y pago): el modelo reusa el quote_id de las referencias vigentes, no genera otra cotización y cierra con una sola (incidente en test, 2026-10-10, ADR-0130).",
+  "pasos": [
+    {
+      "nota": "pide la cotización del Premium",
+      "usuario": "Hola, soy Ana. Me interesa el Plan Premium, ¿me armás la cotización?",
+      "hasta_herramienta": "generar_cotizacion",
+      "insistir": "Sí, armame la cotización del Plan Premium.",
+      "max_turnos": 3,
+      "espera": {
+        "texto_contiene_alguno": [
+          "600.000",
+          "600,000"
+        ]
+      }
+    },
+    {
+      "nota": "confirma el total en otro turno: confirmar_cotizacion con el id real, sin otra cotización",
+      "usuario": "Sí, confirmo ese total. Lo quiero pagar en línea.",
+      "hasta_herramienta": "confirmar_cotizacion",
+      "insistir": "Sí, confirmo la cotización del Plan Premium por ese total.",
+      "max_turnos": 3,
+      "espera": {
+        "sin_herramientas": [
+          "generar_cotizacion"
+        ]
+      }
+    },
+    {
+      "nota": "la cotización quedó aceptada y es la única",
+      "verifica": {
+        "tabla": "pack_commerce_quotes",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "status": "aceptada",
+          "total": 600000
+        }
+      }
+    },
+    {
+      "nota": "da sus datos en otro turno: pedido y link sobre la misma cotización",
+      "usuario": "Mis datos: Ana Gómez, cédula 1012345678, celular 3001234567, correo ana+{cliente.id}@example.com.",
+      "hasta_herramienta": [
+        "confirmar_pago_pedido",
+        "generar_link_pago"
+      ],
+      "insistir": "Sí, creá el pedido del Plan Premium con esos datos y pasame el link de pago.",
+      "max_turnos": 3,
+      "espera": {
+        "sin_herramientas": [
+          "generar_cotizacion"
+        ],
+        "texto_contiene": [
+          "https://pagos.simulados/"
+        ]
+      }
+    },
+    {
+      "nota": "una sola cotización, convertida en el pedido",
+      "verifica": {
+        "tabla": "pack_commerce_quotes",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "status": "convertida"
+        }
+      }
+    },
+    {
+      "nota": "pedido pendiente por el total del Premium",
+      "verifica": {
+        "tabla": "pack_commerce_orders",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "payment_status": "pendiente",
+          "total": 600000
+        },
+        "guardar_como": "pedido"
+      }
+    },
+    {
+      "nota": "la pasarela confirma el pago",
+      "evento": "payment.confirmed",
+      "datos": {
+        "reference": "{pedido.public_order_number}",
+        "provider": "simulado",
+        "provider_reference": "sim-{pedido.public_order_number}",
+        "amount": 600000
+      }
+    },
+    {
+      "nota": "suscripción Premium activa",
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "estado": "activa",
+          "valor_periodo": 600000
+        }
+      }
+    }
+  ]
+}

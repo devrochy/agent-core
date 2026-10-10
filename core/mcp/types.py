@@ -45,6 +45,8 @@ log = get_logger(__name__)
 ToolHandler = Callable[[dict[str, Any], "ToolContext"], Awaitable[dict[str, Any]]]
 GuardrailFn = Callable[[str, list[dict[str, Any]]], Awaitable["GuardrailResult"]]
 AfirmacionesFn = Callable[[], Awaitable[list["Afirmacion"]]]
+# fuente(conversation_id, customer_id) -> referencias vigentes de la conversación (ADR-0130)
+ReferenciasFn = Callable[[uuid.UUID, uuid.UUID], Awaitable[list["Referencia"]]]
 
 
 @dataclass
@@ -362,6 +364,24 @@ class Afirmacion:
     patron: re.Pattern[str]
     tools: frozenset[str] = frozenset()
     basta_url: bool = False
+
+
+@dataclass(frozen=True)
+class Referencia:
+    """Referencia vigente de la conversación que un pack aporta al prompt (ADR-0130):
+    el id real de lo que el cliente está negociando, leído del estado actual de las
+    tablas del pack (p. ej. la cotización en curso y su total).
+
+    - `tipo` y las claves de `datos`: minúsculas y `_`.
+    - Valores: UUID, número o un texto corto de letras, dígitos, `_`, `-` y `.` (un
+      estado, un número público). Nada de texto libre del cliente ni del negocio (invariante 7).
+
+    El core sanea y arma la línea del prompt (`core/orchestrator/referencias.py`); lo
+    que no cumple se descarta. Cómo usarla lo dice el playbook del pack.
+    """
+
+    tipo: str
+    datos: tuple[tuple[str, Any], ...] = ()
 
 
 class BaseSkill(ABC):

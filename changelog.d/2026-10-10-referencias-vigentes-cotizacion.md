@@ -1,0 +1,23 @@
+## El asistente ve el `quote_id` real en el turno siguiente (2026-10-10)
+
+- **Incidente en test** (tenant solvershub):
+  - El modelo no tenía el id de la cotización del turno anterior, porque el historial es solo texto.
+  - Llamó `crear_pedido(quote_id="PLAN-PREMIUM")` y `confirmar_cotizacion` con `OC-0001` y con `Q-0001`.
+  - Generó 6 cotizaciones en 9 minutos y nunca cerró el pedido.
+- **Referencias vigentes** (ADR-0130):
+  - Un pack aporta al bloque dinámico del prompt lo que el cliente está negociando, leído de sus tablas.
+  - Pack-commerce aporta la cotización en curso (`quote_id`, estado, total) y el último pedido de la conversación.
+  - El core sanea los datos y arma la línea: solo ids, números y textos cortos.
+  - Si una fuente falla o tarda más de 0,5 s, el turno sigue sin ella.
+- `aplicar_promocion`, `confirmar_cotizacion` y `crear_pedido`: si el `quote_id` no existe y la conversación tiene una cotización en curso, el error devuelve `quote_id_vigente` con su total. No la usan en silencio, y ya no mandan a generar otra.
+- **Playbook `ventas.md`:**
+  - el `quote_id` sale de `generar_cotizacion` o de las referencias, nunca de un SKU ni de un número de pedido;
+  - no se regenera una cotización vigente;
+  - el total de las referencias se puede citar.
+- **Verificador:** "ya quedó confirmada la cotización" sin `confirmar_cotizacion` ya no pasa (antes daba `cierres: 0`).
+  - Las afirmaciones `cotizacion_aceptada` y `cotizacion_generada` detectan el participio antes del sustantivo cuando lleva auxiliar ("quedó", "está", "fue").
+  - Con condicional ("una vez confirmada la cotización…") no hay falso positivo.
+  - El set etiquetado suma 5 casos: 208 correctas y 16 falsas, 0 falsos positivos y 0 falsos negativos.
+- **Journeys:**
+  - Test de integración con modelo guionado: compra del Premium en 4 turnos con el loop real y las tools de pack-commerce, tomando el `quote_id` del prompt. Cierra con una sola cotización.
+  - Journey `suscripciones/12-comprar-premium-en-varios-turnos` para el LLM real.
