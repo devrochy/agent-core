@@ -32,6 +32,9 @@ app = typer.Typer(
     name="agent-core",
     help="Framework multi-tenant de agentes IA: un solo código base sirve a todos los clientes.",
     no_args_is_help=True,
+    # Los tracebacks de typer muestran variables locales por defecto: con la config o una
+    # credencial en un frame, la imprimirían en la terminal.
+    pretty_exceptions_show_locals=False,
 )
 
 app.command(name="init")(init_command)

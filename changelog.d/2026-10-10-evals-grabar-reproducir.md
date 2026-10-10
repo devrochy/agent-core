@@ -12,3 +12,8 @@
 - CI (adenda de ADR-0120): nuevo job `evals-replay` en las PRs a `develop`. Corre el gate de evals y journeys en replay
   sin `LLM_API_KEY`, con `scripts/gate_evals.sh`. El push a develop y el nightly siguen con el LLM real.
 - Guía y flujo para regrabar en `evals/README.md`.
+- `scripts/grabar_gate_local.sh`: graba el gate con el LLM real en un stack efímero idéntico al CI, lo reproduce dos
+  veces sin clave y revisa que no queden secretos. Tiene ensayos sin LLM (`--ensayo`, `--ensayo-demo`).
+- Seguridad: los tracebacks ya no imprimen secretos. `Settings` oculta en `repr` los campos secretos y las contraseñas
+  de las URLs. Los runners de evals usan una consola sin variables locales (`configure_console_logging`), y la CLI
+  apaga `pretty_exceptions_show_locals`. El contenedor de secretos del modo grabación no se puede imprimir.

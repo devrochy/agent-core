@@ -104,7 +104,7 @@ def escena(ruta: Path, *, regrabar: str = "") -> Iterator[_Escena | None]:
         return
     actual = _Escena.cargar(ruta, _modo, regrabar) if _modo == "replay" else _Escena(ruta, _modo, regrabar)
     if _modo == "record":
-        actual.secretos.update(secretos_de_la_config())
+        actual.secretos.agregar(secretos_de_la_config())
     token = _escena.set(actual)
     try:
         yield actual
@@ -326,12 +326,44 @@ def secretos_de_la_config() -> dict[str, str]:
     return {v: o for v, o in secretos.items() if len(v) >= 8}
 
 
-def _revisar_secretos(texto: str, secretos: dict[str, str], ruta: Path) -> None:
-    for secreto, origen in secretos.items():
-        if len(secreto) >= 8 and secreto in texto:
-            raise ErrorGrabacion(f"{ruta}: la grabación contiene una credencial de la configuración ({origen}); no se escribe.")
-    if _SECRETO.search(texto):
-        raise ErrorGrabacion(f"{ruta}: la grabación contiene algo con forma de credencial (API key, token); no se escribe.")
+class Secretos:
+    """Valores que no pueden terminar en una grabación (valor → de dónde sale).
+
+    No se puede imprimir: `repr`, `str` y rich muestran solo cuántos hay. Un traceback con
+    variables locales (rich, `show_locals`) que pase por una escena o por el proveedor nunca
+    muestra la clave. Los valores solo salen por `motivo_en`, que devuelve el ORIGEN, no el valor.
+    """
+
+    __slots__ = ("_valores",)
+
+    def __init__(self) -> None:
+        self._valores: dict[str, str] = {}
+
+    def agregar(self, valores: dict[str, str]) -> None:
+        self._valores.update({v: o for v, o in valores.items() if v and len(v) >= 8})
+
+    def agregar_de(self, otros: Secretos) -> None:
+        self._valores.update(otros._valores)
+
+    def motivo_en(self, texto: str) -> str | None:
+        """Por qué `texto` no se puede escribir (sin el valor), o None si está limpio."""
+        origen = next((o for v, o in self._valores.items() if v in texto), None)
+        if origen is not None:
+            return f"contiene una credencial de la configuración ({origen})"
+        if _SECRETO.search(texto):
+            return "contiene algo con forma de credencial (API key, token)"
+        return None
+
+    def __len__(self) -> int:
+        return len(self._valores)
+
+    def __repr__(self) -> str:
+        return f"<Secretos: {len(self._valores)} ocultos>"
+
+    __str__ = __repr__
+
+    def __rich_repr__(self) -> Iterator[tuple[str, int]]:
+        yield "ocultos", len(self._valores)
 
 
 def _respuesta_a_dict(respuesta: LLMResponse, norm: _Normalizador) -> dict[str, Any]:
@@ -387,7 +419,7 @@ class _Escena:
     llamadas: dict[str, dict[str, Any]] = field(default_factory=dict)  # clave → llamada (orden de aparición)
     bloques: dict[str, str] = field(default_factory=dict)
     herramientas: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
-    secretos: dict[str, str] = field(default_factory=dict)  # valor → de dónde sale (nunca se escribe)
+    secretos: Secretos = field(default_factory=Secretos, repr=False)
     existe: bool = True
     _consumo: dict[str, int] = field(default_factory=dict)
 
@@ -441,7 +473,10 @@ class _Escena:
     def grabar(self, pedido: Pedido, respuesta: LLMResponse, crudo: str) -> None:
         # Sobre el texto CRUDO (antes de normalizar): un secreto con un UUID adentro no se
         # escaparía partido en marcadores.
-        _revisar_secretos(crudo, self.secretos, self.ruta)
+        motivo = self.secretos.motivo_en(crudo)
+        if motivo:
+            del crudo  # que el texto con la credencial no quede en las variables del traceback
+            raise ErrorGrabacion(f"{self.ruta}: la grabación {motivo}; no se escribe.")
         clave = pedido.clave
         llamada = self.llamadas.get(clave)
         if llamada is None:
@@ -464,7 +499,10 @@ class _Escena:
 
     def escribir(self) -> None:
         texto = self.serializar()
-        _revisar_secretos(texto, self.secretos, self.ruta)
+        motivo = self.secretos.motivo_en(texto)
+        if motivo:
+            del texto  # que el texto con la credencial no quede en las variables del traceback
+            raise ErrorGrabacion(f"{self.ruta}: la grabación {motivo}; no se escribe.")
         self.ruta.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=self.ruta.parent, prefix=f".{self.ruta.name}.", suffix=".tmp")
         try:
@@ -606,6 +644,20 @@ def _cambios_tools(antes: list[dict[str, Any]] | None, ahora: list[dict[str, Any
     return cambios
 
 
+def _texto_crudo(system_blocks: list[str], messages: list[LLMMessage], respuesta: LLMResponse) -> str:
+    """Todo el texto del request y la respuesta, sin normalizar, para buscar credenciales."""
+    return json.dumps(
+        [
+            system_blocks,
+            [[m.content, [tc.arguments for tc in m.tool_calls]] for m in messages],
+            respuesta.content,
+            [tc.arguments for tc in respuesta.tool_calls],
+        ],
+        ensure_ascii=False,
+        default=str,
+    )
+
+
 # ------------------------------------------------------------------ proveedor
 class ProveedorGrabado(BaseLLMProvider):
     """Envoltorio del proveedor resuelto (`core.llm.resolve_provider`).
@@ -636,7 +688,9 @@ class ProveedorGrabado(BaseLLMProvider):
         self.model = model
         self.thinking = thinking
         self.pricing_per_mtok = pricing_per_mtok
-        self._secretos = tuple(s for s in secretos if s)
+        # Nunca un atributo con la clave en claro: `Secretos` no se puede imprimir.
+        self._secretos = Secretos()
+        self._secretos.agregar(dict.fromkeys(secretos, "API key del proveedor (LLM_API_KEY o BYOK)"))
 
     async def generate(
         self,
@@ -666,21 +720,11 @@ class ProveedorGrabado(BaseLLMProvider):
         if self.modo == "replay":
             return actual.reproducir(pedido)
         assert self.inner is not None
-        actual.secretos.update({s: "API key del proveedor (LLM_API_KEY o BYOK)" for s in self._secretos})
+        actual.secretos.agregar_de(self._secretos)
         respuesta = await self.inner.generate(
             system_blocks=system_blocks, messages=messages, tools=tools, max_tokens=max_tokens, temperature=temperature
         )
-        crudo = json.dumps(
-            [
-                system_blocks,
-                [[m.content, [tc.arguments for tc in m.tool_calls]] for m in messages],
-                respuesta.content,
-                [tc.arguments for tc in respuesta.tool_calls],
-            ],
-            ensure_ascii=False,
-            default=str,
-        )
-        actual.grabar(pedido, respuesta, crudo)
+        actual.grabar(pedido, respuesta, _texto_crudo(system_blocks, messages, respuesta))
         return respuesta
 
     async def stream(  # type: ignore[override]

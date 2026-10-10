@@ -755,6 +755,9 @@ async def main(argv: list[str] | None = None) -> int:
     import grabaciones
 
     grabaciones.agregar_argumentos(parser)
+    from core.shared.logger import configure_console_logging
+
+    configure_console_logging()  # tracebacks sin variables locales: nunca imprimen la config
     args = parser.parse_args(argv)
     try:
         grabaciones.activar(args.grabacion)

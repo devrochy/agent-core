@@ -292,6 +292,9 @@ async def main() -> int:
     import grabaciones
 
     grabaciones.agregar_argumentos(parser)
+    from core.shared.logger import configure_console_logging
+
+    configure_console_logging()  # tracebacks sin variables locales: nunca imprimen la config
     args = parser.parse_args()
     from core.llm import cassette
 

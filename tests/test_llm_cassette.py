@@ -391,3 +391,117 @@ def test_sin_embeddings_en_record_o_replay():
 
     cassette.activar("replay")
     assert vector.get_embedding_provider() is None
+
+
+# ------------------------------------------------------------------ secretos fuera de los tracebacks
+_ENTORNO_SECRETO = {
+    "LLM_API_KEY": "clave-llm-de-prueba-0001",
+    "MASTER_ENCRYPTION_KEY": "GpsiZ2sgMd4SvLHGp4Bs5xdaQLlQ1cByyK6DCNxVwL4=",
+    "APP_SECRET_KEY": "app-secret-de-prueba-0002",
+    "DATABASE_URL": "postgresql+asyncpg://runtime:clave-db-de-prueba-0003@localhost:5432/x",
+}
+
+
+def _valores_secretos() -> list[str]:
+    import os
+
+    return [os.environ[k] for k in ("LLM_API_KEY", "MASTER_ENCRYPTION_KEY", "APP_SECRET_KEY")] + ["clave-db-de-prueba-0003"]
+
+
+class _Explota:
+    """Proveedor real simulado que falla en medio de `record`."""
+
+    provider_name = "explota"
+    pricing_per_mtok = (0.0, 0.0)
+
+    async def generate(self, **_: Any) -> LLMResponse:
+        raise RuntimeError("se cayó el proveedor")
+
+
+def _traceback_de_record(tmp_path: Path, formateador: Any, capsys: pytest.CaptureFixture[str]) -> str:
+    import os
+
+    import structlog
+
+    structlog.configure(processors=[structlog.dev.set_exc_info, structlog.dev.ConsoleRenderer(exception_formatter=formateador, colors=False)])
+    try:
+        cassette.activar("record")
+
+        async def turno() -> None:  # como el loop: `settings` y el proveedor en las variables locales
+            settings = get_settings()
+            proveedor = resolve_provider()
+            assert settings.llm_api_key and isinstance(proveedor, cassette.ProveedorGrabado)
+            await proveedor.generate(system_blocks=["## Reglas"], messages=[LLMMessage(role="user", content="hola")])
+
+        import core.llm as llm
+
+        original = llm.cassette.ProveedorGrabado.__init__
+
+        def con_inner_que_explota(self: Any, **kw: Any) -> None:
+            kw["inner"] = _Explota()
+            original(self, **kw)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(llm.cassette.ProveedorGrabado, "__init__", con_inner_que_explota)
+            try:
+                with cassette.escena(tmp_path / "06.json"):
+                    asyncio.run(turno())
+            except RuntimeError:
+                structlog.get_logger("prueba").exception("llm_call_failed")
+        salida = capsys.readouterr().out
+        assert "Traceback" in salida and "se cayó el proveedor" in salida
+        assert os.environ["LLM_API_KEY"]
+        return salida
+    finally:
+        structlog.reset_defaults()
+
+
+@pytest.fixture
+def _entorno_con_secretos(monkeypatch: pytest.MonkeyPatch):
+    for k, v in _ENTORNO_SECRETO.items():
+        monkeypatch.setenv(k, v)
+    get_settings.cache_clear()
+
+
+@pytest.mark.usefixtures("_entorno_con_secretos")
+def test_excepcion_en_record_no_imprime_secretos_ni_con_show_locals(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    """El peor caso, el default de structlog: rich con `show_locals=True`. Ni la escena, ni el
+    proveedor, ni `settings` muestran los valores."""
+    import structlog
+
+    salida = _traceback_de_record(tmp_path, structlog.dev.RichTracebackFormatter(show_locals=True, width=200), capsys)
+    assert "llm_max_tokens" in salida and "**********" in salida  # sí se imprimieron las locals
+    for valor in _valores_secretos():
+        assert valor not in salida
+
+
+@pytest.mark.usefixtures("_entorno_con_secretos")
+def test_consola_de_las_evals_no_muestra_locals(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    import structlog
+
+    from core.shared.logger import configure_console_logging
+
+    configure_console_logging()
+    formateador = structlog.get_config()["processors"][-1]._exception_formatter
+    structlog.reset_defaults()
+    salida = _traceback_de_record(tmp_path, formateador, capsys)
+    assert "llm_max_tokens" not in salida  # solo aparecería en un volcado de variables locales
+    for valor in _valores_secretos():
+        assert valor not in salida
+
+
+@pytest.mark.usefixtures("_entorno_con_secretos")
+def test_settings_y_contenedores_no_se_imprimen():
+    from rich.pretty import pretty_repr
+
+    cassette.activar("record")
+    settings = get_settings()
+    proveedor = resolve_provider()
+    escena = cassette._Escena(Path("x.json"), "record")
+    escena.secretos.agregar(cassette.secretos_de_la_config())
+    assert len(escena.secretos) >= 3
+    texto = " ".join(f(o) for o in (settings, proveedor, escena, escena.secretos) for f in (repr, str, pretty_repr))
+    for valor in _valores_secretos():
+        assert valor not in texto
+    assert "llm_max_tokens=4096" in repr(settings)  # lo que no es secreto se sigue viendo
+    assert escena.secretos.motivo_en("hola clave-db-de-prueba-0003") == "contiene una credencial de la configuración (contraseña de database_url)"

@@ -169,18 +169,35 @@ y reproducido. ADR-0120 (adenda del 2026-10-10) lo fija así:
 
 1. Revisa el diff. Si el cambio no era intencional, es una regresión: arréglala.
 2. Si era intencional, pide **OK al dueño** para regrabar. Son unas 9 llamadas, ~0,01 USD.
-3. Regraba en una **base recién migrada y sembrada**, igual que el CI:
+3. Regraba con `scripts/grabar_gate_local.sh`, desde un worktree **sin `.env`** y con la clave
+   exportada en la terminal (el script nunca la imprime):
 
    ```bash
-   # stack efímero propio con las variables de ci.yml, base vacía
-   agent-core db migrate && ADMIN_PASSWORD=admin123 python scripts/init_db.py
-   LLM_API_KEY=… bash scripts/gate_evals.sh record
+   export LLM_API_KEY=…
+   VENV=/ruta/al/.venv bash scripts/grabar_gate_local.sh
    ```
 
-   En `record`, un escenario que falla por la respuesta del modelo igual queda grabado y la
-   corrida sigue. Un error de grabación (exit 3) la corta sin más llamadas.
-4. Verifica sin red en otra base nueva: `bash scripts/gate_evals.sh replay` con `LLM_API_KEY=`
-   vacía. Revisa que los JSON no tengan secretos ni datos reales y commitéalos en la misma PR.
+   El script hace todo en stacks efímeros nuevos (Postgres pg17 + PostGIS y Redis en Docker,
+   puertos 55571/56511, configurables con `GATE_PG_PORT`/`GATE_RD_PORT`), con las variables de
+   prueba de `ci.yml`:
+   - **graba** (`gate_evals.sh record`) en una base recién migrada y sembrada;
+   - **reproduce dos veces** sin `LLM_API_KEY`, cada una en una base nueva, y compara con la
+     grabación;
+   - **revisa** que ni las grabaciones ni los logs tengan la clave o las claves de prueba.
+
+   Si un escenario falla por la respuesta del modelo, igual queda grabado y la corrida sigue.
+   Una `excepción:` o un traceback (clave inválida, red, proveedor caído) corta la corrida
+   después del golden, sin seguir llamando al LLM (exit 4). También corta si no quedó ninguna
+   grabación (exit 5), si un replay no coincide (exit 6) o si aparece una clave (exit 7).
+   Además rechaza correr si hay un `.env` (cambiaría el prompt frente al CI), si los puertos
+   están ocupados o si hay otra grabación en curso: dos stacks sobre los mismos puertos se
+   cambian la base entre sí, y la base nueva todavía no tiene el rol `app_runtime` (Postgres
+   lo reporta como `password authentication failed for user "app_runtime"`).
+
+   Ensayos sin LLM real, que no gastan y graban en un directorio temporal:
+   `--ensayo` (proveedor en `127.0.0.1:9`, tiene que cortar con exit 4) y `--ensayo-demo`
+   (`FakeProvider`, recorre el camino completo).
+4. Revisa el diff de `evals/cassettes/` (sin secretos ni datos reales) y commitéalo en la misma PR.
 
 Un replay sobre una base **ya usada** no coincide: en la segunda corrida el flujo ofrece las tools
 `sub_*`, que en la primera no estaban. Por eso el CI y la grabación parten siempre de una base

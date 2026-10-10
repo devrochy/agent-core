@@ -25,10 +25,16 @@ if [ "$modo" = "record" ]; then
   # Grabar gasta saldo. Un escenario que falla por la respuesta del modelo (exit 1) igual queda
   # grabado y se sigue; cualquier otra salida (3: error de grabación) corta sin más llamadas.
   estado=0
-  python evals/runner.py "$GOLDEN" || estado=$?
+  salida="$(mktemp)"
+  python evals/runner.py "$GOLDEN" 2>&1 | tee "$salida" || estado=${PIPESTATUS[0]}
   if [ "$estado" -ne 0 ] && [ "$estado" -ne 1 ]; then
     echo "Grabación cortada en el golden (exit $estado): no se graban los journeys." >&2
     exit "$estado"
+  fi
+  # Una `excepción:` (clave inválida, red, proveedor caído) no es una respuesta del modelo.
+  if grep -qE "excepción:|Traceback" "$salida"; then
+    echo "Grabación cortada en el golden: hubo excepciones (ver arriba), no se graban los journeys." >&2
+    exit 4
   fi
   python evals/journeys.py "$JOURNEYS" --umbral 1.0 || { e=$?; [ "$estado" -eq 0 ] && estado=$e; }
   exit "$estado"
