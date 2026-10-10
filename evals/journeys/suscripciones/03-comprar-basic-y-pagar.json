@@ -5,10 +5,7 @@
     {
       "nota": "pide el Basic con pago en línea",
       "usuario": "Quiero el Plan Basic y pagarlo en línea. Mis datos: Ana Gómez, cédula 1012345678, celular 3001234567, correo ana.gomez@example.com.",
-      "hasta_herramienta": [
-        "confirmar_pago_pedido",
-        "generar_link_pago"
-      ],
+      "hasta_herramienta": "confirmar_pago_pedido",
       "insistir": "Sí, confirmo el Plan Basic con pago en línea. Pasame el link de pago.",
       "max_turnos": 4,
       "espera": {

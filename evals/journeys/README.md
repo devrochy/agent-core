@@ -66,7 +66,7 @@ reglas del alta también cuentan por documento y teléfono (un Free por persona,
 ## Pagos simulados
 
 El runner reemplaza el **proveedor** de `pack_payments`, la pieza que habla con Wompi. Corre el
-camino real del pack (capacidad, tool `generar_link_pago`, transacciones) sin red: los links son
+camino real del pack (capacidad y transacciones) sin red: los links son
 `https://pagos.simulados/<referencia>` y respetan el mínimo configurado.
 
 ## Pasos

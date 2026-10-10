@@ -21,9 +21,9 @@ from core.admin.context import base_context
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from pack_payments.config import PaymentsConfig
+from pack_payments.proveedor import build_provider
 from pack_payments.providers.base import PaymentRequestRejected
 from pack_payments.providers.wompi import min_amount_cop
-from pack_payments.skills import build_provider
 
 log = get_logger(__name__)
 

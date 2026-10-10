@@ -25,9 +25,9 @@ from core.shared.tenant import get_current_tenant_id, tenant_scope
 from pack_payments.admin import router as admin_config_router
 from pack_payments.config import PaymentsConfig
 from pack_payments.models import PaymentTransaction
+from pack_payments.proveedor import build_provider, tenant_config
 from pack_payments.providers import wompi
 from pack_payments.providers.base import WebhookEvent
-from pack_payments.skills import PaymentSkill, build_provider, tenant_config
 
 if TYPE_CHECKING:
     from core.mcp.host import MCPHost
@@ -237,10 +237,9 @@ class PaymentsModule(BaseModule):
     setup_guide = "Configura tus llaves de Wompi (sandbox o producción)."
     requires_config = True
     config_schema = PaymentsConfig
-    # Salida a red de la tool y del panel (ADR-0052): solo la API de Wompi.
+    # Salida a red de la capacidad y del panel (ADR-0052): solo la API de Wompi.
     network_allowlist: ClassVar[tuple[str, ...]] = wompi.NETWORK
     admin_router = admin_router
-    declared_skills: list[type] = [PaymentSkill]  # noqa: RUF012
 
     def on_activate(self, host: MCPHost) -> None:
         config = self.config
@@ -248,7 +247,8 @@ class PaymentsModule(BaseModule):
             from core.shared.exceptions import PluginConfigError
 
             raise PluginConfigError(PLUGIN_ID, "Config inválida o ausente")
-        host.register_skill(PaymentSkill())
+        # Sin tools: el link de un pedido lo pide pack-commerce con `confirmar_pago_pedido`
+        # (ADR-0087). `generar_link_pago`, con referencia y monto del LLM, se retiró.
         from pack_payments.payments import WompiPaymentCapability
 
         payment_registry.register(PLUGIN_ID, WompiPaymentCapability())

@@ -174,7 +174,7 @@ graph TB
     G1[guardrails: crm_amount_check · crm_completion_check]
   end
   subgraph PP["pack-payments (ADR-0023)"]
-    S4[payment_skill → generar_link_pago]
+    S4[capacidad de pagos → link del pedido · webhook]
     PB2[playbooks: pagos]
   end
   subgraph PCAL["pack-calendar"]
