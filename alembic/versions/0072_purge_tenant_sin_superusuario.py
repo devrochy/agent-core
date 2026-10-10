@@ -42,8 +42,8 @@ Se mantienen el resto de garantías de la `0011`: SECURITY DEFINER (el dueño om
 transaccional (si algo falla, rollback completo) y master-only con frase `ELIMINAR <slug>` en
 `core/tenants.py` (CLI, panel y API). Solo reemplaza una función: sin bloqueos sobre tablas.
 
-Revision ID: 0067
-Revises: 0066
+Revision ID: 0072
+Revises: 0071
 Create Date: 2026-10-09
 """
 
@@ -53,8 +53,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0067"
-down_revision = "0066"
+revision = "0072"
+down_revision = "0071"
 branch_labels = None
 depends_on = None
 
@@ -171,7 +171,7 @@ def upgrade() -> None:
     sin_permiso = bind.execute(sa.text(_ROLES_SIN_PERMISO)).scalars().all()
     if sin_permiso:
         raise RuntimeError(
-            f"0067: {', '.join(sin_permiso)} no es superusuario ni puede fijar "
+            f"0072: {', '.join(sin_permiso)} no es superusuario ni puede fijar "
             "session_replication_role, y purge_tenant lo necesita. Como superusuario: "
             "GRANT SET ON PARAMETER session_replication_role TO <rol>; "
             "(docs/runbooks/produccion-vps.md, paso 4.3) y vuelve a migrar."

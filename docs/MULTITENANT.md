@@ -144,7 +144,7 @@ salir), así que no disparan los triggers de las FKs ni los de inmutabilidad; la
 `tenants` se borra con las FKs encendidas, para que las referencias desde otros
 negocios (`provisioning_requests.negocio_tenant_id`, `ON DELETE SET NULL`) se
 apliquen. El dueño no es superusuario: necesita `GRANT SET ON PARAMETER
-session_replication_role` (migración `0067`, runbook de producción 4.3). `EXECUTE`
+session_replication_role` (migración `0072`, runbook de producción 4.3). `EXECUTE`
 solo para `app_runtime`.
 
 ## Referencias

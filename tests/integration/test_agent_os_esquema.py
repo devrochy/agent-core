@@ -271,12 +271,15 @@ async def _contar(tabla: str, tid: uuid.UUID | None, filtro: uuid.UUID | None = 
 @pytest.fixture(scope="module")
 async def dos_negocios() -> AsyncIterator[dict[str, Any]]:
     """Negocio A con datos en todas las tablas nuevas y negocio B con los suyos; se purgan al final."""
-    from core.tenants import purge_tenant
+    from core.tenants import deactivate_tenant, purge_tenant
 
     a, slug_a = await _crear_negocio("aos-a")
     b, slug_b = await _crear_negocio("aos-b")
     datos = {"a": a, "b": b, "ids_a": await _sembrar(a), "ids_b": await _sembrar(b)}
     yield datos
+    # La purga exige el negocio suspendido (#408).
+    await deactivate_tenant(str(a))
+    await deactivate_tenant(str(b))
     await purge_tenant(str(a), f"ELIMINAR {slug_a}")
     await purge_tenant(str(b), f"ELIMINAR {slug_b}")
 
@@ -843,13 +846,14 @@ async def test_funciones_de_trigger_con_search_path_y_vista_security_invoker() -
 
 
 async def test_purge_tenant_borra_las_tablas_nuevas_con_datos() -> None:
-    from core.tenants import purge_tenant
+    from core.tenants import deactivate_tenant, purge_tenant
 
     tid, slug = await _crear_negocio("aos-purge")
     await _sembrar(tid)
     for tabla in TABLAS_NUEVAS:
         assert await _contar(tabla, tid, tid) >= 1, f"{tabla}: hay datos antes de purgar"
 
+    await deactivate_tenant(str(tid))  # la purga exige el negocio suspendido (#408)
     await purge_tenant(str(tid), f"ELIMINAR {slug}")
 
     async with _owner() as conn:  # el dueño ve todo: confirma que no quedó nada

@@ -5,7 +5,7 @@
   en los triggers internos de las FKs exige superusuario ("… is a system trigger"), y el dueño de
   producción es `agent_core_migrations NOSUPERUSER BYPASSRLS`. Hacía rollback completo: sin fuga, pero
   sin borrado. En CI, local y test no se veía porque ahí se migra como superusuario.
-- Migración `0067`: `purge_tenant` se declara con `SET session_replication_role = replica` (se
+- Migración `0072`: `purge_tenant` se declara con `SET session_replication_role = replica` (se
   restaura al salir de la función, también si falla) y `SET search_path = pg_catalog, public,
   pg_temp`, con nombres calificados y descubrimiento de tablas por `pg_catalog`. La fila `tenants` se
   borra con las FKs encendidas: el `ON DELETE SET NULL` de `provisioning_requests.negocio_tenant_id`
@@ -21,7 +21,7 @@
   SQL (defensa en profundidad: falla sin borrar nada, con `FOR UPDATE` sobre la fila del negocio).
 - **Paso manual antes de desplegar** donde el rol de migraciones no sea superusuario (producción):
   como superusuario, `GRANT SET ON PARAMETER session_replication_role TO agent_core_migrations;`.
-  Sin eso la `0067` aborta a propósito. Agregado al paso 4.3 de `docs/runbooks/produccion-vps.md`
+  Sin eso la `0072` aborta a propósito. Agregado al paso 4.3 de `docs/runbooks/produccion-vps.md`
   y a los gotchas de `docs/despliegue-coolify.md`. Test, CI y el stack local migran como
   superusuario: no necesitan nada.
 - Test de integración (`-m aislamiento`): purga con un dueño de la función sin superusuario
