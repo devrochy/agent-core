@@ -16,7 +16,7 @@
 
 ## Decisión
 
-Los contratos pasan a v3.0.0 con tres modelos nuevos: `procedure/1`, AgentSpec v3 y KernelSpec v1.
+Los contratos ganan tres modelos nuevos: `procedure/1`, AgentSpec v3 y KernelSpec v1. `procedure/1` es aditivo y entra como minor (2.1.0, HU-AOS-03): ningún contrato existente cambia de forma (ADR-0011). El major (3.0.0) llega con AgentSpec v3 y KernelSpec (HU-AOS-12).
 
 1. **`procedure/1`** (lo publica la habilidad) define:
    - disparadores: descripción, ejemplos y prefijos de botones;
@@ -27,7 +27,7 @@ Los contratos pasan a v3.0.0 con tres modelos nuevos: `procedure/1`, AgentSpec v
 
    Un **linter** exige acciones existentes, etapas alcanzables, confirmación para toda acción `irreversible` y fuente para toda afirmación de dinero. El mismo validador corre en el CLI, en CI y en la API al guardar un borrador o publicar una release: un procedimiento, AgentSpec o KernelSpec inválido no se guarda (el incidente de #305 salió de un playbook de un negocio, no de un pack).
 
-   Un procedimiento solo usa acciones de su habilidad y del core. Lo de otra habilidad llega por eventos de dominio (ADR-0023, ADR-0107) o por registros del core (ADR-0067), nunca importándola (invariante 5). Los *resolvers* reciben solo `ToolContext` (invariante 6).
+   Un procedimiento usa acciones del core, de su habilidad y, **por nombre**, de otras habilidades que declara como dependencia en su manifiesto (`requires`), como `contratar_plan` con `generar_link_pago` de pack-payments (así ya funciona el flujo de commerce). Nunca importa otra habilidad (invariante 5): la acción se resuelve en el catálogo del binario y, si la habilidad requerida no está instalada en el scope, el procedimiento no se ofrece (fail-closed). Los efectos entre habilidades siguen yendo por eventos de dominio (ADR-0023, ADR-0107) o registros del core (ADR-0067). Los *resolvers* reciben solo `ToolContext` (invariante 6).
 2. **AgentSpec v3** (un agente):
    - `description`. `kind` vive en `agents`, no en el contrato: un agente `core` versiona un KernelSpec v1 y un AgentSpec v3 solo describe agentes `specialist` o `backoffice`. La identidad (`id`, `tenantId`, versión) no está en el contrato: la da la fila;
    - `persona` (`inheritConnectionVoice`, `maxLength`, `forbiddenPhrases`), `model` (los mismos campos que en v2: `primary`, `fallback`, `router`, `temperature`) y `playbooks`;
@@ -53,7 +53,7 @@ Los contratos pasan a v3.0.0 con tres modelos nuevos: `procedure/1`, AgentSpec v
    - voz: la `voice` del KernelSpec manda para rol, tono, calidez y emojis. `AppSettings.brand_voice` sigue siendo dato del negocio y se edita en el panel, pero la release congela su valor (ADR-0117 §2): un cambio entra con la siguiente release. `behavior_config.tono` deja de escribirse y se lee solo como respaldo de v2;
    - packs habilitados: `pack_installations`, leídas solo por `enabled_packs()`, `enabled_business_packs()` y `count_tenant_packs()` (semántica en ADR-0118 §2);
    - textos de un procedimiento: se sobrescriben solo en `procedures[].overrides`; los playbooks, solo en `TENANTS_ROOT` (ADR-0026). La release congela ambos (ADR-0117).
-5. **Lector tolerante v2 → v3:** el AgentSpec v2 activo de un negocio se carga como el agente **General** de **cada** conexión conversacional del negocio. Hasta que se construya su release 1 (ADR-0117 §2), el KernelSpec se deriva en memoria de `persona` v2 (rol, tono, calidez, emojis) y de los valores por defecto. Los presets (ADR-0110) y el alta (ADR-0121) siguen escribiendo un AgentSpec v2 que el lector tolerante convierte, hasta HU-AOS-46 (ADR propio). Cada sección del flujo compuesto pasa a un procedimiento "abierto" (una etapa con sus acciones), y todas las acciones que el flujo v2 ofrecía quedan en sus `tools`: nada cambia de conducta aunque la etapa en foco sea otra. La correspondencia, campo por campo:
+5. **Lector tolerante v2 → v3:** el AgentSpec v2 activo de un negocio se carga como el agente **General** de **cada** conexión conversacional del negocio. Hasta que se construya su release 1 (ADR-0117 §2), el KernelSpec se deriva en memoria de `persona` v2 (rol, tono, calidez, emojis) y de los valores por defecto. Los presets (ADR-0110) y el alta (ADR-0121) siguen escribiendo un AgentSpec v2 que el lector tolerante convierte, hasta HU-AOS-46 (ADR propio). Cada sección del flujo compuesto pasa a un procedimiento "abierto" (una etapa con sus acciones), y todas las acciones que el flujo v2 ofrecía quedan en sus `tools`: nada cambia de conducta aunque la etapa en foco sea otra. Un procedimiento abierto hereda la confirmación del binding v2 (`requiresConfirmation`) de cada acción, y el linter la acepta como confirmación de la etapa; así "lo irreversible siempre se confirma" no obliga a cambiar conducta al convertir. La correspondencia, campo por campo:
 
 | Campo v2 | En v3 |
 |---|---|
