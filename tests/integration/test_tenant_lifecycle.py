@@ -12,6 +12,7 @@ import json
 import os
 import uuid
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 from conftest import _meta_request
@@ -225,13 +226,16 @@ async def test_suspendido_no_responde_por_debounce(recorded) -> None:
 async def test_purge_frase_incorrecta_no_borra() -> None:
     from core.db.models import Tenant
     from core.db.session import get_session
-    from core.tenants import purge_tenant
+    from core.tenants import TenantNotSuspendedError, deactivate_tenant, purge_tenant
 
     tid, _slug = await _onboard(_uniq("purge-nofrase"))
     await _seed_catalog(tid)
+    await deactivate_tenant(str(tid))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError) as exc:
         await purge_tenant(str(tid), "ELIMINAR OTRACOSA")
+    assert not isinstance(exc.value, TenantNotSuspendedError)
+    assert "Frase de confirmación" in str(exc.value)
 
     async with get_session() as session:
         still = await session.get(Tenant, tid)
@@ -271,6 +275,9 @@ async def test_purge_borra_core_packs_redis_y_tenant() -> None:
     assert tables, "debe haber tablas con tenant_id"
     assert sum([await _count_rows(t, tid) for t in tables]) > 0, "el tenant debe tener datos"
 
+    from core.tenants import deactivate_tenant
+
+    await deactivate_tenant(slug)
     await purge_tenant(str(tid), f"ELIMINAR {slug}")
 
     # cero filas en TODAS las tablas (core + packs)
@@ -292,6 +299,47 @@ async def test_purge_borra_core_packs_redis_y_tenant() -> None:
     if admin is not None:
         ids = {str(t[0]) for t in await admin_tenants(admin.id)}
         assert str(tid) not in ids, "tras el purge, el admin no puede ver el tenant"
+
+
+async def test_purge_de_un_negocio_activo_falla_y_no_borra_nada() -> None:
+    """Solo se purga un negocio suspendido: en Python (con un mensaje que dice cómo
+    suspenderlo) y, por defensa en profundidad, en la función SQL."""
+    import sqlalchemy.exc
+
+    from core.db.models import Tenant
+    from core.db.session import get_session
+    from core.memory.working import append_turn, get_redis
+    from core.shared.tenant import tenant_scope
+    from core.tenants import TenantNotSuspendedError, purge_tenant
+
+    tid, slug = await _onboard(_uniq("purge-activo"))
+    await _seed_catalog(tid)
+    await _sembrar_conversacion(tid)
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            conv_id = (
+                await session.execute(text("select id from conversations where tenant_id = :t"),
+                                      {"t": str(tid)})
+            ).scalar_one()
+    await append_turn(conv_id, "user", "hola")
+
+    tables = await _tenant_tables()
+    antes = {t: await _count_rows(t, tid) for t in tables}
+    assert sum(antes.values()) > 0
+
+    with pytest.raises(TenantNotSuspendedError, match=f"tenant deactivate {slug}"):
+        await purge_tenant(str(tid), f"ELIMINAR {slug}")
+
+    # La función SQL, llamada directo por el runtime, también se niega.
+    async with get_session() as session:
+        with pytest.raises(sqlalchemy.exc.DBAPIError, match="no está suspendido"):
+            await session.execute(text("select purge_tenant(:tid)"), {"tid": str(tid)})
+        await session.rollback()
+
+    assert {t: await _count_rows(t, tid) for t in tables} == antes, "no se borró nada"
+    async with get_session() as session:
+        assert (await session.get(Tenant, tid)).status == "active"
+    assert await get_redis().exists(f"wm:{conv_id}") == 1, "Redis intacto"
 
 
 # ------------------------------------------------------------------ purga sin superusuario
@@ -474,6 +522,9 @@ async def test_purge_funciona_con_dueno_sin_superusuario(purge_con_dueno_sin_sup
         otro_antes = await _conteos(conn, tablas, otro)
         assert sum(otro_antes.values()) > 0, "el otro negocio debe tener datos"
 
+        from core.tenants import deactivate_tenant
+
+        await deactivate_tenant(str(tid))
         permiso = purge_con_dueno_sin_superusuario
         if permiso is not None:
             # Sin el permiso sobre el parámetro la purga falla entera: rollback, nada borrado.
@@ -495,15 +546,21 @@ async def test_purge_funciona_con_dueno_sin_superusuario(purge_con_dueno_sin_sup
         assert await conn.fetchval(
             "select negocio_tenant_id from public.provisioning_requests where id = $1", solicitud
         ) is None, "ON DELETE SET NULL de la solicitud del vendedor"
+        # La cláusula SET de la función no se filtra a la transacción del llamador. Basta una
+        # fila `tenants` suspendida y sin datos.
+        vacio = uuid.uuid4()
+        await conn.execute(
+            "insert into public.tenants (id, name, slug, status) values ($1, 'x', $2, 'suspended')",
+            vacio, f"purge-vacio-{vacio.hex[:6]}",
+        )
+        async with get_session() as session:
+            await session.execute(text("select purge_tenant(:tid)"), {"tid": str(vacio)})
+            rol = (await session.execute(text("show session_replication_role"))).scalar()
+            await session.rollback()
+        assert rol == "origin"
+        await conn.execute("delete from public.tenants where id = $1", vacio)
     finally:
         await conn.close()
-
-    # La cláusula SET de la función no se filtra a la transacción del llamador.
-    async with get_session() as session:
-        await session.execute(text("select purge_tenant(:tid)"), {"tid": str(uuid.uuid4())})
-        rol = (await session.execute(text("show session_replication_role"))).scalar()
-        await session.rollback()
-    assert rol == "origin"
 
 
 # ------------------------------------------------------------------ panel
@@ -531,6 +588,18 @@ async def test_panel_desactivar_reactivar_y_purge(app_client) -> None:
     async with get_session() as session:
         assert (await session.get(Tenant, tid)).status == "active"
 
+    # activo → no se purga aunque la frase sea correcta, y el aviso dice cómo suspenderlo
+    r = await app_client.post(
+        f"/admin/tenants/{tid}/purge", headers=headers, data={"confirm_phrase": f"ELIMINAR {slug}"}
+    )
+    assert r.status_code == 303 and "danger" in r.headers["location"]
+    assert "deactivate" in unquote(r.headers["location"])
+    async with get_session() as session:
+        assert await session.get(Tenant, tid) is not None
+
+    r = await app_client.post(f"/admin/tenants/{tid}/deactivate", headers=headers)
+    assert r.status_code == 303
+
     # frase incorrecta → no borra
     r = await app_client.post(
         f"/admin/tenants/{tid}/purge", headers=headers, data={"confirm_phrase": "ELIMINAR OTRACOSA"}
@@ -546,5 +615,34 @@ async def test_panel_desactivar_reactivar_y_purge(app_client) -> None:
         data={"confirm_phrase": f"ELIMINAR {slug}"},
     )
     assert r.status_code == 303 and "success" in r.headers["location"]
+    async with get_session() as session:
+        assert await session.get(Tenant, tid) is None
+
+async def test_api_purge_exige_negocio_suspendido(app_client) -> None:
+    """`POST /api/v1/admin/platform/tenants/{id}/purge`: 409 si el negocio está activo."""
+    from _api_helpers import api_headers
+
+    from core.db.models import Tenant
+    from core.db.session import get_session
+
+    tid, slug = await _onboard(_uniq("api-purge"))
+    # El negocio activo del panel es otro (un suspendido no se puede abrir).
+    async with get_session() as session:
+        otro = (
+            await session.execute(text("select id from tenants where slug = 'tenant-1'"))
+        ).scalar_one()
+    headers = await api_headers(app_client, otro)
+    url = f"/api/v1/admin/platform/tenants/{tid}/purge"
+
+    r = await app_client.post(url, headers=headers, json={"confirm_phrase": f"ELIMINAR {slug}"})
+    assert r.status_code == 409, r.text
+    assert "tenant_not_suspended" in r.text and "deactivate" in r.text
+    async with get_session() as session:
+        assert await session.get(Tenant, tid) is not None
+
+    r = await app_client.post(f"/api/v1/admin/platform/tenants/{tid}/deactivate", headers=headers)
+    assert r.status_code == 204, r.text
+    r = await app_client.post(url, headers=headers, json={"confirm_phrase": f"ELIMINAR {slug}"})
+    assert r.status_code == 204, r.text
     async with get_session() as session:
         assert await session.get(Tenant, tid) is None

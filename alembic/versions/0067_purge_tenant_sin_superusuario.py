@@ -21,6 +21,10 @@ función por la cláusula `SET`): las FKs que apuntan al negocio desde fuera de 
 aplican, y una FK desconocida hacia `tenants` aborta la purga en lugar de quedar rota.
 
 Otros cambios respecto de la `0011`:
+- Solo purga un negocio **suspendido** (`tenants.status = 'suspended'`, el estado del ciclo de
+  vida que pone `tenant deactivate`; no la falta de pago de ADR-0045). Si está activo o no
+  existe, falla sin borrar nada. Es defensa en profundidad: `core/tenants.py` ya lo exige antes
+  de llamar, pero una llamada directa (o inyectada) no puede borrar un negocio en operación.
 - Descubre las tablas con `tenant_id` en todos los esquemas propios, no solo en `public`:
   `meta_private.meta_tokens` (tokens cifrados de Meta) quedaba huérfana.
 - `search_path` fijado a `pg_catalog, public, pg_temp`, nombres calificados y descubrimiento por
@@ -34,7 +38,7 @@ superusuario (el dueño no puede concedérselo a sí mismo): está en el paso 4.
 producción. Sin superusuario ni ese permiso (en el rol que migra y en el dueño de la función),
 la migración aborta a propósito, como la `0052`.
 
-Se mantienen las garantías de la `0011`: SECURITY DEFINER (el dueño omite RLS con BYPASSRLS),
+Se mantienen el resto de garantías de la `0011`: SECURITY DEFINER (el dueño omite RLS con BYPASSRLS),
 transaccional (si algo falla, rollback completo) y master-only con frase `ELIMINAR <slug>` en
 `core/tenants.py` (CLI, panel y API). Solo reemplaza una función: sin bloqueos sobre tablas.
 
@@ -78,6 +82,21 @@ AS $$
 DECLARE
     rec record;
 BEGIN
+    -- Solo un negocio suspendido (ciclo de vida, tenants.status) se purga. FOR UPDATE: una
+    -- reactivación concurrente espera a que la purga termine o falle.
+    PERFORM 1 FROM public.tenants
+    WHERE id = p_tenant_id AND status = 'suspended'
+    FOR UPDATE;
+    IF NOT FOUND THEN
+        IF EXISTS (SELECT 1 FROM public.tenants WHERE id = p_tenant_id) THEN
+            RAISE EXCEPTION 'purge_tenant: el negocio % no está suspendido', p_tenant_id
+                USING ERRCODE = 'object_not_in_prerequisite_state',
+                      HINT = 'Suspéndelo primero (agent-core tenant deactivate <slug>).';
+        END IF;
+        RAISE EXCEPTION 'purge_tenant: el negocio % no existe', p_tenant_id
+            USING ERRCODE = 'no_data_found';
+    END IF;
+
     -- Toda tabla con tenant_id (core + packs + meta_private), sin triggers de FK ni de
     -- inmutabilidad: el orden no importa. Las particiones se borran desde su tabla padre.
     FOR rec IN

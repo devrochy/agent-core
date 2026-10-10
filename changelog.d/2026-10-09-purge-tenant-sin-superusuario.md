@@ -14,6 +14,11 @@
 - La purga ahora también borra `meta_private.meta_tokens` (tokens cifrados de Meta del negocio), que
   quedaban huérfanos porque solo se miraba el esquema `public`.
 - `EXECUTE` de `purge_tenant` solo para `app_runtime` (antes, PUBLIC).
+- **Solo se purga un negocio suspendido** (`tenants.status = 'suspended'`, el de `tenant
+  deactivate`; no la falta de pago). Lo exigen `core/tenants.py` (`TenantNotSuspendedError`, con un
+  mensaje que dice cómo suspenderlo), la CLI (antes de pedir la frase), el panel (el botón
+  "Eliminar" solo se habilita en los suspendidos), la API (409 `tenant_not_suspended`) y la función
+  SQL (defensa en profundidad: falla sin borrar nada, con `FOR UPDATE` sobre la fila del negocio).
 - **Paso manual antes de desplegar** donde el rol de migraciones no sea superusuario (producción):
   como superusuario, `GRANT SET ON PARAMETER session_replication_role TO agent_core_migrations;`.
   Sin eso la `0067` aborta a propósito. Agregado al paso 4.3 de `docs/runbooks/produccion-vps.md`
@@ -23,3 +28,6 @@
   (BYPASSRLS y el permiso sobre el parámetro); comprueba `meta_private`, que otro negocio queda
   intacto, el `SET NULL` de la solicitud del vendedor, el rollback completo sin el permiso y que
   `session_replication_role` no se filtra a la transacción del llamador.
+- Tests de integración nuevos: purgar un negocio activo falla en Python y en SQL sin borrar nada
+  (ni Redis); la API responde 409 con el negocio activo y 204 una vez suspendido. Los tests de purga
+  existentes (frase incorrecta, borrado completo, panel) suspenden antes.
