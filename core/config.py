@@ -271,6 +271,10 @@ class Settings(BaseSettings):
     otel_enabled: bool = Field(default=False, alias="OTEL_ENABLED")
     otel_exporter_endpoint: str = Field(default="", alias="OTEL_EXPORTER_OTLP_ENDPOINT")
     otel_service_name: str = Field(default="agent-core", alias="OTEL_SERVICE_NAME")
+    # Ledger del Coordinador (HU-AOS-10, adenda de ADR-0112): `core_decisions`, `turn_outcomes`
+    # y la propagación del `turn_id` a `messages`/`usage_ledger`/`audit_log`. Es observabilidad,
+    # no cambia la conducta; apagarlo deja las columnas en NULL. Es "la bandera" de la HU.
+    kernel_ledger_enabled: bool = Field(default=True, alias="KERNEL_LEDGER_ENABLED")
 
     # --- Correo de sistema (recuperación de contraseña, ADR-0098) ---
     # SMTP de la plataforma, distinto del canal SMTP por tenant (que exige

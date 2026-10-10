@@ -62,3 +62,54 @@ Cada conexión tiene un Coordinador que ejecuta procedimientos tipados sobre un 
   - `AOS_PROCEDURES` y `AOS_RUNTIME` son configuración de plataforma **por negocio**, guardada en base de datos y editable solo por el master: se encienden negocio por negocio sin redeploy.
   - `AOS_CONNECTION_ROUTING` es global por entorno, porque su *contract* (ADR-0115) es global.
   - Orden de encendido: `AOS_CONNECTION_ROUTING` (global, encendida/apagada) → `AOS_RUNTIME` (`legacy` | `v3`, por negocio; `v3` exige `AOS_CONNECTION_ROUTING` encendida) → `AOS_PROCEDURES` (por negocio; exige `AOS_RUNTIME = v3`). Se apagan en orden inverso: apagar `AOS_CONNECTION_ROUTING` exige `AOS_RUNTIME = legacy` en todos los negocios. El panel del master rechaza las combinaciones inválidas.
+
+## Adenda de implementación (2026-10-10, HU-AOS-10): ledger del Coordinador y trazas
+
+Revisada por el agente `arquitecto` antes de escribir código. Es la primera parte de HU-AOS-10; no cambia contratos,
+invariantes ni banderas de conducta.
+
+- **Qué es un turno:** lo que el Coordinador hace con lo que entró: bloquearlo por una política, escalarlo o
+  enrutarlo al hilo del agente. Deja dos filas append-only:
+  - `core_decisions` (cabecera, `id = turn_id`) **al decidir**, antes de cualquier efecto del turno (respuesta fija,
+    escalamiento, LLM). Las políticas del preámbulo deciden `blocked` (`kill_switch`, `escalated_conversation`,
+    `quota`, `budget`, `connection_paused`, `out_of_hours`) o `escalated` (`escalation_keyword`); lo demás se decide
+    `routed` (`route_source = default`, sin router todavía) justo antes de la primera llamada al LLM, así un
+    presupuesto agotado en la primera vuelta queda `blocked/budget`.
+  - `turn_outcomes` al cerrar, después de la entrega: `replied` (encolado, no entregado), `neutral` (ADR-0092),
+    `escalated` (también si el envío falla y se escala), `silent` o `failed` (excepción; una tarea cancelada no
+    escribe). Lleva tokens y costo del turno y el veredicto del verificador (`[{kind, verdict, count}]`, sin texto).
+  - Agendar un debounce no es un turno: decide el disparo. El reintento de un inbound que falló no genera turno nuevo
+    (el inbound ya está duplicado). El playground (canal `test`) escribe filas; el tablero (HU-AOS-29) lo filtra por
+    canal.
+  - **Sin fila** (no hay conversación y `conversation_id` es NOT NULL): negocio no operativo en el consumer o en el
+    disparo del debounce, `QuotaExceeded` al crear el cliente o la conversación, y conversación inexistente.
+- **Costo:** dos INSERT por turno y ninguna lectura extra (la conexión sale del objeto en memoria, los tokens del uso
+  que ya se acumula para `usage_ledger`). Medido en local: p95 de 8,4 ms por turno para las dos escrituras.
+- **`turn_id` en las filas del turno:** `messages`, `usage_ledger` (y `trace_id`) y `audit_log` lo toman por default
+  de columna desde `core/shared/turno.py`, que solo se fija con la cabecera ya commiteada (las FKs son diferidas al
+  COMMIT, pero cada sesión es su propia transacción). Significa "causado por el turno", no "de la conversación del
+  turno". **Guarda de negocio:** si la fila es de otro negocio (cobro de plataforma, packs que cambian de
+  `tenant_scope`), queda NULL; la FK compuesta nunca hace fallar una escritura que antes funcionaba. El inbound se
+  guarda antes de decidir y queda NULL: lo enlaza `core_decisions.inbound_message_ids`. **Pendiente:** los ids del
+  inbound en el camino debounce (la ráfaga vive en Redis como texto) y el `turn_id` dentro de las tareas Celery
+  (`run_async` corre la corrutina en otro hilo y el contexto no viaja).
+- **Trazas:** el turno abre `kernel.turn` como span actual; el hilo (`turn`, `llm_call`), las acciones
+  (`tool_execute`) y la salida comparten `trace_id`. Con OTel apagado se adjunta un span no grabado con
+  `trace_id = turn_id`. A Celery viaja en `traceparent` (señales `before_task_publish`/`task_prerun`/`task_postrun`,
+  `core/observability/celery_trazas.py`), sin dependencias nuevas.
+- **Best-effort mientras el runtime sea legacy:** un fallo de escritura se loguea y el turno sigue igual, también en
+  latencia (cada INSERT tiene un tope de 2 s). Desde `AOS_PROCEDURES` el design (§5.3) pide fail-closed; llega con el
+  motor de procedimientos.
+- **Turno de un solo negocio:** el turno abierto solo es visible bajo el `tenant_scope` de su negocio; un turno de otro
+  negocio anidado abre el suyo. El span `kernel.turn` no registra la excepción (su mensaje puede repetir datos del
+  cliente), solo `error.type`. A Celery solo viaja W3C TraceContext, nunca baggage. Una tarea que el turno lance con
+  `create_task` hereda su `turn_id` (mismo negocio): es ruido aceptado en el ledger.
+- **Bandera:** `KERNEL_LEDGER_ENABLED` (entorno, global, encendida por defecto) es la bandera de la HU. Es
+  observabilidad y no cambia la conducta ni el prompt (el gate de evals en replay pasa sin regrabar), así que no va
+  detrás de `AOS_RUNTIME`/`AOS_PROCEDURES`, que quedan para cambios de conducta. Apagada, no hay filas y el `turn_id`
+  queda NULL.
+- **Kernel y orquestador:** `core/kernel/decisions.py` (ledger), `ingress.py` (cuota y presupuesto, desde el preámbulo
+  del loop) y `egress.py` (un mensaje por turno, antes duplicado en consumer y debounce). El kernel no importa el loop,
+  el consumer ni el debounce (contrato `kernel-sin-orquestador` en `.importlinter`). Las políticas del consumer
+  (pausa de ADR-0122, kill-switch, palabras, horario, velocidad) registran su decisión en el sitio y se mudan a
+  `ingress` cuando entre HU-AOS-11, que hoy edita ese bloque.
