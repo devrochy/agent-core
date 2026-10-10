@@ -215,6 +215,40 @@ def test_link_de_pago_de_un_turno_anterior_se_quita() -> None:
     assert veredicto.urls_quitadas == 1
 
 
+def test_links_de_una_tool_que_termino_con_error_se_conservan_y_uno_inventado_se_quita() -> None:
+    """ADR-0125: `terminos_pendientes` trae `error` (el pedido no se creó), pero sus enlaces
+    legales los dio el servidor: tienen que llegarle al cliente. Una URL inventada se sigue
+    quitando, y la tool fallida no respalda un cierre ni un link de pago."""
+    documentos = [
+        {"tipo": t, "version": "v1", "url": f"https://solvershub.test/legal/{t}"}
+        for t in ("terminos", "privacidad", "dpa")
+    ]
+    frenado = _tool(
+        "crear_pedido", ok=False, status="terminos_pendientes", error="Falta aceptar los términos.",
+        documentos=documentos,
+    )
+    enlaces = "\n".join(d["url"] for d in documentos)
+    veredicto = _verificar(f"Antes de crear el pedido, acepta estos documentos:\n{enlaces}\n¿Los aceptas?", [frenado])
+    assert veredicto.passed and veredicto.urls_quitadas == 0
+    assert all(d["url"] in veredicto.texto for d in documentos)
+
+    inventado = _verificar(f"Acepta estos: {enlaces}\ny este https://solvershub.test/legal/otro", [frenado])
+    assert inventado.urls_quitadas == 1 and "legal/otro" not in inventado.texto
+    assert not _verificar("Listo, tu pedido quedó confirmado.", [frenado]).passed
+    assert not _verificar("Te envío el link de pago.", [frenado]).passed
+
+
+def test_una_url_que_la_tool_fallida_repite_en_su_error_se_quita() -> None:
+    fallida = _tool("crear_pedido", ok=False, error="No existe https://falsa.co/x", hint="Revisa https://falsa.co/y")
+    veredicto = _verificar("Mira https://falsa.co/x y https://falsa.co/y", [fallida])
+    assert veredicto.urls_quitadas == 2
+
+
+def test_un_link_de_pago_de_una_tool_fallida_no_respalda_el_link_de_pago() -> None:
+    fallida = _tool("confirmar_pago_pedido", ok=False, error="La pasarela no respondió.", url="https://pagos/x")
+    assert not _verificar("Te envío el link de pago.", [fallida]).passed
+
+
 # ---------------------------------------------------------------- configuración
 def test_interruptores_del_negocio() -> None:
     assert _verificar("Tu pedido quedó creado.", [], desactivados={"verificador_cierre"}).passed

@@ -26,6 +26,7 @@ from core.provisioning.antiabuso import (
     LimiteDeAltas,
     PedidoPreparado,
     TerminosPendientes,
+    cerrar_aceptacion,
     preparar_pedido_de_alta,
     registrar_pedido_de_alta,
 )
@@ -386,9 +387,12 @@ def _respuesta_del_alta_frenada(frenado: Any) -> dict[str, Any]:
             "error": "Falta que el cliente acepte los términos, el aviso de privacidad y el DPA.",
             "documentos": frenado.documentos,
             "acepta_terminos": frenado.token,
+            # El token es el mismo en cada respuesta de esta conversación: en el turno en que
+            # el cliente acepta, el modelo lo recupera llamando sin él (ADR-0125, adenda).
             "hint": (
-                "Comparte los enlaces y espera la respuesta del cliente. Si acepta, repite "
-                "crear_pedido con customer_data.acepta_terminos."
+                "Si el último mensaje del cliente ya acepta los documentos, repite crear_pedido "
+                "ahora con customer_data.acepta_terminos. Si no, comparte los enlaces y espera "
+                "su respuesta."
             ),
         }
     if isinstance(frenado, FreeNoDisponible):
@@ -1611,6 +1615,11 @@ class OrderSkill(BaseSkill):
                             order_id=order.id,
                         )
                     )
+
+        if pedido_de_alta is not None:
+            # El pedido ya se guardó con su aceptación: es por pedido (ADR-0125), otro pedido
+            # en esta conversación vuelve a pedirla.
+            await cerrar_aceptacion(pedido_de_alta)
 
         result: dict[str, Any] = {
             "order_id": order_id,

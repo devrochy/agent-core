@@ -64,6 +64,10 @@ _CLAVE_IMAGEN = re.compile(r"image|imagen|foto|photo|thumbnail", re.IGNORECASE)
 _CLAVE_ENLACE = re.compile(r"link|url|pago|payment|checkout|_safe_append", re.IGNORECASE)
 
 
+# Claves con texto libre de una respuesta fallida (no datos del servidor).
+_TEXTO_DEL_ERROR = frozenset({"error", "hint", "message", "mensaje"})
+
+
 def _textos(node: Any) -> Iterator[str]:
     if isinstance(node, str):
         yield node
@@ -97,12 +101,13 @@ class Evidencia:
     montos_turno: list[float] = field(default_factory=list)
     # Tools que terminaron bien en el turno actual.
     acciones_ok: set[str] = field(default_factory=set)
-    # URLs devueltas por tools del turno actual que terminaron bien (incluye
-    # `_safe_append`). Un link de pago de un turno anterior puede estar vencido
-    # (ADR-0087): no cuenta.
+    # URLs devueltas por tools del turno actual (incluye `_safe_append`), también si la
+    # tool terminó con error: la URL la dio el servidor, no la inventó el modelo (p. ej. los
+    # enlaces legales de `terminos_pendientes`, ADR-0125). Un link de pago de un turno
+    # anterior puede estar vencido (ADR-0087): no cuenta.
     urls_turno: set[str] = field(default_factory=set)
-    # Las que la tool devolvió como link (pago, checkout, `_safe_append`): son las que
-    # respaldan "te envío el link de pago" (`Afirmacion.basta_url`).
+    # Las que la tool devolvió como link (pago, checkout, `_safe_append`) y terminó bien: son
+    # las que respaldan "te envío el link de pago" (`Afirmacion.basta_url`).
     urls_enlace: set[str] = field(default_factory=set)
     # URLs del prompt del sistema (sin la memoria ni el perfil, que escribe el propio
     # asistente) y de los mensajes del cliente.
@@ -128,12 +133,16 @@ class Evidencia:
             textos = list(_textos(resultado))
             for texto in textos:
                 ev.referencias.update(REFERENCIA_RE.findall(texto))
+            if actual:
+                # De una tool fallida, no las del texto del error ni del `hint`: podrían repetir
+                # un argumento con una URL que inventó el modelo.
+                datos = resultado if ok else {k: v for k, v in resultado.items() if k not in _TEXTO_DEL_ERROR}
+                for texto in _textos(datos):
+                    ev.urls_turno.update(_claves(texto))
             if actual and ok:
                 nombre = str(resultado.get(TOOL_NAME_KEY) or "")
                 if nombre:
                     ev.acciones_ok.add(nombre)
-                for texto in textos:
-                    ev.urls_turno.update(_claves(texto))
                 for texto in _textos_de_enlace(resultado):
                     ev.urls_enlace.update(_claves(texto))
         return ev
