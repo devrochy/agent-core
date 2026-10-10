@@ -36,6 +36,7 @@ from core.api.routers import (
     platform_meta_es,
     playground,
     plugins,
+    procedures,
     push,
     search,
     settings,
@@ -60,6 +61,7 @@ api_router.include_router(playground.router)
 api_router.include_router(escalations.router)
 api_router.include_router(leads.router)
 api_router.include_router(plugins.router)
+api_router.include_router(procedures.router)
 api_router.include_router(connections.router)
 api_router.include_router(meta_ops.router)
 api_router.include_router(meta_wizard.router)

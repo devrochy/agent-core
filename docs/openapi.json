@@ -1919,6 +1919,78 @@
         }
       }
     },
+    "/api/v1/admin/procedures/validate": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · procedimientos"
+        ],
+        "summary": "Validate Procedure",
+        "description": "Valida un procedimiento `procedure/1` y aplica el linter.",
+        "operationId": "validate_procedure_api_v1_admin_procedures_validate_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcedureValidateOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "procedure"
+                ],
+                "properties": {
+                  "procedure": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Procedimiento procedure/1 (ADR-0113)."
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/connections": {
       "get": {
         "tags": [
@@ -21186,6 +21258,50 @@
           "pasos"
         ],
         "title": "PrimerosPasosResponse"
+      },
+      "ProcedureIssue": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "path",
+          "message"
+        ],
+        "title": "ProcedureIssue"
+      },
+      "ProcedureValidateOut": {
+        "properties": {
+          "valid": {
+            "type": "boolean",
+            "title": "Valid"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/ProcedureIssue"
+            },
+            "type": "array",
+            "title": "Errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "valid",
+          "errors"
+        ],
+        "title": "ProcedureValidateOut"
       },
       "ProductOut": {
         "properties": {

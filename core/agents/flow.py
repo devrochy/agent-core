@@ -27,9 +27,12 @@ import uuid
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.shared.logger import get_logger
+
+if TYPE_CHECKING:
+    from agentcore_contracts import Procedure
 
 log = get_logger(__name__)
 
@@ -372,6 +375,47 @@ def render_flow(flow: ResolvedFlow) -> str:
             lines.append(f"   {section.purpose}")
         lines.append(f"   Herramientas: {', '.join(section.tools)}")
     return "\n".join(lines)
+
+
+# ------------------------------------------------------------------ conversión a procedure/1
+# Versión de los procedimientos abiertos que salen del flujo: no los publica ninguna
+# habilidad, son el puente del lector tolerante (ADR-0113 §5).
+OPEN_PROCEDURE_VERSION = "0.0.0"
+_OWNER_UNSAFE_RE = re.compile(r"[^a-z0-9_]")
+
+
+def _procedure_owner(pack: str) -> str:
+    """Dueño del procedimiento a partir del `pack` de la sección (`core`, `tenant` o el
+    id de la habilidad), normalizado al formato del contrato."""
+    owner = _OWNER_UNSAFE_RE.sub("_", pack.lower())[:60]
+    return owner or TENANT
+
+
+def flow_to_procedures(sections: Iterable[FlowSection]) -> list[Procedure]:
+    """Convierte el flujo compuesto (ADR-0109) en procedimientos `procedure/1` abiertos
+    (ADR-0113 §5, HU-AOS-03): uno por sección, con una sola etapa terminal que permite
+    exactamente las acciones de la sección, en el mismo orden. No hay datos, salida ni
+    afirmaciones: nada cambia de conducta, solo de forma.
+
+    La entrada debe ser el flujo ya resuelto y filtrado (`ResolvedFlow.sections`), así el
+    procedimiento no ofrece acciones que el loop no ofrece. Es total: toda sección que
+    `_parse_sections` acepta se convierte (los formatos del contrato son un superconjunto
+    de los del flujo). Sin cambio de conducta: hoy nadie la llama en runtime.
+    """
+    from agentcore_contracts import Procedure, Stage, Triggers
+
+    procedures: list[Procedure] = []
+    for section in sections:
+        procedures.append(
+            Procedure(
+                id=f"{_procedure_owner(section.pack)}.{section.id}",
+                version=OPEN_PROCEDURE_VERSION,
+                title=section.label,
+                triggers=Triggers(description=section.purpose),
+                stages=[Stage(id=section.id, goal=section.purpose, actions=list(section.tools))],
+            )
+        )
+    return procedures
 
 
 # ------------------------------------------------------------------ siembra y migración
