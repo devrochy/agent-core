@@ -651,21 +651,27 @@ async def tenants_purge(request: Request, tenant_id: uuid.UUID, confirm_phrase: 
 
     ref = str(tenant_id)
     try:
-        await purge_tenant(ref, confirm_phrase)
+        redis_limpio = await purge_tenant(ref, confirm_phrase)
     except TenantNotSuspendedError as exc:
         return RedirectResponse(
             f"/admin/tenants?flash={quote(str(exc))}&flash_type=danger", status_code=303
         )
     except ValueError as exc:
         return RedirectResponse(
-            f"/admin/tenants?flash={str(exc)[:140]}&flash_type=danger", status_code=303
+            f"/admin/tenants?flash={quote(str(exc)[:140])}&flash_type=danger", status_code=303
         )
     except Exception as exc:
         log.exception("tenant_purge_failed")
         return RedirectResponse(
-            f"/admin/tenants?flash=Error al eliminar: {str(exc)[:140]}&flash_type=danger",
+            f"/admin/tenants?flash={quote('Error al eliminar: ' + str(exc)[:140])}&flash_type=danger",
             status_code=303,
         )
+    if not redis_limpio:
+        aviso = (
+            "Negocio eliminado de la base, pero su estado Redis no se pudo limpiar. "
+            f"Reintenta con: agent-core tenant purge-redis {tenant_id}"
+        )
+        return RedirectResponse(f"/admin/tenants?flash={quote(aviso)}&flash_type=warning", status_code=303)
     return RedirectResponse("/admin/tenants?flash=tenant_eliminado&flash_type=success", status_code=303)
 
 
