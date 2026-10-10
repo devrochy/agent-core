@@ -549,6 +549,9 @@ async def migrar_secretos(tenant_id: uuid.UUID, conversion: ConversionV3) -> lis
 
     from core.agents.secretos import SecretoDeclarativo, guardar_secretos_declarativos
 
+    if conversion.identidad.tenant_id != str(tenant_id):
+        raise PermissionError("migrar_secretos: la conversión es de otro negocio")
+
     dominios: dict[str, set[str]] = {}
     for tool in conversion.general.declarativeTools:
         for valor in tool.headers.values():

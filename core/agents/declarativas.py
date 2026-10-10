@@ -152,7 +152,15 @@ def preparar(
                     ),
                     None,
                 )
+                dominios_guardados = set(guardadas.get(tool["name"], {}).get("allowed_domains") or [])
                 if valor == MASCARA and guardado is not None:
+                    if not set(tool["allowed_domains"]) <= dominios_guardados:
+                        # Sin el valor, la máscara no puede llevar el secreto a un dominio nuevo.
+                        res.errores[f"{ruta}.headers.{header}"] = (
+                            "El valor guardado no puede viajar a los dominios nuevos de la tool: vuelve a escribirlo."
+                        )
+                        errores_previos = True
+                        continue
                     # El literal guardado de un spec v2 viejo pasa a un secreto.
                     ref = _nombre_para(tool["name"], header, usados)
                     nuevos[ref] = str(guardado)

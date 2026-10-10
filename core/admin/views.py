@@ -2892,7 +2892,15 @@ async def settings_skills_save(request: Request):
                 status_code=303,
             )
         if preparadas.secretos:
-            await guardar_secretos_declarativos(tenant_id, preparadas.secretos)
+            from core.agents.secretos import SecretoInvalido
+
+            try:
+                await guardar_secretos_declarativos(tenant_id, preparadas.secretos)
+            except SecretoInvalido as exc:
+                return RedirectResponse(
+                    f"/admin/configuracion?tab=habilidades&flash={quote(str(exc)[:200])}&flash_type=danger",
+                    status_code=303,
+                )
         extensions["tools"] = preparadas.tools
         data["extensions"] = extensions
     return await _save_spec_from_form(request, data, "habilidades")

@@ -1756,7 +1756,9 @@ class EvalResult(Base):
 
 # ---------------------------------------------------------------- Agent OS: agentes (HU-AOS-12)
 # Tablas creadas en 0069 (HU-AOS-02); aquí solo el mapeo de lo que usa la API de agentes.
-# Toda columna con default en BD se declara con `server_default` para no pisarlo.
+# Los defaults de BD de estado y textos se declaran con `server_default`; las fechas usan
+# `utcnow` como el resto de los modelos, y los ids se fijan en Python (el AAD de los secretos
+# necesita el id de la instalación antes del INSERT).
 class AgentRecord(Base):
     """Agente del negocio (ADR-0113): `kind` y la identidad viven aquí, no en el contrato."""
 

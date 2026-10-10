@@ -248,7 +248,9 @@ async def crear_agente(
                 )
             )
     except IntegrityError as exc:
-        raise Conflicto(f"Ya existe un agente con la key '{key}'.") from exc
+        if "uq_agents_tenant_key" in str(exc.orig):
+            raise Conflicto(f"Ya existe un agente con la key '{key}'.") from exc
+        raise
     return agente
 
 
@@ -268,7 +270,7 @@ async def actualizar_agente(
             await session.execute(
                 select(AgentRecord)
                 .where(AgentRecord.tenant_id == tenant_id, AgentRecord.id == agent_id, AgentRecord.deleted_at.is_(None))
-                .with_for_update()
+                .with_for_update(key_share=True)
             )
         ).scalar_one_or_none()
         if agente is None:
@@ -317,6 +319,15 @@ async def guardar_borrador(
                     AgentDraftRecord.agent_id == agent_id,
                     AgentDraftRecord.lock_version == lock_version,
                     AgentDraftRecord.deleted_at.is_(None),
+                    # Un archivado en paralelo no deja guardar.
+                    select(AgentRecord.id)
+                    .where(
+                        AgentRecord.tenant_id == tenant_id,
+                        AgentRecord.id == agent_id,
+                        AgentRecord.status == "active",
+                        AgentRecord.deleted_at.is_(None),
+                    )
+                    .exists(),
                 )
                 .values(
                     content=normalizado,
@@ -355,12 +366,23 @@ async def publicar(
     normalizado = await _validar(tenant_id, contenido, contrato, catalogo)
     huella = content_hash(normalizado)
     async with get_session() as session:
-        # Serializa las publicaciones del agente: el número es max + 1.
-        await session.execute(
-            select(AgentRecord.id)
-            .where(AgentRecord.tenant_id == tenant_id, AgentRecord.id == agent_id)
-            .with_for_update()
-        )
+        # Serializa las publicaciones del agente (el número es max + 1) y vuelve a mirar el
+        # estado bajo el lock: un archivado en paralelo no deja publicar.
+        estado = (
+            await session.execute(
+                select(AgentRecord.status)
+                .where(
+                    AgentRecord.tenant_id == tenant_id,
+                    AgentRecord.id == agent_id,
+                    AgentRecord.deleted_at.is_(None),
+                )
+                .with_for_update(key_share=True)
+            )
+        ).scalar_one_or_none()
+        if estado is None:
+            raise AgenteNoEncontrado(str(agent_id))
+        if estado != "active":
+            raise Conflicto("El agente está archivado.")
         existente = (
             await session.execute(
                 select(AgentVersionRecord).where(

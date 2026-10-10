@@ -67,3 +67,11 @@ def test_contrato_y_binario() -> None:
     assert preparar([{"name": "sin url"}], [], {}, {}, ACCIONES).errores
     assert preparar([tool({}, ["10.0.0.1"])], [], {}, {}, ACCIONES).errores
     assert preparar({"no": "lista"}, [], {}, {}, ACCIONES).errores
+
+
+def test_la_mascara_no_lleva_el_valor_guardado_a_un_dominio_nuevo() -> None:
+    guardada = [tool({"Authorization": "Bearer viejo"})]
+    otra = tool({"Authorization": MASCARA}, [DOM, "suyo.com"])
+    r = preparar([otra], guardada, {}, {}, ACCIONES)
+    assert "vuelve a escribirlo" in r.errores["tools[0].headers.Authorization"]
+    assert r.secretos == {} and r.tools == []

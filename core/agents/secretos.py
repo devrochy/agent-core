@@ -90,6 +90,9 @@ def _leer(fila: PackInstallationRecord) -> dict[str, dict[str, object]]:
     """`{nombre: {"value": str, "domains": [str]}}` descifrado. Entradas malformadas fuera."""
     if not fila.config_encrypted:
         return {}
+    if not fila.config_encrypted.startswith("gcm:v1:"):
+        # Solo AES-GCM con AAD: un Fernet (sin AAD) copiado de otra fila no se acepta.
+        raise RuntimeError("secretos: formato de cifrado no permitido en la instalación core")
     data = json.loads(unseal(fila.config_encrypted, aad_instalacion(fila.tenant_id, fila.id)))
     secretos = data.get(_CLAVE) if isinstance(data, dict) else None
     limpios: dict[str, dict[str, object]] = {}
