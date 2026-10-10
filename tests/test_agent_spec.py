@@ -178,13 +178,46 @@ async def test_persona_llega_como_variables_de_plantilla() -> None:
     assert vars_["max_length"] == "300"
 
 
-def test_persona_guard_frases_prohibidas_y_longitud() -> None:
-    from core.orchestrator.loop import _persona_guard
+def test_persona_frase_prohibida_es_guardrail_duro() -> None:
+    from core.orchestrator.loop import _persona_frase_prohibida
 
     spec = make_spec()
     spec.persona.forbiddenPhrases = ["garantizado"]
     spec.persona.maxLength = 20
 
-    assert _persona_guard("Está garantizado el resultado", spec) is not None
-    assert _persona_guard("Respuesta corta", spec) is None
-    assert _persona_guard("X" * 30, spec) is not None
+    verdict = _persona_frase_prohibida("Está GARANTIZADO el resultado", spec)
+    assert verdict is not None and verdict.reason == "persona_forbidden_phrase"
+    assert "garantizado" not in verdict.retry_instruction.lower(), "la frase no se interpola"
+    assert _persona_frase_prohibida("Respuesta corta", spec) is None
+    # El largo ya no es un fallo de guardrail (adenda de ADR-0050).
+    assert _persona_frase_prohibida("X" * 30, spec) is None
+
+
+def test_persona_excede_largo_es_tope_blando() -> None:
+    from core.orchestrator.loop import _persona_excede_largo
+
+    spec = make_spec()
+    spec.persona.maxLength = 20
+    assert _persona_excede_largo("X" * 21, spec)
+    assert not _persona_excede_largo("X" * 20, spec)
+    spec.persona.maxLength = 0
+    assert not _persona_excede_largo("X" * 5000, spec), "0 apaga el tope"
+
+
+async def test_instruccion_largo_sale_del_playbook_o_del_respaldo(monkeypatch) -> None:
+    from core.orchestrator import loop
+
+    spec = make_spec()
+    spec.persona.maxLength = 320
+
+    async def sin_seccion(_spec, _key):
+        return None
+
+    monkeypatch.setattr(loop, "load_response", sin_seccion)
+    assert await loop._instruccion_largo(spec) == loop.INSTRUCCION_LARGO.replace("{max_length}", "320")
+
+    async def con_seccion(_spec, key):
+        return "Acorta a {max_length} caracteres." if key == "persona_max_length" else None
+
+    monkeypatch.setattr(loop, "load_response", con_seccion)
+    assert await loop._instruccion_largo(spec) == "Acorta a 320 caracteres."

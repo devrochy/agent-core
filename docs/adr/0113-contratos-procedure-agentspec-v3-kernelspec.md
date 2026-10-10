@@ -59,7 +59,7 @@ Los contratos ganan tres modelos nuevos: `procedure/1`, AgentSpec v3 y KernelSpe
 |---|---|
 | `id`, `version`, `tenantId` | Identidad y versión del agente: `agents` y `agent_versions` (`key`, número y hash) |
 | `persona.role`, `tone`, `warmth`, `emojis` | **Voz de la conexión**: `voice` del KernelSpec, versionada con la release; el agente la hereda |
-| `persona.maxLength`, `forbiddenPhrases` | `persona` del agente |
+| `persona.maxLength`, `forbiddenPhrases` | `persona` del agente. `maxLength` conserva la semántica de tope blando de la adenda de ADR-0050 (2026-10-10): un reintento propio, nunca escala |
 | `model` | `model` del agente; el KernelSpec solo dice qué cambia en etapas de riesgo alto |
 | `memory` | `memory`, más `readScopes` y `writeNamespaces` |
 | `playbooks` | `playbooks` del agente: la allowlist de ADR-0014 pasa a ser por agente |

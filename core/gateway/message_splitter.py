@@ -65,7 +65,11 @@ def split_for_bubbles(
     else:
         chunks = paragraphs
 
-    return _cap_chunks(chunks, CAPS.get(style, 3))
+    capped = _cap_chunks(chunks, CAPS.get(style, 3))
+    # Ni un párrafo enorme ni la cola fusionada pueden pasar el límite técnico de
+    # WhatsApp: Meta rechazaría la burbuja. Desde que `persona.maxLength` es un tope
+    # blando (adenda de ADR-0050), una respuesta puede llegar con miles de caracteres.
+    return [part for chunk in capped for part in _split_by_length(chunk, max_length)]
 
 
 def _cap_chunks(chunks: list[str], max_chunks: int) -> list[str]:

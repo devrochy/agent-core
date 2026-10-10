@@ -64,6 +64,9 @@ Lo que fijó la implementación del verificador, revisada por el agente `arquite
   las validaciones de persona y antes de los guardrails de packs, que ven el texto ya corregido. Comparte el contador de
   reintentos y `guardrail_fail_action` (ADR-0092). Es fail-open para montos y cierres: si lanza una excepción, el turno pasa y el
   veredicto queda como `error`, pero los links se quitan todos.
+  *Adenda de ADR-0050 (2026-10-10):* de las validaciones de persona, solo `forbiddenPhrases` corre antes del
+  verificador. `persona.maxLength` corre al final, cuando el verificador y los guardrails de packs ya pasaron, y no
+  comparte el contador de reintentos ni `guardrail_fail_action`.
 - **Punto de extensión para packs:** `MCPHost.register_afirmaciones(fn)` con `Afirmacion(label, patron, tools,
   basta_url)` en `core.mcp.types`. Es API de plugins, no `packages/contracts`. Se filtra por packs habilitados
   (ADR-0019) y se limpia en `remove_plugin`. La polaridad (preguntas, negaciones y condicionales) es español genérico

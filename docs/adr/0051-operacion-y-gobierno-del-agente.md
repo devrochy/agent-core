@@ -38,6 +38,9 @@ historial de calidad.
    afirma una acción, exige que la tool se haya llamado) y `max_length`. La acción es
    `retry` (reintento correctivo) o `escalate`. Esto **unifica** el camino con el
    `_persona_guard` existente (forbiddenPhrases/maxLength del spec).
+   *Adenda de ADR-0050 (2026-10-10):* ya no es el mismo camino para el largo.
+   `persona.maxLength` es un tope blando que nunca escala; el `max_length` declarativo
+   es el tope duro que el negocio pide de forma explícita y sigue igual.
 4. **Evals persistidos y atados a la versión del spec.** Nueva tabla de negocio
    `eval_runs` (con `tenant_id`, RLS, índice por tenant) + `eval_results` por
    escenario, con `spec_version` y `git_ref`. `evals/runner.py` persiste cada corrida

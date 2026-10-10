@@ -66,3 +66,17 @@ def test_un_mensaje_parte_solo_por_limite_tecnico() -> None:
 def test_default_del_splitter_es_un_mensaje() -> None:
     """El default del splitter es una sola burbuja (Meta cobra cada mensaje)."""
     assert split_for_bubbles(TRES) == ["Uno.\n\nDos.\n\nTres."]
+
+
+@pytest.mark.parametrize("estilo", ["pocos_cortos", "varios_cortos"])
+def test_ninguna_burbuja_pasa_el_limite_tecnico(estilo: str) -> None:
+    """La cola fusionada por el tope de burbujas (y un párrafo enorme) también se
+    parte por largo: con `persona.maxLength` como tope blando una respuesta puede
+    traer miles de caracteres, y Meta rechaza una burbuja de más de 4096."""
+    from core.gateway.message_splitter import WA_MAX_TEXT_LENGTH
+
+    parrafo = ("palabra " * 700).strip()  # ~5600 chars, sin puntos
+    texto = "\n\n".join([parrafo] * 8)
+    burbujas = split_for_bubbles(texto, estilo)
+    assert all(len(b) <= WA_MAX_TEXT_LENGTH for b in burbujas)
+    assert sum(b.count("palabra") for b in burbujas) == 700 * 8, "no se pierde contenido"

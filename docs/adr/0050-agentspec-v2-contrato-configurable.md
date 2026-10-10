@@ -107,3 +107,55 @@ al abrirla "desaparecían" las del core. Ahora el pack no hardcodea la barra.
 - **Bajos**: clamp de `temperature`/`maxToolCallsPerTurn`, `rag.minScore` invertido a
   distancia (label correcto), `_persona_guard` sin interpolar la frase,
   `_load_history` con `tenant_id` explícito, clave Redis con namespace de tenant.
+
+## Adenda (2026-10-10): `persona.maxLength` es un tope blando
+
+Pendiente de aprobación del dueño (PR a `develop`). La revisó el agente `arquitecto` antes de
+escribir código. La forma del contrato no cambia (`maxLength: int`); cambia solo el efecto en runtime.
+
+**Caso.** En los journeys del asistente de SolversHub (HU-SH-08, `evals/journeys.py --tenant solvershub 01
+--k 4`, 2026-10-09), "¿qué planes tienen y cuánto cuestan?" escaló 1 de 4 veces: el modelo listó los 4
+planes, pasó de 500 caracteres dos veces seguidas y el turno escaló y pausó el bot. Un exceso de largo no es
+una afirmación falsa, y escalar una consulta válida pierde ventas.
+
+**Decisión.**
+- `persona.maxLength` es una guía de estilo, no un guardrail. Nunca escala, nunca pausa el bot y nunca
+  responde neutral (`verifying`). `0` lo apaga, y el negocio puede subir su valor.
+- Se mide sobre el borrador que escribió el modelo (después de `strip_markdown` y de quitar links sin
+  respaldo), sin los `_safe_append` del servidor.
+- Se evalúa **al final**: después de `forbiddenPhrases`, del verificador (ADR-0119) y de los guardrails de
+  packs. Un borrador que falla algo de eso sigue el camino de siempre (`guardrail_max_retries`,
+  `guardrail_fail_action`).
+- Tiene **un** reintento propio, fijo, que no toca `guardrail_retries` ni lee `guardrail_fail_action`: esos
+  son de veracidad (ADR-0092, ADR-0113 §4).
+- **El reintento de largo nunca empeora el resultado.** El borrador largo ya verificado se guarda. Si el texto
+  acortado falla una verificación dura (p. ej. redondea o inventa un precio), se entrega el borrador largo.
+  Si pasa, se entrega el acortado, siga largo o no.
+- Solo se reintenta si queda una vuelta del bucle (`maxToolCallsPerTurn`) y presupuesto
+  (`budgetUsdPerConversation`). Si no, el reintento terminaría en `max_iterations` (escala) o en el cierre
+  por presupuesto, y la respuesta se entrega sin reintento.
+- La instrucción del reintento es la sección `persona_max_length` del playbook `respuestas` (invariante 3),
+  con `{max_length}` reemplazado por el entero del spec. En código queda solo el texto de respaldo, igual al
+  que había. La sección se agrega con la próxima regrabación de las evals: `respuestas` entra en el system
+  prompt de todos los negocios y cambiarlo invalida todas las grabaciones (adenda de ADR-0119).
+- **Rastro:** cada respuesta entregada por encima del tope deja una fila en `audit_log`
+  (`actor = core:persona`, `action = persona_max_length_excedido`) con `largo`, `tope` y `entregado`
+  (`reintento`, `guardado` o `sin_reintento`), sin texto. Es un dato por turno: HU-AOS-10 lo mueve a
+  `turn_outcomes` cambiando solo `_registrar_largo_excedido`, como `registrar_veredicto`.
+- El envío ya parte la respuesta en burbujas según `split_style`. Como ahora puede llegar con miles de
+  caracteres, ninguna burbuja pasa el límite técnico de WhatsApp (4096): también se parten la cola que
+  junta el tope de burbujas y un párrafo enorme.
+- La regla declarativa `max_length` de `extensions["guardrails"]` (ADR-0051 §3) **no cambia**: es el tope
+  duro que un negocio pide de forma explícita, con su `action`.
+
+**Descartado.** Recortar por oraciones (pierde justo lo que el cliente pidió, p. ej. el precio del cuarto
+plan, y puede dejar una afirmación a medias). Subir el default de 500 (el número sirve para WhatsApp: el
+problema era la consecuencia). Hacerlo configurable por negocio (YAGNI: `0` y el valor ya lo controlan).
+
+**Qué haría que revisáramos esto:** que `persona_max_length_excedido` aparezca en más del 10 % de los turnos
+de un negocio (su tope no le sirve) o quejas de mensajes demasiado largos.
+
+**Código:** `core/orchestrator/loop.py` (`_persona_frase_prohibida`, `_persona_excede_largo`,
+`_instruccion_largo`, `_registrar_largo_excedido`; se retira `_persona_guard`),
+`core/gateway/message_splitter.py`. Tests: `tests/integration/test_persona_largo_loop.py`,
+`tests/test_agent_spec.py`, `tests/test_message_splitter.py`.
