@@ -1,0 +1,29 @@
+{
+  "contract": "procedure/1",
+  "id": "pack_subscriptions.cobro_suscripcion",
+  "version": "1.0.0",
+  "title": "Cobro de la suscripción",
+  "triggers": {
+    "description": "El cliente quiere pagar su suscripción o envía el comprobante de un pago",
+    "examples": ["cómo pago la mensualidad", "ya pagué, te mando el comprobante"]
+  },
+  "slots": {
+    "link_pago": { "type": "string", "format": "uri", "setBy": "action:sub_link_pago" },
+    "comprobante": { "type": "media", "setBy": "content:image", "dataClass": "payment" }
+  },
+  "stages": [
+    { "id": "consultar", "goal": "Consultar el estado y el valor de la suscripción",
+      "actions": ["sub_consultar"], "exitWhen": { "action": "sub_consultar", "ok": true } },
+    { "id": "pagar", "goal": "Enviar el link de pago del servidor",
+      "actions": ["sub_link_pago"], "exitWhen": { "slots": ["link_pago"] } },
+    { "id": "comprobante", "goal": "Recibir el comprobante si el cliente pagó por otro medio",
+      "actions": [] }
+  ],
+  "completion": { "events": ["pack_payments.pago_confirmado"], "returnControl": true },
+  "recovery": { "actionError": "explicar", "timeout": "relevo_humano" },
+  "claims": [
+    { "kind": "amount", "mustMatch": ["action:sub_consultar.monto"] },
+    { "kind": "link", "mustMatch": ["slot:link_pago"], "phrases": ["te envío el link de pago"] }
+  ],
+  "evals": ["cobro-link-feliz", "cobro-comprobante-imagen"]
+}

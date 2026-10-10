@@ -1,4 +1,6 @@
-"""Verifica que los contratos congelados v1.0.0 importan y mantienen su forma."""
+"""Verifica que los contratos congelados importan y mantienen su forma (ADR-0011).
+
+Antes vivía en `packages/contracts/tests/`, fuera de `testpaths`, y no corría."""
 
 from agentcore_contracts import (
     AgentSpec,
@@ -9,7 +11,8 @@ from agentcore_contracts import (
 
 
 def test_version_congelada() -> None:
-    assert __version__ == "1.0.0"
+    # 2.1.0: `procedure/1` aditivo (ADR-0113); el 3.0.0 llega con AgentSpec v3 (HU-AOS-12).
+    assert __version__ == "2.1.0"
 
 
 def test_inbound_message_shape() -> None:
@@ -78,5 +81,7 @@ def test_agent_spec_shape() -> None:
         packs=["pack_commerce"],
     )
     assert spec.persona.tone in Tone.__args__
-    assert spec.policies.escalation.triggers == ["asesor"]
+    # v2.0.0 (ADR-0050): los campos de v1 que se eliminaron se ignoran al cargar un spec viejo.
+    assert not hasattr(spec.policies, "escalation")
+    assert "locale" not in spec.persona.model_dump()
     assert "tenantId" in spec.model_dump()

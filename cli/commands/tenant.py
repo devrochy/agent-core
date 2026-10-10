@@ -552,9 +552,18 @@ def purge(
 ) -> None:
     """Elimina por completo un tenant: borrado físico IRREVERSIBLE.
 
-    Exige escribir exactamente: ELIMINAR <slug>. Borra todos los datos del tenant
-    (core + packs + Redis) y la fila tenants. No se puede deshacer.
+    Exige que el tenant esté suspendido (`tenant deactivate <slug>`) y escribir
+    exactamente: ELIMINAR <slug>. Borra todos los datos del tenant (core + packs +
+    Redis) y la fila tenants. No se puede deshacer.
     """
+    from core.tenants import ensure_purgeable
+
+    # Antes de pedir la frase: no tiene sentido confirmar algo que se va a rechazar.
+    try:
+        asyncio.run(ensure_purgeable(slug))
+    except ValueError as exc:
+        console.print(f"[red]✗ {exc}[/red]")
+        raise typer.Exit(1) from exc
 
     phrase = confirm
     if not phrase:

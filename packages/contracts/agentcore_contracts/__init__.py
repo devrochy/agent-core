@@ -1,6 +1,10 @@
-"""@agentcore/contracts — v2.0.0 (Python).
+"""@agentcore/contracts — v2.1.0 (Python).
 
 Contratos congelados de agent-core. Ver docs/adr/0011-contratos-python.md.
+
+- v2.0.0: AgentSpec v2 (ADR-0050).
+- v2.1.0: `procedure/1`, aditivo (ADR-0113, HU-AOS-03). El 3.0.0 llega con AgentSpec v3
+  (HU-AOS-12).
 """
 
 from agentcore_contracts.contracts import (
@@ -45,8 +49,21 @@ from agentcore_contracts.contracts import (
     ToolResult,
     Usage,
 )
+from agentcore_contracts.procedure import (
+    Candidates,
+    Claim,
+    Completion,
+    ContentKind,
+    ExitWhen,
+    Procedure,
+    Recovery,
+    Slot,
+    SlotCondition,
+    Stage,
+    Triggers,
+)
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 __all__ = [
     "AgentMemory",
@@ -57,13 +74,18 @@ __all__ = [
     "AudioContent",
     "BusinessHourRange",
     "BusinessHours",
+    "Candidates",
     "ChannelKind",
+    "Claim",
+    "Completion",
     "Contact",
+    "ContentKind",
     "ContentPart",
     "DocumentContent",
     "DomainEvent",
     "EscalationPolicy",
     "EscalationState",
+    "ExitWhen",
     "Handoff",
     "ImageContent",
     "InboundMessage",
@@ -74,12 +96,17 @@ __all__ = [
     "OutboundMessage",
     "Persona",
     "PlaybookRef",
+    "Procedure",
     "RagConfig",
+    "Recovery",
     "Scope",
     "ScopedDb",
     "ScopedHttp",
     "ScopedSecrets",
     "SideEffect",
+    "Slot",
+    "SlotCondition",
+    "Stage",
     "TextContent",
     "Tone",
     "ToolBinding",
@@ -88,5 +115,6 @@ __all__ = [
     "ToolDefinition",
     "ToolError",
     "ToolResult",
+    "Triggers",
     "Usage",
 ]
