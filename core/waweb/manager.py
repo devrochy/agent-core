@@ -11,6 +11,7 @@ factoría de socket, drainer, sleep, alert) — se puede correr entero con fakes
 from __future__ import annotations
 
 import asyncio
+import shutil
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -72,6 +73,10 @@ class WaWebConnector:
     # sesiones sanas "esperando escaneo" (el QR tiene >45 s sin escanear), lo que
     # reiniciaba el vínculo cada ~45 s y castigaba la conexión con WhatsApp.
     _qr_cycles: set[uuid.UUID] = field(default_factory=set, init=False)
+    # Negocios con un reset del panel consumido y todavía sin aplicar. `ctx` es
+    # el estado leído al crear la tarea (no se relee): sin esta marca, una sesión
+    # que arrancó `connected` reconectaba con las credenciales viejas tras el reset.
+    _reset_pending: set[uuid.UUID] = field(default_factory=set, init=False)
 
     async def run(self) -> None:
         """Bucle principal: barre sesiones y arranca/detiene sockets."""
@@ -108,12 +113,19 @@ class WaWebConnector:
         attempt = 0
         while ctx.tenant_id not in self._stop:
             try:
-                if ctx.status in (status.PENDING_QR, status.ERROR):
+                reset = ctx.tenant_id in self._reset_pending
+                if reset or ctx.status in (status.PENDING_QR, status.ERROR):
                     # Sesión que NUNCA se vinculó: el directorio de trabajo puede
                     # tener restos de intentos previos, y Neonize entonces "reanuda"
                     # en vez de emitir un QR nuevo (visto en vivo: timeout de login
                     # sin QR y sin que corriera el watchdog). Se limpia al empezar.
                     await self.store.clear(ctx.tenant_id)
+                if reset:
+                    # Re-vincular desde el panel: además del blob durable hay que
+                    # borrar el `session.db` local, o Neonize reanuda la sesión
+                    # vieja (ya cerrada: el socket se desconectó en el `finally`).
+                    shutil.rmtree(work_dir, ignore_errors=True)
+                    self._reset_pending.discard(ctx.tenant_id)
                 await self.store.materialize(ctx.tenant_id, work_dir)
                 await self.registry.set_status(ctx.tenant_id, status.CONNECTING)
                 self._qr_cycles.discard(ctx.tenant_id)
@@ -138,10 +150,14 @@ class WaWebConnector:
                 log.exception("waweb_session_error", tenant_id=str(ctx.tenant_id))
                 await self._on_status(ctx, "error", str(exc)[:200])
             finally:
-                try:
-                    await self.store.persist(ctx.tenant_id, work_dir)
-                except Exception:
-                    log.exception("waweb_session_persist_failed")
+                # Con un reset pendiente NO se persiste: el directorio de trabajo
+                # tiene la sesión vieja y pisaría el `creds_encrypted=None` que
+                # dejó `reset_session`.
+                if ctx.tenant_id not in self._reset_pending:
+                    try:
+                        await self.store.persist(ctx.tenant_id, work_dir)
+                    except Exception:
+                        log.exception("waweb_session_persist_failed")
                 # Un ciclo que termina NO deja socket vivo: las reconexiones
                 # internas de Neonize competirían con el próximo socket y el
                 # servidor reemplaza un stream (visto en vivo: doble auth +
@@ -177,11 +193,13 @@ class WaWebConnector:
             if not processed:
                 idle += 1
                 # El panel pidió reciclar la sesión (re-vincular): se cierra el
-                # socket para que `run_session` vuelva a arrancar en `pending_qr`
-                # y emita un QR nuevo. Sin esto, el QR no aparece hasta que el
+                # socket y se marca el reset para que `run_session` no persista
+                # el directorio viejo y el próximo ciclo arranque sin credenciales
+                # (emite un QR nuevo). Sin esto, el QR no aparece hasta que el
                 # pairing-watchdog recicle por su cuenta.
                 if await handoff.consume_reset(str(ctx.tenant_id)):
                     log.warning("waweb_reset_solicitado", tenant_id=str(ctx.tenant_id))
+                    self._reset_pending.add(ctx.tenant_id)
                     self._connected.discard(ctx.tenant_id)
                     self._qr_cycles.discard(ctx.tenant_id)
                     self._pairing_trips.pop(ctx.tenant_id, None)
