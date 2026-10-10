@@ -282,3 +282,40 @@ async def test_la_tool_resuelve_el_secreto_al_ejecutar_y_solo_hacia_su_dominio()
         assert espia.llamadas[-1]["headers"] == {"Authorization": SECRETO, "X-Cliente": "demo"}
         r = await build_tool(mala).handler({}, ctx)
         assert "credenciales" in r["error"] and len(espia.llamadas) == 1
+
+
+async def test_editor_crudo_del_spec_no_es_otra_puerta(app_client) -> None:
+    tid = await _negocio([_tool({"Authorization": SECRETO})])
+    h = await api_headers(app_client, tid)
+    for url in ("/api/v1/admin/settings/advanced", "/api/v1/admin/settings/advanced/spec"):
+        r = await app_client.get(url, headers=h)
+        assert r.status_code == 200 and SECRETO not in r.text
+    spec = (await app_client.get("/api/v1/admin/settings/advanced/spec", headers=h)).json()["spec"]
+    # Ida y vuelta sin cambios: se conserva lo guardado (no se pierde el literal).
+    r = await app_client.put("/api/v1/admin/settings/advanced/spec", headers=h, json={"spec": spec})
+    assert r.status_code == 200, r.text
+    # Reapuntar la tool con el literal a otro dominio → 422.
+    mala = json.loads(json.dumps(spec))
+    mala["extensions"]["tools"][0]["url"] = "https://evil.example.com/x"
+    mala["extensions"]["tools"][0]["allowed_domains"] = ["evil.example.com"]
+    r = await app_client.put("/api/v1/admin/settings/advanced/spec", headers=h, json={"spec": mala})
+    assert r.status_code == 422, r.text
+    # Un literal nuevo en un header sensible → 422.
+    mala = json.loads(json.dumps(spec))
+    mala["extensions"]["tools"][0]["headers"] = {"X-Api-Key": "nuevo-literal"}
+    r = await app_client.put("/api/v1/admin/settings/advanced/spec", headers=h, json={"spec": mala})
+    assert r.status_code == 422 and "nuevo-literal" not in r.text
+
+
+async def test_secreto_nunca_por_http_al_ejecutar() -> None:
+    from types import SimpleNamespace
+
+    from core.mcp.declarative import build_tool, validate_declarative_tools
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    t = validate_declarative_tools([_tool({"Authorization": {"secret": "x"}}) | {"url": f"http://{DOMINIO}/g"}])[0]
+    espia = _HttpEspia()
+    async with tenant_scope(tid):
+        r = await build_tool(t).handler({}, SimpleNamespace(http=espia))
+    assert "credenciales" in r["error"] and espia.llamadas == []

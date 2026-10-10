@@ -20,12 +20,13 @@ tolerante (`general`, `coordinador`) están reservadas para el backfill de HU-AO
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from core.agents import versiones as svc
 from core.agents.contrato_v3 import MAX_SPEC_BYTES
@@ -42,6 +43,8 @@ Kind = Literal["core", "specialist", "backoffice"]
 
 # ------------------------------------------------------------------ esquemas
 class AgentCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     key: str = Field(pattern=r"^[a-z0-9_]{2,40}$")
     kind: Kind
     name: str = Field(min_length=1, max_length=120)
@@ -49,6 +52,9 @@ class AgentCreate(BaseModel):
 
 
 class AgentPatch(BaseModel):
+    # `key` y `kind` no cambian: la instancia fija su rol por FK.
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = Field(default=None, max_length=1000)
     status: Literal["active", "archived"] | None = None
@@ -94,6 +100,10 @@ class AgentDetail(AgentSummary):
 
 
 class PublishIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Opcional: si se envía, publica solo si el borrador sigue en esa versión (409 si no).
+    lock_version: int | None = Field(default=None, ge=0, lt=2**31)
     label: str | None = Field(default=None, max_length=60)
     notes: str = Field(default="", max_length=2000)
 
@@ -187,6 +197,13 @@ def _no_finito(valor: str) -> Any:
     raise ValueError(f"número no finito: {valor}")
 
 
+def _float_finito(valor: str) -> float:
+    numero = float(valor)
+    if not math.isfinite(numero):  # `1e999` también es Infinity
+        raise ValueError("número no finito")
+    return numero
+
+
 async def _leer_json(request: Request) -> Any:
     """Cuerpo con tope (no confía en Content-Length), sin NaN/Infinity ni anidación abusiva."""
     declarado = request.headers.get("content-length")
@@ -198,7 +215,7 @@ async def _leer_json(request: Request) -> Any:
         if len(cuerpo) > _MAX_BODY_BYTES:
             raise ApiError(413, "payload_too_large", f"El cuerpo pesa más de {_MAX_BODY_BYTES // 1024} KiB.")
     try:
-        return json.loads(bytes(cuerpo), parse_constant=_no_finito)
+        return json.loads(bytes(cuerpo), parse_constant=_no_finito, parse_float=_float_finito)
     except (ValueError, RecursionError):
         raise ApiError.bad_request("El cuerpo no es JSON válido.", code="invalid_json") from None
 
@@ -292,6 +309,7 @@ async def save_draft(
         or not isinstance(lock, int)
         or isinstance(lock, bool)
         or lock < 0
+        or lock >= 2**31
     ):
         raise ApiError.bad_request(
             'Se espera {"content": {...}, "lock_version": <entero>}.',
@@ -330,7 +348,13 @@ async def publish_version(
     tid = await _puede_escribir(principal)
     try:
         version, creada = await svc.publicar(
-            tid, agent_id, catalogo=_catalogo(), actor=principal.admin.id, notes=payload.notes, label=payload.label
+            tid,
+            agent_id,
+            catalogo=_catalogo(),
+            actor=principal.admin.id,
+            notes=payload.notes,
+            label=payload.label,
+            lock_version=payload.lock_version,
         )
     except svc.AgenteNoEncontrado:
         raise ApiError.not_found("Agente no encontrado.") from None

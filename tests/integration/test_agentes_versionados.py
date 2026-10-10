@@ -113,6 +113,13 @@ async def test_borrador_publicacion_concurrencia_y_validacion(app_client) -> Non
     r = await app_client.put(f"/api/v1/admin/agents/{aid}/draft", headers=h, json={"content": otro, "lock_version": 0})
     assert r.status_code == 409, r.text
     assert r.json()["error"]["code"] == "stale_lock_version"
+    # 1e999 es Infinity: no entra.
+    r = await app_client.put(
+        f"/api/v1/admin/agents/{aid}/draft",
+        headers=h | {"Content-Type": "application/json"},
+        content=b'{"content": {"contract": "agentspec/3", "model": {"primary": "x", "temperature": 1e999}}, "lock_version": 1}',
+    )
+    assert r.status_code == 400
 
     # Publicar: versión inmutable con hash; publicar lo mismo otra vez es idempotente.
     r = await app_client.post(f"/api/v1/admin/agents/{aid}/versions", headers=h, json={"notes": "primera"})
@@ -223,7 +230,12 @@ async def test_archivar_y_patch_no_cambia_kind(app_client) -> None:
         )
     ).json()["id"]
     r = await app_client.patch(f"/api/v1/admin/agents/{aid}", headers=h, json={"kind": "core"})
-    assert r.status_code == 200 and r.json()["kind"] == "specialist"
+    assert r.status_code == 422  # key y kind no se cambian
+    r = await app_client.get(f"/api/v1/admin/agents/{aid}", headers=h)
+    assert r.json()["kind"] == "specialist"
+    # Publicar con un lock_version viejo → 409.
+    r = await app_client.post(f"/api/v1/admin/agents/{aid}/versions", headers=h, json={"lock_version": 7})
+    assert r.status_code == 409
     r = await app_client.patch(f"/api/v1/admin/agents/{aid}", headers=h, json={"status": "archived"})
     assert r.status_code == 200 and r.json()["status"] == "archived"
     r = await app_client.put(

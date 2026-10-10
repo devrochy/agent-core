@@ -547,7 +547,11 @@ async def migrar_secretos(tenant_id: uuid.UUID, conversion: ConversionV3) -> lis
     tampoco puede llamar a nadie (ScopedHttp cierra todo sin allowlist)."""
     from agentcore_contracts import SecretRef
 
-    from core.agents.secretos import SecretoDeclarativo, guardar_secretos_declarativos
+    from core.agents.secretos import (
+        SecretoDeclarativo,
+        guardar_secretos_declarativos,
+        secreto_igual,
+    )
 
     if conversion.identidad.tenant_id != str(tenant_id):
         raise PermissionError("migrar_secretos: la conversión es de otro negocio")
@@ -563,6 +567,12 @@ async def migrar_secretos(tenant_id: uuid.UUID, conversion: ConversionV3) -> lis
         if not dominios.get(nombre):
             avisos.append(f"secreto '{nombre}': su tool no tiene allowedDomains, no se migra")
             continue
+        igual = await secreto_igual(tenant_id, nombre, valor)
+        if igual is False:
+            # Nunca se pisa un secreto del editor con el mismo nombre y otro valor.
+            raise ValueError(f"migrar_secretos: el secreto '{nombre}' ya existe con otro valor")
+        if igual:
+            continue  # ya migrado: idempotente
         a_guardar[nombre] = SecretoDeclarativo(valor=valor, dominios=tuple(sorted(dominios[nombre])))
     if a_guardar:
         await guardar_secretos_declarativos(tenant_id, a_guardar)

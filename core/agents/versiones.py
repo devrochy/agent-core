@@ -354,6 +354,7 @@ async def publicar(
     label: str | None = None,
     contenido: Any = None,
     legacy_agent_spec_id: uuid.UUID | None = None,
+    lock_version: int | None = None,
 ) -> tuple[AgentVersionRecord, bool]:
     """Congela el borrador (o `contenido`, para el backfill) en una versión inmutable.
     Devuelve `(versión, creada)`; con el mismo hash que una existente, `creada = False`."""
@@ -361,7 +362,10 @@ async def publicar(
     if agente.status != "active":
         raise Conflicto("El agente está archivado.")
     if contenido is None:
-        contenido = (await obtener_borrador(tenant_id, agent_id)).content
+        borrador = await obtener_borrador(tenant_id, agent_id)
+        if lock_version is not None and borrador.lock_version != lock_version:
+            raise Conflicto("El borrador cambió desde que lo abriste: recárgalo antes de publicar.")
+        contenido = borrador.content
     contrato = CONTRATO_POR_KIND[agente.kind]
     normalizado = await _validar(tenant_id, contenido, contrato, catalogo)
     huella = content_hash(normalizado)

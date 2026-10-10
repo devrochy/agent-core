@@ -182,6 +182,16 @@ async def secretos_configurados(tenant_id: uuid.UUID) -> dict[str, list[str]]:
     return {k: list(v["domains"]) for k, v in actuales.items()}  # type: ignore[arg-type]
 
 
+async def secreto_igual(tenant_id: uuid.UUID, nombre: str, valor: SecretStr) -> bool | None:
+    """¿El secreto `nombre` ya existe con ese valor? None si no existe. No devuelve el valor."""
+    async with get_session() as session:
+        fila = await _instalacion(session, tenant_id, bloquear=False)
+        actuales = _leer(fila) if fila is not None else {}
+    if nombre not in actuales:
+        return None
+    return actuales[nombre]["value"] == valor.get_secret_value()
+
+
 async def resolver_secretos(tenant_id: uuid.UUID, nombres: Iterable[str], host: str) -> dict[str, str]:
     """Valores de los secretos pedidos que existen Y pueden viajar a `host` (al ejecutar)."""
     pedidos = set(nombres)
@@ -207,5 +217,6 @@ __all__ = [
     "aad_instalacion",
     "guardar_secretos_declarativos",
     "resolver_secretos",
+    "secreto_igual",
     "secretos_configurados",
 ]

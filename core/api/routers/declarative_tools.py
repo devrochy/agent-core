@@ -18,11 +18,13 @@ Permisos: sección `settings` (`write` para el PUT), como el resto de la Configu
 from __future__ import annotations
 
 import json
+import math
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
+from core.agents.contrato_v3 import _estructura
 from core.agents.declarativas import enmascarar, literales_sin_migrar, preparar
 from core.agents.secretos import (
     SecretoInvalido,
@@ -91,6 +93,13 @@ def _no_finito(valor: str) -> Any:
     raise ValueError(f"número no finito: {valor}")
 
 
+def _float_finito(valor: str) -> float:
+    numero = float(valor)
+    if not math.isfinite(numero):  # `1e999` también es Infinity
+        raise ValueError("número no finito")
+    return numero
+
+
 async def _leer_json(request: Request) -> Any:
     declarado = request.headers.get("content-length")
     if declarado is not None and declarado.isascii() and declarado.isdigit() and int(declarado) > _MAX_BODY_BYTES:
@@ -101,9 +110,13 @@ async def _leer_json(request: Request) -> Any:
         if len(cuerpo) > _MAX_BODY_BYTES:
             raise ApiError(413, "payload_too_large", "El cuerpo es demasiado grande.")
     try:
-        return json.loads(bytes(cuerpo), parse_constant=_no_finito)
+        datos = json.loads(bytes(cuerpo), parse_constant=_no_finito, parse_float=_float_finito)
     except (ValueError, RecursionError):
         raise ApiError.bad_request("El cuerpo no es JSON válido.", code="invalid_json") from None
+    problema = _estructura(datos)
+    if problema is not None:
+        raise ApiError.bad_request(problema, code="invalid_json")
+    return datos
 
 
 def _tenant(principal: Principal) -> Any:

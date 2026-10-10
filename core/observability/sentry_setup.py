@@ -31,7 +31,8 @@ _EXTRA_DENYLIST = [
     # v2 todavía puede tener literales en `extensions.tools`; los secretos de la instalación
     # `core` se descifran en `valores`/`actuales`).
     "authorization", "cookie", "x-api-key", "x_api_key", "headers", "extensions", "secretos",
-    "valores", "actuales", "nuevos",
+    "valores", "actuales", "nuevos", "secrets", "cuerpo", "secretos_enviados", "valor", "texto",
+    "limpios", "entrada", "data", "value", "guardado", "contenido",
 ]
 _configured = False
 

@@ -8157,7 +8157,7 @@
           "admin · configuración"
         ],
         "summary": "Get Raw Spec",
-        "description": "AgentSpec activo tal cual (editor crudo de Configuración → Avanzado).",
+        "description": "AgentSpec activo (editor crudo de Configuración → Avanzado), con los headers sensibles\nde las tools declarativas enmascarados (HU-AOS-12).",
         "operationId": "get_raw_spec_api_v1_admin_settings_advanced_spec_get",
         "parameters": [
           {
@@ -26222,6 +26222,7 @@
             "default": ""
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "key",
@@ -26390,6 +26391,7 @@
             "title": "Status"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "title": "AgentPatch"
       },
@@ -26622,6 +26624,19 @@
       },
       "PublishIn": {
         "properties": {
+          "lock_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMaximum": 2147483648.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lock Version"
+          },
           "label": {
             "anyOf": [
               {
@@ -26641,6 +26656,7 @@
             "default": ""
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "title": "PublishIn"
       },

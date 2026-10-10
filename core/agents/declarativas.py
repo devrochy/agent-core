@@ -120,6 +120,9 @@ def preparar(
     guardadas = {t["name"]: t for t in validate_declarative_tools(actuales)}
     usados = set(configurados) | {n for n in secretos_enviados if n}
     nuevos: dict[str, str] = {}
+    # Secreto migrado con la máscara → dominios de la tool GUARDADA de la que sale. Ninguna
+    # referencia (de esa tool o de otra de la misma petición) lo lleva fuera de ellos.
+    migrados: dict[str, set[str]] = {}
     for nombre, valor in secretos_enviados.items():
         if not SECRET_NAME_RE.fullmatch(nombre):
             res.errores[f"secrets.{nombre[:60]}"] = "Nombre inválido: minúsculas, números y _ (hasta 60)."
@@ -127,6 +130,7 @@ def preparar(
             res.quitar.append(nombre)
         else:
             nuevos[nombre] = valor
+    enviados = set(nuevos)
     dominios_por_secreto: dict[str, set[str]] = {}
     vistos: set[str] = set()
 
@@ -164,6 +168,7 @@ def preparar(
                     # El literal guardado de un spec v2 viejo pasa a un secreto.
                     ref = _nombre_para(tool["name"], header, usados)
                     nuevos[ref] = str(guardado)
+                    migrados[ref] = dominios_guardados
                 else:
                     res.errores[f"{ruta}.headers.{header}"] = (
                         'Este header no admite valores literales: decláralo como {"secret": "<nombre>"} '
@@ -180,7 +185,12 @@ def preparar(
                     res.errores[f"{ruta}.headers.{header}"] = f"El secreto '{ref}' no está configurado: envía su valor."
                     errores_previos = True
                     continue
-                if ref not in nuevos and not set(tool["allowed_domains"]) <= set(configurados[ref]):
+                # Solo un valor enviado en ESTA petición define dominios nuevos; uno migrado o
+                # ya configurado no sale de los suyos.
+                permitidos = migrados.get(ref) if ref in migrados else (
+                    None if ref in enviados else set(configurados.get(ref) or [])
+                )
+                if permitidos is not None and not set(tool["allowed_domains"]) <= permitidos:
                     res.errores[f"{ruta}.headers.{header}"] = (
                         f"El secreto '{ref}' no puede viajar a los dominios nuevos de la tool: vuelve a escribirlo."
                     )
@@ -211,4 +221,55 @@ def preparar(
     return res
 
 
-__all__ = ["MASCARA", "Preparadas", "enmascarar", "literales_sin_migrar", "preparar"]
+class ErroresDeclarativas(ValueError):
+    def __init__(self, errores: dict[str, str]) -> None:
+        super().__init__(f"{len(errores)} problema(s) en las tools declarativas")
+        self.errores = errores
+
+
+def spec_para_mostrar(data: dict[str, Any]) -> dict[str, Any]:
+    """AgentSpec v2 (dump JSON) para devolverlo al panel: `extensions.tools` enmascaradas.
+    Lo usan los editores crudos del spec (`/advanced`, `/advanced/spec`)."""
+    ext = data.get("extensions")
+    if not isinstance(ext, dict) or "tools" not in ext:
+        return data
+    return data | {"extensions": ext | {"tools": enmascarar(ext.get("tools"))}}
+
+
+async def tools_del_editor_crudo(
+    tenant_id: Any, nuevas: Any, actuales: Any, *, actor: Any = None
+) -> list[dict[str, Any]] | Any:
+    """`extensions.tools` que llega por un editor crudo del spec (API o SSR): sin cambios
+    (igual a lo guardado, o a su versión enmascarada) se conserva lo guardado; con cambios
+    pasa por el mismo validador del editor de declarativas (`preparar`), guarda los secretos
+    migrados y devuelve las tools con referencias. Errores → `ErroresDeclarativas`."""
+    from core.agents.secretos import guardar_secretos_declarativos, secretos_configurados
+    from core.kernel.procedures import catalogo_de_acciones
+    from core.plugin_manager import plugin_manager
+
+    if nuevas == actuales or nuevas == enmascarar(actuales):
+        return actuales
+    preparadas = preparar(
+        nuevas if nuevas is not None else [],
+        actuales,
+        {},
+        await secretos_configurados(tenant_id),
+        set(catalogo_de_acciones(plugin_manager.list_modules())),
+    )
+    if preparadas.errores:
+        raise ErroresDeclarativas(preparadas.errores)
+    if preparadas.secretos:
+        await guardar_secretos_declarativos(tenant_id, preparadas.secretos, actor=actor)
+    return preparadas.tools
+
+
+__all__ = [
+    "MASCARA",
+    "ErroresDeclarativas",
+    "Preparadas",
+    "enmascarar",
+    "literales_sin_migrar",
+    "preparar",
+    "spec_para_mostrar",
+    "tools_del_editor_crudo",
+]

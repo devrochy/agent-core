@@ -20,3 +20,7 @@
   solo hacia esos dominios; los literales v2 siguen funcionando igual. `migrar_secretos` es el
   paso del backfill antes de la primera `agent_version`.
 - Migración `0076`: fila `core` en el catálogo `plugins` (FK de `pack_installations`).
+- Los editores crudos del AgentSpec (`/advanced`, `/advanced/spec` y el SSR `raw_json`) ya no
+  devuelven literales sensibles de las tools declarativas, y sus cambios a `extensions.tools`
+  pasan por el mismo validador del editor de declarativas. Al ejecutar, un secreto nunca viaja
+  por `http://`.

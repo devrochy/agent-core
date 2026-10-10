@@ -1134,6 +1134,21 @@ async def spec_save(request: Request):
             # fallback de poder: JSON completo validado por el contrato congelado
             data = json.loads(raw_json)
             new_spec = AgentSpec.model_validate(data)
+            # Las tools declarativas pasan por el mismo validador que su editor (HU-AOS-12):
+            # sin literales sensibles nuevos ni secretos fuera de sus dominios.
+            from core.agents.declarativas import tools_del_editor_crudo
+
+            data = new_spec.model_dump(mode="json")
+            ext = dict(data.get("extensions") or {})
+            tools = await tools_del_editor_crudo(
+                get_current_tenant_id(), ext.get("tools"), (current.extensions or {}).get("tools")
+            )
+            if tools is None:
+                ext.pop("tools", None)
+            else:
+                ext["tools"] = tools
+            data["extensions"] = ext
+            new_spec = AgentSpec.model_validate(data)
         else:
             # Los packs ya no se editan acá: se activan/desactivan por tenant
             # desde /admin/plugins (una sola pantalla, sin redundancia).

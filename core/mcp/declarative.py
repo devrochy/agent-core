@@ -133,7 +133,13 @@ def build_tool(definition: dict[str, Any]) -> MCPTool:
 
     async def _handler(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         url = _interpolate(definition["url"], arguments)
-        headers, faltan = await _resolve_headers(definition.get("headers") or {}, urlsplit(url).hostname or "")
+        crudos = definition.get("headers") or {}
+        partes = urlsplit(url)
+        if partes.scheme != "https" and any(secret_ref(v) is not None for v in crudos.values()):
+            # Un secreto nunca viaja en claro, aunque la tool se haya guardado por otra vía.
+            log.warning("declarative_secret_sin_https", tool=definition["name"])
+            return {"error": f"La herramienta '{definition['name']}' no tiene configuradas sus credenciales."}
+        headers, faltan = await _resolve_headers(crudos, partes.hostname or "")
         if faltan:
             # Sin el secreto (o hacia un dominio al que no puede viajar) no se llama: es un
             # error de configuración del negocio, no del plugin.
