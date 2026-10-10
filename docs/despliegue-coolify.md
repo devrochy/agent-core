@@ -437,6 +437,9 @@ Notas aprendidas en vivo (2026-09-30):
 - La sesión sin vincular se limpia al iniciar cada ciclo (si no, Neonize
   "reanuda" credenciales viejas y nunca emite QR).
 - El watchdog solo recicla sockets que **no** emitieron ningún QR en el ciclo.
+- Una sesión conectada cuyo socket lleva 60 s sin conexión (el auto-reconnect de
+  whatsmeow falló sin emitir `DisconnectedEv`) se recicla con la sesión guardada:
+  buscar `waweb_socket_zombie` en los logs (2026-10-10).
 
 ## Persistencia de artefactos de tenant (`TENANTS_ROOT`)
 

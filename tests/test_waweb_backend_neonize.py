@@ -53,6 +53,25 @@ class FakeClient:
     async def disconnect(self) -> None:
         return None
 
+    # Como en `neonize.aioze` 0.5.2: las propiedades devuelven una corutina
+    # (`asyncio.to_thread` sobre el puente Go), no un bool.
+    conectado = True
+    autenticado = True
+
+    @property
+    def is_connected(self):
+        async def _valor() -> bool:
+            return self.conectado
+
+        return _valor()
+
+    @property
+    def is_logged_in(self):
+        async def _valor() -> bool:
+            return self.autenticado
+
+        return _valor()
+
 
 @pytest.fixture(autouse=True)
 def _fake_neonize(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -113,4 +132,45 @@ async def test_send_serializado_y_devuelve_wamid(tmp_path: Path) -> None:
     wamid = await socket.send(to="57300", text="hola")
 
     assert wamid == "WAMID-1"
+    await socket.disconnect()
+
+
+async def _conectado(tmp_path: Path) -> backend_neonize.NeonizeSocket:
+    socket = backend_neonize.NeonizeSocket()
+    await socket.connect(session_dir=tmp_path / "v", on_qr=_noop, on_status=_noop, on_message=_noop)
+    return socket
+
+
+async def test_alive_espera_las_propiedades_del_cliente(tmp_path: Path) -> None:
+    """`is_connected` es una corutina en aioze: sin `await` daría siempre True."""
+    socket = await _conectado(tmp_path)
+    assert await socket.alive() is True
+
+    socket._client.conectado = False
+    assert await socket.alive() is False
+
+    socket._client.conectado = True
+    socket._client.autenticado = False
+    assert await socket.alive() is False
+    await socket.disconnect()
+
+
+async def test_alive_sin_cliente_o_con_idle_terminado_es_false(tmp_path: Path) -> None:
+    assert await backend_neonize.NeonizeSocket().alive() is False
+
+    socket = await _conectado(tmp_path)
+    socket._idle_task.cancel()
+    await asyncio.sleep(0)
+    assert await socket.alive() is False
+    await socket.disconnect()
+
+
+async def test_alive_con_puente_ocupado_no_declara_muerto(tmp_path: Path) -> None:
+    """Esperar el lock (otro tenant usando el puente) no es evidencia de muerte."""
+    socket = await _conectado(tmp_path)
+    socket._client.conectado = False
+    socket.alive_timeout_s = 0.05
+
+    async with backend_neonize._BRIDGE_LOCK:
+        assert await socket.alive() is True
     await socket.disconnect()
