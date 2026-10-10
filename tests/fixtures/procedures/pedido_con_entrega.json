@@ -2,6 +2,7 @@
   "contract": "procedure/1",
   "id": "pack_commerce.pedido_con_entrega",
   "version": "1.0.0",
+  "requires": ["pack_payments"],
   "title": "Pedido con entrega",
   "triggers": {
     "description": "El cliente quiere comprar productos y recibirlos a domicilio o recogerlos",

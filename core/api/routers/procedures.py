@@ -69,7 +69,7 @@ def _too_large() -> ApiError:
 async def _read_body(request: Request) -> bytes:
     """Cuerpo con tope: se corta antes de leer de más (no confía en Content-Length)."""
     declared = request.headers.get("content-length")
-    if declared is not None and declared.isdigit() and int(declared) > _MAX_BODY_BYTES:
+    if declared is not None and declared.isascii() and declared.isdigit() and int(declared) > _MAX_BODY_BYTES:
         raise _too_large()
     body = bytearray()
     async for chunk in request.stream():
@@ -92,7 +92,9 @@ async def validate_procedure(
     body = await _read_body(request)
     try:
         payload = json.loads(body)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (ValueError, RecursionError):
+        # ValueError cubre JSONDecodeError, UnicodeDecodeError y el tope de dígitos de un
+        # entero; RecursionError, un JSON anidado a propósito (`[[[[...]]]]`).
         raise ApiError.bad_request("El cuerpo no es JSON válido.", code="invalid_json") from None
     if not isinstance(payload, dict) or set(payload) != {"procedure"}:
         raise ApiError.bad_request(

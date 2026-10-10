@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from agentcore_contracts import SideEffect
@@ -46,11 +47,30 @@ def _core_skills() -> list[Any]:
     return [CoreSkill(), SubscriptionSkill()]
 
 
-def catalogo_de_acciones(modules: Iterable[Any]) -> dict[str, ActionInfo]:
+# Último catálogo armado y la identidad de los módulos de los que salió: la API lo pide
+# en cada validación y los módulos cargados no cambian mientras el proceso vive.
+# Guarda los módulos mismos (no sus `id`): así siguen vivos y su identidad no se recicla.
+_cache: tuple[tuple[Any, ...], Mapping[str, ActionInfo]] | None = None
+
+
+def catalogo_de_acciones(modules: Iterable[Any]) -> Mapping[str, ActionInfo]:
     """Acciones del binario por nombre: las del core más las de `modules`.
 
+    Se cachea por la identidad de los módulos (los mismos objetos → el mismo catálogo).
     Una skill que no se puede instanciar se salta con un log (mismo criterio que
     `agent-core flow validate`): sus acciones aparecerán como inexistentes."""
+    global _cache
+    clave = tuple(modules)
+    if _cache is not None and len(_cache[0]) == len(clave) and all(
+        a is b for a, b in zip(_cache[0], clave, strict=True)
+    ):
+        return _cache[1]
+    catalogo: Mapping[str, ActionInfo] = MappingProxyType(_armar(list(clave)))
+    _cache = (clave, catalogo)
+    return catalogo
+
+
+def _armar(modules: list[Any]) -> dict[str, ActionInfo]:
     catalogo: dict[str, ActionInfo] = {}
     for skill in _core_skills():
         for tool in skill.get_tools():

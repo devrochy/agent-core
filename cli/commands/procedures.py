@@ -28,15 +28,19 @@ def _leer(path: Path) -> tuple[object | None, str | None]:
     from core.kernel.procedures import MAX_PROCEDURE_BYTES
 
     try:
-        raw = path.read_bytes()
+        # Se lee a lo sumo un byte más del tope: un archivo enorme no se carga entero.
+        with path.open("rb") as archivo:
+            raw = archivo.read(MAX_PROCEDURE_BYTES + 1)
     except OSError as exc:
         return None, f"no se pudo leer ({exc.strerror})"
     if len(raw) > MAX_PROCEDURE_BYTES:
         return None, f"pesa más de {MAX_PROCEDURE_BYTES // 1024} KiB"
     try:
         return json.loads(raw), None
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        return None, f"JSON inválido ({exc})"
+    except ValueError as exc:  # JSONDecodeError, UnicodeDecodeError y enteros enormes
+        return None, f"JSON inválido ({str(exc)[:120]})"
+    except RecursionError:
+        return None, "JSON inválido (anidado en exceso)"
 
 
 @app.command()

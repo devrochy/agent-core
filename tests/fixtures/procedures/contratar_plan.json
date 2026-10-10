@@ -2,6 +2,7 @@
   "contract": "procedure/1",
   "id": "pack_commerce.contratar_plan",
   "version": "1.0.0",
+  "requires": ["pack_payments"],
   "title": "Contratar un plan",
   "triggers": {
     "description": "El cliente quiere comprar, contratar o pagar un plan",

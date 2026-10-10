@@ -4,9 +4,17 @@ hoy nada en runtime lee procedimientos."""
 
 from core.kernel.procedures.afirmaciones import compilar_afirmaciones
 from core.kernel.procedures.catalogo import ActionInfo, Catalogo, catalogo_de_acciones
-from core.kernel.procedures.linter import MAX_PROCEDURE_BYTES, Issue, lint, revisar, validar
+from core.kernel.procedures.linter import (
+    MAX_ISSUES,
+    MAX_PROCEDURE_BYTES,
+    Issue,
+    lint,
+    revisar,
+    validar,
+)
 
 __all__ = [
+    "MAX_ISSUES",
     "MAX_PROCEDURE_BYTES",
     "ActionInfo",
     "Catalogo",

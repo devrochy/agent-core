@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -391,11 +391,23 @@ def _procedure_owner(pack: str) -> str:
     return owner or TENANT
 
 
-def flow_to_procedures(sections: Iterable[FlowSection]) -> list[Procedure]:
+def flow_to_procedures(
+    sections: Iterable[FlowSection],
+    *,
+    catalogo: Mapping[str, Any] | None = None,
+    confirmed_actions: Iterable[str] = (),
+) -> list[Procedure]:
     """Convierte el flujo compuesto (ADR-0109) en procedimientos `procedure/1` abiertos
     (ADR-0113 §5, HU-AOS-03): uno por sección, con una sola etapa terminal que permite
     exactamente las acciones de la sección, en el mismo orden. No hay datos, salida ni
     afirmaciones: nada cambia de conducta, solo de forma.
+
+    - `catalogo` (acciones del binario, `core.kernel.procedures.catalogo_de_acciones`):
+      si se pasa, `requires` declara las habilidades ajenas cuyas acciones usa la
+      sección por nombre (el flujo de commerce ofrece `generar_link_pago` de payments).
+    - `confirmed_actions`: acciones con `requiresConfirmation` en el binding v2 del
+      negocio. El procedimiento abierto las hereda en `confirmActions` de su etapa, que
+      el linter acepta como confirmación (ADR-0113 §5).
 
     La entrada debe ser el flujo ya resuelto y filtrado (`ResolvedFlow.sections`), así el
     procedimiento no ofrece acciones que el loop no ofrece. Es total: toda sección que
@@ -404,18 +416,44 @@ def flow_to_procedures(sections: Iterable[FlowSection]) -> list[Procedure]:
     """
     from agentcore_contracts import Procedure, Stage, Triggers
 
+    confirmadas = set(confirmed_actions)
     procedures: list[Procedure] = []
     for section in sections:
+        owner = _procedure_owner(section.pack)
+        requires: list[str] = []
+        if catalogo is not None:
+            for tool in section.tools:
+                info = catalogo.get(tool)
+                dueno = getattr(info, "owner", None)
+                if dueno and dueno not in (CORE, owner) and dueno not in requires:
+                    requires.append(dueno)
         procedures.append(
             Procedure(
-                id=f"{_procedure_owner(section.pack)}.{section.id}",
+                id=f"{owner}.{section.id}",
                 version=OPEN_PROCEDURE_VERSION,
                 title=section.label,
+                requires=requires[:20],
                 triggers=Triggers(description=section.purpose),
-                stages=[Stage(id=section.id, goal=section.purpose, actions=list(section.tools))],
+                stages=[
+                    Stage(
+                        id=section.id,
+                        goal=section.purpose,
+                        actions=list(section.tools),
+                        confirmActions=[t for t in section.tools if t in confirmadas],
+                    )
+                ],
             )
         )
     return procedures
+
+
+def confirmed_actions_v2(spec: Any) -> set[str]:
+    """Acciones con `requiresConfirmation` en los bindings v2 habilitados del spec."""
+    return {
+        binding.tool
+        for binding in getattr(spec, "tools", None) or []
+        if getattr(binding, "enabled", False) and getattr(binding, "requiresConfirmation", False)
+    }
 
 
 # ------------------------------------------------------------------ siembra y migración

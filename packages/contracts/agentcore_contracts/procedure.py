@@ -20,9 +20,9 @@ procedimiento válido.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 # ─────────────────────────────────────────────────────────────
 # Formatos
@@ -77,7 +77,11 @@ Name = Annotated[str, Field(pattern=NAME_PATTERN)]
 ActionName = Annotated[str, Field(pattern=ACTION_PATTERN)]
 EventName = Annotated[str, Field(pattern=EVENT_PATTERN)]
 EvalName = Annotated[str, Field(pattern=EVAL_PATTERN)]
-Phrase = Annotated[str, Field(min_length=1, max_length=300)]
+# Frase literal: sin espacios en los bordes y con al menos 3 caracteres (una frase de
+# un espacio o de una letra daría por hecha una acción en casi cualquier texto).
+Phrase = Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=300)]
+Owner = Annotated[str, Field(pattern=OWNER_PATTERN)]
+Scalar = Annotated[str, Field(max_length=100)] | int | float | bool
 EnumValue = Annotated[str, Field(min_length=1, max_length=100)]
 Source = Annotated[str, Field(pattern=SOURCE_PATTERN)]
 
@@ -122,7 +126,7 @@ class Slot(_Strict):
     type: SlotType | None = None
     enum: list[EnumValue] | None = Field(default=None, min_length=1, max_length=50)
     format: SlotFormat | None = None
-    default: Any = None
+    default: Scalar | None = None
     required: bool = False
     # Obligatorio solo si se cumple la condición (la dirección, solo con domicilio).
     requiredWhen: SlotCondition | None = None
@@ -158,6 +162,10 @@ class Stage(_Strict):
     # Acciones de lectura que deben cumplirse antes de avanzar.
     preconditions: list[ActionName] = Field(default=[], max_length=10)
     confirmation: Confirmation | None = None
+    # Acciones de la etapa que piden confirmación una por una antes de ejecutarse. Es lo
+    # que hereda un procedimiento abierto del `requiresConfirmation` de su binding v2
+    # (ADR-0113 §5); el linter la acepta como confirmación de esa acción.
+    confirmActions: list[ActionName] = Field(default=[], max_length=60)
     risk: Risk = "low"
     # Sin `exitWhen` la etapa es terminal.
     exitWhen: ExitWhen | None = None
@@ -201,6 +209,9 @@ class Procedure(_Strict):
     id: str = Field(pattern=PROCEDURE_ID_PATTERN)
     version: str = Field(pattern=SEMVER_PATTERN)
     title: str = Field(max_length=200)
+    # Habilidades de las que el procedimiento usa acciones por nombre (nunca las importa,
+    # invariante 5). Si una no está instalada en el scope, el procedimiento no se ofrece.
+    requires: list[Owner] = Field(default=[], max_length=20)
     triggers: Triggers = Field(default_factory=Triggers)
     slots: dict[Name, Slot] = Field(default={}, max_length=40)
     stages: list[Stage] = Field(min_length=1, max_length=30)

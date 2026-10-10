@@ -12,21 +12,29 @@ from __future__ import annotations
 import copy
 import inspect
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import pytest
-from agentcore_contracts import AgentSpec, Procedure, __version__
+from agentcore_contracts import AgentSpec, Procedure, ToolBinding, __version__
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core.agents import flow as flow_mod
-from core.agents.flow import FlowSection, _parse_sections, flow_to_procedures, resolve_flow
+from core.agents.flow import (
+    FlowSection,
+    _parse_sections,
+    confirmed_actions_v2,
+    flow_to_procedures,
+    resolve_flow,
+)
 from core.kernel.procedures import (
     ActionInfo,
     Issue,
     catalogo_de_acciones,
     compilar_afirmaciones,
+    lint,
     revisar,
     validar,
 )
@@ -52,7 +60,7 @@ def modulos() -> list[Any]:
 
 
 @pytest.fixture(scope="module")
-def catalogo(modulos) -> dict[str, ActionInfo]:
+def catalogo(modulos) -> Mapping[str, ActionInfo]:
     return catalogo_de_acciones(modulos)
 
 
@@ -180,6 +188,14 @@ def _mutar(raw: dict[str, Any], cambio: str) -> None:
             claims[2]["phrases"] = []
         case "afirmacion_sin_respaldo":
             claims[2]["requires"] = "slot:variante_id"  # lo llena un botón, no una acción
+        case "habilidad_no_declarada":
+            raw["requires"] = []  # usa generar_link_pago de pack_payments sin declararlo
+        case "requires_redundante":
+            raw["requires"].append("pack_commerce")
+        case "habilidad_desconocida":
+            raw["requires"].append("pack_fantasma")
+        case "confirmacion_de_accion_ajena":
+            stages[0]["confirmActions"] = ["crear_pedido"]
 
 
 @pytest.mark.parametrize(
@@ -202,6 +218,10 @@ def _mutar(raw: dict[str, Any], cambio: str) -> None:
         "afirmacion_sin_fuente",
         "afirmacion_sin_frases",
         "afirmacion_sin_respaldo",
+        "habilidad_no_declarada",
+        "requires_redundante",
+        "habilidad_desconocida",
+        "confirmacion_de_accion_ajena",
     ],
 )
 def test_cada_regla_del_linter(cambio: str, catalogo) -> None:
@@ -210,6 +230,57 @@ def test_cada_regla_del_linter(cambio: str, catalogo) -> None:
     issues = revisar(raw, catalogo)
     assert cambio in codes(issues), issues
     assert all(i.message for i in issues)
+
+
+def test_irreversible_confirmada_por_accion(catalogo) -> None:
+    """`confirmActions` (lo que hereda un procedimiento abierto de `requiresConfirmation`)
+    cuenta como confirmación de esa acción, no de las demás."""
+    con_irreversible = dict(catalogo)
+    for nombre in ("crear_pedido", "generar_link_pago"):
+        con_irreversible[nombre] = ActionInfo(nombre, catalogo[nombre].owner, "irreversible")
+    raw = fixture("contratar_plan")
+    raw["stages"][3]["confirmActions"] = ["crear_pedido"]
+    issues = revisar(raw, con_irreversible)
+    assert [(i.code, i.path) for i in issues] == [("irreversible_sin_confirmacion", "stages[3].actions[1]")]
+
+
+def test_accion_de_otra_habilidad_por_nombre_con_requires(catalogo) -> None:
+    raw = fixture("contratar_plan")
+    raw["requires"] = []
+    issues = revisar(raw, catalogo)
+    assert {i.code for i in issues} == {"habilidad_no_declarada"}
+    assert "'generar_link_pago' es de 'pack_payments'" in issues[0].message
+    assert revisar(fixture("contratar_plan"), catalogo) == []
+
+
+def test_tope_de_errores(catalogo) -> None:
+    raw = fixture("consultar_planes")
+    raw["stages"][0]["actions"] = [f"accion_{i}" for i in range(60)]
+    issues = revisar(raw, catalogo)
+    assert len(issues) == 51
+    assert issues[-1].code == "demasiados_errores" and "Y 11 problema(s) más" in issues[-1].message  # 60 inexistentes + la fuente del monto
+
+
+def test_ruta_recorta_campos_desconocidos_largos() -> None:
+    raw = fixture("consultar_planes")
+    raw["x" * 500] = 1
+    [issue] = validar(raw)[1]
+    assert issue.code == "forma" and len(issue.path) == 60 and issue.path.endswith("…")
+
+
+@pytest.mark.parametrize("frase", ["  ", "ok", "   a  "])
+def test_frases_demasiado_cortas_se_rechazan(frase: str) -> None:
+    raw = fixture("agendar_cita")
+    raw["claims"][0]["phrases"] = [frase]
+    [issue] = validar(raw)[1]
+    assert issue.path == "claims[0].phrases[0]" and "mínimo 3" in issue.message
+
+
+@pytest.mark.parametrize("default", [{"a": 1}, [1], "x" * 101])
+def test_default_es_un_escalar_acotado(default: Any) -> None:
+    raw = fixture("contratar_plan")
+    raw["slots"]["periodicidad"]["default"] = default
+    assert validar(raw)[0] is None
 
 
 def test_dinero_sin_ninguna_fuente(catalogo) -> None:
@@ -279,9 +350,14 @@ def test_catalogo_es_del_binario_sin_negocio(modulos, monkeypatch: pytest.Monkey
         raise AssertionError("el catálogo no debe leer tools declarativas de un negocio")
 
     import core.mcp.declarative as declarative
+    from core.kernel.procedures import catalogo as catalogo_mod
 
     monkeypatch.setattr(declarative, "tools_for_spec", _prohibido)
+    monkeypatch.setattr(catalogo_mod, "_cache", None)
     catalogo = catalogo_de_acciones(modulos)
+    assert catalogo_de_acciones(modulos) is catalogo  # cacheado por identidad de los módulos
+    with pytest.raises(TypeError):
+        catalogo["x"] = None  # type: ignore[index]
     assert catalogo["escalate_to_human"].owner == "core"
     assert catalogo["sub_link_pago"].owner == "core"
     assert catalogo["generar_link_pago"].owner == "pack_payments"
@@ -336,7 +412,7 @@ async def test_conversion_del_flujo_compuesto_real_sin_cambiar_acciones(
     assert {"core:saludo", "core:escalamiento", "tenant:planes", "pack_commerce:cotizacion"} <= qids
     assert {s.pack for s in flow.sections} >= {"core", "tenant", *packs}
 
-    procedures = flow_to_procedures(flow.sections)
+    procedures = flow_to_procedures(flow.sections, catalogo=catalogo)
 
     assert len(procedures) == len(flow.sections)
     for section, proc in zip(flow.sections, procedures, strict=True):
@@ -345,14 +421,42 @@ async def test_conversion_del_flujo_compuesto_real_sin_cambiar_acciones(
         assert proc.stages[0].actions == section.tools
         assert proc.stages[0].exitWhen is None and proc.slots == {} and proc.claims == []
         assert proc.title == section.label and proc.stages[0].goal == section.purpose
-        # Las acciones existen en el binario. No se exige el linter completo: cuando
-        # HU-AOS-34 marque irreversibles, las etapas abiertas no traen confirmación.
-        assert all(a in catalogo for a in proc.stages[0].actions)
+        # Linter completo: acciones existentes y de habilidades declaradas en `requires`.
+        assert lint(proc, catalogo) == [], proc.id
     cotizacion = next(p for p in procedures if p.id == "pack_commerce.cotizacion")
     assert "consultar_inventario" in cotizacion.stages[0].actions
+    pedido = next(p for p in procedures if p.id == "pack_commerce.pedido")
+    assert pedido.requires == ["pack_payments"]  # generar_link_pago, por nombre
     assert [a for p in procedures for a in p.stages[0].actions] == [
         t for s in flow.sections for t in s.tools
     ]
+
+
+async def test_conversion_hereda_la_confirmacion_del_binding_v2(
+    catalogo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-0113 §5: el procedimiento abierto hereda `requiresConfirmation` del binding v2 y
+    el linter la acepta como confirmación, así marcar una acción irreversible no obliga a
+    cambiar la conducta al convertir."""
+    monkeypatch.setattr(flow_mod, "load_tenant_flow", lambda slug: None)
+    spec = _spec(["pack_commerce", "pack_payments"])
+    spec.tools = [
+        ToolBinding(tool="crear_pedido", enabled=True, requiresConfirmation=True),
+        ToolBinding(tool="generar_link_pago", enabled=False, requiresConfirmation=True),
+    ]
+    flow = await resolve_flow(spec, slug="acme", available=set(catalogo))
+    assert flow is not None
+    con_irreversible = dict(catalogo)
+    con_irreversible["crear_pedido"] = ActionInfo("crear_pedido", "pack_commerce", "irreversible")
+
+    procedures = flow_to_procedures(flow.sections, catalogo=catalogo, confirmed_actions=confirmed_actions_v2(spec))
+    pedido = next(p for p in procedures if p.id == "pack_commerce.pedido")
+    assert pedido.stages[0].confirmActions == ["crear_pedido"]  # el binding deshabilitado no cuenta
+    assert all(lint(p, con_irreversible) == [] for p in procedures)
+
+    sin_binding = flow_to_procedures(flow.sections, catalogo=catalogo)
+    pedido = next(p for p in sin_binding if p.id == "pack_commerce.pedido")
+    assert codes(lint(pedido, con_irreversible)) == ["irreversible_sin_confirmacion"]
 
 
 def test_conversion_es_total_con_los_bordes_del_flujo() -> None:
@@ -455,6 +559,12 @@ def test_endpoint_topes_y_cuerpo_invalido(client) -> None:
     assert resp.status_code == 413 and resp.json()["error"]["code"] == "payload_too_large"
     assert client.post(URL, content=b"{no es json", headers={"content-type": "application/json"}).status_code == 400
     assert client.post(URL, json={"procedimiento": {}}).status_code == 400
+    anidado = b'{"procedure": ' + b"[" * 20000 + b"]" * 20000 + b"}"
+    resp = client.post(URL, content=anidado, headers={"content-type": "application/json"})
+    assert resp.status_code == 400 and resp.json()["error"]["code"] == "invalid_json"
+    enorme = b'{"procedure": ' + b"9" * 5000 + b"}"  # pasa el tope de dígitos de int()
+    resp = client.post(URL, content=enorme, headers={"content-type": "application/json"})
+    assert resp.status_code == 400 and resp.json()["error"]["code"] == "invalid_json"
     assert client.post(URL, json={"procedure": fixture("contratar_plan"), "extra": 1}).status_code == 400
     forma = client.post(URL, json={"procedure": []}).json()
     assert forma["valid"] is False and forma["errors"][0]["code"] == "forma"

@@ -23,6 +23,12 @@ from core.kernel.procedures.catalogo import CORE_OWNER, Catalogo
 # Tope de un procedimiento serializado (CLI y API). Holgado: el más grande de los
 # críticos ocupa unos 4 KiB.
 MAX_PROCEDURE_BYTES = 64 * 1024
+# Tope de problemas que se devuelven: un JSON con miles de errores no debe producir una
+# respuesta de miles de líneas. El último avisa cuántos quedaron fuera.
+MAX_ISSUES = 50
+# Largo máximo de un segmento de la ruta que viene del documento (nombres de datos o de
+# campos desconocidos): la ruta se devuelve en la API y se imprime en el CLI.
+_MAX_SEGMENTO = 60
 
 
 @dataclass(frozen=True)
@@ -54,6 +60,10 @@ _PISTAS: dict[str, str] = {
 _NOMBRE = "se espera un nombre en minúsculas con números y _ (hasta 40)"
 
 
+def _segmento(texto: str) -> str:
+    return texto if len(texto) <= _MAX_SEGMENTO else texto[: _MAX_SEGMENTO - 1] + "…"
+
+
 def _ruta(loc: tuple[int | str, ...]) -> str:
     ruta = ""
     for parte in loc:
@@ -62,8 +72,20 @@ def _ruta(loc: tuple[int | str, ...]) -> str:
         elif parte == "[key]":
             ruta += " (nombre)"
         else:
-            ruta += f".{parte}" if ruta else str(parte)
+            parte = _segmento(parte)
+            ruta += f".{parte}" if ruta else parte
     return ruta or "(raíz)"
+
+
+def con_tope(issues: list[Issue]) -> list[Issue]:
+    """Los primeros `MAX_ISSUES` problemas y, si hay más, uno final que dice cuántos."""
+    if len(issues) <= MAX_ISSUES:
+        return issues
+    resto = len(issues) - MAX_ISSUES
+    return [
+        *issues[:MAX_ISSUES],
+        Issue("demasiados_errores", "(raíz)", f"Y {resto} problema(s) más: corrige estos y vuelve a validar."),
+    ]
 
 
 def _campo(loc: tuple[int | str, ...]) -> str:
@@ -80,6 +102,8 @@ def _mensaje(error: Any) -> str:
     if tipo == "extra_forbidden":
         return "Campo desconocido: procedure/1 no lo define."
     if tipo == "string_pattern_mismatch":
+        if loc[:1] == ("requires",):
+            return "Formato inválido: se espera el id de una habilidad, p. ej. pack_payments."
         return f"Formato inválido: {_PISTAS.get(_campo(loc), _NOMBRE)}."
     if tipo == "literal_error":
         return f"Valor no permitido; se espera {ctx.get('expected', 'otro valor')}."
@@ -90,7 +114,7 @@ def _mensaje(error: Any) -> str:
     if tipo == "string_too_long":
         return f"Texto demasiado largo (máximo {ctx.get('max_length')} caracteres)."
     if tipo == "string_too_short":
-        return "El texto no puede estar vacío."
+        return f"Texto demasiado corto (mínimo {ctx.get('min_length')} caracteres sin contar espacios)."
     if tipo in ("greater_than_equal", "less_than_equal"):
         return "Número fuera de rango."
     if tipo in ("dict_type", "model_type", "model_attributes_type"):
@@ -152,19 +176,30 @@ class _Linter:
         self.catalogo = catalogo
         self.issues: list[Issue] = []
         self.acciones_de_etapas = {a for s in proc.stages for a in s.actions}
+        # ADR-0113 §1: acciones del core, de la habilidad y, por nombre, de las que declara.
+        self.duenos_permitidos = {CORE_OWNER, proc.owner, *proc.requires}
 
     def add(self, code: str, path: str, message: str) -> None:
         self.issues.append(Issue(code, path, message))
 
     # -- referencias
     def accion(self, nombre: str, path: str, *, en_etapas: bool = False) -> None:
-        if nombre not in self.catalogo:
+        info = self.catalogo.get(nombre)
+        if info is None:
             self.add(
                 "accion_inexistente",
                 path,
                 f"La acción '{nombre}' no existe: ni el core ni ninguna habilidad la trae.",
             )
-        elif en_etapas and nombre not in self.acciones_de_etapas:
+            return
+        if info.owner not in self.duenos_permitidos:
+            self.add(
+                "habilidad_no_declarada",
+                path,
+                f"La acción '{nombre}' es de '{info.owner}': declárala en `requires` para usarla "
+                "por nombre (nunca se importa otra habilidad).",
+            )
+        if en_etapas and nombre not in self.acciones_de_etapas:
             self.add(
                 "accion_fuera_de_etapas",
                 path,
@@ -195,6 +230,22 @@ class _Linter:
             )
 
     # -- reglas
+    def habilidades(self) -> None:
+        conocidas = {info.owner for info in self.catalogo.values()}
+        for i, dueno in enumerate(self.proc.requires):
+            if dueno in (CORE_OWNER, self.proc.owner):
+                self.add(
+                    "requires_redundante",
+                    f"requires[{i}]",
+                    f"'{dueno}' no hace falta en `requires`: sus acciones ya están permitidas.",
+                )
+            elif dueno not in conocidas:
+                self.add(
+                    "habilidad_desconocida",
+                    f"requires[{i}]",
+                    f"La habilidad '{dueno}' no trae acciones en este binario.",
+                )
+
     def etapas(self) -> None:
         stages = self.proc.stages
         vistos: set[str] = set()
@@ -207,12 +258,20 @@ class _Linter:
             for j, accion in enumerate(stage.actions):
                 self.accion(accion, f"{base}.actions[{j}]")
                 info = self.catalogo.get(accion)
-                if info is not None and info.side_effect == "irreversible" and stage.confirmation is None:
+                confirmada = stage.confirmation is not None or accion in stage.confirmActions
+                if info is not None and info.side_effect == "irreversible" and not confirmada:
                     self.add(
                         "irreversible_sin_confirmacion",
                         f"{base}.actions[{j}]",
                         f"La acción '{accion}' es irreversible y la etapa '{stage.id}' no pide "
-                        "confirmación: declara `confirmation`.",
+                        "confirmación: declara `confirmation` en la etapa o la acción en `confirmActions`.",
+                    )
+            for j, accion in enumerate(stage.confirmActions):
+                if accion not in stage.actions:
+                    self.add(
+                        "confirmacion_de_accion_ajena",
+                        f"{base}.confirmActions[{j}]",
+                        f"La acción '{accion}' no está entre las acciones de la etapa '{stage.id}'.",
                     )
             for j, accion in enumerate(stage.preconditions):
                 self.accion(accion, f"{base}.preconditions[{j}]")
@@ -343,6 +402,7 @@ class _Linter:
 def lint(proc: Procedure, catalogo: Catalogo) -> list[Issue]:
     """Problemas del procedimiento contra el catálogo de acciones del binario."""
     linter = _Linter(proc, catalogo)
+    linter.habilidades()
     linter.etapas()
     linter.datos()
     linter.afirmaciones()
@@ -350,8 +410,9 @@ def lint(proc: Procedure, catalogo: Catalogo) -> list[Issue]:
 
 
 def revisar(raw: Any, catalogo: Catalogo) -> list[Issue]:
-    """Valida la forma y, si es válida, aplica el linter. Lista vacía = sin problemas."""
+    """Valida la forma y, si es válida, aplica el linter. Lista vacía = sin problemas.
+    Devuelve a lo sumo `MAX_ISSUES` problemas más uno que cuenta el resto."""
     proc, issues = validar(raw)
     if proc is None:
-        return issues
-    return lint(proc, catalogo)
+        return con_tope(issues)
+    return con_tope(lint(proc, catalogo))
