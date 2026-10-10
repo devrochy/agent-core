@@ -37,6 +37,31 @@ Aislamiento: **toda** tabla de negocio lleva `tenant_id uuid not null`, RLS con
 política de aislamiento e índice compuesto que empieza por `tenant_id`
 (invariante #1 de `CLAUDE.md`). Un tenant nunca ve filas de otro.
 
+Las tablas del Agent OS (SPEC-26, migraciones `0067`–`0071`) suman una garantía más: cada
+tabla padre tiene `UNIQUE (tenant_id, id)` y **toda** referencia a otra entidad del negocio es
+una FK compuesta `(tenant_id, …)`, así que una fila de un negocio no puede apuntar a una de otro
+aunque el código se equivoque (ADR-0116 §4). Las append-only (versiones, releases, eventos,
+ledgers) usan el trigger `prevent_mutation()` y `app_runtime` solo tiene `SELECT`/`INSERT` en
+ellas; ninguna tabla nueva le da `DELETE` (invariante 8).
+
+### Tablas de sistema (sin `tenant_id` ni RLS)
+
+Excepciones documentadas a la invariante #1: catálogos globales o datos que se leen antes de
+tener un negocio en contexto. La migración que las crea lleva la marca "Tabla de SISTEMA" (la
+reconoce `.claude/hooks/guards.py`) y explica el motivo.
+
+| Tabla | Por qué es de sistema |
+|---|---|
+| `tenants` | el propio negocio. Las banderas del Agent OS (`aos_runtime`, `aos_procedures`, ADR-0112) viven aquí y solo las edita el master |
+| `plans` | catálogo de planes (ADR-0045) |
+| `connection_types` | catálogo de tipos de conexión (ADR-0069) |
+| `pack_versions` (+ vista `agent_templates`) | contenido versionado de las habilidades de la plataforma (ADR-0118 §1); los plugins del negocio no entran. Inmutable salvo `yanked`; `app_runtime` solo tiene `SELECT` |
+| `webhook_events`, `meta_app_subscriptions`, `admin_permissions`, `tenant_invitations`, `platform_meta_app_requirements` | se leen antes de resolver el negocio o son de la plataforma |
+
+Ninguna **vista** de `public` puede tener columna `tenant_id`: `purge_tenant` recorre
+`information_schema.columns` y la trataría como tabla (lo verifica
+`tests/integration/test_agent_os_esquema.py`).
+
 ## `TENANTS_ROOT` — los artefactos de cada tenant viven fuera del código
 
 Los datos y la documentación específica de cada cliente no van al repo del
