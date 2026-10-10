@@ -36,6 +36,9 @@ class FakeSocket:
         self.sent.append((to, text))
         return "WA-1"
 
+    async def alive(self):
+        return True
+
     async def disconnect(self):
         self.closed.set()
 
@@ -87,6 +90,12 @@ def _stub_handoff(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(manager_mod.handoff, "clear_ready", _noop)
     monkeypatch.setattr(manager_mod.handoff, "publish_qr", _noop)
     monkeypatch.setattr(manager_mod, "purge_outbox", _noop)
+
+    async def _sin_reset(*a: Any, **k: Any) -> bool:
+        return False
+
+    # Sin esto cada vuelta del drain intentaba hablar con Redis.
+    monkeypatch.setattr(manager_mod.handoff, "consume_reset", _sin_reset)
 
 
 def _ctx() -> SessionContext:
@@ -431,3 +440,187 @@ async def test_socket_con_qr_no_se_recicla_por_timeout(tmp_path: Path) -> None:
     assert len(sockets) == 1, "con un QR emitido no debe reciclarse el socket"
     # Solo la limpieza inicial (sesión sin vincular), no reciclados del watchdog.
     assert connector.store.cleared.count(ctx.tenant_id) == 1
+
+
+def _connector_con_reloj(
+    tmp_path: Path,
+    registry: FakeRegistry,
+    factory: Any,
+    reloj: dict[str, float],
+    alerts: list[Any],
+    paso_s: float = 5.0,
+) -> WaWebConnector:
+    """Connector cuyo reloj avanza `paso_s` por cada `sleep` del drain."""
+
+    async def _sleep(segundos: float) -> None:
+        reloj["t"] += paso_s
+        # Cede el loop: si el reciclado no ocurre, `wait_for` corta el test en
+        # vez de colgarlo.
+        await asyncio.sleep(0)
+
+    async def _noop_drain(*a: Any, **k: Any) -> bool:
+        return False
+
+    async def _alert(*a: Any, **k: Any) -> None:
+        alerts.append((a, k))
+
+    async def _policy(_tenant_id: uuid.UUID) -> WaWebPolicy:
+        return WaWebPolicy()
+
+    return WaWebConnector(
+        registry=registry,
+        store=FakeStore(tmp_path),
+        socket_factory=factory,
+        policy_loader=_policy,
+        drainer=_noop_drain,
+        sleep=_sleep,
+        alert=_alert,
+        now=lambda: reloj["t"],
+        liveness_interval_s=30.0,
+        liveness_grace_s=60.0,
+    )
+
+
+@pytest.fixture
+def _limits_sin_redis(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _clear(_: uuid.UUID) -> None:
+        return None
+
+    async def _record(_: uuid.UUID) -> int:
+        return 1
+
+    monkeypatch.setattr(manager_mod.limits, "clear_disconnects", _clear)
+    monkeypatch.setattr(manager_mod.limits, "record_disconnect", _record)
+
+
+@pytest.mark.usefixtures("_limits_sin_redis")
+async def test_socket_zombie_se_recicla_con_la_sesion_guardada(tmp_path: Path) -> None:
+    """Un socket "conectado" que ya no lo está se recicla sin pedir QR.
+
+    Incidente en test (2026-10-06 y 2026-10-10): el auto-reconnect interno de
+    Neonize falló sin emitir `DisconnectedEv`; la sesión siguió en `connected`
+    con el drain vivo y los mensajes entrantes se perdían en silencio.
+    """
+    ctx = _ctx()  # arrancó en pending_qr: se vincula dentro de esta tarea
+    registry = FakeRegistry([ctx])
+    reloj = {"t": 0.0}
+    alerts: list[Any] = []
+    sockets: list[Any] = []
+    secuencia: list[str] = []
+
+    async def on_set(_tenant_id: uuid.UUID, new_status: str) -> None:
+        secuencia.append(new_status)
+
+    registry.on_set = on_set
+
+    class SocketZombie(FakeSocket):
+        async def alive(self):
+            return False
+
+    def factory() -> Any:
+        sock = SocketZombie()
+        sockets.append(sock)
+        if len(sockets) >= 2:
+            connector._stop.add(ctx.tenant_id)
+        return sock
+
+    connector = _connector_con_reloj(tmp_path, registry, factory, reloj, alerts)
+
+    await asyncio.wait_for(connector.run_session(ctx), timeout=3)
+
+    assert len(sockets) == 2, "el socket zombie debe reciclarse"
+    assert sockets[0].closed.is_set()
+    assert status.DISCONNECTED in secuencia
+    assert [k["severity"] for _a, k in alerts] == ["warning"]
+    # Solo la limpieza inicial: tras vincularse, el reciclado conserva la sesión.
+    assert connector.store.cleared.count(ctx.tenant_id) == 1
+    # La gracia se respeta: no recicla antes de 60 s sin conexión.
+    assert reloj["t"] >= 60.0
+
+
+@pytest.mark.usefixtures("_limits_sin_redis")
+async def test_reconexion_interna_breve_no_recicla(tmp_path: Path) -> None:
+    """Sin conexión menos que la gracia (auto-reconnect normal): no se toca."""
+    ctx = _ctx()
+    registry = FakeRegistry([ctx])
+    reloj = {"t": 0.0}
+    alerts: list[Any] = []
+    sockets: list[Any] = []
+    holder: dict[str, Any] = {}
+
+    class SocketQueSeRecupera(FakeSocket):
+        async def alive(self):
+            # Cae entre t=30 y t=60 (dos chequeos), luego vuelve.
+            vivo = not (30.0 <= reloj["t"] < 70.0)
+            if reloj["t"] > 300.0:
+                holder["connector"]._stop.add(ctx.tenant_id)
+            return vivo
+
+    def factory() -> Any:
+        sock = SocketQueSeRecupera()
+        sockets.append(sock)
+        return sock
+
+    connector = _connector_con_reloj(tmp_path, registry, factory, reloj, alerts)
+    holder["connector"] = connector
+
+    await asyncio.wait_for(connector.run_session(ctx), timeout=3)
+
+    assert len(sockets) == 1
+    assert alerts == []
+    assert registry.statuses[ctx.tenant_id] == status.CONNECTED
+
+
+@pytest.mark.usefixtures("_limits_sin_redis")
+async def test_chequeo_de_vida_solo_con_sesion_conectada(tmp_path: Path) -> None:
+    """Mientras espera el escaneo del QR no se consulta `alive()`."""
+    ctx = _ctx()
+    registry = FakeRegistry([ctx])
+    reloj = {"t": 0.0}
+    alerts: list[Any] = []
+    consultas: list[float] = []
+    holder: dict[str, Any] = {}
+
+    class SocketSoloQr(FakeSocket):
+        async def connect(self, *, session_dir, on_qr, on_status, on_message):
+            self.session_dir = session_dir
+            await on_qr("QR-DE-PRUEBA")
+
+        async def alive(self):
+            consultas.append(reloj["t"])
+            return False
+
+    def factory() -> Any:
+        return SocketSoloQr()
+
+    connector = _connector_con_reloj(tmp_path, registry, factory, reloj, alerts)
+    holder["connector"] = connector
+
+    original_sleep = connector.sleep
+
+    async def _sleep(segundos: float) -> None:
+        await original_sleep(segundos)
+        if reloj["t"] > 300.0:
+            connector._stop.add(ctx.tenant_id)
+
+    connector.sleep = _sleep
+
+    await asyncio.wait_for(connector.run_session(ctx), timeout=3)
+
+    assert consultas == []
+    assert alerts == []
+
+
+async def test_sweep_limpia_el_estado_conectado_de_una_tarea_muerta(tmp_path: Path) -> None:
+    ctx = _ctx()
+    connector = _connector(tmp_path, FakeRegistry([]))
+    tarea = asyncio.create_task(asyncio.sleep(0))
+    await tarea
+    connector._tasks[ctx.tenant_id] = tarea
+    connector._connected.add(ctx.tenant_id)
+    connector._linked.add(ctx.tenant_id)
+
+    await connector.sweep()
+
+    assert ctx.tenant_id not in connector._connected
+    assert ctx.tenant_id not in connector._linked

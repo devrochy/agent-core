@@ -12,6 +12,11 @@ connector está probado con un backend falso; acá se mapean los eventos reales:
 - `StreamReplacedEv`           → `disconnected` (+ cierra: el servidor la reemplazó)
 - `MessageEv` (`Info.MessageSource`, `Info.ID`, `Message`) → `InboundEvent`
 
+Además, `alive()` consulta `is_connected` / `is_logged_in` del cliente: el
+auto-reconnect interno de whatsmeow puede fallar sin emitir ningún evento
+(visto en test: `Error sending close to websocket ... EOF` y luego silencio) y
+el manager necesita una señal que no dependa de los eventos.
+
 No importa `neonize` a nivel de módulo: si no está instalado, falla con un
 mensaje claro al conectar.
 """
@@ -19,6 +24,7 @@ mensaje claro al conectar.
 from __future__ import annotations
 
 import asyncio
+import inspect
 from pathlib import Path
 
 from core.shared.logger import get_logger
@@ -46,6 +52,11 @@ def _import_neonize():  # type: ignore[no-untyped-def]
     return NewAClient, ev
 
 
+async def _resolve(value: object) -> object:
+    """Valor de una propiedad de Neonize que puede ser corutina o valor directo."""
+    return await value if inspect.isawaitable(value) else value
+
+
 def _message_text(message: object) -> str:
     """Texto de un mensaje entrante (conversation o extendedTextMessage.text)."""
     conversation = getattr(message, "conversation", None)
@@ -71,6 +82,10 @@ def _jid_number(jid: object) -> str:
 
 class NeonizeSocket:
     """Implementa `WaWebSocket` (core/waweb/backend.py) sobre Neonize."""
+
+    # Tope para `alive()`: esperar el lock del puente más que esto (otro tenant
+    # ocupándolo) no es evidencia de socket muerto.
+    alive_timeout_s: float = 10.0
 
     def __init__(self) -> None:
         self.closed = asyncio.Event()
@@ -202,6 +217,35 @@ class NeonizeSocket:
         async with _BRIDGE_LOCK:
             sent = await self._client.send_message(jid, Message(conversation=body))
         return str(getattr(sent, "ID", "") or "")
+
+    async def alive(self) -> bool:
+        if self._client is None:
+            return False
+        if self._idle_task is not None and self._idle_task.done():
+            # `idle()` espera la tarea de conexión de Neonize: si terminó, el
+            # puente Go ya no mantiene el socket.
+            return False
+        # El tope cubre SOLO la espera del lock: cancelar una llamada al puente
+        # ya en curso soltaría el lock con el hilo todavía dentro de Go, y el
+        # próximo en entrar reproduciría el `concurrent map writes`.
+        try:
+            await asyncio.wait_for(_BRIDGE_LOCK.acquire(), self.alive_timeout_s)
+        except TimeoutError:
+            # Puente ocupado (otro tenant enviando o conectando): no es evidencia.
+            log.warning("waweb_neonize_alive_timeout")
+            return True
+        try:
+            # En `neonize.aioze` estas propiedades devuelven una corutina
+            # (`asyncio.to_thread` sobre el puente Go), no un bool: evaluarlas
+            # sin `await` daría siempre True.
+            connected = await _resolve(self._client.is_connected)
+            logged_in = await _resolve(self._client.is_logged_in)
+        except Exception:
+            log.warning("waweb_neonize_alive_failed", exc_info=True)
+            return True
+        finally:
+            _BRIDGE_LOCK.release()
+        return bool(connected) and bool(logged_in)
 
     async def disconnect(self) -> None:
         if self._idle_task is not None:
