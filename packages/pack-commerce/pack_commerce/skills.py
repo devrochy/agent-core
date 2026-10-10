@@ -1018,6 +1018,17 @@ class OrderSkill(BaseSkill):
                                 "city": {"type": "string"},
                                 "phone": {"type": "string"},
                                 "email": {"type": "string"},
+                                # Solo los usan los planes (ADR-0121, ADR-0125, ADR-0129). La
+                                # tool los valida; sin enum para no cambiar con los presets.
+                                "business_name": {"type": "string", "description": "Nombre del negocio (planes)."},
+                                "vertical": {
+                                    "type": "string",
+                                    "description": "Tipo de negocio (planes): id de opciones_vertical.",
+                                },
+                                "acepta_terminos": {
+                                    "type": "string",
+                                    "description": "Token de terminos_pendientes, si el cliente aceptó.",
+                                },
                             },
                         },
                         "guardar_datos_cliente": {
@@ -1501,7 +1512,7 @@ class OrderSkill(BaseSkill):
             }
             if "vertical" in missing:
                 # El tipo de negocio va en customer_data.vertical como el id de una opción
-                # (ADR-0121): no está en el schema de la tool, que es la misma para todos.
+                # (ADR-0121): las opciones van en la respuesta, no en el schema de la tool.
                 faltan["opciones_vertical"] = _verticales()
             return faltan
         if es_plan and customer_data.get("business_name"):
