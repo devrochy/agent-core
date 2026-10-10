@@ -11,7 +11,8 @@ registrar el webhook): se reemplazan el número y el token por los que atienden 
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -19,10 +20,13 @@ from pydantic import BaseModel, Field, SecretStr
 
 from core.api.deps import Principal, require, require_owner_or_master
 from core.api.errors import ApiError
+from core.api.schemas import ReadinessItem
 from core.gateway.meta_byok_promocion import (
+    TOPE_CHEQUEOS_S,
     PromocionError,
     cargar_numero_real,
     estado_promocion,
+    promotion_item_labels,
     terminar_promocion,
     verificar_promocion,
 )
@@ -57,20 +61,16 @@ class PromotionState(BaseModel):
     steps: list[PromotionStep]
 
 
-class PromotionCheck(BaseModel):
-    key: str
-    ok: bool | None
-    detail: str
-    checked_at: datetime | None = None
-
-
 class PromotionChecks(BaseModel):
-    checks: list[PromotionCheck]
+    """Los ítems del checklist por conexión (HU-CONN-07) más los de la promoción, con el mismo
+    formato que "Producción" de la conexión."""
+
+    checks: list[ReadinessItem]
 
 
 class PromotionResult(BaseModel):
     promoted: bool
-    checks: list[PromotionCheck]
+    checks: list[ReadinessItem]
     state: PromotionState
 
 
@@ -88,17 +88,20 @@ class PromotionNumberIn(BaseModel):
 def _error(exc: PromocionError) -> ApiError:
     if exc.status == 404:
         return ApiError.not_found(exc.message)
-    if exc.status == 409:
-        return ApiError(409, exc.code, exc.message[:200])
+    if exc.status in (409, 504):
+        return ApiError(exc.status, exc.code, exc.message[:200])
     return ApiError.bad_request(exc.message[:200], exc.code)
 
 
 _ESPERA_CHEQUEOS_S = 10
 
 
-async def _limitar_chequeos(tenant_id: uuid.UUID, cid: uuid.UUID) -> None:
-    """Un "Verificar"/"Terminar" cada 10 s por conexión: cada uno son varias llamadas a Graph
-    con el token del negocio (su cuota de Meta). Antes, 404 si la conexión no es de este
+@asynccontextmanager
+async def _limitar_chequeos(tenant_id: uuid.UUID, cid: uuid.UUID) -> AsyncIterator[None]:
+    """Un "Verificar"/"Terminar" a la vez por negocio y 10 s de espera después: cada uno son
+    varias llamadas a Graph con el token del negocio (su cuota de Meta) y corren en el request.
+    El candado es del negocio (no de la conexión pedida): pedir la de prueba y la de producción
+    a la vez no corre dos revisiones de la misma pareja. Antes, 404 si la conexión no es de este
     negocio: el límite no dice nada de conexiones ajenas."""
     from core.db.session import get_session
     from core.gateway.meta_connection_state import get_live_meta_connection
@@ -108,8 +111,15 @@ async def _limitar_chequeos(tenant_id: uuid.UUID, cid: uuid.UUID) -> None:
         if await get_live_meta_connection(session, cid, tenant_id) is None:
             raise ApiError.not_found("Conexión no encontrada")
 
-    if not await get_redis().set(f"promocion_chequeos:{tenant_id}:{cid}", "1", nx=True, ex=_ESPERA_CHEQUEOS_S):
+    clave = f"promocion_chequeos:{tenant_id}"
+    redis = get_redis()
+    # Mientras corre, el candado dura más que el tope de los chequeos; al terminar quedan 10 s.
+    if not await redis.set(clave, "1", nx=True, ex=TOPE_CHEQUEOS_S + _ESPERA_CHEQUEOS_S):
         raise ApiError(429, "too_many_checks", "Espera unos segundos antes de volver a verificar.")
+    try:
+        yield
+    finally:
+        await redis.expire(clave, _ESPERA_CHEQUEOS_S)
 
 
 def _negocio(principal: Principal) -> uuid.UUID:
@@ -132,8 +142,10 @@ async def _state(tenant_id: uuid.UUID, cid: uuid.UUID) -> PromotionState:
         raise _error(exc) from exc
 
 
-def _checks_out(checks: list[PreflightCheck]) -> list[PromotionCheck]:
-    return [PromotionCheck(key=c.key, ok=c.ok, detail=c.detail, checked_at=c.checked_at) for c in checks]
+def _checks_out(checks: list[PreflightCheck]) -> list[ReadinessItem]:
+    from core.admin.production_readiness_service import serialize_checks
+
+    return [ReadinessItem(**item) for item in serialize_checks(checks, promotion_item_labels())]
 
 
 @router.get("/connections/{connection_id}/promotion", response_model=PromotionState)
@@ -176,13 +188,13 @@ async def promotion_verify(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> PromotionChecks:
     """Chequeos de producción con la app del negocio (nunca la de la plataforma), sin cambiar
-    nada."""
+    nada: el checklist por conexión de HU-CONN-07 más `own_app` y `real_number`."""
     cid = _connection_uuid(connection_id)
-    await _limitar_chequeos(_negocio(principal), cid)
-    try:
-        checks = await verificar_promocion(_negocio(principal), cid)
-    except PromocionError as exc:
-        raise _error(exc) from exc
+    async with _limitar_chequeos(_negocio(principal), cid):
+        try:
+            checks = await verificar_promocion(_negocio(principal), cid)
+        except PromocionError as exc:
+            raise _error(exc) from exc
     return PromotionChecks(checks=_checks_out(checks))
 
 
@@ -197,11 +209,11 @@ async def promotion_finish(
     conexión de producción."""
     require_owner_or_master(principal)
     cid = _connection_uuid(connection_id)
-    await _limitar_chequeos(_negocio(principal), cid)
-    try:
-        promoted, checks, produccion_id = await terminar_promocion(_negocio(principal), cid)
-    except PromocionError as exc:
-        raise _error(exc) from exc
+    async with _limitar_chequeos(_negocio(principal), cid):
+        try:
+            promoted, checks, produccion_id = await terminar_promocion(_negocio(principal), cid)
+        except PromocionError as exc:
+            raise _error(exc) from exc
     # Ya promovida, la de prueba está eliminada: el estado es el de la de producción.
     return PromotionResult(
         promoted=promoted,
