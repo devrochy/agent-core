@@ -153,6 +153,115 @@ Los textos del clasificador y del compositor viven en playbooks del core (invari
     - un secreto en la ruta de la URL (`/bot<token>/`) o bajo una clave de nombre neutro no se detecta;
     - números y booleanos, como arriba.
 
+El validador y el linter únicos están en `core/agents/contrato_v3.py`. Los usan `agent-core agent lint`, el CI y la API al guardar o publicar. El lector tolerante está en `core/agents/tolerante.py`. Su salida pasa siempre el validador: lo que hoy está muerto se poda con un aviso, y los secretos literales salen como `SecretStr` hacia la instalación `core`.
+
+## Adenda de implementación (2026-10-10, HU-AOS-05): semántica del motor de procedimientos
+
+**Estado:** propuesta; requiere la aprobación del dueño antes del merge. Fija convenciones de
+hecho que usan HU-AOS-06, HU-AOS-07 y HU-AOS-09. No cambia la forma de `procedure/1`. La
+revisó el agente `arquitecto` antes de escribir código.
+
+- **Dónde vive:**
+  - `core/kernel/procedures/motor.py`: reglas puras;
+  - `ejecucion.py`: el motor con estado, el cierre por evento y la entrada sin LLM;
+  - `registro.py`: los procedimientos disponibles;
+  - `sombra.py`: el modo sombra;
+  - `textos.py`: los playbooks del kernel `motor` y `confirmacion`.
+- **Registro:**
+  - Cada habilidad publica sus procedimientos con `MCPHost.register_procedures` y sus
+    *resolvers* con `MCPHost.register_resolver("<plugin>.<función>", validar=…, candidatos=…)`.
+    Los resolvers reciben solo `ToolContext` y devuelven `ResolverResult(ok, value, error)`.
+  - Un procedimiento ajeno, repetido o que no pasa el linter no se usa: queda en el log y el
+    pack sigue vivo.
+  - **Transitorio** hasta HU-AOS-13/14: se usan los procedimientos del binario de los packs
+    habilitados y sanos (con todo su `requires` habilitado), no los `procedures` de la versión
+    del agente.
+  - Si la versión de una tarea abierta ya no está en el binario, el motor no la gobierna: queda
+    el flujo v2 de respaldo, hasta la revalidación de HU-AOS-14.
+- **Acciones por etapa:**
+  - Con una tarea en foco se ofrecen solo `stage.actions` más las acciones del core (dueño `core`)
+    que el turno ya ofrecía. Desaparecen las tools declarativas del negocio (ADR-0052), por
+    fail-closed: un negocio que dependa de ellas lo nota al encender.
+  - Una llamada fuera de eso se deniega con un error de negocio (`audit_log` `denied`) y no se
+    ejecuta.
+  - Sin tarea en foco, todo queda como siempre.
+- **Confirmación:**
+  - Hay una sola puerta por etapa. Si la etapa declara `confirmation` y `exitWhen.action`, la
+    puerta es esa acción. Si `exitWhen` no tiene acción, la puerta es la salida de la etapa.
+  - `confirmActions` agrega puertas por acción. El `requiresConfirmation` del binding del negocio
+    también: en una acción gobernada por la etapa lo aplica la puerta del motor, no la confirmación
+    v2. El negocio no puede quitar una confirmación (§4).
+  - La confirmación de una acción queda atada al hash de sus argumentos canónicos y se consume al
+    ejecutarse. La de la salida de una etapa queda atada al hash de los valores de la tarea: si un
+    dato cambia después del sí, se vuelve a pedir.
+  - Si una acción está gobernada o no se decide con la proyección leída bajo lock, nunca con la del
+    inicio del turno. El resultado se anota solo en la tarea y la etapa que la autorizaron.
+- **Evidencia de confirmación:** la pone el kernel, nunca un argumento del LLM.
+  - El botón `confirmar:<task_id>:<seq del confirmation_requested>:<firma>` sirve como id de botón
+    interactivo y como payload de botón de plantilla (HU-AOS-09; lo arma
+    `ejecucion.payload_de_confirmacion`). La firma es un HMAC con `APP_SECRET_KEY` sobre el negocio,
+    la tarea, la petición y el hash de los args, así que el cliente no puede fabricar el de otra
+    petición.
+  - Si no, un "sí" escrito de confianza alta que contesta la petición del turno **inmediatamente
+    anterior** (posterior al último mensaje del cliente que ya tuvo respuesta). El clasificador es
+    conservador: coincidencia exacta con el léxico del playbook del kernel `confirmacion`; "dale" y
+    "sí" a secas no confirman. HU-AOS-09 lo reemplaza.
+  - Un turno que empezó con un botón no confirma por texto, porque el título del botón no lo
+    escribió el cliente. La marca vive en Redis 15 min y, si Redis falla, no se confirma.
+  - El linter reserva el prefijo `confirmar:`.
+- **Datos:**
+  - `setBy: action:<A>` toma `resultado[<nombre del dato>]`.
+  - Los candidatos `action:<A>.<campo>` guardan solo los ids ofrecidos (hasta `max`) en
+    `action_succeeded`. Un botón `<prefijo>:<valor>` llena el dato `setBy: interactive:<prefijo>:`
+    solo si el valor está entre los últimos ofrecidos (o entre los que devuelve un resolver de
+    candidatos) y pasa el resolver.
+  - `content:image|audio|document` se llena desde la media del mensaje (`{media_id, mime}`). El
+    video se ignora.
+  - `actualizar_tarea` es todo o nada: tipo, opciones, formato y el resolver, con un presupuesto
+    total de 5 s porque corre con la conversación bloqueada. El modelo nunca escribe un dato con
+    `setBy`.
+  - El linter exige que un dato `setBy: interactive:` declare `candidates`, `enum` o `resolver`,
+    porque el id del botón lo controla el cliente.
+- **Precondiciones:**
+  - Corren solo dentro del turno, con el ejecutor que inyecta el loop (permisos, salud y
+    auditoría de siempre).
+  - Los args son los datos de la tarea cuyo nombre es una propiedad del input schema. Si falta
+    uno obligatorio, `precondition_failed` con `precondicion_sin_datos`.
+  - "Se cumple" = resultado sin `error`, sin `ok: false` y sin `confirmation_required`; el pack
+    niega con `BusinessError`. Una acción con `requiresConfirmation` en el binding no corre como
+    precondición.
+  - Una precondición debe ser de solo lectura. Hasta HU-AOS-34 el linter no lo puede comprobar,
+    así que la clave de idempotencia es estable por (tarea, seq, acción).
+- **Transacciones:**
+  - Antes del efecto es fail-closed: etapa, confirmación y `action_requested` bajo el lock de la
+    conversación.
+  - Después del efecto, el resultado llega siempre al modelo y un fallo al registrar solo se
+    loguea.
+  - Nunca hay un lock abierto mientras corre una acción.
+  - El orden de bloqueo es conversación → tareas, también en el consumer (que abre el episodio
+    antes de tocar la tarea) y en el worker.
+- **Cierre por evento:**
+  - Un evento `<dueño>.<topic>` de `completion.events` coincide con el topic del outbox (p. ej.
+    `core.payment.confirmed` ↔ `payment.confirmed`). El linter exige que el dueño sea el core, la
+    habilidad o una de `requires`.
+  - Correlación: solo por las claves de identidad de cada topic (`CLAVES_DE_CORRELACION` en
+    `core/shared/events.py`, p. ej. `payment.confirmed → reference`), nunca por montos ni
+    proveedores. Una tarea correlaciona si un dato fijado por una acción (`source = action:*`) tiene
+    el mismo nombre y valor. Un topic sin claves no cierra tareas. Si el evento correlaciona con
+    tareas de más de una conversación, no cierra ninguna (log `motor_evento_ambiguo`).
+  - El outbox no guarda quién emitió el evento, así que en runtime el dueño del evento es
+    documental: cualquier código del binario que emita ese topic para el negocio cierra la tarea.
+  - Corre en un savepoint de la transacción del despachador: un fallo del motor se loguea y no
+    revierte lo que hicieron los handlers (p. ej. marcar un pago).
+  - Las tareas de una habilidad que se deshabilitó o se auto-desactivó para el negocio no las
+    gobierna el motor, ni sus resolvers corren.
+  - Una etapa final sin `completion.events` completa la tarea al salir. `returnControl` retoma la
+    primera tarea en pausa.
+- **Recuperación:** `actionError = relevo_humano` escala la tarea y el turno. `timeout` y
+  `explicar_y_reintentar_una_vez` quedan para una HU siguiente.
+- **Pendiente para HU-AOS-09:** el texto que el cliente confirma hoy lo redacta el modelo. HU-AOS-09
+  debe armar el resumen del botón desde los argumentos del servidor.
+
 ## Adenda de implementación (2026-10-10, HU-AOS-13): backfill B2
 
 - **Los secretos se copian, no se mueven.** El backfill (`agent-core db backfill-agentes`) copia los

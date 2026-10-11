@@ -30,7 +30,7 @@
       "actions": ["crear_pedido", "agregar_item_pedido", "confirmar_pago_pedido"],
       "exitWhen": { "slots": ["pedido_id", "link_pago"] } }
   ],
-  "completion": { "events": ["pack_payments.pago_confirmado"], "returnControl": true },
+  "completion": { "events": ["core.payment.confirmed"], "returnControl": true },
   "recovery": { "actionError": "explicar_y_reintentar_una_vez", "timeout": "relevo_humano" },
   "claims": [
     { "kind": "amount", "mustMatch": ["action:generar_cotizacion.total"] },

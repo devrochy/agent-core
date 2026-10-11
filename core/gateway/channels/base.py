@@ -28,6 +28,9 @@ class InboundMessage:
     media: list[dict[str, str]] = field(default_factory=list)
     # [{"type": "audio/ogg", "id": "...", "url": "..."}]
     media_context: str = ""  # texto generado por el procesador de medios
+    # Id del botón o de la fila de lista que tocó el cliente (`plan:premium`). `content` sigue
+    # siendo el título visible; el id solo lo usa el motor de procedimientos (HU-AOS-05).
+    interactive_id: str = ""
 
 
 class InboundAdapter(ABC):

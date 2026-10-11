@@ -82,6 +82,18 @@ ON_PLATFORM_PERIOD_PAID = "platform.period_paid"
 #   moneda, periodo_inicio, periodo_fin.
 ON_PLATFORM_RENEWAL_DUE = "platform.renewal_due"
 
+# Claves del payload que identifican el objeto de cada evento (HU-AOS-05). El motor de
+# procedimientos solo cierra una tarea por estas claves (nunca por montos, proveedores ni el
+# cliente): una tarea correlaciona si un dato suyo fijado por una acción tiene el mismo nombre y
+# valor. Un topic que no está aquí no cierra tareas (fail-closed).
+CLAVES_DE_CORRELACION: dict[str, tuple[str, ...]] = {
+    ON_PAYMENT_CONFIRMED: ("reference",),
+    ON_PAYMENT_REJECTED: ("reference",),
+    ON_SUBSCRIPTION_ACTIVATED: ("subscription_id", "referencia"),
+    ON_SUBSCRIPTION_CHARGE_PAID: ("charge_id",),
+    ON_APPOINTMENT_CONFIRMED: ("appointment_id",),
+}
+
 
 class EventBus:
     def __init__(self) -> None:

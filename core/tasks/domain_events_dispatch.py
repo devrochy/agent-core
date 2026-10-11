@@ -17,6 +17,7 @@ from core.db.admin_enum import admin_domain_events_due
 from core.db.models import DomainEvent, utcnow
 from core.db.session import get_session
 from core.events.outbox import payload_para_handlers
+from core.kernel.procedures.ejecucion import cerrar_por_evento
 from core.shared.async_bridge import run_async
 from core.shared.events import event_bus
 from core.shared.logger import get_logger
@@ -90,6 +91,22 @@ async def entregar_evento(event_id: uuid.UUID, tenant_id: uuid.UUID, ahora: date
                     await event_bus.emit_strict(
                         evento.topic, **payload_para_handlers(evento.payload)
                     )
+                    # Cierre de tareas por evento de dominio (HU-AOS-05), en un savepoint: un
+                    # fallo del motor se loguea y no revierte ni frena lo que ya hicieron los
+                    # handlers (p. ej. marcar un pago). Sin procedimientos que declaren el
+                    # topic no consulta nada.
+                    try:
+                        async with session.begin_nested():
+                            await cerrar_por_evento(
+                                session, tenant_id, evento.topic, payload_para_handlers(evento.payload)
+                            )
+                    except Exception as exc:
+                        log.error(
+                            "motor_cierre_por_evento_fallo",
+                            event_id=str(event_id),
+                            topic=evento.topic,
+                            error=type(exc).__name__,
+                        )
                     evento.status = "entregado"
                     evento.last_error = None
                 except Exception as exc:
