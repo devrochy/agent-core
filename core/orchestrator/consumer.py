@@ -52,6 +52,7 @@ from core.orchestrator.escalation import (
     within_business_hours,
 )
 from core.orchestrator.loop import process_conversation
+from core.orchestrator.retencion_streams import recortar_dlq, recortar_inbound
 from core.orchestrator.ruta_de_conversacion import (
     actualizar_ruta,
     buscar_conversacion_abierta,
@@ -81,6 +82,8 @@ MAX_DELIVERIES = 3
 DEAD_LETTER_STREAM = "agent_core:inbound:dlq"
 # Cada cuánto se intenta el reclamo de pendientes huérfanos (HU-ARCH-06).
 RECLAIM_EVERY_S = 30.0
+# Cada cuánto se recortan el stream de entrada y la DLQ (ADR-0053).
+TRIM_EVERY_S = 600.0
 # Resultado del procesamiento de un inbound (HU-ARCH-06).
 TURN_PROCESSED = "processed"
 TURN_DUPLICATE = "duplicate"
@@ -109,12 +112,16 @@ async def consume_loop() -> None:
     HU-ARCH-06: además de los mensajes NUEVOS, cada `RECLAIM_EVERY_S` se reclaman
     con `XAUTOCLAIM` los pendientes huérfanos (crash, deploy, turno colgado), para
     que ningún mensaje quede sin procesar ni sin llegar a la DLQ.
+
+    Retención (ADR-0053): cada `TRIM_EVERY_S` se recorta lo ya procesado del
+    stream y lo vencido de la DLQ (`_recortar_streams`).
     """
     await ensure_group()
     r = get_redis()
     pending: set[asyncio.Task[None]] = set()
     max_inflight = get_settings().max_concurrent_turns * 5
     last_reclaim = 0.0
+    last_trim = 0.0
     while True:
         try:
             batches = await r.xreadgroup(GROUP, CONSUMER, {INBOUND_STREAM: ">"}, count=10, block=2000)
@@ -127,6 +134,9 @@ async def consume_loop() -> None:
             if now - last_reclaim >= RECLAIM_EVERY_S:
                 last_reclaim = now
                 await _reclaim_pending(r, pending)
+            if now - last_trim >= TRIM_EVERY_S:
+                last_trim = now
+                await _recortar_streams(r)
             if len(pending) >= max_inflight:
                 _, pending = await asyncio.wait(
                     pending, timeout=2, return_when=asyncio.FIRST_COMPLETED
@@ -178,6 +188,40 @@ async def _reclaim_pending(r: Any, pending: set[asyncio.Task[None]]) -> None:
         task.add_done_callback(pending.discard)
 
 
+async def _recortar_streams(r: Any) -> None:
+    """Recorta lo procesado del stream y lo vencido de la DLQ; best-effort (ADR-0053).
+
+    Corre en cada réplica: `XTRIM MINID` es idempotente y el corte se calcula con el
+    PEL y el último entregado del grupo, así que nunca borra lo pendiente ni lo no leído.
+    """
+    settings = get_settings()
+    # Un `try` por stream: que un fallo en uno no deje al otro sin recortar.
+    inbound = dlq = 0
+    try:
+        inbound = await recortar_inbound(r, INBOUND_STREAM, settings.inbound_stream_retention_hours)
+    except Exception:
+        log.exception("inbound_stream_trim_failed")
+    try:
+        dlq = await recortar_dlq(r, DEAD_LETTER_STREAM, settings.inbound_dlq_retention_hours)
+    except Exception:
+        log.exception("inbound_dlq_trim_failed")
+    if inbound or dlq:
+        log.info("inbound_stream_trimmed", inbound=inbound, dlq=dlq)
+
+
+async def _ack_y_borrar(r: Any, entry_id: str) -> None:
+    """`XACK` y luego `XDEL`: lo procesado no se queda en Redis (ADR-0053).
+
+    El `XDEL` es best-effort: si falla, el mensaje YA está ackeado y no debe contar como
+    fallo del turno (reintento/DLQ); lo recoge el recorte periódico.
+    """
+    await r.xack(INBOUND_STREAM, GROUP, entry_id)
+    try:
+        await r.xdel(INBOUND_STREAM, entry_id)
+    except Exception:
+        log.warning("inbound_xdel_failed", entry_id=entry_id, exc_info=True)
+
+
 async def _handle_entry(entry_id: str, fields: dict[str, str], *, reclaimed: bool = False) -> None:
     r = get_redis()
     retry_key = f"inbound:retries:{entry_id}"
@@ -189,7 +233,7 @@ async def _handle_entry(entry_id: str, fields: dict[str, str], *, reclaimed: boo
             # cuando el claim quede abandonado (HU-ARCH-06).
             log.info("inbound_busy_skip", entry_id=entry_id, reclaimed=reclaimed)
             return
-        await r.xack(INBOUND_STREAM, GROUP, entry_id)
+        await _ack_y_borrar(r, entry_id)
         await r.delete(retry_key)
     except TurnQueueTimeout:
         # El cupo del tenant está saturado (HU-ARCH-27): el turno no llegó a
@@ -211,7 +255,7 @@ async def _handle_entry(entry_id: str, fields: dict[str, str], *, reclaimed: boo
 async def _dead_letter(
     r: Any, entry_id: str, fields: dict[str, str], deliveries: int, *, error: str
 ) -> None:
-    """Manda el mensaje a la DLQ con el error y lo ackea (HU-ARCH-06).
+    """Manda el mensaje a la DLQ con el error, lo ackea y lo borra del stream (HU-ARCH-06).
 
     El reintento manual del panel (ADR-0013) revoca el claim y lo re-encola.
     El claim incompleto se revoca aquí para no bloquear ese reintento.
@@ -221,7 +265,7 @@ async def _dead_letter(
     payload["deliveries"] = str(deliveries)
     payload["failed_at"] = utcnow().isoformat()
     await r.xadd(DEAD_LETTER_STREAM, payload)
-    await r.xack(INBOUND_STREAM, GROUP, entry_id)
+    await _ack_y_borrar(r, entry_id)
     await _revoke_claim(fields)
     log.error("message_dead_lettered", entry_id=entry_id, deliveries=deliveries)
 
