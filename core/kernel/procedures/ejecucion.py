@@ -433,6 +433,23 @@ class ContextoMotor:
             log.info("motor_candidatos_de_inicio", cantidad=len(candidatos))
         return comandos.herramientas(nombres, foco=self._par_en_foco(), candidatos=candidatos)
 
+    def afirmaciones(self) -> list[Any]:
+        """Las `claims` con frases de los procedimientos disponibles, compiladas a `Afirmacion`
+        para el verificador (ADR-0119, HU-AOS-07). Solo con el motor activo: en sombra o apagado
+        no se verifica nada nuevo. Se respaldan con las acciones del turno y con el estado de las
+        tareas (los datos que declara cada `claim`)."""
+        if self.modo != "activo":
+            return []
+        from core.kernel.procedures.afirmaciones import compilar_afirmaciones
+
+        salida: list[Any] = []
+        for _pid, proc in sorted(self.procedimientos.items()):
+            try:
+                salida.extend(compilar_afirmaciones(proc))
+            except Exception as exc:
+                log.warning("motor_afirmaciones_fallo", procedure_id=proc.id, error=type(exc).__name__)
+        return salida
+
     def es_comando(self, nombre: str) -> bool:
         """¿Lo despacha el motor? Solo activo y solo los nombres reservados de los comandos."""
         return self.modo == "activo" and nombre in comandos.NOMBRES

@@ -589,6 +589,10 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             # guardrails de packs, que ven el texto ya corregido.
             if afirmaciones is None:
                 afirmaciones = await cargar_afirmaciones(enabled)
+                # HU-AOS-07: con el motor activo, también las `claims` compiladas de los
+                # procedimientos disponibles (con la bandera apagada, ninguna).
+                if motor is not None:
+                    afirmaciones = [*afirmaciones, *motor.afirmaciones()]
             veredicto = verificar_seguro(
                 borrador,
                 [*history_tool_results, *all_tool_results],

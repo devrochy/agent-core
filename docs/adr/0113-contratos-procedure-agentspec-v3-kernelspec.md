@@ -503,11 +503,13 @@ lo mismo (el gate en replay pasa sin regrabar).
   de su `pide_<campo>`. Así un mismo procedimiento sirve a cualquier configuración (sin fork) y los
   datos se piden en `datos`, antes del sí. Los términos del alta (ADR-0125) siguen en `crear_pedido`,
   en `pagar`, como sin procedimientos.
-- **Afirmaciones:** pack-commerce no registra las `claims` compiladas (`compilar_afirmaciones`): sus
-  `COMPLETION_CLAIMS` ya cubren esas frases, con la misma conducta con la bandera apagada y medidas
-  por el set etiquetado. Las `claims` de sus procedimientos le dicen al verificador con estado qué
-  dato respalda un cierre (`order_id` para "tu pedido quedó creado", `link` para el link de pago) y
-  dan las fuentes de dinero del resumen genérico.
+- **Afirmaciones compiladas detrás de la bandera** (cierra el pendiente de la adenda de HU-AOS-08):
+  con el motor activo, el loop suma a las de los packs las `claims` con frases de los procedimientos
+  disponibles del turno (`ContextoMotor.afirmaciones`, `compilar_afirmaciones`), de todas las
+  habilidades. No van por `register_afirmaciones`, que no sabe de la bandera: con ella apagada no se
+  verifica nada nuevo. Se respaldan con las acciones (del turno y anteriores, como las de los packs) y
+  con el estado: el dato que declara la `claim` (`order_id` para "pedido creado"). Las
+  `COMPLETION_CLAIMS` de commerce siguen como siempre.
 - **Cierre:** sin `completion.events`. La tarea se completa con el pedido y, si paga en línea, con el
   link. El cierre por `payment.confirmed` correlaciona por el dato `reference`, que hoy ninguna acción
   devuelve; agregarlo al resultado de `confirmar_pago_pedido` cambiaría lo que ve el modelo con la

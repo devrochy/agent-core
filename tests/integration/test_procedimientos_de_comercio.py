@@ -506,3 +506,20 @@ async def test_con_la_bandera_apagada_no_se_ofrece_nada_nuevo(negocio, monkeypat
     assert "cotizar_plan" not in ofrecidas
     assert not ofrecidas & {"iniciar_procedimiento", "actualizar_tarea", "confirmar_tarea", "cancelar_tarea"}
     assert await _tarea(ctx) is None
+
+
+async def test_las_frases_de_los_procedimientos_se_verifican_solo_con_el_motor(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """"Quedó registrado tu pedido" solo lo declara `contratar_plan` (las `COMPLETION_CLAIMS` de
+    commerce no lo atrapan): con el motor activo, sin `crear_pedido`, el verificador lo rechaza."""
+    tid, pagos = negocio
+    afirma, corrige = "Listo, quedó registrado tu pedido.", "Te ayudo a terminar tu compra."
+    ctx = await _cliente(tid, pagos)
+    resultado, _ = await _turno(ctx, monkeypatch, "¿Ya está?", [afirma, corrige])
+    assert resultado.text == corrige
+    await _banderas(tid, False)
+    try:
+        ctx = await _cliente(tid, pagos)
+        resultado, _ = await _turno(ctx, monkeypatch, "¿Ya está?", [afirma, corrige])
+    finally:
+        await _banderas(tid, True)
+    assert resultado.text == afirma
