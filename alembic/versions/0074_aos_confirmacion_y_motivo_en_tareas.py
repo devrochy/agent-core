@@ -23,7 +23,7 @@ escribe todavía (el runtime empieza a escribirla con esta HU, detrás de `aos_p
 los CHECKs se validan en la misma transacción: con la tabla vacía el VALIDATE es instantáneo.
 
 Revision ID: 0074
-Revises: 0072
+Revises: 0073
 Create Date: 2026-10-10
 """
 
@@ -32,7 +32,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "0074"
-down_revision = "0072"
+down_revision = "0073"
 branch_labels = None
 depends_on = None
 
