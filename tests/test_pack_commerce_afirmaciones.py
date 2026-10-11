@@ -292,3 +292,81 @@ async def test_link_de_suscripcion_o_de_cambio_de_plan_tambien_respalda_el_aviso
         "Tu cargo es de $90.000. Aquí tienes el link de pago: https://pagos.simulados/sub-1", tool_results
     )
     assert verdict.passed, verdict.motivo
+
+
+# Incidente de test (tenant solvershub, 2026-10-11): el cliente aceptó los términos y el modelo,
+# sin llamar `crear_pedido`, respondió esto. El tope de 3 palabras entre "pedido" y "creado"
+# lo dejó pasar y el cliente quedó creyendo que su pedido existía.
+INCIDENTE_PEDIDO_CREADO = (
+    "¡Listo, Ana! Tu pedido del plan Premium quedó creado.\n\n"
+    "Te llega el acceso a tu negocio por correo a ana@example.com.\n\n"
+    "¿Querés pagar en línea ahora?"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        INCIDENTE_PEDIDO_CREADO,
+        "Ya quedó creado tu pedido del plan Basic.",
+        "Listo, ya quedó creado su pedido.",
+        # 5 palabras antes del auxiliar: el tope del tramo largo.
+        "Perfecto, el pedido de tu plan Empresarial ya quedó confirmado.",
+        "Ya creé tu pedido del plan Premium.",
+    ],
+)
+async def test_pedido_creado_sin_crear_pedido_falla(texto: str):
+    verdict = await _verificar(CRMModule(), texto, [])
+    assert not verdict.passed
+    assert verdict.afirmacion == "pedido"
+
+
+@pytest.mark.asyncio
+async def test_pedido_creado_con_crear_pedido_del_turno_pasa():
+    tool_results = [_tool_result("crear_pedido", status="pending", public_order_number="OC-0001")]
+    verdict = await _verificar(CRMModule(), INCIDENTE_PEDIDO_CREADO, tool_results)
+    assert verdict.passed, verdict.motivo
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Tu pedido del plan Premium todavía no quedó creado: falta que aceptes los términos.",
+        "Para que tu pedido del plan Premium quede creado necesito que aceptes los términos.",
+        "Cuando aceptes los términos, tu pedido del plan Premium queda creado y te paso el link.",
+        "¿Confirmás que el pedido del plan Premium quede creado a nombre de Tienda Ejemplo?",
+        # Resúmenes antes de crear el pedido (revisión de seguridad): el participio es de otra
+        # cosa o el pedido todavía no existe.
+        "Resumen de tu pedido: plan Premium, 3 usuarios, datos confirmados.",
+        "Tu pedido del plan Premium va a quedar creado hoy.",
+    ],
+)
+async def test_pedido_creado_en_negacion_condicional_o_pregunta_no_afirma(texto: str):
+    verdict = await _verificar(CRMModule(), texto, [])
+    assert verdict.passed, verdict
+
+
+@pytest.mark.asyncio
+async def test_participio_de_la_cotizacion_no_afirma_el_pedido():
+    """"Quedó generada" es de la cotización: con `generar_cotizacion` en el turno pasa, y el
+    tramo largo de `pedido` (solo masculino) no la toma por un pedido creado."""
+    tool_results = [_tool_result("generar_cotizacion", quote_id="q-1", total=600000.0)]
+    verdict = await _verificar(
+        CRMModule(), "Para tu pedido del plan Premium ya quedó generada la cotización.", tool_results
+    )
+    assert verdict.passed, verdict
+
+
+@pytest.mark.asyncio
+async def test_pedido_patron_lineal_ante_texto_armado():
+    """El patrón `pedido` con el tramo de hasta 6 palabras no retrocede de forma cuadrática:
+    el texto lo escribe el LLM y puede repetir contenido del cliente."""
+    import time
+
+    module = CRMModule()
+    for texto in ("pedido" + "-" * 50_000 + "a", "pedido " * 20_000, "quedó " * 20_000):
+        inicio = time.perf_counter()
+        await _verificar(module, texto, [])
+        assert time.perf_counter() - inicio < 1.0

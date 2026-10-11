@@ -89,8 +89,19 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
         re.compile(
             # El artículo va con su propio espacio: `(?:tu)?\s*` era cuadrático ante
             # una racha de espacios (revisión de seguridad de HU-ARCH-29).
-            r"cerr\w*\s+(?:(?:tu|el|los?|la)\s+)?pedido|"
-            r"pedido\b(?:\W+\w+){0,3}\W+(?:confirmad\w*|cerrad\w*|cread\w*|generad\w*)",
+            r"cerr\w*\s+(?:(?:tu|su|el|los?|la)\s+)?pedido|"
+            # Voz activa en pasado: "Ya creé tu pedido".
+            r"\b(?:cre|gener|registr)é\s+(?:(?:tu|su|el)\s+)?pedido|"
+            r"pedido\b(?:\W+\w+){0,3}\W+(?:confirmad\w*|cerrad\w*|cread\w*|generad\w*)|"
+            # Más lejos (hasta 6 palabras), solo con el auxiliar pegado al participio en
+            # masculino. Test, tenant solvershub (2026-10-11): "Tu pedido del plan Premium quedó
+            # creado" sin `crear_pedido` pasó con el tope de 3. El auxiliar y el masculino dejan
+            # fuera los resúmenes ("…ya quedó generada la cotización", "datos confirmados").
+            r"pedido\b(?:\W+\w+){0,5}\W+(?:qued[oó]|est[aá]|fue)\s+(?:ya\s+)?"
+            r"(?:confirmad|cerrad|cread|generad)o\b|"
+            # El participio antes del sustantivo: "quedó creado tu pedido".
+            r"\b(?:qued[oó]|est[aá]|fue)\s+(?:ya\s+)?(?:confirmad|cerrad|cread|generad)o\s+"
+            r"(?:tu|su|el)\s+pedido",
             re.IGNORECASE,
         ),
         {"crear_pedido", "consultar_estado_pedido", "confirmar_pago_pedido"},
