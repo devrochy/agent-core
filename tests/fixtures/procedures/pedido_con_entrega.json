@@ -2,7 +2,7 @@
   "contract": "procedure/1",
   "id": "pack_commerce.pedido_con_entrega",
   "version": "1.0.0",
-  "requires": ["pack_payments"],
+  "requires": [],
   "title": "Pedido con entrega",
   "triggers": {
     "description": "El cliente quiere comprar productos y recibirlos a domicilio o recogerlos",
@@ -15,7 +15,7 @@
     "direccion": { "type": "string", "requiredWhen": { "slot": "metodo_entrega", "equals": "domicilio" },
                    "confirm": true, "dataClass": "pii" },
     "pedido_id": { "type": "string", "setBy": "action:crear_pedido" },
-    "link_pago": { "type": "string", "format": "uri", "setBy": "action:generar_link_pago" }
+    "link_pago": { "type": "string", "format": "uri", "setBy": "action:confirmar_pago_pedido" }
   },
   "stages": [
     { "id": "elegir_productos", "goal": "Armar la cotización con precios y stock reales",
@@ -27,7 +27,7 @@
       "actions": ["confirmar_cotizacion"], "confirmation": "interactive_button",
       "exitWhen": { "action": "confirmar_cotizacion", "ok": true } },
     { "id": "pagar", "goal": "Crear el pedido y enviar el link de pago", "risk": "high",
-      "actions": ["crear_pedido", "agregar_item_pedido", "generar_link_pago"],
+      "actions": ["crear_pedido", "agregar_item_pedido", "confirmar_pago_pedido"],
       "exitWhen": { "slots": ["pedido_id", "link_pago"] } }
   ],
   "completion": { "events": ["pack_payments.pago_confirmado"], "returnControl": true },

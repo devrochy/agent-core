@@ -236,6 +236,8 @@ async def onboard_tenant(
                         select(ChannelConnection).where(
                             ChannelConnection.tenant_id == tenant_id,
                             ChannelConnection.external_id == whatsapp.get("phone_number_id", ""),
+                            # Solo las manuales (la canónica de un número de Meta, ADR-0115).
+                            ChannelConnection.meta_connection_id.is_(None),
                         )
                     )
                 ).scalar_one_or_none()

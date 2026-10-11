@@ -72,7 +72,7 @@ async def _quote_de(customer_id: uuid.UUID, *, status: str, total: float = 50_00
             return str(quote.id)
 
 
-async def _order_de(customer_id: uuid.UUID) -> str:
+async def _order_de(customer_id: uuid.UUID, *, payment_status: str = "pendiente") -> str:
     from pack_commerce.models import Order
     from sqlalchemy import text
 
@@ -86,7 +86,7 @@ async def _order_de(customer_id: uuid.UUID) -> str:
             ).scalar()
             order = Order(
                 tenant_id=T1, quote_id=None, conversation_id=uuid.uuid4(), customer_id=customer_id,
-                status="abierto", payment_status="pendiente", payment_method="pago_en_linea",
+                status="abierto", payment_status=payment_status, payment_method="pago_en_linea",
                 delivery_method="domicilio", total=185_000.0,
                 idempotency_key=f"test:{uuid.uuid4().hex[:8]}",
                 order_seq=int(order_seq), public_order_number=f"OC-{int(order_seq):04d}",
@@ -94,6 +94,17 @@ async def _order_de(customer_id: uuid.UUID) -> str:
             session.add(order)
             await session.flush()
             return str(order.id)
+
+
+async def _numero_de(order_id: str) -> str:
+    from pack_commerce.models import Order
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(T1):
+        async with get_session() as session:
+            return (await session.get(Order, uuid.UUID(order_id))).public_order_number
 
 
 async def _estado_quote(quote_id: str) -> str:
@@ -199,6 +210,45 @@ async def test_no_toca_el_pedido_de_otro_cliente() -> None:
 
     assert agregar == {"error": "Pedido no encontrado."}
     assert pago == {"error": "Pedido no encontrado."}
+
+
+async def test_no_revela_por_numero_el_estado_ni_el_monto_del_pedido_de_otro_cliente() -> None:
+    """El número público es secuencial (`OC-0002`): quien conozca el de otro cliente no
+    sabe si está pagado ni cuánto vale. Antes lo revelaba `generar_link_pago` de
+    pack-payments (`ya_pagado`, `monto_no_coincide` con el monto), que filtraba solo por
+    tenant (auditor-multitenant, 2026-10-10); esa tool se retiró (ADR-0087) y por número
+    solo queda `consultar_estado_pedido`, que filtra por cliente."""
+    from pack_commerce.skills import OrderSkill
+
+    from core.shared.tenant import tenant_scope
+
+    numero = await _numero_de(await _order_de(uuid.uuid4(), payment_status="pagado"))
+    intruso = _ctx(uuid.uuid4())
+
+    async with tenant_scope(T1):
+        ajeno = await OrderSkill().consultar_estado_pedido({"public_order_number": numero}, intruso)
+        inexistente = await OrderSkill().consultar_estado_pedido(
+            {"public_order_number": "OC-999999998"}, intruso
+        )
+
+    assert ajeno == inexistente
+    assert ajeno["found"] is False
+    assert "payment_status" not in ajeno and "total" not in ajeno
+
+
+async def test_el_dueno_si_ve_su_pedido_por_numero() -> None:
+    from pack_commerce.skills import OrderSkill
+
+    from core.shared.tenant import tenant_scope
+
+    cliente = uuid.uuid4()
+    numero = await _numero_de(await _order_de(cliente, payment_status="pagado"))
+
+    async with tenant_scope(T1):
+        propio = await OrderSkill().consultar_estado_pedido({"public_order_number": numero}, _ctx(cliente))
+
+    assert propio["found"] is True, propio
+    assert propio["payment_status"] == "pagado"
 
 
 async def test_la_cotizacion_propia_se_confirma_y_se_convierte_en_pedido() -> None:

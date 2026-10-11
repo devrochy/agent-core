@@ -34,7 +34,7 @@
       "tools": [
         "crear_pedido",
         "agregar_item_pedido",
-        "generar_link_pago",
+        "confirmar_pago_pedido",
         "consultar_estado_pedido"
       ]
     }

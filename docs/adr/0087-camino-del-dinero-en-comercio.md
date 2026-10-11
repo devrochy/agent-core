@@ -41,3 +41,41 @@ cobro equivocado es un reclamo, una devolución y, si es a la baja, dinero perdi
   genéricos (cobranza, suscripciones), pero **no** hace parte del flujo de comercio.
 - **Qué haría que revisáramos esto**: un proveedor que exija una sola referencia por
   pedido sin versiones, o cobros parciales.
+
+## Adenda (2026-10-10): se retira `generar_link_pago`
+
+Revisada por el agente `arquitecto` antes de escribir código.
+
+**Hallazgo** (`auditor-multitenant`, severidad media, no cruza tenants). `generar_link_pago`
+recibía `reference` y `amount` del LLM y buscaba las transacciones solo por `tenant_id`:
+- un cliente que conociera el número de pedido de otro del mismo negocio (`OC-0002`, secuencial)
+  sabía si estaba pagado (`ya_pagado`) y su monto exacto (`monto_no_coincide` lo citaba);
+- podía crear un link con esa referencia y un monto inventado, y el `create_link` del dueño del
+  pedido (vía `confirmar_pago_pedido`) chocaba después con "Ya existe un cobro…".
+
+**Por qué existía:** la consecuencia (−) de arriba la dejaba "para consumidores genéricos
+(cobranza, suscripciones)". No existían: cobranza usa la `PaymentCapability` y suscripciones
+`sub_link_pago`. La tool seguía viva porque pack-payments la registraba y el `flow.json` de
+pack-commerce la nombraba en "Pedido y cierre" en lugar de `confirmar_pago_pedido`, mientras
+`ventas.md` mandaba usar `confirmar_pago_pedido`.
+
+**Decisión:**
+1. pack-payments no expone tools al modelo. Aporta la capacidad (ADR-0067), el webhook y la
+   configuración del panel. `skills.py` pasa a `proveedor.py` (`tenant_config`, `build_provider`).
+2. El flujo de commerce ofrece `confirmar_pago_pedido`, que toma el pedido por `order_id` del
+   cliente de la conversación y el monto del servidor. Por número público solo queda
+   `consultar_estado_pedido`, que también filtra por cliente.
+3. `playbooks/pagos.md` queda sin nombres de tool y sin la regla de `amount`: el monto y la
+   referencia los pone el sistema. El archivo se conserva porque los presets lo cargan.
+
+**Descartado:** un contrato del core para que un pack resuelva una referencia contra los pedidos
+del cliente (`Cobro`/registro en `core/payments`). Tendría un solo productor (commerce) y un solo
+consumidor (esta tool), duplicaría la búsqueda y la regla de versión `-rN` de
+`confirmar_pago_pedido` y metería el ciclo de vida del pedido en el core.
+
+**Lo que aceptamos pagar:** cambia la lista de tools que recibe el modelo, así que el gate de
+evals se regraba una vez.
+
+**Qué haría que lo revisáramos:** un pack o un plugin de negocio (ADR-0089) que necesite que el
+LLM inicie un cobro sin una tool propia que conozca el monto. Ese sería el segundo caso de uso del
+resolvedor del lado del servidor, con ADR propio.

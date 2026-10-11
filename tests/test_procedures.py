@@ -70,7 +70,7 @@ def codes(issues: list[Issue]) -> list[str]:
 
 # ------------------------------------------------------------------ contrato
 def test_version_del_paquete_y_export() -> None:
-    assert __version__ == "2.1.0"
+    assert __version__ == "3.0.0"
     assert Procedure.model_fields["contract"].default == "procedure/1"
 
 
@@ -189,7 +189,7 @@ def _mutar(raw: dict[str, Any], cambio: str) -> None:
         case "afirmacion_sin_respaldo":
             claims[2]["requires"] = "slot:variante_id"  # lo llena un botón, no una acción
         case "habilidad_no_declarada":
-            raw["requires"] = []  # usa generar_link_pago de pack_payments sin declararlo
+            stages[3]["actions"].append("cob_registrar_abono")  # de pack_cobranza, sin declararlo
         case "requires_redundante":
             raw["requires"].append("pack_commerce")
         case "habilidad_desconocida":
@@ -236,7 +236,7 @@ def test_irreversible_confirmada_por_accion(catalogo) -> None:
     """`confirmActions` (lo que hereda un procedimiento abierto de `requiresConfirmation`)
     cuenta como confirmación de esa acción, no de las demás."""
     con_irreversible = dict(catalogo)
-    for nombre in ("crear_pedido", "generar_link_pago"):
+    for nombre in ("crear_pedido", "confirmar_pago_pedido"):
         con_irreversible[nombre] = ActionInfo(nombre, catalogo[nombre].owner, "irreversible")
     raw = fixture("contratar_plan")
     raw["stages"][3]["confirmActions"] = ["crear_pedido"]
@@ -246,11 +246,12 @@ def test_irreversible_confirmada_por_accion(catalogo) -> None:
 
 def test_accion_de_otra_habilidad_por_nombre_con_requires(catalogo) -> None:
     raw = fixture("contratar_plan")
-    raw["requires"] = []
+    raw["stages"][3]["actions"].append("cob_registrar_abono")
     issues = revisar(raw, catalogo)
     assert {i.code for i in issues} == {"habilidad_no_declarada"}
-    assert "'generar_link_pago' es de 'pack_payments'" in issues[0].message
-    assert revisar(fixture("contratar_plan"), catalogo) == []
+    assert "'cob_registrar_abono' es de 'pack_cobranza'" in issues[0].message
+    raw["requires"] = ["pack_cobranza"]
+    assert revisar(raw, catalogo) == []
 
 
 def test_tope_de_errores(catalogo) -> None:
@@ -360,7 +361,8 @@ def test_catalogo_es_del_binario_sin_negocio(modulos, monkeypatch: pytest.Monkey
         catalogo["x"] = None  # type: ignore[index]
     assert catalogo["escalate_to_human"].owner == "core"
     assert catalogo["sub_link_pago"].owner == "core"
-    assert catalogo["generar_link_pago"].owner == "pack_payments"
+    assert catalogo["confirmar_pago_pedido"].owner == "pack_commerce"
+    assert "generar_link_pago" not in catalogo  # retirada (ADR-0087): pagos no expone tools
     assert catalogo["cob_consultar_saldo"].owner == "pack_cobranza"
 
 
@@ -426,7 +428,7 @@ async def test_conversion_del_flujo_compuesto_real_sin_cambiar_acciones(
     cotizacion = next(p for p in procedures if p.id == "pack_commerce.cotizacion")
     assert "consultar_inventario" in cotizacion.stages[0].actions
     pedido = next(p for p in procedures if p.id == "pack_commerce.pedido")
-    assert pedido.requires == ["pack_payments"]  # generar_link_pago, por nombre
+    assert pedido.requires == []  # el link lo da `confirmar_pago_pedido`, del propio pack
     assert [a for p in procedures for a in p.stages[0].actions] == [
         t for s in flow.sections for t in s.tools
     ]
@@ -442,7 +444,7 @@ async def test_conversion_hereda_la_confirmacion_del_binding_v2(
     spec = _spec(["pack_commerce", "pack_payments"])
     spec.tools = [
         ToolBinding(tool="crear_pedido", enabled=True, requiresConfirmation=True),
-        ToolBinding(tool="generar_link_pago", enabled=False, requiresConfirmation=True),
+        ToolBinding(tool="agregar_item_pedido", enabled=False, requiresConfirmation=True),
     ]
     flow = await resolve_flow(spec, slug="acme", available=set(catalogo))
     assert flow is not None

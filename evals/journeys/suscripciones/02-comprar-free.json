@@ -10,8 +10,7 @@
       "max_turnos": 4,
       "espera": {
         "sin_herramientas": [
-          "confirmar_pago_pedido",
-          "generar_link_pago"
+          "confirmar_pago_pedido"
         ]
       }
     },

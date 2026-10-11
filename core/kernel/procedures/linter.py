@@ -93,14 +93,16 @@ def _campo(loc: tuple[int | str, ...]) -> str:
     return textos[-1] if textos else ""
 
 
-def _mensaje(error: Any) -> str:
+def _mensaje(error: Any, contrato: str = "procedure/1") -> str:
+    """Un mensaje en español por error de pydantic. `contrato` nombra el contrato en el
+    mensaje de campo desconocido (también lo usa el validador de AgentSpec v3/KernelSpec)."""
     tipo = error["type"]
     ctx = error.get("ctx") or {}
     loc = tuple(error["loc"])
     if tipo == "missing":
         return "Falta este campo obligatorio."
     if tipo == "extra_forbidden":
-        return "Campo desconocido: procedure/1 no lo define."
+        return f"Campo desconocido: {contrato} no lo define."
     if tipo == "string_pattern_mismatch":
         if loc[:1] == ("requires",):
             return "Formato inválido: se espera el id de una habilidad, p. ej. pack_payments."

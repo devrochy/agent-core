@@ -97,7 +97,8 @@ async def _conexion_de_la_waba(tenant_id: uuid.UUID, waba_id: str) -> set[uuid.U
 
 async def _manual_del_numero(tenant_id: uuid.UUID, phone_number_id: str) -> ChannelConnection | None:
     """La conexión manual (`ChannelConnection`) dueña del número, con el mismo criterio de
-    dueño que `resolve_tenant_for_phone` (sin borrar, de WhatsApp por Meta)."""
+    dueño que `resolve_tenant_for_phone` (sin borrar, de WhatsApp por Meta, sin cuenta: la
+    conexión canónica de un número de Meta no es dueña, su cuenta sí, ADR-0115)."""
     async with get_session() as session:
         return (
             await session.execute(
@@ -107,6 +108,7 @@ async def _manual_del_numero(tenant_id: uuid.UUID, phone_number_id: str) -> Chan
                     ChannelConnection.channel == "whatsapp",
                     ChannelConnection.provider == "meta",
                     ChannelConnection.deleted_at.is_(None),
+                    ChannelConnection.meta_connection_id.is_(None),
                 )
             )
         ).scalar_one_or_none()

@@ -651,21 +651,27 @@ async def tenants_purge(request: Request, tenant_id: uuid.UUID, confirm_phrase: 
 
     ref = str(tenant_id)
     try:
-        await purge_tenant(ref, confirm_phrase)
+        redis_limpio = await purge_tenant(ref, confirm_phrase)
     except TenantNotSuspendedError as exc:
         return RedirectResponse(
             f"/admin/tenants?flash={quote(str(exc))}&flash_type=danger", status_code=303
         )
     except ValueError as exc:
         return RedirectResponse(
-            f"/admin/tenants?flash={str(exc)[:140]}&flash_type=danger", status_code=303
+            f"/admin/tenants?flash={quote(str(exc)[:140])}&flash_type=danger", status_code=303
         )
     except Exception as exc:
         log.exception("tenant_purge_failed")
         return RedirectResponse(
-            f"/admin/tenants?flash=Error al eliminar: {str(exc)[:140]}&flash_type=danger",
+            f"/admin/tenants?flash={quote('Error al eliminar: ' + str(exc)[:140])}&flash_type=danger",
             status_code=303,
         )
+    if not redis_limpio:
+        aviso = (
+            "Negocio eliminado de la base, pero su estado Redis no se pudo limpiar. "
+            f"Reintenta con: agent-core tenant purge-redis {tenant_id}"
+        )
+        return RedirectResponse(f"/admin/tenants?flash={quote(aviso)}&flash_type=warning", status_code=303)
     return RedirectResponse("/admin/tenants?flash=tenant_eliminado&flash_type=success", status_code=303)
 
 
@@ -995,10 +1001,13 @@ def _parse_business_ranges(text: str) -> list[dict[str, Any]]:
 
 
 def _declarative_tools_json(spec) -> str:  # type: ignore[no-untyped-def]
-    """Definiciones declarativas del tenant a JSON editable (ADR-0052)."""
+    """Definiciones declarativas del tenant a JSON editable (ADR-0052). Los headers sensibles
+    literales salen enmascarados: el panel nunca muestra un secreto (HU-AOS-12)."""
     import json as _json
 
-    tools = (spec.extensions or {}).get("tools") or []
+    from core.agents.declarativas import enmascarar
+
+    tools = enmascarar((spec.extensions or {}).get("tools") or [])
     return _json.dumps(tools, indent=2, ensure_ascii=False) if tools else ""
 
 
@@ -1130,6 +1139,21 @@ async def spec_save(request: Request):
         if raw_json.strip():
             # fallback de poder: JSON completo validado por el contrato congelado
             data = json.loads(raw_json)
+            new_spec = AgentSpec.model_validate(data)
+            # Las tools declarativas pasan por el mismo validador que su editor (HU-AOS-12):
+            # sin literales sensibles nuevos ni secretos fuera de sus dominios.
+            from core.agents.declarativas import tools_del_editor_crudo
+
+            data = new_spec.model_dump(mode="json")
+            ext = dict(data.get("extensions") or {})
+            tools = await tools_del_editor_crudo(
+                get_current_tenant_id(), ext.get("tools"), (current.extensions or {}).get("tools")
+            )
+            if tools is None:
+                ext.pop("tools", None)
+            else:
+                ext["tools"] = tools
+            data["extensions"] = ext
             new_spec = AgentSpec.model_validate(data)
         else:
             # Los packs ya no se editan acá: se activan/desactivan por tenant
@@ -1893,7 +1917,7 @@ async def connection_new(request: Request):
             connection = await get_owned(
                 session, ChannelConnection, connection_uuid, get_current_tenant_id()
             )
-        if connection is None:
+        if connection is None or connection.meta_connection_id is not None:  # canónica de Meta (ADR-0115)
             return RedirectResponse(
                 "/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303
             )
@@ -1961,7 +1985,7 @@ async def connection_new_save(request: Request):
             existing = await get_owned(
                 session, ChannelConnection, connection_uuid, get_current_tenant_id()
             )
-        if existing is None:
+        if existing is None or existing.meta_connection_id is not None:  # canónica de Meta (ADR-0115)
             return RedirectResponse(
                 "/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303
             )
@@ -1996,8 +2020,11 @@ async def connection_new_save(request: Request):
     except Exception as exc:
         log.exception("connection_type_save_failed")
         suffix = f"&connection_id={connection_id}" if connection_id else ""
+        # Solo los errores de negocio (ValueError) se muestran: uno de la base expondría
+        # nombres de constraints y valores.
+        detalle = str(exc)[:120] if isinstance(exc, ValueError) else "revisa los datos e intenta de nuevo"
         return RedirectResponse(
-            f"/admin/conexiones/nuevo?type={ctype.id}{suffix}&flash=Error al guardar: {str(exc)[:120]}&flash_type=danger",
+            f"/admin/conexiones/nuevo?type={ctype.id}{suffix}&flash=Error al guardar: {detalle}&flash_type=danger",
             status_code=303,
         )
 
@@ -2843,7 +2870,11 @@ async def settings_skills_save(request: Request):
         import json as _json
         from urllib.parse import quote
 
-        from core.mcp.declarative import rejected_domains, validate_declarative_tools
+        from core.agents.declarativas import preparar
+        from core.agents.secretos import guardar_secretos_declarativos, secretos_configurados
+        from core.kernel.procedures import catalogo_de_acciones
+        from core.mcp.declarative import rejected_domains
+        from core.plugin_manager import plugin_manager
 
         extensions = dict(data.get("extensions") or {})
         raw = str(form.get("declarative_tools_json") or "").strip()
@@ -2865,7 +2896,36 @@ async def settings_skills_save(request: Request):
                 f"/admin/configuracion?tab=habilidades&flash={quote(msg)}&flash_type=danger",
                 status_code=303,
             )
-        extensions["tools"] = validate_declarative_tools(parsed)
+        # Mismo validador que `/api/v1` (HU-AOS-12): sin literales en headers sensibles (los
+        # enmascarados se migran a la instalación `core`). Los secretos nuevos se cargan desde
+        # el panel nuevo: el SSR no tiene campo para valores.
+        tenant_id = get_current_tenant_id()
+        if tenant_id is None:
+            return _login_redirect()
+        preparadas = preparar(
+            parsed,
+            extensions.get("tools"),
+            {},
+            await secretos_configurados(tenant_id),
+            set(catalogo_de_acciones(plugin_manager.list_modules())),
+        )
+        if preparadas.errores:
+            ruta, msg = next(iter(preparadas.errores.items()))
+            return RedirectResponse(
+                f"/admin/configuracion?tab=habilidades&flash={quote(f'{ruta}: {msg}'[:200])}&flash_type=danger",
+                status_code=303,
+            )
+        if preparadas.secretos:
+            from core.agents.secretos import SecretoInvalido
+
+            try:
+                await guardar_secretos_declarativos(tenant_id, preparadas.secretos)
+            except SecretoInvalido as exc:
+                return RedirectResponse(
+                    f"/admin/configuracion?tab=habilidades&flash={quote(str(exc)[:200])}&flash_type=danger",
+                    status_code=303,
+                )
+        extensions["tools"] = preparadas.tools
         data["extensions"] = extensions
     return await _save_spec_from_form(request, data, "habilidades")
 

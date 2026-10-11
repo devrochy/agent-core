@@ -189,6 +189,13 @@ class Settings(BaseSettings):
     max_agent_iterations: int = Field(default=6, alias="MAX_AGENT_ITERATIONS")
     message_split_style: SplitStyle = Field(default="un_mensaje", alias="MESSAGE_SPLIT_STYLE")
 
+    # --- Agent OS (ADR-0112) ---
+    # Ruteo por (conexión, cliente) de ADR-0115: global por entorno porque su *contract* es
+    # global. Apagada, el consumer usa la conversación abierta del cliente (la de siempre).
+    # Se enciende antes que `tenants.aos_runtime = 'v3'` y se apaga después de volver todos a
+    # `legacy`.
+    aos_connection_routing: bool = Field(default=False, alias="AOS_CONNECTION_ROUTING")
+
     # --- Modo demo (SOLO desarrollo) ---
     # Activa un LLM fake determinístico y un envío de canal no-op para probar el
     # pipeline sin API key ni credenciales reales. Prohibido en producción.
@@ -271,6 +278,10 @@ class Settings(BaseSettings):
     otel_enabled: bool = Field(default=False, alias="OTEL_ENABLED")
     otel_exporter_endpoint: str = Field(default="", alias="OTEL_EXPORTER_OTLP_ENDPOINT")
     otel_service_name: str = Field(default="agent-core", alias="OTEL_SERVICE_NAME")
+    # Ledger del Coordinador (HU-AOS-10, adenda de ADR-0112): `core_decisions`, `turn_outcomes`
+    # y la propagación del `turn_id` a `messages`/`usage_ledger`/`audit_log`. Es observabilidad,
+    # no cambia la conducta; apagarlo deja las columnas en NULL. Es "la bandera" de la HU.
+    kernel_ledger_enabled: bool = Field(default=True, alias="KERNEL_LEDGER_ENABLED")
 
     # --- Correo de sistema (recuperación de contraseña, ADR-0098) ---
     # SMTP de la plataforma, distinto del canal SMTP por tenant (que exige

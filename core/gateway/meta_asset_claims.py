@@ -234,7 +234,11 @@ async def numero_para_conexion(
     la fila estaba eliminada y otro negocio tomó el número mientras tanto.
 
     Si la conexión anterior se queda sin números vivos, sus conversaciones pasan a esta: si
-    no, los avisos y seguimientos de esos clientes fallarían cerrados (ADR-0122)."""
+    no, los avisos y seguimientos de esos clientes fallarían cerrados (ADR-0122).
+
+    En la misma transacción crea, revive o religa la conexión canónica del número
+    (`channel_connections`, ADR-0115 §6): así toda alta o reconexión, por cualquiera de los
+    cinco caminos, deja el número con su conexión ligada a esta cuenta."""
     from sqlalchemy import func, select
 
     from core.db.models import PhoneNumber
@@ -278,6 +282,10 @@ async def numero_para_conexion(
         ).scalar_one()
         if not quedan:
             await mover_conversaciones(session, tenant_id, desde=anterior, hacia=connection_id)
+
+    from core.gateway.conexion_canonica import asegurar_conexion_del_numero
+
+    await asegurar_conexion_del_numero(session, tenant_id, phone_number_id, connection_id)
     return fila, anterior
 
 

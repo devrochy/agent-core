@@ -44,10 +44,7 @@
     {
       "nota": "da sus datos en otro turno: pedido y link sobre la misma cotización",
       "usuario": "Mis datos: Ana Gómez, cédula 1012345678, celular 3001234567, correo ana+{cliente.id}@example.com.",
-      "hasta_herramienta": [
-        "confirmar_pago_pedido",
-        "generar_link_pago"
-      ],
+      "hasta_herramienta": "confirmar_pago_pedido",
       "insistir": "Sí, creá el pedido del Plan Premium con esos datos y pasame el link de pago.",
       "max_turnos": 3,
       "espera": {

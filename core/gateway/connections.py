@@ -3,6 +3,11 @@
 Una conexión vive en `channel_connections` con sus credenciales cifradas
 (Fernet). El webhook y el sender las resuelven desde aquí con fallback al
 .env (el caso "recién instalado, sin configurar en el panel").
+
+Las filas con `meta_connection_id` son la conexión canónica de un número de Meta
+(ADR-0115): no tienen credenciales propias y las administra el alta de Meta. Este módulo
+es el de las conexiones MANUALES, así que no las lista, no las resuelve y no las edita
+(`ES_MANUAL`).
 """
 
 from __future__ import annotations
@@ -25,6 +30,9 @@ from core.gateway.connection_types import (
 from core.shared.crypto import get_secret_box
 from core.shared.tenant import get_current_tenant_id
 
+# Conexión sin cuenta de Meta: manual, `waweb`, correo, calendario (ADR-0115).
+ES_MANUAL = ChannelConnection.meta_connection_id.is_(None)
+
 
 async def list_connections() -> list[ChannelConnection]:
     """Filtra por `tenant_id` explícito además de RLS (defensa en
@@ -36,6 +44,7 @@ async def list_connections() -> list[ChannelConnection]:
             .where(
                 ChannelConnection.deleted_at.is_(None),
                 ChannelConnection.tenant_id == get_current_tenant_id(),
+                ES_MANUAL,
             )
             .order_by(ChannelConnection.created_at)
         )
@@ -53,6 +62,7 @@ async def find_by_external_id(external_id: str) -> ChannelConnection | None:
             select(ChannelConnection).where(
                 ChannelConnection.external_id == external_id,
                 ChannelConnection.deleted_at.is_(None),
+                ES_MANUAL,
             )
         )
         return result.scalar_one_or_none()
@@ -76,6 +86,7 @@ async def primary_connection(tenant_id: uuid.UUID | None = None) -> ChannelConne
                 # profundidad, invariante nº1): `tid is None` no matchea nada
                 # (fail-closed), nunca "sin filtrar".
                 ChannelConnection.tenant_id == tid,
+                ES_MANUAL,
                 or_(
                     ChannelConnection.category == CATEGORY_COMMUNICATION,
                     ChannelConnection.category.is_(None),
@@ -115,6 +126,8 @@ async def active_connection_type_ids(tenant_id: uuid.UUID | None = None) -> set[
                 ChannelConnection.active.is_(True),
                 ChannelConnection.deleted_at.is_(None),
                 ChannelConnection.type_id.is_not(None),
+                # El gating mira las conexiones manuales, como antes de ADR-0115.
+                ES_MANUAL,
             )
         )
     return {str(t) for t in rows.scalars().all() if t}
@@ -133,6 +146,7 @@ async def get_active_connection(
                 ChannelConnection.tenant_id == tid,
                 ChannelConnection.active.is_(True),
                 ChannelConnection.deleted_at.is_(None),
+                ES_MANUAL,
             )
             .order_by(ChannelConnection.is_primary.desc(), ChannelConnection.created_at.desc())
             .limit(1)
@@ -251,7 +265,7 @@ async def save_connection(
         connection: ChannelConnection | None = None
         if connection_id is not None:
             connection = await session.get(ChannelConnection, connection_id)
-            if connection is None:
+            if connection is None or connection.meta_connection_id is not None:
                 raise ValueError("La conexión no existe")
             if connection.tenant_id != tid:
                 raise ValueError("La conexión no pertenece a este tenant")
@@ -269,6 +283,23 @@ async def save_connection(
                 await claim_assets(session, tid, waba_id=None, phone_number_id=external_id)
             except MetaAssetError as exc:
                 raise ValueError(exc.message) from exc
+
+        if external_id and (
+            await session.execute(
+                select(ChannelConnection.id).where(
+                    ChannelConnection.tenant_id == tid,
+                    ChannelConnection.provider == ctype.provider,
+                    ChannelConnection.external_id == external_id,
+                    ChannelConnection.deleted_at.is_(None),
+                    ChannelConnection.meta_connection_id.is_not(None),
+                )
+            )
+        ).first():
+            # El número ya tiene su conexión canónica de Meta (ADR-0115): una fila manual del
+            # mismo número chocaría con ella (índice único y CHECK), al crear o al editar.
+            raise ValueError(
+                "Ese número ya está conectado con el asistente de WhatsApp: adminístralo desde esa conexión."
+            )
 
         if connection is not None:
             connection.label = label
@@ -299,6 +330,8 @@ async def save_connection(
                     .limit(1)
                 )
             ).scalars().first()
+            if existing is not None and existing.meta_connection_id is not None:
+                existing = None  # una canónica borrada no se convierte en manual
             if existing is not None:
                 existing.label = label
                 existing.type_id = type_id
@@ -331,6 +364,7 @@ async def save_connection(
                     select(func.count(ChannelConnection.id)).where(
                         ChannelConnection.active.is_(True),
                         ChannelConnection.tenant_id == tid,
+                        ES_MANUAL,
                         or_(
                             ChannelConnection.category == CATEGORY_COMMUNICATION,
                             ChannelConnection.category.is_(None),
@@ -346,7 +380,7 @@ async def save_connection(
 async def set_active(connection_id: uuid.UUID, active: bool) -> None:
     async with get_session() as session:
         connection = await session.get(ChannelConnection, connection_id)
-        if connection is None:
+        if connection is None or connection.meta_connection_id is not None:
             return
         connection.active = active
         if not active:
@@ -356,7 +390,7 @@ async def set_active(connection_id: uuid.UUID, active: bool) -> None:
 async def set_primary(connection_id: uuid.UUID) -> None:
     async with get_session() as session:
         target = await session.get(ChannelConnection, connection_id)
-        if target is None:
+        if target is None or target.meta_connection_id is not None:
             return
         # Solo se reasigna la primacía dentro de la misma categoría (ADR-0069) y
         # del mismo tenant; las filas legacy sin `category` cuentan como mensajería.
@@ -364,6 +398,7 @@ async def set_primary(connection_id: uuid.UUID) -> None:
             await session.execute(
                 select(ChannelConnection).where(
                     ChannelConnection.tenant_id == target.tenant_id,
+                    ES_MANUAL,
                     or_(
                         ChannelConnection.category == target.category,
                         ChannelConnection.category.is_(None),
@@ -380,7 +415,7 @@ async def delete_connection(connection_id: uuid.UUID) -> None:
     """Borra (soft-delete) una conexión — invariante #8: sin borrado físico."""
     async with get_session() as session:
         connection = await session.get(ChannelConnection, connection_id)
-        if connection is not None:
+        if connection is not None and connection.meta_connection_id is None:
             connection.deleted_at = utcnow()
             connection.active = False
 

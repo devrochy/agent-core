@@ -1,0 +1,23 @@
+{
+  "contract": "kernelspec/1",
+  "voice": { "role": "Asistente del negocio", "tone": "cercano", "warmth": 3, "emojis": "sparse" },
+  "episode": { "idleMinutes": 720 },
+  "routing": {
+    "defaultAgent": "general",
+    "rules": [
+      { "id": "boton_plan", "when": { "interactivePayloadPrefix": "plan:" }, "start": "pack_commerce.contratar_plan" },
+      { "id": "cliente_en_mora", "when": { "customerFact": { "namespace": "cobranza", "key": "en_mora", "equals": true } }, "agent": "cobranza" },
+      { "id": "noche", "when": { "withinHours": { "from": "22:00", "to": "06:00" }, "channel": "whatsapp" }, "agent": "general" }
+    ],
+    "triggers": { "embeddings": true, "minScore": 0.45, "strongScore": 0.80, "margin": 0.15, "maxCandidates": 6 },
+    "coprocessor": { "whenCandidatesAbove": 8, "model": null, "thinking": false, "maxCostUsd": 0.001, "playbook": "enrutamiento" },
+    "owner": { "maxOwnerChangesPer6Turns": 2 },
+    "shadowMode": false
+  },
+  "procedures": { "maxStack": 2, "confirmIrreversibleWith": "interactive_button" },
+  "modelPolicy": { "highRiskStage": { "thinking": true } },
+  "a2a": { "maxDepth": 3, "maxCallsPerTurn": 6, "turnBudgetUsd": 0.05, "turnBudgetTokens": 40000 },
+  "composition": { "style": "single_message", "maxQuestions": 1 },
+  "responses": "respuestas",
+  "policies": { "budgetUsdPerConversation": 0.5, "backofficeBudgetUsdMonthly": 20 }
+}

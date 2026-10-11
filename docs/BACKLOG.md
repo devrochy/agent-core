@@ -391,8 +391,8 @@ de artefactos de tenant).
   core y despachan a él. [Cerrado]
 - **Metadatos de recurrencia en productos** — `Product/ProductVariant` ya tienen
   `billing_period`/`trial_days` (se validan por enum en HU-SUB-10). [Cerrado]
-- **Cobro recurrente con `pack_payments`** — `generar_link_pago` es one-shot
-  (`pack_payments/skills.py:52-75`); el cobro por período con link ya existe
+- **Cobro recurrente con `pack_payments`** — la capacidad crea links one-shot
+  (`pack_payments/payments.py`, `create_link`); el cobro por período con link ya existe
   (`charge_link` del contrato v1, con guard de período futuro); el débito recurrente
   sigue diferido (HU-SUB-17, Fase 2). [Media]
 - **La suscripción y su evento se confirman en otra transacción que el pedido** —

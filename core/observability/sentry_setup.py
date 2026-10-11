@@ -27,6 +27,12 @@ _EXTRA_DENYLIST = [
     # Embedded Signup (HU-SH-05): el canje lleva `client_secret` y `code` en `params`; el token
     # de app es "app_id|app_secret"; los PIN del wizard viven en `nuevo` y `guardado`.
     "client_secret", "code", "codigo", "attempt", "app_token", "input_token", "params", "nuevo", "guardado",
+    # Tools declarativas (HU-AOS-12): headers sensibles y los locales que los llevan (el spec
+    # v2 todavía puede tener literales en `extensions.tools`; los secretos de la instalación
+    # `core` se descifran en `valores`/`actuales`).
+    "authorization", "cookie", "x-api-key", "x_api_key", "headers", "extensions", "secretos",
+    "valores", "actuales", "nuevos", "secrets", "cuerpo", "secretos_enviados", "valor", "texto",
+    "limpios", "entrada", "data", "value", "guardado", "contenido",
 ]
 _configured = False
 

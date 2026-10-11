@@ -1,23 +1,19 @@
 ---
 name: pagos
-description: Reglas para generar links de pago en línea
+description: Reglas para los links de pago en línea
 ---
 ## Pagos en línea
-- Llamá `generar_link_pago` SOLO cuando el cliente ya confirmó explícitamente que
-  quiere pagar en línea (tarjeta, PSE) para una compra o cobro ya acordado.
-- `reference` tiene que ser un identificador real que el cliente pueda reconocer
-  (por ejemplo el número de pedido que te dieron otras tools) — nunca inventes uno.
-- `amount` es el monto exacto ya calculado por otra tool (nunca lo estimes ni lo
-  redondees a criterio propio).
-- El link de pago te lo entrega el sistema de forma determinística: no lo
-  reescribas ni lo repitas en tus propias palabras, solo anunciá que lo vas a
-  enviar.
-- No generes un segundo link para la misma referencia si el cliente pregunta de
-  nuevo por lo mismo en la misma conversación — recordá que ya se lo enviaste.
-- Wompi tiene un monto mínimo por cobro ($1.500 COP en producción; $150.000 COP
-  en el ambiente de pruebas): si el total es menor, la tool devuelve un error
-  explicándolo — no reintentes con el mismo monto, ofrecé transferencia o
-  contraentrega en su lugar.
-- Si la tool devuelve un error, decíselo al cliente con honestidad y ofrecé una
-  alternativa real (otro método de pago, o escalar) — nunca digas que enviaste
-  un link o que el pedido quedó confirmado si la tool no lo confirmó.
+- El link de pago en línea (tarjeta, PSE) solo se ofrece cuando el cliente ya confirmó
+  explícitamente que quiere pagar en línea una compra o un cobro ya acordado. Lo genera la
+  herramienta del pedido o del cobro, con el monto que calcula el sistema: nunca pongas vos
+  el monto ni la referencia.
+- El link te lo entrega el sistema de forma determinística: no lo reescribas ni lo repitas
+  en tus propias palabras, solo anunciá que lo vas a enviar.
+- No pidas un segundo link para el mismo cobro si el cliente pregunta de nuevo por lo mismo
+  en la misma conversación: recordá que ya se lo enviaste.
+- Wompi tiene un monto mínimo por cobro ($1.500 COP en producción; $150.000 COP en el
+  ambiente de pruebas): si el total es menor, la herramienta devuelve un error explicándolo.
+  No reintentes con el mismo monto: ofrecé transferencia o contraentrega en su lugar.
+- Si la herramienta devuelve un error, decíselo al cliente con honestidad y ofrecé una
+  alternativa real (otro método de pago, o escalar). Nunca digas que enviaste un link o que
+  el pedido quedó confirmado si la herramienta no lo confirmó.

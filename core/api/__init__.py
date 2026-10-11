@@ -12,13 +12,16 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from core.api.routers import (
+    agents,
     audit,
     auth,
     collaborators,
     connections,
+    conversation_tasks,
     conversations,
     costs,
     dashboard,
+    declarative_tools,
     dlq,
     domain_events,
     escalations,
@@ -57,11 +60,13 @@ api_router.include_router(dashboard.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(dlq.router)
 api_router.include_router(conversations.router)
+api_router.include_router(conversation_tasks.router)
 api_router.include_router(playground.router)
 api_router.include_router(escalations.router)
 api_router.include_router(leads.router)
 api_router.include_router(plugins.router)
 api_router.include_router(procedures.router)
+api_router.include_router(agents.router)
 api_router.include_router(connections.router)
 api_router.include_router(meta_ops.router)
 api_router.include_router(meta_wizard.router)
@@ -74,6 +79,7 @@ api_router.include_router(plan.router)
 api_router.include_router(platform.router)
 api_router.include_router(platform_altas.router)
 api_router.include_router(platform_meta_es.router)
+api_router.include_router(declarative_tools.router)
 api_router.include_router(settings.router)
 api_router.include_router(domain_events.router)
 api_router.include_router(web_chat.router)

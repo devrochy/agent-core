@@ -142,6 +142,8 @@ async def _paso_whatsapp(session, tenant_id: uuid.UUID) -> Paso:  # type: ignore
                 ChannelConnection.provider == "meta",
                 ChannelConnection.active.is_(True),
                 ChannelConnection.deleted_at.is_(None),
+                # Solo las manuales: la canónica de un número de Meta sigue a su cuenta (ADR-0115).
+                ChannelConnection.meta_connection_id.is_(None),
             )
         )
     ).scalar_one_or_none()

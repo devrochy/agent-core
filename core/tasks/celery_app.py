@@ -38,6 +38,11 @@ celery.conf.update(
     beat_schedule={},             # lo llenan los @register_cron de los plugins
 )
 
+# La traza del turno viaja a las tareas en `traceparent` (HU-AOS-10).
+from core.observability.celery_trazas import conectar as _conectar_trazas  # noqa: E402
+
+_conectar_trazas()
+
 
 # ---------------------------------------------------------------- cron de core
 # Salud de suscripciones de webhook de Meta (cada 15 min): capacidad de

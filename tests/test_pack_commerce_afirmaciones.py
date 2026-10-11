@@ -104,7 +104,7 @@ async def test_link_de_pago_blocks_without_confirmar_pago_pedido():
 async def test_generic_link_mention_without_de_pago_does_not_trigger():
     """"El link" a secas (sin "de pago"/"para pagar") es deliberadamente
     ambiguo -- podría ser cualquier link (ej. uno de Calendar) y exigirle acá
-    generar_link_pago daría falsos positivos fuera del dominio de pagos."""
+    una tool de link de pago daría falsos positivos fuera del dominio de pagos."""
     module = CRMModule()
     verdict = await _verificar(module, "Te envío el link ahora mismo.", [])
     assert verdict.passed, verdict.motivo
@@ -282,9 +282,9 @@ async def test_config_ausente_o_invalida_no_rompe_el_guardrail(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool", ["sub_link_pago", "generar_link_pago"])
-async def test_link_de_suscripcion_o_de_pagos_tambien_respalda_el_aviso(tool):
-    """El link del período de una suscripción (tool del core) o de pagos en línea es
+@pytest.mark.parametrize("tool", ["sub_link_pago", "sub_cambiar_plan"])
+async def test_link_de_suscripcion_o_de_cambio_de_plan_tambien_respalda_el_aviso(tool):
+    """El link del período de una suscripción o de un cambio de plan (tools del core) es
     evidencia igual que el de un pedido (antes terminaba en escalamiento; HU-SUB-12)."""
     module = CRMModule()
     tool_results = [_tool_result(tool, url="https://pagos.simulados/sub-1", monto=90000.0)]
