@@ -714,11 +714,14 @@ def memoria_purgar(
     slug: str = typer.Option(..., "--slug", help="Slug del tenant"),
     email: str = typer.Option("", "--email", help="Email del cliente a olvidar (opcional)"),
     conversation: str = typer.Option("", "--conversation", help="UUID de conversación (opcional)"),
+    customer: str = typer.Option("", "--customer-id", help="UUID del cliente (cualquier canal, p. ej. WhatsApp)"),
 ) -> None:
-    """Olvida la memoria semántica de un cliente/conversación (ADR-0053).
+    """Olvida la memoria de un cliente o de una conversación (ADR-0053, ADR-0114 §4).
 
-    Borrado LÓGICO de `memory_vectors` (invariante #8) del tenant indicado.
-    Exige `--email` (resuelve el customer) o `--conversation`.
+    Borrado LÓGICO (invariante #8) del tenant indicado. Con `--email` (solo): los recuerdos
+    de `memory_vectors`, los hechos de `memory_facts`, su perfil en `customers.attributes` y la
+    memoria de trabajo de todas sus conversaciones. Con `--conversation`: los recuerdos y la
+    memoria de trabajo de esa conversación. Sus mensajes y tareas quedan (registro del negocio).
     """
     import uuid as _uuid
 
@@ -740,25 +743,76 @@ def memoria_purgar(
             raise typer.Exit(1)
 
         async with tenant_scope(tenant_id):
-            customer_id = None
-            if email:
+            customer_id = _uuid.UUID(customer) if customer else None
+            if customer_id is not None:
                 async with get_session() as session:
-                    customer_id = (
+                    existe = (
                         await session.execute(
-                            select(Customer.id).where(Customer.tenant_id == tenant_id, Customer.external_id == email)
+                            select(Customer.id).where(Customer.tenant_id == tenant_id, Customer.id == customer_id)
                         )
                     ).scalar_one_or_none()
+                if existe is None:
+                    console.print(f"[red]Cliente no encontrado:[/red] {customer}")
+                    raise typer.Exit(1)
+            elif email:
+                async with get_session() as session:
+                    encontrados = (
+                        await session.execute(
+                            select(Customer.id).where(
+                                Customer.tenant_id == tenant_id,
+                                Customer.external_id == email,
+                                Customer.deleted_at.is_(None),
+                            )
+                        )
+                    ).scalars().all()
+                if len(encontrados) > 1:
+                    console.print("[red]Hay varios clientes con ese email (uno por canal): usá --customer-id[/red]")
+                    raise typer.Exit(1)
+                customer_id = encontrados[0] if encontrados else None
                 if customer_id is None:
                     console.print(f"[red]Cliente no encontrado:[/red] {email}")
                     raise typer.Exit(1)
             conv_id = _uuid.UUID(conversation) if conversation else None
             return await purge_memory(customer_id=customer_id, conversation_id=conv_id)
 
-    if not (email or conversation):
-        console.print("[red]Indicá --email o --conversation[/red]")
+    if not (email or conversation or customer):
+        console.print("[red]Indicá --customer-id, --email o --conversation[/red]")
         raise typer.Exit(1)
     n = asyncio.run(_run())
-    console.print(f"✓ [green]{n} recuerdos olvidados[/green] para {slug}")
+    console.print(f"✓ [green]{n} registros de memoria olvidados[/green] (recuerdos y hechos) para {slug}")
+
+
+@app.command()
+def memoria_importar_perfil() -> None:
+    """Copia como hechos `perfil` las claves de `customers.attributes` sin hecho (HU-AOS-36).
+
+    Para correr una vez después del deploy de la migración 0080: completa lo que el código
+    anterior escribió en `attributes` mientras corría el deploy. Idempotente, todos los negocios.
+    """
+    from sqlalchemy import select
+
+    from core.db.models import Tenant
+    from core.db.session import get_session
+
+    async def _run() -> int:
+        from core.memory import facts
+        from core.shared.tenant import tenant_scope
+
+        async with get_session() as session:
+            tenant_ids = (await session.execute(select(Tenant.id).where(Tenant.deleted_at.is_(None)))).scalars().all()
+        total = 0
+        for tid in tenant_ids:
+            async with tenant_scope(tid):
+                while True:
+                    async with get_session() as session:
+                        n = await facts.importar_perfil(session, tenant_id=tid)
+                    if not n:
+                        break
+                    total += n
+        return total
+
+    n = asyncio.run(_run())
+    console.print(f"✓ [green]{n} claves del perfil copiadas como hechos[/green]")
 
 
 # ------------------------------------------------------------------ altas automáticas (ADR-0121)

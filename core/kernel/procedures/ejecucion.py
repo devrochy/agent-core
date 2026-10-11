@@ -1051,8 +1051,9 @@ async def contexto_del_motor(
     base o de los playbooks sube por el camino de error del turno."""
     from core.db.session import get_session
     from core.kernel.banderas import banderas_del_negocio
-    from core.kernel.episodio import abrir_episodio
+    from core.kernel.episodio import DEFAULT_IDLE_MINUTES, abrir_episodio
     from core.kernel.tarjeta import renderizar_tarjeta
+    from core.shared import release_vigente
 
     tenant_id = get_current_tenant_id()
     if tenant_id is None:
@@ -1066,7 +1067,13 @@ async def contexto_del_motor(
     async with get_session() as session:
         banderas = await banderas_del_negocio(session, tenant_id)
         if banderas.procedimientos:
-            await abrir_episodio(session, tenant_id=tenant_id, conversation_id=conversation_id)
+            # Un solo episodio por turno: con release (aos_runtime = v3) manda su `idleMinutes`.
+            await abrir_episodio(
+                session,
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+                idle_minutes=release_vigente.idle_minutes(DEFAULT_IDLE_MINUTES),
+            )
             filas = await state.tareas_abiertas(session, tenant_id=tenant_id, conversation_id=conversation_id)
             tareas = [state.proyeccion_de(f) for f in filas]
             tarjeta = renderizar_tarjeta(tareas, procedimientos=registro.definicion)
@@ -1116,7 +1123,8 @@ async def entrada_sin_llm(conversation: Any, fields: Mapping[str, str]) -> None:
 async def _entrada_sin_llm(conversation: Any, interactivo: str, media: list[Any]) -> None:
     from core.db.session import get_session
     from core.kernel.banderas import banderas_del_negocio
-    from core.kernel.episodio import abrir_episodio
+    from core.kernel.episodio import DEFAULT_IDLE_MINUTES, abrir_episodio
+    from core.shared import release_vigente
 
     tenant_id, conversation_id = conversation.tenant_id, conversation.id
     async with get_session() as s:
@@ -1128,7 +1136,12 @@ async def _entrada_sin_llm(conversation: Any, interactivo: str, media: list[Any]
     async with get_session() as s:
         # Primero el episodio (bloquea la conversación y expira lo viejo): un botón tras 12 h no
         # resucita una tarea vencida.
-        await abrir_episodio(s, tenant_id=tenant_id, conversation_id=conversation_id)
+        await abrir_episodio(
+            s,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            idle_minutes=release_vigente.idle_minutes(DEFAULT_IDLE_MINUTES),
+        )
         await _bloquear_conversacion(s, tenant_id, conversation_id)
         foco = await _foco(s, tenant_id, conversation_id, permitidos)
         if foco is None:

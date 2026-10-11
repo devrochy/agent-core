@@ -44,6 +44,10 @@ if [ "$ROLE" = "api" ]; then
     echo "[entrypoint] ERROR: las migraciones fallaron. El servicio no arranca." >&2
     exit 1
   fi
+  # Versiones de las habilidades en `pack_versions` (HU-AOS-14), con el rol dueño. Nunca frena
+  # el arranque: un contenido cambiado sin subir la versión alerta en el log y no se registra.
+  echo "[entrypoint] registrando versiones de habilidades..."
+  agent-core db sync-packs || echo "[entrypoint] AVISO: sync-packs reportó problemas (ver el log)" >&2
 fi
 
 exec "$@"
