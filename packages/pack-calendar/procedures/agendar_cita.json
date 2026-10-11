@@ -1,0 +1,49 @@
+{
+  "contract": "procedure/1",
+  "id": "pack_calendar.agendar_cita",
+  "version": "1.0.0",
+  "title": "Agendar una cita",
+  "triggers": {
+    "description": "El cliente quiere agendar una cita, una demo o una reunión en un horario disponible",
+    "examples": [
+      "quiero agendar una cita",
+      "quiero agendar una demo",
+      "tienen espacio el jueves",
+      "me das una cita para mañana",
+      "a qué hora me pueden atender"
+    ]
+  },
+  "slots": {
+    "tipo_cita": { "type": "string", "resolver": "pack_calendar.tipo_de_cita" },
+    "horario": { "type": "datetime", "required": true, "resolver": "pack_calendar.horario_ofrecido" },
+    "correo": { "type": "string", "format": "email", "required": true, "dataClass": "pii" },
+    "nombre": { "type": "string", "dataClass": "pii" },
+    "event_id": { "type": "string", "setBy": "action:create_calendar_event" }
+  },
+  "stages": [
+    {
+      "id": "elegir_horario",
+      "goal": "Ofrecer solo horarios libres reales de la agenda y que el cliente elija uno",
+      "actions": ["list_appointment_types", "check_availability", "find_next_available"],
+      "exitWhen": { "slots": ["horario"] }
+    },
+    {
+      "id": "datos",
+      "goal": "Pedir el correo del cliente para enviarle la confirmación",
+      "actions": [],
+      "exitWhen": { "slots": ["correo"] }
+    },
+    {
+      "id": "agendar",
+      "goal": "Crear la cita en el horario elegido, con la confirmación del cliente",
+      "actions": ["create_calendar_event"],
+      "confirmation": "interactive_button",
+      "exitWhen": { "action": "create_calendar_event", "slots": ["event_id"] }
+    }
+  ],
+  "recovery": { "actionError": "explicar", "timeout": "relevo_humano" },
+  "claims": [
+    { "kind": "status", "phrases": ["quedó agendada", "tu cita está confirmada"], "requires": "slot:event_id" }
+  ],
+  "evals": ["agenda-horario-no-ofrecido", "agenda-feliz-con-boton"]
+}

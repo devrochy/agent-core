@@ -1,0 +1,47 @@
+{
+  "contract": "procedure/1",
+  "id": "pack_cobranza.promesa_de_pago",
+  "version": "1.0.0",
+  "title": "Promesa de pago",
+  "triggers": {
+    "description": "El cliente con saldo pendiente o en mora se compromete a pagar en una fecha",
+    "examples": [
+      "te pago el viernes",
+      "el 15 te cancelo",
+      "la otra semana me pongo al día",
+      "pago cuando me llegue la quincena"
+    ]
+  },
+  "slots": {
+    "saldo": { "type": "number", "setBy": "action:cob_consultar_saldo" },
+    "fecha": { "type": "date", "required": true, "resolver": "pack_cobranza.fecha_de_promesa" },
+    "promesa_id": { "type": "string", "setBy": "action:cob_registrar_promesa_saldo" }
+  },
+  "stages": [
+    {
+      "id": "consultar_saldo",
+      "goal": "Consultar el saldo real del cliente antes de hablar de montos",
+      "actions": ["cob_consultar_saldo"],
+      "exitWhen": { "slots": ["saldo"] }
+    },
+    {
+      "id": "fecha",
+      "goal": "Que el cliente diga cuándo paga; la fecha la validan las reglas de la cartera",
+      "actions": [],
+      "exitWhen": { "slots": ["fecha"] }
+    },
+    {
+      "id": "registrar",
+      "goal": "Registrar la promesa por el saldo real en la fecha validada, con la confirmación del cliente",
+      "actions": ["cob_consultar_saldo", "cob_registrar_promesa_saldo"],
+      "confirmation": "interactive_button",
+      "exitWhen": { "action": "cob_registrar_promesa_saldo", "ok": true, "slots": ["promesa_id"] }
+    }
+  ],
+  "recovery": { "actionError": "explicar", "timeout": "relevo_humano" },
+  "claims": [
+    { "kind": "amount", "mustMatch": ["action:cob_consultar_saldo.saldo"] },
+    { "kind": "status", "phrases": ["promesa registrada", "quedó registrada tu promesa"], "requires": "slot:promesa_id" }
+  ],
+  "evals": ["promesa-viernes-saldo-real", "promesa-fecha-fuera-de-regla", "promesa-saldo-distinto"]
+}

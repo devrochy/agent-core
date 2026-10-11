@@ -418,3 +418,59 @@ HU-AOS-09" de la adenda de HU-AOS-05. No cambia la forma de ningún contrato. La
   - Después del toque, el modelo tiene que repetir la acción con los mismos argumentos (el hash) y el
     historial es solo texto: lo cubre un test de integración con modelo guionado, y queda como riesgo
     para HU-AOS-06 (comandos como tools).
+
+## Adenda de implementación (2026-10-11, HU-AOS-08): procedimientos de agenda, cambio de plan y promesa
+
+**Estado:** propuesta; requiere la aprobación del dueño antes del merge. La revisó el agente `arquitecto`
+antes de escribir código. No cambia la forma de ningún contrato ni el motor.
+
+- **Dónde viven:** cada pack trae sus procedimientos como JSON en `packages/pack-<x>/procedures/` (junto a
+  `flow.json` y `playbooks/`) y los registra en `on_activate` con `core/kernel/procedures/de_pack.cargar`
+  (resuelve la carpeta como la del `flow.json`, orden por nombre de archivo, solo valida la forma; un JSON
+  roto se loguea y se salta). El linter contra el binario corre en runtime (`registro.py`) y en CI
+  (`tests/test_procedimientos_de_packs.py`, que cubre todo `packages/pack-*/procedures/*.json`).
+- **Publicados:** `pack_calendar.agendar_cita` (el `agendar_demo` del Gherkin, con textos genéricos: una
+  demo es un tipo de cita; los textos propios de un negocio llegan como `overrides` con HU-AOS-13/14),
+  `pack_subscriptions.cambiar_plan` y `pack_cobranza.promesa_de_pago`.
+- **Acciones solo de procedimiento:** `sub_cotizar_cambio_plan`, `sub_aplicar_cambio_plan` (core, adenda de
+  ADR-0111) y `cob_registrar_promesa_saldo` (pack-cobranza). Ningún `flow.json` las nombra y no son
+  `always_available`: el loop legacy no las ofrece (siempre hay flujo: `core/flow.json`), no entran en los
+  bindings del General v3 y solo aparecen cuando el motor las pone en `stage.actions` de la tarea en foco.
+- **Convención del monto esperado:** el motor no ata los argumentos de una acción a los datos de la tarea.
+  En lo que mueve dinero o compromete un monto, la acción que compromete recibe el monto como argumento,
+  **con el mismo nombre que el campo fuente de la afirmación `amount`** (`monto_a_pagar`, `saldo`): así el
+  resumen del botón lo muestra como monto del servidor y el kernel ya rechaza el resumen si el argumento
+  difiere de la fuente del turno. El servidor recalcula y no hace nada si no coincide; el valor del modelo
+  nunca se usa como monto.
+- **Salida atada a un efecto real:** las etapas que comprometen salen con `exitWhen.action` **y** un dato
+  que fija esa acción (`event_id`, `cambio`, `promesa_id`), y las acciones nuevas devuelven `error` en todo
+  camino sin efecto (`create_calendar_event` devuelve `status: rejected` sin `error` en un choque).
+- **"Ofrecido" (agenda):** un horario es ofrecido si está entre los libres que el servidor ofrece ese día,
+  con la misma cuenta que `check_availability` (`_free_slots`, cuadrícula de `slot_minutes`, duración del
+  tipo de cita). El resolver no ve los eventos de la tarea ni recorre varios días (corre bajo el lock con 5
+  s): si el día no tiene cupo, remite a `find_next_available`.
+- **Reglas de cobranza en el resolver** (configuración del pack, nunca del prompt): fecha no pasada, a lo
+  sumo `max_dias_prorroga` días, no domingo si la cartera lo marca no laborable y no más de
+  `max_reprogramaciones` promesas pendientes. El monto es el saldo de `cob_consultar_saldo`.
+- **Afirmaciones compiladas: no se registran todavía.** `register_afirmaciones` no va detrás de la bandera:
+  compilar "promesa registrada" con respaldo en `cob_registrar_promesa_saldo` daría falsos positivos en
+  legacy. Límite: con el motor activo, las frases de los `claims` de estos procedimientos no las verifica
+  el verificador (sí los montos y links genéricos, y el `promesa_guardrail` acepta las dos tools). HU-AOS-07
+  debe registrarlas detrás de `aos_procedures`.
+- **Límites conocidos:**
+  - En la agenda, `create_calendar_event` recibe `start_datetime` del modelo: puede no ser el `horario`
+    validado. El botón muestra los argumentos exactos y, en modo interno, la tool revalida (ocupado, fuera de
+    horario, pasado); **en modo Google no revalida**. Atar argumentos ↔ datos es trabajo del motor (HU siguiente).
+  - **Oferta según el motor** (`core/kernel/oferta.py`, predicados de oferta de la tool): con
+    `aos_procedures` encendida, las tools de siempre que un procedimiento reemplaza (`sub_cambiar_plan`,
+    `cob_registrar_promesa_pago`) no se ofrecen, para que el modelo no se salte el botón; si la bandera no
+    se puede leer se ofrecen como siempre. Las solo de procedimiento no se ofrecen sin la bandera, aunque un
+    flujo del negocio las nombre; si la bandera no se puede leer, no se ofrecen. `create_calendar_event` no
+    se oculta: es la acción de la etapa `agendar` (el predicado filtra también las candidatas del motor) y
+    sirve fuera del procedimiento; con el motor activo y sin tarea en foco se sigue ofreciendo.
+  - Con el motor activo y una tarea en foco de OTRO procedimiento, las acciones solo de procedimiento no
+    se ofrecen (no están en la etapa). Sin foco, solo si un flujo del negocio las nombra; ahí el monto sigue
+    atado pero no hay botón. Negarlas en `antes_de_accion` sin foco es un cambio del motor que queda para
+    una HU siguiente.
+  - Costo: cada predicado lee la bandera del negocio (una consulta por tool reemplazada o nueva y por
+    turno, hasta cinco). Si se nota en la latencia, se cachea por turno.
