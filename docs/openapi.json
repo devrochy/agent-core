@@ -8434,6 +8434,67 @@
         }
       }
     },
+    "/api/v1/admin/settings/bot-paused": {
+      "put": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Save Bot Paused",
+        "description": "Pausa o reactiva el asistente del negocio (kill-switch por tenant).\n\nFija el valor pedido (repetirlo no cambia nada) y solo escribe\n`app_settings.bot_paused`: a diferencia de `PUT .../identity`, no reenvía la\nidentidad completa, así que no pisa lo que otra persona esté editando.",
+        "operationId": "save_bot_paused_api_v1_admin_settings_bot_paused_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotPausedUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPausedState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/settings/brain": {
       "put": {
         "tags": [
@@ -19521,9 +19582,15 @@
             "default": []
           },
           "bot_paused": {
-            "type": "boolean",
-            "title": "Bot Paused",
-            "default": false
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bot Paused"
           },
           "business_tz": {
             "type": "string",
@@ -27839,6 +27906,32 @@
           "latest_version"
         ],
         "title": "ConnectionAgentInstance"
+      },
+      "BotPausedState": {
+        "properties": {
+          "paused": {
+            "type": "boolean",
+            "title": "Paused"
+          }
+        },
+        "type": "object",
+        "required": [
+          "paused"
+        ],
+        "title": "BotPausedState"
+      },
+      "BotPausedUpdate": {
+        "properties": {
+          "paused": {
+            "type": "boolean",
+            "title": "Paused"
+          }
+        },
+        "type": "object",
+        "required": [
+          "paused"
+        ],
+        "title": "BotPausedUpdate"
       },
       "BuildIn": {
         "properties": {

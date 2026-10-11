@@ -1,7 +1,8 @@
 """Configuración del agente (lectura y escritura).
 
 `GET /api/v1/admin/settings` devuelve la configuración del tenant activo;
-`PUT .../identity` y `PUT .../brain` la actualizan. Reusa la maquinaria de
+`PUT .../identity` y `PUT .../brain` la actualizan, y `PUT .../bot-paused` pausa
+o reactiva el asistente sin tocar el resto de la identidad. Reusa la maquinaria de
 versionado del `AgentSpec` (`core.agents.spec`) para no duplicar lógica con el
 panel SSR. Requiere la sección `settings`.
 
@@ -36,7 +37,7 @@ from core.agents.spec import (
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.config import get_settings
-from core.db.models import AppSettings
+from core.db.models import AppSettings, AuditLog
 from core.db.session import get_session
 from core.llm.difficulty_router import (
     DIFFICULTY_SCORE_THRESHOLD,
@@ -110,7 +111,9 @@ class IdentityUpdate(BaseModel):
     persona_emojis: str = "sparse"
     persona_max_length: int = 500
     persona_forbidden: list[str] = []
-    bot_paused: bool = False
+    # `None` = no cambiar: la pausa tiene su propio endpoint (`PUT .../bot-paused`) y un
+    # formulario abierto desde antes no debe reactivar ni pausar el asistente al guardar.
+    bot_paused: bool | None = None
     business_tz: str = ""
     business_ranges: list[dict[str, Any]] = []
 
@@ -125,6 +128,14 @@ class IdentityUpdate(BaseModel):
         except (ZoneInfoNotFoundError, ValueError) as exc:
             raise ValueError(f"zona horaria desconocida: {value}") from exc
         return value
+
+
+class BotPausedUpdate(BaseModel):
+    paused: bool
+
+
+class BotPausedState(BaseModel):
+    paused: bool
 
 
 class BrainSettings(BaseModel):
@@ -368,7 +379,8 @@ async def save_identity(
             "auto_escalate_after_turns": max(0, payload.auto_escalate_after_turns),
             "business_hours": business_hours,
         }
-        app_settings.bot_paused = payload.bot_paused
+        if payload.bot_paused is not None:
+            app_settings.bot_paused = payload.bot_paused
 
     persona_data = spec.model_dump(mode="json")
     persona_data["persona"].update(
@@ -384,6 +396,44 @@ async def save_identity(
 
     refreshed = await _load_app_settings(principal.tenant_id)
     return _identity_out(refreshed, spec, available)
+
+
+@router.put("/bot-paused", response_model=BotPausedState)
+async def save_bot_paused(
+    payload: BotPausedUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> BotPausedState:
+    """Pausa o reactiva el asistente del negocio (kill-switch por tenant).
+
+    Fija el valor pedido (repetirlo no cambia nada) y solo escribe
+    `app_settings.bot_paused`: a diferencia de `PUT .../identity`, no reenvía la
+    identidad completa, así que no pisa lo que otra persona esté editando.
+    """
+    if principal.tenant_id is None:
+        raise ApiError.bad_request("Selecciona un negocio.", code="no_tenant")
+    async with get_session() as session:
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == principal.tenant_id,
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if app_settings is None:
+            app_settings = AppSettings(tenant_id=principal.tenant_id)
+            session.add(app_settings)
+        if bool(app_settings.bot_paused) != payload.paused:
+            app_settings.bot_paused = payload.paused
+            session.add(
+                AuditLog(
+                    tenant_id=principal.tenant_id,
+                    actor=f"admin:{principal.admin.email}",
+                    action="settings.bot_paused" if payload.paused else "settings.bot_resumed",
+                    input={"paused": payload.paused},
+                )
+            )
+    return BotPausedState(paused=payload.paused)
 
 
 @router.put("/brain", response_model=BrainSettings)
