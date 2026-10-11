@@ -27,7 +27,12 @@ from core.admin.settings_service import (
     save_skills,
     validate_business_ranges,
 )
-from core.agents.spec import enabled_packs, load_active_spec, save_spec_if_changed
+from core.agents.spec import (
+    con_tenant_de_la_fila,
+    enabled_packs,
+    load_active_spec,
+    save_spec_if_changed,
+)
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.config import get_settings
@@ -635,8 +640,13 @@ class SpecPayload(BaseModel):
 async def get_raw_spec(
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> SpecPayload:
-    """AgentSpec activo tal cual (editor crudo de Configuración → Avanzado)."""
+    """AgentSpec activo (editor crudo de Configuración → Avanzado).
+
+    El `tenantId` mostrado es el del negocio de la sesión, aunque la fila traiga otro.
+    """
     spec = await load_active_spec()
+    if principal.tenant_id is not None:
+        spec = con_tenant_de_la_fila(spec, principal.tenant_id)
     return SpecPayload(spec=spec.model_dump(mode="json"))
 
 
@@ -648,15 +658,19 @@ async def save_raw_spec(
     """Valida el JSON contra el contrato del AgentSpec y guarda si cambió.
 
     `save_spec_if_changed` solo crea versión cuando el contenido difiere, así que
-    guardar el mismo spec es un no-op (no ensucia el historial).
+    guardar el mismo spec es un no-op (no ensucia el historial). El `tenantId` es
+    siempre el del negocio de la sesión: el del cuerpo se ignora.
     """
     from agentcore_contracts import AgentSpec
     from pydantic import ValidationError
 
+    if principal.tenant_id is None:
+        raise ApiError(400, "sin_negocio", "Selecciona un negocio (X-Tenant-Id).")
     try:
         nuevo = AgentSpec.model_validate(payload.spec)
     except ValidationError as exc:
         raise ApiError.bad_request(f"Spec inválido: {str(exc)[:240]}", "invalid_spec") from exc
+    nuevo = con_tenant_de_la_fila(nuevo, principal.tenant_id)
     spec = await load_active_spec()
     await save_spec_if_changed(spec, nuevo.model_dump(mode="json"), principal.tenant_id)
     return SpecPayload(spec=nuevo.model_dump(mode="json"))

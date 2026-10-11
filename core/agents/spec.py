@@ -41,6 +41,19 @@ def enabled_business_packs(spec: AgentSpec) -> set[str]:
     return set(spec.packs)
 
 
+def con_tenant_de_la_fila(spec: AgentSpec, tenant_id: uuid.UUID) -> AgentSpec:
+    """`spec` con `tenantId` = el negocio dueño de la fila (se aplica al guardar).
+
+    El `tenantId` del JSON v2 no es fuente de verdad: lo trae el cuerpo de la
+    petición (editor crudo, presets). Los lectores tampoco lo usan para resolver
+    `TENANTS_ROOT/<slug>/` (salen del `tenant_scope`): filas viejas con uno ajeno
+    no cargan artefactos de otro negocio.
+    """
+    if spec.tenantId == str(tenant_id):
+        return spec
+    return spec.model_copy(update={"tenantId": str(tenant_id)})
+
+
 def count_tenant_packs(spec: AgentSpec) -> int:
     """Cuántos packs de negocio tiene habilitados el tenant (sin el core)."""
     return len(enabled_business_packs(spec))
@@ -330,10 +343,12 @@ async def save_spec_version(
     Fuente única para el panel SSR (`_save_spec_version`) y la API `/api/v1`
     (ADR-0076/0077). Devuelve la versión nueva, o `None` si hubo una edición
     concurrente (los índices parciales protegen la integridad).
+    El `tenantId` del spec se fuerza al negocio que guarda, nunca el del JSON.
     """
     tid = tenant_id or get_current_tenant_id()
     if tid is None:
         return None
+    new_spec = con_tenant_de_la_fila(new_spec, tid)
     version = await next_spec_version(tid)
     try:
         async with get_session() as session:
@@ -368,12 +383,16 @@ async def save_spec_if_changed(
 
     Evita crear una versión en cada guardado cuando lo único que cambió fue
     `AppSettings` (nombre, tono, debounce, etc.). Fuente única para el panel SSR
-    y la API.
+    y la API. El `tenantId` de `data` se reemplaza por el del negocio que guarda
+    antes de comparar: un JSON que solo cambia el `tenantId` no crea versión.
     """
+    tid = tenant_id or get_current_tenant_id()
+    if tid is None:
+        return None
     try:
-        new_spec = AgentSpec.model_validate(data)
+        new_spec = AgentSpec.model_validate({**data, "tenantId": str(tid)})
     except Exception:
         return None
     if new_spec.model_dump(mode="json") == current.model_dump(mode="json"):
         return None
-    return await save_spec_version(new_spec, tenant_id)
+    return await save_spec_version(new_spec, tid)

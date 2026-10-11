@@ -75,16 +75,23 @@ async def load_playbook(
     uno -- si no se pasa, esta función lo resuelve ella misma (una query,
     aceptable en un call-site que no está en un loop).
     """
+    from core.shared.tenant import get_current_tenant_id
+
+    scope = get_current_tenant_id()
     if isinstance(spec_or_tenant, AgentSpec):
         spec = spec_or_tenant
     else:
+        # La allowlist sale del spec del negocio pedido y el override del `tenant_scope`:
+        # si fueran negocios distintos se mezclarían.
+        if spec_or_tenant is not None and scope is not None and str(spec_or_tenant) != str(scope):
+            raise PermissionError("load_playbook: el negocio pedido no es el del tenant_scope")
         spec = await load_active_spec(spec_or_tenant)
     allowed = {p.name for p in spec.playbooks}
     if name not in allowed:
-        log.info("playbook_not_allowed", playbook=name, tenant_id=str(spec.tenantId))
+        log.info("playbook_not_allowed", playbook=name, tenant_id=str(scope))
         return None
     if not _SAFE_PLAYBOOK_NAME.match(name):
-        log.warning("playbook_name_unsafe", playbook=name, tenant_id=str(spec.tenantId))
+        log.warning("playbook_name_unsafe", playbook=name, tenant_id=str(scope))
         return None
 
     # Override por tenant (ADR-0026): gana sobre el default del pack/core si
@@ -93,22 +100,20 @@ async def load_playbook(
     # `tenant_slug`: `None` = "no me lo pasaron, resolverlo acá"; `""` =
     # "el caller ya lo intentó y no hay slug" (no reintentar la query por
     # cada playbook del loop de build_system_blocks si la BD está fallando).
+    # El negocio sale del `tenant_scope`, nunca de `spec.tenantId`.
     slug = tenant_slug
     if slug is None:
-        from core.shared.tenant import tenant_slug as _tenant_slug
+        from core.shared.tenant import current_tenant_slug
 
         try:
-            slug = await _tenant_slug(uuid.UUID(spec.tenantId))
+            slug = await current_tenant_slug()
         except Exception:
-            # `tenantId` inválido (specs de test) o la BD no responde: el
-            # override es una CAPA EXTRA, no la fuente de verdad -- degradar
-            # al default del pack/core en vez de tumbar el turno, mismo
-            # criterio fail-open que el resto de esta función. Se loggea
-            # igual (a diferencia de un `pass` silencioso) para que un fallo
-            # persistente de BD no quede invisible.
-            log.warning(
-                "tenant_slug_resolve_failed", tenant_id=str(spec.tenantId), exc_info=True
-            )
+            # La BD no responde: el override es una CAPA EXTRA, no la fuente
+            # de verdad -- degradar al default del pack/core en vez de tumbar
+            # el turno, mismo criterio fail-open que el resto de esta función.
+            # Se loggea igual (a diferencia de un `pass` silencioso) para que
+            # un fallo persistente de BD no quede invisible.
+            log.warning("tenant_slug_resolve_failed", playbook=name, exc_info=True)
             slug = None
     if slug:
         from core.onboarding import tenant_dir

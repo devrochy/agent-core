@@ -105,3 +105,16 @@ async def tenant_slug(tenant_id: uuid.UUID) -> str | None:
         return (
             await session.execute(select(Tenant.slug).where(Tenant.id == tenant_id))
         ).scalar_one_or_none()
+
+
+async def current_tenant_slug() -> str | None:
+    """Slug del negocio del `tenant_scope` actual. `None` fuera de un scope.
+
+    Fuente para resolver `TENANTS_ROOT/<slug>/` (playbooks, flow.json): el negocio
+    sale SIEMPRE de la sesión, nunca del `tenantId` del AgentSpec, que viaja en el
+    JSON que guarda el propio negocio y podría apuntar a otro.
+    """
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return None
+    return await tenant_slug(tenant_id)

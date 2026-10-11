@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 import re
-import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
@@ -309,13 +308,14 @@ def compose_flow(
 
 
 # ------------------------------------------------------------------ resolución
-async def _resolve_slug(spec: Any) -> str | None:
+async def _resolve_slug() -> str | None:
+    """Slug del negocio del `tenant_scope`, nunca de `spec.tenantId` (fuga entre tenants)."""
     try:
-        from core.shared.tenant import tenant_slug as _tenant_slug
+        from core.shared.tenant import current_tenant_slug
 
-        return await _tenant_slug(uuid.UUID(spec.tenantId))
+        return await current_tenant_slug()
     except Exception:
-        log.warning("flow_tenant_slug_resolve_failed", tenant_id=str(getattr(spec, "tenantId", "")), exc_info=True)
+        log.warning("flow_tenant_slug_resolve_failed", exc_info=True)
         return None
 
 
@@ -334,7 +334,7 @@ async def resolve_flow(
     from core.agents.spec import enabled_business_packs
 
     if slug is None:
-        slug = await _resolve_slug(spec)
+        slug = await _resolve_slug()
 
     tenant_sections = (load_tenant_flow(slug) if slug else None) or []
     sections = compose_flow(
@@ -362,7 +362,9 @@ async def resolve_flow(
     if not resolved:
         return None
     if unknown:
-        log.info("flow_unknown_tools", tenant_id=str(getattr(spec, "tenantId", "")), tools=sorted(set(unknown)))
+        from core.shared.tenant import get_current_tenant_id
+
+        log.info("flow_unknown_tools", tenant_id=str(get_current_tenant_id()), tools=sorted(set(unknown)))
     return ResolvedFlow(sections=resolved, source=source, unknown_tools=sorted(set(unknown)))
 
 

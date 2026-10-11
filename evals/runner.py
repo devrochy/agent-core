@@ -228,6 +228,7 @@ async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tup
     # aunque el flujo del tenant excluyera la tool.
     from core.agents.flow import render_flow, resolve_flow
     from core.agents.spec import enabled_packs
+    from core.shared.tenant import tenant_scope
 
     enabled = enabled_packs(spec)
     candidate = [
@@ -235,7 +236,10 @@ async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tup
         for tool in mcp_host.get_skill_tools([s.name for s in mcp_host.list_skills()])
         if (tool.plugin_id or "core") in enabled
     ]
-    flow = await resolve_flow(spec, available={t.name for t in candidate})
+    # Los overrides del negocio (flow.json, playbooks) salen del `tenant_scope`, no del
+    # `tenantId` del spec.json: el flujo y el prompt se arman dentro del scope del negocio.
+    async with tenant_scope(tenant_id):
+        flow = await resolve_flow(spec, available={t.name for t in candidate})
     if flow is not None:
         by_name = {t.name: t for t in candidate}
         active = [by_name[name] for name in flow.tool_names if name in by_name]
@@ -252,9 +256,9 @@ async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tup
         active = candidate
     tools = to_llm_schemas(active)
     messages = _build_messages(scenario["conversation"])
-    response = await provider.generate(
-        system_blocks=await build_system_blocks(spec, ctx), messages=messages, tools=tools or None
-    )
+    async with tenant_scope(tenant_id):
+        system_blocks = await build_system_blocks(spec, ctx)
+    response = await provider.generate(system_blocks=system_blocks, messages=messages, tools=tools or None)
 
     failures: list[str] = []
     text_lower = response.content.lower()
