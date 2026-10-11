@@ -147,25 +147,24 @@ async def _render_playbook(
 
 async def build_system_blocks(spec: AgentSpec, ctx: PromptContext) -> list[str]:
     """Ensambla los bloques del system prompt desde el spec + playbooks + turno."""
-    import uuid
-
     blocks: list[str] = []
 
     # Override por tenant (ADR-0026): se resuelve UNA VEZ acá, no dentro de
     # cada llamada a load_playbook -- este loop puede pedir 4-6 playbooks por
     # turno, y una query de slug por cada uno sería un N+1 real.
+    # El negocio sale del `tenant_scope`, nunca de `spec.tenantId` (viaja en el
+    # JSON que guarda el propio negocio y podría apuntar a otro).
     tenant_slug: str | None = None
     try:
-        from core.shared.tenant import tenant_slug as _tenant_slug
+        from core.shared.tenant import current_tenant_slug
 
-        tenant_slug = await _tenant_slug(uuid.UUID(spec.tenantId))
+        tenant_slug = await current_tenant_slug()
     except Exception:
-        # `tenantId` inválido (specs de test) o la BD no responde: el
-        # override es una capa extra, no la fuente de verdad -- degradar a
-        # "sin override" en vez de tumbar el ensamblado del prompt entero.
-        # Se loggea igual para que un fallo persistente de BD no quede
-        # invisible (antes era un `pass` silencioso).
-        log.warning("tenant_slug_resolve_failed", tenant_id=spec.tenantId, exc_info=True)
+        # La BD no responde: el override es una capa extra, no la fuente de
+        # verdad -- degradar a "sin override" en vez de tumbar el ensamblado
+        # del prompt entero. Se loggea igual para que un fallo persistente de
+        # BD no quede invisible (antes era un `pass` silencioso).
+        log.warning("tenant_slug_resolve_failed", exc_info=True)
     if tenant_slug is None:
         # "" (no None) le dice a load_playbook "ya se intentó, no hay slug"
         # -- evita que cada llamada del loop de abajo reintente la misma
