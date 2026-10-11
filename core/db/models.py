@@ -45,6 +45,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from core.config import get_settings
+from core.shared.turno import trace_id_de_fila, turn_id_de_fila
 
 
 def utcnow() -> datetime:
@@ -336,6 +337,8 @@ class Message(Base):
     sender_type: Mapped[str] = mapped_column(Text)    # customer | agent | human
     content: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(Text, default="sent")  # queued|sent|delivered|read|failed (outbound)
+    # Turno que causó la fila (HU-AOS-10): default del turno vigente, NULL fuera de un turno.
+    turn_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=turn_id_de_fila)
     tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     # Soporte de medios (mod-media-processor los transforma antes del orchestrator)
     media_type: Mapped[str | None] = mapped_column(Text)          # "audio/ogg", "image/jpeg"
@@ -916,6 +919,7 @@ class AuditLog(Base):
     conversation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("conversations.id"))
     actor: Mapped[str] = mapped_column(Text)    # "tool:crear_lead" | "core:guardrail" | "admin:email"
     action: Mapped[str] = mapped_column(Text)
+    turn_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=turn_id_de_fila)
     input: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     output: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -968,6 +972,9 @@ class UsageLedger(Base):
     cost_usd: Mapped[float] = mapped_column(Numeric(10, 6), default=0)
     tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Turno y traza (HU-AOS-10): default del turno vigente, NULL fuera de un turno.
+    turn_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=turn_id_de_fila)
+    trace_id: Mapped[str | None] = mapped_column(Text, default=trace_id_de_fila)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
