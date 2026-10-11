@@ -50,6 +50,11 @@ from core.orchestrator.escalation import (
     within_business_hours,
 )
 from core.orchestrator.loop import process_conversation
+from core.orchestrator.ruta_de_conversacion import (
+    actualizar_ruta,
+    buscar_conversacion_abierta,
+    ruteo_por_conexion,
+)
 from core.orchestrator.turn_gate import TurnQueueTimeout, run_turn
 from core.shared.events import ON_CONVERSATION_STARTED, ON_MESSAGE_RECEIVED, event_bus
 from core.shared.logger import get_logger
@@ -396,12 +401,14 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
     # corre la IA (ni horario ni keywords, que también responden) y se avisa a los dueños.
     from core.gateway.meta_connection_state import (
         avisar_mensaje_en_conexion_pausada,
-        motivo_pausa_de_conversacion,
+        cuenta_meta_de_conversacion,
+        motivo_pausa_de,
     )
 
-    if (motivo := await motivo_pausa_de_conversacion(conversation)) is not None:
+    cuenta = await cuenta_meta_de_conversacion(conversation)
+    if cuenta is not None and (motivo := await motivo_pausa_de(cuenta)) is not None:
         log.info("inbound_conexion_pausada", conversation_id=str(conversation.id), motivo=motivo)
-        await avisar_mensaje_en_conexion_pausada(conversation.tenant_id, conversation.meta_connection_id, motivo)
+        await avisar_mensaje_en_conexion_pausada(conversation.tenant_id, cuenta, motivo)
         return
 
     if paused or conversation.status == "escalated":
@@ -571,19 +578,11 @@ async def _resolve_conversation(
             text("select pg_advisory_xact_lock(hashtext(:k))"),
             {"k": f"conversation:{tenant_id}:{customer.id}"},
         )
-        conversation = (
-            await session.execute(
-                select(Conversation)
-                .where(
-                    Conversation.tenant_id == tenant_id,
-                    Conversation.customer_id == customer.id,
-                    Conversation.status.in_(["open", "escalated"]),
-                    Conversation.deleted_at.is_(None),
-                )
-                .order_by(Conversation.started_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
+        # Conversación por (conexión, cliente) detrás de `AOS_CONNECTION_ROUTING` (ADR-0115).
+        por_conexion = ruteo_por_conexion()
+        conversation = await buscar_conversacion_abierta(
+            session, tenant_id, customer.id, connection, por_conexion=por_conexion
+        )
 
         is_new = conversation is None
         if conversation is None:
@@ -606,12 +605,12 @@ async def _resolve_conversation(
             # (o al revés), la conexión anterior queda obsoleta y `resolve_credentials`
             # prioriza `connection_id`: la respuesta salía por WhatsApp Web aunque el
             # cliente escribiera a Meta (visto en test, 2026-10-08). Sin ruta identificable
-            # (número de la plataforma) se conserva la que había.
-            nueva_conexion = connection.id if connection else None
-            if conversation.connection_id != nueva_conexion:
-                conversation.connection_id = nueva_conexion
-            if conversation.meta_connection_id != meta_connection_id:
-                conversation.meta_connection_id = meta_connection_id
+            # (número de la plataforma) se conserva la que había. Con el ruteo por conexión
+            # la conversación ya es de esta conexión y no se reescribe (ADR-0115 §6).
+            await actualizar_ruta(
+                session, conversation, connection.id if connection else None, meta_connection_id,
+                por_conexion=por_conexion,
+            )
 
     if is_new:
         await event_bus.emit(

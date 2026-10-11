@@ -41,6 +41,20 @@ class _ScalarResult:
         return self._row
 
 
+@pytest.fixture(autouse=True)
+def conexiones_canonicas(monkeypatch):
+    """La sesión falsa no interpreta SQL: la conexión canónica del número (ADR-0115) se
+    registra acá y se prueba contra Postgres en `tests/integration/test_conexion_canonica.py`."""
+    llamadas: list[tuple[str, object]] = []
+
+    async def _asegurar(_session, _tenant_id, phone_number_id, meta_connection_id, **_k):
+        llamadas.append((phone_number_id, meta_connection_id))
+        return "creada"
+
+    monkeypatch.setattr("core.gateway.conexion_canonica.asegurar_conexion_del_numero", _asegurar)
+    return llamadas
+
+
 class FakeSession:
     """Devuelve, en orden, una fila fake por cada `execute()` -- el primer
     `get_session()` de `save_byok_connection` hace 3 selects (MetaConnection,
@@ -280,7 +294,7 @@ async def test_numero_de_otro_tenant_da_byok_error_limpio(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_credenciales_validas_crea_conexion_telefono_waba_y_suscribe(monkeypatch):
+async def test_credenciales_validas_crea_conexion_telefono_waba_y_suscribe(monkeypatch, conexiones_canonicas):
     _mock_verify_ok(monkeypatch)
     put_calls = _mock_token_store(monkeypatch)
     graph_calls = _mock_subscribe_ok(monkeypatch)
@@ -306,6 +320,8 @@ async def test_credenciales_validas_crea_conexion_telefono_waba_y_suscribe(monke
     waba_rows = [obj for obj in added if hasattr(obj, "waba_id")]
     assert len(waba_rows) == 1
     assert waba_rows[0].waba_id == "waba-1"
+    # El número queda con su conexión canónica ligada a esta cuenta (ADR-0115 §6).
+    assert conexiones_canonicas == [("phone-1", connection.id)]
 
     kinds = {call[1] for call in put_calls}
     # Sin `verify_token` del admin se guarda uno propio de la conexión (ADR-0127).
