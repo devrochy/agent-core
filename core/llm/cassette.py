@@ -273,6 +273,8 @@ def normalizar(
             ]
         if m.tool_call_id is not None:
             item["tool_call_id"] = norm.id_llamada(m.tool_call_id)
+        if m.reasoning_content:  # solo con la política de riesgo alto (HU-AOS-09)
+            item["reasoning_content"] = norm.texto(m.reasoning_content)
         mensajes.append(item)
     return Pedido(
         proveedor=proveedor,
@@ -382,6 +384,12 @@ def _respuesta_a_dict(respuesta: LLMResponse, norm: _Normalizador) -> dict[str, 
             "cache_write_tokens": getattr(uso, "cache_write_tokens", 0),
         },
         "model": respuesta.model,
+        # Solo si lo hay (DeepSeek con thinking): las grabaciones existentes no cambian.
+        **(
+            {"reasoning_content": norm.solo_conocidos(respuesta.reasoning_content)}
+            if respuesta.reasoning_content
+            else {}
+        ),
     }
 
 
@@ -408,6 +416,7 @@ def _respuesta_de_dict(dato: dict[str, Any], norm: _Normalizador) -> LLMResponse
         usage=LLMUsageInfo(**{c: int(uso.get(c, 0) or 0) for c in _CAMPOS_USO}),
         model=str(dato.get("model", "")),
         latency_ms=0,
+        reasoning_content=razonamiento if isinstance(razonamiento := dato.get("reasoning_content", ""), str) else "",
     )
 
 
@@ -652,6 +661,9 @@ def _texto_crudo(system_blocks: list[str], messages: list[LLMMessage], respuesta
             [[m.content, [tc.arguments for tc in m.tool_calls]] for m in messages],
             respuesta.content,
             [tc.arguments for tc in respuesta.tool_calls],
+            # El razonamiento de DeepSeek también se escanea (HU-AOS-09): puede repetir datos.
+            [m.reasoning_content for m in messages if m.reasoning_content],
+            respuesta.reasoning_content,
         ],
         ensure_ascii=False,
         default=str,

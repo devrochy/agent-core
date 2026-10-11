@@ -61,6 +61,26 @@ class WhatsAppMetaOutbound(OutboundAdapter):
         }
         return await self._post(credentials, payload)
 
+    async def send_interactive(
+        self, credentials: dict[str, str], to_external_id: str, interactive: dict[str, Any]
+    ) -> str:
+        """Botones de respuesta dentro de la ventana de 24 h (HU-AOS-09). El id de cada botón es
+        el payload que vuelve en `interactive.button_reply.id` (p. ej. el `confirmar:` firmado)."""
+        to = to_external_id.removeprefix("whatsapp:").lstrip("+")
+        botones = [
+            {"type": "reply", "reply": {"id": str(b["id"]), "title": str(b["title"])}}
+            for b in interactive.get("buttons") or []
+        ]
+        if interactive.get("type") != "button" or not botones or not interactive.get("body"):
+            raise ChannelError("Mensaje interactivo inválido (se esperan cuerpo y botones)")
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "interactive",
+            "interactive": {"type": "button", "body": {"text": str(interactive["body"])}, "action": {"buttons": botones}},
+        }
+        return await self._post(credentials, payload)
+
     @staticmethod
     async def _post(credentials: dict[str, str], payload: dict[str, object]) -> str:
         phone_number_id = credentials.get("phone_number_id", "")

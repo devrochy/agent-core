@@ -31,6 +31,7 @@ from core.gateway.meta_errors import REENGAGEMENT_WINDOW_CODE, GraphError
 from core.gateway.sender import resolve_credentials
 from core.shared.async_bridge import run_async
 from core.shared.audit import record_audit
+from core.shared.exceptions import ChannelError
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from core.tasks.celery_app import celery
@@ -265,6 +266,15 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
                     message.template_language or "es",
                     list(message.template_components or []),
                 )
+            elif message.interactive:
+                # Botones de respuesta (HU-AOS-09): el sender ya validó canal, ventana y topes. Si
+                # la conexión dejó de ser de Meta o el payload no sirve, el `ChannelError` es
+                # permanente: reintentarlo como error de red no lo arregla.
+                try:
+                    wamid = await adapter.send_interactive(credentials, customer.external_id, dict(message.interactive))
+                except ChannelError as exc:
+                    await _release_claim(message.id, message.conversation_id, tenant_id)
+                    return GraphError(f"Mensaje interactivo no enviable: {exc}", category="PERMANENT")
             elif message.media_type == "image" and message.media_url:
                 wamid = await adapter.send_image(credentials, customer.external_id, message.media_url, message.content)
             else:

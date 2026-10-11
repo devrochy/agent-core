@@ -207,3 +207,9 @@ agente `arquitecto` antes de escribir código.
   1 falso positivo (0,4 %, el mismo de antes) y 0 falsos negativos en 25 falsas. Con estado: los
   mismos números; ningún falso positivo nuevo. Los conteos de `referencias_sin_evidencia` en
   `turn_outcomes.verifier` de producción se miran antes de encender un negocio.
+
+## Adenda (2026-10-11, HU-AOS-09): respaldo en el reintento
+
+Con el motor de procedimientos activo, el reintento tras un rechazo del verificador usa el respaldo
+del agente (`model.fallback`) cuando es de la misma familia que el modelo del turno. Reglas y límites
+en ADR-0132. Los reintentos y la acción ante el fallo siguen siendo los de ADR-0092.

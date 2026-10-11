@@ -4,9 +4,8 @@ Viven en los playbooks del kernel `motor` y `confirmacion` (`core/playbooks/kern
 viajan con el binario y ningún negocio reemplaza. Fail-closed: un playbook roto lanza (lo cubre
 un test de CI), en vez de dejar al motor sin sus mensajes.
 
-El clasificador de confirmación es conservador a propósito: confianza alta solo si la respuesta
-del cliente, normalizada, coincide exacta con una frase del léxico. "dale", "ok" o "listo" no
-confirman. HU-AOS-09 trae el clasificador de alta precisión y el botón.
+La confirmación escrita la decide el clasificador conservador de `clasificador.py` (HU-AOS-09):
+"dale", "ok", "listo" o "sí" a secas no confirman. El botón firmado es la vía preferida.
 """
 
 from __future__ import annotations
@@ -112,6 +111,19 @@ def lexico_si() -> frozenset[str]:
     return parsear_lexico(load_core_playbook("confirmacion"))
 
 
+def secciones(contenido: str) -> dict[str, list[str]]:
+    """Secciones `## nombre` de un playbook del kernel (las lee también el clasificador)."""
+    return _secciones(contenido)
+
+
 def confirmacion_alta(texto: str, lexico: frozenset[str] | None = None) -> bool:
-    """¿El texto del cliente es un "sí" explícito con confianza alta?"""
-    return normalizar(texto) in (lexico if lexico is not None else lexico_si())
+    """¿El texto del cliente es un "sí" explícito con confianza alta?
+
+    Con `lexico`, solo la coincidencia exacta con esas frases. Sin él, el clasificador
+    conservador de HU-AOS-09 (`clasificador.es_confirmacion`), que incluye las frases exactas de
+    `## si` y nunca acepta un "sí" a secas."""
+    if lexico is not None:
+        return normalizar(texto) in lexico
+    from core.kernel.procedures.clasificador import es_confirmacion
+
+    return es_confirmacion(texto)

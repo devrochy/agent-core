@@ -354,3 +354,67 @@ son tools del core que arma el motor por turno (`core/kernel/procedures/comandos
   de antes del cambio). La descripción de `iniciar_procedimiento` lista hasta 12 candidatos.
 - **Textos:** playbook del kernel `comandos` (invariante 3), sin override por negocio y fail-closed;
   los schemas son estructura y viven en código.
+
+## Adenda de implementación (2026-10-11, HU-AOS-09): confirmación con botón y clasificador
+
+**Estado:** propuesta; requiere la aprobación del dueño antes del merge. Cierra el "Pendiente para
+HU-AOS-09" de la adenda de HU-AOS-05. No cambia la forma de ningún contrato. La revisó el agente
+`arquitecto` antes de escribir código. La política de modelo por riesgo está en ADR-0132.
+
+- **Un solo mensaje.** Si el turno pidió una confirmación (la tarea en foco quedó con
+  `pending_confirmation` registrada en este turno), el mensaje del turno es el que arma el kernel y
+  **reemplaza** el texto del modelo (`composition.style = single_message`). Así el cliente no ve dos
+  versiones que se contradigan, y `TurnResult.text`, la memoria y `messages` quedan coherentes. Lo
+  que el modelo haya agregado de paso se pierde: es aceptable con `maxQuestions = 1` y es lo único
+  determinista.
+- **Resumen del servidor, nunca del modelo** (`core/kernel/confirmacion.py`, rótulos en el playbook
+  del kernel `confirmacion_boton`):
+  - acción: los argumentos exactos de la llamada que pidió confirmación (los que ata el hash y firma
+    el botón), solo las propiedades que declara el `input_schema` de la acción (una clave inventada
+    por el modelo no se muestra);
+  - etapa: los datos de `exitWhen.slots` y `exitWhen.confirmed`; dato: ese dato;
+  - más el monto que devolvió en el turno una acción de la etapa declarada como fuente de un `claim`
+    de tipo `amount` (`action:<acción>.<campo>`). Va primero y nunca se recorta por largo.
+  - **Fail-closed:** si la petición es de este turno pero no hay un resumen fiel (faltan los args, la
+    fuente devolvió dos montos distintos en el turno, un argumento con el mismo nombre dice otra cosa
+    que el servidor, o algo falla), sale el texto fijo `sin_resumen`, sin datos ni botón: nunca
+    vuelve el texto del modelo pidiendo confirmar.
+  - El core muestra el nombre del dato con espacios y oculta identificadores (`id`, `*_id`, valores
+    con forma de uuid), valores no escalares, credenciales (`es_sensible`), datos `payment` (de la
+    tarea y argumentos con su nombre) y valores con forma de tarjeta (13 a 19 dígitos que pasan
+    Luhn). Todo valor va saneado: una línea, sin controles ni formato Unicode (Cc, Cf, Zl, Zp: bidi,
+    ancho cero), sin las marcas de formato de WhatsApp y acotado. El cuerpo respeta los topes de
+    WhatsApp.
+  - **El resumen propio de una acción de un pack lo provee el pack**, con un punto de extensión al
+    estilo de `register_afirmaciones` (recibe `ToolContext` y los args, solo lectura, con timeout).
+    Llega con HU-AOS-07, su primer cliente: hoy ningún pack publica procedimientos, así que nadie ve
+    el resumen genérico antes. Ejemplo del caso que lo exige: `crear_pedido` recibe `quote_id` y
+    `customer_data`, y el total no está en sus argumentos.
+- **Botón.** Con `stage.confirmation = interactive_button`, el sender lo envía como mensaje
+  interactivo (un botón "Confirmar" con `confirmar:<tarea>:<seq>:<firma>`) solo en WhatsApp Cloud
+  (`meta`) con la ventana de 24 h abierta y con el payload dentro de los topes (cuerpo ≤ 1024,
+  título ≤ 20, id ≤ 256). En cualquier otro caso sale el mismo cuerpo como texto, con la instrucción
+  de responder «confirmo». `explicit` (o una confirmación de dato o del binding) sale siempre como
+  texto. La fila de `messages` guarda el payload en `interactive` (migración 0082) y la cola de
+  salida lo envía en orden con el resto. Un fallo del envío sigue el camino de siempre (reintentos,
+  DLQ y escalamiento), porque es el mensaje del turno; un `ChannelError` del adaptador (la conexión
+  dejó de ser de Meta) es permanente, no se reintenta como error de red.
+- **Clasificador de confirmación escrita** (`core/kernel/procedures/clasificador.py`, léxico en el
+  playbook `confirmacion`): determinista y conservador. Una pregunta (cualquier signo de pregunta,
+  sobre el texto en NFKC) nunca confirma, ni un texto con símbolos o letras no latinas que la
+  normalización borraría ("confirmo ❌", "confirmo нет"; solo se toleran emojis de aprobación); confirma una
+  frase exacta de `si` o una frase de hasta 8 palabras hecha solo de `nucleo`, `prefijos` y
+  `cortesia`, con al menos una de `nucleo` y ninguna de `negaciones`. "Sí", "dale", "ok" o "listo"
+  solos no confirman (decisión del dueño). Se mide con `tests/fixtures/confirmacion/etiquetado.jsonl`
+  sin LLM: precisión 1.0 obligatoria y recall reportado (98 % al 2026-10-11, 194 frases armadas para
+  el set: falta sumar respuestas reales anonimizadas).
+- **Fuera de esta adenda (pendiente):**
+  - Confirmación fuera de la ventana con una plantilla aprobada con botón quick-reply: exige una
+    plantilla aprobada por WABA y ampliar ADR-0108 (parámetro `payload` del botón). En un turno la
+    ventana está abierta, así que solo afecta confirmaciones pedidas por el back-office.
+  - Entrada del botón de plantilla (`type: button`, hoy se descarta en el parser): va con la
+    plantilla, filtrada en `_dispatch_entry_messages` (antes del claim) cuando el negocio no tiene
+    el motor activo.
+  - Después del toque, el modelo tiene que repetir la acción con los mismos argumentos (el hash) y el
+    historial es solo texto: lo cubre un test de integración con modelo guionado, y queda como riesgo
+    para HU-AOS-06 (comandos como tools).

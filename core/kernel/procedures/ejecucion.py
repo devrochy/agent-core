@@ -335,6 +335,10 @@ class ContextoMotor:
         self._abiertas = frozenset(abiertas)
         self._cambio = False
         self._sombra: Any = None
+        # HU-AOS-09: args de cada acción que pidió confirmación (por hash: son los que firma el
+        # botón) y resultados de las acciones de la etapa en el turno, para armar el resumen.
+        self._pedidas: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._resultados: dict[str, list[Mapping[str, Any]]] = {}
         if modo == "sombra":
             from core.kernel.procedures.sombra import Sombra
 
@@ -446,6 +450,7 @@ class ContextoMotor:
                                 s, foco.fila, "confirmation_requested",
                                 {"target": {"kind": "action", "name": accion}, "args_hash": h}, "kernel",
                             )
+                        self._pedidas[h] = (accion, dict(args))  # el resumen de la confirmación (HU-AOS-09)
                         gobernada.decision = Decision(
                             {"status": "confirmation_required", "message": mensaje("confirmacion_requerida", accion=accion)},
                             "confirmation_required",
@@ -480,6 +485,8 @@ class ContextoMotor:
                     return resultado
                 task_id = foco.fila.id
                 ok = not (isinstance(resultado, dict) and resultado.get("error"))
+                if ok and isinstance(resultado, Mapping):
+                    self._resultados.setdefault(accion, []).append(resultado)  # montos del resumen (HU-AOS-09)
                 data: dict[str, Any] = {"action": accion}
                 if ok:
                     candidatos = motor.candidatos_de_resultado(foco.proc, accion, resultado)
@@ -815,6 +822,114 @@ class ContextoMotor:
             await _registrar(s, foco.fila, "cancelled", {"reason": "pedido_del_cliente"}, "llm")
             await _devolver_control(s, foco.fila, foco.proc)
         return await self._terminar_comando(None)
+
+
+    # -- política de modelo y confirmación (HU-AOS-09)
+    @property
+    def riesgo_alto(self) -> bool:
+        """La etapa en foco declara `risk: high` (con la proyección del inicio del turno)."""
+        return self.en_foco and self._foco is not None and self._foco.stage.risk == "high"
+
+    async def confirmacion_del_turno(self) -> ConfirmacionDelTurno | None:
+        """El mensaje de confirmación que reemplaza el texto del turno, o None.
+
+        Solo si la tarea en foco quedó esperando una confirmación pedida EN ESTE turno. El cuerpo
+        sale de los argumentos exactos que firma el botón (acción, solo las propiedades de su
+        schema), de los datos de la tarea (etapa o dato) y de los montos que devolvió en el turno
+        la acción que el procedimiento declara como fuente (`claims` de tipo `amount`); nunca del
+        texto del modelo. Fail-closed: si la petición es de este turno pero no hay un resumen fiel
+        (faltan los args, un monto es ambiguo o choca con un argumento, o algo falla), sale el
+        texto fijo `sin_resumen`, sin datos ni botón. Solo si no se pudo leer la tarea, None."""
+        if self.modo != "activo":
+            return None
+        try:
+            from core.db.session import get_session
+
+            async with get_session() as s:
+                foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
+                if foco is None:
+                    return None
+                pendiente = foco.tarea.pending_confirmation or {}
+                seq = int(pendiente.get("seq") or 0)
+                if not seq or seq <= self._seq_al_empezar.get(foco.fila.id, 0):
+                    return None
+                peticion = _evento_por_seq(await _eventos(s, foco), seq)
+        except Exception as exc:
+            log.warning("motor_confirmacion_del_turno_fallo", error=type(exc).__name__)
+            return None
+        from core.kernel.confirmacion import armar, sin_resumen
+
+        try:
+            args_hash = str((peticion.data.get("args_hash") if peticion is not None else "") or "")
+            datos = self._datos_a_confirmar(foco, pendiente, args_hash)
+            if datos is None:
+                log.info("motor_confirmacion_sin_resumen", task_id=str(foco.fila.id))
+                return ConfirmacionDelTurno(confirmacion=sin_resumen(), modo="explicit")
+            boton = payload_de_confirmacion(self.tenant_id, foco.fila.id, seq, args_hash)
+            modo = "interactive_button" if foco.stage.confirmation == "interactive_button" else "explicit"
+            return ConfirmacionDelTurno(confirmacion=armar(foco.proc.title, datos, boton), modo=modo)
+        except Exception as exc:
+            log.warning("motor_confirmacion_del_turno_fallo", error=type(exc).__name__)
+            return ConfirmacionDelTurno(confirmacion=sin_resumen(), modo="explicit")
+
+    def _datos_a_confirmar(self, foco: _Foco, pendiente: Mapping[str, Any], args_hash: str) -> list[Any] | None:
+        """Los datos del resumen, o None si no hay uno fiel (el turno manda `sin_resumen`)."""
+        from core.kernel.confirmacion import Dato, datos_de_args
+        from core.mcp.host import mcp_host
+
+        proc, kind, nombre = foco.proc, pendiente.get("kind"), str(pendiente.get("name") or "")
+        vals = motor.valores(foco.tarea)
+        de_pago = frozenset(n for n, slot in proc.slots.items() if slot.dataClass == "payment")
+
+        def de_la_tarea(nombres: Sequence[str]) -> list[Dato]:
+            return [Dato(n, vals.get(n)) for n in nombres if n in proc.slots and n not in de_pago and vals.get(n) is not None]
+
+        args: dict[str, Any] = {}
+        if kind == "action":
+            pedida = self._pedidas.get(args_hash)
+            if pedida is None:
+                return None  # sin los args exactos no hay resumen fiel
+            accion, args = pedida
+            herramienta = mcp_host.get_tool(accion)
+            propiedades = ((herramienta.parameters if herramienta is not None else {}) or {}).get("properties") or {}
+            datos = datos_de_args(args, list(propiedades), de_pago)
+        elif kind == "stage":
+            salida = foco.stage.exitWhen
+            datos = de_la_tarea([*(salida.slots if salida else []), *(salida.confirmed if salida else [])])
+        elif kind == "slot":
+            datos = de_la_tarea([nombre])
+        else:
+            return None
+        for claim in proc.claims:
+            if claim.kind != "amount":
+                continue
+            for fuente in claim.mustMatch:
+                accion_fuente, _, campo = fuente.removeprefix("action:").partition(".")
+                if not fuente.startswith("action:") or not campo or accion_fuente not in foco.stage.actions:
+                    continue
+                montos = {
+                    r.get(campo) for r in self._resultados.get(accion_fuente, [])
+                    if isinstance(r.get(campo), int | float) and not isinstance(r.get(campo), bool)
+                }
+                if len(montos) > 1:
+                    return None  # dos cotizaciones distintas en el turno: ¿cuál se confirma?
+                if not montos:
+                    continue  # la fuente no corrió en este turno: el resumen va sin ese monto
+                monto = montos.pop()
+                if campo in args and args[campo] != monto:
+                    return None  # el argumento firmado dice otra cosa que el servidor
+                datos = [d for d in datos if d.nombre != campo]
+                datos.append(Dato(campo, monto, es_monto=True))
+        return datos
+
+
+@dataclass(frozen=True)
+class ConfirmacionDelTurno:
+    """Lo que el turno envía en vez del texto del modelo (HU-AOS-09). `modo` es el de la etapa:
+    `interactive_button` va con botón donde el canal lo soporta; `explicit`, solo como texto."""
+
+    confirmacion: Any  # core.kernel.confirmacion.Confirmacion
+    modo: str
 
 
 def payload_de_confirmacion(tenant_id: uuid.UUID, task_id: uuid.UUID, seq: int, args_hash: str = "") -> str:
