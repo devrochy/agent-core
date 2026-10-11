@@ -56,12 +56,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from agentcore_contracts import AgentSpec, SecretRef
+from agentcore_contracts import AgentSpec
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from core.agents import versiones
 from core.agents.contrato_v3 import Contrato, revisar_spec
+from core.agents.credenciales import referencias_de_tool
 from core.agents.instancias import ConexionNoConversacional
 from core.agents.tolerante import (
     KEY_COORDINADOR,
@@ -194,9 +195,8 @@ async def _chat_web_activo(tenant_id: uuid.UUID) -> bool:
 def _dominios_por_secreto(conversion: ConversionV3) -> dict[str, set[str]]:
     dominios: dict[str, set[str]] = {}
     for tool in conversion.general.declarativeTools:
-        for valor in tool.headers.values():
-            if isinstance(valor, SecretRef):
-                dominios.setdefault(valor.secret, set()).update(tool.allowedDomains)
+        for ref in referencias_de_tool(tool):
+            dominios.setdefault(ref, set()).update(tool.allowedDomains)
     return dominios
 
 

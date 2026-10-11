@@ -41,13 +41,20 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from agentcore_contracts import (
-    SENSITIVE_HEADERS,
     AgentSpec,
     AgentSpecV3,
     KernelSpec,
 )
 from pydantic import SecretStr
 
+from core.agents.credenciales import (
+    credenciales_en_body,
+    credenciales_en_url,
+    es_sensible,
+    extraer_de_body,
+    extraer_de_url,
+    referencias_de_tool,
+)
 from core.agents.flow import (
     OPEN_PROCEDURE_VERSION,
     FlowSection,
@@ -70,10 +77,9 @@ _HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,80}$")
 _ACTION_RE = re.compile(r"^[a-zA-Z0-9_]{1,80}$")
 _PLAYBOOK_RE = re.compile(r"^[a-zA-Z0-9_-]{1,80}$")
 _SECRET_UNSAFE_RE = re.compile(r"[^a-z0-9_]+")
-# Headers con pinta de credencial fuera de los tres sensibles del contrato: no se mueven
-# (el contrato solo exige esos tres), pero se avisa sin el valor.
-_PINTA_DE_SECRETO_RE = re.compile(r"(auth|token|secret|key|password|session)", re.IGNORECASE)
 _MAX_DECLARATIVAS = 50
+# Marca interna (no es un nombre de secreto válido) de lo que se descarta de una tool sin dominios.
+_DESCARTADO = "-DESCARTADO-"
 _MAX_GUARDRAILS = 100
 
 
@@ -158,9 +164,7 @@ def _declarativas(
         avisos.append("extensions.tools: dominios no públicos descartados de allowed_domains (hoy tampoco se usan)")
 
     # Nombres ya usados por referencias existentes: un secreto extraído no los pisa.
-    usados: set[str] = {
-        n for t in normalizadas for v in t["headers"].values() if (n := secret_ref(v)) is not None
-    }
+    usados: set[str] = {n for t in normalizadas for n in referencias_de_tool(t)}
     secretos: dict[str, SecretStr] = {}
     salida: list[dict[str, Any]] = []
     nombres: set[str] = set()
@@ -193,7 +197,7 @@ def _declarativas(
             ):
                 avisos.append(f"extensions.tools '{nombre}': header inválido descartado")
                 continue
-            if header.lower() in SENSITIVE_HEADERS:
+            if es_sensible(header) and valor.strip():
                 if not tool["allowed_domains"]:
                     # Sin allowlist la tool hoy no llama a nadie (el loop arma un ScopedHttp por
                     # tool con sus dominios): el literal no tiene a dónde viajar ni se migra.
@@ -206,14 +210,41 @@ def _declarativas(
                 secretos[ref] = SecretStr(valor)
                 headers[header] = {"secret": ref}
             else:
-                if _PINTA_DE_SECRETO_RE.search(header):
-                    avisos.append(
-                        f"extensions.tools '{nombre}': el header {header} parece una credencial y queda literal; "
-                        "conviene pasarlo a un secreto"
-                    )
                 headers[header] = valor
-        url = tool["url"]
-        if url.startswith("http://") and any(isinstance(v, dict) for v in headers.values()):
+        url, body = tool["url"], tool["body"]
+        # Credenciales en la URL y el body (decisión del dueño 2026-10-11): también a secretos.
+        if credenciales_en_url(url) or credenciales_en_body(body):
+            if not tool["allowed_domains"]:
+                # Como con los headers: sin allowlist la tool no llama a nadie; se descartan.
+                # El userinfo se va sin más; la query y el body quedan sin el valor.
+                url, _, _ = extraer_de_url(url, lambda _n: _DESCARTADO)
+                url = url.replace(f"{{secret:{_DESCARTADO}}}", "")
+                body, _ = extraer_de_body(body, lambda _n: _DESCARTADO)
+                body = _sin_refs(body, _DESCARTADO)
+                avisos.append(
+                    f"extensions.tools '{nombre}': credenciales de la URL o el body descartadas (la tool no "
+                    "tiene allowed_domains y hoy tampoco puede llamar a nadie)"
+                )
+            else:
+                url, de_query, basic = extraer_de_url(url, lambda n, t=nombre: _nombre_secreto(t, n, usados))
+                body, de_body = extraer_de_body(body, lambda r, t=nombre: _nombre_secreto(t, r, usados))
+                for ref, valor in (de_query | de_body).items():
+                    secretos[ref] = SecretStr(valor)
+                if basic is not None:
+                    previo = next((h for h in headers if h.lower() == "authorization"), None)
+                    if previo is not None:
+                        # httpx aplica el userinfo como Basic y pisa el header: queda el del userinfo.
+                        del headers[previo]
+                        avisos.append(
+                            f"extensions.tools '{nombre}': el userinfo de la URL reemplaza al header Authorization"
+                        )
+                    ref = _nombre_secreto(nombre, "authorization", usados)
+                    secretos[ref] = SecretStr(basic)
+                    headers["Authorization"] = {"secret": ref}
+                avisos.append(f"extensions.tools '{nombre}': credenciales de la URL o el body pasan a secretos")
+        if url.startswith("http://") and (
+            any(isinstance(v, dict) for v in headers.values()) or referencias_de_tool({"url": url, "body": body})
+        ):
             # La credencial no viaja en claro (adenda de ADR-0113): misma URL por https.
             url = "https://" + url.removeprefix("http://")
             avisos.append(f"extensions.tools '{nombre}': lleva credenciales por http://, pasa a https://")
@@ -227,10 +258,19 @@ def _declarativas(
                 "allowedDomains": tool["allowed_domains"][:20],
                 "headers": headers,
                 "parameters": tool["parameters"],
-                "body": tool["body"],
+                "body": body,
             }
         )
     return salida, secretos
+
+
+def _sin_refs(valor: Any, nombre: str) -> Any:
+    """Quita del body las claves cuyo valor es la referencia `nombre` (descartadas)."""
+    if isinstance(valor, dict):
+        return {k: _sin_refs(v, nombre) for k, v in valor.items() if v != {"secret": nombre}}
+    if isinstance(valor, list):
+        return [_sin_refs(v, nombre) for v in valor if v != {"secret": nombre}]
+    return valor
 
 
 def _guardrails(raw: Any, existentes: set[str], avisos: list[str]) -> list[dict[str, Any]]:
@@ -570,7 +610,6 @@ async def migrar_secretos(tenant_id: uuid.UUID, conversion: ConversionV3) -> lis
     HU-AOS-13 en ADR-0113). Idempotente: con el mismo valor y los dominios ya cubiertos no
     escribe. Nunca pisa un secreto existente ni le suma dominios solo (`ValueError` sin
     valores). Devuelve avisos (sin valores); hoy siempre vacío."""
-    from agentcore_contracts import SecretRef
 
     from core.agents.secretos import (
         SecretoDeclarativo,
@@ -583,9 +622,8 @@ async def migrar_secretos(tenant_id: uuid.UUID, conversion: ConversionV3) -> lis
 
     dominios: dict[str, set[str]] = {}
     for tool in conversion.general.declarativeTools:
-        for valor in tool.headers.values():
-            if isinstance(valor, SecretRef):
-                dominios.setdefault(valor.secret, set()).update(tool.allowedDomains)
+        for ref in referencias_de_tool(tool):
+            dominios.setdefault(ref, set()).update(tool.allowedDomains)
     avisos: list[str] = []
     a_guardar: dict[str, SecretoDeclarativo] = {}
     for nombre, valor in conversion.secretos.items():

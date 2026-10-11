@@ -430,6 +430,81 @@ async def test_corrida_sobre_todos_los_negocios_no_mezcla_agentes_ni_secretos() 
         assert configurados == {"consultar_envio_authorization": [dominio]}
 
 
+async def test_credenciales_fuera_de_la_lista_url_y_body_pasan_a_la_instalacion_core() -> None:
+    """Decisión del dueño (2026-10-11): un header no listado, el userinfo y la query de la URL y
+    un token del body también se copian a la instalación `core`; ninguna versión ni borrador
+    queda con el literal."""
+    from core.agents.secretos import secretos_configurados
+    from core.gateway.conexion_canonica_backfill import backfill_conexiones
+    from core.shared.tenant import tenant_scope
+
+    tid, _cuenta, _cal = await _negocio_migrable()
+    await backfill_conexiones(dry_run=False, tenant_id=tid)
+    literales = {"goog-literal-1", "clave-userinfo-2", "query-literal-3", "body-literal-4"}
+    tool = _tool({"X-Goog-Api-Key": "goog-literal-1", "Content-Type": "application/json"}) | {
+        "method": "POST",
+        "url": "https://ana:clave-userinfo-2@api.transportadora.co/g/{g}?api_key=query-literal-3&formato=json",
+        "body": {"guia": "{g}", "access_token": "body-literal-4"},
+    }
+    await _poner_tools(tid, [tool])
+    reporte = await _backfill(tid, dry_run=False)
+    assert not reporte.fallo, reporte.errores
+    assert reporte.secretos == {"migrado": 4}
+
+    (contenido,) = (
+        await _sql(
+            tid,
+            "select v.content::text from agent_versions v join agents a on a.id = v.agent_id "
+            "where v.tenant_id = :t and a.key = 'general'",
+            t=tid,
+        )
+    )[0]
+    (t,) = json.loads(contenido)["declarativeTools"]
+    assert t["headers"] == {
+        "X-Goog-Api-Key": {"secret": "consultar_envio_x_goog_api_key"},
+        "Content-Type": "application/json",
+        "Authorization": {"secret": "consultar_envio_authorization"},
+    }
+    assert t["url"] == (
+        "https://api.transportadora.co/g/{g}?api_key={secret:consultar_envio_api_key}&formato=json"
+    )
+    assert t["body"] == {"guia": "{g}", "access_token": {"secret": "consultar_envio_access_token"}}
+    (texto,) = (
+        await _sql(
+            tid,
+            "select coalesce(string_agg(content::text, ''), '') from ("
+            "select content from agent_versions where tenant_id = :t "
+            "union all select content from agent_drafts where tenant_id = :t) x",
+            t=tid,
+        )
+    )[0]
+    assert not any(literal in texto for literal in literales)
+    async with tenant_scope(tid):
+        configurados = await secretos_configurados(tid)
+    assert set(configurados) == {
+        "consultar_envio_x_goog_api_key",
+        "consultar_envio_authorization",
+        "consultar_envio_api_key",
+        "consultar_envio_access_token",
+    }
+    assert all(d == ["api.transportadora.co"] for d in configurados.values())
+
+    # La API de agentes rechaza al guardar un literal nuevo en esos lugares (mismo validador).
+    from core.agents import versiones
+    from core.kernel.procedures import catalogo_de_acciones
+
+    (aid,) = (await _sql(tid, "select id from agents where tenant_id = :t and key = 'general'", t=tid))[0]
+    t["body"]["api_secret"] = "nuevo-literal-5"
+    general = json.loads(contenido) | {"declarativeTools": [t]}
+    async with tenant_scope(tid):
+        with pytest.raises(versiones.ErroresDeContrato) as exc:
+            await versiones.publicar(tid, aid, catalogo=catalogo_de_acciones(_modules()), contenido=general)
+    assert [(i.code, i.path) for i in exc.value.issues] == [
+        ("credencial_literal", "declarativeTools[0].body.api_secret")
+    ]
+    assert "nuevo-literal-5" not in str(exc.value.issues)
+
+
 # ---------------------------------------------------------------- uno y solo uno
 async def test_uno_y_solo_uno_tras_el_backfill() -> None:
     from core.db.session import get_session

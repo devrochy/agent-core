@@ -26,3 +26,13 @@
   posterior de una conexión, la promoción de ADR-0127 §3 y las releases (HU-AOS-14).
 - Lector tolerante: el header sensible de una tool sin `allowed_domains` se descarta con aviso.
   Esa tool hoy no llama a nadie. Adenda de HU-AOS-13 en ADR-0113.
+- **Credenciales fuera de la lista también por referencia** (decisión del dueño 2026-10-11, adenda en
+  ADR-0113). `core/agents/credenciales.py` detecta como sensible un nombre de header, parámetro de
+  query o clave del body con patrón de credencial: `auth`, `token`, `key`, `secret`, `password`,
+  `session`, `cookie`, `signature`, `credential`…. Los ambiguos cuentan como sensibles. El userinfo de
+  la URL también es credencial.
+  - El linter v3 rechaza esos literales (`credencial_literal`, sin el valor).
+  - El lector tolerante y el backfill los mueven a la instalación `core`: el userinfo pasa a
+    `Authorization: Basic`, la query a `{secret:<nombre>}` y el body a `{"secret": ...}`.
+  - El editor de tools declarativas v2 aplica el patrón a los headers.
+  - El loop legacy no cambia. Las referencias de URL y body las resolverá el runtime v3.

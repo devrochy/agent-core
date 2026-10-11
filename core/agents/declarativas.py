@@ -24,9 +24,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from agentcore_contracts import SENSITIVE_HEADERS, DeclarativeTool
+from agentcore_contracts import DeclarativeTool
 from pydantic import SecretStr, ValidationError
 
+from core.agents.credenciales import es_sensible
 from core.agents.secretos import SECRET_NAME_RE, SecretoDeclarativo
 from core.mcp.declarative import rejected_domains, secret_ref, validate_declarative_tools
 
@@ -36,7 +37,8 @@ _SECRET_UNSAFE_RE = re.compile(r"[^a-z0-9_]+")
 
 
 def _sensible(header: str) -> bool:
-    return header.lower() in SENSITIVE_HEADERS
+    # La lista del contrato más el patrón amplio (decisión del dueño 2026-10-11).
+    return es_sensible(header)
 
 
 def enmascarar(tools: Any) -> list[dict[str, Any]]:

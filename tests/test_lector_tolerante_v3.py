@@ -157,15 +157,66 @@ def test_el_negocio_de_la_fila_gana_sobre_el_tenant_id_del_json(catalogo) -> Non
     assert any("distinto del negocio de la fila" in a for a in c.avisos)
 
 
-def test_header_con_pinta_de_credencial_avisa_sin_valor(catalogo) -> None:
+def test_header_con_pinta_de_credencial_tambien_pasa_a_secreto(catalogo) -> None:
+    """Decisión del dueño (2026-10-11): fuera de la lista del contrato, un header con nombre de
+    credencial también pasa a secreto; los demás quedan literales."""
     raw = v2_completo()
     raw["extensions"]["tools"][0]["headers"]["X-Client-Secret"] = "tok-literal-123"
     raw["extensions"]["tools"][0]["headers"]["X-Auth-Token"] = "tok-movido-456"
+    raw["extensions"]["tools"][0]["headers"]["X-Request-Id"] = "fijo"
     c, _, _ = convertir(raw, catalogo)
-    # X-Auth-Token es sensible (adenda): se mueve a secreto; X-Client-Secret solo avisa.
     assert c.secretos["consultar_envio_x_auth_token"].get_secret_value() == "tok-movido-456"
-    aviso = next(a for a in c.avisos if "X-Client-Secret" in a)
-    assert "tok-literal-123" not in aviso
+    assert c.secretos["consultar_envio_x_client_secret"].get_secret_value() == "tok-literal-123"
+    headers = c.general.declarativeTools[0].headers
+    assert headers["X-Client-Secret"] == SecretRef(secret="consultar_envio_x_client_secret")
+    assert headers["X-Request-Id"] == "fijo" and headers["X-Cliente"] == "solvershub"
+    assert all("tok-" not in a for a in c.avisos)
+    assert revisar_spec(c.general.model_dump(mode="json", by_alias=True), catalogo) == []
+
+
+def test_credenciales_de_la_url_y_el_body_pasan_a_secretos(catalogo) -> None:
+    raw = v2_completo()
+    tool = raw["extensions"]["tools"][0]
+    tool["url"] = "https://user:p%40ss@api.transportadora.co/v1/guias/{guia}?api_key=k%2B1&formato=json&q={q}"
+    tool["headers"] = {"X-Cliente": "solvershub"}
+    tool["method"] = "POST"
+    tool["body"] = {"guia": "{guia}", "auth": {"usuario": "u", "password": "clave-body"}, "access_token": "tok-body"}
+    c, _, _ = convertir(raw, catalogo)
+    t = c.general.declarativeTools[0]
+    assert t.url == (
+        "https://api.transportadora.co/v1/guias/{guia}?api_key={secret:consultar_envio_api_key}&formato=json&q={q}"
+    )
+    assert t.headers["Authorization"] == SecretRef(secret="consultar_envio_authorization")
+    assert t.body == {
+        "guia": "{guia}",
+        "auth": {"usuario": "u", "password": {"secret": "consultar_envio_auth_password"}},
+        "access_token": {"secret": "consultar_envio_access_token"},
+    }
+    valores = {k: v.get_secret_value() for k, v in c.secretos.items()}
+    assert valores == {
+        "consultar_envio_api_key": "k%2B1",  # tal como estaba escrito en la query
+        "consultar_envio_auth_password": "clave-body",
+        "consultar_envio_access_token": "tok-body",
+        # Lo que httpx manda por el userinfo `user:p@ss`.
+        "consultar_envio_authorization": "Basic dXNlcjpwQHNz",
+    }
+    dump = c.general.model_dump_json()
+    assert "clave-body" not in dump and "tok-body" not in dump and "k%2B1" not in dump and "p%40ss" not in dump
+    assert revisar_spec(c.general.model_dump(mode="json", by_alias=True), catalogo) == []
+
+
+def test_credenciales_de_url_y_body_sin_dominios_se_descartan(catalogo) -> None:
+    raw = v2_completo()
+    tool = raw["extensions"]["tools"][0]
+    tool["allowed_domains"] = []
+    tool["url"] = "https://u:p@api.transportadora.co/x?token=abc&q={q}"
+    tool["body"] = {"secret_key": "zzz", "n": 1}
+    c, _, _ = convertir(raw, catalogo)
+    t = c.general.declarativeTools[0]
+    assert c.secretos == {}
+    assert t.url == "https://api.transportadora.co/x?token=&q={q}"
+    assert t.body == {"n": 1}
+    assert "zzz" not in c.general.model_dump_json()
 
 
 def test_ningun_campo_v2_queda_sin_destino() -> None:

@@ -7,7 +7,8 @@ borrador o publicar una versión: un AgentSpec o KernelSpec inválido no se guar
   Elige el contrato por el campo `contract` (o por `esperado`, el que exige la fila del agente).
 - `lint_agentspec(spec, catalogo)`: lo que la forma no ve: acciones que el binario no trae,
   declarativas que chocan con una acción del binario (quedarían sombreadas, ADR-0052),
-  dominios que no son FQDN públicos (anti-SSRF), duplicados y referencias rotas.
+  dominios que no son FQDN públicos (anti-SSRF), duplicados, referencias rotas y
+  credenciales literales en headers, URL o body (`core.agents.credenciales`).
 - `lint_kernelspec(spec)`: ids de reglas repetidos y franjas vacías.
 - `revisar_spec(raw, catalogo)`: las dos cosas. Lista vacía = sin problemas.
 
@@ -24,6 +25,7 @@ from typing import Any, Literal
 from agentcore_contracts import AgentSpecV3, KernelSpec
 from pydantic import ValidationError
 
+from core.agents.credenciales import credenciales_literales, referencias_de_tool
 from core.kernel.procedures.catalogo import Catalogo
 from core.kernel.procedures.linter import Issue, _mensaje, _ruta, con_tope
 from core.mcp.types import public_fqdn
@@ -137,6 +139,27 @@ def lint_agentspec(spec: AgentSpecV3, catalogo: Catalogo) -> list[Issue]:
                     "declarativa_sombreada",
                     f"declarativeTools[{i}].name",
                     f"'{tool.name}' es una acción del binario: la declarativa nunca correría. Usa otro nombre.",
+                )
+            )
+        # Credenciales literales fuera de la lista del contrato (decisión del dueño 2026-10-11,
+        # adenda de HU-AOS-13 en ADR-0113): headers, URL y body, siempre por referencia.
+        crudo = tool.model_dump(mode="json", by_alias=True)
+        for ruta in credenciales_literales(crudo):
+            issues.append(
+                Issue(
+                    "credencial_literal",
+                    f"declarativeTools[{i}].{ruta}",
+                    "Las credenciales no admiten valores literales: en un header o el body usa "
+                    '{"secret": "<nombre>"} y en la query de la URL {secret:<nombre>}; el userinfo '
+                    "(usuario:clave@) va como header Authorization por referencia.",
+                )
+            )
+        if tool.url.startswith("http://") and referencias_de_tool(crudo):
+            issues.append(
+                Issue(
+                    "secreto_sin_https",
+                    f"declarativeTools[{i}].url",
+                    "Una tool con secretos solo llama por https://: la credencial no viaja en claro.",
                 )
             )
         for j, dominio in enumerate(tool.allowedDomains):

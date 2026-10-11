@@ -114,8 +114,27 @@ Los textos del clasificador y del compositor viven en playbooks del core (invari
   - Solo admiten `{"secret": "<nombre>"}`, con nombre `^[a-z0-9_]{1,60}$`.
   - Una tool con secretos solo llama por `https://`.
   - Ningún valor de header lleva CR, LF ni NUL.
-  - El rechazo vive en el propio contrato. Los demás headers con pinta de credencial dejan un aviso del lector tolerante.
-  - Limitación conocida: un secreto en la URL o en el `body` no está cubierto.
+  - El rechazo de esa lista vive en el propio contrato.
+  - ~~Los demás headers con pinta de credencial dejan un aviso del lector tolerante. Limitación conocida: un secreto en la URL o en el `body` no está cubierto.~~ Reemplazado por la regla ampliada de abajo (decisión del dueño 2026-10-11).
+- **Regla ampliada de credenciales (decisión del dueño, 2026-10-11, opción A).** Toda credencial de una tool declarativa se declara por referencia, no solo la de la lista. Su valor vive cifrado en la instalación `core`, atado a los dominios de la tool.
+  - **Qué nombre es sensible** (`core/agents/credenciales.py::es_sensible`), sin distinguir mayúsculas: los de la lista del contrato y todo nombre con una palabra (separada por guiones, `_`, puntos o camelCase) que:
+    - empieza por `auth`, `token`, `secret`, `passw`, `session`, `cookie`, `signature`, `credential` o `bearer`;
+    - termina en `key`, `token`, `secret`, `password`, `passwd`, `pwd`, `cookie`, `auth` o `session`;
+    - o es `key`, `pass`, `pw`, `pwd`, `sig` o `jwt`.
+  - **Los ambiguos cuentan como sensibles** (`Idempotency-Key`, `Author`, `token_type`). No lo son `Content-Type`, `Accept`, `X-Request-Id`, `User-Agent` ni `keyword`.
+  - **Dónde se busca:**
+    - en los **headers**, con `{"secret": "<nombre>"}`;
+    - en la **query** de la URL, donde el parámetro sensible lleva `{secret:<nombre>}` en su valor, guardado tal como estaba escrito;
+    - en el **userinfo** de la URL (`usuario:clave@`), que no se admite y pasa a `Authorization: Basic` por referencia (lo mismo que hace httpx);
+    - en las claves sensibles del **body**, a cualquier profundidad, con `{"secret": "<nombre>"}`.
+  - **Qué es literal:** un texto no vacío sin `{argumento}` ni referencia. Los números y booleanos no cuentan, porque pasarlos a un secreto (texto) cambiaría el tipo del JSON.
+  - **Validación:** el linter v3 (`contrato_v3.lint_agentspec`: CLI, CI y API al guardar o publicar) rechaza el literal (`credencial_literal`, la ruta sin el valor) y exige `https://` a una tool con secretos en la URL o el body (`secreto_sin_https`).
+  - **Migración:** el lector tolerante y el backfill mueven estas credenciales a la instalación `core`. Ninguna versión ni borrador queda con el literal. Una tool sin `allowedDomains` las pierde con aviso, porque hoy no llama a nadie.
+  - El editor de tools declarativas v2 aplica el patrón ampliado a los headers.
+  - **Sin cambio de conducta:** el contrato `agentcore-contracts` no cambia, y el loop legacy sigue con los literales del AgentSpec v2. Resolver las referencias de la URL y el body al ejecutar queda para el runtime v3 (HU-AOS-14/15). En `core/mcp/declarative.py` hoy solo se resuelven las de los headers.
+  - **Límites conocidos:**
+    - un secreto en la ruta de la URL o bajo una clave de nombre neutro no se detecta;
+    - un body v2 con un objeto `{"secret": "x"}` se toma como referencia.
 - **`guardrails[]`:** la forma que hoy normaliza `validate_custom_rules`, es decir `{name, kind, action, phrases?, tool?, value?}`.
 - **`declarativeTools[]`:** `{name, description, method, url, allowedDomains, headers, parameters, body}`. Es la forma de ADR-0052 con `allowed_domains` en camelCase.
 - **KernelSpec:** reglas de enrutamiento con al menos una condición y exactamente un destino (`agent` o `start`). `withinHours` se escribe `{"from": "HH:MM", "to": "HH:MM"}`, en la zona del negocio, y cruza la medianoche si `from` > `to`. Ningún default es un id de modelo: `coprocessor.model` y `modelPolicy.highRiskStage.model` en `null` heredan el del agente (ADR-0086).
