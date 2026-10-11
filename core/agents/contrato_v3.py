@@ -7,7 +7,8 @@ borrador o publicar una versión: un AgentSpec o KernelSpec inválido no se guar
   Elige el contrato por el campo `contract` (o por `esperado`, el que exige la fila del agente).
 - `lint_agentspec(spec, catalogo)`: lo que la forma no ve: acciones que el binario no trae,
   declarativas que chocan con una acción del binario (quedarían sombreadas, ADR-0052),
-  dominios que no son FQDN públicos (anti-SSRF), duplicados y referencias rotas.
+  dominios que no son FQDN públicos (anti-SSRF), duplicados, referencias rotas y
+  credenciales literales en headers, URL o body (`core.agents.credenciales`).
 - `lint_kernelspec(spec)`: ids de reglas repetidos y franjas vacías.
 - `revisar_spec(raw, catalogo)`: las dos cosas. Lista vacía = sin problemas.
 
@@ -24,6 +25,7 @@ from typing import Any, Literal
 from agentcore_contracts import AgentSpecV3, KernelSpec
 from pydantic import ValidationError
 
+from core.agents.credenciales import problemas_de_tool, referencias_de_tool
 from core.kernel.procedures.catalogo import Catalogo
 from core.kernel.procedures.linter import Issue, _mensaje, _ruta, con_tope
 from core.mcp.types import public_fqdn
@@ -111,6 +113,24 @@ def _repetidos(nombres: list[str]) -> list[str]:
     return sorted(n for n, veces in Counter(nombres).items() if veces > 1)
 
 
+_MENSAJES_CREDENCIAL = {
+    "credencial_literal": (
+        "Las credenciales no admiten valores literales: en un header o el body usa "
+        '{"secret": "<nombre>"} y en la query de la URL {secret:<nombre>} como valor completo; el '
+        "userinfo (usuario:clave@) va como header Authorization por referencia, y el schema de "
+        "parameters ni el fragmento de la URL llevan credenciales."
+    ),
+    "credencial_mixta": (
+        "Esta credencial mezcla texto fijo con argumentos: pon el texto fijo en un secreto y "
+        "declara el valor completo por referencia."
+    ),
+    "referencia_mal_ubicada": (
+        "{secret:<nombre>} solo vale como valor completo de un parámetro de query; en headers y "
+        'body la referencia es {"secret": "<nombre>"}.'
+    ),
+}
+
+
 def lint_agentspec(spec: AgentSpecV3, catalogo: Catalogo) -> list[Issue]:
     """Problemas del AgentSpec v3 contra el catálogo de acciones del binario."""
     issues: list[Issue] = []
@@ -139,6 +159,19 @@ def lint_agentspec(spec: AgentSpecV3, catalogo: Catalogo) -> list[Issue]:
                     f"'{tool.name}' es una acción del binario: la declarativa nunca correría. Usa otro nombre.",
                 )
             )
+        # Credenciales literales fuera de la lista del contrato (decisión del dueño 2026-10-11,
+        # adenda de HU-AOS-13 en ADR-0113): headers, URL y body, siempre por referencia.
+        crudo = tool.model_dump(mode="json", by_alias=True)
+        for ruta, codigo in problemas_de_tool(crudo):
+            issues.append(Issue(codigo, f"declarativeTools[{i}].{ruta}", _MENSAJES_CREDENCIAL[codigo]))
+        if tool.url.startswith("http://") and referencias_de_tool(crudo):
+            issues.append(
+                Issue(
+                    "secreto_sin_https",
+                    f"declarativeTools[{i}].url",
+                    "Una tool con secretos solo llama por https://: la credencial no viaja en claro.",
+                )
+            )
         for j, dominio in enumerate(tool.allowedDomains):
             if public_fqdn(dominio) is None:
                 issues.append(
@@ -156,6 +189,17 @@ def lint_agentspec(spec: AgentSpecV3, catalogo: Catalogo) -> list[Issue]:
                     "accion_inexistente",
                     f"guardrails[{i}].tool",
                     f"La acción '{regla.tool}' no existe en el binario ni entre las tools declarativas.",
+                )
+            )
+
+    for clave in ("tools", "guardrails"):
+        if clave in spec.extensions:
+            # Forma v2 sin validar (podría llevar literales): en v3 son campos de primer nivel.
+            issues.append(
+                Issue(
+                    "extension_reservada",
+                    f"extensions.{clave}",
+                    f"`extensions.{clave}` es de v2: en v3 usa `{'declarativeTools' if clave == 'tools' else clave}`.",
                 )
             )
 

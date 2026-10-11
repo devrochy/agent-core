@@ -16,6 +16,7 @@ from core.api.routers import (
     audit,
     auth,
     collaborators,
+    connection_agents,
     connections,
     conversation_tasks,
     conversations,
@@ -68,6 +69,7 @@ api_router.include_router(plugins.router)
 api_router.include_router(procedures.router)
 api_router.include_router(agents.router)
 api_router.include_router(connections.router)
+api_router.include_router(connection_agents.router)
 api_router.include_router(meta_ops.router)
 api_router.include_router(meta_wizard.router)
 api_router.include_router(meta_promocion.router)

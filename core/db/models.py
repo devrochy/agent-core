@@ -1876,6 +1876,29 @@ class AgentVersionRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class AgentInstanceRecord(Base):
+    """Instancia de un agente en una conexión conversacional (ADR-0112 §1, HU-AOS-13).
+
+    Una `core` (el Coordinador, índice único parcial) y N especialistas, uno por defecto.
+    `agent_instance_checks()` (0069) rechaza conexiones que no son conversacionales y que
+    cambien negocio, conexión, agente o rol; el rol coincide con el `kind` del agente por FK."""
+
+    __tablename__ = "agent_instances"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)  # core | specialist | backoffice
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    priority: Mapped[int] = mapped_column(SmallInteger, default=100, server_default="100")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    overrides: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class PackInstallationRecord(Base):
     """Habilidad instalada con scope (ADR-0118 §2). En esta HU solo se usa la instalación
     `core` de scope negocio, que guarda los secretos de las `declarativeTools` (ADR-0118 §5):
