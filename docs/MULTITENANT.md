@@ -157,7 +157,10 @@ alerta `critical`, `purge_tenant` devuelve `False`, la CLI sale con código 2 y 
 SSR muestra un aviso (la API sigue respondiendo 204). El reintento idempotente es
 `agent-core tenant purge-redis <tenant_id>` (solo UUID): se niega si el negocio todavía
 existe o si el UUID aparece en Redis como id de un hijo de otro negocio (error de copiar
-y pegar el id de una conversación, conexión o mensaje).
+y pegar el id de una conversación, conexión o mensaje). El alta automática (ADR-0121) da a
+cada negocio un id determinista: antes de crearlo, la misma limpieza borra lo que haya
+quedado con ese id, así un negocio purgado y vuelto a crear por un reintento del alta no
+hereda esas claves (no cubre los streams, ver abajo).
 
 La limpieza borra las claves por conversación (ids leídos antes de purgar) y hace
 `SCAN MATCH *<tenant_id>*` + `UNLINK` de las claves que llevan el UUID **en posición de

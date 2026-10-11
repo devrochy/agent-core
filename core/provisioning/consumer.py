@@ -13,7 +13,8 @@ del negocio VENDEDOR. Pasos:
    aprobó una persona (`aprobar_alta`) los salta. Un Free solo una vez por cliente y por
    correo (ADR-0121).
 6. Negocio con id y slug deterministas (`onboard_tenant`), período pagado (`core/billing`)
-   y preset del vertical.
+   y preset del vertical. Antes de crearlo se borra el estado Redis que haya quedado con
+   ese id (un negocio anterior de la misma alta, purgado sin limpiar Redis).
 7. Owner: cuenta, invitación y correo con el enlace (solo si la cuenta la creó esta alta);
    por WhatsApp, un aviso neutro sin token.
 8. Cierre: fila `completado` y `audit_log` en los dos negocios con actor `provisioning`.
@@ -25,6 +26,7 @@ la reintenta o la descarta (`agent-core tenant reintentar-alta | descartar-alta`
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 import time
@@ -76,6 +78,8 @@ _ESPACIOS = re.compile(r"\s+")
 _NO_SLUG = re.compile(r"[^a-z0-9]+")
 _MAX_NOMBRE = 80
 _CORREO_RESUELTO = frozenset({"enviado", "sin_smtp"})
+# Tope de la limpieza del estado Redis previo al crear el negocio (un SCAN de todo Redis).
+_LIMPIEZA_REDIS_S = 30.0
 
 
 # ------------------------------------------------------------------ piezas puras
@@ -508,6 +512,7 @@ async def _dar_de_alta(
 
     tenant_id = id_del_negocio(vendedor, registro.referencia)
     slug = await _slug_propio(negocio, vendedor, registro.referencia, tenant_id)
+    await _sin_estado_heredado(vendedor, registro, tenant_id)
     creado, pasos = await onboard_tenant(name=negocio, slug=slug, tenant_id=tenant_id, language="es")
     if creado != tenant_id:  # pragma: no cover - `_slug_propio` ya lo descartó
         raise AltaEnRevision(f"el slug {slug} quedó asociado a otro negocio")
@@ -576,6 +581,45 @@ async def _slug_propio(
     if ajeno is not None:
         raise AltaEnRevision(f"el slug {slug} ya es de otro negocio")
     return slug
+
+
+async def _sin_estado_heredado(
+    vendedor: uuid.UUID, registro: ProvisioningRequest, tenant_id: uuid.UUID
+) -> None:
+    """Antes de crear el negocio, borra el estado Redis que haya quedado con su id.
+
+    El id es determinista: si un negocio de esta misma alta se purgó y su Redis no se
+    limpió (`tenant_purge_redis_cleanup_failed`), el que se crea ahora heredaría esas claves
+    (memoria de trabajo, pausas, marcadores…). Solo cuando el negocio todavía no existe: en
+    un reintento sobre uno ya creado, su estado es suyo. Falla cerrado: sin Redis no se crea.
+    """
+    from core.tenants import limpiar_redis_antes_del_alta
+
+    async with get_session() as session:
+        if await session.get(Tenant, tenant_id) is not None:
+            return
+    try:
+        # Con tope: un Redis colgado no deja el candado y la sesión tomados para siempre.
+        borradas = await asyncio.wait_for(limpiar_redis_antes_del_alta(tenant_id), _LIMPIEZA_REDIS_S)
+    except Exception as exc:
+        log.warning(
+            "provisioning_redis_heredado_fallido",
+            tenant_id=str(vendedor),
+            referencia=registro.referencia,
+            negocio_tenant_id=str(tenant_id),
+            exc_info=True,
+        )
+        raise AltaTransitoria(
+            f"no se pudo limpiar el estado Redis previo del negocio ({type(exc).__name__})"
+        ) from exc
+    if borradas:
+        log.warning(
+            "provisioning_redis_heredado_limpiado",
+            tenant_id=str(vendedor),
+            referencia=registro.referencia,
+            negocio_tenant_id=str(tenant_id),
+            claves=borradas,
+        )
 
 
 def periodo_del_vendedor(slug: str, periodo: Mapping[str, Any], *, now: datetime | None = None) -> Periodo:

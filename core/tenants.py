@@ -247,6 +247,15 @@ async def _limpiar_redis(
     return borradas
 
 
+async def _limpiar_redis_de_inexistente(tid: uuid.UUID, *, reintento: bool) -> int:
+    if await _resolve_tenant_if_exists(tid) is not None:
+        raise ValueError(
+            f"El negocio {tid} todavía existe: este comando solo limpia Redis de un negocio "
+            "ya purgado (usa `agent-core tenant purge`)."
+        )
+    return await _limpiar_redis(tid, [], reintento=reintento)
+
+
 async def purge_tenant_redis(tenant_id: uuid.UUID | str) -> int:
     """Reintento: limpia el estado Redis de un tenant YA purgado. Idempotente.
 
@@ -259,14 +268,22 @@ async def purge_tenant_redis(tenant_id: uuid.UUID | str) -> int:
     solas (debounce 5 min, `wm:{conv}` 24 h). Devuelve cuántas claves borró.
     """
     tid = uuid.UUID(str(tenant_id))  # normaliza (MATCH distingue mayúsculas)
-    if await _resolve_tenant_if_exists(tid) is not None:
-        raise ValueError(
-            f"El negocio {tid} todavía existe: este comando solo limpia Redis de un negocio "
-            "ya purgado (usa `agent-core tenant purge`)."
-        )
-    borradas = await _limpiar_redis(tid, [], reintento=True)
+    borradas = await _limpiar_redis_de_inexistente(tid, reintento=True)
     log.info("tenant_purge_redis_retry_done", tenant_id=str(tid), keys_deleted=borradas)
     return borradas
+
+
+async def limpiar_redis_antes_del_alta(tenant_id: uuid.UUID) -> int:
+    """Borra el estado Redis que haya quedado con el id de un negocio que aún NO existe.
+
+    Para el alta automática (ADR-0121), cuyo id es determinista: un negocio anterior de la
+    misma alta, purgado sin limpiar Redis, dejaría claves que el nuevo heredaría. Es la
+    limpieza de `purge_tenant_redis`, sin su negativa por el UUID en otra posición: esa
+    detecta un id pegado por una persona, y este lo calcula el core (esas claves son de
+    otros negocios y no se tocan). SOLO para ids que calcula el core, nunca uno que llegue
+    de una persona o de la API. `ValueError` si el negocio existe.
+    """
+    return await _limpiar_redis_de_inexistente(tenant_id, reintento=False)
 
 
 async def purge_tenant(ref: str, confirm_phrase: str) -> bool:

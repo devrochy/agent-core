@@ -58,6 +58,13 @@ Vuelve a correr el alta desde el principio y retoma el mismo negocio, porque el 
 deterministas: no crea otro. El reintento queda en `audit_log` (`aprovisionamiento_reintentado`, actor
 `cli`). Si el problema sigue, el alta vuelve a revisión con el motivo nuevo.
 
+Si el negocio de esa alta se purgó, el reintento lo vuelve a crear con el mismo id. Antes de crearlo
+borra el estado Redis que haya quedado con ese id (una purga cuya limpieza de Redis falló): no hace falta
+correr `agent-core tenant purge-redis` primero. Si Redis no responde, el negocio no se crea y el alta
+vuelve a revisión con el motivo «no se pudo limpiar el estado Redis previo del negocio». No reintentes
+mientras la purga del negocio está corriendo: su limpieza de Redis podría borrar claves del negocio que el
+reintento acaba de crear.
+
 ## 3.b Aprobar (HU-SH-07)
 
 ```bash
