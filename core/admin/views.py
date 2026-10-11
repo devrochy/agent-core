@@ -1911,13 +1911,13 @@ async def connection_new(request: Request):
             )
         from core.db.models import ChannelConnection
         from core.db.session import get_owned, get_session
-        from core.gateway.connections import credentials_of
+        from core.gateway.connections import administrada_aparte, credentials_of
 
         async with get_session() as session:
             connection = await get_owned(
                 session, ChannelConnection, connection_uuid, get_current_tenant_id()
             )
-        if connection is None or connection.meta_connection_id is not None:  # canónica de Meta (ADR-0115)
+        if connection is None or administrada_aparte(connection):  # canónica de Meta o chat web (ADR-0115)
             return RedirectResponse(
                 "/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303
             )
@@ -1979,13 +1979,13 @@ async def connection_new_save(request: Request):
             )
         from core.db.models import ChannelConnection
         from core.db.session import get_owned, get_session
-        from core.gateway.connections import credentials_of
+        from core.gateway.connections import administrada_aparte, credentials_of
 
         async with get_session() as session:
             existing = await get_owned(
                 session, ChannelConnection, connection_uuid, get_current_tenant_id()
             )
-        if existing is None or existing.meta_connection_id is not None:  # canónica de Meta (ADR-0115)
+        if existing is None or administrada_aparte(existing):  # canónica de Meta o chat web (ADR-0115)
             return RedirectResponse(
                 "/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303
             )

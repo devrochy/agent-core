@@ -5,9 +5,10 @@ Una conexión vive en `channel_connections` con sus credenciales cifradas
 .env (el caso "recién instalado, sin configurar en el panel").
 
 Las filas con `meta_connection_id` son la conexión canónica de un número de Meta
-(ADR-0115): no tienen credenciales propias y las administra el alta de Meta. Este módulo
-es el de las conexiones MANUALES, así que no las lista, no las resuelve y no las edita
-(`ES_MANUAL`).
+(ADR-0115): no tienen credenciales propias y las administra el alta de Meta. Las de tipo
+`webchat` son el widget de chat web y las administra Configuración → Chat web
+(`chat_web_conexion`). Este módulo es el de las conexiones MANUALES, así que no lista, no
+resuelve y no edita ninguna de las dos (`ES_MANUAL`, `administrada_aparte`).
 """
 
 from __future__ import annotations
@@ -15,13 +16,14 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 
 from core.config import get_settings
 from core.db.models import ChannelConnection, utcnow
 from core.db.session import get_session
 from core.gateway.connection_types import (
     CATEGORY_COMMUNICATION,
+    WEBCHAT,
     WHATSAPP_META,
     external_id_for,
     get_connection_type,
@@ -30,8 +32,19 @@ from core.gateway.connection_types import (
 from core.shared.crypto import get_secret_box
 from core.shared.tenant import get_current_tenant_id
 
-# Conexión sin cuenta de Meta: manual, `waweb`, correo, calendario (ADR-0115).
-ES_MANUAL = ChannelConnection.meta_connection_id.is_(None)
+# Conexión sin cuenta de Meta y que no es el chat web: manual, `waweb`, correo, calendario
+# (ADR-0115). `type_id` NULL (filas legacy) cuenta como manual.
+ES_MANUAL = and_(
+    ChannelConnection.meta_connection_id.is_(None),
+    or_(ChannelConnection.type_id.is_(None), ChannelConnection.type_id != WEBCHAT),
+)
+
+
+def administrada_aparte(connection: ChannelConnection) -> bool:
+    """La conexión no es manual: la canónica de un número de Meta (la administra su cuenta) o
+    el chat web (Configuración → Chat web). La API y el panel de conexiones manuales responden
+    404 para ellas."""
+    return connection.meta_connection_id is not None or connection.type_id == WEBCHAT
 
 
 async def list_connections() -> list[ChannelConnection]:
@@ -256,6 +269,10 @@ async def save_connection(
     ctype = get_connection_type(type_id)
     if ctype is None:
         raise ValueError(f"Tipo de conexión desconocido: {type_id}")
+    if type_id == WEBCHAT:
+        # El chat web no es una conexión manual: lo crea Configuración → Chat web con su clave
+        # generada por el servidor (`chat_web_conexion`, ADR-0115 §4).
+        raise ValueError("El chat web se configura en Configuración → Chat web.")
 
     box = get_secret_box()
     tid = get_current_tenant_id()
@@ -265,7 +282,7 @@ async def save_connection(
         connection: ChannelConnection | None = None
         if connection_id is not None:
             connection = await session.get(ChannelConnection, connection_id)
-            if connection is None or connection.meta_connection_id is not None:
+            if connection is None or administrada_aparte(connection):
                 raise ValueError("La conexión no existe")
             if connection.tenant_id != tid:
                 raise ValueError("La conexión no pertenece a este tenant")
@@ -330,9 +347,10 @@ async def save_connection(
                     .limit(1)
                 )
             ).scalars().first()
-            if existing is not None and existing.meta_connection_id is not None:
+            if existing is not None and administrada_aparte(existing):
                 existing = None  # una canónica borrada no se convierte en manual
             if existing is not None:
+                revivida = existing.deleted_at is not None
                 existing.label = label
                 existing.type_id = type_id
                 existing.category = ctype.category
@@ -340,6 +358,9 @@ async def save_connection(
                 existing.credentials_encrypted = encrypted
                 existing.active = True
                 existing.deleted_at = None  # re-agregar des-elimina (invariante #8)
+                if revivida and ctype.produces_conversations:
+                    await session.flush()
+                    await _instancias_de_la_nueva(session, tid, existing.id)
                 return existing, False
             connection = ChannelConnection(
                 tenant_id=tid,
@@ -374,13 +395,23 @@ async def save_connection(
             ).scalar() or 0
             if count_active <= 1:
                 connection.is_primary = True
+        if created and ctype.produces_conversations:
+            await _instancias_de_la_nueva(session, tid, connection.id)
         return connection, created
+
+
+async def _instancias_de_la_nueva(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID) -> None:
+    """Coordinador y General de una conexión conversacional nueva o revivida, si el negocio ya
+    tiene sus agentes (HU-AOS-13; en un SAVEPOINT: un error no tumba el alta)."""
+    from core.agents.instancias import instancias_de_conexion_nueva
+
+    await instancias_de_conexion_nueva(session, tenant_id, connection_id)
 
 
 async def set_active(connection_id: uuid.UUID, active: bool) -> None:
     async with get_session() as session:
         connection = await session.get(ChannelConnection, connection_id)
-        if connection is None or connection.meta_connection_id is not None:
+        if connection is None or administrada_aparte(connection):
             return
         connection.active = active
         if not active:
@@ -390,7 +421,7 @@ async def set_active(connection_id: uuid.UUID, active: bool) -> None:
 async def set_primary(connection_id: uuid.UUID) -> None:
     async with get_session() as session:
         target = await session.get(ChannelConnection, connection_id)
-        if target is None or target.meta_connection_id is not None:
+        if target is None or administrada_aparte(target):
             return
         # Solo se reasigna la primacía dentro de la misma categoría (ADR-0069) y
         # del mismo tenant; las filas legacy sin `category` cuentan como mensajería.
@@ -415,7 +446,7 @@ async def delete_connection(connection_id: uuid.UUID) -> None:
     """Borra (soft-delete) una conexión — invariante #8: sin borrado físico."""
     async with get_session() as session:
         connection = await session.get(ChannelConnection, connection_id)
-        if connection is not None and connection.meta_connection_id is None:
+        if connection is not None and not administrada_aparte(connection):
             connection.deleted_at = utcnow()
             connection.active = False
 
