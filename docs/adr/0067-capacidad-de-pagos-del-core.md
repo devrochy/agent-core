@@ -68,3 +68,48 @@ o que Wompi incorpore métodos que exijan parámetros por método.
 - `packages/pack-cobranza/pack_cobranza/pagos.py` (nuevo), `config.py`, `models.py`,
   migración `0011`, `api_gestor.py`, `module.py`.
 - `solvershub-apk`: tipos, API y acción "Cobro con QR" en el detalle de cuota.
+
+## Adenda (2026-10-10): el link vencido se reemplaza y el rechazo trae un código
+
+Revisada por el agente `arquitecto` antes de escribir código.
+
+**Hallazgo.** Al retirar `generar_link_pago` (adenda de ADR-0087), el vencimiento y el reemplazo
+del link quedaron en la tool. `WompiPaymentCapability.create_link`, el camino de
+`confirmar_pago_pedido`, de cobranza y de suscripciones, devolvía el link `pendiente` aunque ya
+hubiera vencido. Además, todo `PaymentCapabilityError` era igual para el consumidor. Commerce
+contestaba `monto_bajo_minimo` también a un pedido ya pagado o sin pasarela configurada.
+
+**Decisión:**
+1. **`create_link` no devuelve un link vencido.** El link vence a las `created_at +
+   link_expira_horas`, con 15 min de margen. Se calcula con la vigencia configurada hoy, no con la
+   que había al crear el link: si el negocio la cambia, durante esa ventana un link puede contarse
+   como vigente cuando Wompi ya lo expiró, o al revés. Un link vencido se reemplaza por uno nuevo,
+   también si era por otro monto (el saldo de una cuota después de un abono). La transacción vieja
+   queda con `deleted_at` (y `expirado` si estaba pendiente) para auditoría y para el webhook
+   tardío. El `update` exige que siga como se leyó; si otra llamada o un webhook la cambió, se
+   relee y se decide de nuevo. El link nuevo de Wompi queda sin usar y vence solo. Dos primeras
+   llamadas a la vez chocan con el índice único parcial (`pack_payments_0003`) y la segunda
+   devuelve el link de la primera. El Protocol `PaymentCapability` y `PaymentLink` no cambian.
+2. **Código en el rechazo.** `PaymentCapabilityError` ya admitía `code` (por `BusinessError`,
+   ADR-0088). `core/payments` publica el vocabulario y el consumidor ramifica por él sin importar
+   el pack de pagos (invariante nº5):
+
+   | Código | Cuándo |
+   |---|---|
+   | `monto_bajo_minimo` | La pasarela no cobra un monto tan bajo |
+   | `sin_pasarela` | El negocio no configuró la pasarela |
+   | `ya_pagado` | La referencia tiene un pago aprobado (en cualquier transacción, también una reemplazada) |
+   | `en_revision` | Llegó un pago por otro monto y lo revisa el negocio |
+   | `monto_no_coincide` | La referencia tiene un link **vigente** por otro monto |
+   | `no_disponible` | La pasarela rechazó o falló al crear el link (también 401 y 5xx: se loguea como error) |
+
+   Sin código, el consumidor no supone el motivo.
+3. **Commerce** (`confirmar_pago_pedido`) contesta según el código: `monto_bajo_minimo` igual que
+   antes (ADR-0087 §4); `ya_pagado` sin ofrecer otro medio de pago; `en_revision` y
+   `monto_no_coincide` con `escalate`, que el core aplica sin depender del modelo; el resto como
+   pago en línea no disponible por ahora.
+
+**Seguimiento (fuera de esta adenda).** Cobranza y suscripciones siguen tratando todo rechazo como
+`monto_bajo_minimo`. Suscripciones devuelve `cargo.link_url` guardado sin llamar a `create_link`
+(`_link_de_cargo`, `sub_link_pago`), así que todavía puede entregar un link vencido. Como
+`create_link` es idempotente, basta con quitar ese atajo.

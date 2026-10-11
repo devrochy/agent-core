@@ -6,6 +6,7 @@ Cubre los cinco escenarios Gherkin:
 3. Webhook validado: un `payment.confirmed` con monto distinto no marca pagado.
 4. Rechazo tardío: un `payment.rejected` sobre un pedido pagado no lo cambia.
 5. Mínimo del proveedor: monto bajo el mínimo → `monto_bajo_minimo`, sin apagar el pack.
+   Otro rechazo de la capacidad (p. ej. `ya_pagado`) no sale como `monto_bajo_minimo`.
 
 Usa una `PaymentCapability` fake registrada en el `payment_registry` del core,
 para no depender de Wompi ni de red (invariante nº5: commerce no importa el pack
@@ -36,19 +37,22 @@ class _FakeCapability:
 
     plugin_id = "pack_payments_fake"
 
-    def __init__(self, *, min_amount: float = 0.0) -> None:
+    def __init__(self, *, min_amount: float = 0.0, rechazo: str | None = None) -> None:
         self.min_amount = min_amount
+        self.rechazo = rechazo  # código con el que rechaza cualquier link
         self.calls: list[tuple[str, float]] = []
 
     def methods(self):
         return []
 
     async def create_link(self, *, reference: str, amount: float, description: str = "", method=None):
-        from core.payments import PaymentCapabilityError, PaymentLink
+        from core.payments import MONTO_BAJO_MINIMO, PaymentCapabilityError, PaymentLink
 
         self.calls.append((reference, amount))
+        if self.rechazo is not None:
+            raise PaymentCapabilityError("rechazado", code=self.rechazo)
         if amount < self.min_amount:
-            raise PaymentCapabilityError("monto menor al mínimo del proveedor")
+            raise PaymentCapabilityError("monto menor al mínimo del proveedor", code=MONTO_BAJO_MINIMO)
         return PaymentLink(reference=reference, url=f"https://pay.test/{reference}", method="online")
 
 
@@ -237,3 +241,28 @@ async def test_monto_bajo_minimo_es_error_de_negocio(fake_context, monkeypatch):
         result = await OrderSkill().confirmar_pago_pedido({"order_id": order_id}, fake_context)
 
     assert result.get("error") == "monto_bajo_minimo", result
+
+
+async def test_un_pedido_ya_pagado_en_la_pasarela_no_sale_como_monto_bajo_minimo(fake_context, monkeypatch):
+    """La pasarela aprobó el pago y el pedido todavía no lo refleja: no se ofrece otro medio."""
+    from pack_commerce.skills import OrderSkill
+
+    from core.db.session import get_session
+    from core.payments import YA_PAGADO
+    from core.shared.tenant import tenant_scope
+
+    cap = _FakeCapability(rechazo=YA_PAGADO)
+
+    async def _cap(self):
+        return cap
+
+    monkeypatch.setattr(OrderSkill, "_payment_capability", _cap)
+    async with tenant_scope(T1):
+        async with get_session() as session:
+            order = await _make_order(session, customer_id=fake_context.customer_id, total=185_000.0)
+            order_id = str(order.id)
+
+        result = await OrderSkill().confirmar_pago_pedido({"order_id": order_id}, fake_context)
+
+    assert result.get("error") == "ya_pagado", result
+    assert "escalate" not in result

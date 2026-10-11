@@ -388,6 +388,63 @@ async def _order_del_cliente(session, order_id, customer_id) -> Order | None:  #
     ).scalar_one_or_none()
 
 
+def _rechazo_del_link(code: str | None, public_order_number: str) -> dict[str, Any]:
+    """Resultado de `confirmar_pago_pedido` cuando la capacidad rechaza el link.
+
+    Antes todo rechazo salía como `monto_bajo_minimo`: un pedido ya pagado o con un pago en
+    revisión se ofrecía por transferencia. Los casos que necesitan a una persona escalan
+    con `escalate` (el core lo hace, no el modelo).
+    """
+    from core.payments import (
+        EN_REVISION,
+        MONTO_BAJO_MINIMO,
+        MONTO_NO_COINCIDE,
+        SIN_PASARELA,
+        YA_PAGADO,
+    )
+
+    if code == MONTO_BAJO_MINIMO:
+        return {
+            "error": "monto_bajo_minimo",
+            "detail": "El total es menor al mínimo de la pasarela en línea.",
+            "hint": "Ofrecele transferencia o contraentrega.",
+        }
+    if code == SIN_PASARELA:
+        return {
+            "error": "El pago en línea no está disponible para este negocio.",
+            "hint": "Ofrecele transferencia o contraentrega.",
+        }
+    if code == YA_PAGADO:
+        # La pasarela ya aprobó el pago y el pedido todavía no lo refleja (el evento se
+        # procesa aparte): no hay que cobrar de nuevo.
+        return {
+            "error": "ya_pagado",
+            "public_order_number": public_order_number,
+            "detail": "La pasarela ya registró un pago aprobado de este pedido.",
+            "hint": "No le mandes otro link ni le pidas que pague de nuevo.",
+        }
+    if code == EN_REVISION:
+        return {
+            "error": "pago_en_revision",
+            "public_order_number": public_order_number,
+            "detail": "Hay un pago de este pedido en revisión manual (llegó por otro monto).",
+            "escalate": True,
+        }
+    if code == MONTO_NO_COINCIDE:
+        return {
+            "error": "cobro_previo_por_otro_monto",
+            "public_order_number": public_order_number,
+            "detail": "El pedido tiene un link de pago vigente por otro monto.",
+            "escalate": True,
+        }
+    # `no_disponible` o una capacidad que no dice el motivo.
+    return {
+        "error": "pago_en_linea_no_disponible",
+        "detail": "La pasarela no pudo generar el link de pago ahora.",
+        "hint": "Ofrecele reintentar en un momento, o transferencia o contraentrega.",
+    }
+
+
 def _sin_cotizacion_vigente() -> dict[str, Any]:
     """Error cuando no hay una cotización en curso a la cual apuntar. Ajena o inexistente responden igual (ver `_quote_del_cliente`). Entre turnos el modelo solo
     ve texto y pierde el `quote_id`: en test (2026-10-10) inventó `confirmar_cotizacion("Q-0001")`
@@ -1969,14 +2026,10 @@ class OrderSkill(BaseSkill):
                 method="online",
             )
         except PaymentCapabilityError as exc:
-            # Rechazo de NEGOCIO (monto bajo el mínimo): resultado controlado,
-            # NO una falla que apague el pack (HU-ARCH-18).
-            log.warning("payment_link_rejected", order_id=order_id, reason=str(exc))
-            return {
-                "error": "monto_bajo_minimo",
-                "detail": "El total es menor al mínimo de la pasarela en línea.",
-                "hint": "Ofrecele transferencia o contraentrega.",
-            }
+            # Rechazo de NEGOCIO: resultado controlado, NO una falla que apague el
+            # pack (HU-ARCH-18). El `code` dice cuál (adenda 2026-10-10 de ADR-0067).
+            log.warning("payment_link_rejected", order_id=order_id, code=exc.code, reason=str(exc))
+            return _rechazo_del_link(exc.code, base_reference)
 
         async with get_session() as session:
             order = await _order_del_cliente(session, order_id, context.customer_id)

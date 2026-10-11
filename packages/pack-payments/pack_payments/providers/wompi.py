@@ -39,6 +39,7 @@ from core.shared.exceptions import PluginError
 from core.shared.logger import get_logger
 from pack_payments.providers.base import (
     BasePaymentProvider,
+    MontoBajoMinimo,
     PaymentLinkResult,
     PaymentRequestRejected,
     WebhookEvent,
@@ -104,7 +105,7 @@ class WompiProvider(BasePaymentProvider):
             # esto (mismo criterio que agent-sale, wompiClient.ts) -- evita una
             # llamada de red que ya sabemos que falla, y devuelve un mensaje
             # accionable en vez de un 422 crudo.
-            raise PaymentRequestRejected(
+            raise MontoBajoMinimo(
                 f"El monto (${amount:,.0f}) es menor al mínimo permitido para pago en línea "
                 f"(${self.min_amount_cop:,.0f} COP). Ofrecé otro método de pago."
             )
