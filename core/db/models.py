@@ -364,6 +364,57 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+# ---------------------------------------------------------------- estado de la conversación (ADR-0114)
+class ConversationTask(Base):
+    """Tarea: instancia de un procedimiento en una conversación (HU-AOS-04).
+
+    Es la PROYECCIÓN de `task_events`: solo la escribe `core/kernel/state.py`, en la misma
+    transacción que el evento, y se puede reconstruir desde los eventos. Las FKs compuestas
+    `(tenant_id, …)` viven en la migración 0069. Sin `deleted_at`: es registro del negocio,
+    como `messages` (ADR-0053); solo `purge_tenant` la borra.
+
+    `slots`: `{nombre: {value, source, actor, seq, turn_id, confirmed, data_class}}`.
+    `status`: active | suspended | completed | cancelled | failed | escalated.
+    """
+
+    __tablename__ = "conversation_tasks"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    procedure_id: Mapped[str] = mapped_column(Text, nullable=False)
+    procedure_version: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_instance_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    parent_task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    stage: Mapped[str] = mapped_column(Text, nullable=False)
+    slots: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    stack_position: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    last_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    started_turn_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    pending_confirmation: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))  # 0074
+    status_reason: Mapped[str | None] = mapped_column(Text)  # 0074
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class TaskEvent(Base):
+    """Evento de una tarea: append-only (`prevent_mutation()`), fuente de verdad (ADR-0114)."""
+
+    __tablename__ = "task_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    type: Mapped[str] = mapped_column(Text, nullable=False)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)  # llm | kernel | tool | human | backoffice
+    turn_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 # ---------------------------------------------------------------- agente (AgentSpec desde BD)
 class AgentSpecRecord(Base):
     """AgentSpec por tenant desde BD (Sprint 2, ADR-0014).

@@ -16,6 +16,7 @@ busca uno ya autorizado.
 
 from __future__ import annotations
 
+import functools
 import re
 import uuid
 from pathlib import Path
@@ -40,6 +41,8 @@ MAX_SIZE_BYTES = 8 * 1024  # ADR-0014: límite por playbook (anti-bloat/inyecci�
 _SAFE_PLAYBOOK_NAME = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 CORE_PLAYBOOKS = Path(__file__).resolve().parent.parent / "playbooks"
+# Playbooks del kernel (ADR-0114 §2): fuera de `playbook_roots()`, ver `load_core_playbook`.
+CORE_KERNEL_PLAYBOOKS = CORE_PLAYBOOKS / "kernel"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
@@ -143,6 +146,26 @@ async def load_playbook(
             return _strip_frontmatter(content)
     log.info("playbook_not_found", playbook=name)
     return None
+
+
+@functools.cache
+def load_core_playbook(name: str) -> str:
+    """Playbook del KERNEL (`core/playbooks/kernel/<name>.md`), sin allowlist ni override.
+
+    Son textos que el kernel usa siempre, como los rótulos de la tarjeta de estado
+    (ADR-0114 §2), y viajan con el binario. No están en `playbook_roots()` (la carpeta no
+    se recorre: `glob("*.md")` no es recursivo), así que ningún negocio los puede pedir
+    en su allowlist ni reemplazar con un override de `TENANTS_ROOT`.
+
+    Fail-closed: un nombre inseguro, un archivo que falta o que pasa el tope lanzan (y un
+    test de CI lo cubre), en lugar de devolver `None` y dejar al kernel sin sus rótulos.
+    """
+    if not _SAFE_PLAYBOOK_NAME.fullmatch(name):
+        raise ValueError(f"nombre de playbook del kernel inseguro: {name!r}")
+    content = (CORE_KERNEL_PLAYBOOKS / f"{name}.md").read_text(encoding="utf-8")
+    if len(content.encode("utf-8")) > MAX_SIZE_BYTES:
+        raise ValueError(f"playbook del kernel demasiado grande: {name}")
+    return _strip_frontmatter(content)
 
 
 async def list_playbooks() -> list[dict[str, str]]:
