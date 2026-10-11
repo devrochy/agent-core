@@ -45,6 +45,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from core.config import get_settings
+from core.shared.turno import trace_id_de_fila, turn_id_de_fila
 
 
 def utcnow() -> datetime:
@@ -223,8 +224,13 @@ class ChannelConnection(Base):
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
     external_id: Mapped[str] = mapped_column(Text)  # phone_number_id de Meta (clave de ruteo)
     credentials_encrypted: Mapped[str | None] = mapped_column(Text)
+    # Conexión canónica (ADR-0115, migración 0070): la fila de un número de Meta apunta a su
+    # cuenta (`meta_connections`) y no guarda credenciales (CHECK `ck_cc_meta_sin_credenciales`).
+    # NULL = conexión sin cuenta de Meta (manual, `waweb`, correo, calendario).
+    meta_connection_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class WaWebSession(Base):
@@ -331,6 +337,8 @@ class Message(Base):
     sender_type: Mapped[str] = mapped_column(Text)    # customer | agent | human
     content: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(Text, default="sent")  # queued|sent|delivered|read|failed (outbound)
+    # Turno que causó la fila (HU-AOS-10): default del turno vigente, NULL fuera de un turno.
+    turn_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=turn_id_de_fila)
     tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     # Soporte de medios (mod-media-processor los transforma antes del orchestrator)
     media_type: Mapped[str | None] = mapped_column(Text)          # "audio/ogg", "image/jpeg"
@@ -353,6 +361,57 @@ class Message(Base):
     template_language: Mapped[str | None] = mapped_column(Text)
     template_components: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ---------------------------------------------------------------- estado de la conversación (ADR-0114)
+class ConversationTask(Base):
+    """Tarea: instancia de un procedimiento en una conversación (HU-AOS-04).
+
+    Es la PROYECCIÓN de `task_events`: solo la escribe `core/kernel/state.py`, en la misma
+    transacción que el evento, y se puede reconstruir desde los eventos. Las FKs compuestas
+    `(tenant_id, …)` viven en la migración 0069. Sin `deleted_at`: es registro del negocio,
+    como `messages` (ADR-0053); solo `purge_tenant` la borra.
+
+    `slots`: `{nombre: {value, source, actor, seq, turn_id, confirmed, data_class}}`.
+    `status`: active | suspended | completed | cancelled | failed | escalated.
+    """
+
+    __tablename__ = "conversation_tasks"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    procedure_id: Mapped[str] = mapped_column(Text, nullable=False)
+    procedure_version: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_instance_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    parent_task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    stage: Mapped[str] = mapped_column(Text, nullable=False)
+    slots: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    stack_position: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    last_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    started_turn_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    pending_confirmation: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))  # 0074
+    status_reason: Mapped[str | None] = mapped_column(Text)  # 0074
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class TaskEvent(Base):
+    """Evento de una tarea: append-only (`prevent_mutation()`), fuente de verdad (ADR-0114)."""
+
+    __tablename__ = "task_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    type: Mapped[str] = mapped_column(Text, nullable=False)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)  # llm | kernel | tool | human | backoffice
+    turn_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -860,6 +919,7 @@ class AuditLog(Base):
     conversation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("conversations.id"))
     actor: Mapped[str] = mapped_column(Text)    # "tool:crear_lead" | "core:guardrail" | "admin:email"
     action: Mapped[str] = mapped_column(Text)
+    turn_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=turn_id_de_fila)
     input: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     output: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -912,6 +972,9 @@ class UsageLedger(Base):
     cost_usd: Mapped[float] = mapped_column(Numeric(10, 6), default=0)
     tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Turno y traza (HU-AOS-10): default del turno vigente, NULL fuera de un turno.
+    turn_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=turn_id_de_fila)
+    trace_id: Mapped[str | None] = mapped_column(Text, default=trace_id_de_fila)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

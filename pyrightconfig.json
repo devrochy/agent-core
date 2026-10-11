@@ -3,6 +3,8 @@
     "core/config.py",
     "core/memory/vector.py",
     "core/kernel",
+    "core/shared/turno.py",
+    "core/observability/celery_trazas.py",
     "packages/contracts/agentcore_contracts/procedure.py",
     "packages/contracts/agentcore_contracts/agentspec.py",
     "packages/contracts/agentcore_contracts/kernelspec.py",

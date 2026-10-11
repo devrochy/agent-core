@@ -230,13 +230,13 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
         if not await _claim_outbound(message.id, message.conversation_id, tenant_id):
             return None
 
-        # Encolado antes de pausar o eliminar la conexión (ADR-0122): falla sin escalar.
-        if conversation.channel != "web" and conversation.connection_id is None:
-            from core.gateway.meta_connection_state import motivo_pausa_de
+        # Encolado antes de pausar o eliminar la conexión (ADR-0122): falla sin escalar. La
+        # cuenta sale de la conexión canónica si la conversación la tiene (ADR-0115 §2).
+        from core.gateway.meta_connection_state import motivo_pausa_de_conversacion
 
-            if (motivo := await motivo_pausa_de(conversation.meta_connection_id)) is not None:
-                await _release_claim(message.id, message.conversation_id, tenant_id)
-                return ConexionPausadaError(motivo)
+        if (motivo := await motivo_pausa_de_conversacion(conversation)) is not None:
+            await _release_claim(message.id, message.conversation_id, tenant_id)
+            return ConexionPausadaError(motivo)
 
         provider, credentials = await resolve_credentials(
             conversation.connection_id,

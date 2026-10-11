@@ -553,14 +553,15 @@ def purge(
     """Elimina por completo un tenant: borrado físico IRREVERSIBLE.
 
     Exige que el tenant esté suspendido (`tenant deactivate <slug>`) y escribir
-    exactamente: ELIMINAR <slug>. Borra todos los datos del tenant (core + packs +
-    Redis) y la fila tenants. No se puede deshacer.
+    exactamente: ELIMINAR <slug>. Borra todos los datos del tenant (core + packs) y
+    la fila tenants y, después, su estado Redis. No se puede deshacer. Si Redis no se
+    pudo limpiar, sale con código 2 y muestra el comando de reintento (`purge-redis`).
     """
     from core.tenants import ensure_purgeable
 
     # Antes de pedir la frase: no tiene sentido confirmar algo que se va a rechazar.
     try:
-        asyncio.run(ensure_purgeable(slug))
+        tenant_id = str(asyncio.run(ensure_purgeable(slug)).id)
     except ValueError as exc:
         console.print(f"[red]✗ {exc}[/red]")
         raise typer.Exit(1) from exc
@@ -571,22 +572,64 @@ def purge(
             f"[bold red]Irreversible[/bold red]. Escribe exactamente [bold]ELIMINAR {slug}[/bold] para confirmar:",
         ).ask() or ""
 
-    async def _run() -> None:
+    async def _run() -> bool:
         from core.memory.working import get_redis
         from core.tenants import purge_tenant
 
-        await purge_tenant(slug, phrase)
+        redis_limpio = await purge_tenant(slug, phrase)
         try:
             await get_redis().aclose()
         except Exception:
             pass
+        return redis_limpio
 
     try:
-        asyncio.run(_run())
+        redis_limpio = asyncio.run(_run())
     except ValueError as exc:
         console.print(f"[red]✗ {exc}[/red]")
         raise typer.Exit(1) from exc
+    if not redis_limpio:
+        console.print(
+            f"⚠ [yellow]{slug} eliminado de la base (irreversible), pero su estado Redis no se "
+            f"pudo limpiar.[/yellow] Reintenta con: agent-core tenant purge-redis {tenant_id}"
+        )
+        raise typer.Exit(2)
     console.print(f"✓ [red]{slug} eliminado por completo[/red] (irreversible)")
+
+
+@app.command("purge-redis")
+def purge_redis(
+    tenant_id: str = typer.Argument(..., help="UUID del tenant YA purgado (el slug ya no existe)"),
+) -> None:
+    """Reintento: limpia el estado Redis de un tenant ya purgado. Idempotente.
+
+    Úsalo cuando `tenant purge` borró la base pero avisó que Redis no se limpió
+    (log `tenant_purge_redis_cleanup_failed`). Se niega si el tenant todavía existe.
+    """
+    try:
+        tid = uuid.UUID(tenant_id)
+    except ValueError as exc:
+        console.print(f"[red]✗ No es un UUID válido: {tenant_id}[/red]")
+        raise typer.Exit(1) from exc
+
+    async def _run() -> int:
+        from core.memory.working import get_redis
+        from core.tenants import purge_tenant_redis
+
+        try:
+            return await purge_tenant_redis(tid)
+        finally:
+            try:
+                await get_redis().aclose()
+            except Exception:
+                pass
+
+    try:
+        borradas = asyncio.run(_run())
+    except ValueError as exc:
+        console.print(f"[red]✗ {exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"✓ Redis del tenant {tid} limpio ({borradas} claves borradas)")
 
 
 @app.command()

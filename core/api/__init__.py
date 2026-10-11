@@ -17,6 +17,7 @@ from core.api.routers import (
     auth,
     collaborators,
     connections,
+    conversation_tasks,
     conversations,
     costs,
     dashboard,
@@ -59,6 +60,7 @@ api_router.include_router(dashboard.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(dlq.router)
 api_router.include_router(conversations.router)
+api_router.include_router(conversation_tasks.router)
 api_router.include_router(playground.router)
 api_router.include_router(escalations.router)
 api_router.include_router(leads.router)

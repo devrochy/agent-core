@@ -238,8 +238,12 @@ async def approved_template_for(
     conversation: Conversation, name: str, language: str
 ) -> MessageTemplate | None:
     """Plantilla APROBADA con ese nombre e idioma en la WABA de la conexión de la
-    conversación. Sin conexión de Meta no hay plantillas."""
-    if conversation.meta_connection_id is None:
+    conversación. Sin conexión de Meta no hay plantillas. La cuenta es la misma con la que
+    salen las credenciales (ADR-0115 §2): la de la conexión canónica si la hay."""
+    from core.gateway.meta_connection_state import cuenta_de_plantillas_de_conversacion
+
+    cuenta = await cuenta_de_plantillas_de_conversacion(conversation)
+    if cuenta is None:
         return None
     async with get_session() as session:
         return (
@@ -247,7 +251,7 @@ async def approved_template_for(
                 select(MessageTemplate)
                 .join(WabaAccount, WabaAccount.id == MessageTemplate.waba_account_id)
                 .where(
-                    WabaAccount.connection_id == conversation.meta_connection_id,
+                    WabaAccount.connection_id == cuenta,
                     WabaAccount.deleted_at.is_(None),
                     WabaAccount.tenant_id == conversation.tenant_id,
                     MessageTemplate.tenant_id == conversation.tenant_id,
@@ -260,7 +264,10 @@ async def approved_template_for(
 
 
 async def approved_templates_for_conversation(conversation: Conversation) -> list[MessageTemplate]:
-    if conversation.meta_connection_id is None:
+    from core.gateway.meta_connection_state import cuenta_de_plantillas_de_conversacion
+
+    cuenta = await cuenta_de_plantillas_de_conversacion(conversation)
+    if cuenta is None:
         return []
     async with get_session() as session:
         return list(
@@ -269,7 +276,7 @@ async def approved_templates_for_conversation(conversation: Conversation) -> lis
                     select(MessageTemplate)
                     .join(WabaAccount, WabaAccount.id == MessageTemplate.waba_account_id)
                     .where(
-                        WabaAccount.connection_id == conversation.meta_connection_id,
+                        WabaAccount.connection_id == cuenta,
                         WabaAccount.deleted_at.is_(None),
                         WabaAccount.tenant_id == conversation.tenant_id,
                         MessageTemplate.tenant_id == conversation.tenant_id,
@@ -347,11 +354,9 @@ async def send_event_notice(
     # reintenta. La pausa es a propósito y puede durar días; con `NoticeNotSentError` el
     # outbox lo reintentaría 5 veces, dejando 5 mensajes fallidos, y lo perdería igual.
     # Queda un solo `failed` con el motivo, con el id estable del aviso.
-    from core.gateway.meta_connection_state import motivo_pausa_de
+    from core.gateway.meta_connection_state import motivo_pausa_de_conversacion
 
-    if getattr(conversation, "connection_id", None) is None and (
-        motivo := await motivo_pausa_de(conversation.meta_connection_id)
-    ):
+    if motivo := await motivo_pausa_de_conversacion(conversation):
         async with get_session() as session:
             session.add(
                 Message(

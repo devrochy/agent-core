@@ -44,7 +44,10 @@ log = get_logger(__name__)
 
 
 async def _resolve_meta_connection_credentials(
-    meta_connection_id: uuid.UUID, expected_tenant_id: uuid.UUID | None
+    meta_connection_id: uuid.UUID,
+    expected_tenant_id: uuid.UUID | None,
+    *,
+    phone_number_id: str | None = None,
 ) -> dict[str, str] | None:
     """Conexiones creadas por el wizard de Embedded Signup (ADR-0030): no
     tienen `ChannelConnection`, el token vive en `meta_token_store`.
@@ -55,7 +58,12 @@ async def _resolve_meta_connection_credentials(
     allá de RLS/unicidad de esquema (hallazgo auditor-multitenant,
     2026-09-22: `phone_numbers.phone_number_id` es único global, no
     compuesto con `tenant_id`; si esa garantía de esquema se relajara algún
-    día, esta aserción evita enviar con el token de OTRO tenant)."""
+    día, esta aserción evita enviar con el token de OTRO tenant).
+
+    `phone_number_id`: el número de la conexión canónica de la conversación (ADR-0115 §5).
+    Si viene, solo sirve ese número, vivo y de esta cuenta: si no lo está, no hay
+    credenciales (nunca se responde por otro número de la cuenta, ADR-0122 §3). Sin él, el
+    primer número vivo de la cuenta (conversaciones sin conexión canónica, como antes)."""
     from core.gateway.meta_connection_state import motivo_pausa
     from core.gateway.meta_credentials import access_token_for
 
@@ -70,15 +78,14 @@ async def _resolve_meta_connection_credentials(
         # Filtro explícito de tenant además de RLS (defensa en profundidad,
         # invariante nº1): el número nunca se lee sin atarlo a su conexión
         # (mismo criterio que `meta_byok.save_byok_connection`).
-        phone = (
-            await session.execute(
-                select(PhoneNumber).where(
-                    PhoneNumber.connection_id == meta_connection_id,
-                    PhoneNumber.tenant_id == connection.tenant_id,
-                    PhoneNumber.deleted_at.is_(None),
-                )
-            )
-        ).scalars().first()
+        query = select(PhoneNumber).where(
+            PhoneNumber.connection_id == meta_connection_id,
+            PhoneNumber.tenant_id == connection.tenant_id,
+            PhoneNumber.deleted_at.is_(None),
+        )
+        if phone_number_id is not None:
+            query = query.where(PhoneNumber.phone_number_id == phone_number_id)
+        phone = (await session.execute(query)).scalars().first()
     if phone is None:
         return None
     if expected_tenant_id is not None and connection.tenant_id != expected_tenant_id:
@@ -107,7 +114,8 @@ async def resolve_credentials(
     allow_env_fallback: bool = True,
 ) -> tuple[str, dict[str, str]]:
     """Devuelve (provider, credentials). Orden: `ChannelConnection` (conexión
-    manual) -> `MetaConnection`+`meta_token_store` (wizard de Embedded
+    manual, o la canónica de un número de Meta, que resuelve por su cuenta y su
+    número, ADR-0115) -> `MetaConnection`+`meta_token_store` (wizard de Embedded
     Signup, ADR-0030) -> conexión primaria en BD -> `.env`.
 
     La primaria y el `.env` son solo para conversaciones sin `meta_connection_id`: con
@@ -137,6 +145,27 @@ async def resolve_credentials(
                 expected_tenant_id=str(expected_tenant_id),
             )
             connection = None
+        if connection is None:
+            # La conversación tiene conexión pero no se puede leer (otro negocio, RLS): no se
+            # cae a la primaria ni al `.env` (ADR-0122 §3). Las FKs compuestas lo hacen
+            # inalcanzable en operación normal.
+            log.warning("conexion_de_la_conversacion_no_disponible", connection_id=str(connection_id))
+            return "meta", {}
+        if connection.meta_connection_id is not None:
+            # Conexión canónica de un número de Meta (ADR-0115): sin credenciales propias, la
+            # cuenta las pone y el número es el de la conexión. Sin respaldo silencioso
+            # (ADR-0122 §3): si esa cuenta no puede enviar por ese número, no sale nada.
+            creds = await _resolve_meta_connection_credentials(
+                connection.meta_connection_id, expected_tenant_id, phone_number_id=connection.external_id
+            )
+            if creds:
+                return "meta", creds
+            log.warning(
+                "credenciales_de_la_conexion_no_disponibles",
+                connection_id=str(connection_id),
+                meta_connection_id=str(connection.meta_connection_id),
+            )
+            return "meta", {}
         if connection and connection.credentials_encrypted:
             creds = get_secret_box().decrypt_json(connection.credentials_encrypted)
             return connection.provider, {str(k): str(v) for k, v in creds.items()}
@@ -211,11 +240,10 @@ async def _registrar_si_pausada(conversation: Conversation, content: str, sender
 
     Los llamadores que escalan cuando el envío falla (consumer, debounce) ya revisan la
     pausa antes de llegar acá: una pausa no es un fallo que tenga que atender una persona."""
-    from core.gateway.meta_connection_state import motivo_pausa_de
+    from core.gateway.meta_connection_state import motivo_pausa_de_conversacion
 
-    if conversation.channel == "web" or getattr(conversation, "connection_id", None) is not None:
-        return False
-    motivo = await motivo_pausa_de(conversation.meta_connection_id)
+    # La cuenta sale de la conexión canónica si la conversación la tiene (ADR-0115 §2).
+    motivo = await motivo_pausa_de_conversacion(conversation)
     if motivo is None:
         return False
     log.info("envio_con_conexion_pausada", conversation_id=str(conversation.id), motivo=motivo)

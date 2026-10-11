@@ -71,6 +71,7 @@ source_modules =
     core.mcp
     core.subscriptions
     core.orchestrator
+    core.kernel
 forbidden_modules =
     core.alta_negocio
     core.provisioning.consumer
@@ -78,6 +79,20 @@ forbidden_modules =
 # Solo imports directos: todo pack llega al despachador del outbox por `core.tasks.celery_app`
 # (crons y push), y el despachador registra el consumidor. Lo que importa es que ninguna
 # tool lo llame; `tests/test_provisioning_sin_llm.py` lo revisa también dentro de funciones.
+allow_indirect_imports = True
+
+# HU-AOS-10 (adenda de ADR-0112): el kernel decide y el orquestador despacha. El kernel no
+# conoce el loop, el consumer ni el debounce: así sus políticas no dependen de quién lo llama.
+# `core.orchestrator.escalation` (escalar) y el verificador sí son piezas que el kernel usa.
+[importlinter:contract:kernel-sin-orquestador]
+name = El kernel no importa el loop, el consumer ni el debounce
+type = forbidden
+source_modules =
+    core.kernel
+forbidden_modules =
+    core.orchestrator.loop
+    core.orchestrator.consumer
+    core.orchestrator.debounce
 allow_indirect_imports = True
 
 # ADR-0125 (HU-SH-07): lo que un pack o una ruta de la API usan del aprovisionamiento no llega

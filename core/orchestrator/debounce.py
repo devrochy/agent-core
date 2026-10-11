@@ -49,6 +49,7 @@ import uuid
 from collections.abc import Awaitable
 from typing import Any
 
+from core.kernel.decisions import bloquear, en_turno
 from core.memory.working import get_redis
 from core.orchestrator.turn_gate import TurnQueueTimeout, run_turn
 from core.shared.logger import get_logger
@@ -152,10 +153,6 @@ async def poll_debounce_once() -> None:
 async def _fire_conversation(conversation_id: uuid.UUID, payload: dict[str, Any]) -> None:
     """Procesa el turno diferido. Sin reintento automático: si falla, el próximo
     mensaje del cliente genera un turno fresco (límite conocido, documentado)."""
-    from core.gateway.sender import send_to_conversation
-    from core.orchestrator.escalation import escalate
-    from core.orchestrator.loop import process_conversation
-
     try:
         latest_message = str(payload.get("latest_message", ""))
         tenant_id = payload.get("tenant_id")
@@ -171,29 +168,29 @@ async def _fire_conversation(conversation_id: uuid.UUID, payload: dict[str, Any]
             if not await is_tenant_active(uuid.UUID(tenant_id)):
                 log.info("debounce_tenant_not_active", conversation_id=str(conversation_id))
                 return
-            # La conexión se pausó o eliminó después de agendar el turno (ADR-0122): no se
-            # gasta el LLM ni se escala por un envío que no puede salir.
-            from core.db.models import Conversation
-            from core.db.session import get_session
-            from core.gateway.meta_connection_state import motivo_pausa_de_conversacion
-
-            async with get_session() as session:
-                conversation = await session.get(Conversation, conversation_id)
-            if conversation is not None and (motivo := await motivo_pausa_de_conversacion(conversation)):
-                log.info("debounce_conexion_pausada", conversation_id=str(conversation_id), motivo=motivo)
-                return
-            result = await process_conversation(conversation_id, latest_message)
-            if result is not None and result.text:
-                delivered = await send_to_conversation(
-                    conversation_id, result.text, image_url=result.image_url
-                )
-                if not delivered and not result.escalated:
-                    # El turno se generó pero no llegó al canal: escalar a humano
-                    # para no perder al cliente (incidente de envío silencioso detectado en producción).
-                    await escalate(conversation_id, reason="send_failed",
-                                   summary=result.text[:200])
+            await _turno_diferido(conversation_id, latest_message)
     except Exception:
         log.exception("debounce_fire_failed", conversation_id=str(conversation_id))
+
+
+@en_turno  # decisión y resultado del turno (HU-AOS-10); el loop reusa este turno
+async def _turno_diferido(conversation_id: uuid.UUID, latest_message: str) -> None:
+    from core.db.models import Conversation
+    from core.db.session import get_session
+    from core.gateway.meta_connection_state import motivo_pausa_de_conversacion
+    from core.kernel.egress import entregar
+    from core.orchestrator.loop import process_conversation
+
+    # La conexión se pausó o eliminó después de agendar el turno (ADR-0122): no se
+    # gasta el LLM ni se escala por un envío que no puede salir.
+    async with get_session() as session:
+        conversation = await session.get(Conversation, conversation_id)
+    if conversation is not None and (motivo := await motivo_pausa_de_conversacion(conversation)):
+        log.info("debounce_conexion_pausada", conversation_id=str(conversation_id), motivo=motivo)
+        await bloquear(conversation, "connection_paused", status="silent")
+        return
+    result = await process_conversation(conversation_id, latest_message)
+    await entregar(conversation_id, result)
 
 
 async def recover_orphaned_conversations() -> None:

@@ -94,6 +94,9 @@ Lo que fijó la implementación del verificador, revisada por el agente `arquite
   un test de la suite unitaria. Medición del 2026-10-09: 205 correctas con 0 falsos positivos y 14 falsas con 0 falsos
   negativos; en los mismos borradores, los guardrails viejos tenían 16,7 % de falsos positivos. `calendar_completion_check` sigue registrado: no tuvo falsos positivos medidos y su
   respaldo depende del `status` de cada acción. Se mide y se retira en una HU siguiente.
+- **Veredicto en `turn_outcomes` (HU-AOS-10, 2026-10-10):** `registrar_veredicto` lo escribe también en
+  `turn_outcomes.verifier` (`[{kind, verdict, count}]`) y `verifier_retries`. La fila de `audit_log` sigue de forma
+  transitoria, aunque esta adenda decía "mueve": la leen tests y journeys, y se retira en una HU siguiente.
 
 ## Adenda (2026-10-09): URLs de una tool que terminó con error (HU-SH-07)
 
