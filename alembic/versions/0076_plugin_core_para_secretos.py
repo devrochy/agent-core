@@ -16,7 +16,7 @@ nunca la sincroniza: la fila se siembra aquí.
   (es transaccional), sin dejar nada a medias.
 
 Revision ID: 0076
-Revises: 0072
+Revises: 0074
 Create Date: 2026-10-10
 """
 
@@ -25,7 +25,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "0076"
-down_revision = "0072"
+down_revision = "0074"
 branch_labels = None
 depends_on = None
 
