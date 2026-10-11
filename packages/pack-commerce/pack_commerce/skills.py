@@ -488,6 +488,19 @@ def _respuesta_del_alta_frenada(frenado: Any) -> dict[str, Any]:
     (ADR-0125). El comportamiento completo vive en el playbook de ventas del vendedor; el
     `hint` solo dice el siguiente paso, como el resto de las respuestas de esta tool."""
     if isinstance(frenado, TerminosPendientes):
+        if frenado.enlaces_enviados:
+            hint = (
+                "Si el último mensaje del cliente ya acepta los documentos, repite crear_pedido "
+                "ahora con el mismo quote_id, los mismos datos y customer_data.acepta_terminos. "
+                "Si no, comparte los enlaces y espera su respuesta."
+            )
+        else:
+            # El cliente todavía no recibió los enlaces: ninguna respuesta suya los acepta
+            # (canary de comercial, 2026-10-10: el modelo repetía la llamada en el mismo turno).
+            hint = (
+                "El cliente todavía no recibió estos enlaces: compártelos y pregúntale si los "
+                "acepta. Un «sí» anterior no los acepta: no repitas crear_pedido en este turno."
+            )
         return {
             "status": "terminos_pendientes",
             "error": "Falta que el cliente acepte los términos, el aviso de privacidad y el DPA.",
@@ -495,11 +508,7 @@ def _respuesta_del_alta_frenada(frenado: Any) -> dict[str, Any]:
             "acepta_terminos": frenado.token,
             # El token es el mismo en cada respuesta de esta conversación: en el turno en que
             # el cliente acepta, el modelo lo recupera llamando sin él (ADR-0125, adenda).
-            "hint": (
-                "Si el último mensaje del cliente ya acepta los documentos, repite crear_pedido "
-                "ahora con el mismo quote_id, los mismos datos y customer_data.acepta_terminos. "
-                "Si no, comparte los enlaces y espera su respuesta."
-            ),
+            "hint": hint,
         }
     if isinstance(frenado, FreeNoDisponible):
         return {
