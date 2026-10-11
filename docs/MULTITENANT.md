@@ -109,7 +109,7 @@ Un tenant nace `active` y puede transitar a `suspended` y a `eliminado`:
 |---|---|---|
 | `active` | Procesa mensajes normalmente | alta (`tenant create`) o reactivación |
 | `suspended` | Deja de procesar mensajes (webhook y consumer lo rechazan), **conserva sus datos** y sigue visible en el panel | `tenant deactivate` (CLI) o botón en `/admin/tenants` |
-| eliminado | Borrado físico **irreversible** de todo su dato (core + packs + Redis + fila `tenants`) | solo desde `suspended`: `tenant purge` o `/admin/tenants` (modal) |
+| eliminado | Borrado físico **irreversible** de todo su dato (core + packs + fila `tenants`; después, su estado Redis) | solo desde `suspended`: `tenant purge` o `/admin/tenants` (modal) |
 
 **Suspensión** (`tenant deactivate`): reversible (`tenant activate`). Útil para
 bajas temporales, impago, o incidentes. La enforcement es defensa en profundidad:
@@ -137,7 +137,7 @@ billing tampoco se purga. Es la **excepción deliberada a la invariante #8**
 (sin borrado físico): el ciclo de vida del tenant la requiere (tipo GDPR /
 right-to-erasure). La función SQL `purge_tenant(tid)` (SECURITY DEFINER, dueño,
 transaccional) descubre dinámicamente todas las tablas con `tenant_id` — core,
-packs y `meta_private` — y las vacía; además se limpia el estado Redis. Destruye también el
+packs y `meta_private` — y las vacía. Destruye también el
 historial inmutable (`usage_ledger`, `audit_log`) del tenant. Mientras corre, la
 función fija `session_replication_role = replica` (cláusula `SET`, se restaura al
 salir), así que no disparan los triggers de las FKs ni los de inmutabilidad; la fila
@@ -146,6 +146,33 @@ negocios (`provisioning_requests.negocio_tenant_id`, `ON DELETE SET NULL`) se
 apliquen. El dueño no es superusuario: necesita `GRANT SET ON PARAMETER
 session_replication_role` (migración `0072`, runbook de producción 4.3). `EXECUTE`
 solo para `app_runtime`.
+
+**Estado Redis en la purga.** Redis no entra en la transacción, así que se limpia
+**después** del commit de la función SQL (y de verificar que la fila `tenants` ya no
+existe): si la purga SQL falla y hace rollback, el negocio conserva intacto su estado
+Redis (memoria de trabajo, debounce, marcadores de términos...). Si la limpieza de
+Redis falla, la purga no se revierte: se registra `tenant_purge_redis_cleanup_failed`
+(nivel error, con `tenant_id` y el comando de reintento; sin el slug), se manda una
+alerta `critical`, `purge_tenant` devuelve `False`, la CLI sale con código 2 y el panel
+SSR muestra un aviso (la API sigue respondiendo 204). El reintento idempotente es
+`agent-core tenant purge-redis <tenant_id>` (solo UUID): se niega si el negocio todavía
+existe o si el UUID aparece en Redis como id de un hijo de otro negocio (error de copiar
+y pegar el id de una conversación, conexión o mensaje).
+
+La limpieza borra las claves por conversación (ids leídos antes de purgar) y hace
+`SCAN MATCH *<tenant_id>*` + `UNLINK` de las claves que llevan el UUID **en posición de
+tenant** (el primer UUID del nombre). Las que lo llevan en otra posición no son suyas y no
+se tocan (p. ej. `webhook_firma_ajena:{a}:{b}` de varios negocios). Los streams
+`agent_core:inbound` y `agent_core:inbound:dlq` no se tocan: el tenant va en los campos, no
+en el nombre, y el guard del consumer descarta lo pendiente de un negocio que ya no existe.
+**Pendiente:** esos streams no se recortan (`XADD` sin `MAXLEN`, `XACK` sin `XDEL`), así que
+las entradas ya procesadas del negocio (texto y teléfono) siguen en Redis tras la purga.
+
+**Convención de claves Redis** (de ella depende que la purga sea completa y no toque a
+otro negocio): todo estado Redis de un tenant lleva su UUID como **primer** UUID del nombre
+(`<familia>:{tenant_id}:...`); una clave que solo lleva el id de la conversación debe tener
+TTL de 24 h o menos (hoy: `debounce:payload|messages:{conv}`, 5 min; `wm:{conv}` legado,
+24 h); y ningún nombre de clave lleva texto libre de usuarios.
 
 ## Referencias
 
