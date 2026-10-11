@@ -167,6 +167,25 @@ celery.conf.beat_schedule[_MEMORY_RETENTION_TASK] = {
     "schedule": crontab(hour="3", minute="45"),
 }
 
+# Consolidación nocturna de la memoria (ADR-0114, HU-AOS-36): datos de tareas cerradas → hechos.
+_MEMORY_CONSOLIDATION_TASK = "core.memory_consolidation"
+
+
+@celery.task(name=_MEMORY_CONSOLIDATION_TASK)
+def _memory_consolidation() -> None:
+    from core.tasks.memory_consolidation import consolidar_memoria
+
+    try:
+        run_async(consolidar_memoria())
+    except Exception:
+        log.exception("cron_task_failed", task=_MEMORY_CONSOLIDATION_TASK)
+
+
+celery.conf.beat_schedule[_MEMORY_CONSOLIDATION_TASK] = {
+    "task": _MEMORY_CONSOLIDATION_TASK,
+    "schedule": crontab(hour="3", minute="30"),
+}
+
 # Antiabuso del alta (HU-SH-07, ADR-0125): las huellas de teléfono y documento de los
 # pedidos de alta se vacían a los 12 meses (ya no sirven para ninguna regla).
 _ALTA_HUELLAS_RETENCION_TASK = "core.alta_huellas_retencion"

@@ -475,6 +475,9 @@ def convertir_v2(
             }
             if rag is not None
             else None,
+            # Lo que v2 ya podía escribir: el perfil del cliente (ADR-0114, adenda de HU-AOS-36).
+            # Sin esto, el General v3 no podría guardar datos del cliente.
+            "writeNamespaces": ["perfil"],
         },
         "tools": _bindings(spec, ofrecidas, existentes, catalogo, avisos),
         "guardrails": guardrails,

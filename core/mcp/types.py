@@ -65,6 +65,9 @@ class ToolContext:
     idempotency_key: str
     channel: str
     http: ScopedHttp | None = None
+    # `memory.writeNamespaces` del agente v3 que corre la tool (ADR-0114 §3, HU-AOS-36).
+    # None = runtime legacy: no se chequea (sin cambio de conducta con las banderas apagadas).
+    write_namespaces: frozenset[str] | None = None
 
 
 # Sufijos que nunca son un destino público (DNS interno, mDNS, metadata de cloud).

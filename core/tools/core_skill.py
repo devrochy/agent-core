@@ -25,6 +25,7 @@ from core.db.session import get_session
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
 from core.memory import vector as vector_memory
+from core.memory.facts import HechoInvalido, NamespaceNoConcedido
 from core.orchestrator.escalation import escalate
 
 
@@ -61,7 +62,17 @@ class CoreSkill(BaseSkill):
         attributes = dict(args.get("attributes") or {})
         if not attributes:
             return {"error": "attributes vacío: no hay nada que actualizar"}
-        await entity_memory.upsert_attributes(ctx.customer_id, attributes)
+        try:
+            await entity_memory.upsert_attributes(
+                ctx.customer_id, attributes, source="agent", concedidos=ctx.write_namespaces
+            )
+        except NamespaceNoConcedido:
+            return {"error": "este agente no puede guardar datos en el perfil del cliente"}
+        except HechoInvalido:
+            return {
+                "error": "dato no admitido en el perfil: claves cortas de una línea, sin datos de pago, "
+                "salud ni contraseñas"
+            }
         return {"status": "ok", "updated": list(attributes.keys())}
 
     async def _remember_fact(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -73,6 +84,7 @@ class CoreSkill(BaseSkill):
             customer_id=ctx.customer_id,
             conversation_id=ctx.conversation_id,
             meta={"source": "core:remember_fact"},
+            kind="fact",
         )
         return {"status": "stored"}
 

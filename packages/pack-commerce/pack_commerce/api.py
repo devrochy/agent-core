@@ -37,6 +37,7 @@ from core.db.models import Customer
 from core.db.session import get_session
 from core.gateway.webhook_verify import constant_time_equal
 from core.mcp.types import plugin_http
+from core.memory import entity as entity_memory
 from core.plugin_manager import plugin_manager
 from core.security import rate_limit
 from core.security.login_lockout import client_ip
@@ -233,15 +234,23 @@ async def intake_lead(
                     external_id=external_id,
                     contact_phone=phone or None,
                     name=nombre,
-                    attributes={
+                )
+                session.add(customer)
+                await session.flush()
+                # El perfil es proyección de los hechos (ADR-0114 §3): se escribe por la memoria
+                # del core, en esta misma transacción.
+                await entity_memory.upsert_attributes_en_sesion(
+                    session,
+                    tenant_id,
+                    customer.id,
+                    {
                         "negocio": negocio,
                         "origen": origen,
                         "optin": optin,
                         "source": config.lead_intake_source,
                     },
+                    source="import",
                 )
-                session.add(customer)
-                await session.flush()
             else:
                 customer.name = nombre or customer.name
                 customer.contact_phone = phone or customer.contact_phone
