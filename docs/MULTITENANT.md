@@ -204,7 +204,7 @@ el texto y el teléfono de los clientes, así que no se guardan más de lo neces
 
 **Convención de claves Redis** (de ella depende que la purga sea completa y no toque a
 otro negocio): todo estado Redis de un tenant lleva su UUID como **primer** UUID del nombre
-(`<familia>:{tenant_id}:...`); una clave que solo lleva el id de la conversación debe tener
+(`<familia>:{tenant_id}:...`, p. ej. `debounce:inbound:{tenant_id}:{conv}`); una clave que solo lleva el id de la conversación debe tener
 TTL de 24 h o menos (hoy: `debounce:payload|messages:{conv}`, 5 min; `wm:{conv}` legado,
 24 h); y ningún nombre de clave lleva texto libre de usuarios.
 

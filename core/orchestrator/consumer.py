@@ -450,7 +450,11 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
         result = await process_conversation(conversation.id, effective_message)
         await entregar(conversation.id, result)
     else:
-        await schedule_debounce(conversation.id, delay_ms, {"latest_message": effective_message})
+        await schedule_debounce(
+            conversation.id,
+            delay_ms,
+            {"latest_message": effective_message, "inbound_message_ids": [persisted]},
+        )
 
 
 # ------------------------------------------------------------------ resolución
