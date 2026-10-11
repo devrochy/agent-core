@@ -739,6 +739,8 @@ async def _dispatch_entry_messages(
                 "connection_external_id": message.connection_external_id,
                 "media": json.dumps(message.media),
                 "media_context": message.media_context,
+                # Solo si el cliente tocó un botón o una fila de lista (HU-AOS-05).
+                **({"interactive_id": message.interactive_id} if message.interactive_id else {}),
             },
         )
         enqueued += 1

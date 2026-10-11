@@ -21,7 +21,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 
-from core.agents.flow import render_flow, resolve_flow
+from core.agents.flow import confirmed_actions_v2, render_flow, resolve_flow
 from core.agents.responses import load_response
 from core.agents.spec import enabled_packs, load_active_spec
 from core.config import get_settings
@@ -30,7 +30,7 @@ from core.db.session import get_session
 from core.kernel.decisions import anotar_uso, bloquear, en_turno, enrutar, marcar_neutral
 from core.kernel.ingress import QUOTA_EXHAUSTED_REPLY as QUOTA_EXHAUSTED_REPLY
 from core.kernel.ingress import conversacion_bloqueada, politicas_del_turno
-from core.kernel.tarjeta import tarjeta_del_turno
+from core.kernel.procedures.ejecucion import ContextoMotor, contexto_del_motor
 from core.llm import resolve_provider
 from core.llm.difficulty_router import (
     DIFFICULTY_SCORE_THRESHOLD,
@@ -267,8 +267,18 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # Ids vigentes de la conversación (ADR-0130): el historial es solo texto y el modelo
     # no ve el `quote_id` que devolvió una tool en un turno anterior.
     referencias = await cargar_referencias(enabled, disabled_for_tenant, conversation_id, customer.id)
-    # Tarjeta de estado (ADR-0114, HU-AOS-04): "" salvo con `tenants.aos_procedures` encendida.
-    state_card = await tarjeta_del_turno(conversation_id)
+    # Motor de procedimientos (HU-AOS-05): None salvo con `aos_procedures` (activo) o con
+    # `aos_runtime = v3` y procedimientos registrados (sombra, no cambia nada de lo que ve el modelo).
+    # Activo trae la tarjeta de estado (ADR-0114) y, con tarea en foco, las acciones de su etapa.
+    motor = await contexto_del_motor(
+        conversation_id, customer_id=customer.id, channel=conversation.channel, enabled=enabled,
+        disabled=disabled_for_tenant, herramientas_base=active_tools, candidatas=candidate_tools,
+        texto_cliente=latest_message, confirmar_tambien=frozenset(confirmed_actions_v2(spec)),
+    )
+    if motor is not None:
+        motor.ejecutor = _ejecutor_del_motor(conversation, customer, spec)
+        active_tools = motor.herramientas()
+    state_card = motor.tarjeta if motor is not None else ""
 
     prompt_ctx = PromptContext(
         assistant_name=app_settings.assistant_name if app_settings else settings.app_name,
@@ -467,7 +477,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             )
             for tool_call in response.tool_calls:
                 with tracer.start_as_current_span("tool_execute") as tool_span:
-                    result = await _execute_tool_safely(conversation, customer, tool_call, spec)
+                    result = await _execute_tool_safely(conversation, customer, tool_call, spec, motor=motor)
                     span_attributes(tool_span, tool=tool_call.name)
                 # _tool_name (reservada, safe_renderer.py): guardrails como
                 # crm_completion_check necesitan saber QUÉ tool produjo cada
@@ -506,6 +516,10 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                     await _write_usage_ledger(conversation_id, spec, usage, turn_span)
                     escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
                     return TurnResult(text=escalation_text, escalated=True)
+            # La etapa cambió en el lote (HU-AOS-05): la vuelta siguiente ofrece sus acciones.
+            if motor is not None and await motor.tras_lote():
+                active_tools = motor.herramientas()
+                tool_schemas = to_llm_schemas(active_tools) if routing.allow_tools else None
             continue
 
         # ---- refusal
@@ -758,8 +772,26 @@ def _http_for_tool(tool_name: str, declarative: dict[str, Any]) -> ScopedHttp:
     return ScopedHttp(list(allowed))
 
 
+def _ejecutor_del_motor(conversation: Conversation, customer: Customer, spec):  # type: ignore[no-untyped-def]
+    """Precondiciones del motor (HU-AOS-05): corren como cualquier acción del turno (permisos,
+    salud del pack, auditoría), sin volver a pasar por el motor."""
+    async def ejecutar(nombre: str, args: dict[str, Any], clave: str) -> dict[str, Any]:
+        # Una precondición es una lectura: si el binding pide confirmación, no se ejecuta (y no deja
+        # una confirmación v2 pendiente con los datos de la tarea).
+        if _binding_requires_confirmation(spec, nombre):
+            return {"error": "precondicion_requiere_confirmacion"}
+        llamada = LLMToolCall(id=clave, name=nombre, arguments=args)  # clave estable: idempotente
+        return await _execute_tool_safely(conversation, customer, llamada, spec)
+
+    return ejecutar
+
+
 async def _execute_tool_safely(
-    conversation: Conversation, customer: Customer, tool_call: LLMToolCall, spec=None  # type: ignore[no-untyped-def]
+    conversation: Conversation,
+    customer: Customer,
+    tool_call: LLMToolCall,
+    spec=None,  # type: ignore[no-untyped-def]
+    motor: ContextoMotor | None = None,
 ) -> dict[str, Any]:
     """Ejecuta una tool aislando el error: un plugin roto se desactiva, el turno sigue."""
     from core.mcp.declarative import tools_for_spec
@@ -792,13 +824,30 @@ async def _execute_tool_safely(
             )
             return result
 
+    # Motor de procedimientos (HU-AOS-05): con tarea en foco, una acción fuera de la etapa se
+    # deniega y lo que compromete espera la confirmación del cliente, atada a estos argumentos.
+    previo = await motor.antes_de_accion(tool_call.name, tool_call.arguments) if motor is not None else None
+    if previo is not None and (decision := previo.decision) is not None:
+        await record_audit(
+            actor=f"tool:{tool_call.name}",
+            action=decision.auditoria,
+            conversation_id=conversation.id,
+            # Sin los valores (pueden traer datos del cliente): solo las claves y el hash.
+            input_data={"keys": sorted(tool_call.arguments)[:40], "args_hash": decision.args_hash},
+            output_data=decision.resultado,
+        )
+        return decision.resultado
+
     # v2.0.0 (ADR-0050): human-in-the-loop. Un binding con `requiresConfirmation`
     # no ejecuta de una: la primera vez deja el pedido pendiente y se lo devuelve
     # al modelo para que pida confirmación al cliente; la siguiente llamada con
     # los MISMOS argumentos (el cliente ya dijo "sí") sí ejecuta.
     # El objeto `conversation` se actualiza en memoria para que la repetición
     # dentro del MISMO turno ya cuente como confirmada (no re-lee de BD).
-    if spec is not None and _binding_requires_confirmation(spec, tool_call.name):
+    # Con la acción gobernada por la etapa en foco (leída bajo lock), la confirmación es la del
+    # motor, que también aplica el `requiresConfirmation` del binding (ADR-0113 §4).
+    gobernada = previo is not None and previo.gobernada
+    if spec is not None and not gobernada and _binding_requires_confirmation(spec, tool_call.name):
         pending = dict(conversation.state.get("pending_confirmation") or {})
         already = (
             pending.get("tool") == tool_call.name
@@ -880,6 +929,8 @@ async def _execute_tool_safely(
         # guardrail declarativo `required_tool`, ADR-0051).
         output_data={**result, TOOL_NAME_KEY: tool_call.name},
     )
+    if motor is not None:
+        result = await motor.tras_accion(tool_call.name, tool_call.arguments, result, previo)
     return result
 
 
