@@ -28,7 +28,7 @@
     { "id": "pagar", "goal": "Crear el pedido y enviar el link de pago", "risk": "high",
       "actions": ["crear_pedido", "confirmar_pago_pedido"], "exitWhen": { "slots": ["pedido_id", "link_pago"] } }
   ],
-  "completion": { "events": ["pack_payments.pago_confirmado", "pack_commerce.pedido_free_confirmado"], "returnControl": true },
+  "completion": { "events": ["core.payment.confirmed", "pack_commerce.pedido_free_confirmado"], "returnControl": true },
   "recovery": { "actionError": "explicar_y_reintentar_una_vez", "timeout": "relevo_humano" },
   "claims": [
     { "kind": "amount", "mustMatch": ["action:informar_plan.precio", "action:generar_cotizacion.total"] },

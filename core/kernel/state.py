@@ -22,7 +22,8 @@ en `conversations.state.pending_confirmation`, que queda para acciones fuera de 
 Las tareas son registro del negocio, como `messages` (ADR-0053): la purga por cliente no las
 toca y solo `purge_tenant` las borra.
 
-El motor que decide QUÉ evento escribir llega con HU-AOS-05; aquí se garantiza que lo que se
+El motor que decide QUÉ evento escribir está en `core/kernel/procedures/ejecucion.py`
+(HU-AOS-05); aquí se garantiza que lo que se
 escribe es coherente y queda junto con su proyección.
 """
 
@@ -598,6 +599,14 @@ async def eventos(
             )
         ).scalars()
     )
+
+
+async def eventos_de_tarea(
+    session: AsyncSession, *, tenant_id: uuid.UUID, conversation_id: uuid.UUID, task_id: uuid.UUID
+) -> list[Evento]:
+    """Los eventos de una tarea de esta conversación como `Evento` (los lee el motor)."""
+    filas = await eventos(session, tenant_id=tenant_id, conversation_id=conversation_id, task_id=task_id)
+    return [_evento_de(e) for e in filas]
 
 
 async def reconstruir(

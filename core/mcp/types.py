@@ -47,6 +47,10 @@ GuardrailFn = Callable[[str, list[dict[str, Any]]], Awaitable["GuardrailResult"]
 AfirmacionesFn = Callable[[], Awaitable[list["Afirmacion"]]]
 # fuente(conversation_id, customer_id) -> referencias vigentes de la conversación (ADR-0130)
 ReferenciasFn = Callable[[uuid.UUID, uuid.UUID], Awaitable[list["Referencia"]]]
+# resolver de un dato de procedimiento (ADR-0113 §1, HU-AOS-05): (valor, contexto, datos) -> veredicto
+ValidarDatoFn = Callable[[Any, "ToolContext", dict[str, Any]], Awaitable["ResolverResult"]]
+# candidatos de un dato (`candidates.source: resolver:`): (contexto, datos) -> ids que el cliente elige
+CandidatosFn = Callable[["ToolContext", dict[str, Any]], Awaitable[list[str]]]
 
 
 @dataclass
@@ -385,6 +389,32 @@ class Referencia:
 
     tipo: str
     datos: tuple[tuple[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class ResolverResult:
+    """Veredicto de un *resolver* de datos (ADR-0113 §1, HU-AOS-05).
+
+    - `ok=True`: el dato es válido; `value` es el valor normalizado que se guarda (p. ej. el
+      id de la variante para "el premium"). `None` = se guarda el valor tal como llegó.
+    - `ok=False`: `error` es un mensaje en lenguaje claro para el modelo (el dato no se guarda).
+      Lo escribe la habilidad, nunca el cliente.
+    """
+
+    ok: bool
+    value: Any = None
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class Resolver:
+    """Funciones del servidor de una habilidad que validan o proponen un dato de un
+    procedimiento. Reciben solo `ToolContext` (invariante 6) y no tienen efectos."""
+
+    name: str
+    validar: ValidarDatoFn | None = None
+    candidatos: CandidatosFn | None = None
+    plugin_id: str = ""
 
 
 class BaseSkill(ABC):

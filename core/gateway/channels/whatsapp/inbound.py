@@ -58,6 +58,7 @@ class WhatsAppMetaInbound(InboundAdapter):
                     name = contact.get("profile", {}).get("name")
 
                     content = ""
+                    interactive_id = ""
                     media: list[dict[str, str]] = []
                     msg_type = msg.get("type", "text")
 
@@ -77,6 +78,7 @@ class WhatsAppMetaInbound(InboundAdapter):
                         interactive = msg.get("interactive", {})
                         reply = interactive.get("button_reply") or interactive.get("list_reply") or {}
                         content = reply.get("title", "")
+                        interactive_id = str(reply.get("id") or "")[:256]
                     else:
                         continue  # tipos no soportados: sticker, location, etc.
 
@@ -90,6 +92,7 @@ class WhatsAppMetaInbound(InboundAdapter):
                             content=content,
                             connection_external_id=phone_number_id,
                             media=media,
+                            interactive_id=interactive_id,
                         )
                     )
         return messages
