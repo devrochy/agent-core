@@ -55,3 +55,17 @@ def test_quitar_un_link_de_una_respuesta_correcta_es_un_falso_positivo() -> None
     falsa = {**caso, "etiqueta": "falsa", "urls_sin_respaldo": 1}
     assert medir([falsa]).falsos_negativos == []
     assert medir([{**falsa, "urls_sin_respaldo": 0}]).falsos_negativos != [], "sin links inventados, nada lo detecta"
+
+
+def test_con_el_estado_de_las_tareas_no_suben_los_falsos_positivos() -> None:
+    """HU-AOS-06: la regla de referencias del motor activo, medida sobre las respuestas reales
+    con un estado derivado de sus propios resultados, no agrega falsos positivos; y los casos
+    con estado explícito (`origen: sintetico-estado`) no fallan ninguno."""
+    casos = cargar()
+    sin, con = medir(casos), medir(casos, con_estado=True)
+    assert con.falsos_negativos == [] and con.tasa_falsos_positivos <= UMBRAL_FALSOS_POSITIVOS
+    assert [fp["id"] for fp in con.falsos_positivos] == [fp["id"] for fp in sin.falsos_positivos]
+    con_estado = [c for c in casos if c["origen"] == "sintetico-estado"]
+    assert sum(c["etiqueta"] == "falsa" for c in con_estado) >= 4
+    medicion = medir(con_estado)
+    assert medicion.falsos_positivos == [] and medicion.falsos_negativos == []

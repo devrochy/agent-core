@@ -278,3 +278,47 @@ revisó el agente `arquitecto` antes de escribir código.
 - **Idempotencia por `legacy_agent_spec_id`:** con el dedupe por hash, el legacy id de una versión es
   "la primera fila v2 que produjo este contenido". Una re-corrida con el mismo v2 activo no publica
   nada, aunque el binario haya cambiado: refrescar la versión es decisión del build de HU-AOS-14.
+
+## Adenda de implementación (2026-10-11, HU-AOS-06): comandos del hilo
+
+Revisada por el agente `arquitecto` antes de escribir código. No cambia contratos: los comandos
+son tools del core que arma el motor por turno (`core/kernel/procedures/comandos.py`).
+
+- **Solo con el motor activo** (`aos_procedures`). En sombra o con la bandera apagada no aparece
+  ninguna tool nueva y el prompt es idéntico (el gate en replay pasa sin regrabar).
+- **Se ofrecen solo los que aplican al estado:**
+  - `iniciar_procedimiento(procedure_id)`: sin tarea en foco y con candidatos (los disponibles sin
+    tarea abierta; sin router hasta HU-AOS-17). `procedure_id` es un enum de esos candidatos, con
+    título y descripción de cada uno escapados en la descripción. Un id fuera de la lista se
+    rechaza sin crear la tarea;
+  - `actualizar_tarea(slots)`: con tarea en foco y datos que el modelo puede escribir (sin `setBy`,
+    ni ubicación ni archivo, ni `candidates`: esos se eligen con un botón o una lista). El motor
+    rechaza con la misma lista lo que llegue fuera del schema. Un objeto con una propiedad por dato (tipo, `enum`, `format`) y
+    `additionalProperties: false`;
+  - `confirmar_tarea()`: con algo pendiente de confirmar (`comandos.confirmable_por_comando`, el
+    punto que puede ajustar HU-AOS-09);
+  - `cancelar_tarea()`: con tarea en foco.
+- **Sin `task_id` ni `motivo`** (la tabla del design §5.2 los listaba): actúan sobre la tarea en
+  foco. El modelo no ve UUIDs y no hay dos tareas abiertas del mismo procedimiento; un motivo libre
+  sería PII en `task_events`, que no se redacta.
+- **Pausar y retomar** quedan para HU-AOS-20 (dueña de la pila y de `maxStack`); retomar al
+  completar ya existe (`returnControl`).
+- **Resultado** (`CommandResult` del design, como dict): `{ok, state_card, errors,
+  allowed_actions}`. `state_card` es la tarjeta re-renderizada tras el comando y manda sobre la del
+  inicio del turno (el prompt del sistema no se reconstruye). `allowed_actions` son las acciones de
+  la etapa vigente que de verdad se ofrecen. La vuelta siguiente ofrece las tools de la etapa nueva.
+- **Despacho:** el loop los manda al motor antes de `_tool_denial`. Un comando que no aplica al
+  estado vigente (no se ofreció o el lote lo cambió) o con argumentos fuera del schema no se aplica.
+  En un mismo lote, `iniciar` + `actualizar` funciona: cada comando se decide con el estado que dejó
+  el anterior. Los nombres están reservados: ninguna acción del binario puede usarlos (test) y una
+  tool declarativa del negocio con ese nombre no se ofrece mientras el motor esté activo.
+- **Un comando aplicado resuelve el turno** (`turnos_sin_resolver`), aunque no sea una acción: sin
+  eso, un procedimiento de cuatro datos llegaría al autoescalado de ADR-0051/0104. Límite conocido:
+  un modelo que repite un comando aplicable cada turno esquiva el autoescalado; se mira con el
+  tablero de fiabilidad (HU-AOS-29) antes de encender un negocio.
+- **Salud del pack en vivo:** iniciar, actualizar y confirmar vuelven a comprobar que la habilidad
+  sigue sana para el negocio (un pack que se auto-desactivó a mitad del turno no abre tareas ni
+  llama sus resolvers). Si la relectura del estado falla, el resultado va sin tarjeta (nunca con la
+  de antes del cambio). La descripción de `iniciar_procedimiento` lista hasta 12 candidatos.
+- **Textos:** playbook del kernel `comandos` (invariante 3), sin override por negocio y fail-closed;
+  los schemas son estructura y viven en código.

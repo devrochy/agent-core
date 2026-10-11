@@ -42,7 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db.models import ConversationTask
 from core.kernel import state
-from core.kernel.procedures import motor, registro
+from core.kernel.procedures import comandos, motor, registro
 from core.kernel.procedures.catalogo import CORE_OWNER
 from core.kernel.procedures.textos import confirmacion_alta, error_de_resolver, mensaje
 from core.kernel.state import Evento, Proyeccion
@@ -84,6 +84,8 @@ class ResultadoComando:
     ok: bool
     errores: list[str] = field(default_factory=list)
     acciones: list[str] = field(default_factory=list)
+    # Tarjeta de estado vigente al terminar el comando (HU-AOS-06): lo que el modelo ve después.
+    tarjeta: str = ""
 
 
 @dataclass
@@ -309,6 +311,7 @@ class ContextoMotor:
         seq_al_empezar: dict[uuid.UUID, int] | None = None,
         permitidos: frozenset[str] = frozenset(),
         confirmar_tambien: frozenset[str] = frozenset(),
+        abiertas: frozenset[str] = frozenset(),
     ) -> None:
         self.modo: Modo = modo
         self.tenant_id = tenant_id
@@ -328,6 +331,8 @@ class ContextoMotor:
         self._core = frozenset(t.name for t in self._base if getattr(t, "plugin_id", "") == CORE_OWNER)
         self._foco = foco
         self._seq_al_empezar = dict(seq_al_empezar or {})
+        # Procedimientos con una tarea abierta: no son candidatos de `iniciar_procedimiento`.
+        self._abiertas = frozenset(abiertas)
         self._cambio = False
         self._sombra: Any = None
         if modo == "sombra":
@@ -342,14 +347,72 @@ class ContextoMotor:
 
     def herramientas(self) -> list[Any]:
         """Acciones a ofrecer: las de siempre sin foco; con foco, las de la etapa más las del core
-        que el turno ya ofrecía (las declarativas del negocio no: fail-closed)."""
-        if not self.en_foco or self._foco is None:
+        que el turno ya ofrecía (las declarativas del negocio no: fail-closed). Activo, además, los
+        comandos del hilo que aplican al estado (HU-AOS-06)."""
+        if self.modo != "activo":
             return list(self._base)
-        permitidas = set(self._foco.stage.actions)
-        salida = [t for t in self._candidatas if t.name in permitidas]
-        nombres = {t.name for t in salida}
-        salida += [t for t in self._base if t.name in self._core and t.name not in nombres]
-        return salida
+        if self._foco is None:
+            # Una tool declarativa del negocio con el nombre de un comando no se ofrece.
+            salida = [t for t in self._base if t.name not in comandos.NOMBRES]
+        else:
+            permitidas = set(self._foco.stage.actions)
+            salida = [t for t in self._candidatas if t.name in permitidas]
+            nombres = {t.name for t in salida}
+            salida += [t for t in self._base if t.name in self._core and t.name not in nombres]
+        return salida + self.comandos()
+
+    # -- comandos del hilo como tools del LLM (HU-AOS-06)
+    def _candidatos(self) -> list[Procedure]:
+        """Procedimientos que se pueden iniciar: los disponibles sin una tarea abierta. Es la misma
+        lista del enum de `iniciar_procedimiento` y la que comprueba el motor."""
+        return [p for pid, p in sorted(self.procedimientos.items()) if pid not in self._abiertas]
+
+    def _par_en_foco(self) -> tuple[Proyeccion, Procedure] | None:
+        return (self._foco.tarea, self._foco.proc) if self._foco is not None else None
+
+    def _comandos_aplicables(self) -> list[str]:
+        if self.modo != "activo":
+            return []
+        return comandos.aplicables(foco=self._par_en_foco(), candidatos=self._candidatos())
+
+    def comandos(self) -> list[Any]:
+        """Los comandos que aplican al estado, como `MCPTool` (vacío fuera del modo activo)."""
+        nombres = self._comandos_aplicables()
+        if not nombres:
+            return []
+        candidatos = self._candidatos()
+        if nombres[0] == comandos.INICIAR:
+            log.info("motor_candidatos_de_inicio", cantidad=len(candidatos))
+        return comandos.herramientas(nombres, foco=self._par_en_foco(), candidatos=candidatos)
+
+    def es_comando(self, nombre: str) -> bool:
+        """¿Lo despacha el motor? Solo activo y solo los nombres reservados de los comandos."""
+        return self.modo == "activo" and nombre in comandos.NOMBRES
+
+    async def ejecutar_comando(self, nombre: str, args: Mapping[str, Any]) -> dict[str, Any]:
+        """Aplica un comando del modelo y devuelve el `CommandResult` del design (§5.2): `ok`, la
+        tarjeta actualizada, los errores en lenguaje claro y las acciones de la etapa vigente.
+
+        Un comando que no aplica al estado actual (no se ofreció o el estado cambió en el lote) o
+        con argumentos fuera del schema no se aplica. Nunca lanza."""
+        try:
+            error = comandos.argumentos_invalidos(nombre, args)
+            if error is None and nombre not in self._comandos_aplicables():
+                error = comandos.texto("comando_no_disponible", comando=nombre)
+            if error is not None:
+                r = ResultadoComando(False, [error])
+            else:
+                r = await self.aplicar_comando(nombre, args)
+        except Exception as exc:
+            log.warning("motor_comando_fallo", comando=nombre, error=type(exc).__name__)
+            r = ResultadoComando(False, [mensaje("error_interno")])
+        await self._releer_seguro()
+        return {
+            "ok": r.ok,
+            "state_card": self.tarjeta,
+            "errors": list(r.errores),
+            "allowed_actions": self._acciones(),
+        }
 
     # -- antes y después de cada acción
     async def antes_de_accion(self, accion: str, args: dict[str, Any]) -> Previo:
@@ -464,14 +527,45 @@ class ContextoMotor:
         if not self._cambio:
             return False
         self._cambio = False
+        await self._releer_seguro()
+        return True
+
+    async def _releer_seguro(self) -> bool:
+        """Relee el foco, las tareas abiertas y la tarjeta (lo que ofrece la vuelta siguiente y lo
+        que devuelve un comando). No toca `_cambio`: el loop recalcula las tools con `tras_lote`.
+        False si la lectura falló: la tarjeta queda vacía (nunca la de antes del cambio)."""
+        if self.modo != "activo":
+            return True
+        try:
+            from core.db.session import get_session
+            from core.kernel.tarjeta import renderizar_tarjeta
+
+            async with get_session() as s:
+                filas = await state.tareas_abiertas(s, tenant_id=self.tenant_id, conversation_id=self.conversation_id)
+                self._abiertas = frozenset(f.procedure_id for f in filas)
+                self.tarjeta = renderizar_tarjeta(
+                    [state.proyeccion_de(f) for f in filas], procedimientos=registro.definicion
+                )
+                self._foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
+            return True
+        except Exception as exc:
+            log.warning("motor_releer_foco_fallo", error=type(exc).__name__)
+            self.tarjeta = ""
+            return False
+
+    async def instantaneas(self) -> list[dict[str, Any]] | None:
+        """Estado de las tareas para el verificador (ADR-0119, HU-AOS-06), o None fuera del modo
+        activo o si la lectura falla (el verificador sigue como sin estado)."""
+        if self.modo != "activo":
+            return None
         try:
             from core.db.session import get_session
 
             async with get_session() as s:
-                self._foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
+                return await instantaneas_de_tareas(s, self.tenant_id, self.conversation_id, self._permitidos)
         except Exception as exc:
-            log.warning("motor_releer_foco_fallo", error=type(exc).__name__)
-        return True
+            log.warning("motor_instantaneas_fallo", error=type(exc).__name__)
+            return None
 
     # -- avance de etapa
     async def _avanzar_seguro(self, task_id: uuid.UUID) -> None:
@@ -582,18 +676,25 @@ class ContextoMotor:
         raise ValueError(f"comando desconocido: {nombre}")
 
     def _acciones(self) -> list[str]:
-        return list(self._foco.stage.actions) if self._foco is not None else []
+        """Acciones de la etapa en foco que de verdad se ofrecen (las filtradas por conexión o por
+        la salud del pack no)."""
+        if self._foco is None:
+            return []
+        ofrecidas = {t.name for t in self._candidatas}
+        return [a for a in self._foco.stage.actions if a in ofrecidas]
 
     async def _terminar_comando(self, task_id: uuid.UUID | None) -> ResultadoComando:
+        # `_cambio` queda encendido: el `tras_lote` del loop recalcula las tools de la vuelta
+        # siguiente (las de la etapa nueva y los comandos que ahora aplican).
         self._cambio = True
         if task_id is not None:
             await self._avanzar_seguro(task_id)
-        await self.tras_lote()
-        return ResultadoComando(True, [], self._acciones())
+        await self._releer_seguro()
+        return ResultadoComando(True, [], self._acciones(), self.tarjeta)
 
     async def _iniciar(self, procedure_id: str) -> ResultadoComando:
         proc = self.procedimientos.get(procedure_id)
-        if proc is None:
+        if proc is None or not await self._sigue_sano(proc):
             return ResultadoComando(False, [mensaje("procedimiento_no_disponible")])
         async with _con_lock(self.tenant_id, self.conversation_id) as s:
             abiertas = await state.tareas_abiertas(s, tenant_id=self.tenant_id, conversation_id=self.conversation_id)
@@ -610,12 +711,34 @@ class ContextoMotor:
         self._seq_al_empezar[task_id] = 1
         return await self._terminar_comando(task_id)
 
+    async def _exigir_foco_sano(self) -> None:
+        """Los comandos que escriben no gobiernan la tarea de un pack que se auto-desactivó a mitad
+        del turno (sus resolvers no se llaman)."""
+        if self._foco is not None and not await self._sigue_sano(self._foco.proc):
+            raise _NoGobierna
+
+    async def _sigue_sano(self, proc: Procedure) -> bool:
+        """La habilidad del procedimiento sigue sana para el negocio (un pack que se
+        auto-desactivó a mitad del turno no abre tareas nuevas). Fail-closed."""
+        try:
+            from core.plugin_manager import plugin_manager
+
+            rotos = set(await plugin_manager.disabled_plugins_for_tenant(self.tenant_id))
+        except Exception as exc:
+            log.warning("motor_salud_de_packs_fallo", error=type(exc).__name__)
+            return False
+        return registro.gobernable(proc, self._permitidos - rotos)
+
     async def _actualizar(self, slots: Mapping[str, Any]) -> ResultadoComando:
+        await self._exigir_foco_sano()
         async with _con_lock(self.tenant_id, self.conversation_id) as s:
             foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
             if foco is None:
                 raise _NoGobierna
             proc = foco.proc
+            # El servidor usa la misma lista que el schema del comando: un dato con `setBy`, de
+            # ubicación o archivo, o con candidatos no lo escribe el modelo.
+            escribibles = comandos.escribibles(proc)
             errores: list[str] = []
             validos: dict[str, Any] = {}
             ctx = _contexto_de_herramienta(
@@ -630,7 +753,7 @@ class ContextoMotor:
                         if slot is None:
                             errores.append(mensaje("dato_desconocido", dato=_nombre_seguro(nombre)))
                             continue
-                        if slot.setBy is not None:
+                        if slot.setBy is not None or str(nombre) not in escribibles:
                             errores.append(mensaje("dato_del_servidor", dato=nombre))
                             continue
                         v, error = await _validar_dato(
@@ -663,6 +786,7 @@ class ContextoMotor:
     async def _confirmar(self) -> ResultadoComando:
         """Exige la evidencia del turno, que pone el kernel (nunca un argumento del LLM): un "sí"
         explícito de confianza alta del cliente, posterior a la petición de confirmación."""
+        await self._exigir_foco_sano()
         async with _con_lock(self.tenant_id, self.conversation_id) as s:
             foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
             if foco is None:
@@ -690,14 +814,102 @@ class ContextoMotor:
                 raise _NoGobierna
             await _registrar(s, foco.fila, "cancelled", {"reason": "pedido_del_cliente"}, "llm")
             await _devolver_control(s, foco.fila, foco.proc)
-        self._cambio = True
-        await self.tras_lote()
-        return ResultadoComando(True, [], self._acciones())
+        return await self._terminar_comando(None)
 
 
 def payload_de_confirmacion(tenant_id: uuid.UUID, task_id: uuid.UUID, seq: int, args_hash: str = "") -> str:
     """Id firmado del botón que confirma la petición `seq` de una tarea (lo envía HU-AOS-09)."""
     return motor.payload_boton_confirmar(_secreto(), str(tenant_id), str(task_id), seq, args_hash)
+
+
+_MAX_INSTANTANEAS = 20
+
+
+def _datos_de_cierre(proc: Procedure | None) -> frozenset[str]:
+    """Datos que el procedimiento declara como respaldo de sus afirmaciones de estado o de link
+    (`claims[].requires` y `mustMatch` con `slot:`). Solo esos respaldan un cierre desde el
+    estado: un dato de una lectura (`estado_pago = pendiente`) no respalda "tu pago quedó
+    registrado" en los turnos siguientes."""
+    if proc is None:
+        return frozenset()
+    datos: set[str] = set()
+    for claim in proc.claims:
+        if claim.kind == "amount":
+            continue
+        for fuente in [*claim.mustMatch, *([claim.requires] if claim.requires else [])]:
+            if fuente.startswith("slot:"):
+                datos.add(fuente.removeprefix("slot:"))
+    return frozenset(datos)
+
+
+async def instantaneas_de_tareas(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    permitidos: frozenset[str] = frozenset(),
+) -> list[dict[str, Any]]:
+    """Tareas del episodio en curso para el verificador (ADR-0119, HU-AOS-06), solo datos.
+
+    Son las abiertas y las que cambiaron desde el inicio del episodio (`episode_started_at`).
+    Cada una: `procedure_id`, `status`, `slots` (`{nombre: {value, source}}`) y `cierre`:
+    si puede respaldar una afirmación de cierre. Solo pueden la tarea en foco y las que se
+    completaron después de la última respuesta del asistente (un cierre por evento entre
+    turnos): así el pedido de la compra anterior del episodio no respalda "tu pedido quedó
+    creado" de la siguiente. Montos y referencias sí salen de todas. Además, solo respaldan
+    cierres los datos que una afirmación del procedimiento declara (`respalda_cierre`) y solo si
+    el motor gobierna la tarea (su definición está en el binario y su habilidad, habilitada)."""
+    fila_conv = (
+        await session.execute(
+            text(
+                "SELECT c.episode_started_at, (SELECT max(o.created_at) FROM messages o "
+                "WHERE o.tenant_id = c.tenant_id AND o.conversation_id = c.id AND o.deleted_at IS NULL "
+                "AND o.direction = 'outbound') FROM conversations c WHERE c.tenant_id = :t AND c.id = :c"
+            ),
+            {"t": tenant_id, "c": conversation_id},
+        )
+    ).first()
+    if fila_conv is None:
+        return []
+    inicio, ultima_respuesta = fila_conv[0], fila_conv[1]
+    filtro = ConversationTask.status.in_(state.ABIERTOS)
+    if inicio is not None:
+        filtro = filtro | (ConversationTask.updated_at >= inicio)
+    filas = (
+        await session.execute(
+            select(ConversationTask)
+            .where(
+                ConversationTask.tenant_id == tenant_id,
+                ConversationTask.conversation_id == conversation_id,
+                ConversationTask.parent_task_id.is_(None),
+                filtro,
+            )
+            .order_by(ConversationTask.updated_at.desc(), ConversationTask.id)
+            .limit(_MAX_INSTANTANEAS)
+        )
+    ).scalars().all()
+    salida: list[dict[str, Any]] = []
+    for fila in filas:
+        proc = registro.definicion(fila.procedure_id, fila.procedure_version)
+        gobernada = proc is not None and registro.gobernable(proc, permitidos)
+        de_cierre = _datos_de_cierre(proc) if gobernada else frozenset()
+        en_foco = fila.status == "active" and fila.stack_position == 0
+        cerrada_ahora = fila.status == "completed" and (
+            ultima_respuesta is None or (fila.completed_at is not None and fila.completed_at > ultima_respuesta)
+        )
+        salida.append({
+            "procedure_id": fila.procedure_id,
+            "status": fila.status,
+            "cierre": gobernada and (en_foco or cerrada_ahora),
+            "slots": {
+                str(n): {
+                    "value": (m or {}).get("value"),
+                    "source": (m or {}).get("source"),
+                    "respalda_cierre": str(n) in de_cierre,
+                }
+                for n, m in (fila.slots or {}).items()
+            },
+        })
+    return salida
 
 
 def _nombre_seguro(nombre: Any) -> str:
@@ -751,7 +963,7 @@ async def contexto_del_motor(
         return ContextoMotor(
             modo="activo", procedimientos=registro.disponibles(enabled, disabled), tarjeta=tarjeta,
             foco=foco, texto_cliente=texto_cliente, seq_al_empezar={f.id: f.last_seq for f in filas},
-            confirmar_tambien=confirmar_tambien, **comunes,
+            confirmar_tambien=confirmar_tambien, abiertas=frozenset(f.procedure_id for f in filas), **comunes,
         )
     if banderas.runtime == "v3" and registro.hay_procedimientos():
         procs = registro.disponibles(enabled, disabled)
