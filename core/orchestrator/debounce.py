@@ -38,6 +38,14 @@ comando, no hay ventana de carrera. `LTRIM`/`MAX_ACCUMULATED_MESSAGES`
 acota el crecimiento (cliente/bot en loop reseteando el timer para
 siempre) y el `EXPIRE`/TTL en ambas claves evita que una quede viva para
 siempre si el proceso muere entre el `RPUSH` y el disparo del turno.
+
+Ids de los inbound de la ráfaga (seguimiento #438 de HU-AOS-10): viajan en otra lista,
+`debounce:inbound:{tenant_id}:{conversation_id}`, con el mismo RPUSH/LTRIM/EXPIRE en el mismo
+pipeline. Lleva el UUID del negocio primero (convención de `docs/MULTITENANT.md`) para que la
+purga del negocio la barra aunque ya no existan sus conversaciones. Al disparar, el turno
+diferido los anota en `core_decisions.inbound_message_ids`; el reencolado por
+`TurnQueueTimeout` los vuelve a empujar desde el payload, como el texto. Sin orden garantizado
+si llega un mensaje entre el claim y el reencolado (igual que el texto).
 """
 
 from __future__ import annotations
@@ -49,7 +57,7 @@ import uuid
 from collections.abc import Awaitable
 from typing import Any
 
-from core.kernel.decisions import en_turno
+from core.kernel.decisions import anotar_entrada, en_turno
 from core.memory.working import get_redis
 from core.orchestrator.turn_gate import TurnQueueTimeout, run_turn
 from core.shared.logger import get_logger
@@ -60,6 +68,7 @@ log = get_logger(__name__)
 PENDING_KEY = "debounce:pending"
 PAYLOAD_KEY = "debounce:payload:{conversation_id}"
 MESSAGES_KEY = "debounce:messages:{conversation_id}"
+INBOUND_IDS_KEY = "debounce:inbound:{tenant_id}:{conversation_id}"
 POLL_INTERVAL_S = 1.5
 # Tope duro de mensajes acumulados por ráfaga (higiene de memoria/Redis
 # compartido entre tenants, no un límite de negocio).
@@ -84,6 +93,7 @@ async def schedule_debounce(conversation_id: uuid.UUID, delay_ms: int, payload: 
     # "último valor gana" es correcto porque es el mismo valor en cada
     # llamada de la misma conversación.
     new_message = payload.pop("latest_message", "")
+    inbound_ids = [str(i) for i in payload.pop("inbound_message_ids", None) or []]
     payload_key = PAYLOAD_KEY.format(conversation_id=conversation_id)
     messages_key = MESSAGES_KEY.format(conversation_id=conversation_id)
 
@@ -92,6 +102,13 @@ async def schedule_debounce(conversation_id: uuid.UUID, delay_ms: int, payload: 
         pipe.rpush(messages_key, new_message)
         pipe.ltrim(messages_key, -MAX_ACCUMULATED_MESSAGES, -1)
         pipe.expire(messages_key, PENDING_KEY_TTL_S)
+    if inbound_ids and payload.get("tenant_id"):
+        ids_key = INBOUND_IDS_KEY.format(
+            tenant_id=payload["tenant_id"], conversation_id=conversation_id
+        )
+        pipe.rpush(ids_key, *inbound_ids)
+        pipe.ltrim(ids_key, -MAX_ACCUMULATED_MESSAGES, -1)
+        pipe.expire(ids_key, PENDING_KEY_TTL_S)
     pipe.set(payload_key, json.dumps(payload), ex=PENDING_KEY_TTL_S)
     pipe.zadd(PENDING_KEY, {str(conversation_id): fire_at})
     await pipe.execute()
@@ -100,10 +117,23 @@ async def schedule_debounce(conversation_id: uuid.UUID, delay_ms: int, payload: 
 async def cancel_debounce(conversation_id: uuid.UUID) -> None:
     r = get_redis()
     await r.zrem(PENDING_KEY, str(conversation_id))
-    await r.delete(
-        PAYLOAD_KEY.format(conversation_id=conversation_id),
-        MESSAGES_KEY.format(conversation_id=conversation_id),
-    )
+    payload_key = PAYLOAD_KEY.format(conversation_id=conversation_id)
+    claves = [payload_key, MESSAGES_KEY.format(conversation_id=conversation_id)]
+    tenant_id = _tenant_del_payload(await r.get(payload_key)) or get_current_tenant_id()
+    if tenant_id is not None:  # sin negocio conocido, la lista de ids vence por TTL
+        claves.append(INBOUND_IDS_KEY.format(tenant_id=tenant_id, conversation_id=conversation_id))
+    await r.delete(*claves)
+
+
+def _tenant_del_payload(raw_payload: Any) -> str | None:
+    """`tenant_id` del payload pendiente (no cambia en la vida de la conversación)."""
+    if not raw_payload:
+        return None
+    try:
+        tenant_id = json.loads(raw_payload).get("tenant_id")
+    except (ValueError, AttributeError):
+        return None
+    return str(tenant_id) if tenant_id else None
 
 
 async def poll_debounce_loop() -> None:
@@ -129,12 +159,38 @@ async def poll_debounce_once() -> None:
             continue
         payload_key = PAYLOAD_KEY.format(conversation_id=conversation_id_str)
         messages_key = MESSAGES_KEY.format(conversation_id=conversation_id_str)
-        raw_payload = await r.get(payload_key)
-        messages = await r.lrange(messages_key, 0, -1)
-        await r.delete(payload_key, messages_key)
+        # El negocio se lee antes (nombra la lista de ids); payload, texto e ids se leen y
+        # borran en una transacción: un mensaje que llegue en medio no pierde su texto ni su id.
+        tenant_del_payload = _tenant_del_payload(await r.get(payload_key))
+        ids_key = (
+            INBOUND_IDS_KEY.format(tenant_id=tenant_del_payload, conversation_id=conversation_id_str)
+            if tenant_del_payload
+            else None
+        )
+        pipe = r.pipeline(transaction=True)
+        pipe.get(payload_key)
+        pipe.lrange(messages_key, 0, -1)
+        if ids_key is not None:
+            pipe.lrange(ids_key, 0, -1)
+            pipe.delete(payload_key, messages_key, ids_key)
+        else:
+            pipe.delete(payload_key, messages_key)
+        leido = await pipe.execute()
+        raw_payload, messages = leido[0], leido[1]
+        inbound_ids: list[str] = list(dict.fromkeys(leido[2])) if ids_key is not None else []
+        tenant_leido = _tenant_del_payload(raw_payload)
+        if ids_key is None and tenant_leido:
+            # El payload apareció entre el GET y la transacción: sus ids van con él.
+            ids_key = INBOUND_IDS_KEY.format(tenant_id=tenant_leido, conversation_id=conversation_id_str)
+            pipe = r.pipeline(transaction=True)
+            pipe.lrange(ids_key, 0, -1)
+            pipe.delete(ids_key)
+            inbound_ids = list(dict.fromkeys((await pipe.execute())[0]))
         payload = json.loads(raw_payload) if raw_payload else {}
         if messages:
             payload["latest_message"] = "\n".join(messages)
+        if inbound_ids:
+            payload["inbound_message_ids"] = inbound_ids
         conversation_id = uuid.UUID(conversation_id_str)
         tenant_id = payload.get("tenant_id")
         # Gate de turnos (global + por tenant) y disparo concurrente.
@@ -168,19 +224,29 @@ async def _fire_conversation(conversation_id: uuid.UUID, payload: dict[str, Any]
             if not await is_tenant_active(uuid.UUID(tenant_id)):
                 log.info("debounce_tenant_not_active", conversation_id=str(conversation_id))
                 return
-            await _turno_diferido(conversation_id, latest_message)
+            await _turno_diferido(
+                conversation_id, latest_message, payload.get("inbound_message_ids") or []
+            )
     except Exception:
         log.exception("debounce_fire_failed", conversation_id=str(conversation_id))
 
 
 @en_turno  # decisión y resultado del turno (HU-AOS-10); el loop reusa este turno
-async def _turno_diferido(conversation_id: uuid.UUID, latest_message: str) -> None:
+async def _turno_diferido(
+    conversation_id: uuid.UUID, latest_message: str, inbound_message_ids: list[str]
+) -> None:
     from core.db.models import Conversation
     from core.db.session import get_session
     from core.kernel.egress import entregar
     from core.kernel.ingress import conexion_pausada
     from core.orchestrator.loop import process_conversation
 
+    # Los inbound de la ráfaga, antes de la primera decisión (`core_decisions`).
+    for message_id in inbound_message_ids:
+        try:
+            anotar_entrada(uuid.UUID(str(message_id)))
+        except ValueError:
+            continue
     # La conexión se pausó o eliminó después de agendar el turno (ADR-0122): no se
     # gasta el LLM ni se escala por un envío que no puede salir.
     async with get_session() as session:
@@ -221,7 +287,7 @@ async def recover_orphaned_conversations() -> None:
                             text(
                                 """
                                 SELECT DISTINCT ON (m.conversation_id)
-                                       m.conversation_id, m.direction, m.content
+                                       m.conversation_id, m.id, m.direction, m.content
                                 FROM messages m
                                 JOIN conversations c ON c.id = m.conversation_id
                                 WHERE c.status = 'open' AND c.bot_paused = false
@@ -236,13 +302,15 @@ async def recover_orphaned_conversations() -> None:
                 # el ContextVar ya volvió a None y la recuperación quedaba
                 # silenciosamente inoperante para TODOS los tenants (el payload
                 # sin tenant_id hace que `_fire_conversation` descarte el turno).
-                for conversation_id, direction, content in rows:
+                for conversation_id, message_id, direction, content in rows:
                     if direction != "inbound":
                         continue
                     has_timer = await r.zscore(PENDING_KEY, str(conversation_id))
                     if has_timer is None:
                         await schedule_debounce(
-                            uuid.UUID(str(conversation_id)), 0, {"latest_message": content or ""}
+                            uuid.UUID(str(conversation_id)),
+                            0,
+                            {"latest_message": content or "", "inbound_message_ids": [message_id]},
                         )
                         recovered += 1
         if recovered:

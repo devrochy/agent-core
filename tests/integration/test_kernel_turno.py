@@ -153,9 +153,11 @@ async def test_cada_turno_es_una_fila_nueva_y_el_debounce_decide_al_disparar(
 
     t1, _t2 = tenant_setup
     agendados: list[uuid.UUID] = []
+    payloads: list[dict[str, Any]] = []
 
-    async def _agendar(conversation_id, _delay, _payload):
+    async def _agendar(conversation_id, _delay, payload):
         agendados.append(conversation_id)
+        payloads.append(payload)
 
     monkeypatch.setattr(consumer, "schedule_debounce", _agendar)
     from core.config import DEBOUNCE_DELAY_MS
@@ -168,6 +170,10 @@ async def test_cada_turno_es_una_fila_nueva_y_el_debounce_decide_al_disparar(
     conv = await _conversacion_de(t1, cliente)
     assert agendados == [conv]
     assert await _decisiones(t1, conv) == [], "agendar no es un turno: decide el disparo"
+    entrante = await _filas(
+        t1, "SELECT id FROM messages WHERE conversation_id = :c AND direction = 'inbound'", c=conv
+    )
+    assert payloads[0]["inbound_message_ids"] == [entrante[0]["id"]], "el id viaja al agendar"
 
     for _ in range(2):
         await debounce._fire_conversation(conv, {"latest_message": "hola", "tenant_id": str(t1)})
@@ -175,10 +181,100 @@ async def test_cada_turno_es_una_fila_nueva_y_el_debounce_decide_al_disparar(
     assert [d["outcome"] for d in decisiones] == ["routed", "routed"]
     assert decisiones[0]["id"] != decisiones[1]["id"]
     assert all(d["inbound_message_ids"] == [] for d in decisiones), (
-        "en debounce los ids quedan pendientes"
+        "un disparo sin ids en el payload (agendado antes de #438) no inventa ninguno"
     )
     for d in decisiones:
         assert [r["status"] for r in await _resultado(t1, d["id"])] == ["replied"]
+
+
+def _con_debounce(monkeypatch, delay_ms: int) -> None:
+    from core.config import DEBOUNCE_DELAY_MS
+
+    for modo in list(DEBOUNCE_DELAY_MS):  # otros tests dejan al negocio en `inmediato`
+        monkeypatch.setitem(DEBOUNCE_DELAY_MS, modo, delay_ms)
+
+
+async def _entrantes(tid: uuid.UUID, conv: uuid.UUID) -> list[uuid.UUID]:
+    filas = await _filas(
+        tid,
+        "SELECT id FROM messages WHERE conversation_id = :c AND direction = 'inbound' "
+        "ORDER BY created_at",
+        c=conv,
+    )
+    return [f["id"] for f in filas]
+
+
+async def test_el_turno_diferido_registra_los_inbound_de_la_rafaga(
+    tenant_setup, monkeypatch
+) -> None:
+    """#438: los dos mensajes de una ráfaga quedan en `core_decisions.inbound_message_ids`
+    del único turno que dispara el debounce, y la lista de ids no queda en Redis."""
+    from core.memory.working import get_redis
+    from core.orchestrator import consumer, debounce
+    from core.shared.tenant import tenant_scope
+
+    t1, _t2 = tenant_setup
+    _con_debounce(monkeypatch, 60_000)  # ninguna ventana vence entre los dos mensajes
+    cliente = uniq("wa-rafaga")
+    async with tenant_scope(t1):
+        await consumer._handle_inbound_scoped(_inbound(t1, cliente, "hola"))
+        await consumer._handle_inbound_scoped(_inbound(t1, cliente, "quiero el plan anual"))
+    conv = await _conversacion_de(t1, cliente)
+    clave = debounce.INBOUND_IDS_KEY.format(tenant_id=t1, conversation_id=conv)
+    entrantes = await _entrantes(t1, conv)
+    assert len(entrantes) == 2
+    assert await get_redis().lrange(clave, 0, -1) == [str(i) for i in entrantes]
+
+    await get_redis().zadd(debounce.PENDING_KEY, {str(conv): 0})  # vence ya
+    await debounce.poll_debounce_once()
+
+    [d] = await _decisiones(t1, conv)
+    assert d["outcome"] == "routed"
+    assert d["inbound_message_ids"] == entrantes
+    assert await get_redis().exists(clave) == 0
+
+
+async def test_el_reencolado_por_cupo_saturado_conserva_los_ids(tenant_setup, monkeypatch) -> None:
+    """#438: si el cupo del negocio está saturado (`TurnQueueTimeout`) el turno se reprograma
+    y los ids vuelven a Redis con él; el turno que corre después los registra."""
+    from core.memory.working import get_redis
+    from core.orchestrator import consumer, debounce
+    from core.orchestrator.turn_gate import TurnQueueTimeout
+    from core.shared.tenant import tenant_scope
+
+    t1, _t2 = tenant_setup
+    payloads: list[dict[str, Any]] = []
+
+    async def _agendar(_conversation_id, _delay, payload):
+        payloads.append(payload)
+
+    monkeypatch.setattr(consumer, "schedule_debounce", _agendar)
+    _con_debounce(monkeypatch, 1000)
+    cliente = uniq("wa-cupo")
+    async with tenant_scope(t1):
+        await consumer._handle_inbound_scoped(_inbound(t1, cliente))
+    conv = await _conversacion_de(t1, cliente)
+    entrantes = await _entrantes(t1, conv)
+    async with tenant_scope(t1):
+        await debounce.schedule_debounce(conv, 0, payloads[0])
+
+    async def _saturado(_tenant_id, coro):
+        coro.close()
+        raise TurnQueueTimeout("cupo saturado")
+
+    real = debounce.run_turn
+    monkeypatch.setattr(debounce, "run_turn", _saturado)
+    await debounce.poll_debounce_once()
+    clave = debounce.INBOUND_IDS_KEY.format(tenant_id=t1, conversation_id=conv)
+    assert await get_redis().zscore(debounce.PENDING_KEY, str(conv)) is not None
+    assert await get_redis().lrange(clave, 0, -1) == [str(i) for i in entrantes]
+    assert await _decisiones(t1, conv) == []
+
+    monkeypatch.setattr(debounce, "run_turn", real)
+    await debounce.poll_debounce_once()
+    [d] = await _decisiones(t1, conv)
+    assert d["inbound_message_ids"] == entrantes
+    assert await get_redis().exists(clave) == 0
 
 
 # ---------------------------------------------------------------- bloqueos sin LLM
