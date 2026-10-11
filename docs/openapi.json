@@ -18988,9 +18988,15 @@
             "default": []
           },
           "bot_paused": {
-            "type": "boolean",
-            "title": "Bot Paused",
-            "default": false
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bot Paused"
           },
           "business_tz": {
             "type": "string",

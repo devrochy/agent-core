@@ -111,7 +111,9 @@ class IdentityUpdate(BaseModel):
     persona_emojis: str = "sparse"
     persona_max_length: int = 500
     persona_forbidden: list[str] = []
-    bot_paused: bool = False
+    # `None` = no cambiar: la pausa tiene su propio endpoint (`PUT .../bot-paused`) y un
+    # formulario abierto desde antes no debe reactivar ni pausar el asistente al guardar.
+    bot_paused: bool | None = None
     business_tz: str = ""
     business_ranges: list[dict[str, Any]] = []
 
@@ -377,7 +379,8 @@ async def save_identity(
             "auto_escalate_after_turns": max(0, payload.auto_escalate_after_turns),
             "business_hours": business_hours,
         }
-        app_settings.bot_paused = payload.bot_paused
+        if payload.bot_paused is not None:
+            app_settings.bot_paused = payload.bot_paused
 
     persona_data = spec.model_dump(mode="json")
     persona_data["persona"].update(

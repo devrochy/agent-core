@@ -5,7 +5,8 @@
   completa y ganaba la última escritura);
 - solo afecta al negocio activo de la sesión, nunca a otro;
 - exige escritura en `settings` (un colaborador de solo lectura recibe 403);
-- deja rastro en `audit_log` cuando el valor cambia, y repetirlo no audita de nuevo.
+- deja rastro en `audit_log` cuando el valor cambia, y repetirlo no audita de nuevo;
+- `PUT .../identity` sin `bot_paused` no reactiva un asistente pausado.
 """
 
 from __future__ import annotations
@@ -114,6 +115,34 @@ async def test_pausa_solo_cambia_bot_paused_y_audita(app_client) -> None:
     ]
 
 
+async def test_guardar_identidad_sin_bot_paused_no_lo_cambia(app_client) -> None:
+    """Quien tenía Configuración abierta desde antes de la pausa no la deshace al guardar."""
+    tid = await _negocio("pausa-ident")
+    cookie = await _cookie(app_client, tid)
+    abierta = await _identity(app_client, cookie)
+
+    resp = await app_client.put(URL, headers={"Cookie": cookie}, json={"paused": True})
+    assert resp.status_code == 200, resp.text
+
+    sin_pausa = {k: v for k, v in abierta.items() if k != "bot_paused"}
+    resp = await app_client.put(
+        "/api/v1/admin/settings/identity",
+        headers={"Cookie": cookie},
+        json=dict(sin_pausa, business_description="Cambio de otra persona."),
+    )
+    assert resp.status_code == 200, resp.text
+    despues = await _identity(app_client, cookie)
+    assert despues["bot_paused"] is True
+    assert despues["business_description"] == "Cambio de otra persona."
+
+    # Si lo manda explícito, sí lo cambia (el interruptor del formulario).
+    resp = await app_client.put(
+        "/api/v1/admin/settings/identity", headers={"Cookie": cookie}, json=dict(sin_pausa, bot_paused=False)
+    )
+    assert resp.status_code == 200, resp.text
+    assert (await _identity(app_client, cookie))["bot_paused"] is False
+
+
 async def test_pausa_no_toca_otro_negocio(app_client) -> None:
     tid_a = await _negocio("pausa-a")
     tid_b = await _negocio("pausa-b")
@@ -128,8 +157,8 @@ async def test_pausa_no_toca_otro_negocio(app_client) -> None:
     assert (await _identity(app_client, cookie_a))["bot_paused"] is True
 
 
-async def test_tenant_ajeno_por_header_responde_403(app_client) -> None:
-    """Un owner de A no puede pausar B mandando `X-Tenant-Id` de B."""
+async def test_negocio_ajeno_por_header_o_cookie_no_se_toca(app_client) -> None:
+    """Un owner de A no puede pausar B con `X-Tenant-Id` (403) ni con la cookie de negocio."""
     from core.admin.auth import hash_password
     from core.db.models import Admin, TenantUser
     from core.db.session import get_session
@@ -152,13 +181,15 @@ async def test_tenant_ajeno_por_header_responde_403(app_client) -> None:
     )
     assert resp.status_code == 403, resp.text
 
+    # Una cookie de negocio ajena se ignora: cae en su propio negocio (A), no en B.
+    resp = await app_client.put(
+        URL, headers={"Cookie": f"{cookie}; ac_tenant={tid_b}"}, json={"paused": True}
+    )
+    assert resp.status_code == 200, resp.text
+
     admin_b = await _cookie(app_client, tid_b)
     assert (await _identity(app_client, admin_b))["bot_paused"] is False
     assert await _auditoria(tid_b) == []
-
-    # Su propio negocio sí lo puede pausar.
-    resp = await app_client.put(URL, headers={"Cookie": cookie}, json={"paused": True})
-    assert resp.status_code == 200, resp.text
     assert await _auditoria(tid_a) == [(f"admin:{email}", "settings.bot_paused")]
 
 
