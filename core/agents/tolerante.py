@@ -194,6 +194,14 @@ def _declarativas(
                 avisos.append(f"extensions.tools '{nombre}': header inválido descartado")
                 continue
             if header.lower() in SENSITIVE_HEADERS:
+                if not tool["allowed_domains"]:
+                    # Sin allowlist la tool hoy no llama a nadie (el loop arma un ScopedHttp por
+                    # tool con sus dominios): el literal no tiene a dónde viajar ni se migra.
+                    avisos.append(
+                        f"extensions.tools '{nombre}': el header {header} se descarta (la tool no tiene "
+                        "allowed_domains y hoy tampoco puede llamar a nadie)"
+                    )
+                    continue
                 ref = _nombre_secreto(nombre, header, usados)
                 secretos[ref] = SecretStr(valor)
                 headers[header] = {"secret": ref}
@@ -489,31 +497,30 @@ async def _conexiones_conversacionales(tenant_id: uuid.UUID, avisos: list[str]) 
     return [cid for cid, conv in filas if conv]
 
 
-async def cargar_como_v3(tenant_id: uuid.UUID | None = None, *, modules: Iterable[Any] | None = None) -> VistaV3:
-    """Carga el AgentSpec v2 activo del negocio del `tenant_scope` activo como v3.
+async def convertir_negocio(spec: AgentSpec, *, modules: Iterable[Any] | None = None) -> ConversionV3:
+    """Convierte `spec` (el v2 activo del negocio del `tenant_scope` activo) con las mismas
+    entradas que el loop: catálogo del binario, candidatas de los packs habilitados y el flujo
+    compuesto resuelto con el slug del negocio del scope (nunca el `tenantId` del JSON).
 
-    `tenant_id`, si se pasa, debe ser el del scope (si no, `PermissionError`): el lector no
-    lee un negocio desde el contexto de otro. `modules`: los módulos del binario para el
+    Devuelve la conversión CON los secretos literales (`SecretStr`): la usan `cargar_como_v3`
+    (que solo expone los nombres) y el backfill de HU-AOS-13 (que los mueve a la instalación
+    `core` antes de crear la primera versión). `modules`: los módulos del binario para el
     catálogo; por defecto, los ya cargados (`plugin_manager.list_modules()`)."""
     from core.agents.flow import resolve_flow
-    from core.agents.spec import load_active_spec
     from core.kernel.procedures import catalogo_de_acciones
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import get_current_tenant_id, tenant_slug
 
     tid = get_current_tenant_id()
     if tid is None:
-        raise ValueError("cargar_como_v3 corre dentro del tenant_scope del negocio")
-    if tenant_id is not None and tenant_id != tid:
-        raise PermissionError("cargar_como_v3: el negocio pedido no es el del tenant_scope")
-    spec = await load_active_spec(tid)
+        raise ValueError("convertir_negocio corre dentro del tenant_scope del negocio")
     catalogo = catalogo_de_acciones(modules if modules is not None else plugin_manager.list_modules())
     candidatas, siempre = candidatas_del_spec(spec, catalogo)
     # El slug sale del negocio del scope, nunca del `tenantId` del JSON.
     slug = await tenant_slug(tid)
     flujo = await resolve_flow(spec, slug=slug, available=set(candidatas)) if slug else None
     try:
-        conversion = convertir_v2(
+        return convertir_v2(
             spec,
             tenant_id=str(tid),
             catalogo=catalogo,
@@ -524,6 +531,23 @@ async def cargar_como_v3(tenant_id: uuid.UUID | None = None, *, modules: Iterabl
     except ConversionFallida:
         del spec  # el v2 lleva los secretos literales: fuera de los locales del frame
         raise
+
+
+async def cargar_como_v3(tenant_id: uuid.UUID | None = None, *, modules: Iterable[Any] | None = None) -> VistaV3:
+    """Carga el AgentSpec v2 activo del negocio del `tenant_scope` activo como v3.
+
+    `tenant_id`, si se pasa, debe ser el del scope (si no, `PermissionError`): el lector no
+    lee un negocio desde el contexto de otro. `modules`: los módulos del binario para el
+    catálogo; por defecto, los ya cargados (`plugin_manager.list_modules()`)."""
+    from core.agents.spec import load_active_spec
+    from core.shared.tenant import get_current_tenant_id
+
+    tid = get_current_tenant_id()
+    if tid is None:
+        raise ValueError("cargar_como_v3 corre dentro del tenant_scope del negocio")
+    if tenant_id is not None and tenant_id != tid:
+        raise PermissionError("cargar_como_v3: el negocio pedido no es el del tenant_scope")
+    conversion = await convertir_negocio(await load_active_spec(tid), modules=modules)
     avisos = list(conversion.avisos)
     conexiones = await _conexiones_conversacionales(tid, avisos)
     return VistaV3(
@@ -542,15 +566,16 @@ async def migrar_secretos(tenant_id: uuid.UUID, conversion: ConversionV3) -> lis
     cada uno atado a los dominios de las tools que lo usan (ADR-0113 §2). Es el paso que el
     backfill (HU-AOS-13) corre ANTES de crear la primera `agent_version`, que es inmutable.
 
-    Idempotente: reescribir un secreto con el mismo valor no cambia nada visible. Devuelve
-    avisos (sin valores) de los que no se pudieron mover: una tool sin `allowedDomains` hoy
-    tampoco puede llamar a nadie (ScopedHttp cierra todo sin allowlist)."""
+    Copia, no mueve: el loop legacy sigue usando los literales de `agent_specs` (adenda de
+    HU-AOS-13 en ADR-0113). Idempotente: con el mismo valor y los dominios ya cubiertos no
+    escribe. Nunca pisa un secreto existente ni le suma dominios solo (`ValueError` sin
+    valores). Devuelve avisos (sin valores); hoy siempre vacío."""
     from agentcore_contracts import SecretRef
 
     from core.agents.secretos import (
         SecretoDeclarativo,
+        comparar_secreto,
         guardar_secretos_declarativos,
-        secreto_igual,
     )
 
     if conversion.identidad.tenant_id != str(tenant_id):
@@ -564,18 +589,26 @@ async def migrar_secretos(tenant_id: uuid.UUID, conversion: ConversionV3) -> lis
     avisos: list[str] = []
     a_guardar: dict[str, SecretoDeclarativo] = {}
     for nombre, valor in conversion.secretos.items():
-        if not dominios.get(nombre):
-            avisos.append(f"secreto '{nombre}': su tool no tiene allowedDomains, no se migra")
-            continue
-        igual = await secreto_igual(tenant_id, nombre, valor)
+        # El lector solo extrae secretos de tools con `allowedDomains` (las demás no llaman a nadie).
+        necesarios = dominios.get(nombre, set())
+        igual, actuales = await comparar_secreto(tenant_id, nombre, valor)
         if igual is False:
             # Nunca se pisa un secreto del editor con el mismo nombre y otro valor.
             raise ValueError(f"migrar_secretos: el secreto '{nombre}' ya existe con otro valor")
         if igual:
+            faltan = sorted(necesarios - set(actuales))
+            if faltan:
+                # Nunca se amplían solos: un secreto se ata a dominios nuevos solo reescribiéndolo
+                # (un rollback del v2 podría traer dominios que alguien quitó a propósito).
+                raise ValueError(
+                    f"migrar_secretos: el secreto '{nombre}' ya migrado no cubre {', '.join(faltan)}: "
+                    "reescríbelo en el editor de tools declarativas"
+                )
             continue  # ya migrado: idempotente
-        a_guardar[nombre] = SecretoDeclarativo(valor=valor, dominios=tuple(sorted(dominios[nombre])))
+        a_guardar[nombre] = SecretoDeclarativo(valor=valor, dominios=tuple(sorted(necesarios)))
     if a_guardar:
-        await guardar_secretos_declarativos(tenant_id, a_guardar)
+        # `solo_nuevos`: si el negocio lo escribió entre la comparación y aquí, no se pisa.
+        await guardar_secretos_declarativos(tenant_id, a_guardar, solo_nuevos=True)
     return avisos
 
 
@@ -590,6 +623,7 @@ __all__ = [
     "acciones_ofrecidas",
     "candidatas_del_spec",
     "cargar_como_v3",
+    "convertir_negocio",
     "convertir_v2",
     "migrar_secretos",
 ]

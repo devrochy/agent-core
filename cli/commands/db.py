@@ -84,3 +84,58 @@ def backfill_conexiones(
             f"[yellow]Choque:[/yellow] negocio {choque.tenant_id}, número {choque.phone_number_id} "
             "ya tiene una conexión manual: no se crea otra."
         )
+
+
+@app.command("backfill-agentes")
+def backfill_agentes(
+    dry_run: bool = typer.Option(False, "--dry-run", help="No escribe: reporta lo que haría."),
+    tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
+    lote: int = typer.Option(500, "--lote", min=1, help="Conexiones por transacción."),
+) -> None:
+    """Agent OS, paso B2 (HU-AOS-13): por negocio, el Coordinador y el General (desde el
+    AgentSpec v2 activo) con sus versiones y una instancia de cada uno en cada conexión
+    conversacional. Idempotente. Exige el backfill de conexiones (`backfill-conexiones`)
+    hecho antes; correr primero con `--dry-run`. No cambia la conducta: el runtime sigue en
+    `aos_runtime = legacy`."""
+    import asyncio
+
+    from rich.table import Table
+
+    from cli.tenant_ref import resolve_tenant
+    from core.agents.backfill_agentes import ReporteAgentes
+    from core.agents.backfill_agentes import backfill_agentes as correr
+    from core.plugin_manager import plugin_manager
+
+    async def _run() -> ReporteAgentes:
+        tenant_id = await resolve_tenant(tenant) if tenant else None
+        return await correr(dry_run=dry_run, tenant_id=tenant_id, lote=lote, modules=plugin_manager.scan())
+
+    reporte = asyncio.run(_run())
+    tabla = Table(title="Backfill de agentes" + (" (dry-run: no se escribió nada)" if dry_run else ""))
+    tabla.add_column("Concepto")
+    tabla.add_column("Cantidad", justify="right")
+    filas = [
+        ("Negocios", reporte.negocios),
+        ("Negocios migrados", reporte.migrados),
+        ("Negocios bloqueados (falta el backfill de conexiones)", len(reporte.bloqueados)),
+        ("Negocios con error", len(reporte.errores)),
+        ("AgentSpec por defecto sembrado", reporte.specs_sembrados),
+        *((f"Agentes: {k}", v) for k, v in sorted(reporte.agentes.items())),
+        *((f"Versiones: {k}", v) for k, v in sorted(reporte.versiones.items())),
+        *((f"Instancias: {k}", v) for k, v in sorted(reporte.instancias.items())),
+        *((f"Secretos: {k}", v) for k, v in sorted(reporte.secretos.items())),
+        ("Conexiones conversacionales", reporte.conexiones_conversacionales),
+        ("Conexiones sin agentes (integraciones o sin tipo)", reporte.conexiones_sin_agentes),
+        ("Choques con una conexión manual del mismo número", reporte.choques_manuales),
+        ("Negocios con chat web activo sin conexión (aún no es tipo de conexión)", reporte.chat_web_sin_conexion),
+        ("Avisos de la conversión (ver el log)", reporte.avisos),
+    ]
+    for concepto, cantidad in filas:
+        tabla.add_row(concepto, str(cantidad))
+    console.print(tabla)
+    for problema in reporte.bloqueados:
+        console.print(f"[yellow]Bloqueado:[/yellow] negocio {problema.tenant_id}: {problema.mensaje}")
+    for problema in reporte.errores:
+        console.print(f"[red]Error:[/red] negocio {problema.tenant_id}: {problema.mensaje}")
+    if reporte.fallo:
+        raise typer.Exit(1)

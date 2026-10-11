@@ -371,3 +371,16 @@ def test_referencias_ya_escritas_por_el_editor_se_conservan(catalogo) -> None:
     # El literal nuevo no pisa el nombre de la referencia existente.
     assert headers["Cookie"] == SecretRef(secret="consultar_envio_cookie")
     assert list(c.secretos) == ["consultar_envio_cookie"]
+
+
+def test_tool_sin_dominios_pierde_el_header_sensible_sin_extraer_secreto(catalogo) -> None:
+    """HU-AOS-13: sin `allowed_domains` la tool hoy no llama a nadie (ScopedHttp por tool): el
+    literal no se extrae (no tendría a dónde viajar) ni entra a la versión. Con aviso, sin valor."""
+    raw = v2_completo()
+    raw["extensions"]["tools"][0]["allowed_domains"] = []
+    c, _, _ = convertir(raw, catalogo)
+    assert c.general.declarativeTools[0].headers == {"X-Cliente": "solvershub"}
+    assert c.secretos == {}
+    assert any("se descarta" in a and "allowed_domains" in a for a in c.avisos)
+    assert all(SECRETO not in a for a in c.avisos)
+    assert SECRETO not in c.general.model_dump_json()

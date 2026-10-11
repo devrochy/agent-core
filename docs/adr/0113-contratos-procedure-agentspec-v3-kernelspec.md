@@ -126,3 +126,20 @@ Los textos del clasificador y del compositor viven en playbooks del core (invari
   - Quitar un campo, volverlo obligatorio o cambiar su tipo o su semántica es *major*.
 
 El validador y el linter únicos están en `core/agents/contrato_v3.py`. Los usan `agent-core agent lint`, el CI y la API al guardar o publicar. El lector tolerante está en `core/agents/tolerante.py`. Su salida pasa siempre el validador: lo que hoy está muerto se poda con un aviso, y los secretos literales salen como `SecretStr` hacia la instalación `core`.
+
+## Adenda de implementación (2026-10-10, HU-AOS-13): backfill B2
+
+- **Los secretos se copian, no se mueven.** El backfill (`agent-core db backfill-agentes`) copia los
+  literales de las `declarativeTools` v2 a la instalación `core` antes de la primera `agent_version`:
+  ninguna versión lleva literales, pero `agent_specs` (la fila activa y las inactivas) los conserva
+  porque el loop legacy los sigue usando. Su limpieza queda para HU-AOS-46. El backfill nunca pisa un
+  secreto existente (lo comprueba con la fila bloqueada) ni lo ata solo a dominios nuevos: un rollback
+  del v2 podría traer dominios que alguien quitó a propósito. En ese caso el negocio queda en error
+  y hay que reescribir el secreto en el editor.
+- **Header sensible de una tool sin `allowedDomains`:** el lector tolerante lo descarta con aviso y no
+  extrae el secreto. Esa tool hoy no llama a nadie (el loop arma un `ScopedHttp` por tool con su
+  allowlist), así que no cambia la conducta, y el mismo v2 da el mismo contenido para el backfill y
+  para el build de releases (HU-AOS-14).
+- **Idempotencia por `legacy_agent_spec_id`:** con el dedupe por hash, el legacy id de una versión es
+  "la primera fila v2 que produjo este contenido". Una re-corrida con el mismo v2 activo no publica
+  nada, aunque el binario haya cambiado: refrescar la versión es decisión del build de HU-AOS-14.

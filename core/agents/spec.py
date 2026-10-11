@@ -164,12 +164,11 @@ async def _migrate_legacy_escalation(tenant_id: uuid.UUID, raw: dict[str, Any]) 
         settings_row.escalation_config = config
 
 
-async def _ensure_default_playbooks(tenant_id: uuid.UUID, spec: AgentSpec) -> AgentSpec:
-    """Fusiona los playbooks default en el índice si faltan (data migration perezosa).
-
-    Los specs sembrados antes de añadir `respuestas` no la tienen; el merge es
-    idempotente y solo escribe si faltan referencias.
-    """
+def con_playbooks_por_defecto(spec: AgentSpec) -> AgentSpec | None:
+    """`spec` con los playbooks default y los de sus packs habilitados que le faltan en el
+    índice, o None si no le falta ninguno. Puro: es la parte de `_ensure_default_playbooks`
+    que no escribe, para leer el spec como lo ve el loop sin tocar la fila (backfill de
+    HU-AOS-13)."""
     existing = {p.name for p in spec.playbooks}
     missing = [ref for ref in DEFAULT_PLAYBOOK_REFS if ref["name"] not in existing]
     # Playbooks de packs habilitados del tenant (ADR-0019): un playbook nuevo en
@@ -185,14 +184,25 @@ async def _ensure_default_playbooks(tenant_id: uuid.UUID, spec: AgentSpec) -> Ag
     except Exception:
         pass
     if not missing:
-        return spec
+        return None
     # `model_validate`, no `model_copy(update=...)`: model_copy no valida y los `missing`
     # (dicts) quedaban como dicts en el spec devuelto; el primer turno tras sumarse un
     # playbook de pack se caía en `load_playbook` (`'dict' object has no attribute
     # 'name'`). Visto con los journeys de HU-SUB-12.
-    merged = AgentSpec.model_validate(
+    return AgentSpec.model_validate(
         {**spec.model_dump(mode="json"), "playbooks": [*spec.model_dump(mode="json")["playbooks"], *missing]}
     )
+
+
+async def _ensure_default_playbooks(tenant_id: uuid.UUID, spec: AgentSpec) -> AgentSpec:
+    """Fusiona los playbooks default en el índice si faltan (data migration perezosa).
+
+    Los specs sembrados antes de añadir `respuestas` no la tienen; el merge es
+    idempotente y solo escribe si faltan referencias.
+    """
+    merged = con_playbooks_por_defecto(spec)
+    if merged is None:
+        return spec
     async with get_session() as session:
         row = (
             await session.execute(
@@ -260,6 +270,30 @@ async def load_active_spec(tenant_id: uuid.UUID | None = None) -> AgentSpec:
     await _migrate_legacy_escalation(tenant_id, row.spec)
     spec = AgentSpec.model_validate(_drop_legacy_fields(row.spec))
     return await _ensure_default_playbooks(tenant_id, spec)
+
+
+async def leer_spec_activo(tenant_id: uuid.UUID) -> tuple[uuid.UUID, AgentSpec] | None:
+    """`(id de la fila, AgentSpec)` del spec activo del negocio, como lo ve el loop, SIN
+    escribir: no siembra el default, no persiste el merge de playbooks ni el rescate del
+    escalamiento v1 (los hace el loop en su turno). None si el negocio no tiene spec activo.
+    Lo usa el backfill de HU-AOS-13, que no toca `agent_specs`."""
+    async with get_session() as session:
+        row = (
+            await session.execute(
+                select(AgentSpecRecord)
+                .where(
+                    AgentSpecRecord.tenant_id == tenant_id,
+                    AgentSpecRecord.is_active.is_(True),
+                    AgentSpecRecord.deleted_at.is_(None),
+                )
+                .order_by(AgentSpecRecord.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if row is None:
+        return None
+    spec = AgentSpec.model_validate(_drop_legacy_fields(row.spec))
+    return row.id, con_playbooks_por_defecto(spec) or spec
 
 
 async def activate_spec_version(
