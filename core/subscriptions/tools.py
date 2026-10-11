@@ -52,13 +52,22 @@ async def _suscripcion_del_cliente(ctx: ToolContext) -> SubscriptionView | None:
     return activas[0] if activas else None
 
 
-def _proveedor_habilitado(provider_ids: frozenset[str]) -> Callable[[set[str]], Awaitable[bool]]:
-    """Predicado de oferta: solo tenants con un proveedor de suscripciones activo."""
+def _proveedor_habilitado() -> Callable[[set[str]], Awaitable[bool]]:
+    """Predicado de oferta: solo tenants con un proveedor de suscripciones activo.
+
+    Los proveedores se leen del registro EN CADA REQUEST, no al registrar la skill:
+    las skills del core se registran antes de que los packs se activen (al importar
+    `core.main`, antes del lifespan), y un conjunto calculado ahí quedaba vacío para
+    siempre en ese proceso, así que las `sub_*` no se ofrecían nunca.
+    """
 
     async def _predicate(_connection_types: set[str]) -> bool:
         from core.agents.spec import enabled_packs, load_active_spec
 
         try:
+            provider_ids = set(subscription_registry.registered_provider_ids())
+            if not provider_ids:
+                return False
             spec = await load_active_spec()
             return bool(enabled_packs(spec) & provider_ids)
         except Exception:
@@ -87,8 +96,7 @@ class SubscriptionSkill(BaseSkill):
         return [replace(t, always_available=True) for t in self._build_tools()]
 
     def _build_tools(self) -> list[MCPTool]:
-        providers = frozenset(subscription_registry.registered_provider_ids())
-        predicate = _proveedor_habilitado(providers)
+        predicate = _proveedor_habilitado()
         return [
             MCPTool(
                 name="sub_consultar",
