@@ -252,10 +252,14 @@ async def intentos_recientes(
 @dataclass(frozen=True)
 class TerminosPendientes:
     """Falta que el cliente acepte el juego de versiones vigente. `token` es lo que la tool
-    tiene que recibir de vuelta cuando el cliente acepte, en esta misma conversación."""
+    tiene que recibir de vuelta cuando el cliente acepte, en esta misma conversación.
+
+    `enlaces_enviados`: si el cliente ya recibió estos enlaces. Si no, ninguna respuesta suya
+    puede aceptarlos todavía y la tool no debe pedir que se repita en el mismo turno."""
 
     documentos: list[dict[str, str]]
     token: str
+    enlaces_enviados: bool = False
 
 
 @dataclass(frozen=True)
@@ -327,18 +331,15 @@ async def _anotar_terminos_mostrados(
         log.warning("alta_terminos_sin_redis", tenant_id=str(vendedor), exc_info=True)
 
 
-async def _mensaje_que_acepta(
+async def _hora_de_envio(
     vendedor: uuid.UUID, conversation_id: uuid.UUID | None, version: str
-) -> str | None:
-    """El último mensaje del cliente posterior a que se ENVIARAN los enlaces de este juego de
-    versiones, o None.
+) -> datetime | None:
+    """Cuándo se ENVIARON al cliente los enlaces de este juego de versiones, o None si todavía
+    no salieron.
 
     «Enviados» es el primer mensaje saliente (no fallido) posterior al marcador: la respuesta del
-    turno que mostró los enlaces. Un mensaje del cliente que llegó mientras corría ese turno (una
-    ráfaga) es posterior al marcador, pero el cliente todavía no había visto los enlaces: no
-    acepta. Sin ese mensaje (el modelo repitió el token en el mismo turno, lo trajo de otra
-    conversación, el marcador venció, la respuesta no salió o Redis no responde), no hay
-    aceptación: falla cerrado."""
+    turno que mostró los enlaces. Sin marcador (nunca se mostraron, venció o Redis no responde)
+    también es None."""
     from core.memory.working import get_redis
 
     if conversation_id is None:
@@ -352,7 +353,7 @@ async def _mensaje_que_acepta(
         return None
     marcador = datetime.fromisoformat(mostrado.decode() if isinstance(mostrado, bytes) else str(mostrado))
     async with _sesion_del(vendedor) as session:
-        enviados = (
+        return (
             await session.execute(
                 select(func.min(Message.created_at)).where(
                     Message.tenant_id == vendedor,
@@ -363,8 +364,23 @@ async def _mensaje_que_acepta(
                 )
             )
         ).scalar_one_or_none()
-        if enviados is None:
-            return None
+
+
+async def _mensaje_que_acepta(
+    vendedor: uuid.UUID, conversation_id: uuid.UUID | None, version: str
+) -> str | None:
+    """El último mensaje del cliente posterior a que se ENVIARAN los enlaces de este juego de
+    versiones (`_hora_de_envio`), o None.
+
+    Un mensaje del cliente que llegó mientras corría el turno que mostró los enlaces (una
+    ráfaga) es posterior al marcador, pero el cliente todavía no los había visto: no acepta. Sin
+    envío (el modelo repitió el token en el mismo turno, lo trajo de otra conversación, el
+    marcador venció, la respuesta no salió o Redis no responde), no hay aceptación: falla
+    cerrado."""
+    enviados = await _hora_de_envio(vendedor, conversation_id, version)
+    if enviados is None:
+        return None
+    async with _sesion_del(vendedor) as session:
         mensaje = (
             await session.execute(
                 select(Message.id)
@@ -447,7 +463,9 @@ async def preparar_pedido_de_alta(
         if mensaje_id is None:
             await _anotar_terminos_mostrados(vendedor, conversation_id, version)
             return TerminosPendientes(
-                documentos=[vigentes[tipo].para_aceptar() for tipo in legal.TIPOS], token=token
+                documentos=[vigentes[tipo].para_aceptar() for tipo in legal.TIPOS],
+                token=token,
+                enlaces_enviados=await _hora_de_envio(vendedor, conversation_id, version) is not None,
             )
         aceptacion = {
             "documentos": [vigentes[tipo].para_aceptar() for tipo in legal.TIPOS],

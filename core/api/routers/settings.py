@@ -561,11 +561,12 @@ async def get_advanced(
         read_llm,
         recent_eval_runs,
     )
+    from core.agents.declarativas import spec_para_mostrar
 
     spec = await load_active_spec()
-    spec = await load_active_spec()
     return AdvancedResponse(
-        spec=spec.model_dump(mode="json"),
+        # Los literales sensibles de tools declarativas viejas nunca salen (HU-AOS-12).
+        spec=spec_para_mostrar(spec.model_dump(mode="json")),
         versions=[SpecVersion(**v) for v in await list_spec_versions(principal.tenant_id)],
         llm=LlmSettings(**await read_llm(principal.tenant_id)),
         guardrails_text=read_custom_guardrails(spec),
@@ -640,14 +641,15 @@ class SpecPayload(BaseModel):
 async def get_raw_spec(
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> SpecPayload:
-    """AgentSpec activo (editor crudo de Configuración → Avanzado).
+    """AgentSpec activo (editor crudo de Configuración → Avanzado), con los headers sensibles
+    de las tools declarativas enmascarados (HU-AOS-12). El `tenantId` mostrado es el del
+    negocio de la sesión, aunque la fila traiga otro."""
+    from core.agents.declarativas import spec_para_mostrar
 
-    El `tenantId` mostrado es el del negocio de la sesión, aunque la fila traiga otro.
-    """
     spec = await load_active_spec()
     if principal.tenant_id is not None:
         spec = con_tenant_de_la_fila(spec, principal.tenant_id)
-    return SpecPayload(spec=spec.model_dump(mode="json"))
+    return SpecPayload(spec=spec_para_mostrar(spec.model_dump(mode="json")))
 
 
 @router.put("/advanced/spec", response_model=SpecPayload)
@@ -664,6 +666,13 @@ async def save_raw_spec(
     from agentcore_contracts import AgentSpec
     from pydantic import ValidationError
 
+    from core.agents.declarativas import (
+        ErroresDeclarativas,
+        spec_para_mostrar,
+        tools_del_editor_crudo,
+    )
+    from core.agents.secretos import SecretoInvalido
+
     if principal.tenant_id is None:
         raise ApiError(400, "sin_negocio", "Selecciona un negocio (X-Tenant-Id).")
     try:
@@ -672,8 +681,28 @@ async def save_raw_spec(
         raise ApiError.bad_request(f"Spec inválido: {str(exc)[:240]}", "invalid_spec") from exc
     nuevo = con_tenant_de_la_fila(nuevo, principal.tenant_id)
     spec = await load_active_spec()
-    await save_spec_if_changed(spec, nuevo.model_dump(mode="json"), principal.tenant_id)
-    return SpecPayload(spec=nuevo.model_dump(mode="json"))
+    data = nuevo.model_dump(mode="json")
+    # Las tools declarativas pasan por el mismo validador que su editor (sin literales
+    # sensibles, secretos atados a dominios): el editor crudo no es una segunda puerta.
+    ext = dict(data.get("extensions") or {})
+    try:
+        tools = await tools_del_editor_crudo(
+            principal.tenant_id, ext.get("tools"), (spec.extensions or {}).get("tools"), actor=principal.admin.id
+        )
+    except ErroresDeclarativas as exc:
+        raise ApiError(
+            422, "invalid_declarative_tools", "Las tools declarativas no son válidas.",
+            fields={f"extensions.{k}": v for k, v in exc.errores.items()},
+        ) from None
+    except SecretoInvalido as exc:
+        raise ApiError(422, "invalid_secret", str(exc)) from None
+    if tools is None:
+        ext.pop("tools", None)
+    else:
+        ext["tools"] = tools
+    data["extensions"] = ext
+    await save_spec_if_changed(spec, data, principal.tenant_id)
+    return SpecPayload(spec=spec_para_mostrar(data))
 
 
 # ---------------------------------------------------------------- plantillas por evento

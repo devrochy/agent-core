@@ -131,6 +131,25 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
         ),
         {"confirmar_cotizacion"},
     ),
+    # Test, tenant solvershub (2026-10-10): con el `ya_pagado` de `generar_link_pago` (un
+    # error: la referencia era la del Basic ya pagado) el modelo dijo "el pedido OC-0001 ya
+    # figura como pagado, así que no hace falta generar otro", y luego "el pago sí quedó
+    # registrado", sobre una compra del Premium que no tenía ni pedido. El estado de pago
+    # se afirma con una consulta del turno; el bloque de referencias no es evidencia.
+    "pago_registrado": (
+        re.compile(
+            r"\b(?:figur|aparec|qued|est|consta)\w*\s+(?:ya\s+)?(?:como\s+)?pagad[oa]s?\b|"
+            r"\bya\s+(?:est[aá]|qued[oó])\s+pag[oa]\b|"
+            # Con verbo: "medio de pago registrado: Nequi" no afirma nada.
+            r"\bpago\s+(?:(?:ya|s[ií])\s+)*(?:qued[oó]|fue|est[aá]|ha\s+sido)\s+(?:ya\s+)?"
+            r"(?:registrad|aprobad|acreditad)\w*|"
+            r"\b(?:recib(?:imos|[ií]|i[oó])|se\s+(?:registr|acredit)[oó])\s+(?:tu|el)\s+pago\b|"
+            # "Si ya pagaste, mandame el comprobante" es un condicional.
+            r"(?<!si\s)\bya\s+(?:pagaste|(?:realizaste|hiciste)\s+el\s+pago)\b",
+            re.IGNORECASE,
+        ),
+        {"consultar_estado_pedido", "sub_consultar"},
+    ),
     "asesor_humano": (
         re.compile(
             r"comuniqu\w*\s+con\s+un\s+asesor|un\s+asesor\s+te\s+\w*|"

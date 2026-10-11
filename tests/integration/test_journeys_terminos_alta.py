@@ -369,3 +369,53 @@ async def test_un_quote_id_inventado_responde_como_recuperarlo(vendedor) -> None
         )
     assert confirmar == crear
     assert "generar_cotizacion" in confirmar["hint"] and "no lo inventes" in confirmar["hint"]
+
+
+class _ModeloQueSigueElHint(_ModeloGuionado):
+    """Un modelo que obedece el `hint` de `terminos_pendientes`: repite `crear_pedido` con el
+    token solo si el hint lo pide y el cliente dijo «acepto»; si no, comparte los enlaces.
+
+    Reproduce el canary de comercial (run 38065232533, comprar-basic, intento 4/8): el cliente
+    dice «acepto» antes de haber visto los enlaces. Con el hint de siempre, el modelo repetía
+    la llamada en ese mismo turno y volvía `terminos_pendientes`."""
+
+    async def generate(self, **kwargs: Any) -> _Respuesta:
+        mensajes = kwargs.get("messages") or []
+        ultimo = max(i for i, m in enumerate(mensajes) if m.role == "user")
+        resultados = [json.loads(m.content) for m in mensajes[ultimo + 1 :] if m.role == "tool"]
+        if not resultados:
+            return self._crear_pedido()
+        respuesta = resultados[-1]
+        if respuesta.get("status") != "terminos_pendientes":
+            return _Respuesta("end_turn", content="Gracias, seguimos con tu alta.")
+        acepta = "acepto" in str(mensajes[ultimo].content).lower()
+        if acepta and "repite crear_pedido" in respuesta["hint"] and len(resultados) == 1:
+            return self._crear_pedido(acepta_terminos=respuesta["acepta_terminos"])
+        enlaces = "\n".join(d["url"] for d in respuesta.get("documentos", []))
+        return _Respuesta("end_turn", content=f"Antes de seguir, revisa y acepta estos documentos:\n{enlaces}")
+
+
+async def test_un_acepto_antes_de_ver_los_enlaces_no_hace_repetir_la_llamada(vendedor, monkeypatch) -> None:
+    await _documentos_de_prueba(vendedor)
+    customer_id, conversation_id = await journeys.nuevo_cliente(vendedor, "Ana")
+    ctx = journeys.Contexto(vendedor, customer_id, conversation_id, journeys.PagoSimulado())
+    datos = _datos(id_document=ctx.valor("cliente.documento"), phone=ctx.valor("cliente.celular"))
+    modelo = _ModeloQueSigueElHint(await _cotizacion(vendedor, customer_id), datos)
+    monkeypatch.setattr("core.orchestrator.loop.resolve_provider", lambda *a, **k: modelo)
+    registro: list[str] = []
+
+    # El cliente acepta sin haber visto los enlaces: una sola llamada y los enlaces en la respuesta.
+    await journeys.paso_usuario(ctx, {"usuario": ACEPTA, "hasta_herramienta": "crear_pedido"}, registro)
+    assert [s["status"] for s in await _salidas_de_crear_pedido(ctx)] == ["terminos_pendientes"], registro
+    assert len(modelo.llamadas) == 1
+    assert any("https://solvershub.test/legal/terminos" in linea for linea in registro), registro
+
+    # Ya con los enlaces enviados, el «acepto» siguiente sí crea el pedido.
+    await journeys.paso_usuario(ctx, {"usuario": ACEPTA, "hasta_herramienta": "crear_pedido"}, registro)
+    salidas = await _salidas_de_crear_pedido(ctx)
+    assert [s["status"] for s in salidas] == [
+        "terminos_pendientes", "terminos_pendientes", "confirmed",
+    ], registro
+    assert [ll["customer_data"].get("acepta_terminos") for ll in modelo.llamadas] == [
+        None, None, salidas[0]["acepta_terminos"],
+    ]

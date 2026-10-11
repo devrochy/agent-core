@@ -61,14 +61,14 @@ def test_revisar_turno_reporta_cada_falla() -> None:
     espera = {
         "herramientas": ["crear_pedido"],
         "alguna_herramienta": ["informar_plan", "consultar_inventario"],
-        "sin_herramientas": ["generar_link_pago"],
+        "sin_herramientas": ["confirmar_pago_pedido"],
         "texto_contiene": ["Basic"],
         "texto_no_contiene": ["30 días"],
         "max_caracteres": 20,
         "escala": False,
     }
     fallas = journeys._revisar_turno(
-        "El Basic tiene 30 días de prueba", ["generar_link_pago"], True, espera
+        "El Basic tiene 30 días de prueba", ["confirmar_pago_pedido"], True, espera
     )
     assert len(fallas) == 6  # no llamó crear_pedido ni las de catálogo, llamó la prohibida, dijo "30 días", largo, escaló
     assert journeys._revisar_turno("El Basic cuesta $200.000", ["informar_plan", "crear_pedido"], False, espera) == [
@@ -93,15 +93,15 @@ def test_los_journeys_del_repo_son_validos() -> None:
 
 
 def test_el_pago_simulado_tiene_la_firma_de_build_provider() -> None:
-    """Si `build_provider` suma un parámetro y el simulado no, la tool de pagos falla y el
-    journey lo ve como "pago en línea no disponible" (pasó con #324)."""
+    """Si `build_provider` suma un parámetro y el simulado no, la capacidad de pagos falla y
+    el journey lo ve como "pago en línea no disponible" (pasó con #324)."""
     import inspect
 
-    from pack_payments.skills import build_provider
+    from pack_payments.proveedor import build_provider
 
     real = list(inspect.signature(build_provider).parameters)
     simulado = list(inspect.signature(journeys.PagoSimulado()._proveedor).parameters)
-    assert simulado == real  # mismos nombres: la tool llama con `http=` por nombre
+    assert simulado == real
 
 
 # ---------------------------------------------------------------- set de un negocio (HU-SH-08)

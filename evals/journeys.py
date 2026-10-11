@@ -54,7 +54,7 @@ class FallaJourney(AssertionError):
 @dataclass
 class PagoSimulado:
     """Pasarela simulada: reemplaza al PROVEEDOR de `pack_payments` (la pieza que habla
-    con Wompi), así corre el camino real del pack (capacidad, tool, transacciones) sin red.
+    con Wompi), así corre el camino real del pack (capacidad y transacciones) sin red.
 
     Respeta el mismo mínimo que la pasarela real (`monto_minimo`; Wompi: 150.000 COP).
     """
@@ -65,14 +65,12 @@ class PagoSimulado:
     def instalar(self) -> None:
         try:
             import pack_payments.payments as capacidad
-            import pack_payments.skills as tool
         except ImportError:  # sin pack de pagos instalado no hay nada que simular
             return
-        tool.build_provider = self._proveedor  # type: ignore[assignment]
         capacidad.build_provider = self._proveedor  # type: ignore[assignment]
 
-    def _proveedor(self, config: Any, http: Any = None) -> Any:
-        # Misma firma que `pack_payments.skills.build_provider` (con el `http` de la tool, #324).
+    def _proveedor(self, config: Any) -> Any:
+        # Misma firma que `pack_payments.proveedor.build_provider` (#324).
         from pack_payments.providers.base import (
             BasePaymentProvider,
             PaymentLinkResult,

@@ -180,20 +180,17 @@ def test_turnstile_fuera_de_la_allowlist_no_sale() -> None:
 # ------------------------------------------------------------- pack-payments
 
 
-def test_la_tool_de_pagos_pasa_context_http_al_proveedor() -> None:
+def test_el_proveedor_de_pagos_sale_por_el_cliente_del_pack() -> None:
     from pack_payments.config import PaymentsConfig
+    from pack_payments.proveedor import build_provider
     from pack_payments.providers import wompi
-    from pack_payments.skills import build_provider
 
     from core.mcp.types import PLUGIN_HTTP_METHODS
 
     config = PaymentsConfig.model_validate(
         {"public_key": "pub_test_x", "private_key": "prv_test_x", "events_secret": "e", "sandbox": True}
     )
-    sentinel = object()
-    assert build_provider(config, http=sentinel).http is sentinel  # type: ignore[arg-type]
-
-    # Sin `context.http` (panel, capacidad de pagos): el cliente del pack.
+    # Panel y capacidad de pagos: el cliente del pack, con su allowlist.
     http = build_provider(config).http
     assert http._allowed == set(wompi.NETWORK)
     assert http._methods == set(PLUGIN_HTTP_METHODS)

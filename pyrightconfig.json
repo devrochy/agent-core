@@ -9,7 +9,12 @@
     "packages/contracts/agentcore_contracts/agentspec.py",
     "packages/contracts/agentcore_contracts/kernelspec.py",
     "core/agents/contrato_v3.py",
-    "core/agents/tolerante.py"
+    "core/agents/tolerante.py",
+    "core/agents/declarativas.py",
+    "core/agents/secretos.py",
+    "core/agents/versiones.py",
+    "core/api/routers/agents.py",
+    "core/api/routers/declarative_tools.py"
   ],
   "pythonVersion": "3.12",
   "typeCheckingMode": "basic",

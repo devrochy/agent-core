@@ -11,6 +11,10 @@ el pedido.
 - Un `quote_id` que no existe devuelve `quote_id_vigente`, sin usarla en silencio.
 - Journey de varios turnos con el loop real y un modelo guionado (sin LLM real) que
   toma el `quote_id` del bloque de referencias del prompt.
+- Entre la cotización vigente y el último pedido, el más nuevo es la compra en curso: un
+  pedido de otra compra sale como `pedido_anterior`, sin total (incidente del 2026-10-10,
+  19:34-19:49: OC-0001 del Basic, pagado, salía como "pedido" junto a la cotización del
+  Premium y el modelo dijo "ya figura como pagado, así que no hace falta generar otro").
 """
 
 from __future__ import annotations
@@ -34,13 +38,17 @@ pytestmark = [
 ]
 
 PRECIO = 600000.0
+PRECIO_BASIC = 200000.0
 DATOS = {"full_name": "Ana Gómez", "id_document": "1012345678", "phone": "3001234567", "email": "ana@example.com"}
 _QUOTE_EN_PROMPT = re.compile(r"- cotizacion: quote_id=([0-9a-f-]{36})")
 
 
 # ------------------------------------------------------------------ negocio y datos
-async def _negocio() -> tuple[uuid.UUID, str]:
-    """Negocio propio con pack-commerce y un plan Premium; devuelve (tenant, variant_id)."""
+async def _negocio(con_basic: bool = False) -> tuple[uuid.UUID, str]:
+    """Negocio propio con pack-commerce y un plan Premium; devuelve (tenant, variant_id).
+
+    Sin pack de suscripciones: comprar el Premium con el Basic pagado es un pedido nuevo,
+    no un cambio de plan (`sub_cambiar_plan`). Con `con_basic`, también el Plan Basic."""
     from pack_commerce.models import Product, ProductVariant
 
     from core.alta_negocio import onboard_tenant
@@ -60,6 +68,13 @@ async def _negocio() -> tuple[uuid.UUID, str]:
                 tenant_id=tid, product_id=producto.id, sku="PLAN-PREMIUM", price=PRECIO, billing_period="mensual"
             )
             s.add(variante)
+            if con_basic:
+                basic = Product(tenant_id=tid, name="Plan Basic")
+                s.add(basic)
+                await s.flush()
+                s.add(ProductVariant(
+                    tenant_id=tid, product_id=basic.id, sku="PLAN-BASIC", price=PRECIO_BASIC, billing_period="mensual"
+                ))
             await s.flush()
             return tid, str(variante.id)
 
@@ -128,7 +143,9 @@ async def test_solo_la_cotizacion_de_esta_conversacion_y_de_este_cliente() -> No
     await _cotizacion(tid, otra_conv, cliente, variante)
     await _cotizacion(tid, conv, otro_cliente, variante)
 
-    assert await _lineas(tid, conv, cliente) == [f"- cotizacion: quote_id={propia}, estado=draft, total=600000.00"]
+    assert await _lineas(tid, conv, cliente) == [
+        f"- cotizacion: quote_id={propia}, estado=draft, total=600000.00, pedido=ninguno"
+    ]
 
 
 async def test_otro_negocio_no_ve_la_cotizacion() -> None:
@@ -146,6 +163,77 @@ async def test_una_cotizacion_convertida_ya_no_es_vigente() -> None:
     await _cotizacion(tid, conv, cliente, variante, status="convertida")
 
     assert await _lineas(tid, conv, cliente) == []
+
+
+async def _pedido(
+    tid: uuid.UUID, conv: uuid.UUID, cliente: uuid.UUID, *, status: str = "abierto", payment_status: str = "pendiente"
+) -> tuple[str, str]:
+    """Pedido de la conversación con el número que asigna el pack; devuelve (order_id, número)."""
+    from pack_commerce.models import Order
+    from sqlalchemy import text
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            seq = (await s.execute(text("select pack_commerce_next_order_seq(:t)"), {"t": tid})).scalar_one()
+            order = Order(
+                tenant_id=tid, conversation_id=conv, customer_id=cliente, status=status,
+                payment_status=payment_status, total=PRECIO_BASIC, idempotency_key=f"refs:{uuid.uuid4().hex}",
+                order_seq=seq, public_order_number=f"OC-{seq:04d}",
+            )
+            s.add(order)
+            await s.flush()
+            return str(order.id), order.public_order_number
+
+
+async def test_pedido_pagado_de_otra_compra_sale_como_anterior_sin_total() -> None:
+    """El caso del incidente: OC-0001 (Basic, pagado) y después la cotización del Premium."""
+    tid, variante = await _negocio()
+    conv, cliente = await _conversacion(tid)
+    order_id, numero = await _pedido(tid, conv, cliente, payment_status="pagado")
+    quote = await _cotizacion(tid, conv, cliente, variante)
+
+    assert await _lineas(tid, conv, cliente) == [
+        f"- cotizacion: quote_id={quote}, estado=draft, total=600000.00, pedido=ninguno",
+        f"- pedido_anterior: order_id={order_id}, numero={numero}, estado=abierto, estado_pago=pagado",
+    ]
+
+
+async def test_pedido_pendiente_de_otra_compra_conserva_el_order_id() -> None:
+    """Un pedido sin pagar sigue cobrable con `confirmar_pago_pedido` aunque el cliente
+    cotice otra cosa: es anterior, pero lleva su `order_id`."""
+    tid, variante = await _negocio()
+    conv, cliente = await _conversacion(tid)
+    order_id, _ = await _pedido(tid, conv, cliente)
+    await _cotizacion(tid, conv, cliente, variante)
+
+    lineas = await _lineas(tid, conv, cliente)
+    assert lineas[1].startswith(f"- pedido_anterior: order_id={order_id},")
+    assert "estado_pago=pendiente" in lineas[1] and "total=" not in lineas[1]
+
+
+async def test_una_cotizacion_mas_vieja_que_el_pedido_no_se_expone() -> None:
+    tid, variante = await _negocio()
+    conv, cliente = await _conversacion(tid)
+    await _cotizacion(tid, conv, cliente, variante)  # draft abandonado
+    order_id, numero = await _pedido(tid, conv, cliente)
+
+    assert await _lineas(tid, conv, cliente) == [
+        f"- pedido: order_id={order_id}, numero={numero}, estado=abierto, estado_pago=pendiente, total=200000.00"
+    ]
+
+
+@pytest.mark.parametrize("status", ["cancelado", "entregado", "expirado"])
+async def test_un_pedido_cerrado_es_anterior_aunque_no_haya_cotizacion(status: str) -> None:
+    tid, _ = await _negocio()
+    conv, cliente = await _conversacion(tid)
+    order_id, numero = await _pedido(tid, conv, cliente, status=status, payment_status="pagado")
+
+    assert await _lineas(tid, conv, cliente) == [
+        f"- pedido_anterior: order_id={order_id}, numero={numero}, estado={status}, estado_pago=pagado"
+    ]
 
 
 @pytest.mark.parametrize("quote_id", ["PLAN-PREMIUM", "OC-0001", "Q-0001", str(uuid.uuid4())])
@@ -340,3 +428,134 @@ async def test_sin_referencias_el_error_con_quote_id_vigente_igual_cierra(monkey
     quote_id = str(cotizaciones[0].id)
     assert modelo.ids_usados == ["PLAN-PREMIUM", quote_id, "PLAN-PREMIUM", quote_id]
     assert len(pedidos) == 1 and cotizaciones[0].status == "convertida"
+
+
+# ------------------------------------------------------------------ journey: dos compras
+_PEDIDO_PAGADO_EN_PROMPT = re.compile(r"^- pedido: .*estado_pago=pagado", re.MULTILINE)
+INCIDENTE = "Tu pedido OC-0001 ya figura como pagado, así que no hace falta generar otro link."
+SIN_PEDIDO = "El Premium todavía no tiene pedido. ¿Confirmás el total de la cotización para crearlo?"
+CORREGIDA = "Me corrijo: el Premium todavía no tiene pedido ni pago. ¿Confirmás el total para crearlo?"
+
+
+class _CompradorDosCompras(_Comprador):
+    """Compra el Basic y, en la misma conversación, el Premium. Al preguntar cómo pagar,
+    si el prompt muestra un `- pedido:` pagado responde como en el incidente (une ese pago
+    con la compra actual); si no, sigue con la cotización. Ante el reintento del
+    verificador (`[SISTEMA] …`) se corrige."""
+
+    def __init__(self, basic_id: str, premium_id: str) -> None:
+        super().__init__(premium_id)
+        self.basic_id = basic_id
+        self.reintentos = 0
+        self.prompts_pago: list[str] = []
+
+    async def generate(self, **kwargs: Any) -> _Respuesta:
+        ultimo = kwargs["messages"][-1]
+        if ultimo.role == "tool":
+            resultado = json.loads(ultimo.content)
+            if kwargs["messages"][-2].tool_calls[0].name == "generar_cotizacion" and "total" in resultado:
+                total = "$" + f"{int(resultado['total']):,}".replace(",", ".")
+                return _Respuesta("end_turn", content=f"Tu cotización da {total} al mes. ¿Confirmás ese total?")
+            return await super().generate(**kwargs)
+        texto = str(ultimo.content)
+        if texto.startswith("[SISTEMA]"):
+            self.reintentos += 1
+            return _Respuesta("end_turn", content=CORREGIDA)
+        if "quiero el plan basic" in texto.lower():
+            return self._tool("generar_cotizacion", items=[{"variant_id": self.basic_id, "quantity": 1}])
+        if "cómo lo pago" in texto.lower():
+            bloque = kwargs["system_blocks"][-1]
+            self.prompts_pago.append(bloque)
+            return _Respuesta("end_turn", content=INCIDENTE if _PEDIDO_PAGADO_EN_PROMPT.search(bloque) else SIN_PEDIDO)
+        return await super().generate(**kwargs)
+
+
+COMPRA_BASIC = ["Hola, quiero el Plan Basic", "Sí, confirmo ese total", TURNOS[2]]
+COMPRA_PREMIUM = ["Ahora quiero el Plan Premium", "¿Cómo lo pago?", "Sí, confirmo ese total", TURNOS[2]]
+
+
+async def _dos_compras(monkeypatch, referencias_viejas: bool = False):  # type: ignore[no-untyped-def]
+    """Basic comprado y pagado (el pago se marca como lo haría el webhook) y, en la misma
+    conversación, la compra del Premium. Con `referencias_viejas`, el bloque se arma como
+    antes del arreglo (el pedido anterior sale como `- pedido:`) para probar la red del
+    verificador."""
+    from pack_commerce.models import Order, ProductVariant, Quote
+    from sqlalchemy import select, update
+
+    from core.db.session import get_session
+    from core.orchestrator import loop
+    from core.orchestrator.loop import process_conversation
+    from core.shared.tenant import tenant_scope
+
+    tid, premium = await _negocio(con_basic=True)
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            basic = (await s.execute(select(ProductVariant.id).where(
+                ProductVariant.tenant_id == tid, ProductVariant.sku == "PLAN-BASIC"
+            ))).scalar_one()
+    conv, _ = await _conversacion(tid)
+    modelo = _CompradorDosCompras(str(basic), premium)
+    monkeypatch.setattr("core.orchestrator.loop.resolve_provider", lambda *a, **k: modelo)
+    if referencias_viejas:
+        reales = loop.cargar_referencias
+
+        async def como_antes(*args, **kwargs):  # type: ignore[no-untyped-def]
+            return [linea.replace("- pedido_anterior:", "- pedido:") for linea in await reales(*args, **kwargs)]
+
+        monkeypatch.setattr("core.orchestrator.loop.cargar_referencias", como_antes)
+
+    respuestas = []
+    for turno in COMPRA_BASIC:
+        async with tenant_scope(tid):
+            respuestas.append(await process_conversation(conv, turno))
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            await s.execute(update(Order).where(Order.tenant_id == tid, Order.conversation_id == conv)
+                            .values(payment_status="pagado"))
+    for turno in COMPRA_PREMIUM:
+        async with tenant_scope(tid):
+            respuestas.append(await process_conversation(conv, turno))
+
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            cotizaciones = (await s.execute(
+                select(Quote).where(Quote.tenant_id == tid, Quote.conversation_id == conv).order_by(Quote.created_at)
+            )).scalars().all()
+            pedidos = (await s.execute(
+                select(Order).where(Order.tenant_id == tid, Order.conversation_id == conv).order_by(Order.created_at)
+            )).scalars().all()
+    return modelo, respuestas, cotizaciones, pedidos
+
+
+async def test_con_un_pedido_viejo_pagado_compra_otro_plan_en_la_misma_conversacion(monkeypatch, packs_activos) -> None:
+    modelo, respuestas, cotizaciones, pedidos = await _dos_compras(monkeypatch)
+
+    assert all(r is not None and not r.escalated for r in respuestas), [r and r.text for r in respuestas]
+    viejo = pedidos[0]
+    # Al preguntar cómo pagar el Premium, el pedido pagado del Basic es de otra compra.
+    (bloque,) = modelo.prompts_pago
+    assert "pedido=ninguno" in bloque
+    assert f"- pedido_anterior: order_id={viejo.id}, numero={viejo.public_order_number}" in bloque
+    assert "estado_pago=pagado" in bloque and "\n- pedido:" not in bloque
+    assert respuestas[4].text == SIN_PEDIDO
+    assert modelo.reintentos == 0
+
+    # Termina con el pedido del Premium, pendiente, sobre su propia cotización.
+    assert [c.status for c in cotizaciones] == ["convertida", "convertida"]
+    assert len(pedidos) == 2
+    nuevo = pedidos[1]
+    assert nuevo.quote_id == cotizaciones[1].id and nuevo.public_order_number != viejo.public_order_number
+    assert float(nuevo.total) == PRECIO and nuevo.payment_status == "pendiente"
+    assert viejo.payment_status == "pagado"
+
+
+async def test_si_el_modelo_une_el_pago_viejo_el_verificador_lo_frena(monkeypatch, packs_activos) -> None:
+    """Red del verificador: con el bloque como antes del arreglo, el modelo repite la frase
+    del incidente sin consultar el estado; `pago_registrado` la rechaza y el cliente recibe
+    la corrección, nunca "ya figura como pagado"."""
+    modelo, respuestas, _cotizaciones, pedidos = await _dos_compras(monkeypatch, referencias_viejas=True)
+
+    assert modelo.reintentos == 1
+    assert respuestas[4] is not None and respuestas[4].text == CORREGIDA
+    assert "figura como pagado" not in " ".join(r.text for r in respuestas if r is not None)
+    assert len(pedidos) == 2 and pedidos[1].payment_status == "pendiente"

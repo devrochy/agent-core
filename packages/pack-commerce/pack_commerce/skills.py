@@ -315,7 +315,19 @@ async def _cotizacion_no_encontrada(
 
 async def referencias_vigentes(conversation_id: uuid.UUID, customer_id: uuid.UUID) -> list[Referencia]:
     """Lo que el cliente está negociando en esta conversación, para el prompt (ADR-0130):
-    la cotización en curso y el último pedido. Estado actual de las tablas, no texto."""
+    la cotización en curso y el último pedido. Estado actual de las tablas, no texto.
+
+    Entre la cotización vigente y el último pedido, el más nuevo es la compra en curso
+    (una cotización vigente nunca tiene pedido: `crear_pedido` la pasa a `convertida`).
+    - Cotización más nueva: va con `pedido=ninguno`, y el pedido sale como `pedido_anterior`.
+    - Pedido más nuevo: la cotización vieja no se expone (invitaría a confirmar algo viejo).
+    - Un pedido cerrado (cancelado, entregado, expirado) también es `pedido_anterior`.
+    `pedido_anterior` no lleva el total: no se cita como el de la compra actual.
+
+    Incidente (test, tenant solvershub, 2026-10-10): el pedido OC-0001 del Basic (pagado)
+    salía como "pedido" junto a la cotización del Premium; el modelo los unió y dijo
+    que "el pedido OC-0001 ya figura como pagado, así que no hace falta generar otro".
+    """
     tenant_id = get_current_tenant_id()
     async with get_session() as session:
         quote = await _cotizacion_vigente(session, conversation_id, customer_id)
@@ -331,24 +343,32 @@ async def referencias_vigentes(conversation_id: uuid.UUID, customer_id: uuid.UUI
                 .limit(1)
             )
         ).scalar_one_or_none()
+    if quote is not None and order is not None and order.created_at >= quote.created_at:
+        quote = None
     referencias: list[Referencia] = []
     if quote is not None:
         referencias.append(
             Referencia(
                 tipo="cotizacion",
-                datos=(("quote_id", quote.id), ("estado", quote.status), ("total", _float(quote.total))),
+                datos=(
+                    ("quote_id", quote.id),
+                    ("estado", quote.status),
+                    ("total", _float(quote.total)),
+                    ("pedido", "ninguno"),
+                ),
             )
         )
     if order is not None:
+        en_curso = quote is None and order.status in ORDER_STATUS_ACTIVE
         referencias.append(
             Referencia(
-                tipo="pedido",
+                tipo="pedido" if en_curso else "pedido_anterior",
                 datos=(
                     ("order_id", order.id),
                     ("numero", order.public_order_number),
                     ("estado", order.status),
                     ("estado_pago", order.payment_status),
-                    ("total", _float(order.total)),
+                    ("total", _float(order.total) if en_curso else None),
                 ),
             )
         )
@@ -488,6 +508,19 @@ def _respuesta_del_alta_frenada(frenado: Any) -> dict[str, Any]:
     (ADR-0125). El comportamiento completo vive en el playbook de ventas del vendedor; el
     `hint` solo dice el siguiente paso, como el resto de las respuestas de esta tool."""
     if isinstance(frenado, TerminosPendientes):
+        if frenado.enlaces_enviados:
+            hint = (
+                "Si el último mensaje del cliente ya acepta los documentos, repite crear_pedido "
+                "ahora con el mismo quote_id, los mismos datos y customer_data.acepta_terminos. "
+                "Si no, comparte los enlaces y espera su respuesta."
+            )
+        else:
+            # El cliente todavía no recibió los enlaces: ninguna respuesta suya los acepta
+            # (canary de comercial, 2026-10-10: el modelo repetía la llamada en el mismo turno).
+            hint = (
+                "El cliente todavía no recibió estos enlaces: compártelos y pregúntale si los "
+                "acepta. Un «sí» anterior no los acepta: no repitas crear_pedido en este turno."
+            )
         return {
             "status": "terminos_pendientes",
             "error": "Falta que el cliente acepte los términos, el aviso de privacidad y el DPA.",
@@ -495,11 +528,7 @@ def _respuesta_del_alta_frenada(frenado: Any) -> dict[str, Any]:
             "acepta_terminos": frenado.token,
             # El token es el mismo en cada respuesta de esta conversación: en el turno en que
             # el cliente acepta, el modelo lo recupera llamando sin él (ADR-0125, adenda).
-            "hint": (
-                "Si el último mensaje del cliente ya acepta los documentos, repite crear_pedido "
-                "ahora con el mismo quote_id, los mismos datos y customer_data.acepta_terminos. "
-                "Si no, comparte los enlaces y espera su respuesta."
-            ),
+            "hint": hint,
         }
     if isinstance(frenado, FreeNoDisponible):
         return {
