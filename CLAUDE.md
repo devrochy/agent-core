@@ -37,7 +37,8 @@ core/                  monolito modular (todo el runtime en un proceso)
   gateway/             webhooks (firma Meta), canales, sender
   orchestrator/        loop, consumer, debounce, turn_gate
   kernel/              Coordinador (ADR-0112): decisions (core_decisions/turn_outcomes),
-                       ingress, egress, procedures (validador); el verificador sigue en
+                       ingress, egress, procedures (validador y motor de procedimientos,
+                       HU-AOS-05); el verificador sigue en
                        orchestrator/verificador (ADR-0119)
   mcp/                 host de skills/tools/guardrails
   plugin_manager.py    entry_points, registry, config por tenant

@@ -16,17 +16,22 @@ import json
 import uuid
 from typing import Any
 
+from agentcore_contracts import Procedure
+
 from core.mcp.types import (
     AfirmacionesFn,
     BaseSkill,
+    CandidatosFn,
     Guardrail,
     GuardrailFn,
     MCPResource,
     MCPTool,
     ReferenciasFn,
+    Resolver,
     ScopedHttp,
     SkillInfo,
     ToolContext,
+    ValidarDatoFn,
 )
 from core.shared.events import ON_TOOL_EXECUTED, EventHandler, event_bus
 from core.shared.exceptions import BusinessError, PluginError
@@ -46,6 +51,10 @@ class MCPHost:
         # Fuentes de referencias vigentes por plugin (ADR-0130): el loop las pide en cada
         # turno, solo de los packs habilitados y sanos para el negocio.
         self._referencias: dict[str, ReferenciasFn] = {}
+        # Procedimientos (`procedure/1`) y *resolvers* por plugin (HU-AOS-05): el motor del
+        # kernel los lee (`core/kernel/procedures/registro.py`), solo de los packs habilitados.
+        self._procedimientos: dict[str, list[Procedure]] = {}
+        self._resolvers: dict[str, Resolver] = {}
         self._resources: dict[str, MCPResource] = {}
         self._plugin_handlers: dict[str, list[EventHandler]] = {}
         self._active_plugin: str = ""  # plugin en proceso de activación
@@ -120,6 +129,54 @@ class MCPHost:
         """Fuentes de referencias por `plugin_id` (el loop filtra por packs habilitados)."""
         return dict(self._referencias)
 
+    def register_procedures(self, procedures: list[Procedure]) -> None:
+        """Registra los procedimientos que publica el plugin que se activa (ADR-0113 §1).
+
+        El dueño del id (`pack_commerce.contratar_plan`) debe ser el plugin. Un procedimiento
+        ajeno o con un id repetido no se registra (log), y el plugin sigue vivo: un
+        procedimiento mal escrito no puede dejar sin tools a todos los negocios del proceso.
+        El linter completo (acciones del binario) corre en CI y, en runtime, al usarlo
+        (`registro.py`). Una llamada por plugin."""
+        plugin_id = self._active_plugin
+        if plugin_id in self._procedimientos:
+            raise PluginError(plugin_id, "Procedimientos ya registrados")
+        propios: list[Procedure] = []
+        vistos = {p.id for lista in self._procedimientos.values() for p in lista}
+        for proc in procedures:
+            if not isinstance(proc, Procedure) or proc.owner != plugin_id or proc.id in vistos:
+                log.error(
+                    "procedimiento_rechazado",
+                    plugin=plugin_id,
+                    procedure_id=getattr(proc, "id", None),
+                )
+                continue
+            vistos.add(proc.id)
+            propios.append(proc)
+        self._procedimientos[plugin_id] = propios
+
+    def get_procedures(self) -> dict[str, list[Procedure]]:
+        """Procedimientos por `plugin_id` (el motor filtra por packs habilitados)."""
+        return {k: list(v) for k, v in self._procedimientos.items()}
+
+    def register_resolver(
+        self,
+        name: str,
+        *,
+        validar: ValidarDatoFn | None = None,
+        candidatos: CandidatosFn | None = None,
+    ) -> None:
+        """Registra un *resolver* `<plugin>.<función>` del plugin que se activa (HU-AOS-05).
+        Un procedimiento solo usa resolvers de su habilidad o del core (linter)."""
+        plugin_id = self._active_plugin
+        if not name.startswith(f"{plugin_id}.") or name in self._resolvers:
+            raise PluginError(plugin_id, f"Resolver inválido o duplicado: {name}")
+        if validar is None and candidatos is None:
+            raise PluginError(plugin_id, f"Resolver sin funciones: {name}")
+        self._resolvers[name] = Resolver(name=name, validar=validar, candidatos=candidatos, plugin_id=plugin_id)
+
+    def get_resolver(self, name: str) -> Resolver | None:
+        return self._resolvers.get(name)
+
     def register_resource(self, resource: MCPResource) -> None:
         resource.plugin_id = self._active_plugin
         self._resources[resource.uri] = resource
@@ -142,6 +199,8 @@ class MCPHost:
         self._guardrails = [g for g in self._guardrails if g.plugin_id != plugin_id]
         self._afirmaciones.pop(plugin_id, None)
         self._referencias.pop(plugin_id, None)
+        self._procedimientos.pop(plugin_id, None)
+        self._resolvers = {k: v for k, v in self._resolvers.items() if v.plugin_id != plugin_id}
         self._resources = {k: v for k, v in self._resources.items() if v.plugin_id != plugin_id}
         handlers = self._plugin_handlers.pop(plugin_id, [])
         event_bus.unsubscribe_all(handlers)

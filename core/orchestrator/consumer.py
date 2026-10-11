@@ -43,6 +43,7 @@ from core.gateway.sender import send_to_conversation
 from core.gateway.webhooks import INBOUND_STREAM
 from core.kernel.decisions import anotar_entrada, bloquear, en_turno, marcar_escalado
 from core.kernel.egress import entregar
+from core.kernel.procedures.ejecucion import entrada_sin_llm
 from core.memory.working import get_redis
 from core.orchestrator.debounce import schedule_debounce
 from core.orchestrator.escalation import (
@@ -508,6 +509,10 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
                 await escalate(conversation.id, reason="send_failed", summary=text[:200])
                 marcar_escalado()
         return
+
+    # ---------------- datos sin LLM (HU-AOS-05): botón, fila de lista o contenido que llena un
+    # dato de la tarea en foco. Solo con `aos_procedures`; sin botón ni media no consulta nada.
+    await entrada_sin_llm(conversation, fields)
 
     # ---------------- velocidad de respuesta
     behavior = dict(app_settings.behavior_config) if app_settings else {}

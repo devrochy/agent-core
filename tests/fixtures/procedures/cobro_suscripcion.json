@@ -19,7 +19,7 @@
     { "id": "comprobante", "goal": "Recibir el comprobante si el cliente pagó por otro medio",
       "actions": [] }
   ],
-  "completion": { "events": ["pack_payments.pago_confirmado"], "returnControl": true },
+  "completion": { "events": ["core.payment.confirmed"], "returnControl": true },
   "recovery": { "actionError": "explicar", "timeout": "relevo_humano" },
   "claims": [
     { "kind": "amount", "mustMatch": ["action:sub_consultar.monto"] },
