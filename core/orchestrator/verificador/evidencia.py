@@ -5,7 +5,14 @@ La evidencia sale de lo que el sistema hizo, nunca de lo que dijo el modelo:
   estampa el loop) y de turnos anteriores (`audit_log`, `_current_turn=False`);
 - el contexto que el negocio y el cliente ya pusieron en la conversación (prompt
   del sistema y mensajes del cliente), solo para las URLs: la web, el Instagram o
-  el catálogo del negocio no salen de ninguna tool.
+  el catálogo del negocio no salen de ninguna tool;
+- con el motor de procedimientos activo (`tenants.aos_procedures`, HU-AOS-06), el estado
+  de las tareas del episodio (`EstadoTareas`): los datos que fijó el servidor
+  (`source = action:*`) son evidencia de montos y referencias, y los de la tarea en foco
+  (o de una que se completó después de la última respuesta) respaldan los cierres de la
+  acción que los fijó. Lo que escribió el modelo, un botón o el contenido del cliente no
+  es evidencia. También cuentan las referencias vigentes del bloque dinámico (ADR-0130),
+  que son dato del servidor.
 
 Los mensajes anteriores del propio asistente NO son evidencia: lavarían un dato
 inventado en un turno previo.
@@ -92,6 +99,39 @@ def _textos_de_enlace(node: Any, clave: str = "") -> Iterator[str]:
             yield from _textos_de_enlace(item, clave)
 
 
+def familia(referencia: str) -> str:
+    """Prefijo de una referencia pública (`OC` de `OC-0042-r2`)."""
+    return referencia.split("-", 1)[0]
+
+
+@dataclass(frozen=True)
+class EstadoTareas:
+    """El estado que suma el motor activo (HU-AOS-06). `tareas`: instantáneas de
+    `ejecucion.instantaneas_de_tareas` (`procedure_id`, `status`, `cierre`, `slots` con
+    `value` y `source`). `referencias_vigentes`: las líneas del bloque de ADR-0130."""
+
+    tareas: tuple[dict[str, Any], ...] = ()
+    referencias_vigentes: tuple[str, ...] = ()
+
+
+def _datos_del_servidor(tarea: Any) -> tuple[dict[str, Any], set[str]]:
+    """`({dato: valor}, {acción})` de los datos que fijó una acción del servidor. Las acciones
+    son solo las de los datos que respaldan cierres (`respalda_cierre`: los declara una afirmación
+    del procedimiento)."""
+    valores: dict[str, Any] = {}
+    acciones: set[str] = set()
+    slots = tarea.get("slots") if isinstance(tarea, dict) else None
+    for nombre, meta in (slots or {}).items():
+        if not isinstance(meta, dict) or meta.get("value") is None:
+            continue
+        fuente = meta.get("source")
+        if isinstance(fuente, str) and fuente.startswith("action:") and len(fuente) > 7:
+            valores[str(nombre)] = meta["value"]
+            if meta.get("respalda_cierre") is True:
+                acciones.add(fuente[7:])
+    return valores, acciones
+
+
 @dataclass
 class Evidencia:
     # Montos verificados (clave normalizada), del turno actual y de los anteriores:
@@ -113,12 +153,25 @@ class Evidencia:
     # asistente) y de los mensajes del cliente.
     # Todas las URLs se guardan con `clave_url`.
     urls_contexto: set[str] = field(default_factory=set)
-    # Referencias públicas que aparecen en cualquier resultado.
+    # Referencias públicas que aparecen en cualquier resultado (y, con estado, en los datos del
+    # servidor de las tareas y en las referencias vigentes).
     referencias: set[str] = field(default_factory=set)
+    # Con estado (motor activo, HU-AOS-06):
+    con_estado: bool = False
+    # Acciones que fijaron un dato de la tarea en foco o de una recién completada: respaldan
+    # los cierres de esas acciones aunque no hayan corrido en este turno.
+    acciones_estado: set[str] = field(default_factory=set)
+    # Prefijos de las referencias que el servidor fijó en las tareas (`OC`): solo esas
+    # familias se exigen al borrador.
+    familias_estado: set[str] = field(default_factory=set)
 
     @classmethod
-    def desde(cls, resultados: list[dict[str, Any]], contexto: str = "") -> Evidencia:
+    def desde(
+        cls, resultados: list[dict[str, Any]], contexto: str = "", estado: EstadoTareas | None = None
+    ) -> Evidencia:
         ev = cls(urls_contexto=_claves(contexto))
+        if estado is not None:
+            ev._sumar_estado(estado)
         for resultado in resultados:
             if not isinstance(resultado, dict):
                 continue
@@ -146,3 +199,19 @@ class Evidencia:
                 for texto in _textos_de_enlace(resultado):
                     ev.urls_enlace.update(_claves(texto))
         return ev
+
+    def _sumar_estado(self, estado: EstadoTareas) -> None:
+        self.con_estado = True
+        for linea in estado.referencias_vigentes:
+            if isinstance(linea, str):
+                self.referencias.update(REFERENCIA_RE.findall(linea))
+        for tarea in estado.tareas:
+            valores, acciones = _datos_del_servidor(tarea)
+            for valor in extract_monetary_values(valores):
+                self.montos.add(normalized_amount_key(valor))
+            for texto in _textos(valores):
+                encontradas = REFERENCIA_RE.findall(texto)
+                self.referencias.update(encontradas)
+                self.familias_estado.update(familia(r) for r in encontradas)
+            if isinstance(tarea, dict) and tarea.get("cierre") is True:
+                self.acciones_estado |= acciones

@@ -160,6 +160,7 @@ async def save_byok_connection(
     waba_id: str,
     environment: str = "sandbox",
     verify_token: str | None = None,
+    instancias_de: uuid.UUID | None = None,
 ) -> MetaConnection:
     """Verifica las credenciales contra Graph API y recién después
     persiste -- nunca guarda a ciegas. Reentrante: volver a correrlo con
@@ -250,7 +251,8 @@ async def save_byok_connection(
         waba = await waba_para_conexion(session, tenant_id, connection_id, waba_id)
         try:
             phone, previous_connection_id = await numero_para_conexion(
-                session, tenant_id, connection_id, phone_number_id, waba_account_id=waba.id
+                session, tenant_id, connection_id, phone_number_id, waba_account_id=waba.id,
+                instancias_de=instancias_de,
             )
         except IntegrityError as exc:
             raise ByokError(
