@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import select
 
 from core.db.session import get_owned, get_session
+from core.kernel.oferta import sin_motor_activo, solo_con_motor_activo
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
@@ -194,6 +195,8 @@ class CobranzaSkill(BaseSkill):
                     "required": ["fecha", "valor"],
                 },
                 handler=self.registrar_promesa,
+                # Con el motor activo la promesa va por el procedimiento (HU-AOS-08).
+                connection_predicate=sin_motor_activo(),
             ),
             MCPTool(
                 # HU-AOS-08: solo la ofrece el motor de procedimientos (`promesa_de_pago`): ningún
@@ -214,6 +217,7 @@ class CobranzaSkill(BaseSkill):
                     "required": ["fecha", "saldo"],
                 },
                 handler=self.registrar_promesa_saldo,
+                connection_predicate=solo_con_motor_activo(),
             ),
             MCPTool(
                 name="cob_registrar_abono",
@@ -454,6 +458,9 @@ class CobranzaSkill(BaseSkill):
                     select(Promesa).where(
                         Promesa.tenant_id == get_current_tenant_id(),
                         Promesa.idempotency_key == context.idempotency_key,
+                        # Solo la promesa de ESTE cliente y préstamo (auditor-multitenant).
+                        Promesa.cliente_id == cliente.id,
+                        Promesa.prestamo_id == prestamo.id,
                     )
                 )
             ).scalar_one_or_none()
@@ -462,6 +469,8 @@ class CobranzaSkill(BaseSkill):
                     "registrada": True, "ya_existe": True, "promesa_id": str(existente.id),
                     "fecha": existente.fecha_prometida.isoformat(), "saldo": float(existente.valor_prometido),
                 }
+            # Serializa las promesas del préstamo (el tope de pendientes es count-then-insert).
+            await session.refresh(prestamo, with_for_update=True)
             saldo, _mora, _proxima = await _saldo_y_mora(session, prestamo)
             if saldo <= 0:
                 return {"error": "El cliente no tiene saldo pendiente: no hay promesa que registrar."}

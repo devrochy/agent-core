@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any, ClassVar
 
+from core.kernel.oferta import sin_motor_activo, solo_con_motor_activo
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
@@ -167,7 +168,7 @@ class SubscriptionSkill(BaseSkill):
                 handler=self.cambiar_plan,
                 # Con el motor activo el cambio de plan va por el procedimiento (botón con el
                 # monto del servidor): esta tool no se ofrece (HU-AOS-08). Sin la bandera, igual.
-                connection_predicate=_sin_motor_activo(predicate),
+                connection_predicate=sin_motor_activo(predicate),
             ),
             MCPTool(
                 name="sub_cotizar_cambio_plan",
@@ -184,7 +185,7 @@ class SubscriptionSkill(BaseSkill):
                     "required": ["plan_code"],
                 },
                 handler=self.cotizar_cambio_plan,
-                connection_predicate=predicate,
+                connection_predicate=solo_con_motor_activo(predicate),
             ),
             MCPTool(
                 name="sub_aplicar_cambio_plan",
@@ -205,7 +206,7 @@ class SubscriptionSkill(BaseSkill):
                     "required": ["plan_code", "monto_a_pagar"],
                 },
                 handler=self.aplicar_cambio_plan,
-                connection_predicate=predicate,
+                connection_predicate=solo_con_motor_activo(predicate),
             ),
         ]
 
@@ -366,31 +367,6 @@ async def plan_del_catalogo(codigo: str) -> tuple[str, PlanSnapshot]:
     catalogo = await plan_catalog_registry.para_negocio(tenant_id) if tenant_id else None
     encontrado = await catalogo.plan_por_codigo(codigo) if catalogo else None
     if encontrado is None:
-        raise SubscriptionError(f"No encontré el plan {codigo} en el catálogo del negocio.", code="plan_no_encontrado")
+        # Sin repetir el código: lo escribió el modelo (y puede venir del mensaje del cliente).
+        raise SubscriptionError("Ese plan no está en el catálogo del negocio.", code="plan_no_encontrado")
     return encontrado
-
-
-def _sin_motor_activo(
-    predicate: Callable[[set[str]], Awaitable[bool]],
-) -> Callable[[set[str]], Awaitable[bool]]:
-    """El predicado de siempre y, además, que el negocio no tenga el motor de procedimientos
-    activo (`tenants.aos_procedures`). Si la bandera no se puede leer, se ofrece como siempre
-    (con la bandera apagada nada cambia)."""
-
-    async def _predicate(connection_types: set[str]) -> bool:
-        if not await predicate(connection_types):
-            return False
-        tenant_id = get_current_tenant_id()
-        if tenant_id is None:
-            return True
-        try:
-            from core.db.session import get_session
-            from core.kernel.banderas import banderas_del_negocio
-
-            async with get_session() as session:
-                return not (await banderas_del_negocio(session, tenant_id)).procedimientos
-        except Exception:
-            log.warning("sub_cambiar_plan_bandera_ilegible", exc_info=True)
-            return True
-
-    return _predicate

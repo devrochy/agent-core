@@ -520,6 +520,8 @@ class SubscriptionCapabilityImpl:
         destino = {"variante_id": str(variant_id), "plan": dict(plan)}
         async with get_session() as session:
             sub = await self._sub_vigente(session, subscription_id)
+            # Dos cambios a la vez (dos canales) no dejan dos cargos pendientes: se serializan.
+            await session.refresh(sub, with_for_update=True)
             evaluacion = evaluar_cambio(sub, variant_id=variant_id, plan=plan, ahora=ahora)
             if monto_esperado is not None and not mismo_monto(evaluacion.monto, monto_esperado, sub.moneda):
                 raise SubscriptionError(

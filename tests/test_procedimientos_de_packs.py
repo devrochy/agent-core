@@ -131,35 +131,37 @@ def test_los_bindings_del_general_no_cambian(catalogo, monkeypatch) -> None:
     assert {"sub_consultar", "sub_cambiar_plan", "escalate_to_human"} <= siempre
 
 
-async def test_sub_cambiar_plan_se_oculta_solo_con_el_motor_activo(monkeypatch) -> None:
-    """B2 de la revisión: con una tarea en `confirmar`, el modelo no puede saltarse el botón con
-    la tool de siempre. Con la bandera apagada se ofrece igual que antes."""
-    from contextlib import asynccontextmanager
+async def test_oferta_segun_el_motor(monkeypatch) -> None:
+    """B2 de la revisión: con el motor activo el modelo no puede saltarse el botón con la tool de
+    siempre, y las del procedimiento no se ofrecen sin la bandera (aunque un flujo las nombre).
+    Si la bandera no se lee, lo de siempre se ofrece y lo nuevo no."""
+    from core.kernel import oferta
 
-    from core.kernel.banderas import BanderasAOS
-    from core.subscriptions import tools
+    estado: dict[str, bool | None] = {"activo": False}
 
-    async def siempre_si(_tipos: set[str]) -> bool:
-        return True
+    async def motor() -> bool | None:
+        return estado["activo"]
 
-    @asynccontextmanager
-    async def sesion_falsa():  # type: ignore[no-untyped-def]
-        yield None
+    async def no(_tipos: set[str]) -> bool:
+        return False
 
-    estado = {"banderas": BanderasAOS()}
+    monkeypatch.setattr(oferta, "motor_activo", motor)
+    viejo, nuevo = oferta.sin_motor_activo(), oferta.solo_con_motor_activo()
+    for activo, esperado_viejo, esperado_nuevo in ((False, True, False), (None, True, False), (True, False, True)):
+        estado["activo"] = activo
+        assert (await viejo(set()), await nuevo(set())) == (esperado_viejo, esperado_nuevo), activo
+    assert await oferta.sin_motor_activo(no)(set()) is False
+    assert await oferta.solo_con_motor_activo(no)(set()) is False
 
-    async def banderas(_s: Any, _t: Any) -> BanderasAOS:
-        return estado["banderas"]
 
-    monkeypatch.setattr("core.db.session.get_session", sesion_falsa)
-    monkeypatch.setattr("core.kernel.banderas.banderas_del_negocio", banderas)
-    monkeypatch.setattr(tools, "get_current_tenant_id", lambda: uuid.uuid4())
-    predicado = tools._sin_motor_activo(siempre_si)
-    assert await predicado(set()) is True
-    estado["banderas"] = BanderasAOS(runtime="v3", procedimientos=False)
-    assert await predicado(set()) is True
-    estado["banderas"] = BanderasAOS(runtime="v3", procedimientos=True)
-    assert await predicado(set()) is False
+def test_las_tools_reemplazadas_y_las_nuevas_usan_el_predicado_del_motor() -> None:
+    from pack_cobranza.skills import CobranzaSkill
+
+    from core.subscriptions.tools import SubscriptionSkill
+
+    herramientas = {t.name: t for t in [*SubscriptionSkill().get_tools(), *CobranzaSkill().get_tools()]}
+    for nombre in ("sub_cambiar_plan", "cob_registrar_promesa_pago", *SOLO_PROCEDIMIENTO):
+        assert herramientas[nombre].connection_predicate is not None, nombre
 
 
 # ------------------------------------------------------------------ agenda

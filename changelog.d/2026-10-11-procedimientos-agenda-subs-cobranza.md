@@ -11,6 +11,8 @@
   - `pack_cobranza.promesa_de_pago`: la fecha la validan las reglas del pack (prórroga máxima, domingo no
     laborable, promesas pendientes) y la promesa queda por el saldo real (`cob_registrar_promesa_saldo`).
 - `core/kernel/procedures/de_pack.py`: carga los JSON de `packages/pack-*/procedures/`.
+- `core/kernel/oferta.py`: con `aos_procedures` encendida no se ofrecen `sub_cambiar_plan` ni
+  `cob_registrar_promesa_pago` (irían sin botón); las acciones nuevas solo se ofrecen con la bandera.
 - `pack_subscriptions.capability.evaluar_cambio`: las reglas del cambio de plan en una función pura (sin
   cambio de conducta de `change_plan`).
 - Adendas a ADR-0111 y ADR-0113. Sin migración.

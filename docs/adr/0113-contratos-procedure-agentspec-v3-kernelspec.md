@@ -461,6 +461,16 @@ antes de escribir código. No cambia la forma de ningún contrato ni el motor.
   - En la agenda, `create_calendar_event` recibe `start_datetime` del modelo: puede no ser el `horario`
     validado. El botón muestra los argumentos exactos y, en modo interno, la tool revalida (ocupado, fuera de
     horario, pasado); **en modo Google no revalida**. Atar argumentos ↔ datos es trabajo del motor (HU siguiente).
-  - Con el motor activo y sin tarea en foco, las tools de siempre (`create_calendar_event`,
-    `cob_registrar_promesa_pago`) se siguen ofreciendo (regla general de la adenda de HU-AOS-05). Solo
-    `sub_cambiar_plan` se oculta (adenda de ADR-0111).
+  - **Oferta según el motor** (`core/kernel/oferta.py`, predicados de oferta de la tool): con
+    `aos_procedures` encendida, las tools de siempre que un procedimiento reemplaza (`sub_cambiar_plan`,
+    `cob_registrar_promesa_pago`) no se ofrecen, para que el modelo no se salte el botón; si la bandera no
+    se puede leer se ofrecen como siempre. Las solo de procedimiento no se ofrecen sin la bandera, aunque un
+    flujo del negocio las nombre; si la bandera no se puede leer, no se ofrecen. `create_calendar_event` no
+    se oculta: es la acción de la etapa `agendar` (el predicado filtra también las candidatas del motor) y
+    sirve fuera del procedimiento; con el motor activo y sin tarea en foco se sigue ofreciendo.
+  - Con el motor activo y una tarea en foco de OTRO procedimiento, las acciones solo de procedimiento no
+    se ofrecen (no están en la etapa). Sin foco, solo si un flujo del negocio las nombra; ahí el monto sigue
+    atado pero no hay botón. Negarlas en `antes_de_accion` sin foco es un cambio del motor que queda para
+    una HU siguiente.
+  - Costo: cada predicado lee la bandera del negocio (una consulta por tool reemplazada o nueva y por
+    turno, hasta cinco). Si se nota en la latencia, se cachea por turno.

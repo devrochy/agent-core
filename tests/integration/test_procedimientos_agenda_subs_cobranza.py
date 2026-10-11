@@ -66,14 +66,12 @@ def packs_registrados() -> Any:
 
     plugin_manager.scan()
     register_core_skills(mcp_host)
-    sin_proveedor = subscription_registry.get("pack_subscriptions") is None
-    if sin_proveedor:
+    # El proveedor real (idempotente): no se desregistra, otros tests del proceso lo usan.
+    if subscription_registry.get("pack_subscriptions") is None:
         subscription_registry.register("pack_subscriptions", SubscriptionCapabilityImpl())
     plan_catalog_registry.register("pack_subscriptions", _Catalogo())  # type: ignore[arg-type]
     yield
     plan_catalog_registry.unregister("pack_subscriptions")
-    if sin_proveedor:
-        subscription_registry.unregister("pack_subscriptions")
 
 
 def _asegurar_pack(pack_id: str) -> None:
@@ -394,7 +392,7 @@ async def test_cambio_de_plan_con_monto_distinto_no_cobra_y_el_resolver_rechaza_
         cotizacion = await SubscriptionSkill().cotizar_cambio_plan({"plan_code": "PLAN-PREMIUM"}, _ctx(conv))
     assert rechazo.value.code == "monto_distinto"
     assert await _cargos(tid, sid) == []
-    assert not no_existe.ok and "PLAN-ORO" in no_existe.error
+    assert not no_existe.ok and "catálogo" in no_existe.error and "PLAN-ORO" not in no_existe.error
     assert ok.ok and ok.value == "PLAN-PREMIUM"
     assert (cotizacion["cambio"], cotizacion["monto_a_pagar"], cotizacion["precio_nuevo"]) == ("pendiente_pago", 200000.0, 600000.0)
 
@@ -502,3 +500,37 @@ async def test_con_la_bandera_apagada_las_acciones_nuevas_no_se_ofrecen(packs_re
     assert "sub_cambiar_plan" in ofrecidas and "cob_registrar_promesa_pago" in ofrecidas
     assert not (SOLO_PROCEDIMIENTO & ofrecidas)
     assert not ({"iniciar_procedimiento", "actualizar_tarea"} & ofrecidas)
+
+
+# ---------------------------------------------------------------- aislamiento entre negocios
+
+
+async def test_resolvers_y_bandera_no_cruzan_negocios(packs_registrados, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Un id de otro negocio no se acepta y la bandera de un negocio no cambia la oferta de otro."""
+    from pack_calendar.models import AppointmentType
+    from pack_calendar.procedimientos import tipo_de_cita
+
+    from core.shared.tenant import tenant_scope
+
+    a = await _negocio(["pack_calendar", "pack_subscriptions"])
+    b = await _negocio(["pack_calendar", "pack_subscriptions"])
+    async with _scope(a) as s:
+        tipo_a = AppointmentType(tenant_id=a, name="Demo", duration_minutes=60)
+        s.add(tipo_a)
+        await s.flush()
+        tipo_a_id = tipo_a.id
+    conv_b = await _conversacion(b)
+    async with tenant_scope(b):
+        ajeno = await tipo_de_cita(str(tipo_a_id), _ctx(conv_b), {})
+    async with tenant_scope(a):
+        propio = await tipo_de_cita(str(tipo_a_id), _ctx(conv_b), {})
+    assert not ajeno.ok and propio.ok
+
+    await _suscripcion_basic(b, conv_b.customer_id)
+    await _banderas(a, True)
+    try:
+        guion = _Guion(["Hola, ¿en qué te ayudo?"])
+        await _turno(conv_b, guion, monkeypatch, "hola")
+    finally:
+        await _banderas(a, False)
+    assert "sub_cambiar_plan" in guion.tools[0]
