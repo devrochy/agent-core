@@ -270,3 +270,36 @@ En test se puede encender para verificar.
 - `packages/pack-subscriptions`: `variant_id` en `subscription.activated` y `referencia` nula sin pedido.
 - `cli/commands/tenant.py` (`altas`, `reintentar-alta`, `descartar-alta`) y `docs/runbooks/altas-en-revision.md`.
 - `.importlinter`: las tools y los packs no importan el alta.
+
+## Adenda (2026-10-10): el id determinista no hereda el estado Redis de un negocio purgado
+
+Hallazgo de la revisión del PR #424. Complementa el § 3.3 (concurrencia) y el § 3.6 (alta).
+
+- **Defecto.** El id del negocio es UUIDv5 de vendedor + referencia. Si el negocio de un alta se purga
+  (`tenant purge`), la limpieza de Redis falla (`tenant_purge_redis_cleanup_failed`) y después el alta se
+  repite (`reintentar-alta` o `aprobar-alta` sobre un alta en revisión), el negocio nuevo nace con el mismo
+  UUID y hereda las claves sin TTL del anterior: memoria de trabajo, pausas, marcadores de términos.
+- **Decisión.** El id sigue siendo determinista. Justo antes de `onboard_tenant`, si el negocio todavía no
+  existe, el alta llama a `limpiar_redis_antes_del_alta(id)` (`core/tenants.py`). Es la misma limpieza que
+  `purge_tenant_redis`, el reintento de la purga: se niega si el negocio existe y solo borra las claves con
+  el UUID en posición de tenant.
+  - No se niega si el UUID aparece en otra posición, como sí hace `purge_tenant_redis`, que así detecta un
+    id pegado por error. Este id lo calcula el core, y esas claves son de otros negocios: no se tocan. Por
+    eso es una función aparte, solo para ids del core, y no un parámetro del comando del operador.
+  - Si el negocio ya existe (un reintento después de crearlo), no se toca: su estado es suyo.
+  - **Falla cerrado.** Si Redis no responde o la limpieza pasa de 30 s, el negocio no se crea: el alta se
+    reintenta y al tercer intento queda en revisión. El tope evita que un Redis colgado deje tomados el
+    candado y la sesión de Postgres.
+  - Si borró algo, queda `provisioning_redis_heredado_limpiado` (warning) con el vendedor, la referencia,
+    el negocio y cuántas claves.
+- **Alternativa descartada: id aleatorio y la idempotencia en `provisioning_requests`.** Habría que guardar
+  el id en la fila antes de crear el negocio, para que una caída entre los dos pasos no cree otro, y decidir
+  qué hacer cuando ese id apunta a un negocio purgado (`negocio_tenant_id` queda en NULL por la FK). Es
+  más código y cambia el § 3.3, y el estado de un UUID purgado sin limpiar seguiría sin dueño hasta el
+  `purge-redis` manual. La limpieza antes del alta cubre el caso con lo que ya existe.
+- **Lo que no cubre** (fuera de las claves con el UUID en el nombre; quedan aparte): las entradas de la
+  DLQ `agent_core:inbound:dlq`, que llevan el tenant en los campos; la sesión de WhatsApp Web en disco
+  (`WAWEB_SESSION_DIR/<tenant_id>`), y los artefactos de `TENANTS_ROOT/<slug>/`, con un slug también
+  determinista. La purga tampoco los borra hoy.
+- **Costo.** Un `SCAN MATCH *<uuid>*` sobre Redis la primera vez que corre cada alta (no en los reintentos
+  sobre un negocio ya creado). Con decenas de altas por día no pesa.

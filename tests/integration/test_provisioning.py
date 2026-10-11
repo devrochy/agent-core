@@ -888,3 +888,148 @@ async def test_reintento_con_el_correo_corregido_no_manda_el_enlace_a_otro_corre
     assert fila.motivo == CORREO_CAMBIADO
     assert enviados == []  # ni el enlace de la cuenta A a B, ni nada a A
     assert await _admin(correo_b) is None
+
+
+# ------------------------------------------------------------------ estado Redis heredado
+class _RedisCaido:
+    async def unlink(self, *_a: Any) -> int:
+        raise ConnectionError("redis caído (test)")
+
+    async def zrem(self, *_a: Any) -> int:
+        raise ConnectionError("redis caído (test)")
+
+    def scan_iter(self, *_a: Any, **_k: Any) -> Any:
+        raise ConnectionError("redis caído (test)")
+
+
+@pytest.mark.aislamiento
+async def test_reintento_tras_purgar_el_negocio_no_hereda_su_redis(vendedores, monkeypatch) -> None:
+    """Revisión del PR #424: el id del negocio es determinista (ADR-0121 § 3.3). Si el negocio
+    de un alta se purga y su Redis no se limpia, reintentar el alta lo crea con el MISMO id:
+    antes heredaba las claves sin TTL del anterior. Ahora el alta las borra antes de crearlo,
+    sin tocar las de otros negocios ni dejar de ser idempotente."""
+    import core.memory.working as working
+    from core.memory.working import get_redis
+    from core.provisioning import AltaTransitoria
+    from core.provisioning.consumer import MAX_INTENTOS, id_del_negocio, reintentar_alta
+    from core.shared.tenant import tenant_scope
+    from core.tenants import deactivate_tenant, purge_tenant
+
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    referencia, _ = await _pedido_de_plan(vendedor, datos_alta=_datos(_correo()))
+    negocio = id_del_negocio(vendedor, referencia)
+
+    async def smtp_caido(to: str, subject: str, body: str) -> str:
+        raise OSError("smtp caído")
+
+    # El alta crea el negocio, pero el correo no sale: queda en revisión con el negocio creado.
+    monkeypatch.setattr("core.gateway.system_email.send_system_email", smtp_caido)
+    for _ in range(MAX_INTENTOS - 1):
+        with pytest.raises(AltaTransitoria):
+            await _entregar(vendedor, referencia)
+    await _entregar(vendedor, referencia)
+    assert (await _registro(vendedor, referencia)).estado == "revision"
+    viejo = await _tenant(negocio)
+    assert viejo is not None
+
+    # Estado Redis del negocio, sin TTL, como el que dejan la memoria, el turno y las pausas.
+    r = get_redis()
+    conv, otro = uuid.uuid4(), uuid.uuid4()
+    heredadas = [
+        f"wm:{negocio}:{conv}",
+        f"turns:{negocio}",
+        f"meta:paused:{negocio}:{conv}",
+        f"inbound:{negocio}:{conv}",
+    ]
+    for clave in heredadas:
+        await r.set(clave, "del-negocio-purgado")
+    del_vendedor = f"turns:{vendedor}"
+    await r.set(del_vendedor, "7")
+    # El id en otra posición (clave de otro negocio): no es suya, no se borra ni frena el alta.
+    ajena = f"webhook_firma_ajena:{otro}:{negocio}"
+    await r.set(ajena, "1", ex=600)
+
+    # El master lo purga y la limpieza de Redis falla después del commit.
+    await deactivate_tenant(str(negocio))
+    real = working.get_redis
+    monkeypatch.setattr(working, "get_redis", lambda: _RedisCaido())
+    assert await purge_tenant(str(negocio), f"ELIMINAR {viejo.slug}") is False
+    monkeypatch.setattr(working, "get_redis", real)
+    assert await _tenant(negocio) is None
+    for clave in heredadas:
+        assert await r.exists(clave) == 1, f"{clave}: el fallo de la limpieza es real"
+
+    # Reintentar el alta: el mismo negocio (idempotencia por id), sin el estado del anterior.
+    async def smtp_ok(to: str, subject: str, body: str) -> str:
+        return "msg-test"
+
+    monkeypatch.setattr("core.gateway.system_email.send_system_email", smtp_ok)
+    fila = await reintentar_alta(vendedor, referencia)
+    assert fila.estado == "completado", fila.motivo
+    assert fila.negocio_tenant_id == negocio
+    assert await _tenant(negocio) is not None
+    for clave in heredadas:
+        assert await r.exists(clave) == 0, f"{clave} quedó heredada por el negocio nuevo"
+    assert await r.get(del_vendedor) == "7", "el estado del vendedor no se toca"
+    assert await r.exists(ajena) == 1, "la clave de otro negocio no se toca"
+
+    # Con el negocio ya creado (un reintento a mitad del alta), su estado es suyo: no se toca.
+    from core.provisioning.consumer import _sin_estado_heredado
+
+    propia = f"turns:{negocio}"
+    await r.set(propia, "1")
+    async with tenant_scope(vendedor):
+        await _sin_estado_heredado(vendedor, fila, negocio)
+    assert await r.get(propia) == "1"
+    await r.unlink(del_vendedor, ajena, propia)
+
+
+async def test_sin_redis_el_alta_no_crea_el_negocio(vendedores, correos, monkeypatch) -> None:
+    """Falla cerrado: si no se puede comprobar que el id no trae estado Redis de un negocio
+    purgado, el negocio no se crea y el outbox reintenta (al tercer intento, revisión)."""
+    import core.tenants as tenants
+    from core.provisioning import AltaTransitoria
+    from core.provisioning.consumer import MAX_INTENTOS, id_del_negocio
+
+    async def redis_caido(*_a: Any, **_k: Any) -> int:
+        raise ConnectionError("redis caído (test)")
+
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    referencia, _ = await _pedido_de_plan(vendedor, datos_alta=_datos(_correo()))
+    monkeypatch.setattr(tenants, "_limpiar_redis", redis_caido)
+    for _ in range(MAX_INTENTOS - 1):
+        with pytest.raises(AltaTransitoria, match="estado Redis"):
+            await _entregar(vendedor, referencia)
+    await _entregar(vendedor, referencia)
+    fila = await _registro(vendedor, referencia)
+    assert fila.estado == "revision" and "estado Redis" in fila.motivo
+    assert "redis caído" not in fila.motivo, "el motivo no copia el error de la conexión"
+    assert await _tenant(id_del_negocio(vendedor, referencia)) is None
+    assert correos == []
+
+
+async def test_redis_colgado_no_deja_el_alta_esperando(vendedores, correos, monkeypatch) -> None:
+    """Un Redis que no responde (sin error) no deja el candado y la sesión tomados: la
+    limpieza tiene tope y el alta se reintenta sin crear el negocio."""
+    import asyncio
+
+    import core.tenants as tenants
+    from core.provisioning import AltaTransitoria
+    from core.provisioning.consumer import id_del_negocio
+
+    async def redis_colgado(*_a: Any, **_k: Any) -> int:
+        await asyncio.sleep(60)
+        return 0
+
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    referencia, _ = await _pedido_de_plan(vendedor, datos_alta=_datos(_correo()))
+    monkeypatch.setattr(tenants, "_limpiar_redis", redis_colgado)
+    monkeypatch.setattr("core.provisioning.consumer._LIMPIEZA_REDIS_S", 0.2)
+    inicio = time.monotonic()
+    with pytest.raises(AltaTransitoria, match="TimeoutError"):
+        await _entregar(vendedor, referencia)
+    assert time.monotonic() - inicio < 10
+    assert await _tenant(id_del_negocio(vendedor, referencia)) is None
