@@ -279,6 +279,38 @@ revisó el agente `arquitecto` antes de escribir código.
   "la primera fila v2 que produjo este contenido". Una re-corrida con el mismo v2 activo no publica
   nada, aunque el binario haya cambiado: refrescar la versión es decisión del build de HU-AOS-14.
 
+## Adenda de implementación (2026-10-11, HU-AOS-13 parte 2): escrituras de instancias y altas
+
+Revisada por el agente `arquitecto` antes de escribir código. No cambia contratos ni esquema (sin migración).
+
+- **Inicializar solo lo que no tiene Coordinador.** `asegurar_instancias_base` crea el Coordinador y el General
+  solo en una conexión **sin Coordinador vivo**. Una conexión que ya lo tiene está configurada y no se toca: lo que
+  el dueño quitó o cambió (el General, el agente por defecto) no vuelve en un religar del número, en otra corrida
+  del backfill (`configurada` en el reporte) ni en el build de releases.
+- **El Coordinador lo gestiona el sistema** (ADR-0112 §1: exactamente uno por conexión). La API de instancias no lo
+  agrega, no lo deshabilita ni lo quita; para que el asistente no responda está la pausa (ADR-0122). Los triggers
+  diferidos de 0070 quedan como red en la base. Solo se agregan especialistas (el back-office corre en el worker,
+  ADR-0116 §5), con una versión publicada y en una conexión que ya tiene Coordinador.
+- **Siempre un agente por defecto, habilitado.** Se cambia eligiendo otro (el anterior deja de serlo en la misma
+  transacción); no se deshabilita ni se quita mientras lo sea. Las escrituras de una conexión se serializan con
+  `FOR NO KEY UPDATE` sobre su fila: esa regla no la garantiza ningún constraint.
+- **Permisos:** las escrituras piden la sección `settings` con escritura (cambian lo que dice el asistente, como
+  editar un agente), poder ver `connections` y, con `aos_runtime = legacy`, ser master; el GET sigue en
+  `connections`. Tope de 50 instancias vivas por conexión.
+- **Altas posteriores** (ADR-0115 §6): `numero_para_conexion` llama a `instancias_al_alta` en la misma transacción,
+  dentro de un SAVEPOINT. Si el negocio ya tiene su Coordinador y su General, la conexión nueva nace inicializada; si
+  no, no se hace nada (lo hará el backfill). Un error se registra (`instancias_alta_fallo`; a nivel error con la
+  traza si es de RLS o de FK compuesta) y el alta sigue: con `legacy` las instancias no hacen nada y un bug del
+  Agent OS no debe tumbar las altas de WhatsApp. Un `tenant_scope` ajeno (`PermissionError`) sí se propaga. Fallar
+  cerrado para negocios v3 se decide con HU-AOS-14.
+- **Promoción** (ADR-0127 §3): la conexión del número real clona las instancias de la del número de prueba
+  (`clonar_instancias`) antes de lo base; si la cuenta de prueba tiene varios números vivos no se adivina y entra
+  solo lo base. El mapa que devuelve (instancia de origen → de destino) solo lleva pares
+  con el mismo agente: es lo que necesita HU-AOS-14 para clonar `release_components` (FK por agente e instancia).
+  Los triggers diferidos se evalúan al COMMIT, fuera del savepoint.
+- **Pendiente para HU-AOS-14:** qué de una instancia (`enabled`, `priority`, `is_default`) congela la release y qué
+  sigue en caliente no lo clasifica ADR-0117 §2; la API lo documenta como "aplica con la próxima release".
+
 ## Adenda de implementación (2026-10-11, HU-AOS-06): comandos del hilo
 
 Revisada por el agente `arquitecto` antes de escribir código. No cambia contratos: los comandos
