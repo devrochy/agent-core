@@ -25,7 +25,20 @@ class PaymentCapabilityError(BusinessError):
     Subclase de `BusinessError` (HU-ARCH-18): el host la convierte en resultado
     controlado y el pack de pagos NO se auto-deshabilita. El consumidor (p. ej.
     cobranza) la muestra como mensaje accionable.
+
+    `code` dice por qué (constantes de abajo, adenda 2026-10-10 de ADR-0067): el
+    consumidor decide con él sin importar el pack de pagos (invariante nº5). Sin
+    código, el consumidor no debe suponer el motivo.
     """
+
+
+# Vocabulario de `PaymentCapabilityError.code`.
+MONTO_BAJO_MINIMO = "monto_bajo_minimo"  # la pasarela no cobra montos tan bajos
+SIN_PASARELA = "sin_pasarela"  # el negocio no configuró la pasarela
+YA_PAGADO = "ya_pagado"  # la referencia ya tiene un pago aprobado
+EN_REVISION = "en_revision"  # llegó un pago por otro monto: lo revisa el negocio
+MONTO_NO_COINCIDE = "monto_no_coincide"  # la referencia tiene un link vigente por otro monto
+NO_DISPONIBLE = "no_disponible"  # la pasarela rechazó o falló al crear el link; reintentar
 
 
 @dataclass(frozen=True)

@@ -32,6 +32,11 @@ class PaymentRequestRejected(Exception):
     """
 
 
+class MontoBajoMinimo(PaymentRequestRejected):
+    """El monto es menor al mínimo que el proveedor acepta en este ambiente: el
+    consumidor ofrece otro medio de pago en vez de reintentar."""
+
+
 @dataclass
 class PaymentLinkResult:
     provider_reference: str

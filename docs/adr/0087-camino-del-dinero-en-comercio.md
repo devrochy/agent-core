@@ -22,7 +22,9 @@ cobro equivocado es un reclamo, una devolución y, si es a la baja, dinero perdi
    sobre un pedido ya pagado no cambia su estado.
 4. **Monto bajo el mínimo = error de negocio.** La capacidad lanza
    `PaymentCapabilityError`; commerce devuelve `monto_bajo_minimo` sin apagar el
-   pack (HU-ARCH-18), y el asistente ofrece transferencia/contraentrega.
+   pack (HU-ARCH-18), y el asistente ofrece transferencia/contraentrega. Ya no es el único
+   rechazo: los demás llegan con su código y commerce los distingue (adenda 2026-10-10 de
+   ADR-0067).
 5. **Commerce consume `payment_registry` del core**, nunca importa el pack de pagos
    (invariante nº5).
 
