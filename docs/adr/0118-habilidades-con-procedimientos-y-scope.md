@@ -66,3 +66,9 @@ Las habilidades de la plataforma publican versiones inmutables con procedimiento
 - `core/mcp/` (metadatos v2 de acciones y permisos) y `core/orchestrator/loop.py` (`_tool_denial`).
 - `packages/pack-*/pyproject.toml` (manifiesto).
 - `docs/MULTITENANT.md` (tabla de sistema nueva) y migraciones.
+
+## Adenda (2026-10-11, HU-AOS-14): quién ejecuta el sync de `pack_versions`
+
+`register_pack_version()` (migración 0079) no da `EXECUTE` a `app_runtime`, a diferencia de `upsert_plan()`
+(ADR-0045): la ejecuta el rol dueño (`MIGRATIONS_DATABASE_URL`, que ya solo tiene el contenedor `api`) desde
+el entrypoint, después de migrar (`agent-core db sync-packs`). Detalle en la adenda de HU-AOS-14 de ADR-0117.

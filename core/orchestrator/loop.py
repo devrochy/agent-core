@@ -30,6 +30,7 @@ from core.db.session import get_session
 from core.kernel.decisions import anotar_uso, bloquear, en_turno, enrutar, marcar_neutral
 from core.kernel.ingress import QUOTA_EXHAUSTED_REPLY as QUOTA_EXHAUSTED_REPLY
 from core.kernel.ingress import conversacion_bloqueada, politicas_del_turno
+from core.kernel.release_del_turno import con_release, fijar_release_del_turno
 from core.kernel.tarjeta import tarjeta_del_turno
 from core.llm import resolve_provider
 from core.llm.difficulty_router import (
@@ -68,6 +69,7 @@ from core.shared.audit import record_audit
 from core.shared.crypto import get_secret_box
 from core.shared.exceptions import BusinessError, LLMProviderError, PluginError
 from core.shared.logger import get_logger
+from core.shared.release_vigente import con_valores_de_release
 from core.shared.tenant import get_current_tenant_id
 from core.tools.core_skill import conversation_spent
 
@@ -169,6 +171,7 @@ async def _write_usage_ledger(
             span.end()
 
 
+@con_release  # ranura de la release del turno (HU-AOS-14); vacía con aos_runtime = legacy
 @en_turno(anota_resultado=True)  # decisión y resultado del turno (HU-AOS-10)
 async def process_conversation(conversation_id: uuid.UUID, latest_message: str) -> TurnResult | None:
     settings = get_settings()
@@ -197,6 +200,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     bloqueo = await politicas_del_turno(conversation, spec)
     if bloqueo is not None:
         return TurnResult(text=bloqueo.texto) if bloqueo.texto is not None else None
+    # Release del turno, sticky por episodio (ADR-0117 §4): no hace nada con aos_runtime = legacy.
+    await fijar_release_del_turno(conversation)
 
     # ---------------- 1. Memoria y contexto
     history = await _load_history(conversation_id)
@@ -288,6 +293,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # Zona del negocio para la fecha y hora actual del prompt (ADR-0091).
         timezone=(getattr(app_settings, "timezone", None) if app_settings else None) or DEFAULT_TIMEZONE,
     )
+    # Con release (aos_runtime = v3), los campos de AppSettings congelados en ella (ADR-0117 §2).
+    prompt_ctx = con_valores_de_release(prompt_ctx)
     system_blocks = await build_system_blocks(spec, prompt_ctx)
 
     # ---------------- 2. Proveedor y routing

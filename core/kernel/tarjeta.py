@@ -272,7 +272,8 @@ async def tarjeta_del_turno(conversation_id: uuid.UUID) -> str:
     from core.db.session import get_session
     from core.kernel import state
     from core.kernel.banderas import banderas_del_negocio
-    from core.kernel.episodio import abrir_episodio
+    from core.kernel.episodio import DEFAULT_IDLE_MINUTES, abrir_episodio
+    from core.shared import release_vigente
     from core.shared.tenant import get_current_tenant_id
 
     tenant_id = get_current_tenant_id()
@@ -281,7 +282,13 @@ async def tarjeta_del_turno(conversation_id: uuid.UUID) -> str:
     async with get_session() as session:
         if not (await banderas_del_negocio(session, tenant_id)).procedimientos:
             return ""
-        await abrir_episodio(session, tenant_id=tenant_id, conversation_id=conversation_id)
+        # Un solo episodio por turno: con release (aos_runtime = v3) manda su `idleMinutes`.
+        await abrir_episodio(
+            session,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            idle_minutes=release_vigente.idle_minutes(DEFAULT_IDLE_MINUTES),
+        )
         filas = await state.tareas_abiertas(session, tenant_id=tenant_id, conversation_id=conversation_id)
         tareas = [proyeccion_de(f) for f in filas]
     return renderizar_tarjeta(tareas)
