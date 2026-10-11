@@ -223,8 +223,13 @@ class ChannelConnection(Base):
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
     external_id: Mapped[str] = mapped_column(Text)  # phone_number_id de Meta (clave de ruteo)
     credentials_encrypted: Mapped[str | None] = mapped_column(Text)
+    # Conexión canónica (ADR-0115, migración 0070): la fila de un número de Meta apunta a su
+    # cuenta (`meta_connections`) y no guarda credenciales (CHECK `ck_cc_meta_sin_credenciales`).
+    # NULL = conexión sin cuenta de Meta (manual, `waweb`, correo, calendario).
+    meta_connection_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class WaWebSession(Base):

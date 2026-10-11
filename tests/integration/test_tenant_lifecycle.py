@@ -646,3 +646,197 @@ async def test_api_purge_exige_negocio_suspendido(app_client) -> None:
     assert r.status_code == 204, r.text
     async with get_session() as session:
         assert await session.get(Tenant, tid) is None
+
+
+# ------------------------------------------------------------------ purga: Redis después del commit
+async def _estado_redis(tid: uuid.UUID) -> tuple[uuid.UUID, dict[str, str]]:
+    """Siembra conversación + una clave de cada familia de estado Redis del tenant.
+
+    Devuelve (conv_id, {nombre: clave}). `debounce:pending` se verifica aparte (ZSET).
+    """
+    from core.memory.working import append_turn, get_redis
+    from core.shared.tenant import tenant_scope
+
+    await _sembrar_conversacion(tid)
+    async with tenant_scope(tid):
+        from core.db.session import get_session
+
+        async with get_session() as session:
+            conv_id = (
+                await session.execute(
+                    text("select id from conversations where tenant_id = :t"), {"t": str(tid)}
+                )
+            ).scalar_one()
+        await append_turn(conv_id, "user", "hola")  # wm:{tid}:{conv}
+    await append_turn(conv_id, "user", "hola")  # wm:{conv} (legado, sin tenant en contexto)
+
+    r = get_redis()
+    claves = {
+        "wm_tenant": f"wm:{tid}:{conv_id}",
+        "wm_legado": f"wm:{conv_id}",
+        "turns": f"turns:{tid}",
+        "inbound": f"inbound:{tid}:meta:wamid-{tid.hex[:6]}",
+        "debounce_payload": f"debounce:payload:{conv_id}",
+        "debounce_messages": f"debounce:messages:{conv_id}",
+        "terminos": f"alta:terminos:{tid}:{conv_id}:v1",
+        "waweb_outbox": f"waweb:outbox:{tid}",
+    }
+    await r.set(claves["turns"], "3")
+    await r.set(claves["inbound"], "1")
+    await r.set(claves["debounce_payload"], json.dumps({"tenant_id": str(tid)}))
+    await r.rpush(claves["debounce_messages"], "hola")
+    await r.set(claves["terminos"], "2026-10-10T00:00:00+00:00")
+    await r.rpush(claves["waweb_outbox"], json.dumps({"to": "57300", "text": "hola"}))
+    await r.zadd("debounce:pending", {str(conv_id): 9_999_999_999_999})
+    for nombre, clave in claves.items():
+        assert await r.exists(clave) == 1, f"falta sembrar {nombre}"
+    return conv_id, claves
+
+
+async def _borrar_estado(conv_id: uuid.UUID, claves: dict[str, str]) -> None:
+    """Higiene: varias claves sembradas no tienen TTL."""
+    from core.memory.working import get_redis
+
+    r = get_redis()
+    await r.unlink(*claves.values())
+    await r.zrem("debounce:pending", str(conv_id))
+
+
+async def test_purge_sql_fallida_deja_redis_intacto(monkeypatch) -> None:
+    """Si la función SQL falla (rollback), el negocio sigue y conserva su estado Redis.
+
+    Se anula el guard de Python para que la función SQL se niegue (negocio activo):
+    falla real de la purga SQL, con rollback.
+    """
+    import sqlalchemy.exc
+
+    import core.tenants as tenants
+    from core.db.models import Tenant
+    from core.db.session import get_session
+    from core.memory.working import get_redis
+
+    tid, slug = await _onboard(_uniq("purge-sqlfalla"))
+    conv_id, claves = await _estado_redis(tid)
+
+    monkeypatch.setattr(tenants, "require_suspended_for_purge", lambda _t: None)
+    with pytest.raises(sqlalchemy.exc.DBAPIError, match="no está suspendido"):
+        await tenants.purge_tenant(str(tid), f"ELIMINAR {slug}")
+
+    async with get_session() as session:
+        assert await session.get(Tenant, tid) is not None, "el negocio sigue"
+    r = get_redis()
+    for nombre, clave in claves.items():
+        assert await r.exists(clave) == 1, f"{nombre} ({clave}) se borró con la purga fallida"
+    assert await r.zscore("debounce:pending", str(conv_id)) is not None
+    await _borrar_estado(conv_id, claves)
+
+
+async def test_purge_limpia_redis_del_tenant_y_no_el_de_otro() -> None:
+    from core.db.models import Tenant
+    from core.db.session import get_session
+    from core.memory.working import get_redis
+    from core.tenants import deactivate_tenant, purge_tenant
+
+    tid, slug = await _onboard(_uniq("purge-redis"))
+    otro, _ = await _onboard(_uniq("purge-redis-otro"))
+    conv_id, claves = await _estado_redis(tid)
+    otro_conv, otras = await _estado_redis(otro)
+    # Clave de varios negocios con el purgado en segunda posición: no es suya.
+    compartida = f"webhook_firma_ajena:{otro}:{tid}"
+    otras["compartida"] = compartida
+    await get_redis().set(compartida, "1", ex=600)
+
+    await deactivate_tenant(slug)
+    assert await purge_tenant(str(tid), f"ELIMINAR {slug}") is True
+
+    async with get_session() as session:
+        assert await session.get(Tenant, tid) is None
+    r = get_redis()
+    for nombre, clave in claves.items():
+        assert await r.exists(clave) == 0, f"{nombre} ({clave}) quedó tras la purga"
+    assert await r.zscore("debounce:pending", str(conv_id)) is None
+    for nombre, clave in otras.items():
+        assert await r.exists(clave) == 1, f"{nombre} del OTRO negocio se borró"
+    assert await r.zscore("debounce:pending", str(otro_conv)) is not None
+    await _borrar_estado(otro_conv, otras)
+
+
+class _LogQueAnota:
+    """Sustituto del logger de `core.tenants` (structlog cachea el logger: `capture_logs`
+    no ve los eventos de un logger ya usado)."""
+
+    def __init__(self, eventos: list[dict]) -> None:
+        self._eventos = eventos
+
+    def __getattr__(self, nivel: str):
+        def anotar(event: str, **kw) -> None:
+            self._eventos.append({"event": event, "log_level": nivel, **kw})
+
+        return anotar
+
+
+class _RedisCaido:
+    """Cliente Redis que falla en todo lo que usa la limpieza."""
+
+    async def unlink(self, *_a, **_k):
+        raise ConnectionError("redis caído (test)")
+
+    async def zrem(self, *_a, **_k):
+        raise ConnectionError("redis caído (test)")
+
+    def scan_iter(self, *_a, **_k):
+        raise ConnectionError("redis caído (test)")
+
+
+async def test_purge_con_redis_caido_tras_commit_registra_y_se_reintenta(monkeypatch) -> None:
+    """Redis falla DESPUÉS del commit: el negocio queda purgado, se registra el error con
+    el tenant y `purge_tenant_redis` (reintento idempotente) termina la limpieza."""
+    import core.memory.working as working
+    import core.tenants as tenants
+    from core.db.models import Tenant
+    from core.db.session import get_session
+    from core.tenants import deactivate_tenant, purge_tenant, purge_tenant_redis
+
+    tid, slug = await _onboard(_uniq("purge-redisfalla"))
+    _conv_id, claves = await _estado_redis(tid)
+    vivo, _ = await _onboard(_uniq("purge-redis-vivo"))
+    _vivo_conv, claves_vivo = await _estado_redis(vivo)
+    await deactivate_tenant(slug)
+
+    logs: list[dict] = []
+    monkeypatch.setattr(tenants, "log", _LogQueAnota(logs))
+    real = working.get_redis
+    monkeypatch.setattr(working, "get_redis", lambda: _RedisCaido())
+    assert await purge_tenant(str(tid), f"ELIMINAR {slug}") is False
+    monkeypatch.setattr(working, "get_redis", real)
+
+    async with get_session() as session:
+        assert await session.get(Tenant, tid) is None, "la purga SQL no se revierte"
+    fallos = [e for e in logs if e.get("event") == "tenant_purge_redis_cleanup_failed"]
+    assert len(fallos) == 1, logs
+    assert fallos[0]["tenant_id"] == str(tid)
+    assert fallos[0]["log_level"] == "error"
+    assert fallos[0]["exc_info"] is True
+    assert f"tenant purge-redis {tid}" in fallos[0]["retry"]
+
+    r = real()
+    assert await r.exists(claves["wm_tenant"]) == 1, "Redis quedó sin limpiar (el fallo es real)"
+
+    # Reintento: con mayúsculas también (se normaliza el UUID).
+    borradas = await purge_tenant_redis(str(tid).upper())
+    assert borradas >= 1
+    for nombre in ("wm_tenant", "turns", "inbound", "terminos", "waweb_outbox"):
+        assert await r.exists(claves[nombre]) == 0, f"{nombre} quedó tras el reintento"
+    assert await purge_tenant_redis(tid) == 0, "idempotente"
+
+    # Sobre un negocio vivo se niega y no borra nada.
+    with pytest.raises(ValueError, match="todavía existe"):
+        await purge_tenant_redis(vivo)
+    # Con el id de una conversación del negocio vivo (error de copiar y pegar) también.
+    with pytest.raises(ValueError, match="posición que no es la de un negocio"):
+        await purge_tenant_redis(_vivo_conv)
+    for nombre, clave in claves_vivo.items():
+        assert await r.exists(clave) == 1, f"{nombre} del negocio vivo se borró"
+    await _borrar_estado(_vivo_conv, claves_vivo)
+    # Lo que va solo por conversación vence solo; aquí se limpia a mano.
+    await _borrar_estado(_conv_id, claves)

@@ -651,21 +651,27 @@ async def tenants_purge(request: Request, tenant_id: uuid.UUID, confirm_phrase: 
 
     ref = str(tenant_id)
     try:
-        await purge_tenant(ref, confirm_phrase)
+        redis_limpio = await purge_tenant(ref, confirm_phrase)
     except TenantNotSuspendedError as exc:
         return RedirectResponse(
             f"/admin/tenants?flash={quote(str(exc))}&flash_type=danger", status_code=303
         )
     except ValueError as exc:
         return RedirectResponse(
-            f"/admin/tenants?flash={str(exc)[:140]}&flash_type=danger", status_code=303
+            f"/admin/tenants?flash={quote(str(exc)[:140])}&flash_type=danger", status_code=303
         )
     except Exception as exc:
         log.exception("tenant_purge_failed")
         return RedirectResponse(
-            f"/admin/tenants?flash=Error al eliminar: {str(exc)[:140]}&flash_type=danger",
+            f"/admin/tenants?flash={quote('Error al eliminar: ' + str(exc)[:140])}&flash_type=danger",
             status_code=303,
         )
+    if not redis_limpio:
+        aviso = (
+            "Negocio eliminado de la base, pero su estado Redis no se pudo limpiar. "
+            f"Reintenta con: agent-core tenant purge-redis {tenant_id}"
+        )
+        return RedirectResponse(f"/admin/tenants?flash={quote(aviso)}&flash_type=warning", status_code=303)
     return RedirectResponse("/admin/tenants?flash=tenant_eliminado&flash_type=success", status_code=303)
 
 
@@ -1893,7 +1899,7 @@ async def connection_new(request: Request):
             connection = await get_owned(
                 session, ChannelConnection, connection_uuid, get_current_tenant_id()
             )
-        if connection is None:
+        if connection is None or connection.meta_connection_id is not None:  # canónica de Meta (ADR-0115)
             return RedirectResponse(
                 "/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303
             )
@@ -1961,7 +1967,7 @@ async def connection_new_save(request: Request):
             existing = await get_owned(
                 session, ChannelConnection, connection_uuid, get_current_tenant_id()
             )
-        if existing is None:
+        if existing is None or existing.meta_connection_id is not None:  # canónica de Meta (ADR-0115)
             return RedirectResponse(
                 "/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303
             )
@@ -1996,8 +2002,11 @@ async def connection_new_save(request: Request):
     except Exception as exc:
         log.exception("connection_type_save_failed")
         suffix = f"&connection_id={connection_id}" if connection_id else ""
+        # Solo los errores de negocio (ValueError) se muestran: uno de la base expondría
+        # nombres de constraints y valores.
+        detalle = str(exc)[:120] if isinstance(exc, ValueError) else "revisa los datos e intenta de nuevo"
         return RedirectResponse(
-            f"/admin/conexiones/nuevo?type={ctype.id}{suffix}&flash=Error al guardar: {str(exc)[:120]}&flash_type=danger",
+            f"/admin/conexiones/nuevo?type={ctype.id}{suffix}&flash=Error al guardar: {detalle}&flash_type=danger",
             status_code=303,
         )
 
