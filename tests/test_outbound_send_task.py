@@ -104,7 +104,7 @@ def _send_one_fixture(monkeypatch, *, earliest=True, claim=True, adapter=None):
         id=uuid.uuid4(), tenant_id=tenant_id, status="queued",
         conversation_id=uuid.uuid4(), created_at=datetime.now(UTC),
         media_type=None, media_url=None, content="hola",
-        template_name=None, template_language=None, template_components=None,
+        template_name=None, template_language=None, template_components=None, interactive=None,
     )
     conv = SimpleNamespace(
         connection_id=None, meta_connection_id=None, customer_id=uuid.uuid4(), channel="whatsapp"

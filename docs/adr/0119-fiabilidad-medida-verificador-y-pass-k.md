@@ -163,3 +163,9 @@ de escribir código.
   saldrían a la red y cambiarían el prompt.
 - **CI:** el gate de las PRs a `develop` corre en replay sin `LLM_API_KEY` (job `evals-replay`). Lo fija la adenda del
   2026-10-10 de ADR-0120.
+
+## Adenda (2026-10-11, HU-AOS-09): respaldo en el reintento
+
+Con el motor de procedimientos activo, el reintento tras un rechazo del verificador usa el respaldo
+del agente (`model.fallback`) cuando es de la misma familia que el modelo del turno. Reglas y límites
+en ADR-0132. Los reintentos y la acción ante el fallo siguen siendo los de ADR-0092.

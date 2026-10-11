@@ -1,0 +1,194 @@
+{"texto": "si confirmo", "confirma": true}
+{"texto": "Sí, confirmo", "confirma": true}
+{"texto": "confirmo", "confirma": true}
+{"texto": "Confirmado", "confirma": true}
+{"texto": "sí confirmado", "confirma": true}
+{"texto": "sí de acuerdo", "confirma": true}
+{"texto": "Sí, está bien", "confirma": true}
+{"texto": "sí correcto", "confirma": true}
+{"texto": "correcto", "confirma": true}
+{"texto": "Sí, es correcto", "confirma": true}
+{"texto": "sí señor", "confirma": true}
+{"texto": "sí señora", "confirma": true}
+{"texto": "afirmativo", "confirma": true}
+{"texto": "sí por favor", "confirma": true}
+{"texto": "Confirmo, gracias", "confirma": true}
+{"texto": "confirmo 👍", "confirma": true}
+{"texto": "CONFIRMO", "confirma": true}
+{"texto": "Sí confirmo el pedido", "confirma": true}
+{"texto": "sí, confirmo la compra", "confirma": true}
+{"texto": "confirmo el pago", "confirma": true}
+{"texto": "Acepto", "confirma": true}
+{"texto": "sí acepto", "confirma": true}
+{"texto": "acepto, gracias", "confirma": true}
+{"texto": "Autorizo", "confirma": true}
+{"texto": "sí autorizo el cobro", "confirma": true}
+{"texto": "Confirmado, muchas gracias", "confirma": true}
+{"texto": "ok confirmo", "confirma": true}
+{"texto": "dale, confirmo", "confirma": true}
+{"texto": "listo, confirmo", "confirma": true}
+{"texto": "perfecto, confirmado", "confirma": true}
+{"texto": "claro, confirmo", "confirma": true}
+{"texto": "de acuerdo, confirmo", "confirma": true}
+{"texto": "sí señor, confirmo", "confirma": true}
+{"texto": "Correcto, gracias", "confirma": true}
+{"texto": "así es", "confirma": true}
+{"texto": "Sí, así es", "confirma": true}
+{"texto": "es correcto", "confirma": true}
+{"texto": "todo correcto", "confirma": true}
+{"texto": "sí, todo correcto", "confirma": true}
+{"texto": "confirmo todo", "confirma": true}
+{"texto": "afirmativo, gracias", "confirma": true}
+{"texto": "confirmamos", "confirma": true}
+{"texto": "sí, confirmamos", "confirma": true}
+{"texto": "procede", "confirma": true}
+{"texto": "sí, procede", "confirma": true}
+{"texto": "adelante", "confirma": true}
+{"texto": "sí, adelante", "confirma": true}
+{"texto": "confirmo por favor", "confirma": true}
+{"texto": "confirmo porfa", "confirma": true}
+{"texto": "Confirmo.", "confirma": true}
+{"texto": "confirmo!!", "confirma": true}
+{"texto": "¡Confirmo!", "confirma": true}
+{"texto": "sí sí confirmo", "confirma": true}
+{"texto": "sí", "confirma": false}
+{"texto": "Si", "confirma": false}
+{"texto": "siii", "confirma": false}
+{"texto": "sip", "confirma": false}
+{"texto": "dale", "confirma": false}
+{"texto": "ok", "confirma": false}
+{"texto": "okay", "confirma": false}
+{"texto": "listo", "confirma": false}
+{"texto": "vale", "confirma": false}
+{"texto": "bueno", "confirma": false}
+{"texto": "claro", "confirma": false}
+{"texto": "claro que sí", "confirma": false}
+{"texto": "perfecto", "confirma": false}
+{"texto": "de acuerdo", "confirma": false}
+{"texto": "está bien", "confirma": false}
+{"texto": "bien", "confirma": false}
+{"texto": "👍", "confirma": false}
+{"texto": "✅", "confirma": false}
+{"texto": "sí gracias", "confirma": false}
+{"texto": "gracias", "confirma": false}
+{"texto": "sí, pero cambia el correo", "confirma": false}
+{"texto": "confirmo, pero el correo es otro", "confirma": false}
+{"texto": "no, confirmo después", "confirma": false}
+{"texto": "no confirmo", "confirma": false}
+{"texto": "no", "confirma": false}
+{"texto": "nop", "confirma": false}
+{"texto": "todavía no", "confirma": false}
+{"texto": "aún no confirmo", "confirma": false}
+{"texto": "espera", "confirma": false}
+{"texto": "espera, confirmo en un rato", "confirma": false}
+{"texto": "¿confirmo?", "confirma": false}
+{"texto": "confirmo?", "confirma": false}
+{"texto": "¿qué tengo que confirmar?", "confirma": false}
+{"texto": "confirmo que no", "confirma": false}
+{"texto": "si confirmo me llega mañana?", "confirma": false}
+{"texto": "si confirmo me llega mañana", "confirma": false}
+{"texto": "mejor no", "confirma": false}
+{"texto": "cancela", "confirma": false}
+{"texto": "cancelar", "confirma": false}
+{"texto": "quiero cancelar", "confirma": false}
+{"texto": "cambia el plan", "confirma": false}
+{"texto": "quiero cambiar el correo", "confirma": false}
+{"texto": "quizás", "confirma": false}
+{"texto": "tal vez confirmo", "confirma": false}
+{"texto": "creo que sí", "confirma": false}
+{"texto": "creo que confirmo", "confirma": false}
+{"texto": "depende del precio", "confirma": false}
+{"texto": "déjame revisar", "confirma": false}
+{"texto": "lo voy a pensar", "confirma": false}
+{"texto": "confírmame el total", "confirma": false}
+{"texto": "confirma tú", "confirma": false}
+{"texto": "confirmame el pedido", "confirma": false}
+{"texto": "¿me confirmas el precio?", "confirma": false}
+{"texto": "confirmame cuánto es", "confirma": false}
+{"texto": "confirmar", "confirma": false}
+{"texto": "quiero confirmar pero no sé cómo", "confirma": false}
+{"texto": "el correo está mal", "confirma": false}
+{"texto": "incorrecto", "confirma": false}
+{"texto": "no es correcto", "confirma": false}
+{"texto": "correcto no", "confirma": false}
+{"texto": "eso está incorrecto", "confirma": false}
+{"texto": "sí, pero primero dime el total", "confirma": false}
+{"texto": "sí pero", "confirma": false}
+{"texto": "ok pero", "confirma": false}
+{"texto": "listo pero mándame otro link", "confirma": false}
+{"texto": "sí, el correo es ana@empresa.co", "confirma": false}
+{"texto": "mi correo es ana@empresa.co", "confirma": false}
+{"texto": "ana@empresa.co", "confirma": false}
+{"texto": "600000", "confirma": false}
+{"texto": "sí, 2 unidades", "confirma": false}
+{"texto": "quiero el plan premium", "confirma": false}
+{"texto": "y cuánto cuesta el anual?", "confirma": false}
+{"texto": "hola", "confirma": false}
+{"texto": "buenas tardes", "confirma": false}
+{"texto": "gracias por la info", "confirma": false}
+{"texto": "sí claro, cuando pueda confirmo", "confirma": false}
+{"texto": "confirmo mañana", "confirma": false}
+{"texto": "confirmo luego", "confirma": false}
+{"texto": "confirmo más tarde", "confirma": false}
+{"texto": "después confirmo", "confirma": false}
+{"texto": "sí, ya confirmo con mi esposa", "confirma": false}
+{"texto": "lo confirmo con mi jefe", "confirma": false}
+{"texto": "confirmo cuando me llegue el link", "confirma": false}
+{"texto": "confirmo si me hacen descuento", "confirma": false}
+{"texto": "acepto si es anual", "confirma": false}
+{"texto": "no acepto", "confirma": false}
+{"texto": "no autorizo", "confirma": false}
+{"texto": "nunca confirmé eso", "confirma": false}
+{"texto": "yo no confirmé", "confirma": false}
+{"texto": "ya confirmé ayer", "confirma": false}
+{"texto": "confirmé", "confirma": false}
+{"texto": "sí confirmé", "confirma": false}
+{"texto": "confirmado no", "confirma": false}
+{"texto": "confirmado?", "confirma": false}
+{"texto": "¿confirmado?", "confirma": false}
+{"texto": "adelante con otra cosa", "confirma": false}
+{"texto": "adelante pregunta", "confirma": false}
+{"texto": "procede a cancelar", "confirma": false}
+{"texto": "sí señor, cancela todo", "confirma": false}
+{"texto": "ok, cambio de plan", "confirma": false}
+{"texto": "sí, el otro", "confirma": false}
+{"texto": "sí, el básico", "confirma": false}
+{"texto": "el premium", "confirma": false}
+{"texto": "sí, ese", "confirma": false}
+{"texto": "ese mismo", "confirma": false}
+{"texto": "perfecto, envíame el link", "confirma": false}
+{"texto": "dale mándame el link", "confirma": false}
+{"texto": "sí mándalo", "confirma": false}
+{"texto": "sí, hazlo", "confirma": false}
+{"texto": "hazlo", "confirma": false}
+{"texto": "sí, quiero", "confirma": false}
+{"texto": "lo quiero", "confirma": false}
+{"texto": "sí lo quiero", "confirma": false}
+{"texto": "sí, me interesa", "confirma": false}
+{"texto": "me sirve", "confirma": false}
+{"texto": "excelente", "confirma": false}
+{"texto": "genial", "confirma": false}
+{"texto": "súper", "confirma": false}
+{"texto": "sí, todo bien", "confirma": false}
+{"texto": "todo bien", "confirma": false}
+{"texto": "👍 ok", "confirma": false}
+{"texto": "ok 👌", "confirma": false}
+{"texto": "sí, lo confirmo", "confirma": true}
+{"texto": "dale, sí, lo confirmo", "confirma": true}
+{"texto": "confirmo, adelante con el pago", "confirma": true}
+{"texto": "sí, todo está correcto", "confirma": true}
+{"texto": "de acuerdo, acepto los términos", "confirma": true}
+{"texto": "perfecto, sí confirmo mi pedido", "confirma": true}
+{"texto": "confirmo que el correo está mal", "confirma": false}
+{"texto": "no sé si confirmar", "confirma": false}
+{"texto": "acepto pero en dos cuotas", "confirma": false}
+{"texto": "correcto, pero el plan es el anual", "confirma": false}
+{"texto": "confirmo ❌", "confirma": false}
+{"texto": "confirmo 👎", "confirma": false}
+{"texto": "confirmo нет", "confirma": false}
+{"texto": "confirmo？", "confirma": false}
+{"texto": "confirmo؟", "confirma": false}
+{"texto": "confirmo‽", "confirma": false}
+{"texto": "confirmo 👍🏽", "confirma": true}
+{"texto": "✅ confirmo", "confirma": true}
+{"texto": "confirmo​", "confirma": false}

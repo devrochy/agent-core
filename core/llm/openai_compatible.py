@@ -77,6 +77,11 @@ def resolve_thinking_for_model(model: str, thinking: bool) -> bool:
     return thinking
 
 
+class _NoReintentar(LLMProviderError):
+    """Un 4xx (salvo 429) con `reintentar_4xx = False`: el request está mal y repetirlo no lo
+    arregla. Lo usa la política de riesgo alto (HU-AOS-09) para degradar rápido."""
+
+
 class OpenAICompatibleProvider(BaseLLMProvider):
     def __init__(
         self,
@@ -93,11 +98,23 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         self.pricing_per_mtok = PRICING.get(model, (0.0, 0.0))
         # `None` = no enviar el campo (proveedores que no lo conocen, como OpenAI).
         self.thinking = thinking
+        # Con False, un 4xx distinto de 429 falla sin reintentos (HU-AOS-09). Por defecto, como
+        # siempre: se reintenta todo error HTTP.
+        self.reintentar_4xx = True
 
     def _thinking_payload(self) -> dict[str, Any]:
         if self.thinking is None or self.provider_name != "deepseek":
             return {}
         return {"thinking": {"type": "enabled" if self.thinking else "disabled"}}
+
+    def _razonamiento(self, msg: LLMMessage) -> dict[str, Any]:
+        """DeepSeek con thinking y tools exige devolver `reasoning_content` en las vueltas
+        siguientes del turno (si no, responde 400). Solo va a DeepSeek con thinking encendido y si
+        el mensaje lo trae: otro proveedor no conoce el campo, y sin la política de riesgo alto
+        (HU-AOS-09) el request es idéntico al de siempre."""
+        if self.provider_name != "deepseek" or not self.thinking:
+            return {}
+        return {"reasoning_content": msg.reasoning_content} if msg.role == "assistant" and msg.reasoning_content else {}
 
     # ------------------------------------------------------------ serialización
     def _serialize_messages(self, system_blocks: list[str], messages: list[LLMMessage]) -> list[dict[str, Any]]:
@@ -122,10 +139,11 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                             }
                             for tc in msg.tool_calls
                         ],
+                        **self._razonamiento(msg),
                     }
                 )
             else:
-                out.append({"role": msg.role, "content": msg.content})
+                out.append({"role": msg.role, "content": msg.content, **self._razonamiento(msg)})
         return out
 
     @staticmethod
@@ -189,6 +207,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             stop_reason = "end_turn"
 
         usage = data.get("usage", {})
+        razonamiento = message.get("reasoning_content")
         return LLMResponse(
             content=message.get("content") or "",
             stop_reason=stop_reason,
@@ -197,9 +216,11 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                 input_tokens=usage.get("prompt_tokens", 0),
                 output_tokens=usage.get("completion_tokens", 0),
                 cache_read_tokens=usage.get("prompt_cache_hit_tokens", 0),
+                reasoning_tokens=int((usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0),
             ),
             model=self.model,
             latency_ms=latency_ms,
+            reasoning_content=razonamiento if isinstance(razonamiento, str) else "",
         )
 
     # ------------------------------------------------------------ stream
@@ -254,11 +275,15 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                     raise LLMProviderError(
                         f"{self.provider_name} HTTP {response.status_code}: {response.text[:300]}"
                     )
+                if not self.reintentar_4xx and 400 <= response.status_code < 500:
+                    raise _NoReintentar(f"{self.provider_name} HTTP {response.status_code}: {response.text[:300]}")
                 response.raise_for_status()
                 result = response.json()
                 if not isinstance(result, dict):
                     raise LLMProviderError(f"Respuesta no-JSON de {self.provider_name}")
                 return result
+            except _NoReintentar:
+                raise
             except (httpx.HTTPError, LLMProviderError) as exc:
                 last_error = exc
                 if attempt < MAX_RETRIES:

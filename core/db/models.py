@@ -328,6 +328,14 @@ class Message(Base):
         CheckConstraint(
             "status in ('queued','sent','delivered','read','failed')", name="ck_messages_status"
         ),
+        # Migración 0082 (HU-AOS-09): forma mínima del mensaje interactivo y solo en un outbound
+        # que no es plantilla.
+        CheckConstraint(
+            "interactive IS NULL OR (jsonb_typeof(interactive) = 'object' "
+            "AND interactive->>'type' IN ('button','list') AND jsonb_typeof(interactive->'body') = 'string' "
+            "AND direction = 'outbound' AND template_name IS NULL)",
+            name="ck_messages_interactive_objeto",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -360,6 +368,10 @@ class Message(Base):
     template_name: Mapped[str | None] = mapped_column(Text)
     template_language: Mapped[str | None] = mapped_column(Text)
     template_components: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    # Mensaje interactivo de WhatsApp (HU-AOS-09, migración 0082): el objeto `interactive` de
+    # Graph sin el destinatario (`{"type": "button", "body", "buttons": [{"id", "title"}]}`).
+    # `content` guarda el cuerpo para el panel.
+    interactive: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

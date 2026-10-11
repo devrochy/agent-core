@@ -18,6 +18,7 @@ atiende webhooks/HTTP.
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from sqlalchemy import or_, select
 
@@ -451,6 +452,100 @@ async def send_template_to_conversation(
 
     outbound_send_task.delay(str(message_id), str(current_tenant_id))
     await event_bus.emit(ON_MESSAGE_SENT, conversation_id=conversation_id, content=preview_text)
+    return True
+
+
+# Topes de un mensaje interactivo con botones de respuesta de WhatsApp Cloud.
+_MAX_CUERPO_INTERACTIVO = 1024
+_MAX_TITULO_BOTON = 20
+_MAX_ID_BOTON = 256
+_MAX_BOTONES = 3
+
+
+def interactivo_valido(interactive: dict[str, Any]) -> bool:
+    """¿Cumple los topes de Meta? Se valida antes de encolar: un payload inválido no gasta la
+    cola ni termina escalado por la DLQ."""
+    botones = interactive.get("buttons")
+    cuerpo = interactive.get("body")
+    if interactive.get("type") != "button" or not isinstance(cuerpo, str) or not cuerpo.strip():
+        return False
+    if len(cuerpo) > _MAX_CUERPO_INTERACTIVO or not isinstance(botones, list) or not 1 <= len(botones) <= _MAX_BOTONES:
+        return False
+    return all(
+        isinstance(b, dict)
+        and isinstance(b.get("id"), str) and 0 < len(b["id"]) <= _MAX_ID_BOTON
+        and isinstance(b.get("title"), str) and 0 < len(b["title"]) <= _MAX_TITULO_BOTON
+        for b in botones
+    )
+
+
+async def send_interactive_to_conversation(
+    conversation_id: uuid.UUID,
+    interactive: dict[str, Any],
+    *,
+    fallback_text: str,
+    sender_type: str = "agent",
+) -> bool:
+    """Encola un mensaje con botones de respuesta (HU-AOS-09).
+
+    La capacidad del canal se decide aquí, no por excepción en el adaptador: solo WhatsApp
+    Cloud (`meta`) con la ventana de 24 h abierta envía botones. En cualquier otro caso (web,
+    waweb, Messenger, ventana cerrada, payload fuera de topes) sale `fallback_text` por el camino
+    de texto de siempre, que registra el fallo si la ventana está cerrada. `content` guarda el
+    cuerpo para el panel; `interactive`, el payload. Devuelve True si quedó encolado."""
+    async with get_session() as session:
+        conversation = await session.get(Conversation, conversation_id)
+        if conversation is None:
+            return False
+        customer = await session.get(Customer, conversation.customer_id)
+        if customer is None:
+            return False
+    if conversation.tenant_id != get_current_tenant_id():
+        # Defensa en profundidad (además de RLS): la fila sale con el negocio de la conversación.
+        log.error("envio_interactivo_tenant_distinto", conversation_id=str(conversation_id))
+        return False
+
+    expira = conversation.service_window_expires_at
+    ventana_abierta = expira is None or expira >= utcnow()
+    if conversation.channel != "whatsapp" or not ventana_abierta or not interactivo_valido(interactive):
+        return await send_to_conversation(conversation_id, fallback_text, sender_type=sender_type)
+    provider, credentials = await resolve_credentials(
+        conversation.connection_id, conversation.meta_connection_id, expected_tenant_id=conversation.tenant_id
+    )
+    if provider != "meta":
+        return await send_to_conversation(conversation_id, fallback_text, sender_type=sender_type)
+
+    cuerpo = str(interactive["body"])
+    if await _registrar_si_pausada(conversation, cuerpo, sender_type):
+        return False
+    from core.gateway.meta_usage import connection_id_for_phone_number, is_paused
+
+    current_tenant_id = get_current_tenant_id()
+    meta_connection_id = await connection_id_for_phone_number(credentials.get("phone_number_id", ""), current_tenant_id)
+    paused = await is_paused(current_tenant_id, meta_connection_id)
+    async with get_session() as session:
+        message = Message(
+            tenant_id=current_tenant_id,
+            conversation_id=conversation_id,
+            direction="outbound",
+            sender_type=sender_type,
+            content=cuerpo,
+            status="failed" if paused else "queued",
+            error_reason="Envío pausado: uso de la API de Meta cerca del límite (>=90%)" if paused else None,
+            client_message_id=str(uuid.uuid4()),
+            interactive=dict(interactive),
+        )
+        session.add(message)
+        await session.flush()
+        message_id = message.id
+    if paused:
+        log.error("envio_pausado_por_uso_de_api", conversation_id=str(conversation_id))
+        return False
+
+    from core.tasks.outbound_send import outbound_send_task
+
+    outbound_send_task.delay(str(message_id), str(current_tenant_id))
+    await event_bus.emit(ON_MESSAGE_SENT, conversation_id=conversation_id, content=cuerpo)
     return True
 
 

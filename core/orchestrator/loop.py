@@ -106,6 +106,9 @@ class TurnResult:
     text: str
     image_url: str | None = None
     escalated: bool = False
+    # Confirmación armada por el kernel (HU-AOS-09): `text` ya es su versión de texto; egress
+    # la envía con botón si el canal lo soporta. None en todo turno sin el motor activo.
+    confirmacion: Any = None
 
 
 @dataclass
@@ -120,6 +123,7 @@ class _TurnUsage:
     model: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     escalated: bool = False
+    politica: Any = None  # `UsoDePolitica` del turno (HU-AOS-09), solo con el motor activo
 
     def add(self, provider, response) -> None:  # type: ignore[no-untyped-def]
         self.input_tokens += response.usage.input_tokens
@@ -153,7 +157,12 @@ async def _write_usage_ledger(
                     latency_ms=usage.latency_ms,
                     cost_usd=round(usage.cost_usd, 6),
                     tool_calls=usage.tool_calls or None,
-                    result={"escalated": usage.escalated},
+                    result={
+                        "escalated": usage.escalated,
+                        # Política de modelo por riesgo (HU-AOS-09): solo si hizo algo.
+                        **({"politica_modelo": usage.politica.como_dict()}
+                           if usage.politica is not None and not usage.politica.vacio() else {}),
+                    },
                 )
             )
     except Exception:
@@ -343,6 +352,10 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     provider = _resolved_provider(
         app_settings, routing.model, thinking=routing.reason == "complex_signals"
     )
+    # Política de modelo por riesgo (HU-AOS-09): None salvo con el motor activo.
+    politica = _politica_del_turno(motor, app_settings, spec, routing)
+    if politica is not None:
+        provider = politica.envolver(provider)
     tool_schemas = to_llm_schemas(active_tools) if routing.allow_tools else None
     # v2.0.0 (ADR-0050): temperatura del tenant (clampeada -- el raw_json de
     # /admin/spec puede traer cualquier float).
@@ -395,6 +408,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     turn_cost: float = 0.0
     budget = spec.policies.budgetUsdPerConversation
     usage = _TurnUsage()
+    usage.politica = politica.uso if politica is not None else None
 
     # Span del turno (OTel): atributos para el panel/trazas.
     tracer = get_tracer()
@@ -473,7 +487,11 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # ---- tool_use
         if response.stop_reason == "tool_use":
             messages.append(
-                LLMMessage(role="assistant", content=response.content, tool_calls=response.tool_calls)
+                LLMMessage(
+                    role="assistant", content=response.content, tool_calls=response.tool_calls,
+                    # DeepSeek con thinking lo exige en la vuelta siguiente (HU-AOS-09).
+                    reasoning_content=getattr(response, "reasoning_content", "") if politica is not None else "",
+                )
             )
             for tool_call in response.tool_calls:
                 with tracer.start_as_current_span("tool_execute") as tool_span:
@@ -594,6 +612,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         elif not verdict.passed:
             if guardrail_retries < guardrail_max_retries:
                 guardrail_retries += 1
+                if politica is not None and persona_verdict is None and veredicto is not None and not veredicto.passed:
+                    politica.reintento_del_verificador()  # el reintento usa el respaldo (HU-AOS-09)
                 messages.append(LLMMessage(role="assistant", content=response.content))
                 messages.append(LLMMessage(role="user", content=f"[SISTEMA] {verdict.retry_instruction}"))
                 continue
@@ -673,7 +693,12 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             await _registrar_largo_excedido(conversation_id, spec, len(borrador), entregado)
         extras = extract_safe_extras(all_tool_results)
         final_text = apply_safe_extras(borrador, extras)
-        return await _close_turn(
+        # HU-AOS-09: si el turno pidió una confirmación, el cliente confirma lo que armó el
+        # servidor (args firmados y datos de la tarea), no el texto del modelo.
+        confirmacion = await motor.confirmacion_del_turno() if motor is not None else None
+        if confirmacion is not None:
+            final_text = confirmacion.confirmacion.texto
+        resultado = await _close_turn(
             conversation_id,
             spec,
             app_settings,
@@ -685,8 +710,11 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             count_unresolved=not _turno_avanza_sin_tools(
                 latest_message, final_text, bool(all_tool_results)
             ),
-            image_url=extras.image_url,
+            image_url=extras.image_url if confirmacion is None else None,
         )
+        if confirmacion is not None and not resultado.escalated:
+            resultado.confirmacion = confirmacion
+        return resultado
 
     # Se agotaron las iteraciones
     await escalate(conversation_id, reason="max_iterations", summary="Loop sin resolución")
@@ -1283,6 +1311,42 @@ def _resolved_provider(  # type: ignore[no-untyped-def]
         if app_settings.llm_api_key_encrypted:
             api_key = get_secret_box().decrypt(app_settings.llm_api_key_encrypted)
     return resolve_provider(provider_key=provider_key, api_key=api_key, model=model, thinking=thinking)
+
+
+def _politica_del_turno(motor: ContextoMotor | None, app_settings: AppSettings | None, spec, routing):  # type: ignore[no-untyped-def]
+    """Política de modelo por riesgo del turno (HU-AOS-09, ADR-0132), o None.
+
+    Solo con el motor activo (`tenants.aos_procedures`). Riesgo alto: la etapa en foco al empezar
+    el turno declara `risk: high` (y el router no eligió ya el modo de razonamiento sin tools).
+    Respaldo del verificador: `spec.model.fallback`, solo si es de la misma familia que el modelo
+    del turno (con otro proveedor fallaría siempre); si no, se anota `respaldo_no_disponible`."""
+    if motor is None or motor.modo != "activo":
+        return None
+    from core.kernel.politica_modelo import (
+        PoliticaDelTurno,
+        decidir,
+        misma_familia,
+        politica_por_defecto,
+    )
+    from core.llm.openai_compatible import OpenAICompatibleProvider
+
+    alto = eleccion = None
+    if routing.reason == "default":
+        eleccion = decidir(motor.riesgo_alto, politica_por_defecto(), routing.model)
+        if eleccion is not None:
+            alto = _resolved_provider(app_settings, eleccion.model, thinking=eleccion.thinking)
+            if isinstance(alto, OpenAICompatibleProvider):
+                alto.reintentar_4xx = False  # un 400 degrada ya, sin 4,5 s de reintentos
+    fallback = spec.model.fallback
+    declarado = bool(fallback) and fallback != routing.model
+    respaldo = (
+        _resolved_provider_fallback(app_settings, fallback)
+        if declarado and misma_familia(fallback, routing.model)
+        else None
+    )
+    if alto is None and not declarado:
+        return None
+    return PoliticaDelTurno(alto=alto, eleccion=eleccion, respaldo=respaldo, hay_respaldo_declarado=declarado)
 
 
 def _resolved_provider_fallback(app_settings: AppSettings | None, model: str):  # type: ignore[no-untyped-def]
