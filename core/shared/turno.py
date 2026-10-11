@@ -12,6 +12,12 @@ Guarda de negocio: la FK `(tenant_id, turn_id) → core_decisions (tenant_id, id
 el COMMIT. Si dentro de un turno se escribe bajo el `tenant_scope` de OTRO negocio (cobro de
 plataforma, packs que cambian de scope), el default devuelve NULL: nunca hace fallar una
 escritura que antes funcionaba.
+
+Tareas Celery (seguimiento #439): el turno viaja a la tarea en headers del mensaje
+(`core.observability.celery_trazas`) y el worker lo fija aquí como `heredado`; `run_async`
+lo lleva a la corrutina (copia el contexto del hilo de la tarea). Un turno heredado no se
+vuelve a propagar a tareas nuevas que encole la tarea (solo su propio reintento, que Celery
+republica con los mismos headers).
 """
 
 from __future__ import annotations
@@ -29,12 +35,15 @@ class TurnoVigente:
     turn_id: uuid.UUID
     tenant_id: uuid.UUID
     trace_id: str | None
+    # True: llegó de los headers de una tarea Celery (no lo abrió el kernel en este proceso).
+    heredado: bool = False
 
 
 _vigente: ContextVar[TurnoVigente | None] = ContextVar("turno_vigente", default=None)
 
 
-def fijar(turno: TurnoVigente) -> Token[TurnoVigente | None]:
+def fijar(turno: TurnoVigente | None) -> Token[TurnoVigente | None]:
+    """Fija el turno vigente (None lo limpia: el worker lo hace al empezar cada tarea)."""
     return _vigente.set(turno)
 
 
@@ -58,6 +67,12 @@ def _tenant_de_la_fila(context: Any) -> object:
         except Exception:
             return None
     return get_current_tenant_id()
+
+
+def vigente() -> TurnoVigente | None:
+    """Turno vigente si es del negocio del `tenant_scope` actual (la guarda del default de
+    columna, sin fila); si no, None."""
+    return _del_negocio(get_current_tenant_id())
 
 
 def turno_id(context: Any = None) -> uuid.UUID | None:

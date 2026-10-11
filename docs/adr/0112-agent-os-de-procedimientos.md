@@ -142,3 +142,48 @@ invariantes ni banderas de conducta.
     legacy) no la ejecuta.
 - **Pendiente para HU-AOS-15:** el fail-closed de `core_decisions` con `aos_procedures`
   encendida. El motor no lo necesita: un `turn_id` NULL en `task_events` es válido.
+
+## Adenda de implementación (2026-10-11, HU-AOS-10, seguimientos #438 y #439)
+
+Revisada por el agente `arquitecto` antes de escribir código. Deja sin efecto el **Pendiente** de la adenda de
+HU-AOS-10 (ids del inbound en el camino debounce y `turn_id` dentro de las tareas Celery). Sin migración, sin bandera
+nueva y sin cambio de conducta (gate en replay sin regrabar).
+
+- **Ids del inbound en el debounce (#438).** Cada inbound agendado empuja su id a
+  `debounce:inbound:{tenant_id}:{conversation_id}` (lista, mismo RPUSH/LTRIM/EXPIRE de 5 min y mismo pipeline que el
+  texto de la ráfaga). Al disparar, el turno diferido los anota antes de la primera decisión, así
+  `core_decisions.inbound_message_ids` lleva todos los mensajes de la ráfaga, sin duplicados. El reencolado por
+  `TurnQueueTimeout` los vuelve a empujar desde el payload, como el texto; si entra un mensaje entre el claim y el
+  reencolado, el orden del arreglo no es cronológico (no se promete orden). La recuperación de conversaciones
+  huérfanas al arrancar pasa el id del último inbound. Al disparar, payload, texto e ids se leen y borran en una
+  transacción (antes eran comandos sueltos y un mensaje que llegara en medio podía perder su texto). La clave lleva el UUID del negocio primero
+  (`docs/MULTITENANT.md`): la purga del negocio y su reintento (`tenant purge-redis`) la barren sin enumerar
+  conversaciones; no es una familia solo por conversación. Se escribe siempre (son UUIDs sin datos del cliente),
+  también con `KERNEL_LEDGER_ENABLED` apagada.
+- **`turn_id` dentro de las tareas Celery (#439).** Diagnóstico corregido: `run_async` sí lleva los ContextVars del
+  hilo de la tarea a la corrutina (`run_coroutine_threadsafe` copia el contexto del llamador); lo que no viaja es el
+  **proceso**: la tarea corre en el worker, donde el turno nunca se fijó. Se propaga en **headers** del mensaje
+  (`agentcore_turn_id`, `agentcore_turn_tenant_id`, `agentcore_turn_trace_id`, en
+  `core/observability/celery_trazas.py`, el mismo patrón que `traceparent`), no como argumentos de cada tarea: las
+  firmas de las tareas (también las de los packs) no cambian, y un worker viejo ignora los headers y una tarea en
+  cola sin ellos queda NULL.
+  - **Al encolar:** solo si hay turno vigente del negocio en `tenant_scope` (la guarda del default de columna) y
+    no es heredado. Nunca pisa headers de turno que ya traiga el mensaje.
+  - **En el worker:** `task_prerun` fija el turno de los headers, validado (UUIDs, `trace_id` de 32 hex), o lo
+    limpia si no viene; `task_postrun` lo suelta. Los defaults de columna aplican la guarda por fila: lo que la
+    tarea escribe para otro negocio queda NULL. La FK compuesta no falla por esto: el turno solo viaja
+    después de commitear su cabecera, y el header no se re-verifica contra `core_decisions` en el worker (sería una
+    lectura por tarea). **Supuesto:** el broker es de confianza; un header forjado con un `turn_id` inexistente haría
+    fallar en el COMMIT la escritura de esa tarea, pero escribir en el broker ya permite encolar cualquier tarea.
+    Caso límite aceptado: si un negocio se purga y se vuelve a dar de alta con el mismo id (alta automática
+    determinista, ADR-0121) mientras sigue en cola una tarea suya con headers de turno (p. ej. un reintento con
+    `countdown`), esa escritura falla por la FK; antes habría pasado.
+  - Las tareas genéricas de los packs (`enqueue`, `task_queue`) que un turno encola heredan su `turn_id` en todo lo
+    que escriben del mismo negocio: atribución de más, nunca hacia otro negocio.
+  - **Reintento:** `self.retry` republica con los headers del mensaje (comprobado con un worker real), así que
+    conserva el turno. **Tareas nuevas encoladas desde el worker** (p. ej. `_enqueue_next` de `outbound_send`, que
+    encola el siguiente mensaje, quizá de otro turno) **no** lo heredan: NULL antes que mal atribuido. La
+    reprogramación por política (`_handle_policy_defer`, `apply_async` con otro id) es la misma tarea en sentido
+    de negocio y aun así queda NULL; se acepta.
+  - `traceparent` sí viaja a las tareas encadenadas: una tarea puede compartir `trace_id` con el turno y tener
+    `turn_id` NULL. Es intencional; no se deben igualar.
