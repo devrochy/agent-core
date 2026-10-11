@@ -16,6 +16,8 @@ from core.orchestrator.loop import _connections_ok
 from core.subscriptions import subscription_registry
 
 NOMBRES = {"sub_consultar", "sub_link_pago", "sub_pausar", "sub_cancelar", "sub_cambiar_plan"}
+# Las del procedimiento `cambiar_plan` (HU-AOS-08): mismo predicado, pero no `always_available`.
+NOMBRES |= {"sub_cotizar_cambio_plan", "sub_aplicar_cambio_plan"}
 
 
 class _Spec:

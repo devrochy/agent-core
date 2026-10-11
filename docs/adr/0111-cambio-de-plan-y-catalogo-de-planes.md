@@ -86,3 +86,30 @@ importa otro (invariante 5).
 - `packages/pack-commerce/pack_commerce/planes.py`: catálogo de planes de commerce; bloqueo de un segundo plan.
 - `packages/pack-subscriptions/pack_subscriptions/`: `prorrateo.py`, `change_plan`, `referencia_origen`,
   `cambio_programado` y la migración `pack_subscriptions_0006`.
+
+## Adenda (2026-10-11, HU-AOS-08): cotización y monto confirmado
+
+**Estado:** propuesta; requiere la aprobación del dueño antes del merge. La revisó el agente `arquitecto`.
+No cambia el esquema ni la conducta de `sub_cambiar_plan`.
+
+- **Dos operaciones opcionales del proveedor, juntas** (mismo patrón que `permite_varias`):
+  - `cotizar_cambio(subscription_id, *, variant_id, plan)`: lo que haría `change_plan`, sin efectos
+    (`cambio`, `monto_a_pagar`, `precio_nuevo`, `plan_actual`, `plan_nuevo`, `desde`), con los mismos rechazos;
+  - `change_plan(..., monto_esperado=None)`: el monto que el cliente confirmó. Se compara en la **misma
+    transacción** y con el mismo `ahora` que el cálculo, redondeado como `prorrateo.py` (al peso en COP, al
+    centavo en otras monedas). Si no coincide, `SubscriptionError(code="monto_distinto")` y no se hace nada.
+  - Un proveedor que no implementa `cotizar_cambio` no soporta el procedimiento; su `change_plan` nunca recibe
+    `monto_esperado` (`core.subscriptions.soporta_cotizacion`).
+- **Por qué no repite la alternativa descartada** ("el LLM pasa el precio y se compara"): el monto del modelo
+  nunca se usa como monto. El cargo sale siempre del cálculo del servidor; el argumento solo ata lo que el
+  cliente vio en el botón (HU-AOS-09) a lo que se cobra, y si difiere no se cobra.
+- **Las reglas viven en una sola función pura** (`pack_subscriptions.capability.evaluar_cambio`), que usan
+  `change_plan`, la cotización y el resolver `plan_destino` del procedimiento.
+- **Tools del core solo de procedimiento** (ADR-0106 sigue: un solo juego de `sub_*` en el core):
+  `sub_cotizar_cambio_plan(plan_code)` y `sub_aplicar_cambio_plan(plan_code, monto_a_pagar)`. No son
+  `always_available` y ningún `flow.json` las nombra: el loop legacy no las ofrece y no entran en los
+  bindings del General v3 (`tolerante.candidatas_del_spec`). Las ofrece el motor en la etapa `confirmar` de
+  `pack_subscriptions.cambiar_plan` (adenda HU-AOS-08 de ADR-0113).
+- **`sub_cambiar_plan` no se ofrece con `tenants.aos_procedures` encendida**: si no, el modelo podría
+  saltarse el botón con la tool de siempre (las del core no las gobierna el motor). Con la bandera apagada se
+  ofrece como siempre.

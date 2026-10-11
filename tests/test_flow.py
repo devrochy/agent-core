@@ -238,7 +238,10 @@ def test_tools_del_core_siempre_disponibles() -> None:
     from core.tools.core_skill import CoreSkill
 
     assert all(t.always_available for t in CoreSkill().get_tools())
-    assert all(t.always_available for t in SubscriptionSkill().get_tools())
+    # Salvo las que solo ofrece el motor de procedimientos (HU-AOS-08).
+    from core.subscriptions.tools import SOLO_PROCEDIMIENTO
+
+    assert all(t.always_available for t in SubscriptionSkill().get_tools() if t.name not in SOLO_PROCEDIMIENTO)
 
 
 # ------------------------------------------------------------------ siembra y migración

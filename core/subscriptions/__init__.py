@@ -358,3 +358,29 @@ async def registrar_pago_externo(
     if metodo is None:
         return None
     return dict(await metodo(subscription_id, inicio=inicio, fin=fin, referencia=referencia, canal=canal))
+
+
+# ------------------------------------------------- cotización del cambio de plan (HU-AOS-08)
+# Adenda de ADR-0111. El procedimiento `cambiar_plan` (ADR-0113) confirma con un botón el monto
+# que el servidor va a cobrar: el proveedor cotiza sin efectos (`cotizar_cambio`) y `change_plan`
+# recibe el monto confirmado (`monto_esperado`) para compararlo, en la misma transacción, con su
+# propio cálculo. Son opcionales y van juntas: un proveedor que no implementa `cotizar_cambio`
+# no soporta el procedimiento (las tools devuelven un error de negocio) y su `change_plan` nunca
+# recibe `monto_esperado`.
+
+
+def soporta_cotizacion(capability: SubscriptionCapability) -> bool:
+    return callable(getattr(capability, "cotizar_cambio", None))
+
+
+async def cotizar_cambio(
+    capability: SubscriptionCapability, subscription_id: uuid.UUID, *, variant_id: str, plan: PlanSnapshot
+) -> dict[str, Any]:
+    """Lo que haría `change_plan` con ese plan, sin efectos: `{cambio, monto_a_pagar,
+    precio_nuevo, …}`. Lanza `SubscriptionError` (los mismos rechazos que `change_plan`)."""
+    metodo = getattr(capability, "cotizar_cambio", None)
+    if not callable(metodo):
+        raise SubscriptionError(
+            "Este proveedor de suscripciones no cotiza cambios de plan.", code="sin_cotizacion"
+        )
+    return dict(await metodo(subscription_id, variant_id=variant_id, plan=plan))

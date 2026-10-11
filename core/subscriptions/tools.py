@@ -21,10 +21,13 @@ from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from core.subscriptions import (
+    PlanSnapshot,
     SubscriptionCapability,
     SubscriptionError,
     SubscriptionView,
     capability_del_negocio,
+    cotizar_cambio,
+    soporta_cotizacion,
     subscription_registry,
 )
 
@@ -92,8 +95,13 @@ class SubscriptionSkill(BaseSkill):
     keywords: ClassVar[list[str]] = []  # siempre activa; el predicado filtra por negocio
 
     def get_tools(self) -> list[MCPTool]:
-        """Tools del core: siempre disponibles, fuera del flujo (HU-FWK-01, ADR-0109)."""
-        return [replace(t, always_available=True) for t in self._build_tools()]
+        """Tools del core: siempre disponibles, fuera del flujo (HU-FWK-01, ADR-0109). Las del
+        procedimiento `cambiar_plan` (HU-AOS-08) no: ningún `flow.json` las nombra, así que el loop
+        solo las ofrece cuando el motor las pone en la etapa de una tarea en foco."""
+        return [
+            t if t.name in SOLO_PROCEDIMIENTO else replace(t, always_available=True)
+            for t in self._build_tools()
+        ]
 
     def _build_tools(self) -> list[MCPTool]:
         predicate = _proveedor_habilitado()
@@ -157,6 +165,46 @@ class SubscriptionSkill(BaseSkill):
                     "required": ["plan_code"],
                 },
                 handler=self.cambiar_plan,
+                # Con el motor activo el cambio de plan va por el procedimiento (botón con el
+                # monto del servidor): esta tool no se ofrece (HU-AOS-08). Sin la bandera, igual.
+                connection_predicate=_sin_motor_activo(predicate),
+            ),
+            MCPTool(
+                name="sub_cotizar_cambio_plan",
+                description=(
+                    "Cotiza el cambio de la suscripción del cliente a otro plan del catálogo, sin "
+                    "cambiar nada: precio del plan nuevo, tipo de cambio y monto a pagar hoy "
+                    "(diferencia prorrateada). Pasá solo el SKU del plan nuevo."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "plan_code": {"type": "string", "description": "SKU del plan nuevo (p. ej. PLAN-PREMIUM)."},
+                    },
+                    "required": ["plan_code"],
+                },
+                handler=self.cotizar_cambio_plan,
+                connection_predicate=predicate,
+            ),
+            MCPTool(
+                name="sub_aplicar_cambio_plan",
+                description=(
+                    "Aplica el cambio de plan cotizado. Pasá el SKU y el monto_a_pagar EXACTO que "
+                    "devolvió sub_cotizar_cambio_plan: si no coincide con el del sistema no se "
+                    "aplica. Pide la confirmación del cliente antes de ejecutarse."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "plan_code": {"type": "string", "description": "SKU del plan nuevo."},
+                        "monto_a_pagar": {
+                            "type": "number",
+                            "description": "monto_a_pagar de la cotización (0 si el cambio no cobra hoy).",
+                        },
+                    },
+                    "required": ["plan_code", "monto_a_pagar"],
+                },
+                handler=self.aplicar_cambio_plan,
                 connection_predicate=predicate,
             ),
         ]
@@ -243,3 +291,106 @@ class SubscriptionSkill(BaseSkill):
                 "El plan cambia cuando se confirme el pago."
             )
         return resultado
+
+    # ------------------------------------------------- procedimiento `cambiar_plan` (HU-AOS-08)
+    async def cotizar_cambio_plan(self, arguments: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+        return await cotizacion_del_cliente(ctx, str(arguments.get("plan_code") or ""))
+
+    async def aplicar_cambio_plan(self, arguments: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+        """El monto confirmado se compara con el del servidor dentro de `change_plan` (misma
+        transacción); nunca se usa como monto (adenda de ADR-0111)."""
+        monto = arguments.get("monto_a_pagar")
+        if isinstance(monto, bool) or not isinstance(monto, int | float | str):
+            raise SubscriptionError("Falta el monto_a_pagar de la cotización.", code="monto_distinto")
+        cap, sub, variant_id, plan = await _cambio_cotizable(ctx, str(arguments.get("plan_code") or ""))
+        vista = await cap.change_plan(  # type: ignore[call-arg]
+            uuid.UUID(sub["subscription_id"]), variant_id=variant_id, plan=plan, monto_esperado=monto
+        )
+        cargo = vista.get("cargo_cambio") or {}
+        resultado: dict[str, Any] = {
+            "plan": plan.get("nombre"),
+            "cambio": vista.get("cambio"),
+            "monto_a_pagar": float(cargo.get("monto") or 0),
+            "link_pago": cargo.get("link") or None,
+            "proximo_cargo": vista.get("proximo_cargo"),
+        }
+        if cargo.get("link"):
+            from core.events.core_handlers import format_amount
+
+            resultado["_safe_append"] = (
+                f"💳 Para pasar a {plan.get('nombre')} pagás la diferencia de "
+                f"{format_amount(cargo.get('monto'), plan.get('moneda'))} aquí: {cargo['link']}"
+            )
+        elif vista.get("cambio") == "pendiente_pago":
+            resultado["hint"] = (
+                "El pago en línea no está disponible para este monto: ofrecé transferencia. "
+                "El plan cambia cuando se confirme el pago."
+            )
+        return resultado
+
+
+async def _cambio_cotizable(ctx: ToolContext, plan_code: str) -> tuple[Any, SubscriptionView, str, PlanSnapshot]:
+    """(proveedor, suscripción vigente, variant_id, plan) o `SubscriptionError`. Todo camino
+    sin efecto termina en error: la tarea del procedimiento solo avanza con un resultado real."""
+    cap = await _capability(ctx)
+    if not soporta_cotizacion(cap):
+        raise SubscriptionError("Este proveedor de suscripciones no cotiza cambios de plan.", code="sin_cotizacion")
+    sub = await _suscripcion_del_cliente(ctx)
+    if sub is None:
+        raise SubscriptionError("El cliente no tiene una suscripción activa.", code="sin_suscripcion")
+    variant_id, plan = await plan_del_catalogo(plan_code)
+    return cap, sub, variant_id, plan
+
+
+async def cotizacion_del_cliente(ctx: ToolContext, plan_code: str) -> dict[str, Any]:
+    """Cotización del cambio de la suscripción del cliente de la conversación al plan `plan_code`
+    (sin efectos). La usan `sub_cotizar_cambio_plan` y el resolver `plan_destino` del
+    procedimiento, así los dos dicen lo mismo. Lanza `SubscriptionError`."""
+    cap, sub, variant_id, plan = await _cambio_cotizable(ctx, plan_code)
+    cotizacion = await cotizar_cambio(cap, uuid.UUID(sub["subscription_id"]), variant_id=variant_id, plan=plan)
+    return {"plan_code": str(plan.get("plan_code") or plan_code.strip()), **cotizacion}
+
+
+# Tools que solo ofrece el motor de procedimientos (no son `always_available`).
+SOLO_PROCEDIMIENTO = frozenset({"sub_cotizar_cambio_plan", "sub_aplicar_cambio_plan"})
+
+
+async def plan_del_catalogo(codigo: str) -> tuple[str, PlanSnapshot]:
+    """(variant_id, snapshot) del plan por SKU en el catálogo del negocio (ADR-0111), o error."""
+    from core.subscriptions import plan_catalog_registry
+
+    codigo = codigo.strip()[:100]
+    if not codigo:
+        raise SubscriptionError("Falta el código del plan nuevo.", code="plan_invalido")
+    tenant_id = get_current_tenant_id()
+    catalogo = await plan_catalog_registry.para_negocio(tenant_id) if tenant_id else None
+    encontrado = await catalogo.plan_por_codigo(codigo) if catalogo else None
+    if encontrado is None:
+        raise SubscriptionError(f"No encontré el plan {codigo} en el catálogo del negocio.", code="plan_no_encontrado")
+    return encontrado
+
+
+def _sin_motor_activo(
+    predicate: Callable[[set[str]], Awaitable[bool]],
+) -> Callable[[set[str]], Awaitable[bool]]:
+    """El predicado de siempre y, además, que el negocio no tenga el motor de procedimientos
+    activo (`tenants.aos_procedures`). Si la bandera no se puede leer, se ofrece como siempre
+    (con la bandera apagada nada cambia)."""
+
+    async def _predicate(connection_types: set[str]) -> bool:
+        if not await predicate(connection_types):
+            return False
+        tenant_id = get_current_tenant_id()
+        if tenant_id is None:
+            return True
+        try:
+            from core.db.session import get_session
+            from core.kernel.banderas import banderas_del_negocio
+
+            async with get_session() as session:
+                return not (await banderas_del_negocio(session, tenant_id)).procedimientos
+        except Exception:
+            log.warning("sub_cambiar_plan_bandera_ilegible", exc_info=True)
+            return True
+
+    return _predicate
