@@ -35,6 +35,9 @@ class ActionInfo:
     name: str
     owner: str
     side_effect: SideEffect | None = None
+    # Scopes que la acción exige a su binding (`MCPTool.scopes`). El lector tolerante de
+    # AgentSpec v2 los concede al consentir una acción que hoy corre sin binding (HU-AOS-12).
+    scopes: tuple[str, ...] = ()
 
 
 Catalogo = Mapping[str, ActionInfo]
@@ -74,7 +77,7 @@ def _armar(modules: list[Any]) -> dict[str, ActionInfo]:
     catalogo: dict[str, ActionInfo] = {}
     for skill in _core_skills():
         for tool in skill.get_tools():
-            catalogo[tool.name] = ActionInfo(name=tool.name, owner=CORE_OWNER)
+            catalogo[tool.name] = ActionInfo(name=tool.name, owner=CORE_OWNER, scopes=tuple(tool.scopes or ()))
     for module in modules:
         owner = str(getattr(module, "id", "") or "")
         for skill_cls in getattr(module, "declared_skills", None) or []:
@@ -84,5 +87,7 @@ def _armar(modules: list[Any]) -> dict[str, ActionInfo]:
                 log.warning("procedimientos_catalogo_skill_fallo", plugin=owner, exc_info=True)
                 continue
             for tool in tools:
-                catalogo.setdefault(tool.name, ActionInfo(name=tool.name, owner=owner))
+                catalogo.setdefault(
+                    tool.name, ActionInfo(name=tool.name, owner=owner, scopes=tuple(tool.scopes or ()))
+                )
     return catalogo

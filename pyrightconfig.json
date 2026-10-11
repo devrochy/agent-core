@@ -1,5 +1,16 @@
 {
-  "include": ["core/config.py", "core/memory/vector.py", "core/kernel", "core/shared/turno.py", "core/observability/celery_trazas.py", "packages/contracts/agentcore_contracts/procedure.py"],
+  "include": [
+    "core/config.py",
+    "core/memory/vector.py",
+    "core/kernel",
+    "core/shared/turno.py",
+    "core/observability/celery_trazas.py",
+    "packages/contracts/agentcore_contracts/procedure.py",
+    "packages/contracts/agentcore_contracts/agentspec.py",
+    "packages/contracts/agentcore_contracts/kernelspec.py",
+    "core/agents/contrato_v3.py",
+    "core/agents/tolerante.py"
+  ],
   "pythonVersion": "3.12",
   "typeCheckingMode": "basic",
   "reportMissingImports": "none"

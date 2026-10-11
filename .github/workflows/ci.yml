@@ -105,6 +105,10 @@ jobs:
         # habilidades se suman cuando las publiquen (HU-AOS-07/16).
         run: agent-core procedures lint tests/fixtures/procedures/*.json
 
+      - name: Linter de agentes (agentspec/3 y kernelspec/1)
+        # ADR-0113 / HU-AOS-12: el mismo validador del CLI y de la API al guardar un borrador.
+        run: agent-core agent lint tests/fixtures/agents/*.json
+
       - name: Contrato OpenAPI sin drift (hacia main)
         # Checklist de release: `docs/openapi.json` refleja `/api/v1` (ADR-0077).
         if: github.base_ref == 'main' || github.ref == 'refs/heads/main'

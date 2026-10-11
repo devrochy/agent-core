@@ -1,11 +1,12 @@
-"""Contratos congelados de agent-core v1.0.0.
+"""Contratos congelados de agent-core (origen v1.0.0; `AgentSpec` v2 desde 2.0.0).
 
 CONGELADO. Ver docs/adr/0011-contratos-python.md (reemplaza ADR-0003).
 Cualquier cambio de forma requiere un ADR nuevo y un incremento major.
 Este paquete NO importa de ningún otro paquete del monorepo.
 
-Port 1:1 de packages/contracts/src/index.ts (TS) a Python. Los nombres de campo
-preservan el camelCase del contrato v1.0.0 para no romper la forma congelada.
+Nació como port 1:1 del espejo TS de v1.0.0 (retirado en 3.0.0, ADR-0113). Los nombres de
+campo preservan el camelCase del contrato para no romper la forma congelada. `AgentSpec`
+es el v2 (ADR-0050); el v3 está en `agentspec.py` y el Coordinador en `kernelspec.py`.
 """
 
 from __future__ import annotations
