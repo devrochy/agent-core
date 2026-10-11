@@ -17,6 +17,7 @@ from core.agents.contrato_v3 import revisar_spec
 from core.agents.flow import FlowSection, compose_flow, load_core_flow, load_pack_flows
 from core.agents.tolerante import (
     KEY_GENERAL,
+    ConversionFallida,
     acciones_ofrecidas,
     candidatas_del_spec,
     convertir_v2,
@@ -194,7 +195,7 @@ def test_credenciales_de_la_url_y_el_body_pasan_a_secretos(catalogo) -> None:
     }
     valores = {k: v.get_secret_value() for k, v in c.secretos.items()}
     assert valores == {
-        "consultar_envio_api_key": "k%2B1",  # tal como estaba escrito en la query
+        "consultar_envio_api_key": "k+1",  # sin codificar: el runtime v3 lo codifica al ponerlo
         "consultar_envio_auth_password": "clave-body",
         "consultar_envio_access_token": "tok-body",
         # Lo que httpx manda por el userinfo `user:p@ss`.
@@ -202,21 +203,83 @@ def test_credenciales_de_la_url_y_el_body_pasan_a_secretos(catalogo) -> None:
     }
     dump = c.general.model_dump_json()
     assert "clave-body" not in dump and "tok-body" not in dump and "k%2B1" not in dump and "p%40ss" not in dump
+    assert "k+1" not in dump
     assert revisar_spec(c.general.model_dump(mode="json", by_alias=True), catalogo) == []
 
 
-def test_credenciales_de_url_y_body_sin_dominios_se_descartan(catalogo) -> None:
+def test_credenciales_de_url_y_body_sin_dominios_descartan_la_tool(catalogo) -> None:
+    """Sin allowed_domains la tool hoy no llama a nadie: con credenciales en la URL o el body
+    se descarta entera (no hay a dónde migrarlas)."""
     raw = v2_completo()
     tool = raw["extensions"]["tools"][0]
     tool["allowed_domains"] = []
     tool["url"] = "https://u:p@api.transportadora.co/x?token=abc&q={q}"
     tool["body"] = {"secret_key": "zzz", "n": 1}
     c, _, _ = convertir(raw, catalogo)
-    t = c.general.declarativeTools[0]
+    assert c.general.declarativeTools == []
     assert c.secretos == {}
-    assert t.url == "https://api.transportadora.co/x?token=&q={q}"
-    assert t.body == {"n": 1}
+    assert any("se descarta la tool" in a for a in c.avisos)
     assert "zzz" not in c.general.model_dump_json()
+
+
+def test_un_objeto_secret_del_body_v2_es_dato_y_se_extrae(catalogo) -> None:
+    """En v2 `{"secret": "XYZ"}` del body es dato: se extrae a un secreto (y su texto nunca se
+    toma ni se reporta como nombre de secreto)."""
+    raw = v2_completo()
+    tool = raw["extensions"]["tools"][0]
+    tool["method"] = "POST"
+    tool["body"] = {"client": {"secret": "valor-XYZ"}, "otro": {"secret": "abc"}}
+    c, _, _ = convertir(raw, catalogo)
+    body = c.general.declarativeTools[0].body
+    assert body == {
+        "client": {"secret": {"secret": "consultar_envio_client_secret"}},
+        "otro": {"secret": {"secret": "consultar_envio_otro_secret"}},
+    }
+    assert c.secretos["consultar_envio_client_secret"].get_secret_value() == "valor-XYZ"
+    assert "valor-XYZ" not in c.general.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("url", "body", "ruta"),
+    [
+        ("https://api.transportadora.co/x?api_key=sk_live{_}", {}, "url.query.api_key"),
+        ("https://{u}:{p}@api.transportadora.co/x", {}, "url.userinfo"),
+        ("https://api.transportadora.co/x", {"password": "XX{g}"}, "body.password"),
+    ],
+)
+def test_credencial_mezclada_con_argumentos_no_se_convierte(catalogo, url, body, ruta) -> None:  # type: ignore[no-untyped-def]
+    """Texto fijo + argumentos no se puede pasar a un secreto sin cambiar lo que se envía:
+    la conversión falla con la ruta, sin el valor."""
+    raw = v2_completo()
+    tool = raw["extensions"]["tools"][0]
+    tool["url"], tool["body"], tool["method"] = url, body, "POST"
+    with pytest.raises(ConversionFallida) as exc:
+        convertir(raw, catalogo)
+    assert ruta in str(exc.value)
+    assert "sk_live" not in str(exc.value) and "XX" not in str(exc.value)
+    assert exc.value.__context__ is None  # la traza no arrastra el spec con literales
+
+
+def test_credencial_fija_en_el_schema_de_parameters_no_se_convierte(catalogo) -> None:
+    raw = v2_completo()
+    raw["extensions"]["tools"][0]["parameters"] = {
+        "type": "object",
+        "properties": {"api_key": {"type": "string", "default": "sk_live_123"}},
+    }
+    with pytest.raises(ConversionFallida) as exc:
+        convertir(raw, catalogo)
+    assert "parameters.properties.api_key.default" in str(exc.value)
+    assert "sk_live_123" not in str(exc.value)
+
+
+def test_fragmento_y_punto_y_coma_de_la_url(catalogo) -> None:
+    raw = v2_completo()
+    raw["extensions"]["tools"][0]["url"] = "https://api.transportadora.co/x?a=1;token=T1#access_token=T2"
+    c, _, _ = convertir(raw, catalogo)
+    assert c.general.declarativeTools[0].url == "https://api.transportadora.co/x?a=1;token={secret:consultar_envio_token}"
+    assert c.secretos["consultar_envio_token"].get_secret_value() == "T1"
+    assert "T2" not in c.general.model_dump_json()
+
 
 
 def test_ningun_campo_v2_queda_sin_destino() -> None:

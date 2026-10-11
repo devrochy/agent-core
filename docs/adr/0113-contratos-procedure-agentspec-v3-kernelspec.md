@@ -116,35 +116,42 @@ Los textos del clasificador y del compositor viven en playbooks del core (invari
   - Ningún valor de header lleva CR, LF ni NUL.
   - El rechazo de esa lista vive en el propio contrato.
   - ~~Los demás headers con pinta de credencial dejan un aviso del lector tolerante. Limitación conocida: un secreto en la URL o en el `body` no está cubierto.~~ Reemplazado por la regla ampliada de abajo (decisión del dueño 2026-10-11).
-- **Regla ampliada de credenciales (decisión del dueño, 2026-10-11, opción A).** Toda credencial de una tool declarativa se declara por referencia, no solo la de la lista. Su valor vive cifrado en la instalación `core`, atado a los dominios de la tool.
-  - **Qué nombre es sensible** (`core/agents/credenciales.py::es_sensible`), sin distinguir mayúsculas: los de la lista del contrato y todo nombre con una palabra (separada por guiones, `_`, puntos o camelCase) que:
-    - empieza por `auth`, `token`, `secret`, `passw`, `session`, `cookie`, `signature`, `credential` o `bearer`;
-    - termina en `key`, `token`, `secret`, `password`, `passwd`, `pwd`, `cookie`, `auth` o `session`;
-    - o es `key`, `pass`, `pw`, `pwd`, `sig` o `jwt`.
-  - **Los ambiguos cuentan como sensibles** (`Idempotency-Key`, `Author`, `token_type`). No lo son `Content-Type`, `Accept`, `X-Request-Id`, `User-Agent` ni `keyword`.
-  - **Dónde se busca:**
-    - en los **headers**, con `{"secret": "<nombre>"}`;
-    - en la **query** de la URL, donde el parámetro sensible lleva `{secret:<nombre>}` en su valor, guardado tal como estaba escrito;
-    - en el **userinfo** de la URL (`usuario:clave@`), que no se admite y pasa a `Authorization: Basic` por referencia (lo mismo que hace httpx);
-    - en las claves sensibles del **body**, a cualquier profundidad, con `{"secret": "<nombre>"}`.
-  - **Qué es literal:** un texto no vacío sin `{argumento}` ni referencia. Los números y booleanos no cuentan, porque pasarlos a un secreto (texto) cambiaría el tipo del JSON.
-  - **Validación:** el linter v3 (`contrato_v3.lint_agentspec`: CLI, CI y API al guardar o publicar) rechaza el literal (`credencial_literal`, la ruta sin el valor) y exige `https://` a una tool con secretos en la URL o el body (`secreto_sin_https`).
-  - **Migración:** el lector tolerante y el backfill mueven estas credenciales a la instalación `core`. Ninguna versión ni borrador queda con el literal. Una tool sin `allowedDomains` las pierde con aviso, porque hoy no llama a nadie.
-  - El editor de tools declarativas v2 aplica el patrón ampliado a los headers.
-  - **Sin cambio de conducta:** el contrato `agentcore-contracts` no cambia, y el loop legacy sigue con los literales del AgentSpec v2. Resolver las referencias de la URL y el body al ejecutar queda para el runtime v3 (HU-AOS-14/15). En `core/mcp/declarative.py` hoy solo se resuelven las de los headers.
+- **Regla ampliada de credenciales (decisión del dueño, 2026-10-11, opción A).** En v3, toda credencial de una tool declarativa se declara por referencia, no solo la de la lista. Su valor vive cifrado en la instalación `core`, atado a los dominios de la tool. Ajustada tras la revisión de seguridad.
+  - **Qué nombre es sensible** (`core/agents/credenciales.py::es_sensible`, sin distinguir mayúsculas ni tildes): los de la lista del contrato y todo nombre con una palabra (separada por guiones, `_`, puntos o camelCase) que:
+    - empieza por `auth`, `token`, `secret`, `passw`, `passphrase`, `passcode`, `session`, `cookie`, `signature`, `credential`, `bearer`, `clave`, `contrasen`, `llave`, `firma` o `hmac`;
+    - termina en `key`, `keys`, `token`, `secret`, `password`, `passwd`, `pwd`, `cookie`, `auth`, `session`, `sessionid` o `sessid`;
+    - o es `key`, `pass`, `pw`, `pwd`, `sig`, `sid`, `jwt`, `pin` u `otp`.
+  - **Ambiguos y falsos positivos:** los ambiguos cuentan como sensibles (`Idempotency-Key`, `Author`, `token_type`, `max_tokens`). No lo son `Content-Type`, `Accept`, `X-Request-Id`, `User-Agent` ni `keyword`.
+  - **Dónde se declara la referencia:**
+    - **headers:** `{"secret": "<nombre>"}`;
+    - **query de la URL:** `{secret:<nombre>}` como valor COMPLETO de un parámetro. Es el único lugar de la URL donde se admite esa forma: ni en el host, ni en la ruta, ni mezclada con texto. Se separan parámetros por `&` y `;`;
+    - **userinfo** (`usuario:clave@`): no se admite. Pasa a `Authorization: Basic` por referencia, que es lo que hace httpx;
+    - **body:** `{"secret": "<nombre>"}` bajo una clave sensible. La sensibilidad se hereda por objetos y listas, salvo en claves neutras (`user`, `type`, `id`…). Una referencia del body solo cuenta si su nombre cumple `^[a-z0-9_]{1,60}$`, así que su texto nunca se trata ni se reporta como nombre;
+    - **fragmento** de la URL y **schema de `parameters`** (`default`, `const`, `enum` o `examples` bajo una propiedad sensible): no llevan credenciales.
+  - **Clases de valor** (sobre el texto CRUDO, así `%7B` no es una llave):
+    - **literal:** texto fijo sin placeholders;
+    - **argumento:** solo `{argumento}`, con un esquema delante opcional (`Bearer {token}`);
+    - **mixto:** texto fijo junto con placeholders.
+  - **Lo que no cuenta:** los números y booleanos, porque pasarlos a un secreto (texto) cambiaría el tipo del JSON. Es un límite.
+  - **Linter v3** (CLI, CI y API al guardar o publicar). Rechaza con la ruta, sin el valor:
+    - `credencial_literal`;
+    - `credencial_mixta`;
+    - `referencia_mal_ubicada`;
+    - `secreto_sin_https` (una tool con secretos solo por `https://`);
+    - `extension_reservada` (`extensions.tools` o `extensions.guardrails` en v3: son de v2).
+  - **Lector tolerante y backfill:** mueven las credenciales literales a la instalación `core`, y ninguna versión ni borrador queda con el literal.
+    - En v2, `{"secret": ...}` dentro del body es dato, no referencia, así que también se extrae.
+    - El fragmento de la URL se quita, porque no viaja.
+    - Si una credencial está mezclada con argumentos, o si hay credenciales fijas en `parameters`, la conversión falla con la ruta y el negocio queda en error hasta corregirlo en el editor. No se migra en silencio, porque cambiaría lo que se envía.
+    - Una tool sin `allowedDomains` con credenciales en la URL, el body o `parameters` se descarta entera, con aviso: hoy no llama a nadie.
+  - **Convención del valor de un secreto:** se guarda sin codificar, venga de un header, la query o el body. El runtime v3 (HU-AOS-14/15) debe:
+    - codificarlo al ponerlo en la query (`quote(safe="")`);
+    - sustituir argumentos y secretos en una sola pasada;
+    - entregar el secreto solo hacia los dominios a los que está atado, con `resolver_secretos(..., host)` también para las referencias de la URL y del body.
+  - **Sin cambio de conducta:** el contrato `agentcore-contracts` no cambia, y el loop legacy (`core/mcp/declarative.py`) sigue con los literales del AgentSpec v2. El editor de tools declarativas v2 sigue con la lista del contrato: ampliarlo cambiaría lo que el loop legacy resuelve, así que lo decide el dueño.
   - **Límites conocidos:**
-    - un secreto en la ruta de la URL o bajo una clave de nombre neutro no se detecta;
-    - un body v2 con un objeto `{"secret": "x"}` se toma como referencia.
-- **`guardrails[]`:** la forma que hoy normaliza `validate_custom_rules`, es decir `{name, kind, action, phrases?, tool?, value?}`.
-- **`declarativeTools[]`:** `{name, description, method, url, allowedDomains, headers, parameters, body}`. Es la forma de ADR-0052 con `allowed_domains` en camelCase.
-- **KernelSpec:** reglas de enrutamiento con al menos una condición y exactamente un destino (`agent` o `start`). `withinHours` se escribe `{"from": "HH:MM", "to": "HH:MM"}`, en la zona del negocio, y cruza la medianoche si `from` > `to`. Ningún default es un id de modelo: `coprocessor.model` y `modelPolicy.highRiskStage.model` en `null` heredan el del agente (ADR-0086).
-- **Documento:** el validador rechaza más de 32 niveles de anidación y los números no finitos (`NaN`, `Infinity`) antes de validar la forma.
-- **Keys reservadas:** `general` (el agente General del lector tolerante) y `coordinador` (el Coordinador del backfill de HU-AOS-13). La API de agentes no deja crearlas.
-- **Campos nuevos en v3:**
-  - Un campo **opcional con default** es *minor*. Un documento viejo sigue validando, y lo único que no lo lee es un binario viejo, que no existe porque el contrato viaja con el binario.
-  - Quitar un campo, volverlo obligatorio o cambiar su tipo o su semántica es *major*.
-
-El validador y el linter únicos están en `core/agents/contrato_v3.py`. Los usan `agent-core agent lint`, el CI y la API al guardar o publicar. El lector tolerante está en `core/agents/tolerante.py`. Su salida pasa siempre el validador: lo que hoy está muerto se poda con un aviso, y los secretos literales salen como `SecretStr` hacia la instalación `core`.
+    - un secreto en la ruta de la URL (`/bot<token>/`) o bajo una clave de nombre neutro no se detecta;
+    - números y booleanos, como arriba.
 
 ## Adenda de implementación (2026-10-10, HU-AOS-13): backfill B2
 

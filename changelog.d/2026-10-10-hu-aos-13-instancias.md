@@ -27,12 +27,14 @@
 - Lector tolerante: el header sensible de una tool sin `allowed_domains` se descarta con aviso.
   Esa tool hoy no llama a nadie. Adenda de HU-AOS-13 en ADR-0113.
 - **Credenciales fuera de la lista también por referencia** (decisión del dueño 2026-10-11, adenda en
-  ADR-0113). `core/agents/credenciales.py` detecta como sensible un nombre de header, parámetro de
-  query o clave del body con patrón de credencial: `auth`, `token`, `key`, `secret`, `password`,
-  `session`, `cookie`, `signature`, `credential`…. Los ambiguos cuentan como sensibles. El userinfo de
-  la URL también es credencial.
-  - El linter v3 rechaza esos literales (`credencial_literal`, sin el valor).
-  - El lector tolerante y el backfill los mueven a la instalación `core`: el userinfo pasa a
-    `Authorization: Basic`, la query a `{secret:<nombre>}` y el body a `{"secret": ...}`.
-  - El editor de tools declarativas v2 aplica el patrón a los headers.
-  - El loop legacy no cambia. Las referencias de URL y body las resolverá el runtime v3.
+  ADR-0113, ajustada tras la revisión de seguridad). `core/agents/credenciales.py` detecta como
+  sensibles los nombres de headers, query, body y del schema de `parameters` con patrón de
+  credencial, también en español (`clave`, `contraseña`, `llave`, `firma`…). El userinfo y el fragmento
+  de la URL también cuentan.
+  - El linter v3 rechaza literales (`credencial_literal`), mezclas de texto fijo y argumentos
+    (`credencial_mixta`), `{secret:..}` fuera del valor completo de la query
+    (`referencia_mal_ubicada`) y `extensions.tools` en v3.
+  - El lector tolerante y el backfill mueven los literales a la instalación `core`. Una mezcla o un
+    `default` sensible en `parameters` deja al negocio en error con la ruta.
+  - El loop legacy y el editor v2 no cambian. Las referencias de URL y body las resolverá el
+    runtime v3.

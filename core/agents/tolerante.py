@@ -48,11 +48,13 @@ from agentcore_contracts import (
 from pydantic import SecretStr
 
 from core.agents.credenciales import (
+    CredencialMixta,
     credenciales_en_body,
     credenciales_en_url,
     es_sensible,
     extraer_de_body,
     extraer_de_url,
+    problemas_de_parameters,
     referencias_de_tool,
 )
 from core.agents.flow import (
@@ -78,8 +80,6 @@ _ACTION_RE = re.compile(r"^[a-zA-Z0-9_]{1,80}$")
 _PLAYBOOK_RE = re.compile(r"^[a-zA-Z0-9_-]{1,80}$")
 _SECRET_UNSAFE_RE = re.compile(r"[^a-z0-9_]+")
 _MAX_DECLARATIVAS = 50
-# Marca interna (no es un nombre de secreto válido) de lo que se descarta de una tool sin dominios.
-_DESCARTADO = "-DESCARTADO-"
 _MAX_GUARDRAILS = 100
 
 
@@ -164,7 +164,8 @@ def _declarativas(
         avisos.append("extensions.tools: dominios no públicos descartados de allowed_domains (hoy tampoco se usan)")
 
     # Nombres ya usados por referencias existentes: un secreto extraído no los pisa.
-    usados: set[str] = {n for t in normalizadas for n in referencias_de_tool(t)}
+    usados: set[str] = {n for t in normalizadas for n in referencias_de_tool(t, v2=True)}
+    usados_previos = set(usados)
     secretos: dict[str, SecretStr] = {}
     salida: list[dict[str, Any]] = []
     nombres: set[str] = set()
@@ -212,36 +213,51 @@ def _declarativas(
             else:
                 headers[header] = valor
         url, body = tool["url"], tool["body"]
-        # Credenciales en la URL y el body (decisión del dueño 2026-10-11): también a secretos.
-        if credenciales_en_url(url) or credenciales_en_body(body):
+        # Credenciales en la URL, el body y el schema de parameters (decisión del dueño
+        # 2026-10-11): también a secretos. En v2 no hay referencias en URL ni body.
+        if credenciales_en_url(url) or credenciales_en_body(body, con_refs=False) or problemas_de_parameters(
+            tool["parameters"]
+        ):
             if not tool["allowed_domains"]:
-                # Como con los headers: sin allowlist la tool no llama a nadie; se descartan.
-                # El userinfo se va sin más; la query y el body quedan sin el valor.
-                url, _, _ = extraer_de_url(url, lambda _n: _DESCARTADO)
-                url = url.replace(f"{{secret:{_DESCARTADO}}}", "")
-                body, _ = extraer_de_body(body, lambda _n: _DESCARTADO)
-                body = _sin_refs(body, _DESCARTADO)
+                # Sin allowlist la tool hoy no llama a nadie: se descarta entera con sus
+                # credenciales (no hay a dónde migrarlas y su schema no debe llegar al LLM). Sus
+                # headers sensibles ya se descartaron arriba: no dejó secretos.
                 avisos.append(
-                    f"extensions.tools '{nombre}': credenciales de la URL o el body descartadas (la tool no "
-                    "tiene allowed_domains y hoy tampoco puede llamar a nadie)"
+                    f"extensions.tools '{nombre}': lleva credenciales en la URL, el body o parameters y no "
+                    "tiene allowed_domains (hoy no puede llamar a nadie): se descarta la tool"
                 )
-            else:
+                continue
+            if problemas_de_parameters(tool["parameters"]):
+                rutas = ", ".join(r for r, _ in problemas_de_parameters(tool["parameters"]))
+                raise ConversionFallida(
+                    f"extensions.tools '{nombre}': credenciales fijas en el schema de parameters ({rutas[:300]}); "
+                    "quítalas en el editor de tools declarativas"
+                )
+            try:
                 url, de_query, basic = extraer_de_url(url, lambda n, t=nombre: _nombre_secreto(t, n, usados))
                 body, de_body = extraer_de_body(body, lambda r, t=nombre: _nombre_secreto(t, r, usados))
-                for ref, valor in (de_query | de_body).items():
-                    secretos[ref] = SecretStr(valor)
-                if basic is not None:
-                    previo = next((h for h in headers if h.lower() == "authorization"), None)
-                    if previo is not None:
-                        # httpx aplica el userinfo como Basic y pisa el header: queda el del userinfo.
-                        del headers[previo]
-                        avisos.append(
-                            f"extensions.tools '{nombre}': el userinfo de la URL reemplaza al header Authorization"
-                        )
-                    ref = _nombre_secreto(nombre, "authorization", usados)
-                    secretos[ref] = SecretStr(basic)
-                    headers["Authorization"] = {"secret": ref}
-                avisos.append(f"extensions.tools '{nombre}': credenciales de la URL o el body pasan a secretos")
+            except CredencialMixta as exc:
+                raise ConversionFallida(
+                    f"extensions.tools '{nombre}': credenciales que mezclan texto fijo y argumentos ({str(exc)[:300]}); "
+                    "no se pueden pasar a un secreto sin cambiar lo que se envía: reescríbelas en el editor"
+                ) from None
+            for ref, valor in (de_query | de_body).items():
+                secretos[ref] = SecretStr(valor)
+            if basic is not None:
+                previo = next((h for h in headers if h.lower() == "authorization"), None)
+                if previo is not None:
+                    # httpx aplica el userinfo como Basic y pisa el header: queda el del userinfo,
+                    # y el secreto que se había sacado del header viejo no queda huérfano.
+                    viejo = secret_ref(headers.pop(previo))
+                    if viejo is not None and viejo not in usados_previos:
+                        secretos.pop(viejo, None)
+                    avisos.append(
+                        f"extensions.tools '{nombre}': el userinfo de la URL reemplaza al header Authorization"
+                    )
+                ref = _nombre_secreto(nombre, "authorization", usados)
+                secretos[ref] = SecretStr(basic)
+                headers["Authorization"] = {"secret": ref}
+            avisos.append(f"extensions.tools '{nombre}': credenciales de la URL o el body pasan a secretos")
         if url.startswith("http://") and (
             any(isinstance(v, dict) for v in headers.values()) or referencias_de_tool({"url": url, "body": body})
         ):
@@ -262,15 +278,6 @@ def _declarativas(
             }
         )
     return salida, secretos
-
-
-def _sin_refs(valor: Any, nombre: str) -> Any:
-    """Quita del body las claves cuyo valor es la referencia `nombre` (descartadas)."""
-    if isinstance(valor, dict):
-        return {k: _sin_refs(v, nombre) for k, v in valor.items() if v != {"secret": nombre}}
-    if isinstance(valor, list):
-        return [_sin_refs(v, nombre) for v in valor if v != {"secret": nombre}]
-    return valor
 
 
 def _guardrails(raw: Any, existentes: set[str], avisos: list[str]) -> list[dict[str, Any]]:
@@ -409,7 +416,16 @@ def convertir_v2(
     if tenant_id is not None and spec.tenantId != tenant_id:
         avisos.append("tenantId del AgentSpec v2 distinto del negocio de la fila: se usa el de la fila")
 
-    declarativas, secretos = _declarativas(ext.pop("tools", None), catalogo, avisos)
+    try:
+        declarativas, secretos = _declarativas(ext.pop("tools", None), catalogo, avisos)
+    except ConversionFallida as exc:
+        mensaje: str | None = str(exc)
+    else:
+        mensaje = None
+    if mensaje is not None:
+        # Fuera del `except` (sin `__context__`) y sin el spec en los locales: lleva literales.
+        del spec, ext
+        raise ConversionFallida(mensaje)
     existentes = set(catalogo) | {t["name"] for t in declarativas}
     guardrails = _guardrails(ext.pop("guardrails", None), existentes, avisos)
     for clave in sorted(ext):
