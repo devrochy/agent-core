@@ -49,7 +49,7 @@ import uuid
 from collections.abc import Awaitable
 from typing import Any
 
-from core.kernel.decisions import bloquear, en_turno
+from core.kernel.decisions import en_turno
 from core.memory.working import get_redis
 from core.orchestrator.turn_gate import TurnQueueTimeout, run_turn
 from core.shared.logger import get_logger
@@ -177,17 +177,17 @@ async def _fire_conversation(conversation_id: uuid.UUID, payload: dict[str, Any]
 async def _turno_diferido(conversation_id: uuid.UUID, latest_message: str) -> None:
     from core.db.models import Conversation
     from core.db.session import get_session
-    from core.gateway.meta_connection_state import motivo_pausa_de_conversacion
     from core.kernel.egress import entregar
+    from core.kernel.ingress import conexion_pausada
     from core.orchestrator.loop import process_conversation
 
     # La conexión se pausó o eliminó después de agendar el turno (ADR-0122): no se
     # gasta el LLM ni se escala por un envío que no puede salir.
     async with get_session() as session:
         conversation = await session.get(Conversation, conversation_id)
-    if conversation is not None and (motivo := await motivo_pausa_de_conversacion(conversation)):
-        log.info("debounce_conexion_pausada", conversation_id=str(conversation_id), motivo=motivo)
-        await bloquear(conversation, "connection_paused", status="silent")
+    if conversation is not None and await conexion_pausada(
+        conversation, avisar_duenos=False, evento="debounce_conexion_pausada"
+    ):
         return
     result = await process_conversation(conversation_id, latest_message)
     await entregar(conversation_id, result)
