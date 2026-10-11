@@ -124,3 +124,21 @@ invariantes ni banderas de conducta.
   el disparo del debounce, `QuotaExceeded` al crear el cliente o la conversación), que no son turno. La salida de
   horario sigue enviando ella misma (con su escalamiento si el envío falla) en vez de pasar por `egress.entregar`:
   unificarlas llega con la respuesta por plantilla del design (`egress.template_reply`).
+
+## Adenda de implementación (2026-10-10, HU-AOS-05): motor de procedimientos y modo sombra
+
+- **Motor activo** con `tenants.aos_procedures`. Las convenciones del motor están en la adenda de
+  ADR-0113 de la misma fecha.
+- **Modo sombra** sin bandera nueva: la ventana es `aos_runtime = 'v3'` con `aos_procedures`
+  apagada (el CHECK de 0070 ya ordena las dos).
+  - El turno sigue con el flujo de siempre. El motor observa cada acción ejecutada sobre una
+    tarea sombra en Redis (`aos:sombra:{negocio}:{conversación}`, TTL de un episodio).
+  - La tarea sombra no guarda valores del cliente: solo nombres de datos llenos, la etapa y los
+    booleanos de los `requiredWhen`.
+  - No ejecuta precondiciones ni *resolvers*.
+  - Registra las diferencias (códigos y conteos) en `audit_log` (`core:motor_sombra`,
+    `diferencias`), una fila por lote de acciones.
+  - Sin procedimientos registrados cuesta un chequeo en memoria. El replay del gate (runtime
+    legacy) no la ejecuta.
+- **Pendiente para HU-AOS-15:** el fail-closed de `core_decisions` con `aos_procedures`
+  encendida. El motor no lo necesita: un `turn_id` NULL en `task_events` es válido.

@@ -20,6 +20,10 @@ from pydantic import ValidationError
 from core.kernel.procedures.afirmaciones import accion_de, acciones_que_respaldan, respaldo_de
 from core.kernel.procedures.catalogo import CORE_OWNER, Catalogo
 
+# Prefijo del botón de confirmación del motor (`confirmar:<task_id>:<seq>`, HU-AOS-05): ningún
+# procedimiento lo puede declarar como suyo. Igual a `motor.PREFIJO_CONFIRMAR`.
+PREFIJO_CONFIRMAR = "confirmar:"
+
 # Tope de un procedimiento serializado (CLI y API). Holgado: el más grande de los
 # críticos ocupa unos 4 KiB.
 MAX_PROCEDURE_BYTES = 64 * 1024
@@ -339,6 +343,19 @@ class _Linter:
                 if origen == "action":
                     self.accion(valor, f"{base}.setBy", en_etapas=True)
                 elif origen == "interactive":
+                    if valor == PREFIJO_CONFIRMAR:
+                        self.add(
+                            "prefijo_reservado",
+                            f"{base}.setBy",
+                            f"El prefijo '{valor}' es del core (botón de confirmación del motor).",
+                        )
+                    if slot.candidates is None and slot.enum is None and slot.resolver is None:
+                        self.add(
+                            "dato_interactivo_sin_restriccion",
+                            f"{base}.setBy",
+                            "Un dato que llena un botón acepta lo que mande el cliente: declara "
+                            "`candidates`, `enum` o un `resolver` que lo valide.",
+                        )
                     if slot.setBy in prefijos:
                         self.add(
                             "prefijo_interactivo_repetido",
@@ -401,10 +418,31 @@ class _Linter:
                 )
 
 
+    def disparadores_y_cierre(self) -> None:
+        if self.proc.triggers.interactivePayloadPrefix == PREFIJO_CONFIRMAR:
+            self.add(
+                "prefijo_reservado",
+                "triggers.interactivePayloadPrefix",
+                f"El prefijo '{PREFIJO_CONFIRMAR}' es del core (botón de confirmación del motor).",
+            )
+        if self.proc.completion is None:
+            return
+        for i, evento in enumerate(self.proc.completion.events):
+            dueno = evento.split(".", 1)[0]
+            if dueno not in self.duenos_permitidos:
+                self.add(
+                    "evento_de_habilidad_no_declarada",
+                    f"completion.events[{i}]",
+                    f"El evento '{evento}' es de '{dueno}': el dueño de un evento de cierre es el core, "
+                    "la habilidad del procedimiento o una de `requires`.",
+                )
+
+
 def lint(proc: Procedure, catalogo: Catalogo) -> list[Issue]:
     """Problemas del procedimiento contra el catálogo de acciones del binario."""
     linter = _Linter(proc, catalogo)
     linter.habilidades()
+    linter.disparadores_y_cierre()
     linter.etapas()
     linter.datos()
     linter.afirmaciones()

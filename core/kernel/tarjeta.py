@@ -15,7 +15,9 @@ confirmación y las acciones de la etapa.
   descarta. Así un valor nunca abre una línea ni un encabezado nuevo del prompt.
 - Determinista: no lleva horas ni nada que cambie entre corridas con el mismo estado.
 - Solo con `tenants.aos_procedures` encendida. Apagada, la tarjeta es "" y el prompt es
-  idéntico al de siempre.
+  idéntico al de siempre. La arma el motor al empezar el turno
+  (`core/kernel/procedures/ejecucion.contexto_del_motor`, HU-AOS-05), con las definiciones de
+  los procedimientos (título, etapas, datos requeridos y acciones).
 """
 
 from __future__ import annotations
@@ -23,14 +25,13 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-import uuid
 from collections.abc import Callable, Mapping, Sequence
 from functools import cache
 from typing import Any
 
 from agentcore_contracts.procedure import Procedure, Slot
 
-from core.kernel.state import Proyeccion, proyeccion_de
+from core.kernel.state import Proyeccion
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
@@ -256,39 +257,3 @@ def renderizar_tarjeta(
     if omitidas:
         salida.append(r["mas_en_pausa"].format(cantidad=omitidas))
     return "\n".join(salida)
-
-
-async def tarjeta_del_turno(conversation_id: uuid.UUID) -> str:
-    """Tarjeta para el turno en curso; "" con `aos_procedures` apagada (sin escribir nada).
-
-    Encendida: abre el episodio si corresponde (expira las tareas viejas) y arma la tarjeta
-    con las tareas abiertas. Fail-closed: un error de base o del playbook sube por el camino
-    de error del turno, como cualquier otra falla de BD.
-
-    Las definiciones de los procedimientos (título, etapas, datos requeridos, acciones) llegan
-    con el motor y las releases (HU-AOS-05/14); hasta entonces la tarjeta muestra lo que hay
-    en la tarea.
-    """
-    from core.db.session import get_session
-    from core.kernel import state
-    from core.kernel.banderas import banderas_del_negocio
-    from core.kernel.episodio import DEFAULT_IDLE_MINUTES, abrir_episodio
-    from core.shared import release_vigente
-    from core.shared.tenant import get_current_tenant_id
-
-    tenant_id = get_current_tenant_id()
-    if tenant_id is None:
-        return ""
-    async with get_session() as session:
-        if not (await banderas_del_negocio(session, tenant_id)).procedimientos:
-            return ""
-        # Un solo episodio por turno: con release (aos_runtime = v3) manda su `idleMinutes`.
-        await abrir_episodio(
-            session,
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            idle_minutes=release_vigente.idle_minutes(DEFAULT_IDLE_MINUTES),
-        )
-        filas = await state.tareas_abiertas(session, tenant_id=tenant_id, conversation_id=conversation_id)
-        tareas = [proyeccion_de(f) for f in filas]
-    return renderizar_tarjeta(tareas)
