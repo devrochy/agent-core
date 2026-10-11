@@ -1815,3 +1815,83 @@ class EvalResult(Base):
     verifier: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))  # HU-ARCH-29
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ---------------------------------------------------------------- Agent OS: agentes (HU-AOS-12)
+# Tablas creadas en 0069 (HU-AOS-02); aquí solo el mapeo de lo que usa la API de agentes.
+# Los defaults de BD de estado y textos se declaran con `server_default`; las fechas usan
+# `utcnow` como el resto de los modelos, y los ids se fijan en Python (el AAD de los secretos
+# necesita el id de la instalación antes del INSERT).
+class AgentRecord(Base):
+    """Agente del negocio (ADR-0113): `kind` y la identidad viven aquí, no en el contrato."""
+
+    __tablename__ = "agents"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    key: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)  # core | specialist | backoffice
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", server_default="")
+    source_template: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default="active", server_default="active")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentDraftRecord(Base):
+    """Borrador editable de un agente, con concurrencia optimista por `lock_version`."""
+
+    __tablename__ = "agent_drafts"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    base_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    lock_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentVersionRecord(Base):
+    """Versión inmutable de un agente (append-only: trigger `prevent_mutation`, 0069)."""
+
+    __tablename__ = "agent_versions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    contract: Mapped[str] = mapped_column(Text, nullable=False)  # agentspec/3 | kernelspec/1
+    content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    legacy_agent_spec_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    notes: Mapped[str] = mapped_column(Text, default="", server_default="")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PackInstallationRecord(Base):
+    """Habilidad instalada con scope (ADR-0118 §2). En esta HU solo se usa la instalación
+    `core` de scope negocio, que guarda los secretos de las `declarativeTools` (ADR-0118 §5):
+    no habilita nada y no cuenta para el tope del plan. `config_encrypted` lleva AAD
+    `(tenant_id, installation_id)` (`core.agents.secretos.aad_instalacion`)."""
+
+    __tablename__ = "pack_installations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    pack_id: Mapped[str] = mapped_column(Text, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)  # tenant | connection
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    status: Mapped[str] = mapped_column(Text, default="pending_config", server_default="pending_config")
+    config_encrypted: Mapped[str | None] = mapped_column(Text)
+    installed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    installed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
