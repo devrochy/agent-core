@@ -33,9 +33,11 @@ Por negocio, en su `tenant_scope` (ADR-0112 §1, ADR-0113 §5):
    el build de releases (HU-AOS-14).
 7. **Instancias** en cada conexión conversacional viva (también las pausadas: la pausa es
    otra cosa, ADR-0122): la `core` del Coordinador y la del General, por defecto. Las
-   integraciones no reciben nada. Si la conexión ya tiene otro Coordinador u otro agente por
-   defecto, no se pisa: se informa (`instancias.asegurar_instancias_base`, la misma función
-   que usarán las altas posteriores y la promoción de ADR-0127 §3).
+   integraciones no reciben nada. Solo se inicializan las conexiones sin Coordinador vivo:
+   una que ya lo tiene está configurada y no se toca (lo que el dueño quitó, como el General,
+   no vuelve: `configurada` en el reporte). Si tiene otro Coordinador, se informa; si tiene
+   otro agente por defecto, el General entra sin serlo (`instancias.asegurar_instancias_base`,
+   la misma función de las altas posteriores y de la promoción de ADR-0127 §3).
 
 Sin cambio de conducta: con `tenants.aos_runtime = 'legacy'` nada en runtime lee estas tablas
 y `agent_specs` no cambia salvo la siembra del default (los literales v2 siguen ahí y el loop
