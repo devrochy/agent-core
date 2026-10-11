@@ -589,6 +589,10 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             # guardrails de packs, que ven el texto ya corregido.
             if afirmaciones is None:
                 afirmaciones = await cargar_afirmaciones(enabled)
+                # HU-AOS-07: con el motor activo, también las `claims` compiladas de los
+                # procedimientos disponibles (con la bandera apagada, ninguna).
+                if motor is not None:
+                    afirmaciones = [*afirmaciones, *motor.afirmaciones()]
             veredicto = verificar_seguro(
                 borrador,
                 [*history_tool_results, *all_tool_results],
@@ -910,6 +914,9 @@ async def _execute_tool_safely(
             output_data=decision.resultado,
         )
         return decision.resultado
+    # HU-AOS-07: con la acción gobernada, se ejecutan los argumentos ligados a los datos de la
+    # tarea (los mismos que firma la confirmación); el historial del modelo no se toca.
+    argumentos = previo.args if previo is not None and previo.args is not None else tool_call.arguments
 
     # v2.0.0 (ADR-0050): human-in-the-loop. Un binding con `requiresConfirmation`
     # no ejecuta de una: la primera vez deja el pedido pendiente y se lo devuelve
@@ -969,14 +976,14 @@ async def _execute_tool_safely(
         if tool_call.name in declarative and mcp_host.get_tool(tool_call.name) is None:
             # Tool declarativa del tenant (ADR-0052): se ejecuta con su handler
             # (ScopedHttp acotado), no vía mcp_host (que no la conoce).
-            result = await declarative[tool_call.name].handler(tool_call.arguments, context)
+            result = await declarative[tool_call.name].handler(argumentos, context)
             # Una tool declarativa devuelve lo que responde una API externa: es dato, no
             # instrucción (invariante 7). Nunca puede pedir relevo humano; solo las tools
             # registradas (pack/core) escalan.
             if isinstance(result, dict):
                 result.pop("escalate", None)
         else:
-            result = await mcp_host.execute_tool(tool_call.name, tool_call.arguments, context)
+            result = await mcp_host.execute_tool(tool_call.name, argumentos, context)
     except BusinessError as exc:
         # Rechazo de negocio (HU-ARCH-18): resultado controlado, el pack SIGUE
         # habilitado. Cubre tools declarativas que no pasan por el host.
@@ -996,6 +1003,8 @@ async def _execute_tool_safely(
         actor=f"tool:{tool_call.name}",
         action="execute",
         conversation_id=conversation.id,
+        # Lo que mandó el modelo: los datos ligados que completó el motor (PII de la tarea) no se
+        # copian a la auditoría.
         input_data=tool_call.arguments,
         # Se incluye `_tool_name` para que `_historical_tool_results` pueda
         # reconstruir qué tools se llamaron en turnos anteriores (lo usa el
@@ -1003,7 +1012,7 @@ async def _execute_tool_safely(
         output_data={**result, TOOL_NAME_KEY: tool_call.name},
     )
     if motor is not None:
-        result = await motor.tras_accion(tool_call.name, tool_call.arguments, result, previo)
+        result = await motor.tras_accion(tool_call.name, argumentos, result, previo)
     return result
 
 

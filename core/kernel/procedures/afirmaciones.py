@@ -14,8 +14,10 @@ Hay un solo verificador (`core/orchestrator/verificador/`) y una sola API
   verificador compara contra cualquier monto que venga del servidor, no contra esa fuente
   en particular.
 
-Nadie registra estas afirmaciones todavía: lo hará la habilidad que publique sus
-procedimientos (HU-AOS-07), por `register_afirmaciones`. Sin cambio de conducta.
+No van por `register_afirmaciones` (que no sabe de la bandera): con el motor activo, el loop suma
+las de los procedimientos disponibles del turno (`ContextoMotor.afirmaciones`, HU-AOS-07). Con la
+bandera apagada no se verifica nada nuevo. Las de los packs (`COMPLETION_CLAIMS` de commerce)
+siguen como siempre.
 """
 
 from __future__ import annotations

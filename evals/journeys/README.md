@@ -34,6 +34,8 @@ el runner guarda en `messages` cada mensaje del cliente y cada respuesta. La cor
   - `catalogo` de commerce, que reemplaza los ejemplos del preset;
   - `config` por pack (sin secretos reales);
   - `pagos_simulados.monto_minimo`, el mínimo de la pasarela real;
+  - `motor_de_procedimientos: true`: enciende el motor de procedimientos (`aos_runtime = v3` y
+    `aos_procedures`, HU-AOS-07) en el negocio de la corrida (set `procedimientos`);
   - `documentos_legales`: versiones de prueba de `terminos`, `privacidad` y `dpa`
     (`[{"tipo", "version", "url"}]`), publicadas como desde Plataforma (`legal.publicar`). En un
     vendedor, con los tres el pedido de un plan pide aceptarlos antes de crearse (ADR-0125).

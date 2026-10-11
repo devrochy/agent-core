@@ -474,3 +474,122 @@ antes de escribir código. No cambia la forma de ningún contrato ni el motor.
     una HU siguiente.
   - Costo: cada predicado lee la bandera del negocio (una consulta por tool reemplazada o nueva y por
     turno, hasta cinco). Si se nota en la latencia, se cachea por turno.
+
+## Adenda de implementación (2026-10-11, HU-AOS-07): procedimientos de comercio
+
+**Estado:** propuesta; requiere la aprobación del dueño antes del merge (fija convenciones nuevas del
+motor). No cambia la forma de ningún contrato ni el esquema. La revisó el agente `arquitecto` antes
+de escribir código. Todo rige solo con `tenants.aos_procedures`; con la bandera apagada el modelo ve
+lo mismo (el gate en replay pasa sin regrabar).
+
+- **Procedimientos como datos de la habilidad.** Como en la adenda de HU-AOS-08: JSON en
+  `packages/pack-*/procedures/`, registrados con el cargador único `core/kernel/procedures/de_pack.py`.
+  El manifiesto de la versión del pack incluye ahora `provides.procedures` (ADR-0118 §1) con
+  `de_pack.crudos`, que lee los mismos archivos que registra `de_pack.cargar`: lo que se congela en
+  `pack_versions` es lo que se registra. Por eso cambian de contenido, y suben de versión, todos los
+  packs con procedimientos: pack-commerce 2.1.0 (publica `pack_commerce.contratar_plan` y
+  `pack_commerce.tomar_pedido`), pack-calendar 2.2.0, pack-subscriptions 0.2.0 y pack-cobranza 0.5.0.
+- **Corrige el ejemplo de §1:** `contratar_plan` no usa `generar_link_pago` de pack-payments (la
+  retiró la adenda del 2026-10-10 de ADR-0087): el link sale de `confirmar_pago_pedido` de commerce,
+  que llega a los pagos por `payment_registry`. No declara `requires`.
+- **Argumentos ligados a los datos de la tarea** (`motor.ligar_argumentos`, en `antes_de_accion` bajo
+  el lock). En una acción gobernada, un argumento con el nombre de un dato de la tarea que tiene
+  valor (en el primer nivel del input schema o dentro de un objeto de primer nivel, p. ej.
+  `customer_data.email`) queda atado a ese dato. Es la misma convención "por nombre" de las
+  precondiciones.
+  - Igual (normalizado como el dato) → se usa el valor del dato, así el hash de la confirmación no
+    depende de cómo lo escribió el modelo.
+  - Distinto → si el dato tiene resolver y lo lleva al mismo valor (un SKU por el uuid de la
+    variante), vale; si no, se deniega con `argumento_ligado` y no se ejecuta.
+  - Ausente → el kernel lo completa solo si es obligatorio (`required` de primer nivel, o dentro de
+    un objeto de primer nivel obligatorio o presente). Un argumento opcional no se completa: puede
+    ser una alternativa (`informar_plan(sku | variant_id)`) y completarlo cambiaría la consulta.
+  - Los argumentos efectivos viajan en `Previo.args`: el loop ejecuta, audita y registra esos; el
+    historial del modelo no se toca.
+  - Garantiza que la cotización es del plan elegido, que confirmar y crear el pedido usan la
+    cotización vigente, que el link es el del pedido de la tarea y que la dirección del pedido es la
+    confirmada.
+- **Un dato que cambia invalida lo que dependía de él** (`motor.dependientes`,
+  `motor.etapa_de_retroceso`; un solo punto para los tres caminos de escritura: comando, botón y
+  resultado de una acción). Cuando un dato con valor recibe otro:
+  - se borran (`slot_cleared`, actor `kernel`, motivo `dato_cambiado`) los datos que fijó una acción
+    después del valor viejo. Es una heurística de causalidad por `seq` que invalida de más, hacia el
+    lado seguro: la acción se vuelve a llamar;
+  - si una etapa anterior del camino ya no cumple sus datos (`exitWhen.slots` y `confirmed`; las
+    salidas por acción ya pasadas cuentan como cumplidas), la tarea vuelve a ella (`stage_entered`
+    hacia atrás, que también descarta la confirmación pendiente).
+  - Así, cambiar de plan en `confirmar` borra la cotización y vuelve a `cotizar`: la acción que
+    confirma queda fuera de etapa y, con la ligadura, la cotización vieja no se puede usar.
+- **Datos congelados tras un efecto** (`motor.datos_congelados`). En una etapa `risk: high` en la que
+  ya terminó bien una acción (el pedido existe), cambiar un dato con valor se rechaza
+  (`dato_bloqueado`); la salida es `cancelar_tarea`. Antes del efecto sí se puede (pasar de pago en
+  línea a transferencia tras el rechazo por el mínimo). Le da a `risk` un segundo significado,
+  además de la política de modelo de ADR-0132: se migra a los metadatos de efecto de las acciones
+  con HU-AOS-34.
+- **Resumen de confirmación que provee el pack** (cierra el pendiente de la adenda de HU-AOS-09).
+  `MCPHost.register_resumen(accion, fn)` con `DatoDeResumen(nombre, valor, es_monto)` en
+  `core.mcp.types` (API de plugins, no contrato). Solo para una tool del mismo plugin; se limpia en
+  `remove_plugin`. El motor lo llama al cerrar el turno (sin lock), con los argumentos ligados que
+  firma el botón y un tope de 2 s. Si falla, tarda, viene vacío o trae un monto que no es número,
+  sale `sin_resumen`. Con resumen del pack no se mezclan los montos de los `claims` del turno: el pack
+  ya leyó el estado vigente. pack-commerce lo da para `confirmar_cotizacion` desde la cotización del
+  cliente (plan y periodicidad o productos y cantidades, descuento y total).
+  - Por eso en la etapa de confirmación no puede haber una acción que cambie el total sin cambiar el
+    id que firma el botón (`aplicar_promocion`): un test lo vigila en los procedimientos del pack.
+- **Revisión de seguridad (2026-10-11), lo que se ajustó:**
+  - Una confirmación de acción vale solo en la visita vigente a la etapa: un cambio de etapa
+    (también el retroceso) la vence (`accion_confirmada` corta en `stage_entered`).
+  - Con resumen del pack, la petición guarda la huella del resumen (`confirmation_requested.resumen`)
+    y antes de ejecutar se vuelve a armar: si la misma cotización cambió de total, el sí anterior no
+    vale y se pide otro; al cerrar el turno, un resumen que ya no coincide sale como `sin_resumen`.
+  - Un argumento con el nombre de un dato que fija una acción (`setBy: action:`) y la tarea todavía
+    no tiene se niega: el modelo no puede poner el pedido de otra compra antes de crear el de esta.
+  - Los datos de un resultado no se toman si ese resultado trae otro valor para un dato de la tarea
+    que no fija esa acción (el link de otro pedido).
+  - La auditoría de la ejecución guarda los argumentos que mandó el modelo, no los datos ligados
+    (PII de la tarea); los resolvers de la ligadura comparten un presupuesto de 5 s; un resumen de
+    más de 20 líneas sale `sin_resumen` (los montos van primero) y las opciones del catálogo en los
+    errores de un resolver van escapadas como dato.
+  - Aceptado y anotado: en `tomar_pedido` el resumen muestra productos y total, no la entrega ni el
+    método de pago, y cambiarlos en `confirmar` o `pagar` antes del efecto no vuelve a pedir el sí
+    (no cambian el monto). Los datos que llegan como contenido (media) no pasan por el congelado ni
+    por la invalidación (ningún procedimiento de esta HU los usa).
+- **Monto (alineado con el "monto esperado" de HU-AOS-08):** `confirmar_cotizacion` recibe solo el
+  `quote_id`, y agregarle el monto cambiaría su schema con la bandera apagada. En commerce el monto que
+  el cliente confirma sale del resumen del pack (leído de la cotización) y queda atado por su huella;
+  la ligadura de argumentos también cubre los argumentos de monto de HU-AOS-08 cuando un dato de la
+  tarea lleva su nombre.
+- **Lo que pide el negocio, antes de confirmar.** `contratar_plan` no fija los datos del cliente:
+  `cotizar_plan` (tool nueva de commerce, que ninguna sección del flujo nombra, con el predicado
+  `solo_con_motor_activo` de `core/kernel/oferta.py`: sin la bandera ni se ofrece ni se ejecuta)
+  devuelve `pide_<campo>` desde `checkout_fields["plan"]` del negocio, y cada dato es `requiredWhen`
+  de su `pide_<campo>`. Así un mismo procedimiento sirve a cualquier configuración (sin fork) y los
+  datos se piden en `datos`, antes del sí. Los términos del alta (ADR-0125) siguen en `crear_pedido`,
+  en `pagar`, como sin procedimientos.
+- **Afirmaciones compiladas detrás de la bandera** (cierra el pendiente de la adenda de HU-AOS-08):
+  con el motor activo, el loop suma a las de los packs las `claims` con frases de los procedimientos
+  disponibles del turno (`ContextoMotor.afirmaciones`, `compilar_afirmaciones`), de todas las
+  habilidades. No van por `register_afirmaciones`, que no sabe de la bandera: con ella apagada no se
+  verifica nada nuevo. Se respaldan con las acciones (del turno y anteriores, como las de los packs) y
+  con el estado: el dato que declara la `claim` (`order_id` para "pedido creado"). Las
+  `COMPLETION_CLAIMS` de commerce siguen como siempre.
+- **Cierre:** sin `completion.events`. La tarea se completa con el pedido y, si paga en línea, con el
+  link. El cierre por `payment.confirmed` correlaciona por el dato `reference`, que hoy ninguna acción
+  devuelve; agregarlo al resultado de `confirmar_pago_pedido` cambiaría lo que ve el modelo con la
+  bandera apagada.
+- **Política de modelo (ADR-0132):** `pagar` es `risk: high`, pero el turno en que el cliente toca
+  «Confirmar» empieza en `confirmar` y corre `crear_pedido` sin thinking. Se deja así por costo: el
+  thinking aplica a los turnos que empiezan en `pagar` (términos, datos faltantes).
+- **Pendientes antes de encender `aos_procedures` en un negocio:**
+  - `ReleaseCongelada.procedimientos()` solo deriva los abiertos del flujo: un cambio de release
+    escala la tarea de un procedimiento publicado al primer `action_succeeded` (la acción no declara
+    efecto). Lo resuelve HU-AOS-16, junto con los procedimientos por agente: hasta entonces todo
+    negocio con commerce ve `contratar_plan` y `tomar_pedido` como candidatos.
+  - Con el motor activo y sin tarea en foco, `confirmar_cotizacion` y `crear_pedido` se siguen
+    ofreciendo (son las acciones de las etapas; el predicado de oferta filtra también las candidatas
+    del motor): el modelo puede cerrar una venta por el camino de siempre, sin botón, con las guardas
+    de siempre de la tool. Negarlas sin foco es el mismo pendiente que anota HU-AOS-08.
+  - Desde que hay procedimientos registrados, un negocio con `aos_runtime = v3` y el motor apagado
+    escribe la sombra (`audit_log`, Redis).
+  - Un proveedor que devuelva un QR en vez de URL no llena `link` (`format: uri`) y la tarea queda en
+    `pagar`; la salida es `cancelar_tarea`.

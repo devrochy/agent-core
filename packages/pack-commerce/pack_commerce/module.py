@@ -1023,7 +1023,7 @@ async def order_update_status(request: Request, order_id: uuid.UUID, status: str
 class CRMModule(BaseModule):
     id = PLUGIN_ID
     name = "CRM"
-    version = "2.0.0"
+    version = "2.1.0"
     description = "Leads, catálogo (menú), promociones y pedidos para el negocio"
     display_name = "Comercio"
     category = "Ventas"
@@ -1096,6 +1096,12 @@ class CRMModule(BaseModule):
         # Montos y afirmaciones de cierre los verifica el core (ADR-0119, HU-ARCH-29);
         # reemplaza a `crm_amount_check` y `crm_completion_check`.
         host.register_afirmaciones(self._afirmaciones)
+        # Procedimientos de comercio (HU-AOS-07): datos del pack (`procedures/*.json`), sus
+        # resolvers y el resumen de `confirmar_cotizacion`. Solo los usa el motor del core con
+        # `tenants.aos_procedures`; con la bandera apagada nada cambia.
+        from pack_commerce.procedimientos import registrar as registrar_procedimientos
+
+        registrar_procedimientos(host)
         # La cotización en curso y el último pedido de la conversación, para el prompt
         # (ADR-0130): sin esto el modelo no ve el `quote_id` en el turno siguiente.
         host.register_referencias(referencias_vigentes)

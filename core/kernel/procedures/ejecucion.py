@@ -58,6 +58,10 @@ Ejecutor = Callable[[str, dict[str, Any], str], Awaitable[dict[str, Any]]]
 Modo = Literal["activo", "sombra"]
 
 _TIMEOUT_RESOLVER_S = 3.0
+# Resumen de confirmación que provee un pack (HU-AOS-07): corre al cerrar el turno, sin lock.
+_TIMEOUT_RESUMEN_S = 2.0
+_SIN_RESUMEN_DEL_PACK = object()
+_MAX_LINEAS_RESUMEN = 20
 # Presupuesto de todos los resolvers de un `actualizar_tarea` (corren con la conversación bloqueada).
 _PRESUPUESTO_RESOLVERS_S = 5.0
 # Marca de "el último inbound fue un botón": ese turno no confirma por texto (el título del botón
@@ -104,11 +108,16 @@ class Previo:
     - `decision`: si no es None, la acción no se ejecuta.
     - `task_id`/`stage`: la tarea y la etapa que gobiernan la acción (None = no la gobierna el
       motor: aplica la confirmación del binding v2 de siempre). `tras_accion` solo registra el
-      resultado en esa misma tarea y etapa."""
+      resultado en esa misma tarea y etapa.
+    - `args`: los argumentos efectivos (ligados a los datos de la tarea)."""
 
     decision: Decision | None = None
     task_id: uuid.UUID | None = None
     stage: str | None = None
+    # Argumentos efectivos de una acción gobernada (HU-AOS-07): los del modelo con los datos
+    # ligados de la tarea (`motor.ligar_argumentos`). El loop ejecuta, audita y registra ESTOS;
+    # None = los del modelo tal cual.
+    args: dict[str, Any] | None = None
 
     @property
     def gobernada(self) -> bool:
@@ -252,6 +261,41 @@ async def _completar(session: AsyncSession, foco_fila: ConversationTask, proc: P
     await _devolver_control(session, foco_fila, proc)
 
 
+# ---------------------------------------------------------------- cambios de datos (HU-AOS-07)
+
+
+def _previo(tarea: Proyeccion, nombre: str, nuevo: Any) -> int | None:
+    """El `seq` del valor anterior si el dato ya tenía OTRO valor; None si es nuevo o el mismo."""
+    meta = tarea.slots.get(nombre)
+    if not isinstance(meta, Mapping) or meta.get("value") is None or meta.get("value") == nuevo:
+        return None
+    return int(meta.get("seq") or 0)
+
+
+async def _invalidar_y_retroceder(
+    s: AsyncSession, foco: _Foco, cambiados: Mapping[str, int], escritos: set[str]
+) -> _Foco:
+    """Borra (`slot_cleared`) los datos que una acción fijó después del valor viejo de un dato que
+    cambió y, si una etapa anterior del camino ya no cumple sus datos, vuelve a ella
+    (`stage_entered` hacia atrás, que también descarta la confirmación pendiente)."""
+    viejos = motor.dependientes(foco.tarea, min(cambiados.values()), frozenset(escritos))
+    for nombre in viejos:
+        fila = await _registrar(s, foco.fila, "slot_cleared", {"slot": nombre, "reason": "dato_cambiado"}, "kernel")
+        foco = _Foco(fila=fila, tarea=state.proyeccion_de(fila), proc=foco.proc, stage=foco.stage)
+    destino = motor.etapa_de_retroceso(foco.proc, foco.tarea)
+    if destino is not None:
+        fila = await _registrar(
+            s, foco.fila, "stage_entered", {"from_stage": foco.stage.id, "to_stage": destino.id}, "kernel"
+        )
+        foco = _Foco(fila=fila, tarea=state.proyeccion_de(fila), proc=foco.proc, stage=destino)
+    if viejos or destino is not None:
+        log.info(
+            "motor_dato_cambiado", procedure_id=foco.proc.id, invalidados=len(viejos),
+            retrocede=destino.id if destino is not None else None,
+        )
+    return foco
+
+
 # ---------------------------------------------------------------- validación de datos
 
 
@@ -389,6 +433,23 @@ class ContextoMotor:
             log.info("motor_candidatos_de_inicio", cantidad=len(candidatos))
         return comandos.herramientas(nombres, foco=self._par_en_foco(), candidatos=candidatos)
 
+    def afirmaciones(self) -> list[Any]:
+        """Las `claims` con frases de los procedimientos disponibles, compiladas a `Afirmacion`
+        para el verificador (ADR-0119, HU-AOS-07). Solo con el motor activo: en sombra o apagado
+        no se verifica nada nuevo. Se respaldan con las acciones del turno y con el estado de las
+        tareas (los datos que declara cada `claim`)."""
+        if self.modo != "activo":
+            return []
+        from core.kernel.procedures.afirmaciones import compilar_afirmaciones
+
+        salida: list[Any] = []
+        for _pid, proc in sorted(self.procedimientos.items()):
+            try:
+                salida.extend(compilar_afirmaciones(proc))
+            except Exception as exc:
+                log.warning("motor_afirmaciones_fallo", procedure_id=proc.id, error=type(exc).__name__)
+        return salida
+
     def es_comando(self, nombre: str) -> bool:
         """¿Lo despacha el motor? Solo activo y solo los nombres reservados de los comandos."""
         return self.modo == "activo" and nombre in comandos.NOMBRES
@@ -433,10 +494,23 @@ class ContextoMotor:
                     return Previo(Decision(
                         {"error": mensaje("fuera_de_etapa", accion=accion, etapa=foco.stage.id)}, "denied", h
                     ))
-                gobernada = Previo(task_id=foco.fila.id, stage=foco.stage.id)
+                # Argumentos ligados a los datos de la tarea (HU-AOS-07): la cotización vigente, el
+                # plan elegido, la dirección confirmada. Lo distinto se niega (salvo que el resolver
+                # del dato lo lleve al mismo valor: un SKU por el uuid de la variante).
+                args, distinto = await self._ligar(foco, accion, args)
+                h = motor.hash_args(args)
+                if distinto is not None:
+                    return Previo(Decision({"error": mensaje("argumento_ligado", dato=distinto)}, "denied", h))
+                gobernada = Previo(task_id=foco.fila.id, stage=foco.stage.id, args=args)
                 if motor.requiere_confirmacion(foco.stage, accion) or accion in self._confirmar_tambien:
                     eventos = await _eventos(s, foco)
-                    if not motor.accion_confirmada(eventos, accion, h):
+                    # HU-AOS-07: con resumen del pack, la confirmación vale para ESE resumen (el
+                    # total leído del estado): si cambió con los mismos args, se pide otra vez.
+                    huella = await self._huella_del_pack(accion, args)
+                    confirmada = motor.accion_confirmada(eventos, accion, h) and (
+                        huella is None or (huella != "" and huella == motor.huella_pedida(eventos, accion, h))
+                    )
+                    if not confirmada:
                         pendiente = foco.tarea.pending_confirmation or {}
                         peticion = _evento_por_seq(eventos, pendiente.get("seq"))
                         misma = (
@@ -444,12 +518,14 @@ class ContextoMotor:
                             and pendiente.get("name") == accion
                             and peticion is not None
                             and peticion.data.get("args_hash") == h
+                            and (peticion.data.get("resumen") or None) == (huella or None)
+                            and not motor.accion_confirmada(eventos, accion, h)
                         )
                         if not misma:
-                            await _registrar(
-                                s, foco.fila, "confirmation_requested",
-                                {"target": {"kind": "action", "name": accion}, "args_hash": h}, "kernel",
-                            )
+                            datos_peticion: dict[str, Any] = {"target": {"kind": "action", "name": accion}, "args_hash": h}
+                            if huella:
+                                datos_peticion["resumen"] = huella
+                            await _registrar(s, foco.fila, "confirmation_requested", datos_peticion, "kernel")
                         self._pedidas[h] = (accion, dict(args))  # el resumen de la confirmación (HU-AOS-09)
                         gobernada.decision = Decision(
                             {"status": "confirmation_required", "message": mensaje("confirmacion_requerida", accion=accion)},
@@ -462,6 +538,40 @@ class ContextoMotor:
         except Exception as exc:
             log.warning("motor_antes_de_accion_fallo", accion=accion, error=type(exc).__name__)
             return Previo(Decision({"error": mensaje("error_interno")}, "denied", h))
+
+    async def _ligar(self, foco: _Foco, accion: str, args: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+        """(argumentos efectivos, nombre del primer dato distinto o None). Bajo el lock."""
+        from core.mcp.host import mcp_host
+
+        herramienta = mcp_host.get_tool(accion)
+        esquema = (herramienta.parameters if herramienta is not None else {}) or {}
+        ligadura = motor.ligar_argumentos(foco.proc, foco.tarea, esquema, args)
+        efectivos = ligadura.args
+        vals = motor.valores(foco.tarea)
+        if ligadura.distintos:
+            try:
+                async with asyncio.timeout(_PRESUPUESTO_RESOLVERS_S):  # corren con la conversación bloqueada
+                    return await self._normalizar_distintos(foco, ligadura.distintos, efectivos, vals)
+            except TimeoutError:
+                return efectivos, ligadura.distintos[0].dato
+        return efectivos, None
+
+    async def _normalizar_distintos(
+        self, foco: _Foco, distintos: Sequence[motor.Distinto], efectivos: dict[str, Any], vals: Mapping[str, Any]
+    ) -> tuple[dict[str, Any], str | None]:
+        for d in distintos:
+            slot = foco.proc.slots[d.dato]
+            if slot.resolver is None:
+                return efectivos, d.dato
+            ctx = _contexto_de_herramienta(
+                self.conversation_id, self.customer_id, self.channel, f"{self.conversation_id}:resolver"
+            )
+            v, error = await _validar_dato(foco.proc, d.dato, slot, d.valor, ctx, dict(vals), self._permitidos)
+            if error is not None or v != vals.get(d.dato):
+                return efectivos, d.dato
+            destino = efectivos if d.padre is None else efectivos[d.padre]
+            destino[d.dato] = vals[d.dato]
+        return efectivos, None
 
     async def tras_accion(
         self, accion: str, args: dict[str, Any], resultado: dict[str, Any], previo: Previo | None = None
@@ -509,7 +619,21 @@ class ContextoMotor:
         return resultado
 
     async def _datos_de_accion(self, s: AsyncSession, foco: _Foco, accion: str, resultado: Mapping[str, Any]) -> None:
-        """Datos con `setBy: action:<acción>`: el nombre del dato es la clave del resultado."""
+        """Datos con `setBy: action:<acción>`: el nombre del dato es la clave del resultado. Si uno
+        cambia de valor (una cotización nueva), lo que dependía del viejo se invalida."""
+        cambiados: dict[str, int] = {}
+        escritos: set[str] = set()
+        vals = motor.valores(foco.tarea)
+        ajenos = [
+            n for n, slot in foco.proc.slots.items()
+            if slot.setBy != f"action:{accion}" and vals.get(n) is not None and resultado.get(n) is not None
+            and not motor.mismo_valor(slot, vals[n], resultado[n])
+        ]
+        if ajenos:
+            # El resultado es de otro objeto que el de la tarea (el link de otro pedido): sus
+            # datos no se toman.
+            log.warning("motor_resultado_de_otro_objeto", procedure_id=foco.proc.id, accion=accion, datos=ajenos[:5])
+            return
         for nombre, slot in foco.proc.slots.items():
             if slot.setBy != f"action:{accion}" or resultado.get(nombre) is None:
                 continue
@@ -517,14 +641,32 @@ class ContextoMotor:
             if rechazo is not None:
                 log.warning("motor_dato_de_accion_invalido", procedure_id=foco.proc.id, dato=nombre, codigo=rechazo.codigo)
                 continue
+            previo = _previo(foco.tarea, nombre, valor)
             try:
-                await _registrar(
+                fila = await _registrar(
                     s, foco.fila, "slot_set",
                     {"slot": nombre, "value": valor, "source": f"action:{accion}", "data_class": slot.dataClass},
                     "tool",
                 )
             except state.TransicionInvalida:
                 log.warning("motor_dato_de_accion_rechazado", procedure_id=foco.proc.id, dato=nombre)
+                continue
+            escritos.add(nombre)
+            if previo is not None:
+                cambiados[nombre] = previo
+            foco = _Foco(fila=fila, tarea=state.proyeccion_de(fila), proc=foco.proc, stage=foco.stage)
+        if cambiados:
+            await self._tras_cambio(s, foco, cambiados, escritos)
+
+    async def _tras_cambio(
+        self, s: AsyncSession, foco: _Foco, cambiados: Mapping[str, int], escritos: set[str]
+    ) -> _Foco:
+        """Un dato cambió de valor (HU-AOS-07): se borran los datos que una acción fijó con el valor
+        viejo y, si una etapa anterior ya no cumple sus datos, la tarea vuelve a ella. Único punto
+        para los tres caminos de escritura (comando, botón y resultado de una acción)."""
+        foco = await _invalidar_y_retroceder(s, foco, cambiados, escritos)
+        self._cambio = True
+        return foco
 
     async def tras_lote(self) -> bool:
         """Al terminar un lote de acciones: vuelca la sombra y dice si cambiaron las acciones a
@@ -774,6 +916,10 @@ class ContextoMotor:
                 return ResultadoComando(False, [mensaje("resolver_no_disponible", dato="los datos")], list(foco.stage.actions))
             if errores:  # todo o nada: el modelo corrige, nunca se adivina
                 return ResultadoComando(False, errores, list(foco.stage.actions))
+            cambian = {n: p for n, v in validos.items() if (p := _previo(foco.tarea, n, v)) is not None}
+            if cambian and motor.datos_congelados(foco.stage, motor.eventos_de_la_etapa(await _eventos(s, foco))):
+                errores = [mensaje("dato_bloqueado", dato=n) for n in cambian]
+                return ResultadoComando(False, errores, list(foco.stage.actions))
             por_confirmar: str | None = None
             for nombre, v in validos.items():
                 fila = await _registrar(
@@ -783,6 +929,8 @@ class ContextoMotor:
                 if proc.slots[nombre].confirm and por_confirmar is None:
                     por_confirmar = nombre
                 foco = _Foco(fila=fila, tarea=state.proyeccion_de(fila), proc=proc, stage=foco.stage)
+            if cambian:
+                foco = await self._tras_cambio(s, foco, cambian, set(validos))
             if por_confirmar is not None and foco.tarea.pending_confirmation is None:
                 await _registrar(
                     s, foco.fila, "confirmation_requested", {"target": {"kind": "slot", "name": por_confirmar}}, "kernel"
@@ -861,7 +1009,9 @@ class ContextoMotor:
 
         try:
             args_hash = str((peticion.data.get("args_hash") if peticion is not None else "") or "")
-            datos = self._datos_a_confirmar(foco, pendiente, args_hash)
+            datos = await self._resumen_del_pack(foco, pendiente, args_hash, peticion)
+            if datos is _SIN_RESUMEN_DEL_PACK:
+                datos = self._datos_a_confirmar(foco, pendiente, args_hash)
             if datos is None:
                 log.info("motor_confirmacion_sin_resumen", task_id=str(foco.fila.id))
                 return ConfirmacionDelTurno(confirmacion=sin_resumen(), modo="explicit")
@@ -871,6 +1021,75 @@ class ContextoMotor:
         except Exception as exc:
             log.warning("motor_confirmacion_del_turno_fallo", error=type(exc).__name__)
             return ConfirmacionDelTurno(confirmacion=sin_resumen(), modo="explicit")
+
+    def _resumen_registrado(self, accion: str) -> Any:
+        """La función de resumen de la acción, solo si su pack está permitido en el turno."""
+        from core.mcp.host import mcp_host
+
+        registrado = mcp_host.get_resumen(accion)
+        return registrado[0] if registrado is not None and registrado[1] in self._permitidos else None
+
+    async def _lineas_del_pack(self, accion: str, args: Mapping[str, Any]) -> list[Any] | None:
+        """Las líneas del resumen del pack para esos args, o None si falla, tarda, viene vacío, se
+        pasa de 20 líneas (se perdería el total) o trae un monto que no es número."""
+        fn = self._resumen_registrado(accion)
+        if fn is None:
+            return None
+        ctx = _contexto_de_herramienta(
+            self.conversation_id, self.customer_id, self.channel, f"{self.conversation_id}:resumen"
+        )
+        try:
+            async with asyncio.timeout(_TIMEOUT_RESUMEN_S):
+                lineas = await fn(dict(args), ctx)
+        except Exception as exc:
+            log.warning("motor_resumen_del_pack_fallo", accion=accion, error=type(exc).__name__)
+            return None
+        if not lineas or len(lineas) > _MAX_LINEAS_RESUMEN:
+            return None
+        for linea in lineas:
+            valor = getattr(linea, "valor", None)
+            if getattr(linea, "es_monto", False) and (isinstance(valor, bool) or not isinstance(valor, int | float)):
+                return None
+        return list(lineas)
+
+    async def _huella_del_pack(self, accion: str, args: Mapping[str, Any]) -> str | None:
+        """Huella del resumen que el cliente confirma (HU-AOS-07): None si la acción no tiene
+        resumen del pack; "" si lo tiene pero no se pudo armar (nunca coincide)."""
+        if self._resumen_registrado(accion) is None:
+            return None
+        lineas = await self._lineas_del_pack(accion, args)
+        return motor.huella_de_resumen(lineas) if lineas else ""
+
+    async def _resumen_del_pack(
+        self, foco: _Foco, pendiente: Mapping[str, Any], args_hash: str, peticion: Evento | None
+    ) -> Any:
+        """El resumen que provee la habilidad de la acción pendiente (HU-AOS-07), leído de su
+        estado con los argumentos firmados; `_SIN_RESUMEN_DEL_PACK` si la acción no tiene uno.
+        Fail-closed (None → `sin_resumen`): si no se puede armar, si la habilidad ya no está sana o
+        si no es el mismo que se ató a la petición (`resumen` de `confirmation_requested`). Con
+        resumen del pack no se mezclan los montos de los `claims` del turno: el pack ya leyó el
+        total vigente."""
+        from core.kernel.confirmacion import Dato
+
+        if pendiente.get("kind") != "action":
+            return _SIN_RESUMEN_DEL_PACK
+        accion = str(pendiente.get("name") or "")
+        if self._resumen_registrado(accion) is None:
+            return _SIN_RESUMEN_DEL_PACK
+        pedida = self._pedidas.get(args_hash)
+        if pedida is None or pedida[0] != accion or not await self._sigue_sano(foco.proc):
+            return None
+        lineas = await self._lineas_del_pack(accion, pedida[1])
+        atada = str((peticion.data.get("resumen") if peticion is not None else "") or "")
+        if not lineas or motor.huella_de_resumen(lineas) != atada:
+            return None
+        de_pago = frozenset(n for n, slot in foco.proc.slots.items() if slot.dataClass == "payment")
+        datos = [
+            Dato(str(linea.nombre), linea.valor, es_monto=bool(linea.es_monto))
+            for linea in lineas
+            if str(getattr(linea, "nombre", "") or "") and str(linea.nombre) not in de_pago
+        ]
+        return datos or None
 
     def _datos_a_confirmar(self, foco: _Foco, pendiente: Mapping[str, Any], args_hash: str) -> list[Any] | None:
         """Los datos del resumen, o None si no hay uno fiel (el turno manda `sin_resumen`)."""
@@ -1207,10 +1426,17 @@ async def _dato_interactivo(
     if error is not None:
         log.info("motor_dato_interactivo_rechazado", procedure_id=foco.proc.id, dato=nombre)
         return
-    await _registrar(
+    previo = _previo(foco.tarea, nombre, v)
+    if previo is not None and motor.datos_congelados(foco.stage, motor.eventos_de_la_etapa(await _eventos(s, foco))):
+        log.info("motor_dato_interactivo_congelado", procedure_id=foco.proc.id, dato=nombre)
+        return
+    fila = await _registrar(
         s, foco.fila, "slot_set",
         {"slot": nombre, "value": v, "source": slot.setBy, "data_class": slot.dataClass}, "kernel",
     )
+    if previo is not None:
+        foco = _Foco(fila=fila, tarea=state.proyeccion_de(fila), proc=foco.proc, stage=foco.stage)
+        await _invalidar_y_retroceder(s, foco, {nombre: previo}, {nombre})
 
 
 # ---------------------------------------------------------------- cierre por evento (worker)

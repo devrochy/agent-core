@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from agentcore_contracts import Procedure
 
@@ -41,6 +42,20 @@ def carpeta_de(pack_id: str) -> Path | None:
 def archivos(pack_id: str) -> list[Path]:
     carpeta = carpeta_de(pack_id)
     return sorted(carpeta.glob("*.json")) if carpeta is not None else []
+
+
+def crudos(pack_id: str) -> list[Any]:
+    """El JSON de cada procedimiento del pack, tal cual y en el mismo orden que `cargar` (HU-AOS-07).
+    Lo usa el manifiesto de la versión del pack (`core/releases/packs.py`, ADR-0118 §1): lo que se
+    congela en `pack_versions` sale de los mismos archivos que se registran. Lanza si uno no es JSON
+    o se pasa del tope (el CI del lock lo detecta)."""
+    salida: list[Any] = []
+    for ruta in archivos(pack_id):
+        crudo = ruta.read_bytes()
+        if len(crudo) > MAX_PROCEDURE_BYTES:
+            raise ValueError(f"procedimiento demasiado grande: {ruta.name}")
+        salida.append(json.loads(crudo))
+    return salida
 
 
 def cargar(pack_id: str) -> list[Procedure]:

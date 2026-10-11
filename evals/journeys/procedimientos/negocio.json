@@ -1,0 +1,114 @@
+{
+  "nombre": "Comercio Journeys AOS",
+  "descripcion": "Academia que vende planes y una cafetería que vende a domicilio, con el motor de procedimientos encendido (HU-AOS-07).",
+  "packs": [
+    "pack_commerce",
+    "pack_payments"
+  ],
+  "plan": "premium",
+  "motor_de_procedimientos": true,
+  "pagos_simulados": {
+    "monto_minimo": 150000
+  },
+  "config": {
+    "pack_payments": {
+      "public_key": "pub_test_journeys_simulado",
+      "private_key": "prv_test_journeys_simulado",
+      "events_secret": "test_events_journeys_simulado",
+      "sandbox": true
+    },
+    "pack_commerce": {
+      "checkout_fields": {
+        "domicilio": [
+          "full_name",
+          "address",
+          "city",
+          "phone"
+        ],
+        "recoger_en_tienda": [
+          "full_name",
+          "phone"
+        ],
+        "plan": [
+          "full_name",
+          "id_document",
+          "phone",
+          "email"
+        ]
+      }
+    }
+  },
+  "catalogo": {
+    "pack": "pack_commerce",
+    "category_paths": [
+      [
+        "Planes"
+      ],
+      [
+        "Comida"
+      ]
+    ],
+    "products": [
+      {
+        "name": "Plan Basic",
+        "description": "Clases grabadas.",
+        "category_path": [
+          "Planes"
+        ],
+        "variants": [
+          {
+            "sku": "BASIC-MES",
+            "price": 200000,
+            "stock": 0,
+            "attributes": {
+              "periodicidad": "mensual",
+              "trial_dias": 0
+            }
+          }
+        ]
+      },
+      {
+        "name": "Plan Premium",
+        "description": "Clases en vivo y tutorías.",
+        "category_path": [
+          "Planes"
+        ],
+        "variants": [
+          {
+            "sku": "PREMIUM-MES",
+            "price": 600000,
+            "stock": 0,
+            "attributes": {
+              "periodicidad": "mensual",
+              "trial_dias": 0
+            }
+          },
+          {
+            "sku": "PREMIUM-ANO",
+            "price": 6000000,
+            "stock": 0,
+            "attributes": {
+              "periodicidad": "anual",
+              "trial_dias": 0
+            }
+          }
+        ]
+      },
+      {
+        "name": "Hamburguesa",
+        "description": "Doble carne.",
+        "category_path": [
+          "Comida"
+        ],
+        "variants": [
+          {
+            "sku": "HAM-1",
+            "price": 25000,
+            "stock": 100,
+            "attributes": {}
+          }
+        ]
+      }
+    ]
+  }
+}

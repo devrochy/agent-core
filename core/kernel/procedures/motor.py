@@ -135,6 +135,133 @@ def salida_cumplida(proc: Procedure, stage: Stage, tarea: Proyeccion, eventos_et
     return not (salida.action is not None and not accion_terminada(eventos_etapa, salida.action, salida.ok))
 
 
+# ---------------------------------------------------------------- cambios de datos (HU-AOS-07)
+
+
+def dependientes(tarea: Proyeccion, seq_anterior: int, excluir: frozenset[str] = frozenset()) -> list[str]:
+    """Datos que fijó una acción (`source = action:*`) DESPUÉS del valor que acaba de cambiar:
+    se calcularon con el valor viejo (la cotización del plan anterior) y dejan de valer. Es una
+    heurística de causalidad por `seq` que invalida de más, hacia el lado seguro: la acción se
+    vuelve a llamar. `excluir`: los datos que se acaban de escribir en el mismo lote."""
+    salida: list[str] = []
+    for nombre, meta in tarea.slots.items():
+        if nombre in excluir or not isinstance(meta, Mapping):
+            continue
+        if str(meta.get("source") or "").startswith("action:") and int(meta.get("seq") or 0) > seq_anterior:
+            salida.append(nombre)
+    return salida
+
+
+def etapa_de_retroceso(proc: Procedure, tarea: Proyeccion) -> Stage | None:
+    """La primera etapa del camino, ANTES de la vigente, cuyas condiciones de datos (`exitWhen`
+    `slots` y `confirmed`) ya no se cumplen; None si todas siguen cumpliéndose. Las salidas por
+    acción de etapas ya pasadas cuentan como cumplidas (sus eventos quedaron atrás)."""
+    stage: Stage | None = proc.stages[0]
+    vistas: set[str] = set()
+    while stage is not None and stage.id != tarea.stage and stage.id not in vistas:
+        vistas.add(stage.id)
+        salida = stage.exitWhen
+        if salida is None:
+            return None
+        if salida.slots or salida.confirmed:
+            solo_datos = stage.model_copy(update={"exitWhen": salida.model_copy(update={"action": None, "ok": None})})
+            if not salida_cumplida(proc, solo_datos, tarea, ()):
+                return stage
+        stage = siguiente(proc, stage)
+    return None
+
+
+def datos_congelados(stage: Stage, eventos_etapa: Sequence[Evento]) -> bool:
+    """En una etapa `risk: high` en la que ya terminó bien una acción (hubo un efecto: el pedido
+    existe), los datos con valor ya no cambian: cambiarlos dejaría el efecto viejo vivo junto al
+    nuevo (dos pedidos). La salida es cancelar el recorrido."""
+    return stage.risk == "high" and any(e.type == "action_succeeded" for e in eventos_etapa)
+
+
+# ---------------------------------------------------------------- argumentos ligados (HU-AOS-07)
+
+
+@dataclass(frozen=True)
+class Distinto:
+    """Un argumento ligado que el modelo mandó con otro valor que el dato de la tarea."""
+
+    dato: str
+    padre: str | None  # el objeto de primer nivel que lo contiene (`customer_data`), o None
+    valor: Any
+
+
+@dataclass(frozen=True)
+class Ligadura:
+    args: dict[str, Any]
+    distintos: tuple[Distinto, ...] = ()
+
+
+def mismo_valor(slot: Slot, valor_tarea: Any, valor_arg: Any) -> bool:
+    """¿El argumento dice lo mismo que el dato? Se normaliza como el dato (tipo, formato, opciones)."""
+    v, rechazo = validar_valor(slot, valor_arg)
+    return rechazo is None and v == valor_tarea
+
+
+def ligar_argumentos(
+    proc: Procedure, tarea: Proyeccion, esquema: Mapping[str, Any], args: Mapping[str, Any]
+) -> Ligadura:
+    """Argumentos efectivos de una acción gobernada: los que tienen el nombre de un dato de la
+    tarea con valor (en el primer nivel del input schema o dentro de un objeto de primer nivel,
+    p. ej. `customer_data.email`) se atan a ese dato. Misma convención por nombre que las
+    precondiciones.
+
+    - Igual (normalizado) → el valor del dato (canónico: el hash de la confirmación no depende de
+      cómo lo escribió el modelo).
+    - Distinto → `distintos` (quien llama lo pasa por el resolver del dato o lo deniega). También
+      un valor para un dato que fija una acción (`setBy: action:`) y la tarea aún no tiene.
+    - Ausente → se completa solo si es obligatorio (`required` de primer nivel, o dentro de un
+      objeto de primer nivel obligatorio o presente). Un argumento opcional no se completa: puede
+      ser una alternativa (`sku` o `variant_id`) y completarlo cambiaría la consulta.
+    """
+    vals = valores(tarea)
+    propiedades = esquema.get("properties") if isinstance(esquema, Mapping) else None
+    if not isinstance(propiedades, Mapping):
+        return Ligadura(dict(args))
+    requeridos = set(esquema.get("required") or [])
+    efectivos: dict[str, Any] = {k: (dict(v) if isinstance(v, Mapping) else v) for k, v in args.items()}
+    distintos: list[Distinto] = []
+
+    def atar(destino: dict[str, Any], nombre: str, padre: str | None, obligatorio: bool) -> None:
+        slot = proc.slots.get(nombre)
+        if slot is None:
+            return
+        if vals.get(nombre) is None:
+            # Un id que fija el servidor y todavía no existe en la tarea (el pedido de esta
+            # compra): un valor del modelo sería de otra compra (el pedido anterior, ADR-0130).
+            if nombre in destino and str(slot.setBy or "").startswith("action:"):
+                distintos.append(Distinto(nombre, padre, destino[nombre]))
+            return
+        if nombre not in destino:
+            if obligatorio:
+                destino[nombre] = vals[nombre]
+            return
+        if mismo_valor(slot, vals[nombre], destino[nombre]):
+            destino[nombre] = vals[nombre]
+        else:
+            distintos.append(Distinto(nombre, padre, destino[nombre]))
+
+    for nombre, sub in propiedades.items():
+        nombre = str(nombre)
+        atar(efectivos, nombre, None, nombre in requeridos)
+        internas = sub.get("properties") if isinstance(sub, Mapping) and sub.get("type") == "object" else None
+        if not isinstance(internas, Mapping) or nombre in proc.slots:
+            continue
+        objeto = efectivos.get(nombre)
+        if objeto is None and nombre in requeridos and any(
+            str(n) in proc.slots and vals.get(str(n)) is not None for n in internas
+        ):
+            objeto = efectivos[nombre] = {}
+        if isinstance(objeto, dict):
+            for interna in internas:
+                atar(objeto, str(interna), nombre, True)
+    return Ligadura(efectivos, tuple(distintos))
+
+
 # ---------------------------------------------------------------- confirmación
 
 
@@ -155,14 +282,39 @@ def hash_args(args: Mapping[str, Any] | None) -> str:
 
 
 def accion_confirmada(eventos: Sequence[Evento], accion: str, h: str) -> bool:
-    """¿Hay un `confirmed` de esa acción con esos args que ninguna ejecución consumió?"""
+    """¿Hay un `confirmed` de esa acción con esos args que ninguna ejecución consumió, dado en la
+    visita vigente a la etapa? Un cambio de etapa (también el retroceso por un dato que cambió,
+    HU-AOS-07) vence las confirmaciones anteriores: al volver se pide otra vez."""
     for e in reversed(eventos):
+        if e.type in ("started", "stage_entered", "revalidated"):
+            return False
         if e.data.get("action") == accion and e.type in ("action_requested", "action_succeeded", "action_failed"):
             return False
         objetivo = e.data.get("target") or {}
         if e.type == "confirmed" and objetivo.get("kind") == "action" and objetivo.get("name") == accion:
             return e.data.get("args_hash") == h
     return False
+
+
+def huella_pedida(eventos: Sequence[Evento], accion: str, h: str) -> str | None:
+    """La huella del resumen que vio el cliente en la última petición de confirmación de esa
+    acción con esos args (`confirmation_requested.data.resumen`), o None si no la tiene."""
+    for e in reversed(eventos):
+        objetivo = e.data.get("target") or {}
+        if (
+            e.type == "confirmation_requested" and objetivo.get("kind") == "action"
+            and objetivo.get("name") == accion and e.data.get("args_hash") == h
+        ):
+            valor = e.data.get("resumen")
+            return str(valor) if valor else None
+    return None
+
+
+def huella_de_resumen(lineas: Sequence[Any]) -> str:
+    """Huella de un resumen del pack (nombre, valor, monto): si el estado que lo produjo cambia
+    (otro total con el mismo `quote_id`), la confirmación dada sobre el viejo no vale."""
+    canon = [[str(getattr(x, "nombre", "")), getattr(x, "valor", None), bool(getattr(x, "es_monto", False))] for x in lineas]
+    return hash_args({"resumen": canon})
 
 
 @dataclass(frozen=True)
