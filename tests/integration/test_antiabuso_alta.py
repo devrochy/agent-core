@@ -528,6 +528,36 @@ async def test_un_mensaje_que_llega_antes_de_enviar_los_enlaces_no_acepta(vended
 
 
 @pytest.mark.aislamiento
+async def test_el_hint_pide_repetir_solo_si_los_enlaces_ya_salieron(vendedores, silencio) -> None:
+    """Mientras el cliente no recibió los enlaces, ningún «sí» los acepta: el `hint` pide
+    compartirlos y no repetir la llamada. Antes decía siempre «si ya aceptó, repite ahora» y el
+    modelo repetía en vano en el mismo turno (canary de comercial, 2026-10-10)."""
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    await publicar_documentos(vendedor)
+    cliente = await _cliente(vendedor)
+    datos = _datos()
+
+    await _mensaje_del_cliente(vendedor, cliente, "Sí, acepto los términos, la privacidad y el DPA.")
+    primero = await _pedir(vendedor, cliente, datos)
+    assert primero["status"] == "terminos_pendientes"
+    assert "no repitas crear_pedido" in primero["hint"]
+    repetido = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": primero["acepta_terminos"]})
+    assert "no repitas crear_pedido" in repetido["hint"]
+
+    await _respuesta_con_enlaces(vendedor, cliente, status="failed")  # no salió: no cuenta
+    assert "no repitas crear_pedido" in (await _pedir(vendedor, cliente, datos))["hint"]
+
+    await _respuesta_con_enlaces(vendedor, cliente)
+    await _mensaje_del_cliente(vendedor, cliente)
+    tras_enviar = await _pedir(vendedor, cliente, datos)
+    assert tras_enviar["status"] == "terminos_pendientes"
+    assert "repite crear_pedido ahora" in tras_enviar["hint"]
+    aceptado = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": tras_enviar["acepta_terminos"]})
+    assert aceptado["status"] == "confirmed", aceptado
+
+
+@pytest.mark.aislamiento
 async def test_la_aceptacion_es_por_pedido(vendedores, silencio) -> None:
     """Al crear el pedido se borra el marcador: otro pedido de un plan en la misma conversación
     vuelve a mostrar los enlaces y pide un «sí» nuevo."""
