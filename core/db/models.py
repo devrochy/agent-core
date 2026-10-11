@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
@@ -1160,6 +1161,44 @@ class MemoryVector(Base):
     # migración que re-ajuste la columna; ver `alembic/versions/0046_*`.
     embedding: Mapped[Any] = mapped_column(Vector(get_settings().embedding_dimensions))
     meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # Memoria por scope (0080, ADR-0114 §3): customer | connection | tenant (`ck_mv_keys`).
+    scope: Mapped[str] = mapped_column(Text, nullable=False, default="customer")
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))  # None = compartida
+    kind: Mapped[str] = mapped_column(Text, nullable=False, default="exchange")  # exchange|episode|fact|document
+    importance: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    embedding_model: Mapped[str | None] = mapped_column(Text)
+    source_turn_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MemoryFact(Base):
+    """Hecho del cliente con procedencia (0069 + 0080, ADR-0114 §3).
+
+    Es la FUENTE de la memoria del cliente; `customers.attributes` es su proyección (solo el
+    namespace `perfil`). Se escribe SOLO en `core/memory/facts.py`, en la misma transacción que
+    la proyección. El hecho nuevo cierra al anterior (`superseded_at`); el olvido es lógico.
+    """
+
+    __tablename__ = "memory_facts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    namespace: Mapped[str] = mapped_column(Text, nullable=False)
+    key: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[Any] = mapped_column(JSONB(none_as_null=False), nullable=False)
+    data_class: Mapped[str] = mapped_column(Text, nullable=False, default="internal")
+    confidence: Mapped[Decimal] = mapped_column(Numeric(3, 2), nullable=False, default=Decimal("1.00"))
+    source: Mapped[str] = mapped_column(Text, nullable=False)  # tool | agent | human | import
+    written_by_instance_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    source_turn_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    source_task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))  # 0080
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

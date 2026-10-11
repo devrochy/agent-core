@@ -109,6 +109,7 @@ async def test_intake_crea_y_es_idempotente(app_client, moto_setup) -> None:
     from pack_commerce.models import Lead
     from sqlalchemy import func, select
 
+    from core.db.models import Customer, MemoryFact
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -134,6 +135,21 @@ async def test_intake_crea_y_es_idempotente(app_client, moto_setup) -> None:
             lead = (
                 await session.execute(select(Lead).where(Lead.idempotency_key == IDEM))
             ).scalar_one()
+            # El perfil del cliente nuevo es proyección de sus hechos (ADR-0114 §3, HU-AOS-36).
+            customer = await session.get(Customer, lead.customer_id)
+            hechos = (
+                await session.execute(
+                    select(MemoryFact.key, MemoryFact.source).where(
+                        MemoryFact.customer_id == lead.customer_id,
+                        MemoryFact.superseded_at.is_(None),
+                        MemoryFact.deleted_at.is_(None),
+                    )
+                )
+            ).all()
+    assert customer is not None
+    assert customer.attributes["negocio"] == "Otro" and customer.attributes["optin"] is True
+    assert {k for k, _ in hechos} == set(customer.attributes)
+    assert {s for _, s in hechos} == {"import"}
     assert n == 1, "el intake debe ser idempotente (mismo email/phone)"
     assert lead.status == "nuevo"
     assert lead.email == EMAIL

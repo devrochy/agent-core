@@ -650,8 +650,8 @@ async def expirar_tareas_inactivas(
     Es el inicio del episodio anterior (ADR-0114 §1): una tarea que no tuvo ningún evento en
     todo ese episodio queda `cancelled` con motivo `episode_expired`. El evento lleva solo los
     NOMBRES de los datos (los valores ya están en la tarea; no se duplica PII en una tabla que
-    no se puede redactar). Copiar los datos válidos a `memory_facts` llega con HU-AOS-36, junto
-    con su lector, su purga y su retención.
+    no se puede redactar). Los datos válidos pasan a `memory_facts` en la consolidación nocturna
+    (`core/memory/facts.py`, HU-AOS-36), fuera de esta transacción.
 
     Debe correr ANTES de cualquier `revalidated` del episodio nuevo: la revalidación toca
     `updated_at` y la tarea ya no se vería inactiva.

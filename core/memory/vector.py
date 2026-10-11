@@ -15,13 +15,16 @@ from __future__ import annotations
 
 import re
 import uuid
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import httpx
 
 from core.config import get_settings
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import CursorResult
 
 log = get_logger(__name__)
 
@@ -92,20 +95,44 @@ def get_embedding_provider() -> EmbeddingProvider | None:
     return _provider
 
 
+KINDS = frozenset({"exchange", "episode", "fact", "document"})  # = ck_mv_kind (0080)
+
+
+def _embedding_model() -> str:
+    settings = get_settings()
+    return settings.embedding_model if settings.embedding_provider == "local" else "text-embedding-3-small"
+
+
 async def store_memory(
     content: str,
     customer_id: uuid.UUID | None = None,
     conversation_id: uuid.UUID | None = None,
     meta: dict[str, Any] | None = None,
+    kind: str | None = None,
 ) -> None:
-    """Guarda un hecho con su embedding. No-op si la capa está desactivada.
+    """Guarda un recuerdo con su embedding (scope `customer`). No-op si la capa está desactivada.
 
     El contenido se redacta (PII) antes de embeber (ADR-0053): la fuente de verdad
     (el mensaje) queda intacta en `messages`; lo que se guarda acá es la versión sin
     datos sensibles evidentes.
+
+    Sin `customer_id` (el loop guarda así cada intercambio), el cliente y la conexión salen de
+    la conversación, con filtro explícito de negocio: así el recuerdo cumple `ck_mv_keys` y lo
+    cubre la purga del cliente (HU-AOS-36). Sin cliente resoluble no se guarda nada.
+    `kind` por defecto conserva la conducta de antes: con cliente explícito es un recuerdo que el
+    recall devuelve (`fact`); sin él, un intercambio que el recall no mira (`exchange`).
+    Los hechos estructurados (`memory_facts`) nunca pasan por aquí.
     """
     provider = get_embedding_provider()
     if provider is None:
+        return
+    if kind is None:
+        kind = "fact" if customer_id is not None else "exchange"
+    if kind not in KINDS:
+        raise ValueError(f"kind inválido: {kind!r}")
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        log.warning("vector_store_missing_tenant_context")
         return
     try:
         # Se redacta ANTES de persistir y de embeber: `memory_vectors` no debe
@@ -113,15 +140,51 @@ async def store_memory(
         # `messages`, que es donde se audita.
         redacted = redact_pii(content)
         embedding = await provider.embed(redacted)
+        from sqlalchemy import text
+
         from core.db.models import MemoryVector
         from core.db.session import get_session
 
         async with get_session() as session:
+            connection_id: uuid.UUID | None = None
+            if conversation_id is not None:
+                fila = (
+                    await session.execute(
+                        text(
+                            "SELECT c.customer_id, cc.id FROM conversations c "
+                            "LEFT JOIN channel_connections cc ON cc.tenant_id = c.tenant_id AND cc.id = c.connection_id "
+                            "WHERE c.tenant_id = :t AND c.id = :c"
+                        ),
+                        {"t": tenant_id, "c": conversation_id},
+                    )
+                ).first()
+                if fila is None or (customer_id is not None and fila[0] != customer_id):
+                    log.warning("vector_store_conversation_not_owned", conversation_id=str(conversation_id))
+                    return
+                customer_id, connection_id = fila[0], fila[1]
+            elif customer_id is not None:
+                # Sin conversación, el cliente tiene que ser de este negocio (la FK es simple).
+                propio = (
+                    await session.execute(
+                        text("SELECT 1 FROM customers WHERE tenant_id = :t AND id = :c"),
+                        {"t": tenant_id, "c": customer_id},
+                    )
+                ).first()
+                if propio is None:
+                    log.warning("vector_store_customer_not_owned")
+                    return
+            if customer_id is None:
+                log.warning("vector_store_without_customer")
+                return
             session.add(
                 MemoryVector(
-                    tenant_id=get_current_tenant_id(),
+                    tenant_id=tenant_id,
                     customer_id=customer_id,
                     conversation_id=conversation_id,
+                    connection_id=connection_id,
+                    scope="customer",
+                    kind=kind,
+                    embedding_model=_embedding_model(),
                     content=redacted,
                     embedding=embedding,
                     meta=meta or {},
@@ -153,11 +216,18 @@ async def purge_memory(
     customer_id: uuid.UUID | None = None,
     conversation_id: uuid.UUID | None = None,
 ) -> int:
-    """Borra (lógico) la memoria semántica de un cliente/conversación (ADR-0053).
+    """Olvido (lógico) de la memoria de un cliente o de una conversación (ADR-0053, ADR-0114 §4).
 
-    Devuelve cuántas filas afectó. Exige al menos un criterio para no borrar todo
-    el tenant por accidente. Limpia también la working memory (Redis) si es por
-    conversación.
+    - Por cliente (solo `customer_id`): sus recuerdos de `memory_vectors` (también los
+      intercambios que el loop guardó), sus hechos de `memory_facts` y su proyección en
+      `customers.attributes`, en UNA transacción; después del commit, la memoria de trabajo de
+      Redis de TODAS sus conversaciones. Sus tareas y mensajes quedan: son registro del negocio.
+    - Por conversación: sus recuerdos y su memoria de trabajo, como antes (con `customer_id`
+      también, solo los recuerdos de ese cliente en esa conversación).
+
+    Devuelve cuántos registros de memoria borró (recuerdos + hechos). Exige al menos un
+    criterio para no borrar todo el negocio por accidente. Si Redis falla después del commit,
+    la purga no se revierte (se registra; la memoria de trabajo vence sola en 24 h).
     """
     if customer_id is None and conversation_id is None:
         raise ValueError("purge_memory requiere customer_id o conversation_id")
@@ -165,32 +235,66 @@ async def purge_memory(
     if tenant_id is None:
         raise ValueError("purge_memory requiere contexto de tenant")
 
-    from sqlalchemy import select, update
+    from sqlalchemy import or_, select, update
 
-    from core.db.models import MemoryVector, utcnow
+    from core.db.models import Conversation, MemoryVector, utcnow
     from core.db.session import get_session
+    from core.memory import facts
 
+    ahora = utcnow()
+    conversaciones: list[uuid.UUID] = []
+    hechos = 0
     async with get_session() as session:
-        stmt = select(MemoryVector).where(
-            MemoryVector.tenant_id == tenant_id, MemoryVector.deleted_at.is_(None)
+        if conversation_id is None and customer_id is not None:
+            # Primero el cliente (orden de locks de `core/memory/facts.py`).
+            hechos = await facts.purgar_de_cliente(
+                session, tenant_id=tenant_id, customer_id=customer_id, now=ahora
+            )
+            conversaciones = list(
+                (
+                    await session.execute(
+                        select(Conversation.id).where(
+                            Conversation.tenant_id == tenant_id, Conversation.customer_id == customer_id
+                        )
+                    )
+                ).scalars()
+            )
+        else:
+            # Solo si la conversación es de este negocio (y de ese cliente, si viene): la clave
+            # legada `wm:{conv}` no lleva negocio y no se borra la de una conversación ajena.
+            filtro = select(Conversation.id).where(
+                Conversation.tenant_id == tenant_id, Conversation.id == conversation_id
+            )
+            if customer_id is not None:
+                filtro = filtro.where(Conversation.customer_id == customer_id)
+            conversaciones = list((await session.execute(filtro)).scalars())
+            if not conversaciones:
+                return 0
+        stmt = (
+            update(MemoryVector)
+            .where(MemoryVector.tenant_id == tenant_id, MemoryVector.deleted_at.is_(None))
+            .values(deleted_at=ahora)
         )
-        if customer_id is not None:
+        if customer_id is not None and conversation_id is None:
+            # También lo que quedó sin cliente en sus conversaciones (p. ej. intercambios que el
+            # código anterior guardó durante el deploy).
+            stmt = stmt.where(
+                or_(MemoryVector.customer_id == customer_id, MemoryVector.conversation_id.in_(conversaciones))
+                if conversaciones
+                else MemoryVector.customer_id == customer_id
+            )
+        elif customer_id is not None:
             stmt = stmt.where(MemoryVector.customer_id == customer_id)
         if conversation_id is not None:
             stmt = stmt.where(MemoryVector.conversation_id == conversation_id)
-        ids = (await session.execute(stmt)).scalars().all()
-        if ids:
-            await session.execute(
-                update(MemoryVector)
-                .where(MemoryVector.id.in_([row.id for row in ids]))
-                .values(deleted_at=utcnow())
-            )
+        resultado = cast("CursorResult[Any]", await session.execute(stmt))
+        recuerdos = int(resultado.rowcount or 0)
 
-    if conversation_id is not None:
+    if conversaciones:
         from core.memory import working as working_memory
 
-        await working_memory.clear(conversation_id)
-    return len(ids)
+        await working_memory.clear_many(conversaciones)
+    return recuerdos + hechos
 
 
 async def recall(
@@ -214,6 +318,9 @@ async def recall(
     if tenant_id is None:
         log.warning("recall_missing_tenant_context")
         return []
+    if customer_id is None:
+        # Sin cliente no hay recall: antes devolvía memoria de cualquier cliente del negocio.
+        return []
     provider = get_embedding_provider()
     if provider is None:
         return []
@@ -234,14 +341,21 @@ async def recall(
                     return []
 
             distance = MemoryVector.embedding.cosine_distance(query_embedding)
+            # Los intercambios del loop no se recuerdan (antes no tenían cliente y el filtro
+            # por cliente los dejaba fuera; HU-AOS-36 conserva esa conducta) y lo olvidado
+            # tampoco vuelve.
             stmt = (
                 select(MemoryVector.content, distance.label("d"))
-                .where(MemoryVector.tenant_id == tenant_id)
+                .where(
+                    MemoryVector.tenant_id == tenant_id,
+                    MemoryVector.scope == "customer",
+                    MemoryVector.customer_id == customer_id,
+                    MemoryVector.kind != "exchange",
+                    MemoryVector.deleted_at.is_(None),
+                )
                 .order_by(distance)
                 .limit(top_k)
             )
-            if customer_id is not None:
-                stmt = stmt.where(MemoryVector.customer_id == customer_id)
             rows = (await session.execute(stmt)).all()
             return [content for content, d in rows if d is not None and float(d) <= max_distance]
     except Exception:

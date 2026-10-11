@@ -33,6 +33,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 
+from core.agents.instancias import conexion_del_numero
 from core.db.models import MessageTemplate, MetaConnection, PhoneNumber, WabaAccount
 from core.db.session import get_session
 from core.gateway.meta_byok import TEST_NUMBER_IN_PRODUCTION_MESSAGE, ByokError, numero_registrado
@@ -239,6 +240,14 @@ async def cargar_numero_real(
             raise error
         pareja = await _pareja_de_produccion(session, connection)
         otros = [n for n in await _numeros_vivos(session, pareja) if n.phone_number_id != phone_number_id] if pareja else []
+        # La conexión del número de prueba, de la que el número real clona sus instancias de
+        # agentes (ADR-0115 §6). Solo si la prueba tiene un único número: con varios no se adivina.
+        de_prueba = await _numeros_vivos(session, connection)
+        instancias_de = (
+            await conexion_del_numero(session, tenant_id, de_prueba[0].phone_number_id, connection.id)
+            if len(de_prueba) == 1
+            else None
+        )
     if otros:
         # Ya hay una conexión de producción de esta app atendiendo otro número: el alta la
         # reusaría y le sumaría este (dos números vivos: el sender responde por cualquiera).
@@ -270,6 +279,8 @@ async def cargar_numero_real(
             waba_id,
             environment="production",
             verify_token=await stored_verify_token(connection),
+            # La conexión del número real nace con las instancias de la de prueba (ADR-0115 §6).
+            instancias_de=instancias_de,
         )
     except ByokError as exc:
         code = "test_number" if str(exc) == TEST_NUMBER_IN_PRODUCTION_MESSAGE else "byok_error"

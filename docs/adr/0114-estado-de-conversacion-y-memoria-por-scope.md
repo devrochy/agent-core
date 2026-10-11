@@ -60,3 +60,70 @@ El estado de la conversación son tareas *event-sourced* y la memoria se separa 
 - `core/llm/prompt_builder.py` (tarjeta en el bloque dinámico, antes de la fecha y hora) y un playbook del core con los rótulos.
 - `core/memory/` (scopes, `memory_facts`, proyección en `customers.attributes`, `entity.py`, extensión de `purge_memory` y del cron de retención).
 - Migraciones con RLS forzada y FKs compuestas. Las FKs compuestas exigen `UNIQUE (tenant_id, id)` en `conversations` y `customers`, creado con `CREATE UNIQUE INDEX CONCURRENTLY` + `ADD CONSTRAINT … USING INDEX` (tablas grandes).
+
+## Adenda (2026-10-11, HU-AOS-36): memoria por scope, procedencia y olvido
+
+Precisa §3 y §4 con lo que se implementó (migración `0080`, `core/memory/facts.py`).
+
+- **Proyección solo de `perfil`.** `customers.attributes` proyecta únicamente los hechos del namespace `perfil`, con
+  claves planas y el mismo algoritmo de antes (`{**attributes, **nuevos}`; `customers.name` si llega un `name` no
+  vacío), así los lectores existentes (perfil del prompt, `get_customer_profile`, búsqueda de email de pack-calendar)
+  ven exactamente lo mismo. Los demás namespaces (datos de tareas, `ventas`, `cobranza`…) viven solo en
+  `memory_facts`: proyectarlos los metería en cada prompt saltándose `readScopes` y `data_class`. Los leerá el runtime
+  v3 cuando exista su lector (HU-AOS-05/12). `perfil` es un namespace reservado: los hechos de una tarea nunca caen ahí.
+- **Único escritor.** `core/memory/facts.py` es el único que escribe `memory_facts` y `customers.attributes`, en la
+  misma transacción (un test estático lo vigila en `core/`, `packages/`, `cli/`, `scripts/` y `evals/`). El intake de
+  leads de pack-commerce pasa por ahí (`entity.upsert_attributes_en_sesion`). Orden de locks: la fila del cliente
+  primero (`FOR NO KEY UPDATE`), después sus hechos.
+- **Backfill.** `0080` copia los `customers.attributes` de los clientes vivos como hechos `perfil` (`source = 'import'`),
+  así la purga y la retención cubren lo que ya había. Con la hora de la migración: la edad real de cada clave no se
+  conoce, y con la del cliente la primera retención borraría el perfil de clientes viejos pero activos. Lo que el
+  código anterior escriba durante el deploy se completa con `agent-core tenant memoria-importar-perfil`.
+- **`data_class`** la asigna el código por namespace y clave (raíces genéricas en español e inglés: nombre, documento,
+  teléfono, dirección… → `pii`; salud, tarjeta, banco, claves → `sensitive`); si quien escribe declara otra, gana la más
+  estricta. Los hechos no se embeben en `memory_vectors` (diseño §7.5: son estructurados).
+- **Lo que escribe el LLM** (`source = 'agent'`, `update_customer_profile`): claves de una línea (`^[\w .-]{1,80}$`),
+  valores de hasta 4 KB, hasta 20 claves por llamada, nada `sensitive` (pago, salud, credenciales, categorías
+  especiales) y ninguna clave del sistema (`crm_lead_id`, `optin`, `source`). Si no, la tool devuelve un error
+  genérico. Es la única conducta nueva sin bandera: antes ese dato quedaba en el perfil y en cada prompt.
+- **Permisos.** `ToolContext.write_namespaces` (el dataclass del core, no el contrato congelado) lleva los
+  `writeNamespaces` del agente v3; `None` = runtime legacy, sin chequeo. Con un conjunto, escribir fuera de él se
+  deniega (`NamespaceNoConcedido`). El lector tolerante concede `["perfil"]` al General (lo que v2 ya podía escribir).
+  Precondición de HU-AOS-14: el build de releases debe partir de versiones del General con ese valor (las que publicó
+  el backfill B2 antes de esta adenda tienen `[]`). Los hechos que escribe la consolidación son del kernel (salen del
+  motor de procedimientos, no de una escritura libre del agente) y no pasan por este chequeo.
+- **Procedencia y consolidación.** Un cron nocturno (`core.memory_consolidation`, 03:30 UTC) pasa a `memory_facts` los
+  datos de las tareas cerradas `completed` o `cancelled` por `episode_expired` de los últimos 7 días:
+  - solo los confirmados o fijados por una acción, el kernel o una persona (no lo que el LLM extrajo sin confirmar) y
+    nunca los de clase `payment`;
+  - namespace = la habilidad del `procedure_id`; `source = 'human'` si lo fijó una persona y `'tool'` si no;
+    `source_turn_id` = el turno del dato; `source_task_id` (columna nueva) = la tarea; `written_by_instance_id` = el
+    dueño de la tarea;
+  - corre fuera del turno (sin latencia ni fallos en la conversación) e idempotente: una tarea con hechos (aunque se
+    hayan borrado) no se vuelve a mirar.
+- **Olvido.** La purga por cliente (`purge_memory(customer_id=…)`) borra (lógico) en una transacción sus hechos, sus
+  recuerdos de `memory_vectors` (también los intercambios del loop, que antes no tenían cliente y quedaban fuera) y deja
+  `customers.attributes = '{}'` (todas sus claves son proyección); también los recuerdos sin cliente de sus
+  conversaciones (los que el código anterior guardó durante el deploy); después del commit borra la memoria de trabajo de
+  Redis de **todas** sus conversaciones (`wm:{tenant}:{conv}` y el legado `wm:{conv}`). `customers.name` y
+  `contact_phone` no se tocan: son la identidad del cliente en el canal. `customers.memory_purged_at` (columna nueva,
+  no mapeada en el modelo) marca la purga: la consolidación no toma tareas empezadas antes (y lo vuelve a mirar con
+  el cliente bloqueado, por si la purga se confirmó en medio), para no resucitar lo olvidado. La CLI acepta
+  `--customer-id` (los clientes de WhatsApp no tienen email como `external_id`).
+- **Retención.** `MEMORY_RETENTION_DAYS` cubre `memory_facts` (por `created_at`, en lotes de clientes) y quita de la
+  proyección las claves de los hechos vigentes que vence.
+- **Intercambios fuera del recall.** El loop guarda cada intercambio sin `customer_id`; `store_memory` lo resuelve
+  desde la conversación (filtro explícito de negocio), así esas filas cumplen `ck_mv_keys` y las cubre la purga. El
+  recall excluye `kind = 'exchange'` y lo borrado, y sin cliente devuelve `[]`: con las banderas apagadas recuerda
+  exactamente lo mismo que antes (los intercambios nunca se recordaban). Queda abierto si conviene seguir embebiendo
+  intercambios que nadie lee.
+- **Filas viejas sin cliente.** Los recuerdos que `0080` no puede asociar a un cliente (sin conversación, o de una
+  conversación que no es del negocio) quedan `scope = 'tenant'` y borrados (lógico): nunca se recordaban y ninguna
+  purga los alcanzaba.
+- **Esquema.** Los CHECK `ck_mv_scope`, `ck_mv_kind` y `ck_mv_keys` quedan `NOT VALID` (se aplican a las filas nuevas);
+  su `VALIDATE` va con el contract (HU-AOS-11/15), como los de `0070`. Igual las FKs compuestas nuevas de
+  `memory_vectors` (`connection_id`, `agent_id`, `source_turn_id`, todas al mismo negocio); el backfill y
+  `store_memory` solo copian una conexión que existe en el negocio (`conversations.connection_id` todavía no está
+  validada).
+- **Fuera de esta adenda:** resumen episódico (`kind = 'episode'`, requiere modelo), decaimiento de `importance`,
+  re-embeber al cambiar `embedding_model`, recall en cadena por `readScopes`/`agent_id` y el lector v3 de hechos.

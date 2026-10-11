@@ -25,7 +25,14 @@ Formato del set (JSON Lines): `id`, `origen`, `texto` (el borrador), `resultados
 (los de tools del turno, con `_tool_name`, `_ok` y `_current_turn` como los estampa
 el loop), `contexto` (opcional: prompt y mensajes del cliente), `etiqueta`
 (`correcta` o `falsa`), `nota` y, en las falsas por un link inventado, `urls_sin_respaldo`
-(cuántos links del borrador no tienen respaldo).
+(cuántos links del borrador no tienen respaldo). Opcional, `estado` (HU-AOS-06): el estado de
+las tareas con el motor activo, `{"tareas": [...], "referencias_vigentes": [...]}` con la forma
+de `EstadoTareas`.
+
+**Con estado** (`--con-estado`, HU-AOS-06): los casos sin `estado` se miden además con uno
+derivado de sus propios resultados (cada referencia que devolvió una acción del turno pasa a ser
+un dato `action:*` de una tarea que no respalda cierres). Así se mide que la regla de
+referencias del motor activo no agrega falsos positivos a respuestas reales.
 """
 
 from __future__ import annotations
@@ -76,13 +83,44 @@ def cargar(ruta: Path = SET_FRAMEWORK) -> list[dict[str, Any]]:
     return [json.loads(linea) for linea in ruta.read_text(encoding="utf-8").splitlines() if linea.strip()]
 
 
-def medir(casos: list[dict[str, Any]]) -> Medicion:
+def estado_derivado(caso: dict[str, Any]) -> Any:
+    """Estado sintético de un caso sin `estado`: las referencias que devolvieron sus acciones
+    como datos `action:*` de una tarea en pausa (no respalda cierres)."""
+    from core.orchestrator.verificador import EstadoTareas
+    from core.orchestrator.verificador.evidencia import REFERENCIA_RE, TOOL_NAME_KEY, _textos
+
+    slots: dict[str, Any] = {}
+    for resultado in caso.get("resultados") or []:
+        if not isinstance(resultado, dict) or not resultado.get("_ok", True):
+            continue
+        accion = str(resultado.get(TOOL_NAME_KEY) or "accion")
+        for texto in _textos(resultado):
+            for ref in REFERENCIA_RE.findall(texto):
+                slots[f"ref_{len(slots)}"] = {"value": ref, "source": f"action:{accion}"}
+    tarea = {"procedure_id": "eval.derivado", "status": "suspended", "cierre": False, "slots": slots}
+    return EstadoTareas(tareas=(tarea,))
+
+
+def _estado(caso: dict[str, Any], con_estado: bool) -> Any:
+    from core.orchestrator.verificador import EstadoTareas
+
+    if isinstance(caso.get("estado"), dict):
+        e = caso["estado"]
+        return EstadoTareas(
+            tareas=tuple(e.get("tareas") or ()), referencias_vigentes=tuple(e.get("referencias_vigentes") or ())
+        )
+    return estado_derivado(caso) if con_estado else None
+
+
+def medir(casos: list[dict[str, Any]], con_estado: bool = False) -> Medicion:
     from core.orchestrator.verificador import Evidencia, verificar
 
     afirmaciones = afirmaciones_incorporadas()
     medicion = Medicion()
     for caso in casos:
-        evidencia = Evidencia.desde(caso.get("resultados") or [], caso.get("contexto") or "")
+        evidencia = Evidencia.desde(
+            caso.get("resultados") or [], caso.get("contexto") or "", _estado(caso, con_estado)
+        )
         veredicto = verificar(caso["texto"], evidencia, afirmaciones)
         detalle = {
             "id": caso["id"],
@@ -107,9 +145,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--set", default=str(SET_FRAMEWORK), help="Ruta del set etiquetado (JSON Lines)")
     parser.add_argument("--detalle", action="store_true", help="Imprimir cada desacuerdo")
+    parser.add_argument("--con-estado", action="store_true", help="Medir también con el estado de las tareas")
     args = parser.parse_args()
 
-    medicion = medir(cargar(Path(args.set)))
+    medicion = medir(cargar(Path(args.set)), con_estado=args.con_estado)
     print(
         f"Verificador: {medicion.correctas} correctas · {medicion.falsas} falsas · "
         f"falsos positivos {len(medicion.falsos_positivos)} ({medicion.tasa_falsos_positivos:.1%}, "

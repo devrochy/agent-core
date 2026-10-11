@@ -1,6 +1,6 @@
 """Verificador de afirmaciones con modelo de evidencia (ADR-0119, HU-ARCH-29)."""
 
-from core.orchestrator.verificador.evidencia import Evidencia
+from core.orchestrator.verificador.evidencia import EstadoTareas, Evidencia
 from core.orchestrator.verificador.verificador import (
     TOGGLES,
     Veredicto,
@@ -14,6 +14,7 @@ from core.orchestrator.verificador.verificador import (
 
 __all__ = [
     "TOGGLES",
+    "EstadoTareas",
     "Evidencia",
     "Veredicto",
     "cargar_afirmaciones",

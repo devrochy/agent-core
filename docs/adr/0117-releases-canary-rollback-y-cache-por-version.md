@@ -80,3 +80,69 @@ Cada conexión publica releases inmutables, con canary sticky por episodio, roll
 - `evals/` y el worker: gate contra `agentcore_eval`; `eval_runs.release_id` y `eval_results.procedure_id`.
 - Sync de packs (`pack_versions`) y armado de candidatas `origin = platform`.
 - API `/api/v1/connections/{id}/releases` y `/rollback` (ADR-0077), reflejadas en `docs/openapi.json`.
+
+## Adenda de implementación (2026-10-11, HU-AOS-14): build, release 1, sticky y rollback
+
+Revisada por el agente `arquitecto` antes de escribir código. No cambia contratos ni la conducta con
+`aos_runtime = 'legacy'` (el gate de evals en replay pasa sin regrabar).
+
+- **Forma `release/1` del manifiesto** (`core/releases/manifiesto.py`). Congela **entradas**, nunca
+  contenido del core: `components` (instancia → versión exacta, con `content_hash`), `skills`
+  (`pack_id`, `version`, `manifest_hash` registrados en `pack_versions`), `tenant_plugins` (solo por
+  nombre), `playbook_overrides` (los de la allowlist, con texto y hash), `flow_tenant` (secciones crudas
+  del `flow.json` del negocio, con hash) y `app_settings` (los cuatro campos del prompt).
+  `built_with` (git sha, versión de contratos) queda fuera del hash: un deploy no genera releases. Los
+  procedimientos abiertos se **derivan** al cargar la release (flujo del core y de los packs del binario +
+  las secciones congeladas), no se congelan.
+- **Build** (`core/releases/build.py`): versión exacta de cada instancia viva (exige el Coordinador) y el
+  validador único del contrato sobre cada una. Con `legacy` el Coordinador y el General se **refrescan**
+  antes desde el AgentSpec v2 activo (backfill B2 + publicar la conversión si cambió): así la release 1 sale
+  del v2 activo aunque se haya editado después del backfill. Habilidades: `enabled_business_packs` del v2
+  activo (la única lectura de la habilitación hasta HU-AOS-16); el build exige su versión registrada, con el
+  mismo hash y no `yanked`. Fail-closed con los textos del negocio: un override ilegible o de más de 8 KiB,
+  o un `flow.json` roto, hacen fallar el build. Idempotente por `manifest_hash`; el manifiesto se arma fuera
+  del lock de la conexión. No se activa sola.
+- **Release 1** (`agent-core db backfill-releases`): por cada conexión conversacional sin release, build +
+  promoción (`reason = 'release_1'`). Precondición de `v3` para las conexiones que se den de alta después
+  (alta y promoción BYOK, ADR-0127 §3): correr el comando de nuevo. Que esos caminos construyan la release
+  solos queda para HU-AOS-15.
+- **Promoción y rollback** (`core/releases/promocion.py`): promoción total (canary en HU-AOS-32); el gate es
+  la función `gate_aprobado` (hoy aprueba, HU-AOS-21) y queda anotado en el evento. Destino por defecto del
+  rollback: la release más reciente con `promoted` que no es la activa ni fue retirada por `rolled_back`
+  después de ese `promoted` (dos clics no rebotan); sin destino, 409. Deja `rolled_back` en la que se deja y
+  `promoted` (`reason = 'rollback'`) en la de destino.
+- **Sticky por episodio** (`core/kernel/release_del_turno.py`, solo con `v3` y `AOS_CONNECTION_ROUTING`):
+  una conversación cambia de release al empezar un episodio, o **a mitad de episodio** solo si el último
+  evento de **ciclo de vida** de su release (`promoted`, `canary_started`, `rolled_back`, `canary_stopped`,
+  `invalid`) es `rolled_back`, `canary_stopped` o `invalid`; los eventos del gate no cuentan. Sin columna
+  nueva. El `idleMinutes` es el del KernelSpec de la release vigente de la conversación, y la tarjeta de
+  estado usa el mismo (una sola definición de episodio). El carril es `stable` (`carril()` es el enganche
+  del canary). `core_decisions.release_id`/`release_lane` se llenan desde la ranura del turno.
+- **Revalidación**: `revalidated` (versiones y releases de origen y destino; conserva los datos que declara
+  la versión nueva, o todos si no declara ninguno; la etapa es la vigente si existe, si no la primera, hasta
+  el motor). Sin el procedimiento: `cancelled` con `release_changed`, o `escalated` si hubo un
+  `action_succeeded` de una acción irreversible **o sin efecto conocido** en el catálogo (hoy ninguna lo
+  declara: HU-AOS-34). Escalar la conversación a una persona desde el orquestador es precondición para
+  encender `aos_procedures`; `fijar_release_del_turno` devuelve los ids escalados.
+- **Lo que lee el runtime de la release con `v3`**: overrides de playbooks (`load_playbook`), secciones del
+  negocio (`resolve_flow`) y los cuatro campos de `AppSettings` del prompt. **Límites** hasta HU-AOS-15: el
+  loop sigue ejecutando el AgentSpec v2 de `agent_specs`, así que el rollback es parcial (sin persona,
+  modelo, tools ni guardrails) y ningún cliente real debe pasar a `v3` antes; el aviso de fuera de horario
+  (`core/kernel/ingress.py`) y las respuestas de respaldo del consumer siguen leyendo `AppSettings` y el
+  disco en caliente; el playground todavía no prueba la candidata (ADR-0075).
+- **Caché** (`core/releases/cargar.py`): en proceso por `(tenant_id, release_id)`, con tope por bytes
+  (64 MiB), nunca se invalida. La clave por `agent_version_hash` de lo compilado llega con HU-AOS-35.
+- **Sync de `pack_versions`** (adelantado de HU-AOS-16): `register_pack_version()` (migración 0079,
+  SECURITY DEFINER, `search_path` fijo, `REVOKE ALL FROM PUBLIC`, sin `EXECUTE` para `app_runtime`) recibe
+  el JSON canónico como **texto**, calcula su sha256 en la base y rechaza la fila si no coincide; solo
+  plugins con `owner_tenant_id` nulo; la misma versión con otro hash es `hash_mismatch` (alerta, no se
+  registra). Corre con el rol dueño en el entrypoint del contenedor `api` tras migrar
+  (`agent-core db sync-packs`), registra antes los plugins en `plugins` y nunca frena el arranque. El CI
+  compara los hashes con `packages/pack-versions.lock.json` (`scripts/pack_versions_lock.py`): cambiar el
+  contenido de un pack exige subir su versión.
+- **Pendiente para la segunda parte (decisión del dueño):** candidatas `origin = platform` al registrarse una
+  versión nueva de una habilidad y la promoción directa por `yanked`. Hasta que el runtime lea el contenido
+  del pack desde `pack_versions` (HU-AOS-16) la candidata y la activa correrían el mismo contenido del
+  binario. Si van antes, cada candidata se deriva del manifiesto de la release activa cambiando solo esa
+  entrada, no de un build nuevo.
+- **Rutas:** viven en `/api/v1/admin/connections/{id}/releases` y `/rollback` por el realm (ADR-0077 §2).
