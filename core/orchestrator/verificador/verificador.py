@@ -16,6 +16,11 @@ sistema hizo (`Evidencia`). Es determinista: sin LLM y sin E/S propia.
 - **Referencias y fechas:** se extraen y se cuentan en el veredicto, pero todavía
   no bloquean (modo sombra): no hubo incidentes que las justifiquen y un parser de
   fechas en español que bloquee cuesta falsos positivos.
+- **Con el estado de las tareas** (motor activo, HU-AOS-06): un cierre también lo respalda
+  una acción que fijó un dato de la tarea en foco (o de una recién completada), y una
+  referencia que el borrador afirma y es de una familia que el servidor fijó en las tareas
+  (`OC` de `pedido_id = OC-0042`) tiene que estar en la evidencia. Las demás referencias
+  siguen en sombra. Sin estado, todo es idéntico a antes.
 
 Ante un fallo, el loop aplica el mismo mecanismo que los guardrails: reintento
 correctivo (`guardrail_max_retries`) y luego `guardrail_fail_action` (ADR-0092).
@@ -32,8 +37,10 @@ from typing import Any
 from core.mcp.types import Afirmacion
 from core.orchestrator.verificador.evidencia import (
     REFERENCIA_RE,
+    EstadoTareas,
     Evidencia,
     clave_url,
+    familia,
     urls_con_posicion,
 )
 from core.shared.dinero import MONEY_IN_TEXT, normalized_amount_key, parse_money
@@ -95,7 +102,8 @@ def normalizar_desactivados(nombres: Iterable[Any] | None) -> list[str]:
 class Veredicto:
     texto: str
     passed: bool = True
-    # Código del motivo: `monto_sin_evidencia` o `status_sin_evidencia`.
+    # Código del motivo: `monto_sin_evidencia`, `status_sin_evidencia` o (con estado)
+    # `referencia_sin_evidencia`.
     motivo: str = ""
     # Etiqueta de la afirmación de cierre que falló (para métricas).
     afirmacion: str = ""
@@ -205,8 +213,11 @@ def verificar(
             if not hallada:
                 continue
             cierres += 1
-            respaldada = bool(afirmacion.tools & evidencia.acciones_ok) or (
-                afirmacion.basta_url and bool(evidencia.urls_enlace)
+            respaldada = (
+                bool(afirmacion.tools & evidencia.acciones_ok)
+                or (afirmacion.basta_url and bool(evidencia.urls_enlace))
+                # Con estado: la acción ya fijó su dato en la tarea en foco (HU-AOS-06).
+                or bool(afirmacion.tools & evidencia.acciones_estado)
             )
             if not respaldada and not cierre_fallido:
                 cierre_fallido = afirmacion.label
@@ -218,6 +229,7 @@ def verificar(
     veredicto.conteo["referencias"] = len(referencias)
     veredicto.conteo["fechas"] = len(_FECHA.findall(texto))
     veredicto.sombra["referencias_sin_evidencia"] = len(referencias - evidencia.referencias)
+    referencia_fallida = _referencia_sin_evidencia(oraciones, evidencia) if evidencia.con_estado else ""
 
     if cierre_fallido and "verificador_cierre" not in apagados:
         veredicto.afirmacion = cierre_fallido
@@ -228,7 +240,28 @@ def verificar(
         veredicto.passed = False
         veredicto.motivo = "status_sin_evidencia"
         veredicto.afirmacion = cierre_fallido
+    elif referencia_fallida:
+        veredicto.passed = False
+        veredicto.motivo = "referencia_sin_evidencia"
     return veredicto
+
+
+def _referencia_sin_evidencia(oraciones: list[str], evidencia: Evidencia) -> str:
+    """Primera referencia que el borrador AFIRMA, de una familia que el servidor fijó en las
+    tareas, y que no está en la evidencia ("" si no hay). Las preguntas, negaciones y
+    condicionales no afirman; las referencias de otras familias (un SKU) siguen en sombra."""
+    if not evidencia.familias_estado:
+        return ""
+    for oracion in oraciones:
+        for _n, match in zip(range(_MAX_COINCIDENCIAS), REFERENCIA_RE.finditer(oracion), strict=False):
+            referencia = match.group(0)
+            if (
+                familia(referencia) in evidencia.familias_estado
+                and referencia not in evidencia.referencias
+                and _afirma(oracion, match)
+            ):
+                return referencia
+    return ""
 
 
 def verificar_seguro(
@@ -237,13 +270,14 @@ def verificar_seguro(
     contexto: str,
     afirmaciones: Iterable[Afirmacion],
     desactivados: Iterable[str] = (),
+    estado: EstadoTareas | None = None,
 ) -> Veredicto:
     """Arma la evidencia y verifica, sin tumbar nunca el turno (mismo criterio que un
     guardrail que lanza, `run_guardrails`). Si algo falla, montos y cierres pasan
     (fail-open), pero los links se quitan todos: un link inventado no llega al cliente
     porque el verificador se rompió. El link exacto lo sigue entregando `_safe_append`."""
     try:
-        return verificar(borrador, Evidencia.desde(resultados, contexto), afirmaciones, desactivados)
+        return verificar(borrador, Evidencia.desde(resultados, contexto, estado), afirmaciones, desactivados)
     except Exception:
         log.exception("verificador_fallo")
     texto = borrador
@@ -280,6 +314,29 @@ def _formato_monto(valor: float) -> str:
     return "$" + f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
+# Instrucciones de los motivos que llegan con el estado de las tareas (HU-AOS-06): viven en un
+# playbook del kernel para no cambiar el playbook `respuestas`, que el modelo puede leer entero.
+_PLAYBOOK_ESTADO = "verificador-estado"
+
+
+def _instruccion_del_kernel(clave: str) -> str:
+    try:
+        from core.agents.playbooks import load_core_playbook
+
+        contenido = load_core_playbook(_PLAYBOOK_ESTADO)
+    except Exception:
+        log.exception("verificador_playbook_estado_fallo")
+        return ""
+    lineas: list[str] = []
+    dentro = False
+    for linea in contenido.splitlines():
+        if linea.startswith("## "):
+            dentro = linea[3:].strip() == clave
+        elif dentro and linea.strip():
+            lineas.append(linea.strip())
+    return " ".join(lineas)
+
+
 async def instruccion_correctiva(spec: Any, veredicto: Veredicto) -> str:
     """Instrucción del reintento: sección `verificador_<motivo>` del playbook
     `respuestas` (cero prompts en código, invariante 3). `{montos}` se llena con
@@ -287,7 +344,8 @@ async def instruccion_correctiva(spec: Any, veredicto: Veredicto) -> str:
     interpola."""
     from core.agents.responses import load_response
 
-    texto = await load_response(spec, f"verificador_{veredicto.motivo}") or INSTRUCCION_GENERICA
+    clave = f"verificador_{veredicto.motivo}"
+    texto = await load_response(spec, clave) or _instruccion_del_kernel(clave) or INSTRUCCION_GENERICA
     if "{montos}" in texto:
         montos = ", ".join(_formato_monto(m) for m in veredicto.montos_turno) or "ninguno"
         texto = texto.replace("{montos}", montos)
