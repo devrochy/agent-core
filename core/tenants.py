@@ -209,8 +209,10 @@ async def _limpiar_redis(
 
     Convención en la que se apoya (docs/MULTITENANT.md): todo estado Redis de un tenant
     lleva su UUID como primer UUID del nombre; las claves solo por conversación tienen TTL
-    de 24 h o menos. Los streams `agent_core:inbound` y su DLQ no se tocan (el tenant va
-    en los campos, no en el nombre; ver docs).
+    de 24 h o menos. Los streams no van por nombre (el tenant va en los campos): de la DLQ
+    se borran sus entradas (`XDEL` por el campo `tenant_id`); `agent_core:inbound` no se
+    toca (lo procesado ya se borró al ackear y lo pendiente lo descarta el consumer).
+    Devuelve claves + entradas de la DLQ borradas.
     """
     from core.memory.working import get_redis
 
@@ -244,6 +246,12 @@ async def _limpiar_redis(
         )
     for i in range(0, len(suyas), _REDIS_LOTE):
         borradas += int(await r.unlink(*suyas[i : i + _REDIS_LOTE]))
+    # Sus entradas de la DLQ (texto y teléfono de sus clientes, ADR-0053): no esperan
+    # a que venza la retención de la DLQ.
+    from core.orchestrator.consumer import DEAD_LETTER_STREAM
+    from core.orchestrator.retencion_streams import borrar_dlq_del_tenant
+
+    borradas += await borrar_dlq_del_tenant(r, DEAD_LETTER_STREAM, tid)
     return borradas
 
 
@@ -256,7 +264,7 @@ async def purge_tenant_redis(tenant_id: uuid.UUID | str) -> int:
     aparece en Redis como id de un hijo de otro negocio (error de copiar y pegar). Cubre
     todo lo que lleva el UUID del tenant en posición de tenant; las claves solo por
     conversación ya no se pueden enumerar (la purga borró las conversaciones) y vencen
-    solas (debounce 5 min, `wm:{conv}` 24 h). Devuelve cuántas claves borró.
+    solas (debounce 5 min, `wm:{conv}` 24 h). Devuelve cuántas claves (y entradas de la DLQ) borró.
     """
     tid = uuid.UUID(str(tenant_id))  # normaliza (MATCH distingue mayúsculas)
     if await _resolve_tenant_if_exists(tid) is not None:

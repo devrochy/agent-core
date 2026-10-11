@@ -162,11 +162,42 @@ y pegar el id de una conversación, conexión o mensaje).
 La limpieza borra las claves por conversación (ids leídos antes de purgar) y hace
 `SCAN MATCH *<tenant_id>*` + `UNLINK` de las claves que llevan el UUID **en posición de
 tenant** (el primer UUID del nombre). Las que lo llevan en otra posición no son suyas y no
-se tocan (p. ej. `webhook_firma_ajena:{a}:{b}` de varios negocios). Los streams
-`agent_core:inbound` y `agent_core:inbound:dlq` no se tocan: el tenant va en los campos, no
-en el nombre, y el guard del consumer descarta lo pendiente de un negocio que ya no existe.
-**Pendiente:** esos streams no se recortan (`XADD` sin `MAXLEN`, `XACK` sin `XDEL`), así que
-las entradas ya procesadas del negocio (texto y teléfono) siguen en Redis tras la purga.
+se tocan (p. ej. `webhook_firma_ajena:{a}:{b}` de varios negocios). En los streams el
+tenant va en los campos, no en el nombre: de `agent_core:inbound:dlq` la limpieza borra
+(`XDEL`) las entradas cuyo campo `tenant_id` es el del negocio purgado; `agent_core:inbound`
+no se toca, porque lo procesado ya se borró al ackear y lo pendiente lo descarta (y borra) el
+guard del consumer, que no procesa negocios que ya no existen. Queda una ventana mínima: un
+turno que ya estaba en curso al suspender y que falla después de la limpieza deja su entrada en
+la DLQ hasta que vence su retención (no la ve otro negocio: el panel filtra por la sesión).
+
+**Retención de los streams de entrada (ADR-0053).** `agent_core:inbound` y su DLQ llevan
+el texto y el teléfono de los clientes, así que no se guardan más de lo necesario
+(`core/orchestrator/retencion_streams.py`):
+
+- **Lo procesado se borra al ackear.** Tras un `XACK` exitoso el consumer hace `XDEL` de
+  la entrada (también al mandarla a la DLQ, que guarda su propia copia). Un `XDEL` fallido
+  no cuenta como fallo del turno: lo recoge el recorte periódico.
+- **Recorte periódico** (cada 10 min, en cada réplica; es idempotente): `XTRIM MINID`
+  exacto sobre `agent_core:inbound` con corte = el menor entre *ahora −
+  `INBOUND_STREAM_RETENTION_HOURS`* (24 h por defecto), el pendiente más viejo del PEL de
+  cada grupo y el siguiente al último entregado de cada grupo. Lo que queda antes del
+  corte está ackeado por todos los grupos: **nunca se recorta lo pendiente (PEL) ni lo no
+  leído**, aunque el consumer lleve horas caído. Sin grupos no se recorta nada. El precio
+  es conservador: un pendiente viejo retiene también lo ackeado posterior a él hasta que
+  se resuelva (el reclamo lo lleva a la DLQ en minutos); si el corte queda más de dos
+  retenciones atrás se registra `inbound_trim_blocked_by_pending` (solo IDs). La hora es
+  la de Redis (`TIME`), la misma que genera los IDs, no la de la réplica.
+- **Primer despliegue:** el primer recorte borra de una vez lo acumulado. Es `XTRIM`
+  exacto dentro del bucle del consumer; mirar antes `XLEN agent_core:inbound` en
+  producción (con decenas de miles de entradas es rápido: libera nodos enteros).
+- **No se usa `XADD MAXLEN`/`MINID`**: en Redis 7 el recorte al escribir no mira el PEL y,
+  con atraso, borraría mensajes sin procesar.
+- **DLQ:** `XTRIM MINID` por antigüedad, `INBOUND_DLQ_RETENTION_HOURS` (168 h = 7 días por
+  defecto, mínimo 24 h): tiempo para revisar y reintentar desde el panel; pasada la ventana de 24 h de
+  WhatsApp, reintentar un mensaje tan viejo ya no sirve para responderle al cliente.
+- **Si se agrega otro consumer group** al stream: el corte ya lo respeta, pero el `XDEL`
+  al ackear del grupo del orquestador le borraría lo que aún no leyó; habría que mover el
+  borrado al recorte (o a Redis 8.2+, `XACKDEL`).
 
 **Convención de claves Redis** (de ella depende que la purga sea completa y no toque a
 otro negocio): todo estado Redis de un tenant lleva su UUID como **primer** UUID del nombre

@@ -1,6 +1,7 @@
 {
   "include": [
     "core/config.py",
+    "core/orchestrator/retencion_streams.py",
     "core/memory/vector.py",
     "core/kernel",
     "core/shared/turno.py",

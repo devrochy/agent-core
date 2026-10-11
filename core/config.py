@@ -216,6 +216,18 @@ class Settings(BaseSettings):
     inbound_reclaim_idle_ms: int = Field(default=300_000, alias="INBOUND_RECLAIM_IDLE_MS")
     claim_stale_seconds: int = Field(default=600, alias="CLAIM_STALE_SECONDS")
 
+    # --- Retención de los streams de entrada (ADR-0053, docs/MULTITENANT.md) ---
+    # Llevan texto y teléfono de los clientes. Lo procesado se borra al ackear (XDEL);
+    # como red, el consumer recorta lo ackeado más viejo que `inbound_stream_retention_hours`
+    # (nunca lo pendiente ni lo no leído). La DLQ guarda `inbound_dlq_retention_hours`
+    # (mínimo 24 h) para revisar y reintentar desde el panel; después se borra.
+    inbound_stream_retention_hours: int = Field(
+        default=24, ge=1, le=720, alias="INBOUND_STREAM_RETENTION_HOURS"
+    )
+    inbound_dlq_retention_hours: int = Field(
+        default=168, ge=24, le=2160, alias="INBOUND_DLQ_RETENTION_HOURS"
+    )
+
     # --- Presupuesto de un turno (HU-ARCH-27) ---
     # `turn_timeout_s` es el presupuesto TOTAL del turno (todas las llamadas al
     # LLM y tools): al agotarse se corta y el mensaje no queda colgado. La espera
