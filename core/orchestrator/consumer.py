@@ -3,11 +3,12 @@
 Idempotencia Capa 2: consumer group con reintentos limitados y dead-letter.
 Flujo por mensaje:
   1. Resolver/crear customer y conversation.
-  2. Kill-switch (global > cliente > conversación): guardar mensaje, NO responder.
-  3. Persistir inbound (idempotency_key = message_id del canal).
-  4. Conversación escalada => solo guardar (la atiende un humano).
-  5. Keywords de escalamiento => escalar + respuesta fija.
-  6. Velocidad: inmediato => procesar ya; si no => schedule_debounce
+  2. Persistir inbound (idempotency_key = message_id del canal): SIEMPRE, aunque se bloquee.
+  3. Políticas de entrada del kernel (`core.kernel.ingress.politicas_de_entrada`, HU-AOS-10):
+     conexión pausada (ADR-0122), kill-switch (negocio > cliente > conversación) o conversación
+     escalada => solo guardar; keywords de escalamiento => escalar + respuesta fija; fuera de
+     horario => mensaje configurado. Cada bloqueo deja su decisión en `core_decisions`.
+  4. Velocidad: inmediato => procesar ya; si no => schedule_debounce
      (el ACK se hace YA — el sorted set pasa a ser el dueño del turno).
 """
 
@@ -24,8 +25,6 @@ from typing import Any
 from sqlalchemy import select, text, update
 from sqlalchemy.exc import IntegrityError
 
-from core.agents.responses import load_response
-from core.agents.spec import load_active_spec
 from core.billing.enforcement import QuotaExceeded, enforce_metric
 from core.config import DEBOUNCE_DELAY_MS, get_settings
 from core.db.models import (
@@ -39,18 +38,12 @@ from core.db.models import (
     utcnow,
 )
 from core.db.session import get_session
-from core.gateway.sender import send_to_conversation
 from core.gateway.webhooks import INBOUND_STREAM
-from core.kernel.decisions import anotar_entrada, bloquear, en_turno, marcar_escalado
+from core.kernel.decisions import anotar_entrada, en_turno
 from core.kernel.egress import entregar
+from core.kernel.ingress import politicas_de_entrada
 from core.memory.working import get_redis
 from core.orchestrator.debounce import schedule_debounce
-from core.orchestrator.escalation import (
-    ESCALATION_REPLY,
-    escalate,
-    matches_escalation_keywords,
-    within_business_hours,
-)
 from core.orchestrator.loop import process_conversation
 from core.orchestrator.retencion_streams import recortar_dlq, recortar_inbound
 from core.orchestrator.ruta_de_conversacion import (
@@ -425,13 +418,6 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
         )
         return
 
-    # ---------------- kill-switch en 3 niveles
-    paused = (
-        (app_settings.bot_paused if app_settings else False)
-        or customer.bot_paused
-        or conversation.bot_paused
-    )
-
     # Persistir SIEMPRE el inbound (historial completo aunque el bot esté pausado)
     persisted = await _persist_inbound(conversation.id, fields, effective_message)
     if not persisted:
@@ -445,68 +431,9 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
         content=effective_message,
     )
 
-    # Conexión de Meta pausada o eliminada (ADR-0122): el mensaje ya quedó guardado; no
-    # corre la IA (ni horario ni keywords, que también responden) y se avisa a los dueños.
-    from core.gateway.meta_connection_state import (
-        avisar_mensaje_en_conexion_pausada,
-        cuenta_meta_de_conversacion,
-        motivo_pausa_de,
-    )
-
-    cuenta = await cuenta_meta_de_conversacion(conversation)
-    if cuenta is not None and (motivo := await motivo_pausa_de(cuenta)) is not None:
-        log.info("inbound_conexion_pausada", conversation_id=str(conversation.id), motivo=motivo)
-        await bloquear(conversation, "connection_paused", status="silent")
-        await avisar_mensaje_en_conexion_pausada(conversation.tenant_id, cuenta, motivo)
-        return
-
-    if paused or conversation.status == "escalated":
-        motivo_bloqueo = "escalated_conversation" if conversation.status == "escalated" else "kill_switch"
-        await bloquear(conversation, motivo_bloqueo, status="silent")
-        return
-
-    # ---------------- escalamiento por keywords
-    escalation_cfg = dict(app_settings.escalation_config or {}) if app_settings else {}
-    keywords = list(escalation_cfg.get("keywords", []))
-    if matches_escalation_keywords(effective_message, keywords or None):
-        await bloquear(conversation, "escalation_keyword", status="escalated")
-        # Resolver el texto ANTES de escalar (auditor-multitenant): si
-        # load_active_spec falla (ej. BD caída), no queremos dejar la
-        # conversación ya marcada `escalated`/`bot_paused` sin haber podido
-        # avisarle nada al cliente -- y el claim de idempotencia de este
-        # evento ya se insertó en _claim_event, así que un reintento
-        # posterior lo vería como duplicado y no volvería a intentar nada.
-        # `load_active_spec()` sin tenant explícito resuelve el de la
-        # conversación en curso vía el `tenant_scope` que `handle_inbound`
-        # ya abrió más arriba en la pila (mismo patrón que loop.py:171).
-        spec = await load_active_spec()
-        escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
-        await escalate(conversation.id, reason="keyword", summary=effective_message[:200])
-        await send_to_conversation(conversation.id, escalation_text)
-        return
-
-    # ---------------- horario de atención (ADR-0051)
-    # Fuera de horario: se responde el mensaje configurado y NO se procesa el turno
-    # con el LLM (ahorra costo y evita prometer atención que no hay). Sin config,
-    # `within_business_hours` devuelve True (fail-open).
-    business_hours = escalation_cfg.get("business_hours")
-    if business_hours and not within_business_hours(business_hours):
-        out_msg = str(escalation_cfg.get("out_of_hours_message") or "").strip()
-        await bloquear(conversation, "out_of_hours", status="replied" if out_msg else "silent")
-        if out_msg:
-            text = out_msg
-            for key, value in (
-                ("{assistant_name}", app_settings.assistant_name if app_settings else ""),
-                ("{business_description}", app_settings.business_description if app_settings else ""),
-            ):
-                text = text.replace(key, value or "")
-            delivered = await send_to_conversation(conversation.id, text)
-            if not delivered:
-                # Mismo criterio que el camino inmediato: si el envío falla, se
-                # escala para que una persona retome (el claim de idempotencia ya
-                # se quemó, no habrá reintento).
-                await escalate(conversation.id, reason="send_failed", summary=text[:200])
-                marcar_escalado()
+    # Políticas de entrada del kernel (HU-AOS-10), en orden fijo y sin LLM: conexión pausada
+    # (ADR-0122), kill-switch o conversación escalada, palabras de escalamiento y horario.
+    if await politicas_de_entrada(conversation, customer, app_settings, effective_message):
         return
 
     # ---------------- velocidad de respuesta

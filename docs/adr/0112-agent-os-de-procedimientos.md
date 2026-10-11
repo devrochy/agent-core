@@ -108,8 +108,19 @@ invariantes ni banderas de conducta.
   observabilidad y no cambia la conducta ni el prompt (el gate de evals en replay pasa sin regrabar), así que no va
   detrás de `AOS_RUNTIME`/`AOS_PROCEDURES`, que quedan para cambios de conducta. Apagada, no hay filas y el `turn_id`
   queda NULL.
-- **Kernel y orquestador:** `core/kernel/decisions.py` (ledger), `ingress.py` (cuota y presupuesto, desde el preámbulo
-  del loop) y `egress.py` (un mensaje por turno, antes duplicado en consumer y debounce). El kernel no importa el loop,
-  el consumer ni el debounce (contrato `kernel-sin-orquestador` en `.importlinter`). Las políticas del consumer
-  (pausa de ADR-0122, kill-switch, palabras, horario, velocidad) registran su decisión en el sitio y se mudan a
-  `ingress` cuando entre HU-AOS-11, que hoy edita ese bloque.
+- **Kernel y orquestador:** `core/kernel/decisions.py` (ledger), `ingress.py` (políticas de entrada) y `egress.py`
+  (un mensaje por turno, antes duplicado en consumer y debounce). El kernel no importa el loop, el consumer ni el
+  debounce (contrato `kernel-sin-orquestador` en `.importlinter`). `ingress` tiene todas las políticas deterministas,
+  con el mismo orden, lecturas y textos de antes (traslado sin cambio de conducta, parte 2 de la HU):
+  - al entrar el mensaje, ya guardado (`politicas_de_entrada`, la llama el consumer): conexión pausada de ADR-0122
+    (con el aviso a los dueños), kill-switch en tres niveles o conversación escalada, palabras de escalamiento y
+    horario de atención;
+  - al disparar un turno diferido (`conexion_pausada`, la llama el debounce, sin aviso);
+  - en el preámbulo del loop (`conversacion_bloqueada`, `politicas_del_turno`): pausada o escalada, cuota y
+    presupuesto.
+
+  Se quedan en el orquestador: la **velocidad de respuesta** (es despacho, inmediato o debounce: `debounce_or_now` del
+  design §3.5), y los descartes previos a la conversación (negocio no operativo en el consumer, negocio inactivo en
+  el disparo del debounce, `QuotaExceeded` al crear el cliente o la conversación), que no son turno. La salida de
+  horario sigue enviando ella misma (con su escalamiento si el envío falla) en vez de pasar por `egress.entregar`:
+  unificarlas llega con la respuesta por plantilla del design (`egress.template_reply`).
