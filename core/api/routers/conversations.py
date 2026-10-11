@@ -201,11 +201,10 @@ async def get_conversation(
 async def _rechazar_si_conexion_pausada(conversation: Any) -> None:
     """409 si la conexión de WhatsApp de la conversación está desactivada o eliminada
     (ADR-0122): el operador lo ve en el acto, en vez de un mensaje fallido."""
-    from core.gateway.meta_connection_state import motivo_pausa_de
+    from core.gateway.meta_connection_state import motivo_pausa_de_conversacion
 
-    if getattr(conversation, "connection_id", None) is not None:
-        return
-    motivo = await motivo_pausa_de(conversation.meta_connection_id)
+    # La cuenta sale de la conexión canónica si la conversación la tiene (ADR-0115 §2).
+    motivo = await motivo_pausa_de_conversacion(conversation)
     if motivo is not None:
         raise ApiError(409, "connection_paused", f"{motivo}: reactívala en Conexiones para responder.")
 
