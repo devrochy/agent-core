@@ -228,6 +228,7 @@ async def numero_para_conexion(
     phone_number_id: str,
     *,
     waba_account_id: uuid.UUID | None = None,
+    instancias_de: uuid.UUID | None = None,
 ) -> tuple[Any, uuid.UUID | None]:
     """La fila única de `phone_number_id` en el negocio, asignada (y revivida) a
     `connection_id`. Devuelve `(fila, conexión anterior o None)`. Lanza `MetaAssetError` si
@@ -238,7 +239,10 @@ async def numero_para_conexion(
 
     En la misma transacción crea, revive o religa la conexión canónica del número
     (`channel_connections`, ADR-0115 §6): así toda alta o reconexión, por cualquiera de los
-    cinco caminos, deja el número con su conexión ligada a esta cuenta."""
+    cinco caminos, deja el número con su conexión ligada a esta cuenta. Y le pone sus instancias
+    de agentes si el negocio ya los tiene (`instancias.instancias_al_alta`, HU-AOS-13);
+    `instancias_de` es la conexión de la que se clonan (la del número de prueba, en la promoción
+    de ADR-0127)."""
     from sqlalchemy import func, select
 
     from core.db.models import PhoneNumber
@@ -286,6 +290,10 @@ async def numero_para_conexion(
     from core.gateway.conexion_canonica import asegurar_conexion_del_numero
 
     await asegurar_conexion_del_numero(session, tenant_id, phone_number_id, connection_id)
+
+    from core.agents.instancias import instancias_al_alta
+
+    await instancias_al_alta(session, tenant_id, phone_number_id, connection_id, instancias_de=instancias_de)
     return fila, anterior
 
 
