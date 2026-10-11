@@ -303,9 +303,16 @@ async def registrar_veredicto(
     motivos: list[str],
 ) -> None:
     """Una fila por turno en `audit_log` con el veredicto, solo códigos y conteos
-    (sin texto del borrador: puede traer datos del cliente). HU-AOS-10 mueve el
-    destino a `turn_outcomes` cambiando solo esta función."""
+    (sin texto del borrador: puede traer datos del cliente). Desde HU-AOS-10 va también a
+    `turn_outcomes.verifier`; la fila de `audit_log` sigue de forma transitoria (la leen
+    tests y journeys) hasta retirarla en una HU siguiente."""
+    from core.kernel.decisions import anotar_veredicto
     from core.shared.audit import record_audit
+
+    try:
+        anotar_veredicto(veredicto_para_turno(veredicto, resultado, motivos), len(motivos))
+    except Exception:  # observabilidad: nunca impide el registro ni el turno
+        pass
 
     await record_audit(
         actor="core:verificador",
@@ -321,3 +328,28 @@ async def registrar_veredicto(
             "error": veredicto.error,
         },
     )
+
+
+def veredicto_para_turno(veredicto: Veredicto, resultado: str, motivos: list[str]) -> list[dict[str, Any]]:
+    """`turn_outcomes.verifier`: un elemento por tipo de afirmación, solo códigos y conteos
+    (`[{kind, verdict, count}]`, sin texto). `verdict`: `pass`, `fail` (motivos de los
+    intentos rechazados y del veredicto final), `unverifiable` (modo sombra) o `error`."""
+    if veredicto.error:
+        return [{"kind": "verificador", "verdict": "error", "count": 1}]
+    salida: list[dict[str, Any]] = []
+    fallidos: dict[str, int] = {}
+    for motivo in motivos:
+        fallidos[motivo] = fallidos.get(motivo, 0) + 1
+    for kind, count in sorted(veredicto.conteo.items()):
+        if count:
+            salida.append({"kind": kind, "verdict": "pass", "count": int(count)})
+    if veredicto.urls_quitadas:
+        salida.append({"kind": "links_sin_respaldo", "verdict": "fail", "count": int(veredicto.urls_quitadas)})
+    for motivo, count in sorted(fallidos.items()):
+        salida.append({"kind": motivo, "verdict": "fail", "count": count})
+    for kind, count in sorted(veredicto.sombra.items()):
+        if count:
+            salida.append({"kind": kind, "verdict": "unverifiable", "count": int(count)})
+    if resultado == "fallo" and not fallidos and veredicto.motivo:
+        salida.append({"kind": veredicto.motivo, "verdict": "fail", "count": 1})
+    return salida

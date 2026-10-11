@@ -22,7 +22,10 @@ from core.db.models import PhoneNumber, utcnow
 from core.db.session import get_owned, get_session
 from core.gateway.connection_types import setup_url
 from core.gateway.connections import list_connections
+from core.shared.logger import get_logger
 from core.shared.tenant import tenant_slug
+
+log = get_logger(__name__)
 
 router = APIRouter(prefix="/admin/connections", tags=["admin · conexiones"])
 
@@ -231,7 +234,8 @@ async def connection_manual_form(
 
         async with get_session() as session:
             existing = await get_owned(session, ChannelConnection, connection_id, principal.tenant_id)
-        if existing is None:
+        # La conexión canónica de un número de Meta no es manual (ADR-0115): no se edita acá.
+        if existing is None or existing.meta_connection_id is not None:
             raise ApiError.not_found("Conexión no encontrada.")
         values = credentials_of(existing)
 
@@ -268,7 +272,7 @@ async def save_manual_connection(
             existing = await get_owned(
                 session, ChannelConnection, payload.connection_id, principal.tenant_id
             )
-        if existing is None:
+        if existing is None or existing.meta_connection_id is not None:
             raise ApiError.not_found("Conexión no encontrada.")
         previous = credentials_of(existing)
 
@@ -284,10 +288,15 @@ async def save_manual_connection(
         await save_connection(
             payload.label or ctype.label, values, payload.connection_id, type_id=ctype.id
         )
-    except Exception as exc:
+    except ValueError as exc:
+        # Errores de negocio con texto pensado para el usuario.
         raise ApiError.bad_request(
             f"No se pudo guardar la conexión: {str(exc)[:140]}", "save_failed"
         ) from exc
+    except Exception as exc:
+        # Un error de la base no se muestra (nombres de constraints y valores).
+        log.exception("connection_save_failed")
+        raise ApiError.bad_request("No se pudo guardar la conexión.", "save_failed") from exc
     return Response(status_code=204)
 
 
@@ -303,7 +312,9 @@ async def connection_action(
 
     async with get_session() as session:
         existing = await get_owned(session, ChannelConnection, connection_id, principal.tenant_id)
-    if existing is None:
+    # La conexión canónica de un número de Meta no es manual (ADR-0115): sus acciones son las
+    # de su cuenta (`/admin/meta/connections`).
+    if existing is None or existing.meta_connection_id is not None:
         raise ApiError.not_found("Conexión no encontrada.")
 
     from core.gateway.connections import delete_connection, set_active, set_primary

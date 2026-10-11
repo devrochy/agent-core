@@ -64,3 +64,27 @@ La conexión es `channel_connections`, y hay una conversación abierta por (cone
 - `core/api/routers/web_chat.py` y el resolvedor `SECURITY DEFINER` que reemplaza `web_chat_resolve`;
 - `core/gateway/connection_types.py` (`webchat`);
 - migraciones y backfill.
+
+## Adenda (2026-10-10, HU-AOS-11 primera parte)
+
+- **Lectores de la cuenta.** Además de las guardas y `resolve_credentials`, la selección de plantillas
+  (`event_notices.approved_template_for` y `approved_templates_for_conversation`) usa la cuenta de la
+  conexión canónica: la cuenta es una sola para la pausa, el envío y la plantilla.
+- **Enmienda a ADR-0095 §2.** En `channel_connections` solo cuentan como dueñas de un número las filas
+  **sin cuenta** (`meta_connection_id IS NULL`): migración 0073 en `resolve_tenant_for_phone` y
+  `meta_asset_claimed_by_other_tenant`, y `webhook_secrets._manual_del_numero`. La fila canónica sobrevive
+  a la baja de su cuenta (no tiene estado propio) y no debe seguir reclamando ni ruteando el número.
+- **Con la bandera apagada no es idéntico** (excepción acotada a la frase "sin cambio de conducta" de
+  ADR-0112): desde el despliegue, un número dado de alta o reconectado tiene su conexión canónica, el
+  camino anterior la pone en `connection_id` y la respuesta sale por el número de la conexión (§5), no
+  por el primero vivo de la cuenta. Solo difiere en cuentas con varios números.
+- **"Revivir" es religar:** la fila canónica no se borra nunca, así que reconectar el número la reasigna
+  a la cuenta nueva.
+- **Huérfanas con la bandera encendida:** si no hay abierta para (conexión, cliente) y la conexión está
+  ligada a Meta, el consumer adopta la abierta del cliente sin `connection_id` cuya cuenta
+  (`conversations.meta_connection_id`) es la de la conexión. El *dry-run* del backfill informa las
+  abiertas que quedan sin conexión.
+- **Despliegue:** workers y consumer antes que la web; en la ventana inversa, un consumer viejo con una
+  fila canónica nueva no pausa la entrada, aunque el envío igual falla cerrado.
+- **Pendiente para HU-AOS-13/14:** la promoción (ADR-0127 §3) ya crea la conexión del número real por el
+  alta BYOK; clonar sus instancias y su release queda como criterio de esas HU.

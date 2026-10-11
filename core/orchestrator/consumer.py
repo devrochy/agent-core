@@ -41,6 +41,8 @@ from core.db.models import (
 from core.db.session import get_session
 from core.gateway.sender import send_to_conversation
 from core.gateway.webhooks import INBOUND_STREAM
+from core.kernel.decisions import anotar_entrada, bloquear, en_turno, marcar_escalado
+from core.kernel.egress import entregar
 from core.memory.working import get_redis
 from core.orchestrator.debounce import schedule_debounce
 from core.orchestrator.escalation import (
@@ -50,6 +52,11 @@ from core.orchestrator.escalation import (
     within_business_hours,
 )
 from core.orchestrator.loop import process_conversation
+from core.orchestrator.ruta_de_conversacion import (
+    actualizar_ruta,
+    buscar_conversacion_abierta,
+    ruteo_por_conexion,
+)
 from core.orchestrator.turn_gate import TurnQueueTimeout, run_turn
 from core.shared.events import ON_CONVERSATION_STARTED, ON_MESSAGE_RECEIVED, event_bus
 from core.shared.logger import get_logger
@@ -354,6 +361,7 @@ async def _mark_event_completed(tenant_id: uuid.UUID, external_id: str) -> None:
         log.warning("claim_complete_failed", exc_info=True)
 
 
+@en_turno  # decisión y resultado del turno (HU-AOS-10); el loop reusa este turno
 async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
     settings = get_settings()
     content = fields.get("content", "")
@@ -384,6 +392,7 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
     persisted = await _persist_inbound(conversation.id, fields, effective_message)
     if not persisted:
         return  # duplicado (Capa 3 de idempotencia: UNIQUE en Postgres)
+    anotar_entrada(persisted)
 
     await event_bus.emit(
         ON_MESSAGE_RECEIVED,
@@ -396,21 +405,27 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
     # corre la IA (ni horario ni keywords, que también responden) y se avisa a los dueños.
     from core.gateway.meta_connection_state import (
         avisar_mensaje_en_conexion_pausada,
-        motivo_pausa_de_conversacion,
+        cuenta_meta_de_conversacion,
+        motivo_pausa_de,
     )
 
-    if (motivo := await motivo_pausa_de_conversacion(conversation)) is not None:
+    cuenta = await cuenta_meta_de_conversacion(conversation)
+    if cuenta is not None and (motivo := await motivo_pausa_de(cuenta)) is not None:
         log.info("inbound_conexion_pausada", conversation_id=str(conversation.id), motivo=motivo)
-        await avisar_mensaje_en_conexion_pausada(conversation.tenant_id, conversation.meta_connection_id, motivo)
+        await bloquear(conversation, "connection_paused", status="silent")
+        await avisar_mensaje_en_conexion_pausada(conversation.tenant_id, cuenta, motivo)
         return
 
     if paused or conversation.status == "escalated":
+        motivo_bloqueo = "escalated_conversation" if conversation.status == "escalated" else "kill_switch"
+        await bloquear(conversation, motivo_bloqueo, status="silent")
         return
 
     # ---------------- escalamiento por keywords
     escalation_cfg = dict(app_settings.escalation_config or {}) if app_settings else {}
     keywords = list(escalation_cfg.get("keywords", []))
     if matches_escalation_keywords(effective_message, keywords or None):
+        await bloquear(conversation, "escalation_keyword", status="escalated")
         # Resolver el texto ANTES de escalar (auditor-multitenant): si
         # load_active_spec falla (ej. BD caída), no queremos dejar la
         # conversación ya marcada `escalated`/`bot_paused` sin haber podido
@@ -433,6 +448,7 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
     business_hours = escalation_cfg.get("business_hours")
     if business_hours and not within_business_hours(business_hours):
         out_msg = str(escalation_cfg.get("out_of_hours_message") or "").strip()
+        await bloquear(conversation, "out_of_hours", status="replied" if out_msg else "silent")
         if out_msg:
             text = out_msg
             for key, value in (
@@ -446,6 +462,7 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
                 # escala para que una persona retome (el claim de idempotencia ya
                 # se quemó, no habrá reintento).
                 await escalate(conversation.id, reason="send_failed", summary=text[:200])
+                marcar_escalado()
         return
 
     # ---------------- velocidad de respuesta
@@ -455,13 +472,7 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
 
     if delay_ms == 0:
         result = await process_conversation(conversation.id, effective_message)
-        if result is not None and result.text:
-            delivered = await send_to_conversation(
-                conversation.id, result.text, image_url=result.image_url
-            )
-            if not delivered and not result.escalated:
-                await escalate(conversation.id, reason="send_failed",
-                               summary=result.text[:200])
+        await entregar(conversation.id, result)
     else:
         await schedule_debounce(conversation.id, delay_ms, {"latest_message": effective_message})
 
@@ -571,19 +582,11 @@ async def _resolve_conversation(
             text("select pg_advisory_xact_lock(hashtext(:k))"),
             {"k": f"conversation:{tenant_id}:{customer.id}"},
         )
-        conversation = (
-            await session.execute(
-                select(Conversation)
-                .where(
-                    Conversation.tenant_id == tenant_id,
-                    Conversation.customer_id == customer.id,
-                    Conversation.status.in_(["open", "escalated"]),
-                    Conversation.deleted_at.is_(None),
-                )
-                .order_by(Conversation.started_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
+        # Conversación por (conexión, cliente) detrás de `AOS_CONNECTION_ROUTING` (ADR-0115).
+        por_conexion = ruteo_por_conexion()
+        conversation = await buscar_conversacion_abierta(
+            session, tenant_id, customer.id, connection, por_conexion=por_conexion
+        )
 
         is_new = conversation is None
         if conversation is None:
@@ -606,12 +609,12 @@ async def _resolve_conversation(
             # (o al revés), la conexión anterior queda obsoleta y `resolve_credentials`
             # prioriza `connection_id`: la respuesta salía por WhatsApp Web aunque el
             # cliente escribiera a Meta (visto en test, 2026-10-08). Sin ruta identificable
-            # (número de la plataforma) se conserva la que había.
-            nueva_conexion = connection.id if connection else None
-            if conversation.connection_id != nueva_conexion:
-                conversation.connection_id = nueva_conexion
-            if conversation.meta_connection_id != meta_connection_id:
-                conversation.meta_connection_id = meta_connection_id
+            # (número de la plataforma) se conserva la que había. Con el ruteo por conexión
+            # la conversación ya es de esta conexión y no se reescribe (ADR-0115 §6).
+            await actualizar_ruta(
+                session, conversation, connection.id if connection else None, meta_connection_id,
+                por_conexion=por_conexion,
+            )
 
     if is_new:
         await event_bus.emit(
@@ -625,12 +628,15 @@ _SERVICE_WINDOW_HOURS = 24
 
 async def _persist_inbound(
     conversation_id: uuid.UUID, fields: dict[str, str], effective_message: str
-) -> bool:
+) -> uuid.UUID | None:
+    """Guarda el inbound y devuelve su id (None si es un duplicado)."""
     media: list[dict[str, Any]] = json.loads(fields.get("media", "[]") or "[]")
+    message_id = uuid.uuid4()
     try:
         async with get_session() as session:
             session.add(
                 Message(
+                    id=message_id,
                     tenant_id=get_current_tenant_id(),
                     conversation_id=conversation_id,
                     direction="inbound",
@@ -649,7 +655,7 @@ async def _persist_inbound(
                 conversation = await session.get(Conversation, conversation_id)
                 if conversation is not None:
                     conversation.service_window_expires_at = utcnow() + timedelta(hours=_SERVICE_WINDOW_HOURS)
-        return True
+        return message_id
     except IntegrityError:
         log.info("inbound_duplicate_ignored", message_id=fields.get("external_message_id"))
-        return False
+        return None

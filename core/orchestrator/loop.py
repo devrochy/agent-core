@@ -27,6 +27,10 @@ from core.agents.spec import enabled_packs, load_active_spec
 from core.config import get_settings
 from core.db.models import AppSettings, AuditLog, Conversation, Customer, Message, UsageLedger
 from core.db.session import get_session
+from core.kernel.decisions import anotar_uso, bloquear, en_turno, enrutar, marcar_neutral
+from core.kernel.ingress import QUOTA_EXHAUSTED_REPLY as QUOTA_EXHAUSTED_REPLY
+from core.kernel.ingress import conversacion_bloqueada, politicas_del_turno
+from core.kernel.tarjeta import tarjeta_del_turno
 from core.llm import resolve_provider
 from core.llm.difficulty_router import (
     DIFFICULTY_SCORE_THRESHOLD,
@@ -72,14 +76,6 @@ log = get_logger(__name__)
 FALLBACK_REPLY = (
     "Disculpa, estoy teniendo un inconveniente técnico. "
     "Ya avisé a nuestro equipo para que te atienda una persona."
-)
-
-# Se agotó una cuota del período (mensajes o costo LLM). El texto real vive en
-# core/playbooks/respuestas.md (`## quota_exhausted`); esto es el fallback
-# determinístico si el playbook no está disponible (mismo patrón que FALLBACK_REPLY).
-QUOTA_EXHAUSTED_REPLY = (
-    "Por ahora no puedo seguir atendiendo esta conversación. "
-    "Un asesor humano puede continuar la atención."
 )
 
 # Respaldo del reintento por `persona.maxLength` si el playbook `respuestas` no trae
@@ -143,6 +139,7 @@ async def _write_usage_ledger(
 ) -> None:
     """Una fila append-only por turno. Best-effort: nunca interrumpe la respuesta."""
     try:
+        anotar_uso(usage.input_tokens, usage.output_tokens, usage.cost_usd)  # turn_outcomes (HU-AOS-10)
         async with get_session() as session:
             session.add(
                 UsageLedger(
@@ -172,6 +169,7 @@ async def _write_usage_ledger(
             span.end()
 
 
+@en_turno(anota_resultado=True)  # decisión y resultado del turno (HU-AOS-10)
 async def process_conversation(conversation_id: uuid.UUID, latest_message: str) -> TurnResult | None:
     settings = get_settings()
 
@@ -189,34 +187,16 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             )
         ).scalar_one_or_none()
 
-    if customer is None or conversation.bot_paused or conversation.status == "escalated":
+    if customer is None or await conversacion_bloqueada(conversation, customer):
         return None
 
     # ---------------- 0. AgentSpec del tenant (Sprint 2, ADR-0014)
     spec = await load_active_spec()
 
-    # Cuota de turno (ADR-0045): si el período agotó `mensajes` o
-    # `costo_llm_usd`, se corta el turno antes de gastar LLM. El bloqueo por
-    # clientes/conversaciones/audio/OCR ocurre en el consumer/webhook (acción).
-    tenant_id = get_current_tenant_id()
-    if tenant_id is not None:
-        from core.billing.enforcement import turn_quota_metric
-
-        blocked = await turn_quota_metric(tenant_id)
-        if blocked is not None:
-            log.warning(
-                "turn_quota_exceeded",
-                tenant_id=str(tenant_id),
-                metric=blocked,
-                conversation_id=str(conversation_id),
-            )
-            closure = await load_response(spec, "quota_exhausted") or QUOTA_EXHAUSTED_REPLY
-            return TurnResult(text=closure)
-
-    # Presupuesto agotado (ADR-0015): no se gasta más LLM en esta conversación
-    # hasta que un admin suba el presupuesto o lo resetee.
-    if conversation.state.get("budget_exhausted"):
-        return None
+    # Cuota del período (ADR-0045) y presupuesto agotado (ADR-0015): políticas del kernel.
+    bloqueo = await politicas_del_turno(conversation, spec)
+    if bloqueo is not None:
+        return TurnResult(text=bloqueo.texto) if bloqueo.texto is not None else None
 
     # ---------------- 1. Memoria y contexto
     history = await _load_history(conversation_id)
@@ -287,6 +267,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # Ids vigentes de la conversación (ADR-0130): el historial es solo texto y el modelo
     # no ve el `quote_id` que devolvió una tool en un turno anterior.
     referencias = await cargar_referencias(enabled, disabled_for_tenant, conversation_id, customer.id)
+    # Tarjeta de estado (ADR-0114, HU-AOS-04): "" salvo con `tenants.aos_procedures` encendida.
+    state_card = await tarjeta_del_turno(conversation_id)
 
     prompt_ctx = PromptContext(
         assistant_name=app_settings.assistant_name if app_settings else settings.app_name,
@@ -302,6 +284,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         recalled_memories=recalled,
         entity_profile=entity_memory.profile_to_prompt(profile),
         referencias=referencias,
+        state_card=state_card,
         # Zona del negocio para la fecha y hora actual del prompt (ADR-0091).
         timezone=(getattr(app_settings, "timezone", None) if app_settings else None) or DEFAULT_TIMEZONE,
     )
@@ -419,10 +402,12 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         if budget is not None:
             spent = await conversation_spent(conversation_id) + turn_cost
             if spent >= budget:
+                await bloquear(conversation, "budget")  # sin efecto si el turno ya se enrutó
                 await _mark_budget_exhausted(conversation_id)
                 closure = await load_response(spec, "budget_exhausted") or ""
                 await _write_usage_ledger(conversation_id, spec, usage, turn_span)
                 return TurnResult(text=closure) if closure else None
+        await enrutar(conversation)  # la decisión del turno, una vez, antes del primer LLM
         try:
             with tracer.start_as_current_span("llm_call") as llm_span:
                 response = await provider.generate(
@@ -611,6 +596,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                     motivos=motivos_verificador,
                 )
             if guardrail_fail_action == "neutral":
+                marcar_neutral()
                 # ADR-0092: no escala ni pausa el bot. Responde que va a
                 # verificar (más lo que el servidor ya confirmó en el turno),
                 # deja rastro y cuenta el turno como NO resuelto: el

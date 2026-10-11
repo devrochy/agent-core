@@ -64,6 +64,7 @@ class PromptContext:
     recalled_memories: list[str] = field(default_factory=list)  # Capa 3 (RAG)
     entity_profile: str = ""          # Capa 2 (perfil del cliente)
     referencias: list[str] = field(default_factory=list)  # ids vigentes de la conversación (ADR-0130)
+    state_card: str = ""              # tarjeta de estado (ADR-0114); "" con aos_procedures apagada
     timezone: str = DEFAULT_TIMEZONE  # zona del negocio (ADR-0091)
     now: datetime | None = None       # None = ahora; inyectable en tests
 
@@ -204,6 +205,9 @@ async def build_system_blocks(spec: AgentSpec, ctx: PromptContext) -> list[str]:
         # Ya saneadas por el core (`core/orchestrator/referencias.py`): solo datos.
         referencias = "\n".join(ctx.referencias)
         dynamic_parts.append(f"## Referencias vigentes de esta conversación\n{referencias}")
+    if ctx.state_card:
+        # Ya serializada y escapada por el kernel (`core/kernel/tarjeta.py`), justo antes de la fecha.
+        dynamic_parts.append(ctx.state_card)
     # Siempre la última parte: cambia cada minuto y no debe tocar el prefijo cacheado.
     dynamic_parts.append(_current_datetime_part(ctx))
     blocks.append("\n\n".join(dynamic_parts))
