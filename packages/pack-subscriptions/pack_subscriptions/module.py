@@ -53,7 +53,7 @@ __all__ = ["crear_suscripcion_para"]
 class SubscriptionsModule(BaseModule):
     id = PLUGIN_ID
     name = "Suscripciones"
-    version = "0.1.0"
+    version = "0.2.0"
     description = "Suscripción de cliente final activada por pago de un plan (ADR-0083)"
     display_name = "Suscripciones"
     category = "Cobros"
@@ -72,6 +72,11 @@ class SubscriptionsModule(BaseModule):
         host.register_guardrail("subs_completion_check", self._completion_guardrail, priority=6)
         subscription_registry.register(PLUGIN_ID, SubscriptionCapabilityImpl())
         host.subscribe("payment.confirmed", self._on_payment_confirmed)
+        # HU-AOS-08: procedimiento `cambiar_plan` y su resolver (solo los usa el motor, detrás de
+        # `tenants.aos_procedures`).
+        from pack_subscriptions.procedimientos import registrar
+
+        registrar(host, PLUGIN_ID)
 
     def on_deactivate(self) -> None:
         subscription_registry.unregister(PLUGIN_ID)

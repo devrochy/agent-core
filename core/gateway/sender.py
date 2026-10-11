@@ -167,6 +167,10 @@ async def resolve_credentials(
                 meta_connection_id=str(connection.meta_connection_id),
             )
             return "meta", {}
+        if connection.provider == "web":
+            # Chat web como conexión (ADR-0115 §4): sin proveedor externo. Sus credenciales son el
+            # secreto de Turnstile del widget, que el envío no necesita: no se descifra.
+            return "web", {}
         if connection and connection.credentials_encrypted:
             creds = get_secret_box().decrypt_json(connection.credentials_encrypted)
             return connection.provider, {str(k): str(v) for k, v in creds.items()}

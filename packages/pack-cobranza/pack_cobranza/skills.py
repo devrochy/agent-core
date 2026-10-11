@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import select
 
 from core.db.session import get_owned, get_session
+from core.kernel.oferta import sin_motor_activo, solo_con_motor_activo
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
@@ -194,6 +195,29 @@ class CobranzaSkill(BaseSkill):
                     "required": ["fecha", "valor"],
                 },
                 handler=self.registrar_promesa,
+                # Con el motor activo la promesa va por el procedimiento (HU-AOS-08).
+                connection_predicate=sin_motor_activo(),
+            ),
+            MCPTool(
+                # HU-AOS-08: solo la ofrece el motor de procedimientos (`promesa_de_pago`): ningún
+                # `flow.json` la nombra, así que el loop de siempre no la ve.
+                name="cob_registrar_promesa_saldo",
+                description=(
+                    "Registra la promesa del cliente de pagar su saldo en una fecha. Pasá la fecha "
+                    "(YYYY-MM-DD) y el saldo EXACTO que devolvió cob_consultar_saldo: el valor de la "
+                    "promesa es el saldo real del sistema y si no coincide no se registra. Pide la "
+                    "confirmación del cliente antes de ejecutarse."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "fecha": {"type": "string", "description": "Fecha prometida (YYYY-MM-DD)"},
+                        "saldo": {"type": "number", "description": "saldo de cob_consultar_saldo"},
+                    },
+                    "required": ["fecha", "saldo"],
+                },
+                handler=self.registrar_promesa_saldo,
+                connection_predicate=solo_con_motor_activo(),
             ),
             MCPTool(
                 name="cob_registrar_abono",
@@ -413,6 +437,72 @@ class CobranzaSkill(BaseSkill):
             session.add(promesa)
             await session.flush()
             return {"registrada": True, "promesa_id": str(promesa.id), "fecha": fecha.isoformat(), "valor": float(valor)}
+
+    async def registrar_promesa_saldo(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Promesa por el saldo REAL (HU-AOS-08): la fecha pasa las reglas del pack y el saldo que
+        confirmó el cliente se compara con el del servidor en la misma transacción. El valor del
+        modelo nunca se usa como monto. Todo camino sin efecto devuelve `error`."""
+        from pack_cobranza.procedimientos import error_de_fecha, mismo_saldo, reglas_del_prestamo
+
+        try:
+            fecha = date.fromisoformat(str(arguments.get("fecha") or "").strip())
+        except ValueError:
+            return {"error": "fecha inválida (usar YYYY-MM-DD)"}
+        async with get_session() as session:
+            cliente = await _cliente_de_customer(session, context.customer_id)
+            prestamo = await _prestamo_activo(session, cliente.id) if cliente is not None else None
+            if cliente is None or prestamo is None:
+                return {"error": "El cliente no tiene un préstamo vigente: no hay promesa que registrar."}
+            existente = (
+                await session.execute(
+                    select(Promesa).where(
+                        Promesa.tenant_id == get_current_tenant_id(),
+                        Promesa.idempotency_key == context.idempotency_key,
+                        # Solo la promesa de ESTE cliente y préstamo (auditor-multitenant).
+                        Promesa.cliente_id == cliente.id,
+                        Promesa.prestamo_id == prestamo.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existente is not None:
+                return {
+                    "registrada": True, "ya_existe": True, "promesa_id": str(existente.id),
+                    "fecha": existente.fecha_prometida.isoformat(), "saldo": float(existente.valor_prometido),
+                }
+            # Serializa las promesas del préstamo (el tope de pendientes es count-then-insert).
+            await session.refresh(prestamo, with_for_update=True)
+            saldo, _mora, _proxima = await _saldo_y_mora(session, prestamo)
+            if saldo <= 0:
+                return {"error": "El cliente no tiene saldo pendiente: no hay promesa que registrar."}
+            cartera = await get_owned(session, Cartera, prestamo.cartera_id)
+            moneda = cartera.moneda if cartera else "COP"
+            if not mismo_saldo(saldo, arguments.get("saldo"), moneda):
+                return {
+                    "error": "El saldo cambió desde que se consultó: vuelve a consultarlo y confírmalo de nuevo.",
+                    "saldo": float(saldo),
+                }
+            motivo = error_de_fecha(fecha, await reglas_del_prestamo(session, prestamo))
+            if motivo is not None:
+                return {"error": motivo}
+            promesa = Promesa(
+                tenant_id=get_current_tenant_id(),
+                prestamo_id=prestamo.id,
+                cliente_id=cliente.id,
+                fecha_prometida=fecha,
+                valor_prometido=saldo,
+                tipo="promesa",
+                creado_por="ia",
+                idempotency_key=context.idempotency_key,
+            )
+            session.add(promesa)
+            await session.flush()
+            return {
+                "registrada": True,
+                "promesa_id": str(promesa.id),
+                "fecha": fecha.isoformat(),
+                "saldo": float(saldo),
+                "_safe_append": f"Promesa registrada: {_money(saldo, moneda)} el {fecha.isoformat()}.",
+            }
 
     async def registrar_abono(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         try:

@@ -531,8 +531,16 @@ def candidatas_del_spec(spec: AgentSpec, catalogo: Catalogo) -> tuple[list[str],
     habilitados = enabled_packs(spec)
     candidatas = [nombre for nombre, info in catalogo.items() if info.owner in habilitados]
     candidatas += [t.name for t in tools_for_spec(spec) if t.name not in catalogo]
-    siempre = {nombre for nombre, info in catalogo.items() if info.owner == CORE_OWNER}
+    # Solo las `always_available`: una acción del core que ningún flujo nombra y que solo ofrece
+    # el motor (`SOLO_PROCEDIMIENTO`, HU-AOS-08) no entra en los bindings del General.
+    siempre = {nombre for nombre, info in catalogo.items() if info.owner == CORE_OWNER} - _solo_procedimiento()
     return candidatas, siempre
+
+
+def _solo_procedimiento() -> frozenset[str]:
+    from core.subscriptions.tools import SOLO_PROCEDIMIENTO
+
+    return SOLO_PROCEDIMIENTO
 
 
 async def _conexiones_conversacionales(tenant_id: uuid.UUID, avisos: list[str]) -> list[uuid.UUID]:

@@ -16,6 +16,7 @@ from core.orchestrator.loop import _connections_ok
 from core.subscriptions import subscription_registry
 
 NOMBRES = {"sub_consultar", "sub_link_pago", "sub_pausar", "sub_cancelar", "sub_cambiar_plan"}
+# Las del procedimiento `cambiar_plan` (HU-AOS-08) solo se ofrecen con el motor activo.
 
 
 class _Spec:

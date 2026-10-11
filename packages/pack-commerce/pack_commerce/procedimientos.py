@@ -20,7 +20,6 @@ from __future__ import annotations
 import re
 import unicodedata
 import uuid
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
@@ -38,7 +37,6 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 PLUGIN_ID = "pack_commerce"
-CARPETA = Path(__file__).resolve().parent.parent / "procedures"
 # Palabras que no distinguen un plan de otro ("quiero el plan premium").
 _RELLENO = frozenset({"plan", "planes", "el", "la", "de", "del", "quiero", "por", "favor", "con"})
 _MAX_OPCIONES = 6
@@ -47,9 +45,9 @@ _MAX_PLANES = 50
 
 def registrar(host: MCPHost) -> None:
     """Procedimientos, resolvers y resumen del pack (se llama en `on_activate`)."""
-    from core.kernel.procedures.archivos import leer_procedimientos
+    from core.kernel.procedures import de_pack
 
-    host.register_procedures(leer_procedimientos(CARPETA))
+    host.register_procedures(de_pack.cargar(PLUGIN_ID))
     host.register_resolver(f"{PLUGIN_ID}.variante_de_plan", validar=variante_de_plan)
     host.register_resolver(f"{PLUGIN_ID}.metodo_de_pago", validar=metodo_de_pago)
     host.register_resolver(f"{PLUGIN_ID}.tipo_de_negocio", validar=tipo_de_negocio)

@@ -4,7 +4,8 @@
 - `manifiesto_de_pack(module)`: el contenido de una versión de una habilidad del binario
   (`packages/pack-*`): sus acciones (nombre y scopes; el runtime usa el código del binario),
   sus playbooks (nombre, hash y texto), las secciones de su `flow.json` y sus procedimientos
-  publicados (`procedures/*.json`, HU-AOS-07, con el mismo lector que los registra); por ahora sin
+  publicados (`procedures/*.json`, HU-AOS-07, con el mismo cargador que los registra,
+  `core/kernel/procedures/de_pack.py`); por ahora sin
   consultas ni plantillas (HU-AOS-16). El texto es el JSON
   canónico (claves ordenadas, sin espacios, UTF-8) y `manifest_hash` su sha256.
 - `sync_packs(modules)`: registra cada versión con `register_pack_version()` (SECURITY DEFINER,
@@ -105,10 +106,10 @@ def _flujo(carpeta: Path | None) -> Any:
     return json.loads((carpeta / "flow.json").read_text(encoding="utf-8"))
 
 
-def _procedimientos(carpeta: Path | None) -> list[Any]:
-    from core.kernel.procedures.archivos import CARPETA, leer_crudos
+def _procedimientos(module: Any) -> list[Any]:
+    from core.kernel.procedures.de_pack import crudos
 
-    return leer_crudos(carpeta / CARPETA if carpeta is not None else None)
+    return crudos(str(module.id))
 
 
 def manifiesto_de_pack(module: Any) -> ManifiestoDePack:
@@ -120,7 +121,7 @@ def manifiesto_de_pack(module: Any) -> ManifiestoDePack:
             "tools": _tools(module),
             "playbooks": _playbooks(carpeta),
             "flow": _flujo(carpeta),
-            "procedures": _procedimientos(carpeta),
+            "procedures": _procedimientos(module),
             "consultas": [],
             "agent_templates": [],
         },

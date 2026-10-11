@@ -324,7 +324,7 @@ def _parse_custom_completion_claims(raw: str) -> dict[str, tuple[re.Pattern[str]
 class GoogleCalendarModule(BaseModule):
     id = PLUGIN_ID
     name = "Calendario y citas"
-    version = "2.1.0"
+    version = "2.2.0"
     description = "Agendamiento con agenda interna (sin Google) o Google Calendar (ADR-0084)"
     display_name = "Agenda"
     category = "Agenda"
@@ -366,6 +366,11 @@ class GoogleCalendarModule(BaseModule):
         from core.shared.events import ON_APPOINTMENT_CHANGED
 
         host.subscribe(ON_APPOINTMENT_CHANGED, _on_cita_cambiada)
+        # HU-AOS-08: procedimiento `agendar_cita` y sus resolvers (solo los usa el motor, detrás
+        # de `tenants.aos_procedures`).
+        from pack_calendar.procedimientos import registrar
+
+        registrar(host, PLUGIN_ID)
 
     async def contenido_cargado(self, tenant_id: uuid.UUID) -> ContenidoCargado:
         """Tipos de cita activos (los servicios que se agendan) para el paso «catálogo o

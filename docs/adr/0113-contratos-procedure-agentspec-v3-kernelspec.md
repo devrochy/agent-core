@@ -419,6 +419,62 @@ HU-AOS-09" de la adenda de HU-AOS-05. No cambia la forma de ningún contrato. La
     historial es solo texto: lo cubre un test de integración con modelo guionado, y queda como riesgo
     para HU-AOS-06 (comandos como tools).
 
+## Adenda de implementación (2026-10-11, HU-AOS-08): procedimientos de agenda, cambio de plan y promesa
+
+**Estado:** propuesta; requiere la aprobación del dueño antes del merge. La revisó el agente `arquitecto`
+antes de escribir código. No cambia la forma de ningún contrato ni el motor.
+
+- **Dónde viven:** cada pack trae sus procedimientos como JSON en `packages/pack-<x>/procedures/` (junto a
+  `flow.json` y `playbooks/`) y los registra en `on_activate` con `core/kernel/procedures/de_pack.cargar`
+  (resuelve la carpeta como la del `flow.json`, orden por nombre de archivo, solo valida la forma; un JSON
+  roto se loguea y se salta). El linter contra el binario corre en runtime (`registro.py`) y en CI
+  (`tests/test_procedimientos_de_packs.py`, que cubre todo `packages/pack-*/procedures/*.json`).
+- **Publicados:** `pack_calendar.agendar_cita` (el `agendar_demo` del Gherkin, con textos genéricos: una
+  demo es un tipo de cita; los textos propios de un negocio llegan como `overrides` con HU-AOS-13/14),
+  `pack_subscriptions.cambiar_plan` y `pack_cobranza.promesa_de_pago`.
+- **Acciones solo de procedimiento:** `sub_cotizar_cambio_plan`, `sub_aplicar_cambio_plan` (core, adenda de
+  ADR-0111) y `cob_registrar_promesa_saldo` (pack-cobranza). Ningún `flow.json` las nombra y no son
+  `always_available`: el loop legacy no las ofrece (siempre hay flujo: `core/flow.json`), no entran en los
+  bindings del General v3 y solo aparecen cuando el motor las pone en `stage.actions` de la tarea en foco.
+- **Convención del monto esperado:** el motor no ata los argumentos de una acción a los datos de la tarea.
+  En lo que mueve dinero o compromete un monto, la acción que compromete recibe el monto como argumento,
+  **con el mismo nombre que el campo fuente de la afirmación `amount`** (`monto_a_pagar`, `saldo`): así el
+  resumen del botón lo muestra como monto del servidor y el kernel ya rechaza el resumen si el argumento
+  difiere de la fuente del turno. El servidor recalcula y no hace nada si no coincide; el valor del modelo
+  nunca se usa como monto.
+- **Salida atada a un efecto real:** las etapas que comprometen salen con `exitWhen.action` **y** un dato
+  que fija esa acción (`event_id`, `cambio`, `promesa_id`), y las acciones nuevas devuelven `error` en todo
+  camino sin efecto (`create_calendar_event` devuelve `status: rejected` sin `error` en un choque).
+- **"Ofrecido" (agenda):** un horario es ofrecido si está entre los libres que el servidor ofrece ese día,
+  con la misma cuenta que `check_availability` (`_free_slots`, cuadrícula de `slot_minutes`, duración del
+  tipo de cita). El resolver no ve los eventos de la tarea ni recorre varios días (corre bajo el lock con 5
+  s): si el día no tiene cupo, remite a `find_next_available`.
+- **Reglas de cobranza en el resolver** (configuración del pack, nunca del prompt): fecha no pasada, a lo
+  sumo `max_dias_prorroga` días, no domingo si la cartera lo marca no laborable y no más de
+  `max_reprogramaciones` promesas pendientes. El monto es el saldo de `cob_consultar_saldo`.
+- **Afirmaciones compiladas: no se registran todavía.** `register_afirmaciones` no va detrás de la bandera:
+  compilar "promesa registrada" con respaldo en `cob_registrar_promesa_saldo` daría falsos positivos en
+  legacy. Límite: con el motor activo, las frases de los `claims` de estos procedimientos no las verifica
+  el verificador (sí los montos y links genéricos, y el `promesa_guardrail` acepta las dos tools). HU-AOS-07
+  debe registrarlas detrás de `aos_procedures`.
+- **Límites conocidos:**
+  - En la agenda, `create_calendar_event` recibe `start_datetime` del modelo: puede no ser el `horario`
+    validado. El botón muestra los argumentos exactos y, en modo interno, la tool revalida (ocupado, fuera de
+    horario, pasado); **en modo Google no revalida**. Atar argumentos ↔ datos es trabajo del motor (HU siguiente).
+  - **Oferta según el motor** (`core/kernel/oferta.py`, predicados de oferta de la tool): con
+    `aos_procedures` encendida, las tools de siempre que un procedimiento reemplaza (`sub_cambiar_plan`,
+    `cob_registrar_promesa_pago`) no se ofrecen, para que el modelo no se salte el botón; si la bandera no
+    se puede leer se ofrecen como siempre. Las solo de procedimiento no se ofrecen sin la bandera, aunque un
+    flujo del negocio las nombre; si la bandera no se puede leer, no se ofrecen. `create_calendar_event` no
+    se oculta: es la acción de la etapa `agendar` (el predicado filtra también las candidatas del motor) y
+    sirve fuera del procedimiento; con el motor activo y sin tarea en foco se sigue ofreciendo.
+  - Con el motor activo y una tarea en foco de OTRO procedimiento, las acciones solo de procedimiento no
+    se ofrecen (no están en la etapa). Sin foco, solo si un flujo del negocio las nombra; ahí el monto sigue
+    atado pero no hay botón. Negarlas en `antes_de_accion` sin foco es un cambio del motor que queda para
+    una HU siguiente.
+  - Costo: cada predicado lee la bandera del negocio (una consulta por tool reemplazada o nueva y por
+    turno, hasta cinco). Si se nota en la latencia, se cachea por turno.
+
 ## Adenda de implementación (2026-10-11, HU-AOS-07): procedimientos de comercio
 
 **Estado:** propuesta; requiere la aprobación del dueño antes del merge (fija convenciones nuevas del
@@ -426,12 +482,13 @@ motor). No cambia la forma de ningún contrato ni el esquema. La revisó el agen
 de escribir código. Todo rige solo con `tenants.aos_procedures`; con la bandera apagada el modelo ve
 lo mismo (el gate en replay pasa sin regrabar).
 
-- **Procedimientos como datos de la habilidad.** Viven en `packages/pack-*/procedures/*.json` (uno
-  por archivo, invariante 3). Un solo lector (`core/kernel/procedures/archivos.py`) sirve al registro
-  (`on_activate` → `register_procedures`; un archivo inválido se salta con un log) y al manifiesto de
-  la versión del pack (`provides.procedures`, ADR-0118 §1): lo que se congela en `pack_versions` es lo
-  que se registra. pack-commerce pasa a 2.1.0 y publica `pack_commerce.contratar_plan` y
-  `pack_commerce.tomar_pedido` (pedido con entrega).
+- **Procedimientos como datos de la habilidad.** Como en la adenda de HU-AOS-08: JSON en
+  `packages/pack-*/procedures/`, registrados con el cargador único `core/kernel/procedures/de_pack.py`.
+  El manifiesto de la versión del pack incluye ahora `provides.procedures` (ADR-0118 §1) con
+  `de_pack.crudos`, que lee los mismos archivos que registra `de_pack.cargar`: lo que se congela en
+  `pack_versions` es lo que se registra. Por eso cambian de contenido, y suben de versión, todos los
+  packs con procedimientos: pack-commerce 2.1.0 (publica `pack_commerce.contratar_plan` y
+  `pack_commerce.tomar_pedido`), pack-calendar 2.2.0, pack-subscriptions 0.2.0 y pack-cobranza 0.5.0.
 - **Corrige el ejemplo de §1:** `contratar_plan` no usa `generar_link_pago` de pack-payments (la
   retiró la adenda del 2026-10-10 de ADR-0087): el link sale de `confirmar_pago_pedido` de commerce,
   que llega a los pagos por `payment_registry`. No declara `requires`.
@@ -497,8 +554,14 @@ lo mismo (el gate en replay pasa sin regrabar).
     método de pago, y cambiarlos en `confirmar` o `pagar` antes del efecto no vuelve a pedir el sí
     (no cambian el monto). Los datos que llegan como contenido (media) no pasan por el congelado ni
     por la invalidación (ningún procedimiento de esta HU los usa).
+- **Monto (alineado con el "monto esperado" de HU-AOS-08):** `confirmar_cotizacion` recibe solo el
+  `quote_id`, y agregarle el monto cambiaría su schema con la bandera apagada. En commerce el monto que
+  el cliente confirma sale del resumen del pack (leído de la cotización) y queda atado por su huella;
+  la ligadura de argumentos también cubre los argumentos de monto de HU-AOS-08 cuando un dato de la
+  tarea lleva su nombre.
 - **Lo que pide el negocio, antes de confirmar.** `contratar_plan` no fija los datos del cliente:
-  `cotizar_plan` (tool nueva de commerce, que ninguna sección del flujo nombra y solo ofrece la etapa)
+  `cotizar_plan` (tool nueva de commerce, que ninguna sección del flujo nombra, con el predicado
+  `solo_con_motor_activo` de `core/kernel/oferta.py`: sin la bandera ni se ofrece ni se ejecuta)
   devuelve `pide_<campo>` desde `checkout_fields["plan"]` del negocio, y cada dato es `requiredWhen`
   de su `pide_<campo>`. Así un mismo procedimiento sirve a cualquier configuración (sin fork) y los
   datos se piden en `datos`, antes del sí. Los términos del alta (ADR-0125) siguen en `crear_pedido`,
@@ -522,6 +585,10 @@ lo mismo (el gate en replay pasa sin regrabar).
     escala la tarea de un procedimiento publicado al primer `action_succeeded` (la acción no declara
     efecto). Lo resuelve HU-AOS-16, junto con los procedimientos por agente: hasta entonces todo
     negocio con commerce ve `contratar_plan` y `tomar_pedido` como candidatos.
+  - Con el motor activo y sin tarea en foco, `confirmar_cotizacion` y `crear_pedido` se siguen
+    ofreciendo (son las acciones de las etapas; el predicado de oferta filtra también las candidatas
+    del motor): el modelo puede cerrar una venta por el camino de siempre, sin botón, con las guardas
+    de siempre de la tool. Negarlas sin foco es el mismo pendiente que anota HU-AOS-08.
   - Desde que hay procedimientos registrados, un negocio con `aos_runtime = v3` y el motor apagado
     escribe la sombra (`audit_log`, Redis).
   - Un proveedor que devuelva un QR en vez de URL no llena `link` (`format: uri`) y la tarea queda en

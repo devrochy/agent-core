@@ -498,9 +498,15 @@ async def test_con_la_bandera_apagada_no_se_ofrece_nada_nuevo(negocio, monkeypat
     await _banderas(tid, False)
     try:
         ctx = await _cliente(tid, pagos)
-        _, guion = await _turno(ctx, monkeypatch, "Quiero el premium", ["Claro, te cuento."])
+        _, guion = await _turno(ctx, monkeypatch, "Quiero el premium", [
+            ("cotizar_plan", {"variant_id": "PREMIUM-MES"}),  # inventada o inyectada: no se ejecuta
+            "Claro, te cuento.",
+        ])
     finally:
         await _banderas(tid, True)
+    assert "no está disponible" in guion.resultados[0]
+    assert await _filas(ctx, "select id from pack_commerce_quotes where tenant_id = :t and customer_id = :c",
+                        c=ctx.customer_id) == []
     ofrecidas = set(guion.tools[0])
     assert "generar_cotizacion" in ofrecidas and "crear_pedido" in ofrecidas
     assert "cotizar_plan" not in ofrecidas

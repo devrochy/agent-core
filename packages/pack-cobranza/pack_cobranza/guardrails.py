@@ -25,7 +25,8 @@ async def promesa_guardrail(
     response_text: str, tool_results: list[dict[str, Any]]
 ) -> GuardrailResult:
     ran = {r.get("_tool_name") for r in (tool_results or [])}
-    if "cob_registrar_promesa_pago" in ran:
+    # `cob_registrar_promesa_saldo` es la del procedimiento `promesa_de_pago` (HU-AOS-08).
+    if ran & {"cob_registrar_promesa_pago", "cob_registrar_promesa_saldo"}:
         return GuardrailResult(passed=True)
     if _PROMESA_CLAIM.search(response_text or ""):
         return GuardrailResult(

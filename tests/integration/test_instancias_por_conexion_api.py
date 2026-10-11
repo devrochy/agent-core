@@ -299,7 +299,7 @@ async def test_un_error_en_las_instancias_no_tumba_el_alta(app_client, monkeypat
 
         await session.execute(text("select 1 / 0"))
 
-    monkeypatch.setattr(instancias_mod, "_instancias_al_alta", _rompe)
+    monkeypatch.setattr(instancias_mod, "_inicializar_al_alta", _rompe)
     app_id, waba_id, phone_id = uniq("app"), uniq("waba"), uniq("ph")
     graph = GraphFalso(app_id=app_id, wabas={waba_id: [phone_id]})
     graph.numeros[phone_id] = {

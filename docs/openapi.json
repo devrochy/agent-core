@@ -8611,7 +8611,7 @@
           "admin · configuración"
         ],
         "summary": "Save Web Chat Settings",
-        "description": "Habilita/deshabilita el chat web, edita dominios permitidos, rota la clave\no cambia el secreto de Turnstile. Todo se guarda en\n`app_settings.web_chat_config` (JSONB, migración 0047).",
+        "description": "Habilita/deshabilita el chat web, edita dominios permitidos, rota la clave\no cambia el secreto de Turnstile. Se guarda en `app_settings.web_chat_config`\n(JSONB, migración 0047) y, en la misma transacción, en la conexión `webchat` del\nnegocio (ADR-0115 §4, doble escritura hasta el *contract*: `chat_web_conexion`). El\nprimer guardado crea la conexión con sus instancias de agentes si el negocio ya las\ntiene (HU-AOS-11 parte 2).",
         "operationId": "save_web_chat_settings_api_v1_admin_settings_web_chat_put",
         "parameters": [
           {

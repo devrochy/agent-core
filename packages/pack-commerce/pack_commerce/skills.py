@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import or_, select, text
 
 from core.db.session import get_owned, get_session
+from core.kernel.oferta import solo_con_motor_activo
 from core.mcp.types import BaseSkill, MCPTool, Referencia, ToolContext
 from core.memory import entity as entity_memory
 from core.provisioning.antiabuso import (
@@ -1153,8 +1154,8 @@ class OrderSkill(BaseSkill):
                 handler=self.generar_cotizacion,
             ),
             # Solo la ofrece el motor de procedimientos, en la etapa `cotizar` de
-            # `pack_commerce.contratar_plan` (HU-AOS-07): ninguna sección de flow.json la nombra,
-            # así que con las banderas apagadas no está entre las tools del turno.
+            # `pack_commerce.contratar_plan` (HU-AOS-07): ninguna sección de flow.json la nombra y
+            # su predicado la apaga sin `tenants.aos_procedures`.
             MCPTool(
                 name="cotizar_plan",
                 description=(
@@ -1170,6 +1171,9 @@ class OrderSkill(BaseSkill):
                     "required": ["variant_id"],
                 },
                 handler=self.cotizar_plan,
+                # Ni se ofrece ni se ejecuta sin el motor activo, aunque un flujo del negocio la
+                # nombre (`core/kernel/oferta.py`, HU-AOS-08).
+                connection_predicate=solo_con_motor_activo(),
             ),
             MCPTool(
                 name="aplicar_promocion",

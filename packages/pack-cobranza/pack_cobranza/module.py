@@ -40,7 +40,7 @@ PLUGIN_ID = "pack_cobranza"
 class CobranzaModule(BaseModule):
     id = PLUGIN_ID
     name = "Cobranza"
-    version = "0.3.0"
+    version = "0.5.0"
     description = "Carteras, clientes, préstamos y negociación de cobranza por WhatsApp"
     display_name = "Cobranza"
     category = "Cobros"
@@ -91,6 +91,11 @@ class CobranzaModule(BaseModule):
         from pack_cobranza.pagos import _on_payment_confirmed
 
         host.subscribe(ON_PAYMENT_CONFIRMED, _on_payment_confirmed)
+        # HU-AOS-08: procedimiento `promesa_de_pago` y su resolver (solo los usa el motor, detrás
+        # de `tenants.aos_procedures`).
+        from pack_cobranza.procedimientos import registrar
+
+        registrar(host, self.id)
 
     async def on_collaborator_role(self, tenant_id: Any, admin_id: Any, role_id: str) -> None:
         """Rol de pack asignado a un colaborador (ADR-0066): crea su perfil `Gestor`.

@@ -12,8 +12,9 @@ Regla del contrato: `charge_link` nunca crea un período futuro.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from sqlalchemy import and_, or_, select
@@ -324,6 +325,69 @@ async def _link_de_cargo(cargo: SubscriptionCharge, sub: Subscription, descripci
     return {"url": link.url, "referencia": link.reference}
 
 
+@dataclass(frozen=True)
+class EvaluacionCambio:
+    """Qué hace un cambio de plan (ADR-0111 §3): `inmediato`, `pendiente_pago` (cobra `monto`)
+    o `programado` (al próximo período)."""
+
+    cambio: str
+    monto: Decimal
+    desde_cero: bool
+
+
+def evaluar_cambio(sub: Subscription, *, variant_id: str, plan: PlanSnapshot, ahora: datetime) -> EvaluacionCambio:
+    """Las reglas del cambio de plan (ADR-0111 §3 y §6), sin efectos: las usan `change_plan`, la
+    cotización y el resolver del procedimiento, así los tres dicen lo mismo. Lanza
+    `SubscriptionError` con el código estable de cada rechazo."""
+    from pack_subscriptions.prorrateo import diferencia_prorrateada
+
+    nuevo = Decimal(str(plan.get("precio") or 0))
+    if sub.variante_id is not None and str(sub.variante_id) == str(variant_id):
+        raise SubscriptionError("El cliente ya tiene ese plan.", code="mismo_plan")
+    # Auditoría HU-SUB-07: sin cambios desde una pausada o vencida (el período no
+    # está vigente y la diferencia se calcularía mal); primero se reactiva.
+    if sub.estado not in ("activa", "trialing"):
+        raise SubscriptionError(
+            "Solo se puede cambiar de plan con la suscripción activa; primero hay que reactivarla.",
+            code="estado_no_permite_cambio",
+        )
+    actual = Decimal(sub.valor_periodo or 0)
+    desde_cero = actual == 0 or sub.estado == "trialing"
+    if nuevo == 0 and desde_cero:
+        raise SubscriptionError("Ya está en un plan sin costo.", code="plan_gratis")
+    # Precios de periodicidades distintas no se comparan (auditoría): solo desde un
+    # plan de $0, que arranca un período nuevo.
+    periodicidad_nueva = _periodicidad(plan.get("periodicidad"), sub.periodicidad)
+    if not desde_cero and periodicidad_nueva != sub.periodicidad:
+        raise SubscriptionError(
+            "El cambio entre periodicidades distintas (p. ej. mensual a anual) se hace con "
+            "una compra nueva al terminar el período.",
+            code="periodicidad_distinta",
+        )
+    if nuevo < actual:
+        return EvaluacionCambio("programado", Decimal("0"), desde_cero)
+    if desde_cero:
+        monto = nuevo
+    else:
+        inicio = sub.periodo_actual_inicio or ahora
+        fin = sub.proximo_cargo or sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla)
+        monto = diferencia_prorrateada(actual, nuevo, inicio, fin, ahora, sub.moneda)
+    if monto <= 0:
+        return EvaluacionCambio("inmediato", Decimal("0"), desde_cero)
+    return EvaluacionCambio("pendiente_pago", monto, desde_cero)
+
+
+def mismo_monto(calculado: Decimal, esperado: Decimal | float | str, moneda: str | None) -> bool:
+    """¿El monto confirmado es el del servidor? Con el redondeo de `prorrateo.py`: al peso en COP
+    y al centavo en las demás monedas."""
+    paso = Decimal("1") if (moneda or "COP").upper() == "COP" else Decimal("0.01")
+    try:
+        esperado_dec = Decimal(str(esperado)).quantize(paso, rounding=ROUND_HALF_UP)
+    except (ArithmeticError, ValueError):
+        return False
+    return esperado_dec == Decimal(calculado).quantize(paso, rounding=ROUND_HALF_UP)
+
+
 class SubscriptionCapabilityImpl:
     """Proveedor de suscripciones del contrato v1 (las 8 operaciones)."""
 
@@ -438,6 +502,7 @@ class SubscriptionCapabilityImpl:
         *,
         variant_id: str,
         plan: PlanSnapshot,
+        monto_esperado: Decimal | float | None = None,
     ) -> SubscriptionView:
         """Cambio de plan con el snapshot del CATÁLOGO (HU-SUB-07, ADR-0111).
 
@@ -445,52 +510,35 @@ class SubscriptionCapabilityImpl:
           venía de un plan de $0); el plan cambia al pagarlo (`_on_payment_confirmed`);
         - downgrade: `cambio_programado` para el próximo período, sin reembolso;
         - mismo precio: inmediato.
-        """
-        from pack_subscriptions.prorrateo import diferencia_prorrateada
 
+        `monto_esperado` (HU-AOS-08, adenda de ADR-0111): el monto que el cliente confirmó con
+        la cotización (`cotizar_cambio`). Se compara en la MISMA transacción y con el mismo
+        `ahora` que el cálculo; si no coincide no se hace nada (`monto_distinto`). Nunca se usa
+        como monto: el cargo sale siempre del cálculo del servidor.
+        """
         ahora = datetime.now(UTC)
-        nuevo = Decimal(str(plan.get("precio") or 0))
         destino = {"variante_id": str(variant_id), "plan": dict(plan)}
         async with get_session() as session:
             sub = await self._sub_vigente(session, subscription_id)
-            if sub.variante_id is not None and str(sub.variante_id) == str(variant_id):
-                raise SubscriptionError("El cliente ya tiene ese plan.", code="mismo_plan")
-            # Auditoría HU-SUB-07: sin cambios desde una pausada o vencida (el período no
-            # está vigente y la diferencia se calcularía mal); primero se reactiva.
-            if sub.estado not in ("activa", "trialing"):
+            # Dos cambios a la vez (dos canales) no dejan dos cargos pendientes: se serializan.
+            await session.refresh(sub, with_for_update=True)
+            evaluacion = evaluar_cambio(sub, variant_id=variant_id, plan=plan, ahora=ahora)
+            if monto_esperado is not None and not mismo_monto(evaluacion.monto, monto_esperado, sub.moneda):
                 raise SubscriptionError(
-                    "Solo se puede cambiar de plan con la suscripción activa; primero hay que reactivarla.",
-                    code="estado_no_permite_cambio",
+                    "El valor del cambio ya no es el que se cotizó: vuelve a cotizarlo y confírmalo de nuevo.",
+                    code="monto_distinto",
                 )
-            actual = Decimal(sub.valor_periodo or 0)
-            desde_cero = actual == 0 or sub.estado == "trialing"
-            if nuevo == 0 and desde_cero:
-                raise SubscriptionError("Ya está en un plan sin costo.", code="plan_gratis")
-            # Precios de periodicidades distintas no se comparan (auditoría): solo desde un
-            # plan de $0, que arranca un período nuevo.
-            periodicidad_nueva = _periodicidad(plan.get("periodicidad"), sub.periodicidad)
-            if not desde_cero and periodicidad_nueva != sub.periodicidad:
-                raise SubscriptionError(
-                    "El cambio entre periodicidades distintas (p. ej. mensual a anual) se hace con "
-                    "una compra nueva al terminar el período.",
-                    code="periodicidad_distinta",
-                )
-            if nuevo < actual:
+            if evaluacion.cambio == "programado":
                 await _anular_cambios_pendientes(session, sub)
                 sub.cambio_programado = {**destino, "desde": (sub.proximo_cargo or ahora).isoformat()}
                 await session.flush()
                 return {**_view(sub), "cambio": "programado"}
-            if desde_cero:
-                monto = nuevo
-            else:
-                inicio = sub.periodo_actual_inicio or ahora
-                fin = sub.proximo_cargo or sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla)
-                monto = diferencia_prorrateada(actual, nuevo, inicio, fin, ahora, sub.moneda)
-            if monto <= 0:
+            if evaluacion.cambio == "inmediato":
                 await _anular_cambios_pendientes(session, sub)
-                aplicar_plan(sub, {**destino, "desde_cero": desde_cero}, ahora)
+                aplicar_plan(sub, {**destino, "desde_cero": evaluacion.desde_cero}, ahora)
                 await session.flush()
                 return {**_view(sub), "cambio": "inmediato"}
+            monto = evaluacion.monto
             # Un cambio pendiente anterior a OTRO plan (u otro monto) se anula; al mismo se reusa.
             cargo = await _anular_cambios_pendientes(session, sub, salvo=(str(variant_id), monto))
             if cargo is None:
@@ -505,7 +553,7 @@ class SubscriptionCapabilityImpl:
                     # El período del cálculo: si al pagar ya es otro, el cambio no se aplica.
                     cambio_plan={
                         **destino,
-                        "desde_cero": desde_cero,
+                        "desde_cero": evaluacion.desde_cero,
                         "proximo_cargo": sub.proximo_cargo.isoformat() if sub.proximo_cargo else None,
                     },
                 )
@@ -518,6 +566,27 @@ class SubscriptionCapabilityImpl:
             "cambio": "pendiente_pago",
             "cargo_cambio": {"monto": float(monto), "link": link.get("url"), "referencia": link.get("referencia")},
         }
+
+    async def cotizar_cambio(
+        self, subscription_id: uuid.UUID, *, variant_id: str, plan: PlanSnapshot
+    ) -> dict[str, Any]:
+        """Operación opcional del proveedor (HU-AOS-08, adenda de ADR-0111): lo que haría
+        `change_plan` con este plan, sin efectos. Lanza los mismos `SubscriptionError`."""
+        ahora = datetime.now(UTC)
+        async with get_session() as session:
+            sub = await self._sub_vigente(session, subscription_id)
+            evaluacion = evaluar_cambio(sub, variant_id=variant_id, plan=plan, ahora=ahora)
+            desde = (sub.proximo_cargo or ahora).isoformat() if evaluacion.cambio == "programado" else None
+            return {
+                "plan_actual": sub.concepto,
+                "plan_nuevo": plan.get("nombre"),
+                "precio_nuevo": float(Decimal(str(plan.get("precio") or 0))),
+                "moneda": plan.get("moneda") or sub.moneda,
+                "periodicidad": _periodicidad(plan.get("periodicidad"), sub.periodicidad),
+                "cambio": evaluacion.cambio,
+                "monto_a_pagar": float(evaluacion.monto),
+                "desde": desde,
+            }
 
     async def charge_link(
         self, subscription_id: uuid.UUID, *, period: str = ""

@@ -1,0 +1,45 @@
+{
+  "contract": "procedure/1",
+  "id": "pack_subscriptions.cambiar_plan",
+  "version": "1.0.0",
+  "title": "Cambiar de plan",
+  "triggers": {
+    "description": "El cliente con una suscripción quiere subir o bajar a otro plan",
+    "examples": [
+      "quiero pasarme al plan premium",
+      "cámbiame al plan básico",
+      "quiero mejorar mi plan",
+      "cuánto me cuesta subir de plan"
+    ]
+  },
+  "slots": {
+    "plan_code": { "type": "string", "required": true, "resolver": "pack_subscriptions.plan_destino" },
+    "cambio": { "enum": ["inmediato", "pendiente_pago", "programado"], "setBy": "action:sub_aplicar_cambio_plan" },
+    "link_pago": { "type": "string", "format": "uri", "setBy": "action:sub_aplicar_cambio_plan" }
+  },
+  "stages": [
+    {
+      "id": "elegir_plan",
+      "goal": "Saber a qué plan del catálogo quiere cambiar el cliente",
+      "actions": ["sub_consultar"],
+      "exitWhen": { "slots": ["plan_code"] }
+    },
+    {
+      "id": "confirmar",
+      "goal": "Cotizar con el catálogo del servidor (precio y prorrateo) y aplicar el cambio con la confirmación del cliente",
+      "actions": ["sub_cotizar_cambio_plan", "sub_aplicar_cambio_plan"],
+      "confirmation": "interactive_button",
+      "risk": "high",
+      "exitWhen": { "action": "sub_aplicar_cambio_plan", "ok": true, "slots": ["cambio"] }
+    }
+  ],
+  "recovery": { "actionError": "explicar", "timeout": "relevo_humano" },
+  "claims": [
+    {
+      "kind": "amount",
+      "mustMatch": ["action:sub_cotizar_cambio_plan.monto_a_pagar", "action:sub_cotizar_cambio_plan.precio_nuevo"]
+    },
+    { "kind": "link", "mustMatch": ["slot:link_pago"] }
+  ],
+  "evals": ["cambio-plan-basic-a-premium", "cambio-plan-downgrade-programado", "cambio-plan-monto-distinto"]
+}

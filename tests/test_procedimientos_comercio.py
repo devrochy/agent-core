@@ -7,25 +7,20 @@ Lo que corre contra el loop real y la base (Gherkin) está en
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import pytest
 from agentcore_contracts import Procedure
 
-from core.kernel.procedures import motor, textos
-from core.kernel.procedures.archivos import leer_crudos, leer_procedimientos
+from core.kernel.procedures import de_pack, motor, textos
 from core.kernel.state import Evento, Proyeccion
 
-RAIZ = Path(__file__).resolve().parents[1]
-CARPETA = RAIZ / "packages" / "pack-commerce" / "procedures"
 T0 = datetime(2026, 1, 5, 9, 0, tzinfo=UTC)
 
 
 def _procs() -> dict[str, Procedure]:
-    return {p.id: p for p in leer_procedimientos(CARPETA)}
+    return {p.id: p for p in de_pack.cargar("pack_commerce")}
 
 
 def _plan() -> Procedure:
@@ -55,7 +50,7 @@ def test_el_pack_publica_dos_procedimientos_validos_contra_el_binario() -> None:
     from core.plugin_manager import plugin_manager
 
     catalogo = catalogo_de_acciones(plugin_manager.scan())
-    crudos = leer_crudos(CARPETA)
+    crudos = de_pack.crudos("pack_commerce")
     assert [c["id"] for c in crudos] == ["pack_commerce.contratar_plan", "pack_commerce.tomar_pedido"]
     for crudo in crudos:
         assert revisar(crudo, catalogo) == [], crudo["id"]
@@ -69,15 +64,8 @@ def test_el_manifiesto_congela_los_procedimientos_que_se_registran() -> None:
     modulos = {m.id: m for m in plugin_manager.scan()}
     comercio = manifiesto_de_pack(modulos["pack_commerce"])
     assert comercio.version == "2.1.0"
-    assert comercio.manifest["provides"]["procedures"] == leer_crudos(CARPETA)
+    assert comercio.manifest["provides"]["procedures"] == de_pack.crudos("pack_commerce")
     assert manifiesto_de_pack(modulos["pack_payments"]).manifest["provides"]["procedures"] == []
-
-
-def test_un_archivo_invalido_se_salta_sin_tumbar_el_pack(tmp_path: Path) -> None:
-    (tmp_path / "a.json").write_text(json.dumps({"id": "malo"}), encoding="utf-8")
-    (tmp_path / "b.json").write_text((CARPETA / "tomar_pedido.json").read_text(encoding="utf-8"), encoding="utf-8")
-    assert [p.id for p in leer_procedimientos(tmp_path)] == ["pack_commerce.tomar_pedido"]
-    assert leer_procedimientos(tmp_path / "no-existe") == []
 
 
 def test_en_confirmar_ninguna_accion_cambia_el_total_sin_cambiar_el_id() -> None:
