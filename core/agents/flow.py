@@ -404,7 +404,7 @@ def flow_to_procedures(
 
     - `catalogo` (acciones del binario, `core.kernel.procedures.catalogo_de_acciones`):
       si se pasa, `requires` declara las habilidades ajenas cuyas acciones usa la
-      sección por nombre (el flujo de commerce ofrece `generar_link_pago` de payments).
+      sección por nombre.
     - `confirmed_actions`: acciones con `requiresConfirmation` en el binding v2 del
       negocio. El procedimiento abierto las hereda en `confirmActions` de su etapa, que
       el linter acepta como confirmación (ADR-0113 §5).

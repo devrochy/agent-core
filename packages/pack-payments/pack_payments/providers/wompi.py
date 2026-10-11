@@ -1,9 +1,8 @@
 """Proveedor Wompi (pasarela de pagos, Colombia). Sin SDK.
 
-Salida a red (ADR-0052): el pack no usa `httpx` directo. La tool
-`generar_link_pago` le pasa al proveedor su `context.http`; el panel ("Probar y
-guardar") y la capacidad de pagos, que no tienen `ToolContext`, usan
-`plugin_http(NETWORK)` (`NETWORK` es la `network_allowlist` del módulo). Un fallo
+Salida a red (ADR-0052): el pack no usa `httpx` directo. El panel ("Probar y
+guardar") y la capacidad de pagos usan `plugin_http(NETWORK)` (`NETWORK` es la
+`network_allowlist` del módulo). Un fallo
 de red o un dominio fuera de la allowlist es `PluginError`, como antes la
 excepción de `httpx`; un 4xx/5xx de Wompi sigue siendo `PaymentRequestRejected`.
 
@@ -94,7 +93,7 @@ class WompiProvider(BasePaymentProvider):
         self.events_secret = events_secret
         self.base_url = SANDBOX_BASE_URL if sandbox else PRODUCTION_BASE_URL
         self.min_amount_cop = min_amount_cop(sandbox)
-        # `context.http` de la tool; sin él (panel, capacidad), el cliente del pack.
+        # Sin `http` explícito (panel, capacidad), el cliente del pack.
         self.http = http or plugin_http(NETWORK)
 
     async def create_payment_link(

@@ -15,8 +15,8 @@ from core.db.session import get_session
 from core.payments import PaymentCapabilityError, PaymentLink, PaymentMethod
 from core.shared.logger import get_logger
 from pack_payments.models import PaymentTransaction
+from pack_payments.proveedor import build_provider, tenant_config
 from pack_payments.providers.base import PaymentRequestRejected
-from pack_payments.skills import build_provider, tenant_config
 
 log = get_logger(__name__)
 

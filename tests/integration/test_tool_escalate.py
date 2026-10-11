@@ -171,10 +171,10 @@ async def test_tras_escalar_no_corren_las_demas_tools_del_lote(monkeypatch) -> N
     conversation_id = await _conversacion(t1)
     ejecutadas = _tools_falsas(
         monkeypatch,
-        {"crear_pedido": {"error": ERROR_MONTO, "escalate": True}, "generar_link_pago": {"status": "ok"}},
+        {"crear_pedido": {"error": ERROR_MONTO, "escalate": True}, "confirmar_pago_pedido": {"status": "ok"}},
     )
 
-    await _turno(t1, conversation_id, monkeypatch, _Proveedor(["crear_pedido", "generar_link_pago"]))
+    await _turno(t1, conversation_id, monkeypatch, _Proveedor(["crear_pedido", "confirmar_pago_pedido"]))
 
     assert ejecutadas == ["crear_pedido"]
 

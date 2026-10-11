@@ -2,7 +2,7 @@
   "contract": "procedure/1",
   "id": "pack_commerce.contratar_plan",
   "version": "1.0.0",
-  "requires": ["pack_payments"],
+  "requires": [],
   "title": "Contratar un plan",
   "triggers": {
     "description": "El cliente quiere comprar, contratar o pagar un plan",
@@ -15,7 +15,7 @@
     "correo": { "type": "string", "format": "email", "required": true, "dataClass": "pii", "confirm": true },
     "cotizacion_id": { "type": "string", "setBy": "action:generar_cotizacion" },
     "pedido_id": { "type": "string", "setBy": "action:crear_pedido" },
-    "link_pago": { "type": "string", "format": "uri", "setBy": "action:generar_link_pago" }
+    "link_pago": { "type": "string", "format": "uri", "setBy": "action:confirmar_pago_pedido" }
   },
   "stages": [
     { "id": "elegir_plan", "goal": "Que el cliente elija plan y periodicidad con precios reales",
@@ -26,7 +26,7 @@
       "actions": ["generar_cotizacion", "confirmar_cotizacion"], "confirmation": "interactive_button",
       "exitWhen": { "action": "confirmar_cotizacion", "ok": true } },
     { "id": "pagar", "goal": "Crear el pedido y enviar el link de pago", "risk": "high",
-      "actions": ["crear_pedido", "generar_link_pago"], "exitWhen": { "slots": ["pedido_id", "link_pago"] } }
+      "actions": ["crear_pedido", "confirmar_pago_pedido"], "exitWhen": { "slots": ["pedido_id", "link_pago"] } }
   ],
   "completion": { "events": ["pack_payments.pago_confirmado", "pack_commerce.pedido_free_confirmado"], "returnControl": true },
   "recovery": { "actionError": "explicar_y_reintentar_una_vez", "timeout": "relevo_humano" },

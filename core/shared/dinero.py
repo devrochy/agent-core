@@ -24,7 +24,7 @@ MONEY_KEYS = {
     # Montos que el SERVIDOR pone en las tools de suscripción (core): `monto` del cargo y
     # `valor_periodo` del plan. Sin ellos, mencionar el valor de una suscripción o la
     # diferencia de un cambio de plan se bloqueaba y escalaba (journeys HU-SUB-12/07).
-    # `amount` NO: `generar_link_pago` lo devuelve tal como lo pasó el LLM (auditoría).
+    # `amount` NO: lo devolvía `generar_link_pago` tal como lo pasó el LLM (retirada, ADR-0087).
     "monto", "valor_periodo",
 }
 
