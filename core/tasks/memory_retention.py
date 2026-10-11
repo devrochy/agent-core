@@ -1,7 +1,9 @@
-"""Retención de la memoria semántica (ADR-0053).
+"""Retención de la memoria (ADR-0053 §3, ADR-0114 §4).
 
-Purga lógicamente (`deleted_at`) los `memory_vectors` más viejos que
-`MEMORY_RETENTION_DAYS`. `0` (default) = desactivado: no borra nada.
+Purga lógicamente (`deleted_at`) los `memory_vectors` y los `memory_facts` más viejos que
+`MEMORY_RETENTION_DAYS` (los hechos, junto con sus claves en `customers.attributes`, por
+`core/memory/facts.py::vencer`, en lotes de clientes con su propia transacción). `0` (default)
+= desactivado: no borra nada.
 
 Enumera los tenants vivos (tabla de sistema, sin RLS) y entra a cada uno con su
 propio `tenant_scope`, porque `memory_vectors` sí tiene RLS.
@@ -25,13 +27,15 @@ async def purge_expired_memory() -> dict[str, int]:
     from sqlalchemy import select, update
 
     from core.db.models import MemoryVector
+    from core.memory import facts
 
     days = get_settings().memory_retention_days
     if days <= 0:
-        return {"purged": 0, "tenants": 0}
+        return {"purged": 0, "tenants": 0, "facts": 0}
 
     cutoff = datetime.now(UTC) - timedelta(days=days)
     purged = 0
+    facts_purged = 0
     tenants_touched = 0
 
     async with get_session() as session:
@@ -40,6 +44,7 @@ async def purge_expired_memory() -> dict[str, int]:
         ).scalars().all()
 
     for tenant_id in tenant_ids:
+        tocado = False
         async with tenant_scope(tenant_id):
             async with get_session() as session:
                 result = await session.execute(
@@ -53,8 +58,16 @@ async def purge_expired_memory() -> dict[str, int]:
                 )
                 if result.rowcount:
                     purged += result.rowcount
-                    tenants_touched += 1
+                    tocado = True
+            while True:
+                async with get_session() as session:
+                    n, clientes = await facts.vencer(session, tenant_id=tenant_id, antes_de=cutoff)
+                if not clientes:
+                    break
+                facts_purged += n
+                tocado = tocado or n > 0
+        tenants_touched += int(tocado)
 
-    if purged:
-        log.info("memory_retention_purged", purged=purged, tenants=tenants_touched)
-    return {"purged": purged, "tenants": tenants_touched}
+    if purged or facts_purged:
+        log.info("memory_retention_purged", purged=purged, facts=facts_purged, tenants=tenants_touched)
+    return {"purged": purged, "tenants": tenants_touched, "facts": facts_purged}

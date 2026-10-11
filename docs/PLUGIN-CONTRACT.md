@@ -201,7 +201,8 @@ class MiSkill(BaseSkill):
         )]
 
     async def mi_tool(self, arguments: dict, context: ToolContext) -> dict:
-        # context: conversation_id, customer_id, idempotency_key, channel
+        # context: conversation_id, customer_id, idempotency_key, channel, http,
+        # write_namespaces (writeNamespaces del agente v3; None en el runtime legacy)
         # ¡Inyectados por el core! El LLM NUNCA los ve ni los controla.
         return {"status": "ok"}
 ```
@@ -210,6 +211,10 @@ Reglas de las tools:
 - El handler es una **corrutina** que devuelve un dict JSON-serializable.
 - **Idempotencia obligatoria en escrituras**: usa `context.idempotency_key` con un
   UNIQUE en tu tabla (ver `crear_lead` en pack_commerce).
+- **Memoria del cliente**: el perfil (`customers.attributes`) es proyección de
+  `memory_facts` (ADR-0114). Se escribe con `core.memory.entity.upsert_attributes`
+  (o `upsert_attributes_en_sesion` dentro de tu transacción), nunca asignando
+  `attributes` directamente: un test estático lo vigila.
 - **El LLM propone, la tool decide**: valida SIEMPRE contra la BD, nunca confíes
   en los argumentos del modelo para datos críticos.
 - Errores: deja que las excepciones suban. El core convierte cualquier excepción en
