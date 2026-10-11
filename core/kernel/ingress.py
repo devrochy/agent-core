@@ -20,6 +20,7 @@ ni el debounce (contrato `kernel-sin-orquestador`).
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -149,19 +150,33 @@ async def politicas_de_entrada(
     escalation_cfg = dict(app_settings.escalation_config or {}) if app_settings else {}
     keywords = list(escalation_cfg.get("keywords", []))
     if matches_escalation_keywords(mensaje, keywords or None):
+        # La decisión va antes que cualquier efecto (el `turn_id` de la auditoría sale de ella).
+        # Después, primero el escalamiento: el reintento del consumer no lo rehace (el inbound ya
+        # está guardado y lo vería como duplicado), así que nada opcional puede ir antes.
         await bloquear(conversation, "escalation_keyword", status="escalated")
-        # Resolver el texto ANTES de escalar (auditor-multitenant): si
-        # load_active_spec falla (ej. BD caída), no queremos dejar la
-        # conversación ya marcada `escalated`/`bot_paused` sin haber podido
-        # avisarle nada al cliente -- y el claim de idempotencia de este
-        # evento ya se insertó en el consumer, así que un reintento
-        # posterior lo vería como duplicado y no volvería a intentar nada.
+        await _escalar_por_palabra(conversation.id, mensaje[:200])
+        # El texto es opcional: si el spec no carga (p. ej. BD caída), va el fijo.
         # `load_active_spec()` sin tenant explícito resuelve el de la
         # conversación en curso vía el `tenant_scope` que el consumer ya abrió.
-        spec = await load_active_spec()
-        escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
-        await escalate(conversation.id, reason="keyword", summary=mensaje[:200])
-        await send_to_conversation(conversation.id, escalation_text)
+        try:
+            spec = await load_active_spec()
+            escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
+        except Exception as exc:
+            log.warning(
+                "escalation_text_fallback",
+                conversation_id=str(conversation.id),
+                error=type(exc).__name__,
+            )
+            escalation_text = ESCALATION_REPLY
+        try:
+            await send_to_conversation(conversation.id, escalation_text)
+        except Exception as exc:
+            # Ya está escalada: una persona la retoma aunque no salga el aviso al cliente.
+            log.warning(
+                "escalation_reply_send_failed",
+                conversation_id=str(conversation.id),
+                error=type(exc).__name__,
+            )
         return True
 
     # ---------------- horario de atención (ADR-0051)
@@ -179,12 +194,79 @@ async def politicas_de_entrada(
                 ("{business_description}", app_settings.business_description if app_settings else ""),
             ):
                 texto = texto.replace(key, value or "")
-            delivered = await send_to_conversation(conversation.id, texto)
+            try:
+                delivered = await send_to_conversation(conversation.id, texto)
+            except Exception as exc:
+                log.warning(
+                    "out_of_hours_send_failed",
+                    conversation_id=str(conversation.id),
+                    error=type(exc).__name__,
+                )
+                delivered = False
             if not delivered:
-                # Mismo criterio que el camino inmediato: si el envío falla, se
-                # escala para que una persona retome (el claim de idempotencia ya
-                # se quemó, no habrá reintento).
+                # Mismo criterio que el camino inmediato: si el envío falla (devuelve False
+                # o lanza), se escala para que una persona retome (el inbound ya está
+                # guardado: el reintento del consumer no rehace el turno).
                 await escalate(conversation.id, reason="send_failed", summary=texto[:200])
                 marcar_escalado()
         return True
     return False
+
+
+# Pausa antes de reintentar el escalamiento: deja pasar un corte breve de la BD (failover, pool).
+_ESPERA_REINTENTO_ESCALAR_S = 0.5
+
+
+async def _escalar_por_palabra(conversation_id: Any, resumen: str) -> None:
+    """Escala con un reintento: un fallo pasajero de la BD no deja al cliente sin persona.
+    Si el reintento también falla, se avisa a los dueños por push (no pasa por la BD), el error
+    sube (turno `failed`, `escalation_keyword_failed` en el log) y no se le responde nada al
+    cliente: no se promete una persona que no viene."""
+    # Import en la llamada: los tests parchean `core.orchestrator.escalation.escalate`.
+    from core.orchestrator.escalation import escalate
+
+    try:
+        await escalate(conversation_id, reason="keyword", summary=resumen)
+        return
+    except Exception as exc:
+        # Solo el tipo: el texto de un error de SQLAlchemy trae sus parámetros (el mensaje
+        # del cliente va en `summary`).
+        log.warning(
+            "escalation_keyword_retry", conversation_id=str(conversation_id), error=type(exc).__name__
+        )
+    await asyncio.sleep(_ESPERA_REINTENTO_ESCALAR_S)
+    try:
+        await escalate(conversation_id, reason="keyword", summary=resumen)
+    except Exception as exc:
+        log.error(
+            "escalation_keyword_failed", conversation_id=str(conversation_id), error=type(exc).__name__
+        )
+        _avisar_escalamiento_fallido(conversation_id)
+        raise
+
+
+def _avisar_escalamiento_fallido(conversation_id: Any) -> None:
+    """Push best-effort a los dueños: el reintento del consumer no rehace el turno, así que sin
+    este aviso nadie se entera de que un cliente pidió una persona."""
+    try:
+        from core.tasks.push_tasks import TITULO_ESCALACION, notify_owners_push
+
+        tenant = get_current_tenant_id()
+        if tenant is not None:
+            notify_owners_push.delay(
+                str(tenant),
+                TITULO_ESCALACION,
+                "Un cliente pidió atención humana y no se pudo escalar la conversación. "
+                "Atiéndela desde el panel.",
+                {
+                    "type": "core.escalation",
+                    "conversationId": str(conversation_id),
+                    "reason": "escalation_failed",
+                },
+            )
+    except Exception as exc:
+        log.warning(
+            "push_escalacion_fallida_fallo",
+            conversation_id=str(conversation_id),
+            error=type(exc).__name__,
+        )
