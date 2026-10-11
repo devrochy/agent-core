@@ -483,7 +483,8 @@ print("DLQ:", r.xlen("agent_core:inbound:dlq"))
 PY
 ```
 
-Seguir solo con `pendientes=0`, `sin_leer=0` (o el último entregado igual al último del stream),
+Seguir solo con `pendientes=0`, `sin_leer=0` (o el último entregado igual al último del stream;
+`sin_leer` puede salir `None` porque el consumer borra con `XDEL` lo que ackea),
 `debounce: 0` y la cola de Celery en `0 | 0`. Redis no se migra: lo que queda en él es caché o
 memoria de trabajo, que se rearma desde Postgres.
 

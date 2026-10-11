@@ -203,7 +203,7 @@ Columnas A/W/B: la variable va en la API, el worker o el beat. Fuente de verdad 
 | `META_SERVICE_MESSAGE_ALLOWANCE_HYPOTHESIS_ENABLED` | ✓ | ✓ | ✓ | heredada (por defecto `false`) |
 | `WAWEB_ENABLED` | ✓ | ✓ | ✓ | fijo: `false` (P-08; no hay recurso conector) |
 | `DEMO_MODE` | ✓ | ✓ | ✓ | fijo: `false` |
-| `DEBOUNCE_MODE`, `MAX_AGENT_ITERATIONS`, `MESSAGE_SPLIT_STYLE`, `MAX_CONCURRENT_TURNS`, `MAX_TURNS_PER_TENANT`, `INBOUND_RECLAIM_IDLE_MS`, `CLAIM_STALE_SECONDS`, `TURN_TIMEOUT_S`, `TURN_QUEUE_TIMEOUT_S`, `TURN_SLOW_WARN_S` | ✓ | ✓ | ✓ | heredada, o los valores por defecto de `core/config.py` |
+| `DEBOUNCE_MODE`, `MAX_AGENT_ITERATIONS`, `MESSAGE_SPLIT_STYLE`, `MAX_CONCURRENT_TURNS`, `MAX_TURNS_PER_TENANT`, `INBOUND_RECLAIM_IDLE_MS`, `CLAIM_STALE_SECONDS`, `INBOUND_STREAM_RETENTION_HOURS`, `INBOUND_DLQ_RETENTION_HOURS`, `TURN_TIMEOUT_S`, `TURN_QUEUE_TIMEOUT_S`, `TURN_SLOW_WARN_S` | ✓ | ✓ | ✓ | heredada, o los valores por defecto de `core/config.py` |
 | `BILLING_PROVIDER`, `BILLING_CURRENCY`, `BILLING_TRIAL_DAYS` | ✓ | ✓ | ✓ | heredada |
 | `WOMPI_BILLING_PUBLIC_KEY`, `WOMPI_BILLING_PRIVATE_KEY`, `WOMPI_BILLING_EVENTS_SECRET` | ✓ | ✓ | ✓ | proveedor: llaves de producción del comercio de la plataforma |
 | `WOMPI_BILLING_SANDBOX` | ✓ | ✓ | ✓ | `false` solo con llaves de producción |
