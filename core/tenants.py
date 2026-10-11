@@ -200,7 +200,7 @@ async def _limpiar_redis(
       `wm:{conv}` legado, `debounce:payload|messages:{conv}` y el miembro de `debounce:pending`;
     - `SCAN MATCH *<tenant_id>*` y, de lo que encuentra, solo las claves con el UUID en
       posición de tenant (primer UUID del nombre): `wm:{tid}:*`, `turns:{tid}`,
-      `inbound:{tid}:*`, `alta:terminos:{tid}:*`, `waweb:*:{tid}`, `meta:paused:{tid}:*`,
+      `inbound:{tid}:*`, `debounce:inbound:{tid}:*`, `alta:terminos:{tid}:*`, `waweb:*:{tid}`, `meta:paused:{tid}:*`,
       `outbound:claim:{tid}:*`... y las familias que se agreguen con la misma convención.
 
     Con `reintento=True`, si alguna clave lleva el UUID en otra posición (el operador pegó

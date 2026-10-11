@@ -678,6 +678,7 @@ async def _estado_redis(tid: uuid.UUID) -> tuple[uuid.UUID, dict[str, str]]:
         "inbound": f"inbound:{tid}:meta:wamid-{tid.hex[:6]}",
         "debounce_payload": f"debounce:payload:{conv_id}",
         "debounce_messages": f"debounce:messages:{conv_id}",
+        "debounce_inbound": f"debounce:inbound:{tid}:{conv_id}",
         "terminos": f"alta:terminos:{tid}:{conv_id}:v1",
         "waweb_outbox": f"waweb:outbox:{tid}",
     }
@@ -685,6 +686,7 @@ async def _estado_redis(tid: uuid.UUID) -> tuple[uuid.UUID, dict[str, str]]:
     await r.set(claves["inbound"], "1")
     await r.set(claves["debounce_payload"], json.dumps({"tenant_id": str(tid)}))
     await r.rpush(claves["debounce_messages"], "hola")
+    await r.rpush(claves["debounce_inbound"], str(uuid.uuid4()))
     await r.set(claves["terminos"], "2026-10-10T00:00:00+00:00")
     await r.rpush(claves["waweb_outbox"], json.dumps({"to": "57300", "text": "hola"}))
     await r.zadd("debounce:pending", {str(conv_id): 9_999_999_999_999})
@@ -825,7 +827,7 @@ async def test_purge_con_redis_caido_tras_commit_registra_y_se_reintenta(monkeyp
     # Reintento: con mayúsculas también (se normaliza el UUID).
     borradas = await purge_tenant_redis(str(tid).upper())
     assert borradas >= 1
-    for nombre in ("wm_tenant", "turns", "inbound", "terminos", "waweb_outbox"):
+    for nombre in ("wm_tenant", "turns", "inbound", "debounce_inbound", "terminos", "waweb_outbox"):
         assert await r.exists(claves[nombre]) == 0, f"{nombre} quedó tras el reintento"
     assert await purge_tenant_redis(tid) == 0, "idempotente"
 
