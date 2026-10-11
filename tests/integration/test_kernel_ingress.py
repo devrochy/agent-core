@@ -307,3 +307,131 @@ async def test_turno_diferido_con_la_conexion_pausada_no_avisa_otra_vez(monkeypa
     turnos = await _turnos(tid, conv)
     assert turnos[0][0] == "routed" and turnos[1:] == [("blocked", "connection_paused", "silent")]
     assert avisos == [], "al disparar no se avisa: ya se avisó al entrar el mensaje"
+
+
+# ---------------------------------------------------------------- fallos al escalar o responder
+async def _conversacion_de(tid: uuid.UUID, cliente: str) -> uuid.UUID:
+    filas = await _filas(
+        tid,
+        "SELECT cv.id FROM conversations cv JOIN customers c ON c.id = cv.customer_id "
+        "WHERE c.external_id = :e",
+        e=cliente,
+    )
+    return filas[0]["id"]
+
+
+async def test_palabra_de_escalamiento_escala_aunque_no_cargue_el_spec(monkeypatch) -> None:
+    """Antes, si `load_active_spec` fallaba quedaba la decisión `escalated` sin escalamiento:
+    el reintento del consumer ve el inbound como duplicado y no lo rehace. Ahora escala y
+    responde el texto fijo."""
+    from core.orchestrator.escalation import ESCALATION_REPLY
+
+    tid = await _negocio(escalation_config={"keywords": ["quiero un humano"]})
+    _inmediato(monkeypatch)
+    _sin_llm(monkeypatch)
+
+    async def _spec_caido(*_a: Any, **_k: Any) -> Any:
+        raise ConnectionError("BD caída")
+
+    monkeypatch.setattr("core.agents.spec.load_active_spec", _spec_caido)
+
+    conv = await _entrar(tid, uniq("wa-kws"), "quiero un humano")
+
+    assert await _turnos(tid, conv) == [("escalated", "escalation_keyword", "escalated")]
+    assert await _escalaciones(tid, conv) == ["keyword"]
+    assert await _salientes(tid, conv) == [ESCALATION_REPLY]
+
+
+async def test_palabra_de_escalamiento_reintenta_si_escalar_falla_una_vez(monkeypatch) -> None:
+    from core.orchestrator import escalation
+
+    tid = await _negocio(escalation_config={"keywords": ["quiero un humano"]})
+    _inmediato(monkeypatch)
+    _sin_llm(monkeypatch)
+    original = escalation.escalate
+    intentos: list[str] = []
+
+    async def _falla_una_vez(*a: Any, **k: Any) -> None:
+        intentos.append(k.get("reason", ""))
+        if len(intentos) == 1:
+            raise ConnectionError("conexión cortada")
+        await original(*a, **k)
+
+    monkeypatch.setattr("core.orchestrator.escalation.escalate", _falla_una_vez)
+    monkeypatch.setattr("core.kernel.ingress._ESPERA_REINTENTO_ESCALAR_S", 0)
+
+    conv = await _entrar(tid, uniq("wa-kwr"), "quiero un humano")
+
+    assert intentos == ["keyword", "keyword"]
+    assert await _turnos(tid, conv) == [("escalated", "escalation_keyword", "escalated")]
+    assert await _escalaciones(tid, conv) == ["keyword"]
+    assert len(await _salientes(tid, conv)) == 1
+
+
+async def test_palabra_de_escalamiento_sin_poder_escalar_falla_a_la_vista(monkeypatch) -> None:
+    """Si escalar falla también al reintentar, el turno queda `failed` (decisión y resultado
+    coherentes), el error sube al consumer, se avisa a los dueños (el reintento del consumer no
+    rehace el turno) y no se le promete una persona al cliente."""
+    tid = await _negocio(escalation_config={"keywords": ["quiero un humano"]})
+    _inmediato(monkeypatch)
+    _sin_llm(monkeypatch)
+    avisos = _avisos(monkeypatch)
+    monkeypatch.setattr("core.kernel.ingress._ESPERA_REINTENTO_ESCALAR_S", 0)
+
+    async def _no_escala(*_a: Any, **_k: Any) -> None:
+        raise ConnectionError("BD caída")
+
+    monkeypatch.setattr("core.orchestrator.escalation.escalate", _no_escala)
+    cliente = uniq("wa-kwf")
+
+    with pytest.raises(ConnectionError):
+        await _entrar(tid, cliente, "quiero un humano")
+
+    conv = await _conversacion_de(tid, cliente)
+    assert await _turnos(tid, conv) == [("escalated", "escalation_keyword", "failed")]
+    assert await _salientes(tid, conv) == []
+    assert avisos == ["Nueva escalación"]
+
+
+async def test_palabra_de_escalamiento_con_envio_que_lanza_queda_escalada(monkeypatch) -> None:
+    """Si el aviso al cliente no sale después de escalar, el turno sigue `escalated`: la
+    persona igual llega."""
+    tid = await _negocio(escalation_config={"keywords": ["quiero un humano"]})
+    _inmediato(monkeypatch)
+    _sin_llm(monkeypatch)
+
+    async def _revienta(*_a: Any, **_k: Any) -> bool:
+        raise ConnectionError("broker caído")
+
+    monkeypatch.setattr("core.gateway.sender.send_to_conversation", _revienta)
+
+    conv = await _entrar(tid, uniq("wa-kwe"), "quiero un humano")
+
+    assert await _turnos(tid, conv) == [("escalated", "escalation_keyword", "escalated")]
+    assert await _escalaciones(tid, conv) == ["keyword"]
+    assert await _filas(
+        tid, "SELECT status, bot_paused FROM conversations WHERE id = :c", c=conv
+    ) == [{"status": "escalated", "bot_paused": True}]
+
+
+async def test_fuera_de_horario_con_envio_que_lanza_escala(monkeypatch) -> None:
+    """Antes solo se escalaba si el envío devolvía False; si lanzaba, el cliente se quedaba
+    sin respuesta y sin persona."""
+    tid = await _negocio(
+        escalation_config={"business_hours": SIEMPRE_CERRADO, "out_of_hours_message": "Cerrado"}
+    )
+    _inmediato(monkeypatch)
+    _sin_llm(monkeypatch)
+
+    async def _revienta(*_a: Any, **_k: Any) -> bool:
+        raise ConnectionError("broker caído")
+
+    monkeypatch.setattr("core.gateway.sender.send_to_conversation", _revienta)
+
+    conv = await _entrar(tid, uniq("wa-horl"), "hola")
+
+    assert await _turnos(tid, conv) == [("blocked", "out_of_hours", "escalated")]
+    assert await _escalaciones(tid, conv) == ["send_failed"]
+    assert await _filas(
+        tid, "SELECT status, bot_paused FROM conversations WHERE id = :c", c=conv
+    ) == [{"status": "escalated", "bot_paused": True}]
