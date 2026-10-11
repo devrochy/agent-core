@@ -8,13 +8,20 @@ Requiere Redis real (y Postgres por los fixtures del conftest); no usa el LLM.
 
 from __future__ import annotations
 
+import os
 import time
 import uuid
 
 import pytest
 from conftest import PHONE, TEST_ALPHA_ID
 
-pytestmark = pytest.mark.asyncio(loop_scope="session")
+pytestmark = [
+    pytest.mark.asyncio(loop_scope="session"),
+    pytest.mark.skipif(
+        os.environ.get("AGENT_CORE_INTEGRATION") != "1",
+        reason="tests de integración: requiere AGENT_CORE_INTEGRATION=1 y el stack local",
+    ),
+]
 
 HORA_MS = 3_600_000
 
