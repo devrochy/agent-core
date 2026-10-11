@@ -21,7 +21,7 @@ from core.api.forms import coerce_schema_values, redact_secrets
 from core.db.models import PhoneNumber, utcnow
 from core.db.session import get_owned, get_session
 from core.gateway.connection_types import setup_url
-from core.gateway.connections import list_connections
+from core.gateway.connections import administrada_aparte, list_connections
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_slug
 
@@ -235,7 +235,7 @@ async def connection_manual_form(
         async with get_session() as session:
             existing = await get_owned(session, ChannelConnection, connection_id, principal.tenant_id)
         # La conexión canónica de un número de Meta no es manual (ADR-0115): no se edita acá.
-        if existing is None or existing.meta_connection_id is not None:
+        if existing is None or administrada_aparte(existing):
             raise ApiError.not_found("Conexión no encontrada.")
         values = credentials_of(existing)
 
@@ -272,7 +272,7 @@ async def save_manual_connection(
             existing = await get_owned(
                 session, ChannelConnection, payload.connection_id, principal.tenant_id
             )
-        if existing is None or existing.meta_connection_id is not None:
+        if existing is None or administrada_aparte(existing):
             raise ApiError.not_found("Conexión no encontrada.")
         previous = credentials_of(existing)
 
@@ -314,7 +314,7 @@ async def connection_action(
         existing = await get_owned(session, ChannelConnection, connection_id, principal.tenant_id)
     # La conexión canónica de un número de Meta no es manual (ADR-0115): sus acciones son las
     # de su cuenta (`/admin/meta/connections`).
-    if existing is None or existing.meta_connection_id is not None:
+    if existing is None or administrada_aparte(existing):
         raise ApiError.not_found("Conexión no encontrada.")
 
     from core.gateway.connections import delete_connection, set_active, set_primary

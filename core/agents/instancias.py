@@ -20,6 +20,8 @@ en otra corrida del backfill ni en el build de releases.
 - `instancias_al_alta(session, tid, phone_number_id, cuenta)`: el enganche de los cinco caminos
   de alta de un número (ADR-0122 §6, `meta_asset_claims.numero_para_conexion`), en la misma
   transacción, dentro de un SAVEPOINT: un error se registra y el alta sigue.
+- `instancias_de_conexion_nueva(session, tid, connection_id)`: el mismo enganche para las
+  conexiones sin cuenta de Meta (manual, `waweb`, chat web; HU-AOS-11 parte 2).
 - Escrituras de la API: `agregar_instancia`, `actualizar_instancia`, `quitar_instancia`.
   Serializadas por conexión (bloqueo de su fila). El Coordinador lo gestiona el sistema: la API
   no lo agrega, no lo deshabilita ni lo quita. El agente por defecto está siempre habilitado y
@@ -401,9 +403,35 @@ async def instancias_al_alta(
     defecto es el de la prueba. `PermissionError` (scope ajeno) se propaga: falla cerrado.
     HU-AOS-14 engancha aquí el clon de la release, con el mapa de `clonar_instancias`. Ojo: los
     triggers diferidos (`connection_requires_core`) se evalúan al COMMIT, fuera del savepoint."""
+
+    async def _paso() -> None:
+        _exigir_scope(tenant_id)
+        conexion = await conexion_del_numero(session, tenant_id, phone_number_id, cuenta)
+        if conexion is not None:
+            await _inicializar_al_alta(session, tenant_id, conexion, instancias_de)
+
+    await _sin_tumbar_el_alta(session, tenant_id, _paso, meta_connection_id=str(cuenta))
+
+
+async def instancias_de_conexion_nueva(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID) -> None:
+    """Instancias de una conexión sin cuenta de Meta recién creada o revivida: manual
+    (`connections.save_connection`), `waweb` (`waweb.connections`) o chat web
+    (`chat_web_conexion`, al guardar el widget). La misma frontera que `instancias_al_alta`:
+    en la sesión del alta, dentro de un SAVEPOINT, un error se registra y el alta sigue; no hace
+    nada si el negocio todavía no tiene su Coordinador y su General, ni si la conexión ya tiene
+    Coordinador. El llamador solo la invoca para tipos conversacionales."""
+
+    async def _paso() -> None:
+        _exigir_scope(tenant_id)
+        await _inicializar_al_alta(session, tenant_id, connection_id, None)
+
+    await _sin_tumbar_el_alta(session, tenant_id, _paso, connection_id=str(connection_id))
+
+
+async def _sin_tumbar_el_alta(session: Any, tenant_id: uuid.UUID, paso: Any, **contexto: str) -> None:
     try:
         async with session.begin_nested():
-            await _instancias_al_alta(session, tenant_id, phone_number_id, cuenta, instancias_de)
+            await paso()
     except PermissionError:
         raise  # fuera del tenant_scope del negocio: bug de aislamiento, falla cerrado
     except Exception as exc:  # frontera deliberada: el alta no depende del Agent OS
@@ -414,20 +442,16 @@ async def instancias_al_alta(
         (log.error if aislamiento else log.warning)(
             "instancias_alta_fallo",
             tenant_id=str(tenant_id),
-            meta_connection_id=str(cuenta),
             error=type(exc).__name__,
             sqlstate=sqlstate,
             exc_info=aislamiento,
+            **contexto,
         )
 
 
-async def _instancias_al_alta(
-    session: Any, tenant_id: uuid.UUID, phone_number_id: str, cuenta: uuid.UUID, instancias_de: uuid.UUID | None
+async def _inicializar_al_alta(
+    session: Any, tenant_id: uuid.UUID, conexion: uuid.UUID, instancias_de: uuid.UUID | None
 ) -> None:
-    _exigir_scope(tenant_id)
-    conexion = await conexion_del_numero(session, tenant_id, phone_number_id, cuenta)
-    if conexion is None:
-        return
     agentes = await agentes_base(session, tenant_id)
     if KEY_COORDINADOR not in agentes or KEY_GENERAL not in agentes:
         return

@@ -88,3 +88,49 @@ La conexión es `channel_connections`, y hay una conversación abierta por (cone
   fila canónica nueva no pausa la entrada, aunque el envío igual falla cerrado.
 - **Pendiente para HU-AOS-13/14:** la promoción (ADR-0127 §3) ya crea la conexión del número real por el
   alta BYOK; clonar sus instancias y su release queda como criterio de esas HU.
+
+## Adenda (2026-10-11, HU-AOS-11 segunda parte: chat web como conexión)
+
+- **Chat web = conexión `webchat`** (§4). Tipo nuevo del catálogo (`comunicacion`, canal y
+  proveedor `web`, conversacional), fuera del selector de alta del panel (`en_selector = False`): el
+  widget se sigue configurando en Configuración → Chat web; la consola de conexiones es HU-AOS-23.
+  `external_id` es la clave pública (192 bits, generada por el servidor), `active` es "habilitado",
+  los dominios van en `channel_connections.settings` y el secreto de Turnstile, cifrado, en
+  `credentials_encrypted`. No es una conexión manual (`connections.ES_MANUAL` la excluye y
+  `administrada_aparte` da 404 en la API y el panel de conexiones): no se lista, no cuenta para la
+  primacía ni para el gating de ADR-0072, y `save_connection` la rechaza.
+- **Resolvedor `webchat_resolve`** (migración 0086, `SECURITY DEFINER`, `search_path` fijo, `EXECUTE`
+  solo para `app_runtime`): igualdad sobre el predicado de `uq_cc_webchat_key`, sin `LIMIT`, solo
+  conexiones vivas. Devuelve solo lo no secreto (negocio, conexión, habilitada, dominios y si hay
+  secreto); el secreto lo lee el POST del visitante con RLS dentro del negocio y falla cerrado (403) si
+  no puede leerlo o descifrarlo; el guardado y el backfill lo vuelven a cifrar desde `app_settings`.
+- **Expand con doble escritura.** Hasta el *contract*, `app_settings.web_chat_config` sigue siendo la
+  fuente de verdad y se escribe como antes (secreto incluido, para que una vuelta atrás del código
+  siga sirviendo el widget); cada guardado sincroniza la conexión en la misma transacción. El GET del
+  panel sigue leyendo `app_settings`. El endpoint público cae a `web_chat_resolve` (0048) solo si el
+  negocio nunca tuvo una conexión `webchat`: un widget borrado no revive por la configuración vieja.
+  Tras volver atrás el código y desplegar de nuevo, `backfill-conexiones` resincroniza la conexión
+  desde `app_settings` (una rotación hecha mientras tanto solo estaba ahí).
+- **Rotar la clave** actualiza `external_id` de la misma conexión: la clave vieja sale del índice
+  global. Con 192 bits aleatorios no se reutiliza en la práctica, pero no queda "reservada" como dice
+  la HU al pie de la letra; las conversaciones y las instancias siguen siendo de la conexión.
+- **Polling por conexión:** el GET de mensajes filtra por la conexión del widget (y las conversaciones
+  sin conexión de antes del backfill, del mismo visitante y negocio): con dos widgets un visitante no
+  ve la conversación del otro.
+- **Huérfanas web con la bandera encendida:** como con Meta, la abierta sin conexión del visitante
+  (canal `web`) se adopta en la conexión del widget en vez de abrir otra.
+- **Backfill:** `backfill-conexiones` convierte el widget de `app_settings` en conexión y liga las
+  conversaciones `web` sin conexión cuando el negocio tiene exactamente un widget; las abiertas que
+  quedan sin ligar suman a `abiertas_sin_ligar`. `backfill-agentes` bloquea un negocio con el widget
+  guardado sin su conexión (antes era solo un aviso).
+- **Altas posteriores** (pendientes de HU-AOS-13 parte 2): `sync_phone_numbers` da de alta los números
+  nuevos con `numero_para_conexion` (conexión canónica e instancias en la misma transacción, con el
+  candado por número). Las conexiones sin cuenta de Meta que nacen o reviven después del backfill
+  (widget, manual, `waweb`) reciben Coordinador y General con `instancias_de_conexion_nueva`, la misma
+  frontera de SAVEPOINT que las de Meta, si el negocio ya tiene sus agentes. Decisión revisable.
+- **Fuera de esta parte (revisable):** la release al alta de una conexión nueva sigue siendo del CLI
+  `backfill-releases` (adenda de ADR-0117: que esos caminos construyan la release solos es de
+  HU-AOS-15). El *contract* (deduplicar sin cerrar, índice único, `connection_id` NOT NULL, `VALIDATE`,
+  quitar `mover_conversaciones` y `web_chat_resolve`, borrar el secreto en claro de `app_settings`)
+  no entra: exige la bandera encendida y 2 releases estables, y deduplicar y crear el índice van en el
+  mismo cambio. La verificación con la BYOK real de test antes de encender la bandera sigue abierta.

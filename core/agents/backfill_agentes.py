@@ -7,8 +7,9 @@ Por negocio, en su `tenant_scope` (ADR-0112 §1, ADR-0113 §5):
    haría trabajo que cambia las conexiones conversacionales (tipos por poner, conexiones
    canónicas por crear o por religar), el negocio queda **bloqueado** con el comando a correr y
    no se escribe nada en él. Un choque con una conexión manual del mismo número es solo un
-   aviso: la conexión manual recibe sus instancias. El chat web todavía no es una conexión
-   (tipo `webchat`, segunda parte de HU-AOS-11): un negocio con el widget activo se informa.
+   aviso: la conexión manual recibe sus instancias. El chat web es la conexión `webchat`
+   (segunda parte de HU-AOS-11): un widget guardado sin su conexión también bloquea, así la
+   conexión del widget recibe su Coordinador y su General como las demás.
 2. **El AgentSpec v2 activo, como lo ve el loop,** sin escribir en `agent_specs`
    (`leer_spec_activo`), salvo la siembra que haría el loop: un negocio sin spec activo recibe
    el default, igual que en su primer turno (`ensure_default_spec`).
@@ -77,7 +78,6 @@ from core.agents.tolerante import (
 from core.db.models import (
     AgentRecord,
     AgentVersionRecord,
-    AppSettings,
     ChannelConnection,
     ConnectionTypeRecord,
     Tenant,
@@ -136,8 +136,6 @@ class ReporteAgentes:
     conexiones_sin_agentes: int = 0
     # Choques con una conexión manual del mismo número (la manual recibe sus instancias).
     choques_manuales: int = 0
-    # Negocios con el chat web activo: todavía no es una conexión (tipo `webchat`, HU-AOS-11).
-    chat_web_sin_conexion: int = 0
     avisos: int = 0
 
     @property
@@ -160,6 +158,8 @@ async def _pendiente_de_conexiones(tenant_id: uuid.UUID, reporte: ReporteAgentes
         pendientes.append(f"{previo.numeros['creada']} número(s) vivo(s) sin conexión canónica")
     if previo.numeros.get("religada"):
         pendientes.append(f"{previo.numeros['religada']} conexión(es) canónica(s) por religar a su cuenta")
+    if previo.chat_web.get("creada"):
+        pendientes.append("el chat web sin su conexión")
     if not pendientes:
         return None
     return f"{' y '.join(pendientes)}: corre primero `{COMANDO_CONEXIONES}`"
@@ -180,18 +180,6 @@ async def _spec_activo(tenant_id: uuid.UUID, reporte: ReporteAgentes) -> tuple[u
     if leido is None:
         raise ErrorDelNegocio("no se pudo sembrar el AgentSpec por defecto")
     return leido
-
-
-async def _chat_web_activo(tenant_id: uuid.UUID) -> bool:
-    async with get_session() as session:
-        config = (
-            await session.execute(
-                select(AppSettings.web_chat_config).where(
-                    AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None)
-                )
-            )
-        ).scalar_one_or_none()
-    return bool(isinstance(config, dict) and config.get("enabled"))
 
 
 def _dominios_por_secreto(conversion: ConversionV3) -> dict[str, set[str]]:
@@ -409,9 +397,6 @@ async def _migrar_negocio(
         reporte.bloqueados.append(Problema(tenant_id, pendiente))
         return None
     avisos: list[str] = []
-    if await _chat_web_activo(tenant_id):
-        reporte.chat_web_sin_conexion += 1
-        avisos.append("el chat web está activo pero todavía no es una conexión: queda sin Coordinador")
     spec_id, spec = await _spec_activo(tenant_id, reporte)
     version_v2 = spec.version[:40]
     try:
@@ -516,7 +501,6 @@ async def backfill_agentes(
         conexiones_conversacionales=reporte.conexiones_conversacionales,
         conexiones_sin_agentes=reporte.conexiones_sin_agentes,
         choques_manuales=reporte.choques_manuales,
-        chat_web_sin_conexion=reporte.chat_web_sin_conexion,
     )
     return reporte
 

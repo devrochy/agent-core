@@ -12,7 +12,6 @@ Habilidades y Avanzado del panel SSR quedan pendientes.
 
 from __future__ import annotations
 
-import secrets
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -47,8 +46,10 @@ from core.llm.difficulty_router import (
 from core.llm.prompt_builder import DEFAULT_TIMEZONE
 from core.mcp.host import mcp_host
 from core.orchestrator.verificador import TOGGLES, normalizar_desactivados
+from core.shared.logger import get_logger
 
 router = APIRouter(prefix="/admin/settings", tags=["admin · configuración"])
+log = get_logger(__name__)
 
 # Qué hace el loop al agotar los reintentos del guardrail (ADR-0092).
 GuardrailFailAction = Literal["escalate", "neutral"]
@@ -471,31 +472,50 @@ async def save_web_chat_settings(
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> WebChatSettings:
     """Habilita/deshabilita el chat web, edita dominios permitidos, rota la clave
-    o cambia el secreto de Turnstile. Todo se guarda en
-    `app_settings.web_chat_config` (JSONB, migración 0047)."""
-    async with get_session() as session:
-        app_settings = (
-            await session.execute(
-                select(AppSettings).where(
-                    AppSettings.tenant_id == principal.tenant_id,
-                    AppSettings.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-        if app_settings is None:
-            app_settings = AppSettings(tenant_id=principal.tenant_id)
-            session.add(app_settings)
+    o cambia el secreto de Turnstile. Se guarda en `app_settings.web_chat_config`
+    (JSONB, migración 0047) y, en la misma transacción, en la conexión `webchat` del
+    negocio (ADR-0115 §4, doble escritura hasta el *contract*: `chat_web_conexion`). El
+    primer guardado crea la conexión con sus instancias de agentes si el negocio ya las
+    tiene (HU-AOS-11 parte 2)."""
+    from sqlalchemy.exc import IntegrityError
 
-        config = dict(app_settings.web_chat_config or {})
-        if not config.get("key"):
-            config["key"] = secrets.token_urlsafe(24)
-        elif payload.rotate_key:
-            config["key"] = secrets.token_urlsafe(24)
-        config["enabled"] = bool(payload.enabled)
-        config["allowed_origins"] = _normalize_origins(payload.allowed_origins)
-        if payload.turnstile_secret is not None:
-            config["turnstile_secret"] = payload.turnstile_secret.strip()
-        app_settings.web_chat_config = config
+    from core.agents.instancias import instancias_de_conexion_nueva
+    from core.gateway import chat_web_conexion
+
+    try:
+        async with get_session() as session:
+            app_settings = (
+                await session.execute(
+                    select(AppSettings).where(
+                        AppSettings.tenant_id == principal.tenant_id,
+                        AppSettings.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if app_settings is None:
+                app_settings = AppSettings(tenant_id=principal.tenant_id)
+                session.add(app_settings)
+
+            config = dict(app_settings.web_chat_config or {})
+            if not config.get("key") or payload.rotate_key:
+                # La genera el servidor (nunca el panel): aleatoria, 192 bits (ADR-0115 §4).
+                config["key"] = chat_web_conexion.nueva_clave()
+            config["enabled"] = bool(payload.enabled)
+            config["allowed_origins"] = _normalize_origins(payload.allowed_origins)
+            if payload.turnstile_secret is not None:
+                config["turnstile_secret"] = payload.turnstile_secret.strip()
+            app_settings.web_chat_config = config
+
+            resultado, conexion = await chat_web_conexion.sincronizar(
+                session, principal.tenant_id, chat_web_conexion.desde_app_settings(config)
+            )
+            if resultado == "creada" and conexion is not None:
+                await instancias_de_conexion_nueva(session, principal.tenant_id, conexion)
+    except IntegrityError:
+        # Sin el detalle de la BD: un choque de la clave (índice global `uq_cc_webchat_key`)
+        # no debe delatar que otro negocio la usa. Con 192 bits aleatorios no pasa en la práctica.
+        log.warning("web_chat_guardado_conflicto", tenant_id=str(principal.tenant_id))
+        raise ApiError(409, "conflict", "No se pudo guardar el chat web: vuelve a intentarlo.") from None
 
     refreshed = await _load_app_settings(principal.tenant_id)
     return _web_chat_out(refreshed)

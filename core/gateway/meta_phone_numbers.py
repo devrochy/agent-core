@@ -118,6 +118,7 @@ async def sync_phone_numbers(
         waba_row = (
             await session.execute(
                 select(WabaAccount).where(
+                    WabaAccount.tenant_id == tenant_id,
                     WabaAccount.waba_id == waba_id,
                     WabaAccount.connection_id == connection_id,
                     WabaAccount.deleted_at.is_(None),
@@ -139,24 +140,34 @@ async def sync_phone_numbers(
                 )
             ).scalar_one_or_none()
             if existing is None:
-                from core.gateway.meta_asset_claims import claimed_elsewhere
+                from sqlalchemy import text
 
+                from core.gateway.meta_asset_claims import claimed_elsewhere, numero_para_conexion
+
+                # El mismo candado por número que `claim_assets` y el backfill: un alta
+                # concurrente del mismo número espera.
+                await session.execute(
+                    text("select pg_advisory_xact_lock(hashtext(:k))"), {"k": f"meta_asset:phone:{phone_number_id}"}
+                )
                 # Otro negocio ya lo tiene (fila heredada): no se guarda, o el número
                 # quedaría con dos dueños (ADR-0095). Los demás números siguen.
                 if await claimed_elsewhere(
                     session, tenant_id, phone_number_id=phone_number_id, source="sync_phone_numbers"
                 ):
                     continue
-                session.add(
-                    PhoneNumber(
-                        tenant_id=tenant_id, connection_id=connection_id, waba_account_id=waba_account_id,
-                        phone_number_id=phone_number_id, display_phone_number=item.get("display_phone_number"),
-                        verified_name=item.get("verified_name"), quality_rating=item.get("quality_rating"),
-                        code_verification_status=item.get("code_verification_status"),
-                        name_status=item.get("name_status"), platform_type=item.get("platform_type"),
-                        messaging_limit_tier=item.get("messaging_limit_tier"), raw=item,
-                    )
+                # Alta como las demás (ADR-0115 §6): la fila del número, su conexión canónica y
+                # sus instancias si el negocio ya tiene agentes, en esta misma transacción.
+                nuevo, _ = await numero_para_conexion(
+                    session, tenant_id, connection_id, phone_number_id, waba_account_id=waba_account_id
                 )
+                nuevo.display_phone_number = item.get("display_phone_number")
+                nuevo.verified_name = item.get("verified_name")
+                nuevo.quality_rating = item.get("quality_rating")
+                nuevo.code_verification_status = item.get("code_verification_status")
+                nuevo.name_status = item.get("name_status")
+                nuevo.platform_type = item.get("platform_type")
+                nuevo.messaging_limit_tier = item.get("messaging_limit_tier")
+                nuevo.raw = item
             else:
                 if existing.deleted_at is not None:
                     # El negocio lo tuvo en una conexión eliminada: vuelve con esta (ADR-0122),
@@ -207,7 +218,13 @@ async def add_phone_number(
 
     async with get_session() as session:
         waba_row = (
-            await session.execute(select(WabaAccount).where(WabaAccount.waba_id == waba_id, WabaAccount.connection_id == connection_id))
+            await session.execute(
+                select(WabaAccount).where(
+                    WabaAccount.tenant_id == tenant_id,
+                    WabaAccount.waba_id == waba_id,
+                    WabaAccount.connection_id == connection_id,
+                )
+            )
         ).scalar_one_or_none()
         from core.gateway.meta_asset_claims import (
             CLAIMED_MESSAGE,

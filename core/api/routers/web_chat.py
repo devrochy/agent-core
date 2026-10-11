@@ -25,7 +25,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 
 from core.db.models import Conversation, Customer, Message
 from core.db.session import get_session
@@ -125,14 +125,39 @@ async def _verify_turnstile(token: str, secret: str, ip: str | None) -> bool:
 
 
 async def _resolve_by_key(key: str) -> tuple[uuid.UUID, dict[str, Any]] | None:
-    """Resuelve (tenant_id, web_chat_config) por la clave pública del widget.
+    """Resuelve (tenant_id, config) por la clave pública del widget.
 
-    `app_settings` tiene RLS forzada: la ruta pública no tiene tenant fijado, así
-    que se usa la función `SECURITY DEFINER` `web_chat_resolve(text)` (migración
-    0048), que devuelve solo esta fila y no permite enumerar.
+    `channel_connections` y `app_settings` tienen RLS forzada y la ruta pública no tiene tenant
+    fijado: se resuelve con funciones `SECURITY DEFINER` que no permiten enumerar.
+
+    1. La conexión `webchat` (ADR-0115 §4): `webchat_resolve(text)` (0086) devuelve solo lo no
+       secreto (negocio, conexión, habilitada, dominios y si hay secreto de Turnstile). `config`
+       lleva `connection_id` y `turnstile` (bool); el secreto lo lee el POST con RLS
+       (`_secreto_turnstile`).
+    2. Si el negocio nunca tuvo una conexión `webchat` (antes del backfill), `web_chat_resolve`
+       (0048) sobre `app_settings`, como antes; `config` trae ahí el secreto. Se retira en el
+       *contract*.
     """
     if not key or len(key) > 128:
         return None
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                text(
+                    "select tenant_id, connection_id, active, allowed_origins, has_secret from webchat_resolve(:k)"
+                ),
+                {"k": key},
+            )
+        ).first()
+    if fila is not None:
+        origenes = fila[3]
+        return fila[0], {
+            "enabled": bool(fila[2]),
+            "allowed_origins": [str(o) for o in origenes if o] if isinstance(origenes, list) else [],
+            "turnstile": bool(fila[4]),
+            "connection_id": fila[1],
+        }
+
     async with get_session() as session:
         row = (
             await session.execute(
@@ -141,7 +166,35 @@ async def _resolve_by_key(key: str) -> tuple[uuid.UUID, dict[str, Any]] | None:
         ).first()
     if row is None:
         return None
-    return row[0], dict(row[1] or {})
+    tenant_id, config = row[0], dict(row[1] or {})
+    from core.gateway import chat_web_conexion
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            if await chat_web_conexion.tiene_alguna(session, tenant_id):
+                # El negocio ya tiene (o tuvo) su conexión: la clave de `app_settings` que no está
+                # en ella es vieja (o el widget se borró) y no revive.
+                return None
+    return tenant_id, config
+
+
+async def _secreto_turnstile(tenant_id: uuid.UUID, config: dict[str, Any]) -> str:
+    """El secreto de Turnstile: el de `app_settings` (camino anterior) o, si el widget es una
+    conexión con secreto, el suyo, descifrado dentro del `tenant_scope` del negocio."""
+    legacy = _norm(config.get("turnstile_secret"))
+    connection_id = config.get("connection_id")
+    if legacy or connection_id is None or not config.get("turnstile"):
+        return legacy
+    from core.gateway import chat_web_conexion
+
+    try:
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                return await chat_web_conexion.secreto_turnstile(session, tenant_id, connection_id)
+    except Exception:  # p. ej. el secreto no se descifra (rotación de la clave maestra)
+        # Sin detalle: el llamador responde 403 (falla cerrado).
+        log.error("web_chat_secreto_ilegible", connection_id=str(connection_id))
+        return ""
 
 
 @router.get("/{key}/config")
@@ -157,7 +210,7 @@ async def web_chat_config(key: str) -> JSONResponse:
         {
             "enabled": True,
             "allowed_origins": list(config.get("allowed_origins", [])),
-            "turnstile": bool(config.get("turnstile_secret")),
+            "turnstile": bool(config.get("turnstile") or config.get("turnstile_secret")),
         }
     )
 
@@ -196,7 +249,10 @@ async def post_message(key: str, request: Request) -> JSONResponse:
     if not content or len(content) > 2000 or not visitor_id or len(visitor_id) > 128:
         return JSONResponse({"error": "validation"}, status_code=422)
 
-    turnstile_secret = _norm(config.get("turnstile_secret"))
+    turnstile_secret = await _secreto_turnstile(tenant_id, config)
+    if config.get("turnstile") and not turnstile_secret:
+        # La conexión dice tener secreto pero no se pudo leer: falla cerrado.
+        return JSONResponse({"error": "turnstile_failed"}, status_code=403)
     if turnstile_secret and not await _verify_turnstile(turnstile_token, turnstile_secret, ip):
         return JSONResponse({"error": "turnstile_failed"}, status_code=403)
 
@@ -246,23 +302,30 @@ async def get_messages(key: str, request: Request, after: str | None = None) -> 
         except ValueError:
             return JSONResponse({"error": "invalid_cursor"}, status_code=400)
 
+    query = (
+        select(Conversation)
+        .join(Customer, Customer.id == Conversation.customer_id)
+        .where(
+            Conversation.tenant_id == tenant_id,
+            Conversation.channel == "web",
+            Conversation.deleted_at.is_(None),
+            Customer.channel == "web",
+            Customer.external_id == f"web:{visitor_id}",
+            Customer.deleted_at.is_(None),
+        )
+    )
+    connection_id = config.get("connection_id")
+    if connection_id is not None:
+        # Chat web como conexión (ADR-0115 §4): solo la conversación de ESTE widget. Con dos
+        # widgets del negocio, un visitante no ve la del otro. Las de antes del backfill (sin
+        # conexión) son del mismo visitante y negocio: se siguen viendo.
+        query = query.where(
+            or_(Conversation.connection_id == connection_id, Conversation.connection_id.is_(None))
+        )
     async with tenant_scope(tenant_id):
         async with get_session() as session:
             conversation = (
-                await session.execute(
-                    select(Conversation)
-                    .join(Customer, Customer.id == Conversation.customer_id)
-                    .where(
-                        Conversation.tenant_id == tenant_id,
-                        Conversation.channel == "web",
-                        Conversation.deleted_at.is_(None),
-                        Customer.channel == "web",
-                        Customer.external_id == f"web:{visitor_id}",
-                        Customer.deleted_at.is_(None),
-                    )
-                    .order_by(Conversation.started_at.desc())
-                    .limit(1)
-                )
+                await session.execute(query.order_by(Conversation.started_at.desc()).limit(1))
             ).scalar_one_or_none()
             if conversation is None:
                 return JSONResponse({"items": []})
