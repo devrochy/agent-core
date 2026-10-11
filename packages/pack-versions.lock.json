@@ -1,0 +1,17 @@
+{
+  "pack_calendar": {
+    "2.1.0": "afd6708aa6767d70182b3440d1c01edd0f55fb1072b8baccef443fc060f47755"
+  },
+  "pack_cobranza": {
+    "0.3.0": "cf01b020d8789ca70c222a34be32a3eef428a887169cd33cc820ae4ea0586ba4"
+  },
+  "pack_commerce": {
+    "2.0.0": "12caf3860d39e7dcf0151b4e9cb4d8a383e7e4dbb30be4780adedbc33b532fd0"
+  },
+  "pack_payments": {
+    "0.1.0": "85b6d667acebac10216a8346dc59297af926f2a5abf20afabb46ce83662330d2"
+  },
+  "pack_subscriptions": {
+    "0.1.0": "87aa22f9adc1769c2cfaab4ed71cbbd3ce1b5f4e9aba52db445ed2d0679baf4f"
+  }
+}

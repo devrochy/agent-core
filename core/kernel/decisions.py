@@ -94,6 +94,9 @@ class Turno:
     cost_usd: float = 0.0
     verifier: list[dict[str, Any]] = field(default_factory=list)
     verifier_retries: int = 0
+    # Release del turno (HU-AOS-14): NULL con `aos_runtime = 'legacy'`.
+    release_id: uuid.UUID | None = None
+    release_lane: str | None = None
     _token_vigente: Any = None
 
     def ms(self) -> int:
@@ -238,9 +241,10 @@ async def decidir(
             await session.execute(
                 text(
                     "INSERT INTO core_decisions (id, tenant_id, connection_id, conversation_id, "
-                    "inbound_message_ids, outcome, blocked_by, route_source, latency_ms, trace_id) "
+                    "inbound_message_ids, outcome, blocked_by, route_source, latency_ms, trace_id, "
+                    "release_id, release_lane) "
                     "VALUES (:id, :tenant_id, :connection_id, :conversation_id, :inbound, :outcome, "
-                    ":blocked_by, :route_source, :latency_ms, :trace_id)"
+                    ":blocked_by, :route_source, :latency_ms, :trace_id, :release_id, :release_lane)"
                 ).bindparams(bindparam("inbound", type_=ARRAY(UUID(as_uuid=True)))),
                 {
                     "id": turno.id,
@@ -255,6 +259,8 @@ async def decidir(
                     "route_source": route_source,
                     "latency_ms": turno.ms(),
                     "trace_id": turno.trace_id,
+                    "release_id": turno.release_id,
+                    "release_lane": turno.release_lane,
                 },
             )
     except Exception:
@@ -283,6 +289,14 @@ async def bloquear(conversation: Any, motivo: str, *, status: str | None = None)
 
 
 # ------------------------------------------------------------------ acumuladores del resultado
+def anotar_release(release_id: uuid.UUID, lane: str) -> None:
+    """Release y carril del turno (HU-AOS-14), antes de decidir: `core_decisions.release_id`."""
+    turno = turno_actual()
+    if turno is not None and not turno.decidido:
+        turno.release_id = release_id
+        turno.release_lane = lane
+
+
 def anotar_entrada(message_id: uuid.UUID | None) -> None:
     """Id del mensaje entrante que abrió el turno (`core_decisions.inbound_message_ids`)."""
     turno = turno_actual()

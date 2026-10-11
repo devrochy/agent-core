@@ -176,6 +176,33 @@ def _parse_sections(raw: Any) -> list[FlowSection]:
     return sections
 
 
+def parse_sections(raw: Any) -> list[FlowSection]:
+    """Secciones de un `flow.json` ya leído (lo usa la release congelada, HU-AOS-14)."""
+    return _parse_sections(raw)
+
+
+def read_tenant_flow_raw(slug: str) -> Any | None:
+    """El `flow.json` del negocio como JSON, para congelarlo en una release (HU-AOS-14).
+
+    None si no existe. Fail-closed (a diferencia de `load_tenant_flow`): un archivo que no se
+    puede leer, es inválido o pasa el tope lanza `ValueError`, porque una release es inmutable
+    y congelar "sin flujo" en silencio sería peor que no construirla.
+    """
+    path = tenant_flow_path(slug)
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ValueError("el flow.json del negocio no se puede leer") from exc
+    if len(raw) > MAX_FLOW_BYTES:
+        raise ValueError("el flow.json del negocio pasa el tope de tamaño")
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError("el flow.json del negocio no es JSON válido") from exc
+
+
 def _read_flow_file(path: Path) -> list[FlowSection] | None:
     """Lee y parsea un `flow.json`. None si no existe, está roto o es muy grande."""
     try:
@@ -336,7 +363,15 @@ async def resolve_flow(
     if slug is None:
         slug = await _resolve_slug()
 
-    tenant_sections = (load_tenant_flow(slug) if slug else None) or []
+    from core.shared import release_vigente
+
+    congelada = release_vigente.vigente()
+    if congelada is not None:
+        # Con `aos_runtime = 'v3'`, las secciones del negocio congeladas en la release del turno
+        # (ADR-0117 §2), no las del disco.
+        tenant_sections = parse_sections(congelada.flow_tenant) if congelada.flow_tenant is not None else []
+    else:
+        tenant_sections = (load_tenant_flow(slug) if slug else None) or []
     sections = compose_flow(
         load_core_flow(),
         load_pack_flows(sorted(enabled_business_packs(spec))),

@@ -86,6 +86,62 @@ def backfill_conexiones(
         )
 
 
+@app.command("sync-packs")
+def sync_packs(
+    database_url: str | None = typer.Option(
+        None, "--database-url", help="Por defecto MIGRATIONS_DATABASE_URL (el rol dueño)."
+    ),
+) -> None:
+    """Agent OS (HU-AOS-14): registra la versión de cada habilidad del binario en `pack_versions`
+    con `register_pack_version()` (recalcula el hash en la base). Idempotente. Corre en el
+    arranque del contenedor `api` después de migrar; si la misma versión llega con otro
+    contenido, alerta y no la registra. Sale con 1 si hubo algo que alertar (el entrypoint no
+    frena el arranque por eso)."""
+    import asyncio
+
+    from core.plugin_manager import plugin_manager
+    from core.releases.packs import sync_packs as correr
+
+    reporte = asyncio.run(correr(plugin_manager.scan(), database_url=database_url))
+    for resultado, cantidad in sorted(reporte.resultados.items()):
+        console.print(f"{resultado}: {cantidad}")
+    for error in reporte.errores:
+        console.print(f"[red]Error:[/red] {error}")
+    if reporte.fallo:
+        raise typer.Exit(1)
+
+
+@app.command("backfill-releases")
+def backfill_releases(
+    dry_run: bool = typer.Option(False, "--dry-run", help="No escribe: cuenta las conexiones que recibirían su release 1."),
+    tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
+) -> None:
+    """Agent OS (HU-AOS-14): la release 1 de cada conexión conversacional que no tiene ninguna,
+    construida desde el AgentSpec v2 activo (refresca el Coordinador y el General con el backfill
+    de agentes) y los artefactos del disco, y promovida. Idempotente. Exige `sync-packs` antes.
+    No cambia la conducta: con `aos_runtime = legacy` el runtime ignora la release."""
+    import asyncio
+
+    from cli.tenant_ref import resolve_tenant
+    from core.plugin_manager import plugin_manager
+    from core.releases.release_uno import ReporteReleases
+    from core.releases.release_uno import backfill_releases as correr
+
+    async def _run() -> ReporteReleases:
+        tenant_id = await resolve_tenant(tenant) if tenant else None
+        return await correr(dry_run=dry_run, tenant_id=tenant_id, modules=plugin_manager.scan())
+
+    reporte = asyncio.run(_run())
+    console.print(f"Negocios: {reporte.negocios}" + (" (dry-run: no se escribió nada)" if dry_run else ""))
+    for concepto, cantidad in sorted(reporte.conexiones.items()):
+        console.print(f"Conexiones {concepto}: {cantidad}")
+    for problema in reporte.errores:
+        donde = f" conexión {problema.connection_id}" if problema.connection_id else ""
+        console.print(f"[red]Error:[/red] negocio {problema.tenant_id}{donde}: {problema.mensaje}")
+    if reporte.fallo:
+        raise typer.Exit(1)
+
+
 @app.command("backfill-agentes")
 def backfill_agentes(
     dry_run: bool = typer.Option(False, "--dry-run", help="No escribe: reporta lo que haría."),
