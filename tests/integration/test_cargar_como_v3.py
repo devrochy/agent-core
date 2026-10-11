@@ -121,7 +121,7 @@ async def test_general_por_conexion_conversacional_y_kernel_derivado() -> None:
     assert vista.general.policies.maxToolCallsPerTurn == 8
     assert any(p.id == "pack_commerce.pedido" for p in vista.procedimientos)
     habilitadas = {b.tool for b in vista.general.tools if b.enabled}
-    assert {"crear_pedido", "generar_link_pago", "escalate_to_human"} <= habilitadas
+    assert {"crear_pedido", "confirmar_pago_pedido", "escalate_to_human"} <= habilitadas
     assert any("sin tipo de catálogo" in a for a in vista.avisos)
     # Sin secretos en la vista: solo el nombre de lo que falta migrar.
     assert vista.secretos_por_migrar == ["consultar_envio_authorization"]

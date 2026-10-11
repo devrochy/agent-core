@@ -62,7 +62,7 @@ def v2_completo() -> dict[str, Any]:
         "extensions": {
             "guardrails": [
                 {"kind": "forbidden_phrase", "phrases": ["gratis para siempre"], "action": "escalate"},
-                {"kind": "required_tool", "phrases": ["link de pago"], "tool": "generar_link_pago"},
+                {"kind": "required_tool", "phrases": ["link de pago"], "tool": "confirmar_pago_pedido"},
                 {"kind": "max_length", "value": 900},
             ],
             "tools": [
@@ -200,7 +200,7 @@ def test_tools_tiene_las_acciones_que_hoy_ofrece_el_loop(catalogo) -> None:
     flujo = secciones(spec, candidatas)
     habilitadas = {b.tool for b in c.general.tools if b.enabled}
     en_flujo = {t for s in flujo for t in s.tools}
-    assert {"consultar_inventario", "generar_cotizacion", "generar_link_pago"} <= en_flujo
+    assert {"consultar_inventario", "generar_cotizacion", "confirmar_pago_pedido"} <= en_flujo
     assert (en_flujo - {"send_email"}) <= habilitadas
     assert (siempre - {"send_email"}) <= habilitadas  # always_available (core)
     assert "consultar_envio" in habilitadas  # declarativa nombrada por la sección tenant
@@ -253,7 +253,8 @@ def test_candidatas_core_siempre_y_packs_habilitados(catalogo) -> None:
     assert siempre == core
     assert core <= set(candidatas)
     assert "consultar_envio" in candidatas
-    assert {catalogo[t].owner for t in candidatas if t in catalogo} == {"core", *PACKS}
+    # pack_payments está habilitado pero no aporta tools (adenda 2026-10-10 de ADR-0087).
+    assert {catalogo[t].owner for t in candidatas if t in catalogo} == {"core", "pack_commerce"}
 
 
 # ------------------------------------------------------------------ secretos
