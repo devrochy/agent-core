@@ -30,6 +30,7 @@ from core.db.session import get_session
 from core.kernel.decisions import anotar_uso, bloquear, en_turno, enrutar, marcar_neutral
 from core.kernel.ingress import QUOTA_EXHAUSTED_REPLY as QUOTA_EXHAUSTED_REPLY
 from core.kernel.ingress import conversacion_bloqueada, politicas_del_turno
+from core.kernel.procedures import comandos as comandos_del_hilo
 from core.kernel.procedures.ejecucion import ContextoMotor, contexto_del_motor
 from core.llm import resolve_provider
 from core.llm.difficulty_router import (
@@ -58,6 +59,7 @@ from core.orchestrator.safe_renderer import (
 )
 from core.orchestrator.skill_router import select_relevant_skills
 from core.orchestrator.verificador import (
+    EstadoTareas,
     cargar_afirmaciones,
     instruccion_correctiva,
     normalizar_desactivados,
@@ -389,6 +391,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     if not messages or messages[-1].role != "user" or messages[-1].content != latest_message:
         messages.append(LLMMessage(role="user", content=latest_message))
     all_tool_results: list[dict[str, Any]] = []
+    # Un comando del hilo aplicado (HU-AOS-06) resuelve el turno aunque no sea una acción.
+    hubo_comando_ok = False
     guardrail_retries = 0
     # Borrador que ya pasó todo salvo el largo (`persona.maxLength`, adenda de ADR-0050):
     # si el texto de su único reintento falla una verificación dura, se entrega este.
@@ -505,14 +509,19 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                 # _current_turn/_ok (HU-COM-02): distinguish el turno actual y el
                 # éxito; un `crear_pedido` fallido o de un turno anterior no
                 # respalda "tu pedido quedó confirmado".
-                all_tool_results.append(
-                    {
-                        **result,
-                        TOOL_NAME_KEY: tool_call.name,
-                        "_current_turn": True,
-                        "_ok": not (isinstance(result, dict) and result.get("error")),
-                    }
-                )
+                if motor is not None and motor.es_comando(tool_call.name):
+                    # Un comando no es evidencia (su tarjeta trae datos que escribió el modelo): el
+                    # estado entra al verificador por `_estado_del_verificador` (HU-AOS-06).
+                    hubo_comando_ok = hubo_comando_ok or result.get("ok") is True
+                else:
+                    all_tool_results.append(
+                        {
+                            **result,
+                            TOOL_NAME_KEY: tool_call.name,
+                            "_current_turn": True,
+                            "_ok": not (isinstance(result, dict) and result.get("error")),
+                        }
+                    )
                 usage.tool_calls.append({"tool": tool_call.name})
                 messages.append(
                     LLMMessage(
@@ -579,6 +588,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                 contexto_urls,
                 afirmaciones,
                 disabled_guardrails,
+                estado=await _estado_del_verificador(motor, referencias),
             )
             borrador = veredicto.texto
             if not veredicto.passed:
@@ -706,9 +716,9 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             turn_span,
             latest_message,
             final_text,
-            resolved=bool(all_tool_results),
+            resolved=bool(all_tool_results) or hubo_comando_ok,
             count_unresolved=not _turno_avanza_sin_tools(
-                latest_message, final_text, bool(all_tool_results)
+                latest_message, final_text, bool(all_tool_results) or hubo_comando_ok
             ),
             image_url=extras.image_url if confirmacion is None else None,
         )
@@ -814,6 +824,32 @@ def _ejecutor_del_motor(conversation: Conversation, customer: Customer, spec):  
     return ejecutar
 
 
+async def _estado_del_verificador(motor: ContextoMotor | None, referencias: list[str]) -> EstadoTareas | None:
+    """El estado de las tareas para el verificador (HU-AOS-06): solo con el motor activo; None
+    (verificación sin estado, como siempre) si no hay motor o la lectura falla."""
+    tareas = await motor.instantaneas() if motor is not None else None
+    if tareas is None:
+        return None
+    return EstadoTareas(tareas=tuple(tareas), referencias_vigentes=tuple(referencias))
+
+
+async def _ejecutar_comando(conversation: Conversation, motor: ContextoMotor, tool_call: LLMToolCall) -> dict[str, Any]:
+    """Comando del hilo (HU-AOS-06): lo aplica el motor. La auditoría lleva solo las claves y el
+    resultado en códigos (`task_events` es el registro); su actor no es `tool:*`, así que no
+    vuelve como evidencia en turnos siguientes."""
+    resultado = await motor.ejecutar_comando(tool_call.name, tool_call.arguments)
+    await record_audit(
+        actor="core:comando",
+        action=tool_call.name,
+        conversation_id=conversation.id,
+        # Solo las claves del schema: un nombre de clave extra lo eligió el modelo (podría ser un
+        # dato del cliente). Las demás solo se cuentan.
+        input_data=comandos_del_hilo.claves_auditables(tool_call.name, tool_call.arguments),
+        output_data={"ok": resultado.get("ok") is True, "errors": len(resultado.get("errors") or [])},
+    )
+    return resultado
+
+
 async def _execute_tool_safely(
     conversation: Conversation,
     customer: Customer,
@@ -822,6 +858,8 @@ async def _execute_tool_safely(
     motor: ContextoMotor | None = None,
 ) -> dict[str, Any]:
     """Ejecuta una tool aislando el error: un plugin roto se desactiva, el turno sigue."""
+    if motor is not None and motor.es_comando(tool_call.name):
+        return await _ejecutar_comando(conversation, motor, tool_call)
     from core.mcp.declarative import tools_for_spec
     from core.plugin_manager import plugin_manager
 

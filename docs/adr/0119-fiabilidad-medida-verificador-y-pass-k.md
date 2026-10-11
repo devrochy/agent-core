@@ -164,6 +164,50 @@ de escribir código.
 - **CI:** el gate de las PRs a `develop` corre en replay sin `LLM_API_KEY` (job `evals-replay`). Lo fija la adenda del
   2026-10-10 de ADR-0120.
 
+## Adenda (2026-10-11, HU-AOS-06): el verificador usa el estado de las tareas
+
+**Estado:** propuesta; requiere la aprobación del dueño antes del merge (cambia "referencias en
+sombra" de la adenda de HU-ARCH-29, aunque solo con `tenants.aos_procedures`). Revisada por el
+agente `arquitecto` antes de escribir código.
+
+- **Solo con el motor activo** (`aos_procedures`). Con la bandera apagada la verificación es
+  idéntica, conteos de sombra incluidos: no hay estado y nada de lo de abajo aplica.
+- **Evidencia del estado** (`EstadoTareas`, `core/orchestrator/verificador/evidencia.py`): las
+  tareas del episodio en curso (abiertas y las que cambiaron desde `episode_started_at`, tope 20),
+  más las referencias vigentes del bloque dinámico (ADR-0130), que son dato del servidor.
+  - Solo cuentan los datos que fijó una acción (`source = action:*`). Lo que escribió el modelo,
+    un botón o el contenido del cliente no es evidencia. Un número que citó el cliente tampoco:
+    hay que consultarlo con una acción.
+  - **Montos y referencias:** de todas esas tareas.
+  - **Cierres:** una afirmación queda respaldada si alguna de sus `tools` fijó, en la tarea en foco
+    o en una que se completó después de la última respuesta del asistente, un dato que una
+    afirmación de estado o de link del procedimiento declara (`claims[].requires` o `mustMatch` con
+    `slot:`). Un dato de una lectura (`estado_pago = pendiente`) no respalda cierres en los turnos
+    siguientes, y una tarea que el motor ya no gobierna (pack deshabilitado) tampoco (el cierre por
+    evento entre turnos: "tarea cerrada" del design §7.3). Así el pedido de la compra anterior del
+    episodio no respalda "tu pedido quedó creado" de la siguiente (el patrón del incidente de
+    ADR-0130). `Afirmacion` no cambia.
+- **Referencias que bloquean:** solo las que el borrador afirma (no preguntas, negaciones ni
+  condicionales) y de una **familia** (`OC` de `OC-0042`) que el servidor fijó en alguna tarea.
+  Si no están en la evidencia, falla con `referencia_sin_evidencia`: reintento correctivo y luego
+  `guardrail_fail_action` (ADR-0092), como los demás motivos. Un SKU u otra familia, o una
+  conversación sin ese dato en sus tareas, siguen en sombra.
+- **Instrucción de reintento:** sección `verificador_referencia_sin_evidencia` del playbook del
+  kernel `verificador-estado`. No va en `respuestas` del core porque ese playbook entra al prompt
+  de las evals grabadas; un negocio sí puede reemplazarla con esa sección en su `respuestas`.
+- **Sin interruptor por ahora:** el interruptor es `aos_procedures`, que solo maneja el master. No
+  se reusa `verificador_cierre` (mezclaría semánticas). `verificador_referencias` se suma a
+  `TOGGLES` en la HU que encienda procedimientos en un negocio real, antes de encenderlos.
+- **Los comandos del hilo no son evidencia:** su resultado trae la tarjeta con datos que escribió
+  el modelo. El loop no los suma a los resultados del turno y su auditoría (`core:comando`) no es
+  `tool:*`, así que tampoco vuelven desde `audit_log`.
+- **Medición (2026-10-11):** el set etiquetado suma 11 casos con estado explícito
+  (`origen: sintetico-estado`, `estado` en el JSONL) y `python evals/verificador.py --con-estado`
+  mide las respuestas reales con un estado derivado de sus resultados. Sin estado: 225 correctas,
+  1 falso positivo (0,4 %, el mismo de antes) y 0 falsos negativos en 25 falsas. Con estado: los
+  mismos números; ningún falso positivo nuevo. Los conteos de `referencias_sin_evidencia` en
+  `turn_outcomes.verifier` de producción se miran antes de encender un negocio.
+
 ## Adenda (2026-10-11, HU-AOS-09): respaldo en el reintento
 
 Con el motor de procedimientos activo, el reintento tras un rechazo del verificador usa el respaldo
