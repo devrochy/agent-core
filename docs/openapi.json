@@ -2782,6 +2782,70 @@
         }
       }
     },
+    "/api/v1/admin/connections/{connection_id}/agents": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · conexiones"
+        ],
+        "summary": "List Connection Agents",
+        "operationId": "list_connection_agents_api_v1_admin_connections__connection_id__agents_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConnectionAgentInstance"
+                  },
+                  "title": "Response List Connection Agents Api V1 Admin Connections  Connection Id  Agents Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/connections/catalog": {
       "get": {
         "tags": [
@@ -27114,6 +27178,73 @@
           "created"
         ],
         "title": "PublishOut"
+      },
+      "ConnectionAgentInstance": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "core",
+              "specialist",
+              "backoffice"
+            ],
+            "title": "Role"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default"
+          },
+          "priority": {
+            "type": "integer",
+            "title": "Priority"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "latest_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "agent_id",
+          "key",
+          "name",
+          "role",
+          "is_default",
+          "priority",
+          "enabled",
+          "latest_version"
+        ],
+        "title": "ConnectionAgentInstance"
       }
     }
   }

@@ -24,11 +24,12 @@ import uuid
 from collections.abc import Mapping
 from typing import Any
 
-from agentcore_contracts import AgentSpecV3, SecretRef
+from agentcore_contracts import AgentSpecV3
 from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from core.agents.contrato_v3 import Contrato, revisar_spec, validar_spec
+from core.agents.credenciales import referencias_de_tool
 from core.agents.tolerante import KEYS_RESERVADAS
 from core.db.models import AgentDraftRecord, AgentRecord, AgentVersionRecord
 from core.db.session import get_session
@@ -105,23 +106,22 @@ async def _validar(tenant_id: uuid.UUID, contenido: Any, contrato: Contrato, cat
         configurados = await secretos_configurados(tenant_id)
         faltan: list[Issue] = []
         for i, tool in enumerate(spec.declarativeTools):
-            for header, valor in tool.headers.items():
-                if not isinstance(valor, SecretRef):
-                    continue
-                if valor.secret not in configurados:
+            # Headers, URL y body (adenda de HU-AOS-13 en ADR-0113).
+            for nombre in sorted(referencias_de_tool(tool)):
+                if nombre not in configurados:
                     faltan.append(
                         Issue(
                             "secreto_inexistente",
-                            f"declarativeTools[{i}].headers.{header}",
-                            f"El secreto '{valor.secret}' no está configurado en el negocio.",
+                            f"declarativeTools[{i}]",
+                            f"El secreto '{nombre}' no está configurado en el negocio.",
                         )
                     )
-                elif not set(tool.allowedDomains) <= set(configurados[valor.secret]):
+                elif not set(tool.allowedDomains) <= set(configurados[nombre]):
                     faltan.append(
                         Issue(
                             "secreto_fuera_de_dominio",
                             f"declarativeTools[{i}].allowedDomains",
-                            f"El secreto '{valor.secret}' no puede viajar a todos estos dominios.",
+                            f"El secreto '{nombre}' no puede viajar a todos estos dominios.",
                         )
                     )
         if faltan:

@@ -41,13 +41,22 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from agentcore_contracts import (
-    SENSITIVE_HEADERS,
     AgentSpec,
     AgentSpecV3,
     KernelSpec,
 )
 from pydantic import SecretStr
 
+from core.agents.credenciales import (
+    CredencialMixta,
+    credenciales_en_body,
+    credenciales_en_url,
+    es_sensible,
+    extraer_de_body,
+    extraer_de_url,
+    problemas_de_parameters,
+    referencias_de_tool,
+)
 from core.agents.flow import (
     OPEN_PROCEDURE_VERSION,
     FlowSection,
@@ -70,9 +79,6 @@ _HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,80}$")
 _ACTION_RE = re.compile(r"^[a-zA-Z0-9_]{1,80}$")
 _PLAYBOOK_RE = re.compile(r"^[a-zA-Z0-9_-]{1,80}$")
 _SECRET_UNSAFE_RE = re.compile(r"[^a-z0-9_]+")
-# Headers con pinta de credencial fuera de los tres sensibles del contrato: no se mueven
-# (el contrato solo exige esos tres), pero se avisa sin el valor.
-_PINTA_DE_SECRETO_RE = re.compile(r"(auth|token|secret|key|password|session)", re.IGNORECASE)
 _MAX_DECLARATIVAS = 50
 _MAX_GUARDRAILS = 100
 
@@ -158,9 +164,8 @@ def _declarativas(
         avisos.append("extensions.tools: dominios no públicos descartados de allowed_domains (hoy tampoco se usan)")
 
     # Nombres ya usados por referencias existentes: un secreto extraído no los pisa.
-    usados: set[str] = {
-        n for t in normalizadas for v in t["headers"].values() if (n := secret_ref(v)) is not None
-    }
+    usados: set[str] = {n for t in normalizadas for n in referencias_de_tool(t, v2=True)}
+    usados_previos = set(usados)
     secretos: dict[str, SecretStr] = {}
     salida: list[dict[str, Any]] = []
     nombres: set[str] = set()
@@ -193,19 +198,69 @@ def _declarativas(
             ):
                 avisos.append(f"extensions.tools '{nombre}': header inválido descartado")
                 continue
-            if header.lower() in SENSITIVE_HEADERS:
+            if es_sensible(header) and valor.strip():
+                if not tool["allowed_domains"]:
+                    # Sin allowlist la tool hoy no llama a nadie (el loop arma un ScopedHttp por
+                    # tool con sus dominios): el literal no tiene a dónde viajar ni se migra.
+                    avisos.append(
+                        f"extensions.tools '{nombre}': el header {header} se descarta (la tool no tiene "
+                        "allowed_domains y hoy tampoco puede llamar a nadie)"
+                    )
+                    continue
                 ref = _nombre_secreto(nombre, header, usados)
                 secretos[ref] = SecretStr(valor)
                 headers[header] = {"secret": ref}
             else:
-                if _PINTA_DE_SECRETO_RE.search(header):
-                    avisos.append(
-                        f"extensions.tools '{nombre}': el header {header} parece una credencial y queda literal; "
-                        "conviene pasarlo a un secreto"
-                    )
                 headers[header] = valor
-        url = tool["url"]
-        if url.startswith("http://") and any(isinstance(v, dict) for v in headers.values()):
+        url, body = tool["url"], tool["body"]
+        # Credenciales en la URL, el body y el schema de parameters (decisión del dueño
+        # 2026-10-11): también a secretos. En v2 no hay referencias en URL ni body.
+        if credenciales_en_url(url) or credenciales_en_body(body, con_refs=False) or problemas_de_parameters(
+            tool["parameters"]
+        ):
+            if not tool["allowed_domains"]:
+                # Sin allowlist la tool hoy no llama a nadie: se descarta entera con sus
+                # credenciales (no hay a dónde migrarlas y su schema no debe llegar al LLM). Sus
+                # headers sensibles ya se descartaron arriba: no dejó secretos.
+                avisos.append(
+                    f"extensions.tools '{nombre}': lleva credenciales en la URL, el body o parameters y no "
+                    "tiene allowed_domains (hoy no puede llamar a nadie): se descarta la tool"
+                )
+                continue
+            if problemas_de_parameters(tool["parameters"]):
+                rutas = ", ".join(r for r, _ in problemas_de_parameters(tool["parameters"]))
+                raise ConversionFallida(
+                    f"extensions.tools '{nombre}': credenciales fijas en el schema de parameters ({rutas[:300]}); "
+                    "quítalas en el editor de tools declarativas"
+                )
+            try:
+                url, de_query, basic = extraer_de_url(url, lambda n, t=nombre: _nombre_secreto(t, n, usados))
+                body, de_body = extraer_de_body(body, lambda r, t=nombre: _nombre_secreto(t, r, usados))
+            except CredencialMixta as exc:
+                raise ConversionFallida(
+                    f"extensions.tools '{nombre}': credenciales que mezclan texto fijo y argumentos ({str(exc)[:300]}); "
+                    "no se pueden pasar a un secreto sin cambiar lo que se envía: reescríbelas en el editor"
+                ) from None
+            for ref, valor in (de_query | de_body).items():
+                secretos[ref] = SecretStr(valor)
+            if basic is not None:
+                previo = next((h for h in headers if h.lower() == "authorization"), None)
+                if previo is not None:
+                    # httpx aplica el userinfo como Basic y pisa el header: queda el del userinfo,
+                    # y el secreto que se había sacado del header viejo no queda huérfano.
+                    viejo = secret_ref(headers.pop(previo))
+                    if viejo is not None and viejo not in usados_previos:
+                        secretos.pop(viejo, None)
+                    avisos.append(
+                        f"extensions.tools '{nombre}': el userinfo de la URL reemplaza al header Authorization"
+                    )
+                ref = _nombre_secreto(nombre, "authorization", usados)
+                secretos[ref] = SecretStr(basic)
+                headers["Authorization"] = {"secret": ref}
+            avisos.append(f"extensions.tools '{nombre}': credenciales de la URL o el body pasan a secretos")
+        if url.startswith("http://") and (
+            any(isinstance(v, dict) for v in headers.values()) or referencias_de_tool({"url": url, "body": body})
+        ):
             # La credencial no viaja en claro (adenda de ADR-0113): misma URL por https.
             url = "https://" + url.removeprefix("http://")
             avisos.append(f"extensions.tools '{nombre}': lleva credenciales por http://, pasa a https://")
@@ -219,7 +274,7 @@ def _declarativas(
                 "allowedDomains": tool["allowed_domains"][:20],
                 "headers": headers,
                 "parameters": tool["parameters"],
-                "body": tool["body"],
+                "body": body,
             }
         )
     return salida, secretos
@@ -361,7 +416,16 @@ def convertir_v2(
     if tenant_id is not None and spec.tenantId != tenant_id:
         avisos.append("tenantId del AgentSpec v2 distinto del negocio de la fila: se usa el de la fila")
 
-    declarativas, secretos = _declarativas(ext.pop("tools", None), catalogo, avisos)
+    try:
+        declarativas, secretos = _declarativas(ext.pop("tools", None), catalogo, avisos)
+    except ConversionFallida as exc:
+        mensaje: str | None = str(exc)
+    else:
+        mensaje = None
+    if mensaje is not None:
+        # Fuera del `except` (sin `__context__`) y sin el spec en los locales: lleva literales.
+        del spec, ext
+        raise ConversionFallida(mensaje)
     existentes = set(catalogo) | {t["name"] for t in declarativas}
     guardrails = _guardrails(ext.pop("guardrails", None), existentes, avisos)
     for clave in sorted(ext):
@@ -489,31 +553,30 @@ async def _conexiones_conversacionales(tenant_id: uuid.UUID, avisos: list[str]) 
     return [cid for cid, conv in filas if conv]
 
 
-async def cargar_como_v3(tenant_id: uuid.UUID | None = None, *, modules: Iterable[Any] | None = None) -> VistaV3:
-    """Carga el AgentSpec v2 activo del negocio del `tenant_scope` activo como v3.
+async def convertir_negocio(spec: AgentSpec, *, modules: Iterable[Any] | None = None) -> ConversionV3:
+    """Convierte `spec` (el v2 activo del negocio del `tenant_scope` activo) con las mismas
+    entradas que el loop: catálogo del binario, candidatas de los packs habilitados y el flujo
+    compuesto resuelto con el slug del negocio del scope (nunca el `tenantId` del JSON).
 
-    `tenant_id`, si se pasa, debe ser el del scope (si no, `PermissionError`): el lector no
-    lee un negocio desde el contexto de otro. `modules`: los módulos del binario para el
+    Devuelve la conversión CON los secretos literales (`SecretStr`): la usan `cargar_como_v3`
+    (que solo expone los nombres) y el backfill de HU-AOS-13 (que los mueve a la instalación
+    `core` antes de crear la primera versión). `modules`: los módulos del binario para el
     catálogo; por defecto, los ya cargados (`plugin_manager.list_modules()`)."""
     from core.agents.flow import resolve_flow
-    from core.agents.spec import load_active_spec
     from core.kernel.procedures import catalogo_de_acciones
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import get_current_tenant_id, tenant_slug
 
     tid = get_current_tenant_id()
     if tid is None:
-        raise ValueError("cargar_como_v3 corre dentro del tenant_scope del negocio")
-    if tenant_id is not None and tenant_id != tid:
-        raise PermissionError("cargar_como_v3: el negocio pedido no es el del tenant_scope")
-    spec = await load_active_spec(tid)
+        raise ValueError("convertir_negocio corre dentro del tenant_scope del negocio")
     catalogo = catalogo_de_acciones(modules if modules is not None else plugin_manager.list_modules())
     candidatas, siempre = candidatas_del_spec(spec, catalogo)
     # El slug sale del negocio del scope, nunca del `tenantId` del JSON.
     slug = await tenant_slug(tid)
     flujo = await resolve_flow(spec, slug=slug, available=set(candidatas)) if slug else None
     try:
-        conversion = convertir_v2(
+        return convertir_v2(
             spec,
             tenant_id=str(tid),
             catalogo=catalogo,
@@ -524,6 +587,23 @@ async def cargar_como_v3(tenant_id: uuid.UUID | None = None, *, modules: Iterabl
     except ConversionFallida:
         del spec  # el v2 lleva los secretos literales: fuera de los locales del frame
         raise
+
+
+async def cargar_como_v3(tenant_id: uuid.UUID | None = None, *, modules: Iterable[Any] | None = None) -> VistaV3:
+    """Carga el AgentSpec v2 activo del negocio del `tenant_scope` activo como v3.
+
+    `tenant_id`, si se pasa, debe ser el del scope (si no, `PermissionError`): el lector no
+    lee un negocio desde el contexto de otro. `modules`: los módulos del binario para el
+    catálogo; por defecto, los ya cargados (`plugin_manager.list_modules()`)."""
+    from core.agents.spec import load_active_spec
+    from core.shared.tenant import get_current_tenant_id
+
+    tid = get_current_tenant_id()
+    if tid is None:
+        raise ValueError("cargar_como_v3 corre dentro del tenant_scope del negocio")
+    if tenant_id is not None and tenant_id != tid:
+        raise PermissionError("cargar_como_v3: el negocio pedido no es el del tenant_scope")
+    conversion = await convertir_negocio(await load_active_spec(tid), modules=modules)
     avisos = list(conversion.avisos)
     conexiones = await _conexiones_conversacionales(tid, avisos)
     return VistaV3(
@@ -542,15 +622,15 @@ async def migrar_secretos(tenant_id: uuid.UUID, conversion: ConversionV3) -> lis
     cada uno atado a los dominios de las tools que lo usan (ADR-0113 §2). Es el paso que el
     backfill (HU-AOS-13) corre ANTES de crear la primera `agent_version`, que es inmutable.
 
-    Idempotente: reescribir un secreto con el mismo valor no cambia nada visible. Devuelve
-    avisos (sin valores) de los que no se pudieron mover: una tool sin `allowedDomains` hoy
-    tampoco puede llamar a nadie (ScopedHttp cierra todo sin allowlist)."""
-    from agentcore_contracts import SecretRef
+    Copia, no mueve: el loop legacy sigue usando los literales de `agent_specs` (adenda de
+    HU-AOS-13 en ADR-0113). Idempotente: con el mismo valor y los dominios ya cubiertos no
+    escribe. Nunca pisa un secreto existente ni le suma dominios solo (`ValueError` sin
+    valores). Devuelve avisos (sin valores); hoy siempre vacío."""
 
     from core.agents.secretos import (
         SecretoDeclarativo,
+        comparar_secreto,
         guardar_secretos_declarativos,
-        secreto_igual,
     )
 
     if conversion.identidad.tenant_id != str(tenant_id):
@@ -558,24 +638,31 @@ async def migrar_secretos(tenant_id: uuid.UUID, conversion: ConversionV3) -> lis
 
     dominios: dict[str, set[str]] = {}
     for tool in conversion.general.declarativeTools:
-        for valor in tool.headers.values():
-            if isinstance(valor, SecretRef):
-                dominios.setdefault(valor.secret, set()).update(tool.allowedDomains)
+        for ref in referencias_de_tool(tool):
+            dominios.setdefault(ref, set()).update(tool.allowedDomains)
     avisos: list[str] = []
     a_guardar: dict[str, SecretoDeclarativo] = {}
     for nombre, valor in conversion.secretos.items():
-        if not dominios.get(nombre):
-            avisos.append(f"secreto '{nombre}': su tool no tiene allowedDomains, no se migra")
-            continue
-        igual = await secreto_igual(tenant_id, nombre, valor)
+        # El lector solo extrae secretos de tools con `allowedDomains` (las demás no llaman a nadie).
+        necesarios = dominios.get(nombre, set())
+        igual, actuales = await comparar_secreto(tenant_id, nombre, valor)
         if igual is False:
             # Nunca se pisa un secreto del editor con el mismo nombre y otro valor.
             raise ValueError(f"migrar_secretos: el secreto '{nombre}' ya existe con otro valor")
         if igual:
+            faltan = sorted(necesarios - set(actuales))
+            if faltan:
+                # Nunca se amplían solos: un secreto se ata a dominios nuevos solo reescribiéndolo
+                # (un rollback del v2 podría traer dominios que alguien quitó a propósito).
+                raise ValueError(
+                    f"migrar_secretos: el secreto '{nombre}' ya migrado no cubre {', '.join(faltan)}: "
+                    "reescríbelo en el editor de tools declarativas"
+                )
             continue  # ya migrado: idempotente
-        a_guardar[nombre] = SecretoDeclarativo(valor=valor, dominios=tuple(sorted(dominios[nombre])))
+        a_guardar[nombre] = SecretoDeclarativo(valor=valor, dominios=tuple(sorted(necesarios)))
     if a_guardar:
-        await guardar_secretos_declarativos(tenant_id, a_guardar)
+        # `solo_nuevos`: si el negocio lo escribió entre la comparación y aquí, no se pisa.
+        await guardar_secretos_declarativos(tenant_id, a_guardar, solo_nuevos=True)
     return avisos
 
 
@@ -590,6 +677,7 @@ __all__ = [
     "acciones_ofrecidas",
     "candidatas_del_spec",
     "cargar_como_v3",
+    "convertir_negocio",
     "convertir_v2",
     "migrar_secretos",
 ]

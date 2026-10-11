@@ -21,6 +21,7 @@ solo guarda secretos: no habilita nada, `enabled_packs` no la ve y no cuenta par
 
 from __future__ import annotations
 
+import hmac
 import json
 import re
 import uuid
@@ -50,6 +51,10 @@ MAX_DOMINIOS = 20
 
 class SecretoInvalido(ValueError):
     """Nombre, valor o dominios de un secreto fuera de formato (sin el valor en el mensaje)."""
+
+
+class SecretoExistente(SecretoInvalido):
+    """`solo_nuevos`: el secreto ya existe (sin el valor en el mensaje)."""
 
 
 @dataclass(frozen=True)
@@ -129,10 +134,15 @@ async def guardar_secretos_declarativos(
     *,
     quitar: Iterable[str] = (),
     actor: uuid.UUID | None = None,
+    solo_nuevos: bool = False,
 ) -> dict[str, list[str]]:
     """Guarda (o reemplaza) secretos y quita los de `quitar`, en una transacción y con la fila
     bloqueada. Crea la instalación `core` del negocio si falta. Devuelve los configurados
-    (nombre → dominios). Lanza `SecretoInvalido` sin escribir nada si algo no valida."""
+    (nombre → dominios). Lanza `SecretoInvalido` sin escribir nada si algo no valida.
+
+    `solo_nuevos`: nunca reemplaza un secreto que ya existe (lo comprueba con la fila bloqueada,
+    sin ventana entre leer y escribir): `SecretoExistente` y no se escribe nada. Lo usa el
+    backfill, que no debe pisar lo que el negocio rotó en el editor."""
     _exigir_scope(tenant_id)
     nuevos = _validar(secretos)
     quitar = set(quitar)
@@ -153,6 +163,8 @@ async def guardar_secretos_declarativos(
                     actuales: dict[str, dict[str, object]] = {}
                 else:
                     actuales = _leer(fila)
+                if solo_nuevos and (ya := sorted(set(nuevos) & set(actuales))):
+                    raise SecretoExistente(f"El secreto ya existe: {', '.join(ya)}.")
                 actuales = {k: v for k, v in actuales.items() if k not in quitar} | nuevos
                 if len(actuales) > MAX_SECRETOS:
                     raise SecretoInvalido(f"Máximo {MAX_SECRETOS} secretos por negocio.")
@@ -182,14 +194,22 @@ async def secretos_configurados(tenant_id: uuid.UUID) -> dict[str, list[str]]:
     return {k: list(v["domains"]) for k, v in actuales.items()}  # type: ignore[arg-type]
 
 
-async def secreto_igual(tenant_id: uuid.UUID, nombre: str, valor: SecretStr) -> bool | None:
-    """¿El secreto `nombre` ya existe con ese valor? None si no existe. No devuelve el valor."""
+async def comparar_secreto(tenant_id: uuid.UUID, nombre: str, valor: SecretStr) -> tuple[bool | None, list[str]]:
+    """`(¿mismo valor?, dominios actuales)` del secreto `nombre`; `(None, [])` si no existe.
+    No devuelve el valor."""
     async with get_session() as session:
         fila = await _instalacion(session, tenant_id, bloquear=False)
         actuales = _leer(fila) if fila is not None else {}
     if nombre not in actuales:
-        return None
-    return actuales[nombre]["value"] == valor.get_secret_value()
+        return None, []
+    igual = hmac.compare_digest(str(actuales[nombre]["value"]).encode(), valor.get_secret_value().encode())
+    return igual, list(actuales[nombre]["domains"])  # type: ignore[arg-type]
+
+
+async def secreto_igual(tenant_id: uuid.UUID, nombre: str, valor: SecretStr) -> bool | None:
+    """¿El secreto `nombre` ya existe con ese valor? None si no existe. No devuelve el valor."""
+    igual, _ = await comparar_secreto(tenant_id, nombre, valor)
+    return igual
 
 
 async def resolver_secretos(tenant_id: uuid.UUID, nombres: Iterable[str], host: str) -> dict[str, str]:
@@ -213,8 +233,10 @@ __all__ = [
     "MAX_SECRET_BYTES",
     "SECRET_NAME_RE",
     "SecretoDeclarativo",
+    "SecretoExistente",
     "SecretoInvalido",
     "aad_instalacion",
+    "comparar_secreto",
     "guardar_secretos_declarativos",
     "resolver_secretos",
     "secreto_igual",
