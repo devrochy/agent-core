@@ -74,7 +74,8 @@ async def get_or_create_connection(tenant_id: uuid.UUID) -> ChannelConnection:
             ).scalars().first()
             if existing is not None:
                 changed = False
-                if existing.deleted_at is not None:
+                revivida = existing.deleted_at is not None
+                if revivida:
                     existing.deleted_at = None
                     changed = True
                 if not existing.active:
@@ -82,6 +83,8 @@ async def get_or_create_connection(tenant_id: uuid.UUID) -> ChannelConnection:
                     changed = True
                 if changed:
                     await session.flush()
+                if revivida:
+                    await _instancias_de_la_nueva(session, tenant_id, existing.id)
                 return existing
 
         async with get_session() as session:
@@ -104,7 +107,16 @@ async def get_or_create_connection(tenant_id: uuid.UUID) -> ChannelConnection:
             connection.credentials_encrypted = get_secret_box().encrypt_json(
                 {"connection_id": str(connection.id)}
             )
+            await _instancias_de_la_nueva(session, tenant_id, connection.id)
             return connection
+
+
+async def _instancias_de_la_nueva(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID) -> None:
+    """Coordinador y General de la conexión `waweb` nueva o revivida, si el negocio ya tiene sus
+    agentes (HU-AOS-13/HU-AOS-11; en un SAVEPOINT: un error no tumba el alta)."""
+    from core.agents.instancias import instancias_de_conexion_nueva
+
+    await instancias_de_conexion_nueva(session, tenant_id, connection_id)
 
 
 async def get_or_create_session(

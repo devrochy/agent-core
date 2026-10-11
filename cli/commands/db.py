@@ -47,8 +47,8 @@ def backfill_conexiones(
     tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
     lote: int = typer.Option(500, "--lote", min=1, help="Filas por transacción."),
 ) -> None:
-    """Conexión canónica (ADR-0115): una conexión por número vivo de WhatsApp, `type_id` en las
-    conexiones viejas y `connection_id` en las conversaciones. Idempotente; correr primero con
+    """Conexión canónica (ADR-0115): una conexión por número vivo de WhatsApp, el chat web como
+    conexión `webchat`, `type_id` en las conexiones viejas y `connection_id` en las conversaciones. Idempotente; correr primero con
     `--dry-run` y revisar los choques con conexiones manuales del mismo número."""
     import asyncio
 
@@ -74,6 +74,9 @@ def backfill_conexiones(
         ("Conversaciones ligadas a su conexión", reporte.conversaciones_ligadas),
         ("Conversaciones ambiguas (cuenta con varios números)", reporte.conversaciones_ambiguas),
         ("Conversaciones sin conexión (cuenta sin números vivos)", reporte.conversaciones_sin_conexion),
+        *((f"Chat web: {k}", v) for k, v in sorted(reporte.chat_web.items())),
+        ("Conversaciones web ligadas a su widget", reporte.conversaciones_web_ligadas),
+        ("Conversaciones web sin conexión (sin widget o con varios)", reporte.conversaciones_web_sin_conexion),
         ("Abiertas que quedan sin conexión (revisar antes de AOS_CONNECTION_ROUTING)", reporte.abiertas_sin_ligar),
     ]
     for concepto, cantidad in filas:
@@ -183,7 +186,6 @@ def backfill_agentes(
         ("Conexiones conversacionales", reporte.conexiones_conversacionales),
         ("Conexiones sin agentes (integraciones o sin tipo)", reporte.conexiones_sin_agentes),
         ("Choques con una conexión manual del mismo número", reporte.choques_manuales),
-        ("Negocios con chat web activo sin conexión (aún no es tipo de conexión)", reporte.chat_web_sin_conexion),
         ("Avisos de la conversión (ver el log)", reporte.avisos),
     ]
     for concepto, cantidad in filas:

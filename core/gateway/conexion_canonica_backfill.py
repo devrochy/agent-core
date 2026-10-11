@@ -19,6 +19,12 @@ Cubre lo que existía antes del despliegue; desde ahí cada alta crea su conexi�
    como antes). Incluye conversaciones cerradas y borradas: el *contract* exige
    `connection_id` en todas.
 
+4. **Chat web** (segunda parte): la configuración del widget en `app_settings.web_chat_config`
+   queda como conexión `webchat` (`chat_web_conexion.sincronizar`: la crea o la pone al día,
+   porque hasta el *contract* `app_settings` es la fuente de verdad), y las conversaciones del
+   canal `web` sin conexión reciben la del widget cuando el negocio tiene exactamente una viva.
+   Las abiertas que quedan sin conexión se suman a `abiertas_sin_ligar`.
+
 Messenger e Instagram quedan fuera hasta que haya un cliente. Cada lote es su propia
 transacción. Con `dry_run` no se escribe nada y el reporte dice lo que se haría.
 """
@@ -31,10 +37,11 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import func, select, text, update
 
-from core.db.models import ChannelConnection, Conversation, PhoneNumber, Tenant
+from core.db.models import AppSettings, ChannelConnection, Conversation, PhoneNumber, Tenant
 from core.db.session import get_session
+from core.gateway import chat_web_conexion
 from core.gateway.conexion_canonica import PROVEEDOR, asegurar_conexion_del_numero
-from core.gateway.connection_types import CONNECTION_TYPES
+from core.gateway.connection_types import CONNECTION_TYPES, WEBCHAT
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 
@@ -64,12 +71,20 @@ class ReporteBackfill:
     # encendida, el consumer las adopta cuando el cliente vuelve a escribir a un número de su
     # cuenta. Revisar antes de encender la bandera.
     abiertas_sin_ligar: int = 0
+    # Chat web: `creada` | `sincronizada` | `ya_estaba` por negocio con el widget guardado.
+    chat_web: Counter[str] = field(default_factory=Counter)
+    conversaciones_web_ligadas: int = 0
+    conversaciones_web_sin_conexion: int = 0
 
 
 def _tipo_por_canal_y_proveedor() -> dict[tuple[str, str], tuple[str, str]]:
     """`(channel, provider)` → `(type_id, category)`, solo si corresponde a un único tipo."""
     candidatos: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for tipo in CONNECTION_TYPES:
+        if tipo.id == WEBCHAT:
+            # Una fila vieja `web/web` no es un widget: su `external_id` no es una clave aleatoria
+            # y quedaría resoluble en la superficie pública. Las `webchat` las crea el paso 4.
+            continue
         candidatos.setdefault((tipo.channel, tipo.provider), []).append((tipo.id, tipo.category))
     return {clave: tipos[0] for clave, tipos in candidatos.items() if len(tipos) == 1}
 
@@ -224,6 +239,84 @@ async def _ligar_conversaciones(
                 break
 
 
+async def _chat_web(tenant_id: uuid.UUID, reporte: ReporteBackfill, lote: int) -> None:
+    """Paso 4: la conexión `webchat` desde `app_settings` y las conversaciones web sin conexión."""
+    async with get_session() as session:
+        config = (
+            await session.execute(
+                select(AppSettings.web_chat_config).where(
+                    AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None)
+                )
+            )
+        ).scalar_one_or_none()
+        resultado, _ = await chat_web_conexion.sincronizar(
+            session, tenant_id, chat_web_conexion.desde_app_settings(config), aplicar=not reporte.dry_run
+        )
+        if resultado != "sin_widget":
+            reporte.chat_web[resultado] += 1
+        vivas = list(
+            (
+                await session.execute(
+                    select(ChannelConnection.id).where(
+                        ChannelConnection.tenant_id == tenant_id,
+                        ChannelConnection.type_id == WEBCHAT,
+                        ChannelConnection.deleted_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        cuantas, abiertas = (
+            await session.execute(
+                select(func.count(), func.count().filter(Conversation.status.in_(("open", "escalated")))).where(
+                    Conversation.tenant_id == tenant_id,
+                    Conversation.channel == "web",
+                    Conversation.connection_id.is_(None),
+                )
+            )
+        ).one()
+    if not cuantas:
+        return
+    # En dry-run la conexión que se crearía cuenta como la única.
+    destinos = len(vivas) + (1 if reporte.dry_run and resultado == "creada" else 0)
+    if destinos != 1:
+        reporte.conversaciones_web_sin_conexion += cuantas
+        reporte.abiertas_sin_ligar += abiertas
+        return
+    if reporte.dry_run:
+        reporte.conversaciones_web_ligadas += cuantas
+        return
+    (conexion,) = vivas
+    while True:
+        async with get_session() as session:
+            ids = (
+                select(Conversation.id)
+                .where(
+                    Conversation.tenant_id == tenant_id,
+                    Conversation.channel == "web",
+                    Conversation.connection_id.is_(None),
+                )
+                .limit(lote)
+            )
+            resultado_update = await session.execute(
+                update(Conversation)
+                .where(
+                    Conversation.tenant_id == tenant_id,
+                    Conversation.id.in_(ids.scalar_subquery()),
+                    # Se repite el filtro: si el consumer la ligó mientras tanto, no se pisa.
+                    Conversation.channel == "web",
+                    Conversation.connection_id.is_(None),
+                )
+                .values(connection_id=conexion)
+                .execution_options(synchronize_session=False)
+            )
+            ligadas = int(getattr(resultado_update, "rowcount", 0) or 0)
+        reporte.conversaciones_web_ligadas += ligadas
+        if ligadas < lote:
+            return
+
+
 async def backfill_conexiones(
     *, dry_run: bool, tenant_id: uuid.UUID | None = None, lote: int = LOTE_POR_DEFECTO
 ) -> ReporteBackfill:
@@ -245,6 +338,7 @@ async def backfill_conexiones(
             await _poner_tipos(negocio, reporte, lote)
             planeadas = await _conexiones_por_numero(negocio, reporte, lote)
             await _ligar_conversaciones(negocio, planeadas, reporte, lote)
+            await _chat_web(negocio, reporte, lote)
         reporte.negocios += 1
     log.info(
         "backfill_conexiones",
@@ -256,5 +350,8 @@ async def backfill_conexiones(
         conversaciones_ligadas=reporte.conversaciones_ligadas,
         conversaciones_ambiguas=reporte.conversaciones_ambiguas,
         abiertas_sin_ligar=reporte.abiertas_sin_ligar,
+        chat_web=dict(reporte.chat_web),
+        conversaciones_web_ligadas=reporte.conversaciones_web_ligadas,
+        conversaciones_web_sin_conexion=reporte.conversaciones_web_sin_conexion,
     )
     return reporte

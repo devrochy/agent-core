@@ -58,6 +58,10 @@ class ConnectionType:
     available: bool = True
     setup_kind: str = SETUP_MANUAL
     sort_order: int = 0
+    # Aparece en el selector de alta del panel. `webchat` no (ADR-0115, adenda de la segunda
+    # parte de HU-AOS-11): el widget se configura en Configuración → Chat web, que crea su
+    # conexión; la consola de conexiones es HU-AOS-23.
+    en_selector: bool = True
 
 
 _META_SCHEMA: dict[str, Any] = {
@@ -203,6 +207,25 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
         sort_order=32,
     ),
     ConnectionType(
+        # Chat web embebible como conexión (ADR-0115 §4). `external_id` es la clave pública del
+        # widget, aleatoria y generada por el servidor (`chat_web_conexion.nueva_clave`): no la
+        # da el negocio, por eso no hay `external_id_key` ni credenciales en el formulario. El
+        # secreto de Turnstile va en `credentials_encrypted` y los dominios en `settings`.
+        id="webchat",
+        category=CATEGORY_COMMUNICATION,
+        channel="web",
+        label="Chat web",
+        provider="web",
+        icon="bi-chat-dots",
+        description="Widget de chat para tu sitio web",
+        produces_conversations=True,
+        available=True,
+        setup_kind=SETUP_WIZARD,
+        setup_path="/admin/configuracion",
+        sort_order=35,
+        en_selector=False,
+    ),
+    ConnectionType(
         id="email_smtp",
         category=CATEGORY_EMAIL,
         channel="email",
@@ -238,6 +261,7 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
 BY_ID: dict[str, ConnectionType] = {t.id: t for t in CONNECTION_TYPES}
 
 WHATSAPP_META = "whatsapp_meta"
+WEBCHAT = "webchat"
 
 
 def get_connection_type(type_id: str) -> ConnectionType | None:
@@ -272,7 +296,7 @@ def types_by_category(include_unavailable: bool = True) -> list[dict[str, Any]]:
         items = [
             t
             for t in connection_types()
-            if t.category == cat and (include_unavailable or t.available)
+            if t.category == cat and t.en_selector and (include_unavailable or t.available)
         ]
         if items:
             groups.append({"category": cat, "label": CATEGORY_LABELS[cat], "items": items})
@@ -395,6 +419,7 @@ __all__ = [
     "CONNECTION_TYPES",
     "SETUP_MANUAL",
     "SETUP_WIZARD",
+    "WEBCHAT",
     "WHATSAPP_META",
     "ConnectionType",
     "available_types",

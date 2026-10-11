@@ -15,7 +15,8 @@ actualiza su ruta según la bandera global.
   - Una conversación abierta del cliente que quedó **sin conexión** (el backfill no pudo
     asignarla porque su cuenta tiene varios números, o se abrió entre el despliegue y el
     backfill) y sale por la cuenta de esta conexión se **adopta**: recibe esta conexión en
-    vez de abrir otra (no se pierde el contexto ni cuenta dos veces en la cuota).
+    vez de abrir otra (no se pierde el contexto ni cuenta dos veces en la cuota). Con el chat
+    web (`webchat`), la abierta sin conexión del visitante (canal `web`).
   - Sin conexión identificable (número de la plataforma, o un número todavía sin fila
     canónica) la conversación es la del cliente sin conexión, y solo se actualiza el puente
     de Meta, como en el camino anterior.
@@ -31,6 +32,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from core.config import get_settings
 from core.db.models import ChannelConnection, Conversation
+from core.gateway.connection_types import WEBCHAT
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
@@ -87,15 +89,20 @@ async def buscar_conversacion_abierta(
         return await _la_mas_reciente(session, query.where(Conversation.connection_id.is_(None)))
 
     propia = await _la_mas_reciente(session, query.where(Conversation.connection_id == connection.id))
-    if propia is not None or connection.meta_connection_id is None:
+    if propia is not None:
         return propia
-    huerfana = await _la_mas_reciente(
-        session,
-        query.where(
+    if connection.meta_connection_id is not None:
+        sin_conexion = query.where(
             Conversation.connection_id.is_(None),
             Conversation.meta_connection_id == connection.meta_connection_id,
-        ),
-    )
+        )
+    elif connection.type_id == WEBCHAT:
+        # Chat web (ADR-0115 §4): el cliente es del canal `web`, así que toda conversación suya sin
+        # conexión es de este widget de antes del backfill (hoy hay uno por negocio).
+        sin_conexion = query.where(Conversation.connection_id.is_(None), Conversation.channel == "web")
+    else:
+        return None
+    huerfana = await _la_mas_reciente(session, sin_conexion)
     if huerfana is not None:
         # Sin conexión no puede tener release ni dueño (CHECK `ck_conv_aos_requiere_conexion`):
         # basta con asignarla.

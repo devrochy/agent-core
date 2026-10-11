@@ -104,3 +104,14 @@ def test_setup_url_por_setup_kind_y_disponibilidad():
     assert setup_url(wa) == "/admin/conexiones/wizard/whatsapp/elegir-entorno"
     assert setup_url(cal) == "/admin/plugins/pack_calendar/oauth"
     assert setup_url(off) == ""
+
+
+def test_webchat_es_conversacional_y_no_aparece_en_el_selector():
+    """El chat web es conexión (ADR-0115 §4) pero se configura en Configuración → Chat web."""
+    webchat = get_connection_type("webchat")
+    assert webchat is not None
+    assert (webchat.category, webchat.channel, webchat.provider) == (CATEGORY_COMMUNICATION, "web", "web")
+    assert webchat.produces_conversations is True
+    assert webchat.external_id_key == ""  # la clave la genera el servidor, no el formulario
+    en_selector = {t.id for grupo in types_by_category() for t in grupo["items"]}
+    assert "webchat" not in en_selector and "whatsapp_meta" in en_selector

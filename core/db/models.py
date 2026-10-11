@@ -229,6 +229,9 @@ class ChannelConnection(Base):
     # cuenta (`meta_connections`) y no guarda credenciales (CHECK `ck_cc_meta_sin_credenciales`).
     # NULL = conexión sin cuenta de Meta (manual, `waweb`, correo, calendario).
     meta_connection_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # Configuración no secreta de la conexión (0070). Hoy la usa el chat web (`webchat`):
+    # `{"allowed_origins": [...]}` (ADR-0115 §4, `chat_web_conexion`).
+    settings: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
