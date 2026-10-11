@@ -263,8 +263,36 @@ async def preparar_negocio(
     if definicion.get("vendedor"):
         _como_vendedor(tenant_id)
     await publicar_documentos_legales(tenant_id, definicion.get("documentos_legales") or [])
+    if definicion.get("motor_de_procedimientos"):
+        await encender_motor_de_procedimientos(tenant_id)
     pagos.instalar()
     return tenant_id
+
+
+async def encender_motor_de_procedimientos(tenant_id: uuid.UUID) -> None:
+    """Motor de procedimientos (HU-AOS-07) para el negocio de la corrida: `aos_runtime = v3` y
+    `aos_procedures`, como lo haría el master. Lo pide un set con `"motor_de_procedimientos": true`
+    en su `negocio.json`; el negocio es de la corrida, nunca uno real. Las banderas solo las
+    escribe el rol dueño (el mismo que migra)."""
+    from sqlalchemy import text
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from core.config import get_settings
+
+    settings = get_settings()
+    url = settings.migrations_database_url or settings.database_url
+    host = (make_url(url).host or "").lower()
+    if host not in ("localhost", "127.0.0.1", "::1"):
+        raise SystemExit(f"Las banderas del motor solo se encienden en una base local, no en {host!r}.")
+    engine = create_async_engine(url)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("update tenants set aos_runtime = 'v3', aos_procedures = true where id = :t"), {"t": tenant_id}
+            )
+    finally:
+        await engine.dispose()
 
 
 async def publicar_documentos_legales(tenant_id: uuid.UUID, documentos: list[dict[str, Any]]) -> None:

@@ -6,7 +6,8 @@
     "0.3.0": "cf01b020d8789ca70c222a34be32a3eef428a887169cd33cc820ae4ea0586ba4"
   },
   "pack_commerce": {
-    "2.0.0": "12caf3860d39e7dcf0151b4e9cb4d8a383e7e4dbb30be4780adedbc33b532fd0"
+    "2.0.0": "12caf3860d39e7dcf0151b4e9cb4d8a383e7e4dbb30be4780adedbc33b532fd0",
+    "2.1.0": "b01a94d75b7cdf6e704106ccef788d2008de687595529113494f4d3b39514f4f"
   },
   "pack_payments": {
     "0.1.0": "85b6d667acebac10216a8346dc59297af926f2a5abf20afabb46ce83662330d2"

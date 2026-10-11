@@ -32,6 +32,8 @@ MENSAJES = {
     "procedimiento_no_disponible": (),
     "tarea_en_curso": (),
     "error_interno": (),
+    "argumento_ligado": ("dato",),
+    "dato_bloqueado": ("dato",),
 }
 _SECCION = re.compile(r"^## ([a-z_]+)$")
 _MAX_ERROR_RESOLVER = 300

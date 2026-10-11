@@ -28,6 +28,7 @@ from core.mcp.types import (
     MCPTool,
     ReferenciasFn,
     Resolver,
+    ResumenFn,
     ScopedHttp,
     SkillInfo,
     ToolContext,
@@ -55,6 +56,8 @@ class MCPHost:
         # kernel los lee (`core/kernel/procedures/registro.py`), solo de los packs habilitados.
         self._procedimientos: dict[str, list[Procedure]] = {}
         self._resolvers: dict[str, Resolver] = {}
+        # Resúmenes de confirmación por acción (HU-AOS-07): acción -> (fn, plugin_id).
+        self._resumenes: dict[str, tuple[ResumenFn, str]] = {}
         self._resources: dict[str, MCPResource] = {}
         self._plugin_handlers: dict[str, list[EventHandler]] = {}
         self._active_plugin: str = ""  # plugin en proceso de activación
@@ -177,6 +180,22 @@ class MCPHost:
     def get_resolver(self, name: str) -> Resolver | None:
         return self._resolvers.get(name)
 
+    def register_resumen(self, accion: str, fn: ResumenFn) -> None:
+        """Registra el resumen de confirmación de una acción del plugin que se activa (HU-AOS-07).
+
+        Cuando el motor pide confirmar esa acción, el cliente ve lo que devuelve `fn` (leído del
+        estado del pack, p. ej. el total vigente de la cotización) en vez de los argumentos
+        crudos. Solo para una tool que el mismo plugin ya registró; una por acción."""
+        plugin_id = self._active_plugin
+        tool = self._tools.get(accion)
+        if tool is None or tool.plugin_id != plugin_id or accion in self._resumenes:
+            raise PluginError(plugin_id, f"Resumen inválido o duplicado: {accion}")
+        self._resumenes[accion] = (fn, plugin_id)
+
+    def get_resumen(self, accion: str) -> tuple[ResumenFn, str] | None:
+        """(fn, plugin_id) del resumen de una acción, o None (el motor filtra por packs permitidos)."""
+        return self._resumenes.get(accion)
+
     def register_resource(self, resource: MCPResource) -> None:
         resource.plugin_id = self._active_plugin
         self._resources[resource.uri] = resource
@@ -201,6 +220,7 @@ class MCPHost:
         self._referencias.pop(plugin_id, None)
         self._procedimientos.pop(plugin_id, None)
         self._resolvers = {k: v for k, v in self._resolvers.items() if v.plugin_id != plugin_id}
+        self._resumenes = {k: v for k, v in self._resumenes.items() if v[1] != plugin_id}
         self._resources = {k: v for k, v in self._resources.items() if v.plugin_id != plugin_id}
         handlers = self._plugin_handlers.pop(plugin_id, [])
         event_bus.unsubscribe_all(handlers)

@@ -1,0 +1,158 @@
+{
+  "contract": "procedure/1",
+  "id": "pack_commerce.tomar_pedido",
+  "version": "1.0.0",
+  "title": "Tomar un pedido",
+  "triggers": {
+    "description": "El cliente quiere pedir o comprar productos del catálogo, para recoger o a domicilio.",
+    "examples": [
+      "quiero pedir dos hamburguesas",
+      "me lo mandan a la casa",
+      "quiero hacer un pedido",
+      "lo paso a recoger"
+    ]
+  },
+  "slots": {
+    "quote_id": {
+      "type": "string",
+      "setBy": "action:generar_cotizacion"
+    },
+    "delivery_method": {
+      "enum": [
+        "domicilio",
+        "recoger_en_tienda"
+      ],
+      "required": true
+    },
+    "address": {
+      "type": "string",
+      "requiredWhen": {
+        "slot": "delivery_method",
+        "equals": "domicilio"
+      },
+      "confirm": true,
+      "dataClass": "pii"
+    },
+    "payment_method": {
+      "enum": [
+        "pago_en_linea",
+        "transferencia",
+        "efectivo_contraentrega"
+      ],
+      "required": true,
+      "resolver": "pack_commerce.metodo_de_pago"
+    },
+    "order_id": {
+      "type": "string",
+      "setBy": "action:crear_pedido"
+    },
+    "link": {
+      "type": "string",
+      "format": "uri",
+      "setBy": "action:confirmar_pago_pedido",
+      "requiredWhen": {
+        "slot": "payment_method",
+        "equals": "pago_en_linea"
+      }
+    }
+  },
+  "stages": [
+    {
+      "id": "armar",
+      "goal": "Armar la cotización con productos, cantidades y precios reales.",
+      "actions": [
+        "consultar_inventario",
+        "recomendar_producto",
+        "generar_cotizacion",
+        "aplicar_promocion"
+      ],
+      "exitWhen": {
+        "slots": [
+          "quote_id"
+        ]
+      }
+    },
+    {
+      "id": "entrega",
+      "goal": "Acordar la entrega y el pago; a domicilio, pedir la dirección y confirmarla.",
+      "actions": [
+        "consultar_inventario",
+        "recomendar_producto",
+        "generar_cotizacion",
+        "aplicar_promocion"
+      ],
+      "exitWhen": {
+        "slots": [
+          "delivery_method",
+          "address",
+          "payment_method"
+        ],
+        "confirmed": [
+          "address"
+        ]
+      }
+    },
+    {
+      "id": "confirmar",
+      "goal": "Mostrar el total del servidor y pedir la confirmación explícita del cliente.",
+      "actions": [
+        "confirmar_cotizacion",
+        "generar_cotizacion",
+        "consultar_inventario"
+      ],
+      "confirmation": "interactive_button",
+      "exitWhen": {
+        "action": "confirmar_cotizacion",
+        "ok": true
+      }
+    },
+    {
+      "id": "pagar",
+      "goal": "Crear el pedido y, si paga en línea, enviar el link de pago.",
+      "risk": "high",
+      "actions": [
+        "crear_pedido",
+        "confirmar_pago_pedido"
+      ],
+      "exitWhen": {
+        "slots": [
+          "order_id",
+          "link"
+        ]
+      }
+    }
+  ],
+  "recovery": {
+    "actionError": "explicar"
+  },
+  "claims": [
+    {
+      "kind": "amount",
+      "mustMatch": [
+        "action:generar_cotizacion.total",
+        "action:aplicar_promocion.total",
+        "action:confirmar_cotizacion.total"
+      ]
+    },
+    {
+      "kind": "link",
+      "mustMatch": [
+        "slot:link"
+      ]
+    },
+    {
+      "kind": "status",
+      "phrases": [
+        "pedido creado",
+        "pedido quedó creado",
+        "pedido quedó confirmado",
+        "quedó registrado tu pedido"
+      ],
+      "requires": "slot:order_id"
+    }
+  ],
+  "evals": [
+    "pedido-domicilio-sin-direccion",
+    "pedido-recoger-en-tienda"
+  ]
+}

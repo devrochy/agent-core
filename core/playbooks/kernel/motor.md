@@ -32,3 +32,7 @@ Ese recorrido no está disponible ahora.
 Ya hay un recorrido en curso. Termínalo o cancélalo antes de empezar otro.
 ## error_interno
 No pude registrar el paso del recorrido. Pide disculpas y vuelve a intentarlo.
+## argumento_ligado
+El valor de {dato} no coincide con el dato vigente del recorrido. Usa el de la tarjeta de estado u omítelo: el sistema lo completa.
+## dato_bloqueado
+El dato {dato} ya no se puede cambiar: el pedido de este recorrido ya se creó. Si el cliente quiere otra cosa, cancela este recorrido y empieza uno nuevo.

@@ -520,6 +520,37 @@ async def _get_variant_with_stock(variant_id_or_sku) -> dict[str, Any] | None:  
     }
 
 
+# Campos del checkout que puede pedir un negocio (= `config._CAMPOS_VALIDOS`, en orden estable).
+CAMPOS_DE_CHECKOUT = (
+    "full_name", "id_document", "phone", "email", "business_name", "vertical", "address", "municipality", "city",
+)
+
+
+async def _plan_por_referencia(referencia: str) -> tuple[ProductVariant, Product] | None:
+    """Variante de PLAN activa del negocio por uuid o SKU exacto (HU-AOS-07)."""
+    valor = referencia.strip()
+    if not valor:
+        return None
+    variant_id = _parse_uuid(valor)
+    condicion = ProductVariant.id == variant_id if variant_id is not None else ProductVariant.sku == valor
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                select(ProductVariant, Product)
+                .join(Product, Product.id == ProductVariant.product_id)
+                .where(
+                    condicion,
+                    ProductVariant.tenant_id == get_current_tenant_id(),
+                    Product.tenant_id == get_current_tenant_id(),
+                    ProductVariant.active.is_(True),
+                    ProductVariant.billing_period.isnot(None),
+                )
+                .limit(1)
+            )
+        ).first()
+    return (fila[0], fila[1]) if fila is not None else None
+
+
 def _es_plan_variante(variant: ProductVariant) -> bool:
     """Plan recurrente (`billing_period`): se vende sin stock ni descuento de inventario.
 
@@ -1121,6 +1152,25 @@ class OrderSkill(BaseSkill):
                 },
                 handler=self.generar_cotizacion,
             ),
+            # Solo la ofrece el motor de procedimientos, en la etapa `cotizar` de
+            # `pack_commerce.contratar_plan` (HU-AOS-07): ninguna sección de flow.json la nombra,
+            # así que con las banderas apagadas no está entre las tools del turno.
+            MCPTool(
+                name="cotizar_plan",
+                description=(
+                    "Cotiza UN plan (una unidad) con el precio real del sistema y devuelve el "
+                    "quote_id, el total y los datos que el negocio pide para contratarlo. El "
+                    "variant_id es el del plan que eligió el cliente."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "variant_id": {"type": "string", "description": "variant_id del plan elegido"},
+                    },
+                    "required": ["variant_id"],
+                },
+                handler=self.cotizar_plan,
+            ),
             MCPTool(
                 name="aplicar_promocion",
                 description=(
@@ -1370,6 +1420,32 @@ class OrderSkill(BaseSkill):
             "total": round(subtotal, 2),
             "moneda": getattr(config, "currency_code", "COP") or "COP",
         }
+
+    async def cotizar_plan(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Cotización de un plan (HU-AOS-07): la misma de `generar_cotizacion` con una unidad, más
+        lo que el procedimiento `contratar_plan` necesita para pedir los datos ANTES de confirmar:
+        si hay que cobrar (`requiere_pago`) y qué campos pide el checkout del negocio para planes
+        (`pide_<campo>`, de `checkout_fields`)."""
+        variante = await _plan_por_referencia(str(arguments.get("variant_id", "")))
+        if variante is None:
+            return {"error": "No encontré ese plan. Usa el variant_id de un plan del catálogo."}
+        variant, product = variante
+        resultado = await self.generar_cotizacion(
+            {"items": [{"variant_id": str(variant.id), "quantity": 1}]}, context
+        )
+        if resultado.get("error"):
+            return resultado
+        campos = _campos_requeridos(await _plugin_config(), True, "")
+        resultado.update(
+            {
+                "variant_id": str(variant.id),
+                "plan": product.name,
+                "periodicidad": variant.billing_period,
+                "requiere_pago": _float(resultado.get("total")) > 0,
+                **{f"pide_{campo}": campo in campos for campo in CAMPOS_DE_CHECKOUT},
+            }
+        )
+        return resultado
 
     async def aplicar_promocion(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         quote_id = str(arguments.get("quote_id", ""))

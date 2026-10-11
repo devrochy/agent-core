@@ -14,8 +14,10 @@ Hay un solo verificador (`core/orchestrator/verificador/`) y una sola API
   verificador compara contra cualquier monto que venga del servidor, no contra esa fuente
   en particular.
 
-Nadie registra estas afirmaciones todavía: lo hará la habilidad que publique sus
-procedimientos (HU-AOS-07), por `register_afirmaciones`. Sin cambio de conducta.
+Nadie las registra todavía. pack-commerce, la primera habilidad que publica procedimientos
+(HU-AOS-07), sigue registrando sus `COMPLETION_CLAIMS` (ya cubren esas frases y las mide el set
+etiquetado); las `claims` de sus procedimientos sirven al verificador con estado (qué dato respalda
+un cierre) y al resumen de la confirmación. Sin cambio de conducta.
 """
 
 from __future__ import annotations

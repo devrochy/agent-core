@@ -1,0 +1,48 @@
+{
+  "nombre": "cambia-de-plan-antes-de-confirmar",
+  "semilla": 11,
+  "descripcion": "Gherkin 3 de HU-AOS-07: el cliente pide el Premium mensual y, antes de confirmar el total, se cambia al anual. La cotización se recalcula y el pedido sale del anual (la mensual nunca se acepta).",
+  "pasos": [
+    {
+      "nota": "primero el mensual, después cambia al anual",
+      "simulado": {
+        "objetivo": "Empieza pidiendo el Plan Premium mensual. Cuando te muestren el total para confirmar, NO confirmes: di que mejor quieres el Premium ANUAL. Confirma solo el total del anual y paga por transferencia. Tu objetivo se cumple cuando te confirman el pedido del anual.",
+        "datos": {
+          "nombre": "Ana Gómez",
+          "cedula": "{cliente.documento}",
+          "celular": "{cliente.celular}",
+          "correo": "ana+{cliente.id}@example.com",
+          "medio_de_pago": "transferencia"
+        },
+        "max_turnos": 12
+      },
+      "espera_fin": [
+        "objetivo"
+      ]
+    },
+    {
+      "nota": "un solo pedido, por el anual",
+      "verifica": {
+        "tabla": "pack_commerce_orders",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "total": 6000000
+        }
+      }
+    },
+    {
+      "nota": "ninguna cotización del mensual quedó aceptada",
+      "verifica": {
+        "tabla": "pack_commerce_quotes",
+        "donde": {
+          "customer_id": "{cliente.id}",
+          "status": "aceptada"
+        },
+        "filas": 0
+      }
+    }
+  ]
+}

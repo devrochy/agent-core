@@ -1,0 +1,39 @@
+{
+  "nombre": "pedido-a-domicilio",
+  "semilla": 3,
+  "descripcion": "Gherkin 2 de HU-AOS-07 (tomar_pedido): un pedido a domicilio no pasa a confirmar sin la dirección confirmada; el pedido queda con esa dirección.",
+  "pasos": [
+    {
+      "nota": "el cliente simulado pide a domicilio",
+      "simulado": {
+        "objetivo": "Pedir dos hamburguesas a domicilio y pagar por transferencia. Da tu dirección solo cuando te la pidan. Tu objetivo se cumple cuando te confirman el pedido.",
+        "datos": {
+          "nombre": "Ana Gómez",
+          "celular": "{cliente.celular}",
+          "direccion": "Calle 10 # 20-30",
+          "ciudad": "Bogotá",
+          "medio_de_pago": "transferencia"
+        },
+        "max_turnos": 10
+      },
+      "espera_fin": [
+        "objetivo"
+      ]
+    },
+    {
+      "nota": "el pedido tiene la dirección y el total del servidor",
+      "verifica": {
+        "tabla": "pack_commerce_orders",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "delivery_method": "domicilio",
+          "delivery_address": "$no_nulo",
+          "total": 50000
+        }
+      }
+    }
+  ]
+}

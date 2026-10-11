@@ -51,6 +51,9 @@ ReferenciasFn = Callable[[uuid.UUID, uuid.UUID], Awaitable[list["Referencia"]]]
 ValidarDatoFn = Callable[[Any, "ToolContext", dict[str, Any]], Awaitable["ResolverResult"]]
 # candidatos de un dato (`candidates.source: resolver:`): (contexto, datos) -> ids que el cliente elige
 CandidatosFn = Callable[["ToolContext", dict[str, Any]], Awaitable[list[str]]]
+# resumen de confirmación de una acción de un pack (HU-AOS-07, adenda HU-AOS-09 de ADR-0113):
+# (args firmados, contexto) -> datos que el cliente confirma, o None si no hay un resumen fiel
+ResumenFn = Callable[[dict[str, Any], "ToolContext"], Awaitable["list[DatoDeResumen] | None"]]
 
 
 @dataclass
@@ -404,6 +407,18 @@ class ResolverResult:
     ok: bool
     value: Any = None
     error: str = ""
+
+
+@dataclass(frozen=True)
+class DatoDeResumen:
+    """Una línea del resumen que el cliente confirma (HU-AOS-07). Lo arma el pack desde SU
+    estado (p. ej. la cotización vigente), nunca desde el texto del modelo. El core muestra
+    `nombre` como rótulo y sanea `valor` (`core/kernel/confirmacion.py`); `es_monto` va primero y
+    con el formato de dinero."""
+
+    nombre: str
+    valor: Any
+    es_monto: bool = False
 
 
 @dataclass(frozen=True)
