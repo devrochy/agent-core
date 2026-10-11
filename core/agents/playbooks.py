@@ -101,6 +101,16 @@ async def load_playbook(
     # "el caller ya lo intentó y no hay slug" (no reintentar la query por
     # cada playbook del loop de build_system_blocks si la BD está fallando).
     # El negocio sale del `tenant_scope`, nunca de `spec.tenantId`.
+    # Con `aos_runtime = 'v3'` el override sale de la release del turno (ADR-0117 §2), no del
+    # disco: un nombre sin override congelado usa el default del pack/core.
+    from core.shared import release_vigente
+
+    congelada = release_vigente.vigente()
+    if congelada is not None:
+        texto = congelada.playbooks.get(name)
+        if texto is not None:
+            return _strip_frontmatter(texto)
+        tenant_slug = ""
     slug = tenant_slug
     if slug is None:
         from core.shared.tenant import current_tenant_slug

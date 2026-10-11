@@ -5,6 +5,8 @@
     "core/memory/vector.py",
     "core/kernel",
     "core/shared/turno.py",
+    "core/shared/release_vigente.py",
+    "core/releases",
     "core/observability/celery_trazas.py",
     "packages/contracts/agentcore_contracts/procedure.py",
     "packages/contracts/agentcore_contracts/agentspec.py",
@@ -15,7 +17,8 @@
     "core/agents/secretos.py",
     "core/agents/versiones.py",
     "core/api/routers/agents.py",
-    "core/api/routers/declarative_tools.py"
+    "core/api/routers/declarative_tools.py",
+    "core/api/routers/connection_releases.py"
   ],
   "pythonVersion": "3.12",
   "typeCheckingMode": "basic",
