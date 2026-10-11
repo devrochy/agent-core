@@ -48,7 +48,7 @@ Locks: cada tabla se altera en su propia transacción corta con `lock_timeout` d
 (`customers` sola); los backfills no toman locks de tabla.
 
 Revision ID: 0080
-Revises: 0076
+Revises: 0079
 Create Date: 2026-10-11
 """
 
@@ -61,7 +61,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0080"
-down_revision = "0076"
+down_revision = "0079"
 branch_labels = None
 depends_on = None
 
