@@ -20,7 +20,7 @@ la lleve un outbound que no es plantilla.
 Downgrade: revertir el código antes (el modelo mapea la columna).
 
 Revision ID: 0082
-Revises: 0076
+Revises: 0080
 Create Date: 2026-10-11
 """
 
@@ -29,7 +29,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "0082"
-down_revision = "0076"
+down_revision = "0080"
 branch_labels = None
 depends_on = None
 
