@@ -4,7 +4,8 @@ Contexto inmediato de la conversación: últimos N turnos, para armar el
 historial del LLM sin golpear Postgres en cada turno. Degrada con gracia:
 si Redis falla, el orchestrator reconstruye desde Postgres (Capa 2 de messages).
 
-Clave: wm:{conversation_id} -> LPUSH de JSON {role, content, tool_calls}
+Clave: wm:{tenant_id}:{conversation_id} (wm:{conversation_id} sin tenant en contexto)
+-> RPUSH de JSON {role, content, tool_calls}
 TTL: 24h (una conversación inactiva un día completo rearma desde Postgres).
 """
 
