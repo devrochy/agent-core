@@ -697,7 +697,7 @@ async def test_ya_pague_con_el_pedido_pagado_cierra_aunque_el_evento_no_haya_lle
     _, guion = await _turno(ctx, monkeypatch, "Ya pagué", [("verificar_pago_pedido", {}), "¡Recibimos tu pago!"])
     assert "pago_confirmado" in guion.resultados[0]
     tarea = await _tarea(ctx)
-    assert tarea.status == "completed" and _valor(tarea, "pago_confirmado") is True
+    assert tarea.status == "completed" and _valor(tarea, "pago_confirmado") == "confirmado"
 
 
 async def test_un_pago_de_otro_negocio_o_de_otro_pedido_no_cierra_la_tarea(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]

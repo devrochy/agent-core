@@ -21,7 +21,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, text
+from sqlalchemy import and_, or_, select, text
 
 from core.db.models import ConversationTask
 from core.kernel import state
@@ -47,8 +47,17 @@ async def vencer_esperas_del_negocio(tenant_id: uuid.UUID, *, now: datetime | No
     from core.kernel.procedures.ejecucion import _devolver_control
     from core.shared.tenant import tenant_scope
 
-    procs = sorted({p.id for p in registro.con_cierre_por_evento()})
-    if not procs:
+    # La última etapa de cada versión, en SQL: tareas abandonadas en etapas anteriores (que nadie
+    # cierra si el cliente no vuelve) no pueden llenar el lote y tapar las que esperan el pago.
+    en_espera = [
+        and_(
+            ConversationTask.procedure_id == p.id,
+            ConversationTask.procedure_version == p.version,
+            ConversationTask.stage == p.stages[-1].id,
+        )
+        for p in registro.con_cierre_por_evento()
+    ]
+    if not en_espera:
         return 0
     limite = (now or datetime.now(UTC)) - ESPERA_MAXIMA
     cerradas = 0
@@ -60,7 +69,7 @@ async def vencer_esperas_del_negocio(tenant_id: uuid.UUID, *, now: datetime | No
                     .where(
                         ConversationTask.tenant_id == tenant_id,
                         ConversationTask.status.in_(state.ABIERTOS),
-                        ConversationTask.procedure_id.in_(procs),
+                        or_(*en_espera),
                         ConversationTask.updated_at < limite,
                     )
                     .order_by(ConversationTask.updated_at)

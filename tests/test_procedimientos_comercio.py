@@ -321,7 +321,7 @@ def test_se_completan_con_el_pago_y_esperan_en_su_ultima_etapa(proc_id: str) -> 
     assert ultima.id == "esperar_pago" and ultima.risk == "low"
     assert set(ultima.actions) == {"verificar_pago_pedido", "confirmar_pago_pedido", "consultar_inventario"}
     pago = proc.slots["pago_confirmado"]
-    assert pago.setBy == "action:verificar_pago_pedido"
+    assert pago.setBy == "action:verificar_pago_pedido" and pago.enum == ["confirmado"]  # un `false` no llena el dato
     assert pago.requiredWhen is not None and (pago.requiredWhen.slot, pago.requiredWhen.equals) == ("payment_method", "pago_en_linea")
 
 
@@ -338,7 +338,7 @@ def test_sin_pago_en_linea_la_espera_no_aplica_y_en_linea_espera_el_pago() -> No
                                        "link": _dato("https://pagos.test/OC-1", 11, fuente="action:confirmar_pago_pedido")})
     assert not motor.salida_cumplida(proc, esperar, en_linea, [])
     pagado = _tarea("esperar_pago", {**en_linea.slots,
-                                     "pago_confirmado": _dato(True, 12, fuente="action:verificar_pago_pedido")})
+                                     "pago_confirmado": _dato("confirmado", 12, fuente="action:verificar_pago_pedido")})
     assert motor.salida_cumplida(proc, esperar, pagado, [])
 
 

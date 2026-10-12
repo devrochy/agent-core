@@ -2162,7 +2162,8 @@ class OrderSkill(BaseSkill):
                 return {"error": "Pedido no encontrado."}
             estado, numero = order.payment_status, order.public_order_number
         if estado == "pagado":
-            return {"order_id": order_id, "public_order_number": numero, "pago_confirmado": True}
+            # Un valor fijo del enum del dato: nunca un booleano que un `false` pudiera "llenar".
+            return {"order_id": order_id, "public_order_number": numero, "pago_confirmado": "confirmado"}
         if estado == "rechazado":
             return {
                 "error": "pago_rechazado",

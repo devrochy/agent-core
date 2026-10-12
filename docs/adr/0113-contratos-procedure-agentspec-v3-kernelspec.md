@@ -597,7 +597,8 @@ lo mismo (el gate en replay pasa sin regrabar).
     forma que descartó la adenda 2026-10-10 de ADR-0087; duplicaría la regla `-rN` y el chequeo de
     monto en otra sesión del despachador).
   - **Espera** (etapa `esperar_pago`, última, `risk: low`: sin thinking de ADR-0132). Sale con el dato
-    `pago_confirmado` (`setBy: action:verificar_pago_pedido`, `requiredWhen` pago en línea): con
+    `pago_confirmado` (`setBy: action:verificar_pago_pedido`, `enum: ["confirmado"]` para que ningún
+    otro valor lo llene, `requiredWhen` pago en línea): con
     transferencia, contraentrega o un plan Free el dato no aplica, la etapa sale enseguida y la tarea
     se completa al crear el pedido, como antes. Acciones: `verificar_pago_pedido` (tool nueva de
     solo lectura, con `solo_con_motor_activo`: sin la bandera ni se ofrece ni se ejecuta; devuelve
@@ -622,7 +623,14 @@ lo mismo (el gate en replay pasa sin regrabar).
     solo negocios con `aos_procedures`, una transacción por tarea y `FOR UPDATE SKIP LOCKED` sobre la
     conversación (nunca espera a un turno). No es `recovery.timeout` del contrato, que sigue
     pendiente: cuando llegue, la duración debe pasar a ser dato del procedimiento y este cron, usarla.
-    Si el cliente paga después de la cancelación, el pedido se marca pagado igual.
+    Si el cliente paga después de la cancelación, el pedido se marca pagado igual. Filtra la última
+    etapa en SQL, así las tareas abandonadas en etapas anteriores no tapan las que esperan.
+  - **Sin `claim` nueva de "pago confirmado":** respaldarla con `slot:pago_confirmado` daría falsos
+    positivos cuando el cierre llegó por `order.paid` (el dato no se fija) y el modelo lo dice bien
+    tras `consultar_estado_pedido`. El "nunca des un pago por confirmado sin esta respuesta" queda en
+    la descripción de `verificar_pago_pedido`; revisable con el verificador sobre estado.
+  - El dueño de un evento de cierre sigue siendo documental (adenda de HU-AOS-05): cualquier código
+    del binario que emita `order.paid` para el negocio cierra la tarea del pedido.
 - **Política de modelo (ADR-0132):** `pagar` es `risk: high`, pero el turno en que el cliente toca
   «Confirmar» empieza en `confirmar` y corre `crear_pedido` sin thinking. Se deja así por costo: el
   thinking aplica a los turnos que empiezan en `pagar` (términos, datos faltantes).

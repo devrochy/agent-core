@@ -166,7 +166,10 @@
       }
     },
     "pago_confirmado": {
-      "type": "boolean",
+      "type": "string",
+      "enum": [
+        "confirmado"
+      ],
       "setBy": "action:verificar_pago_pedido",
       "requiredWhen": {
         "slot": "payment_method",

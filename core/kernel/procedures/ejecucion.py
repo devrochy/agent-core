@@ -1468,6 +1468,11 @@ async def cerrar_por_evento(
     ]
     if not por_valor:
         return 0
+    from core.kernel.banderas import banderas_del_negocio
+
+    # La bandera primero: con el motor apagado no se consulta ninguna tarea (una lectura por PK).
+    if not (await banderas_del_negocio(session, tenant_id)).procedimientos:
+        return 0
     filas = (
         await session.execute(
             select(ConversationTask)
@@ -1488,10 +1493,6 @@ async def cerrar_por_evento(
         if proc is not None and motor.correlaciona(proc, tarea, payload, claves):
             candidatas.append((fila.conversation_id, fila.id, proc))
     if not candidatas:
-        return 0
-    from core.kernel.banderas import banderas_del_negocio
-
-    if not (await banderas_del_negocio(session, tenant_id)).procedimientos:
         return 0
     permitidos = await registro.packs_permitidos(tenant_id)
     candidatas = [c for c in candidatas if registro.gobernable(c[2], permitidos)]
