@@ -362,7 +362,7 @@ son tools del core que arma el motor por turno (`core/kernel/procedures/comandos
 
 ## Adenda de implementación (2026-10-11, HU-AOS-09): confirmación con botón y clasificador
 
-**Estado:** propuesta; requiere la aprobación del dueño antes del merge. Cierra el "Pendiente para
+**Estado:** aceptada (dueño, 2026-10-11). Cierra el "Pendiente para
 HU-AOS-09" de la adenda de HU-AOS-05. No cambia la forma de ningún contrato. La revisó el agente
 `arquitecto` antes de escribir código. La política de modelo por riesgo está en ADR-0132.
 
