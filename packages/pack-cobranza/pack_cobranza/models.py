@@ -493,6 +493,9 @@ class Promesa(TenantMixin, Base):
     valor_prometido: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     estado: Mapped[str] = mapped_column(Text, default="pendiente")  # pendiente|cumplida|incumplida
     tipo: Mapped[str] = mapped_column(Text, default="promesa")  # promesa|abono_parcial|refinanciacion
+    # Por qué monto fue la promesa del procedimiento (HU-AOS-08): vencido|saldo_total. NULL en las de
+    # antes, las del gestor y las de la tool de siempre.
+    alcance: Mapped[str | None] = mapped_column(Text, default=None)
     creado_por: Mapped[str] = mapped_column(Text, default="ia")  # ia|gestor|propietario|agente
     idempotency_key: Mapped[str | None] = mapped_column(Text, default=None)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
@@ -512,6 +515,8 @@ class ReglaNegociacion(TenantMixin, Base):
     min_abono_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=10)
     max_reprogramaciones: Mapped[int] = mapped_column(Integer, default=2)
     umbral_saldo_autonomo: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    # Alcances de la promesa de pago que acepta el negocio (HU-AOS-08): ambos|vencido|saldo_total.
+    alcance_promesa: Mapped[str] = mapped_column(Text, default="ambos")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 

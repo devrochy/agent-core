@@ -1,7 +1,7 @@
 {
   "contract": "procedure/1",
   "id": "pack_cobranza.promesa_de_pago",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "title": "Promesa de pago",
   "triggers": {
     "description": "El cliente con saldo pendiente o en mora se compromete a pagar en una fecha",
@@ -9,20 +9,24 @@
       "te pago el viernes",
       "el 15 te cancelo",
       "la otra semana me pongo al día",
-      "pago cuando me llegue la quincena"
+      "pago cuando me llegue la quincena",
+      "el viernes te pago lo atrasado"
     ]
   },
   "slots": {
-    "saldo": { "type": "number", "setBy": "action:cob_consultar_saldo" },
+    "saldo_total": { "type": "number", "setBy": "action:cob_opciones_promesa" },
+    "vencido": { "type": "number", "setBy": "action:cob_opciones_promesa" },
+    "alcance": { "enum": ["vencido", "saldo_total"], "setBy": "action:cob_opciones_promesa" },
+    "monto": { "type": "number", "setBy": "action:cob_opciones_promesa" },
     "fecha": { "type": "date", "required": true, "resolver": "pack_cobranza.fecha_de_promesa" },
     "promesa_id": { "type": "string", "setBy": "action:cob_registrar_promesa_saldo" }
   },
   "stages": [
     {
-      "id": "consultar_saldo",
-      "goal": "Consultar el saldo real del cliente antes de hablar de montos",
-      "actions": ["cob_consultar_saldo"],
-      "exitWhen": { "slots": ["saldo"] }
+      "id": "opciones",
+      "goal": "Consultar las opciones de la promesa con sus montos reales (lo vencido o el saldo total, según la cartera), mostrárselas al cliente y registrar la que elija",
+      "actions": ["cob_opciones_promesa", "cob_consultar_saldo"],
+      "exitWhen": { "slots": ["alcance", "monto"] }
     },
     {
       "id": "fecha",
@@ -32,16 +36,30 @@
     },
     {
       "id": "registrar",
-      "goal": "Registrar la promesa por el saldo real en la fecha validada, con la confirmación del cliente",
-      "actions": ["cob_consultar_saldo", "cob_registrar_promesa_saldo"],
+      "goal": "Registrar la promesa por el monto de la opción elegida en la fecha validada, con la confirmación del cliente",
+      "actions": ["cob_opciones_promesa", "cob_registrar_promesa_saldo"],
       "confirmation": "interactive_button",
       "exitWhen": { "action": "cob_registrar_promesa_saldo", "ok": true, "slots": ["promesa_id"] }
     }
   ],
   "recovery": { "actionError": "explicar", "timeout": "relevo_humano" },
   "claims": [
-    { "kind": "amount", "mustMatch": ["action:cob_consultar_saldo.saldo"] },
+    {
+      "kind": "amount",
+      "mustMatch": [
+        "action:cob_opciones_promesa.monto",
+        "action:cob_opciones_promesa.saldo_total",
+        "action:cob_opciones_promesa.vencido",
+        "action:cob_consultar_saldo.saldo"
+      ]
+    },
     { "kind": "status", "phrases": ["promesa registrada", "quedó registrada tu promesa"], "requires": "slot:promesa_id" }
   ],
-  "evals": ["promesa-viernes-saldo-real", "promesa-fecha-fuera-de-regla", "promesa-saldo-distinto"]
+  "evals": [
+    "promesa-viernes-saldo-real",
+    "promesa-por-lo-vencido",
+    "promesa-solo-un-alcance",
+    "promesa-fecha-fuera-de-regla",
+    "promesa-saldo-distinto"
+  ]
 }

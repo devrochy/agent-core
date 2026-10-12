@@ -72,6 +72,7 @@ def test_skill_expone_tools_de_cliente() -> None:
         "cob_evaluar_negociacion",
         "cob_registrar_promesa_pago",
         "cob_registrar_promesa_saldo",  # solo la ofrece el procedimiento `promesa_de_pago` (HU-AOS-08)
+        "cob_opciones_promesa",  # ídem: alcance de la promesa (HU-AOS-08, decisión del 2026-10-11)
         "cob_registrar_abono",
         "cob_consultar_suscripcion",
         "cob_crear_suscripcion",

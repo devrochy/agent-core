@@ -31,7 +31,9 @@ PUBLICADOS = {
     "pack_subscriptions": "pack_subscriptions.cambiar_plan",
     "pack_cobranza": "pack_cobranza.promesa_de_pago",
 }
-SOLO_PROCEDIMIENTO = {"sub_cotizar_cambio_plan", "sub_aplicar_cambio_plan", "cob_registrar_promesa_saldo"}
+SOLO_PROCEDIMIENTO = {
+    "sub_cotizar_cambio_plan", "sub_aplicar_cambio_plan", "cob_registrar_promesa_saldo", "cob_opciones_promesa",
+}
 
 
 @pytest.fixture(scope="module")
@@ -79,6 +81,7 @@ def test_un_json_roto_se_salta_y_el_pack_sigue(tmp_path, monkeypatch) -> None:
 def test_cada_pack_registra_procedimiento_y_resolvers() -> None:
     from pack_calendar.procedimientos import registrar as reg_calendar
     from pack_cobranza.procedimientos import registrar as reg_cobranza
+    from pack_cobranza.skills import CobranzaSkill
     from pack_subscriptions.procedimientos import registrar as reg_subs
 
     from core.mcp.host import MCPHost
@@ -88,8 +91,11 @@ def test_cada_pack_registra_procedimiento_y_resolvers() -> None:
         ("pack_calendar", reg_calendar), ("pack_subscriptions", reg_subs), ("pack_cobranza", reg_cobranza),
     ):
         host.begin_activation(pack_id)
+        if pack_id == "pack_cobranza":
+            host.register_skill(CobranzaSkill())  # el resumen de la confirmación es de una tool suya
         registrar(host, pack_id)
         host.end_activation()
+    assert host.get_resumen("cob_registrar_promesa_saldo") is not None
     assert {p.id for lista in host.get_procedures().values() for p in lista} == set(PUBLICADOS.values())
     for nombre in (
         "pack_calendar.horario_ofrecido", "pack_calendar.tipo_de_cita",
@@ -254,3 +260,23 @@ def test_reglas_de_la_fecha_de_promesa() -> None:
     assert mismo_saldo(Decimal("850000"), 850000.0, "COP")
     assert not mismo_saldo(Decimal("850000"), 800000, "COP")
     assert not mismo_saldo(Decimal("850000"), True, "COP")
+
+
+def test_opciones_de_promesa_segun_lo_vencido_y_lo_que_permite_el_negocio() -> None:
+    """Decisión del dueño (2026-10-11): por lo vencido o por el saldo total; una sola opción si lo
+    vencido es 0 o igual al saldo; el negocio puede restringir los alcances."""
+    from pack_cobranza.procedimientos import opciones_de_promesa
+
+    def ver(saldo: int, vencido: int, permitido: str | None) -> list[tuple[str, Decimal]]:
+        return [(o.alcance, o.monto) for o in opciones_de_promesa(Decimal(saldo), Decimal(vencido), permitido)]
+
+    assert ver(600, 300, "ambos") == [("vencido", Decimal(300)), ("saldo_total", Decimal(600))]
+    assert ver(600, 0, "ambos") == [("saldo_total", Decimal(600))]             # nada vencido
+    assert ver(600, 600, "ambos") == [("saldo_total", Decimal(600))]           # todo vencido
+    assert ver(600, 300, "saldo_total") == [("saldo_total", Decimal(600))]
+    assert ver(600, 300, "vencido") == [("vencido", Decimal(300))]
+    assert ver(600, 600, "vencido") == [("vencido", Decimal(600))]
+    assert ver(600, 0, "vencido") == []                                         # nada que prometer
+    assert ver(0, 0, "ambos") == []
+    assert ver(600, 300, "otro") == [("saldo_total", Decimal(600))]            # desconocido: lo de antes
+    assert ver(600, 900, "ambos") == [("saldo_total", Decimal(600))]           # nunca más que el saldo

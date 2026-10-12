@@ -14,11 +14,11 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from math import asin, cos, radians, sin, sqrt
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 
 from core.admin.auth import hash_password
@@ -180,11 +180,18 @@ async def cobranza_summary(
 
 
 # ------------------------------------------------------------------ reglas
+AlcancePromesa = Literal["ambos", "vencido", "saldo_total"]
+
+
 class Rules(BaseModel):
     max_dias_prorroga: int
     min_abono_pct: float
     max_reprogramaciones: int
     umbral_saldo_autonomo: float
+    alcance_promesa: AlcancePromesa = Field(
+        default="ambos",
+        description="Alcances de la promesa de pago que acepta el asistente: lo vencido, el saldo total o ambos (HU-AOS-08).",
+    )
 
 
 class RulesUpdate(BaseModel):
@@ -192,6 +199,10 @@ class RulesUpdate(BaseModel):
     min_abono_pct: float = 10.0
     max_reprogramaciones: int = 2
     umbral_saldo_autonomo: float = 0.0
+    alcance_promesa: AlcancePromesa | None = Field(
+        default=None,
+        description="Alcances de la promesa de pago (ambos, vencido o saldo_total). Si no se envía, se conserva el actual.",
+    )
 
 
 @router.get("/rules", response_model=Rules)
@@ -209,7 +220,15 @@ async def get_rules(
         min_abono_pct=float(row.min_abono_pct) if row else 10.0,
         max_reprogramaciones=row.max_reprogramaciones if row else 2,
         umbral_saldo_autonomo=float(row.umbral_saldo_autonomo) if row else 0.0,
+        alcance_promesa=_alcance_de_reglas(row),
     )
+
+
+def _alcance_de_reglas(row: ReglaNegociacion | None) -> AlcancePromesa:
+    valor = row.alcance_promesa if row is not None else None
+    if valor == "vencido" or valor == "saldo_total":
+        return valor
+    return "ambos"
 
 
 @router.put("/rules", response_model=Rules)
@@ -231,6 +250,8 @@ async def save_rules(
         row.min_abono_pct = Decimal(str(max(0.0, payload.min_abono_pct)))
         row.max_reprogramaciones = max(0, payload.max_reprogramaciones)
         row.umbral_saldo_autonomo = Decimal(str(max(0.0, payload.umbral_saldo_autonomo)))
+        if payload.alcance_promesa is not None:
+            row.alcance_promesa = payload.alcance_promesa
     return await get_rules(principal)
 
 
@@ -340,6 +361,10 @@ class Promise(BaseModel):
     estado: str
     tipo: str
     creado_por: str
+    alcance: str | None = Field(
+        default=None,
+        description="Por qué monto fue la promesa del asistente: vencido o saldo_total (null en las demás).",
+    )
 
 
 class PromiseStatusUpdate(BaseModel):
@@ -383,6 +408,7 @@ async def list_promises(
             estado=p.estado,
             tipo=p.tipo,
             creado_por=p.creado_por,
+            alcance=p.alcance,
         )
         for p in rows
     ]
@@ -472,6 +498,7 @@ def _as_promise(row: Promesa, cliente: str) -> Promise:
         estado=row.estado,
         tipo=row.tipo,
         creado_por=row.creado_por,
+        alcance=row.alcance,
     )
 
 

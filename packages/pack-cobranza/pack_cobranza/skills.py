@@ -74,17 +74,32 @@ async def _prestamo_activo(session, cliente_id: uuid.UUID) -> Prestamo | None:
     ).scalars().first()
 
 
-async def _saldo_y_mora(session, prestamo: Prestamo) -> tuple[Decimal, int, Cuota | None]:
-    cuotas = (
-        await session.execute(
-            select(Cuota).where(
-                Cuota.tenant_id == get_current_tenant_id(),
-                Cuota.prestamo_id == prestamo.id,
-                Cuota.estatus.in_(("pendiente", "atrasada")),
-                Cuota.deleted_at.is_(None),
+async def _cuotas_abiertas(session, prestamo: Prestamo) -> list[Cuota]:
+    return list(
+        (
+            await session.execute(
+                select(Cuota).where(
+                    Cuota.tenant_id == get_current_tenant_id(),
+                    Cuota.prestamo_id == prestamo.id,
+                    Cuota.estatus.in_(("pendiente", "atrasada")),
+                    Cuota.deleted_at.is_(None),
+                )
             )
-        )
-    ).scalars().all()
+        ).scalars().all()
+    )
+
+
+async def _saldo_y_vencido(session, prestamo: Prestamo) -> tuple[Decimal, Decimal]:
+    """(saldo total, lo vencido): lo vencido son las cuotas abiertas que vencieron antes de hoy
+    (la misma cuenta que la mora de `_saldo_y_mora`). Alcances de la promesa (HU-AOS-08)."""
+    cuotas = await _cuotas_abiertas(session, prestamo)
+    saldo = sum((c.valor_esperado for c in cuotas), Decimal(0))
+    vencido = sum((c.valor_esperado for c in cuotas if c.fecha_vencimiento < _hoy()), Decimal(0))
+    return saldo, vencido
+
+
+async def _saldo_y_mora(session, prestamo: Prestamo) -> tuple[Decimal, int, Cuota | None]:
+    cuotas = await _cuotas_abiertas(session, prestamo)
     saldo = sum((c.valor_esperado for c in cuotas), Decimal(0))
     vencidas = [c for c in cuotas if c.fecha_vencimiento < _hoy()]
     mora = max(((_hoy() - c.fecha_vencimiento).days for c in vencidas), default=0)
@@ -108,6 +123,7 @@ async def _reglas(session) -> ReglaNegociacion:
             min_abono_pct=Decimal(10),
             max_reprogramaciones=2,
             umbral_saldo_autonomo=Decimal(0),
+            alcance_promesa="ambos",
         )
     return r
 
@@ -199,22 +215,50 @@ class CobranzaSkill(BaseSkill):
                 connection_predicate=sin_motor_activo(),
             ),
             MCPTool(
+                # HU-AOS-08 (alcance, decisión del dueño 2026-10-11): solo la ofrece el motor de
+                # procedimientos (`promesa_de_pago`). `eleccion` NO se llama como el dato `alcance`
+                # a propósito: es una elección que el servidor valida contra lo que ofrece, y la
+                # acción fija `alcance` y `monto` en el mismo lote.
+                name="cob_opciones_promesa",
+                description=(
+                    "Opciones de promesa de pago del cliente con los montos del sistema: por lo "
+                    "vencido o por el saldo total, según lo que permita la cartera. Llámala sin "
+                    "argumentos para ver las opciones y muéstraselas al cliente; cuando elija, "
+                    "llámala con su elección. Si hay una sola opción, queda elegida."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "eleccion": {
+                            "type": "string",
+                            "enum": ["vencido", "saldo_total"],
+                            "description": "La opción que eligió el cliente",
+                        },
+                    },
+                    "required": [],
+                },
+                handler=self.opciones_promesa,
+                connection_predicate=solo_con_motor_activo(),
+            ),
+            MCPTool(
                 # HU-AOS-08: solo la ofrece el motor de procedimientos (`promesa_de_pago`): ningún
                 # `flow.json` la nombra, así que el loop de siempre no la ve.
                 name="cob_registrar_promesa_saldo",
                 description=(
-                    "Registra la promesa del cliente de pagar su saldo en una fecha. Pasá la fecha "
-                    "(YYYY-MM-DD) y el saldo EXACTO que devolvió cob_consultar_saldo: el valor de la "
-                    "promesa es el saldo real del sistema y si no coincide no se registra. Pide la "
-                    "confirmación del cliente antes de ejecutarse."
+                    "Registra la promesa del cliente de pagar en una fecha por la opción que eligió "
+                    "(lo vencido o el saldo total). Pasá la fecha (YYYY-MM-DD), el alcance y el monto "
+                    "EXACTO que devolvió cob_opciones_promesa: el valor de la promesa es el del "
+                    "sistema y si no coincide no se registra. Pide la confirmación del cliente antes "
+                    "de ejecutarse."
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "fecha": {"type": "string", "description": "Fecha prometida (YYYY-MM-DD)"},
-                        "saldo": {"type": "number", "description": "saldo de cob_consultar_saldo"},
+                        "alcance": {"type": "string", "enum": ["vencido", "saldo_total"]},
+                        "monto": {"type": "number", "description": "monto de cob_opciones_promesa"},
                     },
-                    "required": ["fecha", "saldo"],
+                    "required": ["fecha", "alcance", "monto"],
                 },
                 handler=self.registrar_promesa_saldo,
                 connection_predicate=solo_con_motor_activo(),
@@ -438,16 +482,75 @@ class CobranzaSkill(BaseSkill):
             await session.flush()
             return {"registrada": True, "promesa_id": str(promesa.id), "fecha": fecha.isoformat(), "valor": float(valor)}
 
+    async def opciones_promesa(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Opciones de la promesa (HU-AOS-08, alcance): los montos y los alcances los decide el
+        servidor con la configuración del negocio. Con una elección válida (o una sola opción)
+        devuelve `alcance` y `monto`, que el procedimiento guarda juntos."""
+        from pack_cobranza.procedimientos import ALCANCES, ROTULO_ALCANCE, opciones_del_prestamo
+
+        eleccion = arguments.get("eleccion")
+        if eleccion is not None and eleccion not in ALCANCES:
+            return {"error": "Elección inválida: usa vencido o saldo_total."}
+        async with get_session() as session:
+            cliente = await _cliente_de_customer(session, context.customer_id)
+            prestamo = await _prestamo_activo(session, cliente.id) if cliente is not None else None
+            if prestamo is None:
+                return {"error": "El cliente no tiene un préstamo vigente: no hay promesa que registrar."}
+            saldo, vencido = await _saldo_y_vencido(session, prestamo)
+            opciones = await opciones_del_prestamo(session, prestamo)
+            cartera = await get_owned(session, Cartera, prestamo.cartera_id)
+            moneda = cartera.moneda if cartera else "COP"
+        if not opciones:
+            if saldo <= 0:
+                return {"error": "El cliente no tiene saldo pendiente: no hay promesa que registrar."}
+            return {
+                "error": "El cliente no tiene cuotas vencidas y la cartera solo acepta promesas por lo "
+                "vencido: no hay promesa que registrar."
+            }
+        resultado: dict[str, Any] = {
+            "saldo_total": float(saldo),
+            "vencido": float(min(vencido, saldo)),
+            "opciones": [{"alcance": o.alcance, "monto": float(o.monto)} for o in opciones],
+        }
+        elegida = next((o for o in opciones if o.alcance == eleccion), None)
+        if elegida is None and eleccion is None and len(opciones) == 1:
+            elegida = opciones[0]
+        if eleccion is not None and elegida is None:
+            return {
+                "error": "Esa opción no está disponible para este cliente: ofrécele las opciones.",
+                "opciones": resultado["opciones"],
+            }
+        if elegida is not None:
+            resultado["alcance"] = elegida.alcance
+            resultado["monto"] = float(elegida.monto)
+        if eleccion is None:
+            # Las opciones con los montos del servidor, tal cual, al final de la respuesta.
+            resultado["_safe_append"] = "Opciones de promesa: " + "; ".join(
+                f"{ROTULO_ALCANCE[o.alcance]}: {_money(o.monto, moneda)}" for o in opciones
+            ) + "."
+        return resultado
+
     async def registrar_promesa_saldo(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        """Promesa por el saldo REAL (HU-AOS-08): la fecha pasa las reglas del pack y el saldo que
-        confirmó el cliente se compara con el del servidor en la misma transacción. El valor del
-        modelo nunca se usa como monto. Todo camino sin efecto devuelve `error`."""
-        from pack_cobranza.procedimientos import error_de_fecha, mismo_saldo, reglas_del_prestamo
+        """Promesa por lo vencido o por el saldo total (HU-AOS-08): la fecha pasa las reglas del
+        pack, el alcance tiene que ser uno de los que el servidor ofrece y el monto que confirmó el
+        cliente se compara con el del servidor en la misma transacción. El valor del modelo nunca
+        se usa como monto. Todo camino sin efecto devuelve `error`."""
+        from pack_cobranza.procedimientos import (
+            ALCANCES,
+            ROTULO_ALCANCE,
+            error_de_fecha,
+            mismo_saldo,
+            opciones_del_prestamo,
+            reglas_del_prestamo,
+        )
 
         try:
             fecha = date.fromisoformat(str(arguments.get("fecha") or "").strip())
         except ValueError:
             return {"error": "fecha inválida (usar YYYY-MM-DD)"}
+        alcance = arguments.get("alcance")
+        if alcance not in ALCANCES:
+            return {"error": "Alcance inválido: usa vencido o saldo_total."}
         async with get_session() as session:
             cliente = await _cliente_de_customer(session, context.customer_id)
             prestamo = await _prestamo_activo(session, cliente.id) if cliente is not None else None
@@ -467,19 +570,24 @@ class CobranzaSkill(BaseSkill):
             if existente is not None:
                 return {
                     "registrada": True, "ya_existe": True, "promesa_id": str(existente.id),
-                    "fecha": existente.fecha_prometida.isoformat(), "saldo": float(existente.valor_prometido),
+                    "fecha": existente.fecha_prometida.isoformat(),
+                    "alcance": existente.alcance, "monto": float(existente.valor_prometido),
                 }
             # Serializa las promesas del préstamo (el tope de pendientes es count-then-insert).
             await session.refresh(prestamo, with_for_update=True)
-            saldo, _mora, _proxima = await _saldo_y_mora(session, prestamo)
-            if saldo <= 0:
-                return {"error": "El cliente no tiene saldo pendiente: no hay promesa que registrar."}
+            opciones = await opciones_del_prestamo(session, prestamo)
+            opcion = next((o for o in opciones if o.alcance == alcance), None)
+            if opcion is None:
+                return {
+                    "error": "Ese alcance no está disponible para este cliente: vuelve a consultar las opciones.",
+                    "opciones": [{"alcance": o.alcance, "monto": float(o.monto)} for o in opciones],
+                }
             cartera = await get_owned(session, Cartera, prestamo.cartera_id)
             moneda = cartera.moneda if cartera else "COP"
-            if not mismo_saldo(saldo, arguments.get("saldo"), moneda):
+            if not mismo_saldo(opcion.monto, arguments.get("monto"), moneda):
                 return {
-                    "error": "El saldo cambió desde que se consultó: vuelve a consultarlo y confírmalo de nuevo.",
-                    "saldo": float(saldo),
+                    "error": "El monto cambió desde que se consultó: vuelve a consultar las opciones y confírmalo de nuevo.",
+                    "monto": float(opcion.monto),
                 }
             motivo = error_de_fecha(fecha, await reglas_del_prestamo(session, prestamo))
             if motivo is not None:
@@ -489,7 +597,8 @@ class CobranzaSkill(BaseSkill):
                 prestamo_id=prestamo.id,
                 cliente_id=cliente.id,
                 fecha_prometida=fecha,
-                valor_prometido=saldo,
+                valor_prometido=opcion.monto,
+                alcance=opcion.alcance,
                 tipo="promesa",
                 creado_por="ia",
                 idempotency_key=context.idempotency_key,
@@ -500,8 +609,12 @@ class CobranzaSkill(BaseSkill):
                 "registrada": True,
                 "promesa_id": str(promesa.id),
                 "fecha": fecha.isoformat(),
-                "saldo": float(saldo),
-                "_safe_append": f"Promesa registrada: {_money(saldo, moneda)} el {fecha.isoformat()}.",
+                "alcance": opcion.alcance,
+                "monto": float(opcion.monto),
+                "_safe_append": (
+                    f"Promesa registrada: {_money(opcion.monto, moneda)} ({ROTULO_ALCANCE[opcion.alcance]}) "
+                    f"el {fecha.isoformat()}."
+                ),
             }
 
     async def registrar_abono(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
