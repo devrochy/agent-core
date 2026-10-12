@@ -33,7 +33,10 @@ jobs:
           POSTGRES_DB: agent_core
         # Puerto del host dinámico: no choca con un job del CI en otro runner del host.
         ports: ["5432"]
+        # Datos en memoria: en el runner self-hosted cada job dejaba un volumen anónimo de
+        # Postgres (~70 MB) que nadie borraba; en octubre llenaron 69 GB del disco.
         options: >-
+          --tmpfs /var/lib/postgresql/data
           --health-cmd "pg_isready -U agent_core"
           --health-interval 5s
           --health-retries 12
@@ -41,6 +44,7 @@ jobs:
         image: redis:7-alpine
         ports: ["6379"]
         options: >-
+          --tmpfs /data
           --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-retries 12
