@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import after_setup_logger, after_setup_task_logger, beat_init, worker_init
+from celery.signals import beat_init, setup_logging, worker_init
 
 from core.config import get_settings
 from core.shared.async_bridge import run_async
-from core.shared.logger import get_logger, silenciar_urls_de_clientes_http
+from core.shared.logger import configure_logging, get_logger
 
 log = get_logger(__name__)
 settings = get_settings()
@@ -357,18 +357,26 @@ def _load_plugins() -> None:
     import core.tasks.decorators  # noqa: F401
 
 
-@after_setup_logger.connect
-@after_setup_task_logger.connect
-def _silenciar_urls_al_configurar_logs(**_kwargs: object) -> None:
-    """El worker y el beat configuran sus logs con Celery, no con `configure_logging`:
-    sin esto, `httpx` registraba a nivel INFO la URL de `/oauth/access_token` con el
-    App Secret en la query (visto en el worker de test, 2026-10-08)."""
-    silenciar_urls_de_clientes_http()
+@setup_logging.connect
+def _configurar_logs(**_kwargs: object) -> None:
+    """El worker y el beat usan `configure_logging` (JSON); los procesos hijos del worker
+    (prefork) heredan la configuración por fork.
+
+    Con un receptor de esta señal Celery no toca el logger raíz ni redirige stdout al logger
+    `celery.redirected`. Antes, el worker y el beat quedaban con el default de structlog: los
+    tracebacks salían con rich y las variables locales de cada frame (visto en el worker de test,
+    2026-10-11), y `httpx` registraba la URL de `/oauth/access_token` con el App Secret (2026-10-08).
+    """
+    configure_logging()
 
 
 @worker_init.connect
 def _load_plugins_on_worker_start(**_kwargs: object) -> None:
-    """El worker necesita los plugins cargados para resolver sus tareas."""
+    """El worker necesita los plugins cargados para resolver sus tareas.
+
+    `worker_init` llega ANTES que `setup_logging`: sin configurar acá, los logs del escaneo de
+    plugins salían con el default de structlog."""
+    configure_logging()
     _load_plugins()
 
 

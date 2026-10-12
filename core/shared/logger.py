@@ -26,11 +26,39 @@ def silenciar_urls_de_clientes_http() -> None:
         logging.getLogger(nombre).setLevel(logging.WARNING)
 
 
+def _formateador_json_de_stdlib() -> logging.Formatter:
+    """Los registros de `logging` (Celery, httpx, SQLAlchemy…) también en una línea JSON, con el
+    traceback como texto plano en `exception` (sin variables locales)."""
+    return structlog.stdlib.ProcessorFormatter(
+        foreign_pre_chain=[
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.add_logger_name,
+            structlog.processors.TimeStamper(fmt="iso"),
+        ],
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            structlog.processors.format_exc_info,
+            structlog.processors.JSONRenderer(),
+        ],
+    )
+
+
 def configure_logging() -> None:
+    """Logs en JSON para los procesos de servicio: API, worker y beat de Celery, connector.
+
+    Idempotente: en el worker de Celery corre en `worker_init` y otra vez en `setup_logging`.
+    """
     settings = get_settings()
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
 
-    logging.basicConfig(format="%(message)s", stream=sys.stdout, level=level)
+    # Mismo criterio que `logging.basicConfig`: si el raíz ya tiene handlers (pytest, una
+    # llamada anterior) no se agrega otro. El nivel sí se fija siempre.
+    raiz = logging.getLogger()
+    if not raiz.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(_formateador_json_de_stdlib())
+        raiz.addHandler(handler)
+    raiz.setLevel(level)
     silenciar_urls_de_clientes_http()
 
     structlog.configure(
@@ -54,10 +82,12 @@ def configure_console_logging() -> None:
     usa rich con `show_locals=True`, que imprimía el objeto `settings` entero (API key, claves de
     cifrado) y cualquier otro objeto del frame ante una excepción.
     """
-    try:
-        formateador: Any = structlog.dev.RichTracebackFormatter(show_locals=False)
-    except (AttributeError, ModuleNotFoundError):  # sin rich: traceback plano, sin locals
-        formateador = structlog.dev.plain_traceback
+    # Sin rich, `RichTracebackFormatter` se construye igual pero falla al formatear.
+    formateador: Any = (
+        structlog.dev.RichTracebackFormatter(show_locals=False)
+        if getattr(structlog.dev, "rich", None) is not None
+        else structlog.dev.plain_traceback  # traceback plano, sin locals
+    )
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
@@ -72,3 +102,10 @@ def configure_console_logging() -> None:
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     return structlog.get_logger(name)
+
+
+# Red de seguridad: un proceso que importa el core sin llamar a `configure_logging` (así estaban el
+# worker y el beat de Celery hasta 2026-10-11) quedaba con el default de structlog, cuyos
+# tracebacks muestran las variables locales de cada frame. Con esto, a lo sumo sale en consola.
+if not structlog.is_configured():
+    configure_console_logging()

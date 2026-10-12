@@ -47,13 +47,12 @@ def test_configure_logging_silencia_las_urls_de_httpx(caplog) -> None:
 
 
 def test_el_worker_y_el_beat_de_celery_tambien_las_silencian() -> None:
-    from celery.signals import after_setup_logger, after_setup_task_logger
+    from celery.signals import setup_logging
 
     import core.tasks.celery_app as celery_app_mod
 
     _resetea()
-    after_setup_logger.send(sender=None, logger=logging.getLogger(), loglevel=logging.INFO)
-    after_setup_task_logger.send(sender=None, logger=logging.getLogger(), loglevel=logging.INFO)
+    setup_logging.send(sender=None, loglevel=logging.INFO, logfile=None, format="", colorize=False)
 
     assert celery_app_mod is not None
     for n in LOGGERS:
