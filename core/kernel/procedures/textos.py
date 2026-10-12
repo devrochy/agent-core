@@ -34,6 +34,7 @@ MENSAJES = {
     "error_interno": (),
     "argumento_ligado": ("dato",),
     "dato_bloqueado": ("dato",),
+    "sin_recorrido": ("accion", "procedimientos"),
 }
 _SECCION = re.compile(r"^## ([a-z_]+)$")
 _MAX_ERROR_RESOLVER = 300

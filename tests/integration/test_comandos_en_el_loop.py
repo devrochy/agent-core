@@ -412,7 +412,9 @@ async def test_el_estado_de_otro_negocio_no_es_evidencia(  # type: ignore[no-unt
         await _banderas(negocio, "legacy", False)
         await _banderas(otro_negocio, "legacy", False)
     assert desde_a == [] and cruzado == []
-    assert "Estado de la conversación" not in guion.system[0][-1]  # A no tiene tareas
+    # A no tiene tareas: su tarjeta es solo la pista de iniciar (adenda 2026-10-12), sin la de B.
+    tarjeta_a = guion.system[0][-1].split("## Estado de la conversación", 1)[1].split("\n## ", 1)[0]
+    assert "En foco" not in tarjeta_a and "OC-0042" not in tarjeta_a and "pack_prueba_comandos" not in tarjeta_a
     assert resultado is not None and resultado.text != "¡Sí! Tu pedido OC-0042 quedó creado."
     async with _scope(negocio) as s:
         veredicto = (await s.execute(text(

@@ -356,6 +356,7 @@ class ContextoMotor:
         permitidos: frozenset[str] = frozenset(),
         confirmar_tambien: frozenset[str] = frozenset(),
         abiertas: frozenset[str] = frozenset(),
+        sin_gobierno: str | None = None,
     ) -> None:
         self.modo: Modo = modo
         self.tenant_id = tenant_id
@@ -377,6 +378,10 @@ class ContextoMotor:
         self._seq_al_empezar = dict(seq_al_empezar or {})
         # Procedimientos con una tarea abierta: no son candidatos de `iniciar_procedimiento`.
         self._abiertas = frozenset(abiertas)
+        # Procedimiento de la tarea activa en foco que el motor no gobierna (versión fuera del
+        # binario o habilidad deshabilitada): queda el flujo v2 de respaldo y SUS puertas no se
+        # ocultan (las de los demás procedimientos, sí).
+        self._sin_gobierno = sin_gobierno
         self._cambio = False
         self._sombra: Any = None
         # HU-AOS-09: args de cada acción que pidió confirmación (por hash: son los que firma el
@@ -387,6 +392,7 @@ class ContextoMotor:
             from core.kernel.procedures.sombra import Sombra
 
             self._sombra = Sombra(tenant_id, conversation_id, procedimientos, self._core)
+        self.tarjeta = self._con_pista_sin_foco(tarjeta)
 
     # -- lo que ve el modelo
     @property
@@ -400,14 +406,73 @@ class ContextoMotor:
         if self.modo != "activo":
             return list(self._base)
         if self._foco is None:
-            # Una tool declarativa del negocio con el nombre de un comando no se ofrece.
-            salida = [t for t in self._base if t.name not in comandos.NOMBRES]
+            # Una tool declarativa del negocio con el nombre de un comando no se ofrece, ni las
+            # puertas de los procedimientos disponibles: sin foco no hay camino de siempre para
+            # lo que compromete (adenda 2026-10-12 de ADR-0113).
+            ocultas = comandos.NOMBRES | self._puertas_sin_foco()
+            salida = [t for t in self._base if t.name not in ocultas]
         else:
             permitidas = set(self._foco.stage.actions)
             salida = [t for t in self._candidatas if t.name in permitidas]
             nombres = {t.name for t in salida}
-            salida += [t for t in self._base if t.name in self._core and t.name not in nombres]
+            # Una puerta del core (`sub_aplicar_cambio_plan`) solo se ofrece si es de la etapa.
+            puertas = self._todas_las_puertas()
+            salida += [t for t in self._base if t.name in self._core and t.name not in nombres and t.name not in puertas]
         return salida + self.comandos()
+
+    # -- sin foco no hay camino de siempre (adenda 2026-10-12 de ADR-0113)
+    def _todas_las_puertas(self) -> frozenset[str]:
+        """Puertas de acción de los procedimientos disponibles del negocio (todos, no solo los
+        candidatos: una tarea en pausa no abre el camino de siempre por otro lado)."""
+        if self.modo != "activo":
+            return frozenset()
+        return frozenset().union(*(motor.acciones_de_puerta(p) for p in self.procedimientos.values()))
+
+    def _liberadas(self, procedure_id: str | None) -> frozenset[str]:
+        """Las puertas del procedimiento de una tarea sin gobierno (respaldo v2)."""
+        proc = self.procedimientos.get(procedure_id) if procedure_id is not None else None
+        return motor.acciones_de_puerta(proc) if proc is not None else frozenset()
+
+    def _puertas_sin_foco(self) -> frozenset[str]:
+        """Lo que no se ofrece sin foco: todas las puertas menos las del procedimiento de una tarea
+        activa sin gobierno (respaldo v2). Solo para la oferta y la pista: la decisión de
+        `antes_de_accion` se relee bajo el lock."""
+        return self._todas_las_puertas() - self._liberadas(self._sin_gobierno)
+
+    def _con_pista_sin_foco(self, tarjeta: str) -> str:
+        """La tarjeta más la pista de iniciar el recorrido: activo, sin foco (y sin tarea sin
+        gobierno) y con candidatos. Nombra las puertas que el negocio tiene como tools. Si los
+        rótulos fallan, la tarjeta queda como estaba (la negación en `antes_de_accion` es la
+        garantía)."""
+        if self.modo != "activo" or self._foco is not None or self._sin_gobierno is not None or not self._candidatos():
+            return tarjeta
+        from core.kernel.tarjeta import pista_sin_foco
+
+        existentes = {t.name for t in (*self._base, *self._candidatas)}
+        try:
+            return pista_sin_foco(tarjeta, sorted(self._puertas_sin_foco() & existentes))
+        except Exception as exc:
+            log.warning("motor_pista_sin_foco_fallo", error=type(exc).__name__)
+            return tarjeta
+
+    async def _negar_sin_foco(self, s: AsyncSession, accion: str, h: str) -> Previo:
+        """Sin foco (bajo el lock): una puerta de un procedimiento disponible se niega y la
+        respuesta dice qué recorrido iniciar; salvo con una tarea activa sin gobierno (respaldo v2)."""
+        filas = await state.tareas_abiertas(s, tenant_id=self.tenant_id, conversation_id=self.conversation_id)
+        activa = next((f for f in filas if f.status == "active" and f.stack_position == 0), None)
+        if activa is not None and accion in self._liberadas(activa.procedure_id):
+            return Previo()
+        abiertas = {f.procedure_id for f in filas}
+        ids = [
+            pid for pid, p in sorted(self.procedimientos.items())
+            if pid not in abiertas and accion in motor.acciones_de_puerta(p)
+        ]
+        texto = (
+            mensaje("sin_recorrido", accion=accion, procedimientos=", ".join(ids))
+            if ids else mensaje("tarea_en_curso")
+        )
+        log.info("motor_puerta_sin_foco", accion=accion, candidatos=len(ids))
+        return Previo(Decision({"error": texto}, "denied", h))
 
     # -- comandos del hilo como tools del LLM (HU-AOS-06)
     def _candidatos(self) -> list[Procedure]:
@@ -482,14 +547,20 @@ class ContextoMotor:
     # -- antes y después de cada acción
     async def antes_de_accion(self, accion: str, args: dict[str, Any]) -> Previo:
         """Decide con la proyección leída bajo lock (nunca con la del inicio del turno)."""
-        if self.modo != "activo" or accion in self._core:
+        if self.modo != "activo":
+            return Previo()
+        # Una puerta de un procedimiento se decide siempre bajo el lock, aunque sea del core
+        # (`sub_aplicar_cambio_plan`): sin foco se niega salvo el respaldo v2 (releído aquí, nunca
+        # el del inicio del turno) y con foco sigue la etapa. Las demás del core pasan como siempre.
+        puerta = accion in self._todas_las_puertas()
+        if accion in self._core and not puerta:
             return Previo()
         h = motor.hash_args(args)
         try:
             async with _con_lock(self.tenant_id, self.conversation_id) as s:
                 foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
                 if foco is None:
-                    return Previo()
+                    return await self._negar_sin_foco(s, accion, h) if puerta else Previo()
                 if accion not in foco.stage.actions:
                     return Previo(Decision(
                         {"error": mensaje("fuera_de_etapa", accion=accion, etapa=foco.stage.id)}, "denied", h
@@ -692,14 +763,17 @@ class ContextoMotor:
             async with get_session() as s:
                 filas = await state.tareas_abiertas(s, tenant_id=self.tenant_id, conversation_id=self.conversation_id)
                 self._abiertas = frozenset(f.procedure_id for f in filas)
-                self.tarjeta = renderizar_tarjeta(
+                tarjeta = renderizar_tarjeta(
                     [state.proyeccion_de(f) for f in filas], procedimientos=registro.definicion
                 )
                 self._foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
+                self._sin_gobierno = _sin_gobierno(filas, self._foco)
+                self.tarjeta = self._con_pista_sin_foco(tarjeta)
             return True
         except Exception as exc:
             log.warning("motor_releer_foco_fallo", error=type(exc).__name__)
             self.tarjeta = ""
+            self._sin_gobierno = None  # fail-closed: las puertas siguen ocultas
             return False
 
     async def instantaneas(self) -> list[dict[str, Any]] | None:
@@ -1247,6 +1321,14 @@ async def instantaneas_de_tareas(
     return salida
 
 
+def _sin_gobierno(filas: Sequence[ConversationTask], foco: _Foco | None) -> str | None:
+    """El procedimiento de la tarea activa en foco que el motor no gobierna, o None (respaldo v2,
+    adenda HU-AOS-05)."""
+    if foco is not None:
+        return None
+    return next((f.procedure_id for f in filas if f.status == "active" and f.stack_position == 0), None)
+
+
 def _nombre_seguro(nombre: Any) -> str:
     """Un nombre de dato que viene del modelo, acotado y sin saltos (va dentro de un mensaje)."""
     return " ".join(str(nombre).split())[:40] or "?"
@@ -1305,7 +1387,8 @@ async def contexto_del_motor(
         return ContextoMotor(
             modo="activo", procedimientos=registro.disponibles(enabled, disabled), tarjeta=tarjeta,
             foco=foco, texto_cliente=texto_cliente, seq_al_empezar={f.id: f.last_seq for f in filas},
-            confirmar_tambien=confirmar_tambien, abiertas=frozenset(f.procedure_id for f in filas), **comunes,
+            confirmar_tambien=confirmar_tambien, abiertas=frozenset(f.procedure_id for f in filas),
+            sin_gobierno=_sin_gobierno(filas, foco), **comunes,
         )
     if banderas.runtime == "v3" and registro.hay_procedimientos():
         procs = registro.disponibles(enabled, disabled)

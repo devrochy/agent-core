@@ -18,6 +18,9 @@ confirmación y las acciones de la etapa.
   idéntico al de siempre. La arma el motor al empezar el turno
   (`core/kernel/procedures/ejecucion.contexto_del_motor`, HU-AOS-05), con las definiciones de
   los procedimientos (título, etapas, datos requeridos y acciones).
+- Sin tarea en foco y con procedimientos que iniciar, el motor le agrega la pista de iniciar el
+  recorrido (`pista_sin_foco`, adenda 2026-10-12 de ADR-0113): la tarjeta deja de ser "" aunque no
+  haya tareas.
 """
 
 from __future__ import annotations
@@ -57,6 +60,8 @@ CLAVES = {
     "origen_persona": (),
     "acciones": ("acciones",),
     "mas_en_pausa": ("cantidad",),
+    "sin_foco": (),
+    "sin_foco_acciones": ("acciones",),
 }
 MAX_EN_PAUSA = 3          # maxStack por defecto (KernelSpec, HU-AOS-12)
 MAX_VALOR_CHARS = 200
@@ -257,3 +262,18 @@ def renderizar_tarjeta(
     if omitidas:
         salida.append(r["mas_en_pausa"].format(cantidad=omitidas))
     return "\n".join(salida)
+
+
+def pista_sin_foco(tarjeta: str, acciones: Sequence[str], r: Mapping[str, str] | None = None) -> str:
+    """La tarjeta con la pista de iniciar el recorrido (adenda 2026-10-12 de ADR-0113): con el motor
+    activo, sin tarea en foco y con procedimientos que iniciar. Sin tareas la tarjeta es solo el
+    encabezado y la pista; con tareas en pausa, la pista va al final sin repetir el encabezado.
+    `acciones` son las puertas que el negocio tiene como tools; se descartan los nombres que no
+    cumplen el patrón de acción. Pura."""
+    r = r or rotulos()
+    lineas = [tarjeta] if tarjeta else [r["encabezado"]]
+    lineas.append(r["sin_foco"])
+    validas = [a for a in acciones if _ACCION.fullmatch(a)]
+    if validas:
+        lineas.append(r["sin_foco_acciones"].format(acciones=", ".join(validas)))
+    return "\n".join(lineas)

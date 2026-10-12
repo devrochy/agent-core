@@ -12,6 +12,8 @@ Semántica (adenda de implementación de ADR-0113, HU-AOS-05):
   `exitWhen.action`, la puerta es esa acción (la que compromete); si `exitWhen` no tiene acción,
   la puerta es la salida de la etapa. `confirmActions` agrega puertas por acción. La
   confirmación de una acción queda atada al hash de sus argumentos.
+- **Sin tarea en foco** (adenda 2026-10-12): las puertas de acción de los procedimientos
+  disponibles (`acciones_de_puerta`) no se ofrecen ni se ejecutan; hay que iniciar el recorrido.
 - **Salida:** `exitWhen.slots` llenos (los `requiredWhen` que no aplican cuentan como llenos),
   `confirmed` confirmados y `action` terminada en la etapa (con `ok`, si se indica).
 """
@@ -284,6 +286,15 @@ def requiere_confirmacion(stage: Stage, accion: str) -> bool:
         and stage.exitWhen is not None
         and stage.exitWhen.action == accion
     )
+
+
+def acciones_de_puerta(proc: Procedure) -> frozenset[str]:
+    """Las acciones que son puerta de confirmación en alguna etapa (`confirmActions` y la
+    `exitWhen.action` de una etapa con `confirmation`): las que comprometen algo con el sí del
+    cliente. Sin tarea en foco no existen fuera del procedimiento (adenda 2026-10-12 de ADR-0113,
+    "sin foco no hay camino de siempre"). Regla estructural hasta que el manifiesto de acciones v2
+    (HU-AOS-34) declare el efecto de cada acción."""
+    return frozenset(a for stage in proc.stages for a in stage.actions if requiere_confirmacion(stage, a))
 
 
 def hash_args(args: Mapping[str, Any] | None) -> str:
