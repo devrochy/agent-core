@@ -90,3 +90,23 @@ async def test_promesas_admin_lista_con_nombre_de_cliente(app_client) -> None:
     promesas = r.json()
     assert len(promesas) == 1
     assert promesas[0]["cliente"] == "Juana Perez"
+    assert promesas[0]["alcance"] is None  # las del gestor y las de antes no tienen alcance
+
+
+async def test_reglas_alcance_de_la_promesa(app_client) -> None:
+    """HU-AOS-08 (decisión del dueño, 2026-10-11): el negocio restringe los alcances de la promesa.
+    Por defecto `ambos`; un PUT sin el campo (el panel de hoy) conserva el que había."""
+    slug = f"reglas-alc-{uuid.uuid4().hex[:6]}"
+    email = f"{slug}@test.local"
+    tid = await _tenant(email, slug)
+    h = _headers(await _login(app_client, email), tid)
+    url = "/api/v1/pack/cobranza/rules"
+    r = await app_client.get(url, headers=h)
+    assert r.status_code == 200 and r.json()["alcance_promesa"] == "ambos"
+    r = await app_client.put(url, headers=h, json={"max_dias_prorroga": 10, "alcance_promesa": "vencido"})
+    assert r.status_code == 200 and r.json()["alcance_promesa"] == "vencido"
+    r = await app_client.put(url, headers=h, json={"max_dias_prorroga": 12})
+    assert r.status_code == 200, r.text
+    assert (r.json()["alcance_promesa"], r.json()["max_dias_prorroga"]) == ("vencido", 12)
+    r = await app_client.put(url, headers=h, json={"alcance_promesa": "la mitad"})
+    assert r.status_code == 422

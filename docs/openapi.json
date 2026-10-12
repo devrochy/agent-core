@@ -23108,6 +23108,18 @@
           "creado_por": {
             "type": "string",
             "title": "Creado Por"
+          },
+          "alcance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alcance",
+            "description": "Por qué monto fue la promesa del asistente: vencido o saldo_total (null en las demás)."
           }
         },
         "type": "object",
@@ -24192,6 +24204,17 @@
           "umbral_saldo_autonomo": {
             "type": "number",
             "title": "Umbral Saldo Autonomo"
+          },
+          "alcance_promesa": {
+            "type": "string",
+            "enum": [
+              "ambos",
+              "vencido",
+              "saldo_total"
+            ],
+            "title": "Alcance Promesa",
+            "description": "Alcances de la promesa de pago que acepta el asistente: lo vencido, el saldo total o ambos (HU-AOS-08).",
+            "default": "ambos"
           }
         },
         "type": "object",
@@ -24224,6 +24247,23 @@
             "type": "number",
             "title": "Umbral Saldo Autonomo",
             "default": 0.0
+          },
+          "alcance_promesa": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ambos",
+                  "vencido",
+                  "saldo_total"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alcance Promesa",
+            "description": "Alcances de la promesa de pago (ambos, vencido o saldo_total). Si no se envía, se conserva el actual."
           }
         },
         "type": "object",

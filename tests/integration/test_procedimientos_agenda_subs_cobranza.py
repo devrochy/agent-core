@@ -8,7 +8,9 @@ LLM real), por el loop de verdad:
   el botón muestra el monto del servidor y el cargo se crea solo al confirmar. `sub_cambiar_plan`
   no se ofrece con el motor activo (no se puede saltar el botón). Un monto distinto no cobra.
 - **Promesa de pago:** cliente en mora promete "el viernes": la fecha pasa las reglas del pack y
-  la promesa queda por el saldo real. Una fecha fuera de regla y un saldo distinto se rechazan.
+  la promesa queda por lo vencido o por el saldo total, con el monto del servidor (decisión del
+  dueño, 2026-10-11). Una fecha fuera de regla, un alcance que el negocio no permite y un monto
+  distinto se rechazan.
 - **Bandera apagada:** las acciones nuevas no se ofrecen y `sub_cambiar_plan` sí.
 """
 
@@ -39,7 +41,9 @@ pytestmark = [
 HORAS = '{"mon": "09:00-18:00", "tue": "09:00-18:00", "wed": "09:00-18:00", "thu": "09:00-18:00", "fri": "09:00-18:00", "sat": "09:00-18:00", "sun": "09:00-18:00"}'
 PREMIUM = {"plan_code": "PLAN-PREMIUM", "nombre": "Premium", "precio": 600000.0, "moneda": "COP", "periodicidad": "mensual", "trial_dias": 0}
 VARIANTE_PREMIUM = str(uuid.uuid4())
-SOLO_PROCEDIMIENTO = {"sub_cotizar_cambio_plan", "sub_aplicar_cambio_plan", "cob_registrar_promesa_saldo"}
+SOLO_PROCEDIMIENTO = {
+    "sub_cotizar_cambio_plan", "sub_aplicar_cambio_plan", "cob_registrar_promesa_saldo", "cob_opciones_promesa",
+}
 
 
 # ---------------------------------------------------------------- packs registrados en el proceso
@@ -400,7 +404,9 @@ async def test_cambio_de_plan_con_monto_distinto_no_cobra_y_el_resolver_rechaza_
 # ---------------------------------------------------------------- Gherkin: promesa de pago
 
 
-async def _cliente_en_mora(tid: uuid.UUID, customer_id: uuid.UUID) -> uuid.UUID:
+async def _cliente_en_mora(tid: uuid.UUID, customer_id: uuid.UUID, *, con_vencida: bool = True) -> uuid.UUID:
+    """Préstamo de 600.000 en dos cuotas de 300.000: la primera vencida hace 10 días (o, sin
+    `con_vencida`, por vencer en 5) y la segunda por vencer en 20."""
     from pack_cobranza.models import Cartera, Cliente, Cuota, Prestamo
 
     hoy = date.today()
@@ -418,11 +424,58 @@ async def _cliente_en_mora(tid: uuid.UUID, customer_id: uuid.UUID) -> uuid.UUID:
         )
         s.add(prestamo)
         await s.flush()
+        primera = hoy - timedelta(days=10) if con_vencida else hoy + timedelta(days=5)
         s.add(Cuota(tenant_id=tid, prestamo_id=prestamo.id, numero_cuota=1, valor_esperado=Decimal("300000"),
-                    fecha_vencimiento=hoy - timedelta(days=10), estatus="atrasada"))
+                    fecha_vencimiento=primera, estatus="atrasada" if con_vencida else "pendiente"))
         s.add(Cuota(tenant_id=tid, prestamo_id=prestamo.id, numero_cuota=2, valor_esperado=Decimal("300000"),
                     fecha_vencimiento=hoy + timedelta(days=20), estatus="pendiente"))
         return prestamo.id
+
+
+async def _alcance_permitido(tid: uuid.UUID, alcance: str) -> None:
+    """La regla del negocio (`pack_cobranza_reglas_negociacion.alcance_promesa`)."""
+    from pack_cobranza.models import ReglaNegociacion
+
+    async with _scope(tid) as s:
+        s.add(ReglaNegociacion(tenant_id=tid, max_dias_prorroga=15, min_abono_pct=Decimal(10),
+                               max_reprogramaciones=2, umbral_saldo_autonomo=Decimal(0), alcance_promesa=alcance))
+
+
+async def _pagar_cuota_vencida(tid: uuid.UUID, prestamo_id: uuid.UUID) -> None:
+    from pack_cobranza.models import Cuota
+
+    async with _scope(tid) as s:
+        cuota = (await s.execute(select(Cuota).where(
+            Cuota.tenant_id == tid, Cuota.prestamo_id == prestamo_id, Cuota.numero_cuota == 1,
+        ))).scalar_one()
+        cuota.estatus = "pagada"
+
+
+async def _promesas(tid: uuid.UUID) -> list[tuple[str, str | None, Decimal]]:
+    from pack_cobranza.models import Promesa
+
+    async with _scope(tid) as s:
+        filas = (await s.execute(select(Promesa).where(Promesa.tenant_id == tid))).scalars().all()
+    return [(p.fecha_prometida.isoformat(), p.alcance, Decimal(p.valor_prometido)) for p in filas]
+
+
+async def _opciones(tid: uuid.UUID, conv: Any, eleccion: str | None = None) -> dict[str, Any]:
+    from pack_cobranza.skills import CobranzaSkill
+
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        return await CobranzaSkill().opciones_promesa({} if eleccion is None else {"eleccion": eleccion}, _ctx(conv))
+
+
+async def _registrar(tid: uuid.UUID, conv: Any, alcance: str, monto: Any) -> dict[str, Any]:
+    from pack_cobranza.skills import CobranzaSkill
+
+    from core.shared.tenant import tenant_scope
+
+    args = {"fecha": _proximo_viernes().isoformat(), "alcance": alcance, "monto": monto}
+    async with tenant_scope(tid):
+        return await CobranzaSkill().registrar_promesa_saldo(args, _ctx(conv))
 
 
 def _proximo_viernes() -> date:
@@ -430,61 +483,268 @@ def _proximo_viernes() -> date:
     return hoy + timedelta(days=((4 - hoy.weekday()) % 7) or 7)
 
 
-async def test_promesa_de_pago_el_viernes_por_el_saldo_real(packs_registrados, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pack_cobranza.models import Promesa
+PROC_PROMESA = "pack_cobranza.promesa_de_pago"
 
+
+async def test_promesa_de_pago_el_viernes_por_el_saldo_total(packs_registrados, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Con lo vencido y el saldo total disponibles, el cliente elige el saldo total: el botón muestra
+    el alcance y el monto del servidor, y la promesa queda por 600.000 con su alcance."""
     tid = await _negocio(["pack_cobranza"])
-    proc = "pack_cobranza.promesa_de_pago"
     viernes = _proximo_viernes().isoformat()
     lejos = (date.today() + timedelta(days=40)).isoformat()
     await _banderas(tid, True)
     try:
         conv = await _conversacion(tid)
         prestamo_id = await _cliente_en_mora(tid, conv.customer_id)
-        args = {"fecha": viernes, "saldo": 600000}
         guion = _Guion([
-            ("iniciar_procedimiento", {"procedure_id": proc}),
-            ("cob_consultar_saldo", {}),
+            ("iniciar_procedimiento", {"procedure_id": PROC_PROMESA}),
+            ("cob_opciones_promesa", {}),
+            ("cob_opciones_promesa", {"eleccion": "saldo_total"}),
             ("actualizar_tarea", {"slots": {"fecha": lejos}}),       # fuera de la regla de la cartera
             ("actualizar_tarea", {"slots": {"fecha": viernes}}),
-            ("cob_registrar_promesa_saldo", args),
+            ("cob_registrar_promesa_saldo", {"fecha": viernes, "alcance": "saldo_total", "monto": 600000}),
             "Te anoto la promesa por $10, ¿confirmas?",
         ])
         resultado = await _turno(conv, guion, monkeypatch, "te pago el viernes")
+        assert any('"vencido", "monto": 300000.0' in v or "'vencido', 'monto': 300000.0" in v for v in guion.vistos)
         assert any("La cartera acepta promesas hasta" in v for v in guion.vistos)
         assert resultado is not None and resultado.confirmacion is not None
-        assert "$10" not in resultado.text and "600.000" in resultado.text
-        async with _scope(tid) as s:
-            assert (await s.execute(select(Promesa).where(Promesa.tenant_id == tid))).first() is None
+        texto = resultado.text
+        assert "$10" not in texto and "600.000" in texto and "el saldo total" in texto
+        assert await _promesas(tid) == []
 
         await _tocar_boton(conv, resultado)
-        guion = _Guion([("cob_registrar_promesa_saldo", args), "Listo, promesa registrada."])
+        guion = _Guion([("cob_registrar_promesa_saldo", {"fecha": viernes, "alcance": "saldo_total", "monto": 600000}),
+                        "Listo, promesa registrada."])
         await _turno(conv, guion, monkeypatch, "Confirmar")
+        assert await _promesas(tid) == [(viernes, "saldo_total", Decimal("600000"))]
+        tarea, estado = await _tarea(conv, PROC_PROMESA)
+        assert estado == "completed" and (tarea.slots.get("promesa_id") or {}).get("value")
+        from pack_cobranza.models import Promesa
+
         async with _scope(tid) as s:
-            promesas = (await s.execute(select(Promesa).where(Promesa.tenant_id == tid))).scalars().all()
-        assert [(p.prestamo_id, p.fecha_prometida.isoformat(), Decimal(p.valor_prometido)) for p in promesas] == [
-            (prestamo_id, viernes, Decimal("600000"))
-        ]
-        tarea, estado = await _tarea(conv, proc)
-        assert estado == "completed" and (tarea.slots.get("promesa_id") or {}).get("value") == str(promesas[0].id)
+            assert (await s.execute(select(Promesa.prestamo_id))).scalar_one() == prestamo_id
     finally:
         await _banderas(tid, False)
 
 
-async def test_promesa_con_saldo_distinto_no_se_registra(packs_registrados) -> None:  # type: ignore[no-untyped-def]
-    from pack_cobranza.models import Promesa
-    from pack_cobranza.skills import CobranzaSkill
+async def test_promesa_por_lo_vencido_y_cambio_de_opcion_antes_del_si(packs_registrados, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """El cliente elige lo vencido (300.000); antes de confirmar cambia al saldo total: se pide otro
+    sí con el monto nuevo y el botón viejo ya no registra nada."""
+    tid = await _negocio(["pack_cobranza"])
+    viernes = _proximo_viernes().isoformat()
+    await _banderas(tid, True)
+    try:
+        conv = await _conversacion(tid)
+        await _cliente_en_mora(tid, conv.customer_id)
+        guion = _Guion([
+            ("iniciar_procedimiento", {"procedure_id": PROC_PROMESA}),
+            ("cob_opciones_promesa", {"eleccion": "vencido"}),
+            ("actualizar_tarea", {"slots": {"fecha": viernes}}),
+            # El modelo no pasa el monto: el kernel lo completa con el dato de la tarea.
+            ("cob_registrar_promesa_saldo", {"fecha": viernes, "alcance": "vencido"}),
+            "¿Confirmas?",
+        ])
+        vencido = await _turno(conv, guion, monkeypatch, "el viernes te pago lo atrasado")
+        assert vencido is not None and vencido.confirmacion is not None
+        assert "300.000" in vencido.text and "lo vencido" in vencido.text
+
+        guion = _Guion([
+            ("cob_opciones_promesa", {"eleccion": "saldo_total"}),
+            ("cob_registrar_promesa_saldo", {"fecha": viernes, "alcance": "saldo_total", "monto": 600000}),
+            "¿Confirmas?",
+        ])
+        total = await _turno(conv, guion, monkeypatch, "mejor todo")
+        assert total is not None and total.confirmacion is not None
+        assert "600.000" in total.text and "el saldo total" in total.text
+
+        await _tocar_boton(conv, vencido)   # el botón de la petición vieja
+        guion = _Guion([("cob_registrar_promesa_saldo", {"fecha": viernes, "alcance": "saldo_total", "monto": 600000}), "¿Confirmas?"])
+        await _turno(conv, guion, monkeypatch, "Confirmar")
+        assert await _promesas(tid) == []
+
+        await _tocar_boton(conv, total)
+        guion = _Guion([("cob_registrar_promesa_saldo", {"fecha": viernes, "alcance": "saldo_total", "monto": 600000}),
+                        "Listo, promesa registrada."])
+        await _turno(conv, guion, monkeypatch, "Confirmar")
+        assert await _promesas(tid) == [(viernes, "saldo_total", Decimal("600000"))]
+    finally:
+        await _banderas(tid, False)
+
+
+async def test_promesa_por_lo_vencido_registrada(packs_registrados, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    tid = await _negocio(["pack_cobranza"])
+    viernes = _proximo_viernes().isoformat()
+    await _banderas(tid, True)
+    try:
+        conv = await _conversacion(tid)
+        await _cliente_en_mora(tid, conv.customer_id)
+        args = {"fecha": viernes, "alcance": "vencido", "monto": 300000}
+        guion = _Guion([
+            ("iniciar_procedimiento", {"procedure_id": PROC_PROMESA}),
+            ("cob_opciones_promesa", {}),
+            ("cob_opciones_promesa", {"eleccion": "vencido"}),
+            ("actualizar_tarea", {"slots": {"fecha": viernes}}),
+            ("cob_registrar_promesa_saldo", args),
+            "¿Confirmas?",
+        ])
+        resultado = await _turno(conv, guion, monkeypatch, "te pago lo atrasado el viernes")
+        await _tocar_boton(conv, resultado)
+        guion = _Guion([("cob_registrar_promesa_saldo", args), "Listo, promesa registrada."])
+        await _turno(conv, guion, monkeypatch, "Confirmar")
+        assert await _promesas(tid) == [(viernes, "vencido", Decimal("300000"))]
+        tarea, estado = await _tarea(conv, PROC_PROMESA)
+        assert estado == "completed"
+        assert {n: (tarea.slots.get(n) or {}).get("value") for n in ("alcance", "monto", "saldo_total", "vencido")} == {
+            "alcance": "vencido", "monto": 300000.0, "saldo_total": 600000.0, "vencido": 300000.0,
+        }
+    finally:
+        await _banderas(tid, False)
+
+
+async def test_un_pago_entre_la_opcion_y_el_si_vuelve_a_las_opciones(packs_registrados, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """El cliente eligió lo vencido y paga la cuota antes de confirmar: el resumen no se arma
+    (monto esperado) y, al reconsultar, la tarea vuelve a `opciones` con la única opción vigente."""
+    tid = await _negocio(["pack_cobranza"])
+    viernes = _proximo_viernes().isoformat()
+    await _banderas(tid, True)
+    try:
+        conv = await _conversacion(tid)
+        prestamo_id = await _cliente_en_mora(tid, conv.customer_id)
+        guion = _Guion([
+            ("iniciar_procedimiento", {"procedure_id": PROC_PROMESA}),
+            ("cob_opciones_promesa", {"eleccion": "vencido"}),
+            ("actualizar_tarea", {"slots": {"fecha": viernes}}),
+            "¿Para qué fecha?",
+        ])
+        await _turno(conv, guion, monkeypatch, "te pago lo atrasado el viernes")
+        await _pagar_cuota_vencida(tid, prestamo_id)
+
+        guion = _Guion([("cob_registrar_promesa_saldo", {"fecha": viernes, "alcance": "vencido"}), "¿Confirmas?"])
+        resultado = await _turno(conv, guion, monkeypatch, "sí, anótala")
+        assert resultado is not None and resultado.confirmacion is not None
+        assert resultado.confirmacion.confirmacion.payload == ""   # sin resumen fiel: sin botón
+
+        guion = _Guion([
+            ("cob_opciones_promesa", {}),
+            ("cob_registrar_promesa_saldo", {"fecha": viernes, "alcance": "saldo_total", "monto": 300000}),
+            "¿Confirmas?",
+        ])
+        resultado = await _turno(conv, guion, monkeypatch, "¿y ahora cuánto?")
+        tarea, _estado = await _tarea(conv, PROC_PROMESA)
+        assert {n: (tarea.slots.get(n) or {}).get("value") for n in ("alcance", "monto", "vencido")} == {
+            "alcance": "saldo_total", "monto": 300000.0, "vencido": 0.0,
+        }
+        assert resultado is not None and resultado.confirmacion is not None and "300.000" in resultado.text
+        await _tocar_boton(conv, resultado)
+        guion = _Guion([("cob_registrar_promesa_saldo", {"fecha": viernes, "alcance": "saldo_total", "monto": 300000}),
+                        "Listo, promesa registrada."])
+        await _turno(conv, guion, monkeypatch, "Confirmar")
+        assert await _promesas(tid) == [(viernes, "saldo_total", Decimal("300000"))]
+    finally:
+        await _banderas(tid, False)
+
+
+async def test_negocio_que_solo_permite_un_alcance(packs_registrados) -> None:  # type: ignore[no-untyped-def]
+    """La regla del negocio manda: con solo `vencido` no se ofrece ni se registra el saldo total,
+    y con solo `saldo_total`, al revés. Con una sola opción, queda elegida."""
+    solo_vencido = await _negocio(["pack_cobranza"])
+    await _alcance_permitido(solo_vencido, "vencido")
+    conv = await _conversacion(solo_vencido)
+    await _cliente_en_mora(solo_vencido, conv.customer_id)
+    r = await _opciones(solo_vencido, conv)
+    assert r["opciones"] == [{"alcance": "vencido", "monto": 300000.0}]
+    assert (r["alcance"], r["monto"]) == ("vencido", 300000.0)
+    assert "error" in await _opciones(solo_vencido, conv, "saldo_total")
+    assert "error" in await _registrar(solo_vencido, conv, "saldo_total", 600000)
+    assert (await _registrar(solo_vencido, conv, "vencido", 300000)).get("registrada") is True
+
+    solo_total = await _negocio(["pack_cobranza"])
+    await _alcance_permitido(solo_total, "saldo_total")
+    conv = await _conversacion(solo_total)
+    await _cliente_en_mora(solo_total, conv.customer_id)
+    r = await _opciones(solo_total, conv)
+    assert r["opciones"] == [{"alcance": "saldo_total", "monto": 600000.0}] and r["alcance"] == "saldo_total"
+    assert "error" in await _registrar(solo_total, conv, "vencido", 300000)
+    assert await _promesas(solo_total) == []
+
+
+async def test_sin_nada_vencido_hay_una_sola_opcion(packs_registrados) -> None:  # type: ignore[no-untyped-def]
+    """Lo vencido = 0: solo el saldo total, ya elegido. Si el negocio solo acepta lo vencido, no hay
+    promesa que registrar."""
+    tid = await _negocio(["pack_cobranza"])
+    conv = await _conversacion(tid)
+    await _cliente_en_mora(tid, conv.customer_id, con_vencida=False)
+    r = await _opciones(tid, conv)
+    assert (r["vencido"], r["opciones"]) == (0.0, [{"alcance": "saldo_total", "monto": 600000.0}])
+    assert (r["alcance"], r["monto"]) == ("saldo_total", 600000.0)
+    assert "error" in await _opciones(tid, conv, "vencido")
+    assert "error" in await _registrar(tid, conv, "vencido", 0)
+
+    solo_vencido = await _negocio(["pack_cobranza"])
+    await _alcance_permitido(solo_vencido, "vencido")
+    conv = await _conversacion(solo_vencido)
+    await _cliente_en_mora(solo_vencido, conv.customer_id, con_vencida=False)
+    assert "cuotas vencidas" in (await _opciones(solo_vencido, conv))["error"]
+
+
+async def test_promesa_con_monto_distinto_no_se_registra(packs_registrados, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Monto esperado: un monto distinto del servidor no se registra (la tool), el resumen no se arma
+    y, por el motor, el argumento ligado al dato de la tarea se niega."""
+    from pack_cobranza.procedimientos import resumen_de_promesa
 
     from core.shared.tenant import tenant_scope
 
     tid = await _negocio(["pack_cobranza"])
     conv = await _conversacion(tid)
     await _cliente_en_mora(tid, conv.customer_id)
+    r = await _registrar(tid, conv, "vencido", 100)
+    assert "error" in r and r["monto"] == 300000.0
+    r = await _registrar(tid, conv, "saldo_total", 300000)     # el monto de la otra opción
+    assert "error" in r and r["monto"] == 600000.0
+    assert await _promesas(tid) == []
+    viernes = _proximo_viernes().isoformat()
     async with tenant_scope(tid):
-        r = await CobranzaSkill().registrar_promesa_saldo({"fecha": _proximo_viernes().isoformat(), "saldo": 100}, _ctx(conv))
-    assert "error" in r and r["saldo"] == 600000.0
-    async with _scope(tid) as s:
-        assert (await s.execute(select(Promesa).where(Promesa.tenant_id == tid))).first() is None
+        assert await resumen_de_promesa({"fecha": viernes, "alcance": "vencido", "monto": 100}, _ctx(conv)) is None
+        lineas = await resumen_de_promesa({"fecha": viernes, "alcance": "vencido", "monto": 300000}, _ctx(conv))
+    assert lineas is not None and [(d.nombre, d.valor, d.es_monto) for d in lineas] == [
+        ("monto", 300000.0, True), ("alcance", "lo vencido", False), ("fecha", viernes, False),
+    ]
+
+    await _banderas(tid, True)
+    try:
+        conv = await _conversacion(tid)
+        guion = _Guion([
+            ("iniciar_procedimiento", {"procedure_id": PROC_PROMESA}),
+            ("cob_opciones_promesa", {"eleccion": "vencido"}),
+            ("actualizar_tarea", {"slots": {"fecha": viernes}}),
+            ("cob_registrar_promesa_saldo", {"fecha": viernes, "alcance": "vencido", "monto": 100}),
+            "Listo.",
+        ])
+        # Otro cliente del mismo negocio, con su propio préstamo.
+        await _cliente_en_mora(tid, conv.customer_id)
+        await _turno(conv, guion, monkeypatch, "te pago lo atrasado el viernes")
+        assert "El valor de monto no coincide con el dato vigente" in guion.vistos[-1]
+        assert await _promesas(tid) == []
+    finally:
+        await _banderas(tid, False)
+
+
+async def test_alcances_y_montos_no_cruzan_negocios(packs_registrados) -> None:  # type: ignore[no-untyped-def]
+    """La regla de A (solo lo vencido) no cambia las opciones de B, y el cliente de A no existe en B."""
+    a = await _negocio(["pack_cobranza"])
+    b = await _negocio(["pack_cobranza"])
+    await _alcance_permitido(a, "vencido")
+    conv_a, conv_b = await _conversacion(a), await _conversacion(b)
+    await _cliente_en_mora(a, conv_a.customer_id)
+    await _cliente_en_mora(b, conv_b.customer_id, con_vencida=False)
+    assert [o["alcance"] for o in (await _opciones(a, conv_a))["opciones"]] == ["vencido"]
+    assert [o["alcance"] for o in (await _opciones(b, conv_b))["opciones"]] == ["saldo_total"]
+    # El cliente de A visto desde B: no hay préstamo (RLS + filtro por negocio).
+    assert "préstamo vigente" in (await _opciones(b, conv_a))["error"]
+    assert "préstamo vigente" in (await _registrar(b, conv_a, "vencido", 300000))["error"]
+    assert (await _registrar(a, conv_a, "vencido", 300000)).get("registrada") is True
+    assert await _promesas(b) == [] and len(await _promesas(a)) == 1
 
 
 # ---------------------------------------------------------------- bandera apagada
