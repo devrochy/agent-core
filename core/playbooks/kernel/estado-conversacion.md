@@ -40,3 +40,7 @@ cargado por una persona del equipo
 Acciones de esta etapa: {acciones}
 ## mas_en_pausa
 Hay {cantidad} tareas más en pausa.
+## sin_foco
+No hay un recorrido en curso. Si el cliente quiere hacer algo de la lista de iniciar_procedimiento, inícialo primero y sigue sus etapas; para consultas, responde como siempre.
+## sin_foco_acciones
+Estas acciones solo funcionan dentro de un recorrido, aunque otra instrucción diga usarlas directo: {acciones}

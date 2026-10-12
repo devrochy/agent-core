@@ -701,3 +701,83 @@ lo mismo (el gate en replay pasa sin regrabar).
     escribe la sombra (`audit_log`, Redis).
   - Un proveedor que devuelva un QR en vez de URL no llena `link` (`format: uri`) y la tarea queda en
     `pagar`; la salida es `cancelar_tarea`.
+
+## Adenda (2026-10-12): sin foco no hay camino de siempre
+
+**Estado:** propuesta; requiere la aprobación del dueño antes del merge (cambia la semántica del motor sin
+foco). La revisó el agente `arquitecto` antes de escribir código. No cambia la forma de ningún contrato, ni
+el esquema, ni lo que ve el modelo con `tenants.aos_procedures` apagada (el gate en replay pasa sin
+regrabar). Origen: prueba real en test del 2026-10-12. Con el motor activo y sin tarea en foco, el modelo
+cerró una venta por `confirmar_cotizacion` → `crear_pedido` sin llamar `iniciar_procedimiento`. Las tareas
+quedaron vacías y no hubo botón.
+
+- **Resuelve los dos pendientes anotados:**
+  - ~~(HU-AOS-07) "Con el motor activo y sin tarea en foco, `confirmar_cotizacion` y `crear_pedido` se siguen
+    ofreciendo…"~~;
+  - ~~(HU-AOS-08) "Negarlas en `antes_de_accion` sin foco es un cambio del motor que queda para una HU
+    siguiente."~~
+- **Enmienda texto aceptado:**
+  - adenda HU-AOS-05, "Acciones por etapa": ~~"Sin tarea en foco, todo queda como siempre."~~ Sin foco,
+    todo queda como siempre **salvo las puertas** (abajo);
+  - adenda HU-AOS-08: ~~"`create_calendar_event` no se oculta: … con el motor activo y sin tarea en foco se
+    sigue ofreciendo."~~ Ahora sin foco no se ofrece ni se ejecuta. El reagendado usa
+    `update_calendar_event`, que no es puerta;
+  - ADR-0114 §2: con el motor activo, sin foco y con procedimientos que iniciar, la tarjeta ya no es "",
+    aunque no haya tareas: lleva la pista de iniciar (abajo).
+- **Qué se reserva: las puertas de confirmación.** `motor.acciones_de_puerta(proc)` = las `confirmActions` y
+  la `exitWhen.action` de una etapa con `confirmation` (lo mismo que `requiere_confirmacion`). Se toma la
+  unión sobre los procedimientos disponibles del negocio (`registro.disponibles`), no solo los candidatos, así
+  una tarea en pausa (HU-AOS-20) no abre el camino de siempre por otro lado. Con los procedimientos
+  publicados hoy son `confirmar_cotizacion`, `create_calendar_event`, `cob_registrar_promesa_saldo` y
+  `sub_aplicar_cambio_plan` (un test fija el conjunto derivado de `packages/pack-*/procedures/*.json`).
+  - **No se reservan las acciones de las etapas `risk: high`**: le daría a `risk` un tercer significado (el
+    segundo, los datos congelados, ya es deuda de HU-AOS-34). Además metería `confirmar_pago_pedido`: el
+    cliente que vuelve con la tarea vencida (episodio de 12 h, cron de 72 h, tarea completada o cancelada)
+    no podría pedir otra vez el link, y la pista lo llevaría a armar otro pedido de la misma compra.
+  - **`crear_pedido` sigue ofrecida sin foco y no compromete nada nuevo:** exige una cotización `aceptada`, y
+    con el motor activo esa solo sale de `confirmar_cotizacion` dentro de una tarea, con botón. Si no la
+    hay, la tool devuelve su error de siempre, que remite a `confirmar_cotizacion`, y esa se niega con la
+    pista. Límite aceptado: si una tarea se cancela después de confirmar la cotización, `crear_pedido` sin
+    foco puede usar esa cotización ya confirmada por el cliente.
+  - Es una regla estructural hasta que el manifiesto de acciones v2 (HU-AOS-34) declare el efecto de cada
+    acción. Las consultas y lo que no se confirma con el cliente se siguen ofreciendo (`informar_plan`,
+    `consultar_inventario`, `check_availability`, `cob_consultar_saldo`, `sub_consultar`,
+    `generar_cotizacion`…).
+- **Oferta** (`ContextoMotor.herramientas`, motor activo): sin foco, las puertas no se ofrecen. Con foco
+  se ofrecen solo si son de la etapa, como siempre. Endurecimiento de la revisión de seguridad: una puerta
+  del core que el turno ya ofrecía (`sub_aplicar_cambio_plan` cuando un flujo la nombra) tampoco entra
+  por el atajo de las acciones del core.
+- **Negación** (`ContextoMotor.antes_de_accion`, bajo el lock de la conversación). Si no hay foco y el modelo
+  llama una puerta, se niega con `audit_log denied`. Vale también para la del core, p. ej.
+  `sub_aplicar_cambio_plan`. Una puerta se decide siempre bajo el lock, con el foco y el respaldo releídos,
+  nunca con lo del inicio del turno. Con foco, una puerta del core sigue la etapa: fuera de ella,
+  `fuera_de_etapa`; en ella, la puerta de confirmación del motor. El texto `sin_recorrido` del playbook del kernel `motor` nombra
+  los procedimientos candidatos (disponibles sin tarea abierta, releídos bajo el lock) que la tienen como
+  puerta, para que el modelo llame `iniciar_procedimiento` con ese id. Sin candidatos, el texto es
+  `tarea_en_curso`. La garantía es la negación; ocultarla solo ahorra vueltas. `_tool_denial` deja pasar una
+  tool registrada aunque no se ofrezca, y el resumen del flujo puede seguir nombrándola.
+- **Respaldo v2:** hay una tarea activa en la posición 0 que el motor no gobierna (versión fuera del
+  binario o habilidad deshabilitada, `_foco` = None).
+  - Las puertas **de su procedimiento** (según la definición disponible con ese id) no se ocultan ni se
+    niegan: queda el flujo v2 de respaldo de la adenda HU-AOS-05.
+  - Las de los demás procedimientos siguen reservadas.
+  - No hay pista.
+  - Para la oferta sale de las mismas filas que ya lee el motor; para la negación, de la relectura bajo el
+    lock.
+  - Si la relectura falla, se ocultan todas (fail-closed).
+- **Pista en el prompt, sin depender del playbook del negocio.** Con el motor activo, sin foco, sin tarea sin
+  gobierno y con candidatos, la tarjeta de estado lleva:
+  - el encabezado (o lo que ya mostraba, sin repetirlo);
+  - `sin_foco`: inicia el recorrido de la lista de `iniciar_procedimiento` antes de actuar; para
+    consultas, responde como siempre;
+  - `sin_foco_acciones`: las puertas que el negocio tiene como tools "solo funcionan dentro de un
+    recorrido, aunque otra instrucción diga usarlas directo".
+
+  Los textos viven en el playbook del kernel `estado-conversacion` (invariante 3) y no nombran verticales.
+  La descripción de `iniciar_procedimiento` (playbook `comandos`) también dice que se inicia antes de
+  cualquier otra acción. Un playbook de negocio que diga usar las puertas directo (override total, como el
+  de ventas de solvershub) cuesta una vuelta de negación por venta hasta que se corrija en su repo
+  (HU-AOS-22).
+- **Sin cambio:** sombra, bandera apagada, verificador y afirmaciones (una negación es un `error` y no
+  respalda nada), política de modelo (ADR-0132, solo con foco) y autoescalado (una llamada negada no
+  resuelve el turno; si el modelo insiste turno tras turno, escala).

@@ -3,7 +3,7 @@ name: comandos
 description: Descripciones de los comandos del hilo (HU-AOS-06) y sus errores. El kernel arma los schemas y solo rellena nombres validados; los títulos y descripciones de los recorridos van entre comillas, escapados.
 ---
 ## iniciar_procedimiento
-Empieza un recorrido guiado cuando el cliente quiere hacer una de las cosas de la lista. Úsalo solo si su pedido coincide con una de ellas; si no, responde como siempre. El resultado de este comando trae la tarjeta de estado vigente, que manda sobre la del inicio del turno.
+Empieza un recorrido guiado cuando el cliente quiere hacer una de las cosas de la lista. Si su pedido coincide con una de ellas, inícialo antes de cualquier otra acción: lo que se confirma con el cliente solo funciona dentro del recorrido. Si no coincide, responde como siempre. El resultado de este comando trae la tarjeta de estado vigente, que manda sobre la del inicio del turno.
 ## iniciar_procedimiento_id
 El recorrido que pide el cliente: uno de los de la lista.
 ## candidatos

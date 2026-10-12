@@ -36,3 +36,5 @@ No pude registrar el paso del recorrido. Pide disculpas y vuelve a intentarlo.
 El valor de {dato} no coincide con el dato vigente del recorrido. Usa el de la tarjeta de estado u omítelo: el sistema lo completa.
 ## dato_bloqueado
 El dato {dato} ya no se puede cambiar: el pedido de este recorrido ya se creó. Si el cliente quiere otra cosa, cancela este recorrido y empieza uno nuevo.
+## sin_recorrido
+La acción {accion} solo se puede usar dentro de un recorrido y no hay uno en curso. Inicia primero el recorrido con iniciar_procedimiento (procedure_id, uno de: {procedimientos}) y sigue sus etapas: la acción se ofrece cuando toca.

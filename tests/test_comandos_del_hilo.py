@@ -187,8 +187,9 @@ async def test_un_comando_que_no_aplica_no_se_aplica(monkeypatch) -> None:  # ty
     monkeypatch.setattr(m, "_releer_seguro", no_releer)
     monkeypatch.setattr(m, "aplicar_comando", no_debe)
     r = await m.ejecutar_comando(comandos.CANCELAR, {})
+    # Sin foco y con candidatos, la tarjeta lleva la pista de iniciar (adenda 2026-10-12).
     assert r == {
-        "ok": False, "state_card": "", "allowed_actions": [],
+        "ok": False, "state_card": m.tarjeta, "allowed_actions": [],
         "errors": [comandos.texto("comando_no_disponible", comando=comandos.CANCELAR)],
     }
     r2 = await m.ejecutar_comando(comandos.INICIAR, {"procedure_id": "pack_commerce.contratar_plan", "task_id": "x"})
