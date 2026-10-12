@@ -743,6 +743,15 @@ async def test_alcances_y_montos_no_cruzan_negocios(packs_registrados) -> None: 
     # El cliente de A visto desde B: no hay préstamo (RLS + filtro por negocio).
     assert "préstamo vigente" in (await _opciones(b, conv_a))["error"]
     assert "préstamo vigente" in (await _registrar(b, conv_a, "vencido", 300000))["error"]
+    from pack_cobranza.procedimientos import resumen_de_promesa
+
+    from core.shared.tenant import tenant_scope
+
+    args = {"fecha": _proximo_viernes().isoformat(), "alcance": "vencido", "monto": 300000}
+    async with tenant_scope(b):
+        assert await resumen_de_promesa(args, _ctx(conv_a)) is None
+    async with tenant_scope(a):
+        assert await resumen_de_promesa(args, _ctx(conv_a)) is not None
     assert (await _registrar(a, conv_a, "vencido", 300000)).get("registrada") is True
     assert await _promesas(b) == [] and len(await _promesas(a)) == 1
 
