@@ -63,7 +63,7 @@ def test_el_manifiesto_congela_los_procedimientos_que_se_registran() -> None:
 
     modulos = {m.id: m for m in plugin_manager.scan()}
     comercio = manifiesto_de_pack(modulos["pack_commerce"])
-    assert comercio.version == "2.1.0"
+    assert comercio.version == "2.2.0"
     assert comercio.manifest["provides"]["procedures"] == de_pack.crudos("pack_commerce")
     assert manifiesto_de_pack(modulos["pack_payments"]).manifest["provides"]["procedures"] == []
 
@@ -215,14 +215,20 @@ def test_la_direccion_sin_confirmar_devuelve_a_la_entrega() -> None:
 
 
 def test_tras_el_efecto_de_riesgo_alto_los_datos_se_congelan() -> None:
-    pagar = motor.etapa(_plan(), "pagar")
-    confirmar = motor.etapa(_plan(), "confirmar")
-    assert pagar is not None and confirmar is not None
-    hecho = [Evento(seq=20, type="action_succeeded", data={"action": "crear_pedido"}, actor="tool", created_at=T0)]
-    fallo = [Evento(seq=20, type="action_failed", data={"action": "crear_pedido"}, actor="tool", created_at=T0)]
-    assert motor.datos_congelados(pagar, hecho)
-    assert not motor.datos_congelados(pagar, fallo)  # antes del efecto se puede cambiar el método de pago
-    assert not motor.datos_congelados(confirmar, hecho)
+    def ev(seq: int, tipo: str, **data: Any) -> Evento:
+        return Evento(seq=seq, type=tipo, data=data, actor="kernel", created_at=T0)
+
+    entrar = [ev(1, "started", stage="elegir_plan"), ev(2, "stage_entered", from_stage="confirmar", to_stage="pagar")]
+    hecho = [*entrar, ev(3, "action_succeeded", action="crear_pedido")]
+    fallo = [*entrar, ev(3, "action_failed", action="crear_pedido")]
+    assert motor.datos_congelados(_plan(), hecho)
+    assert not motor.datos_congelados(_plan(), fallo)  # antes del efecto se puede cambiar el método de pago
+    # Una acción exitosa en una etapa de riesgo bajo no congela nada.
+    en_confirmar = [ev(1, "started", stage="confirmar"), ev(2, "action_succeeded", action="confirmar_cotizacion")]
+    assert not motor.datos_congelados(_plan(), en_confirmar)
+    # HU-AOS-07: sigue congelado en la espera del pago (etapa de riesgo bajo que viene después).
+    esperando = [*hecho, ev(4, "stage_entered", from_stage="pagar", to_stage="esperar_pago")]
+    assert motor.datos_congelados(_plan(), esperando)
 
 
 # ---------------------------------------------------------------- punto de extensión del resumen
@@ -302,3 +308,63 @@ def test_la_huella_del_resumen_cambia_con_el_total() -> None:
                           "resumen": motor.huella_de_resumen(antes)})
     assert motor.huella_pedida([pedida], "confirmar_cotizacion", "h") == motor.huella_de_resumen(antes)
     assert motor.huella_pedida([pedida], "confirmar_cotizacion", "otro") is None
+
+
+# ---------------------------------------------------------------- cierre por pago (decisión del dueño 2026-10-11)
+
+
+@pytest.mark.parametrize("proc_id", ["pack_commerce.contratar_plan", "pack_commerce.tomar_pedido"])
+def test_se_completan_con_el_pago_y_esperan_en_su_ultima_etapa(proc_id: str) -> None:
+    proc = _procs()[proc_id]
+    assert proc.completion is not None and proc.completion.events == ["pack_commerce.order.paid"]
+    ultima = proc.stages[-1]
+    assert ultima.id == "esperar_pago" and ultima.risk == "low"
+    assert set(ultima.actions) == {"verificar_pago_pedido", "confirmar_pago_pedido", "consultar_inventario"}
+    pago = proc.slots["pago_confirmado"]
+    assert pago.setBy == "action:verificar_pago_pedido"
+    assert pago.requiredWhen is not None and (pago.requiredWhen.slot, pago.requiredWhen.equals) == ("payment_method", "pago_en_linea")
+
+
+def test_sin_pago_en_linea_la_espera_no_aplica_y_en_linea_espera_el_pago() -> None:
+    proc, servidor = _plan(), "action:crear_pedido"
+    esperar = motor.etapa(proc, "esperar_pago")
+    assert esperar is not None
+    base = {"order_id": _dato("o-1", 10, fuente=servidor)}
+    transferencia = _tarea("esperar_pago", {**base, "payment_method": _dato("transferencia", 5)})
+    assert motor.salida_cumplida(proc, esperar, transferencia, [])
+    free = _tarea("esperar_pago", base)  # Free: sin método de pago
+    assert motor.salida_cumplida(proc, esperar, free, [])
+    en_linea = _tarea("esperar_pago", {**base, "payment_method": _dato("pago_en_linea", 5),
+                                       "link": _dato("https://pagos.test/OC-1", 11, fuente="action:confirmar_pago_pedido")})
+    assert not motor.salida_cumplida(proc, esperar, en_linea, [])
+    pagado = _tarea("esperar_pago", {**en_linea.slots,
+                                     "pago_confirmado": _dato(True, 12, fuente="action:verificar_pago_pedido")})
+    assert motor.salida_cumplida(proc, esperar, pagado, [])
+
+
+def test_order_paid_correlaciona_por_el_pedido_que_fijo_crear_pedido() -> None:
+    from core.shared.events import CLAVES_DE_CORRELACION, ON_ORDER_PAID
+
+    claves = CLAVES_DE_CORRELACION[ON_ORDER_PAID]
+    assert claves == ("order_id",)
+    proc = _plan()
+    tarea = _tarea("esperar_pago", {"order_id": _dato("o-1", 10, fuente="action:crear_pedido")})
+    assert motor.correlaciona(proc, tarea, {"order_id": "o-1", "public_order_number": "OC-0001"}, claves)
+    assert not motor.correlaciona(proc, tarea, {"order_id": "o-2", "public_order_number": "OC-0001"}, claves)
+    # Un pedido que escribió el modelo nunca correlaciona.
+    del_modelo = _tarea("esperar_pago", {"order_id": _dato("o-1", 10)})
+    assert not motor.correlaciona(proc, del_modelo, {"order_id": "o-1"}, claves)
+
+
+def test_verificar_pago_pedido_solo_existe_con_el_motor_y_ningun_flujo_la_nombra() -> None:
+    import json
+    from pathlib import Path
+
+    from pack_commerce.skills import OrderSkill
+
+    tools = {t.name: t for t in OrderSkill().get_tools()}
+    assert tools["verificar_pago_pedido"].connection_predicate is not None
+    assert tools["verificar_pago_pedido"].parameters["required"] == ["order_id"]
+    raiz = Path(__file__).resolve().parents[1]
+    for flujo in [raiz / "core" / "flow.json", *sorted((raiz / "packages").glob("pack-*/flow.json"))]:
+        assert "verificar_pago_pedido" not in json.dumps(json.loads(flujo.read_text(encoding="utf-8"))), flujo

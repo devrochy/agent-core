@@ -14,6 +14,11 @@ prueba. Gherkin de la HU:
 
 Más: plan pago por transferencia, Free sin link, datos del negocio vendedor (términos del alta) y
 bandera apagada.
+
+Cierre por pago (decisión del dueño 2026-10-11): con pago en línea la tarea espera en
+`esperar_pago` hasta `order.paid` (webhook simulado real de pack-payments → outbox → despachador →
+commerce marca el pedido pagado → `order.paid` → cierre), con pago rechazado, link vencido,
+"ya pagué", dato bloqueado, aislamiento entre negocios y vencimiento de la espera.
 """
 
 from __future__ import annotations
@@ -276,7 +281,8 @@ async def test_contratar_premium_mensual_pedido_y_link_del_servidor(negocio, mon
     ])
     assert "no coincide con el dato vigente" in guion.resultados[2]
     tarea = await _tarea(ctx)
-    assert tarea.status == "completed", guion.resultados
+    # Cierre por pago (decisión del dueño 2026-10-11): con el link, la tarea espera el pago.
+    assert (tarea.stage, tarea.status) == ("esperar_pago", "active"), guion.resultados
     premium = await _variante_id(ctx, "PREMIUM-MES")
     pedido = (await _filas(ctx, "select id, total, payment_status, public_order_number, payment_link_url "
                                 "from pack_commerce_orders where tenant_id = :t and customer_id = :c",
@@ -509,7 +515,7 @@ async def test_con_la_bandera_apagada_no_se_ofrece_nada_nuevo(negocio, monkeypat
                         c=ctx.customer_id) == []
     ofrecidas = set(guion.tools[0])
     assert "generar_cotizacion" in ofrecidas and "crear_pedido" in ofrecidas
-    assert "cotizar_plan" not in ofrecidas
+    assert "cotizar_plan" not in ofrecidas and "verificar_pago_pedido" not in ofrecidas
     assert not ofrecidas & {"iniciar_procedimiento", "actualizar_tarea", "confirmar_tarea", "cancelar_tarea"}
     assert await _tarea(ctx) is None
 
@@ -529,3 +535,273 @@ async def test_las_frases_de_los_procedimientos_se_verifican_solo_con_el_motor(n
     finally:
         await _banderas(tid, True)
     assert resultado.text == afirma
+
+
+# ---------------------------------------------------------------- cierre por pago (dueño, 2026-10-11)
+
+
+async def _hasta_el_link(ctx: Any, monkeypatch: Any) -> Any:
+    """Premium mensual con pago en línea hasta mandar el link: la tarea queda esperando el pago."""
+    await _hasta_el_resumen(ctx, monkeypatch, "premium mensual", "pago_en_linea")
+    await _turno(ctx, monkeypatch, "Sí, confirmo", [
+        ("confirmar_tarea", {}),
+        ("confirmar_cotizacion", {}),
+        ("crear_pedido", {"payment_method": "pago_en_linea", "customer_data": {}}),
+        ("confirmar_pago_pedido", {}),
+        "Listo, ya puedes pagar.",
+    ])
+    tarea = await _tarea(ctx)
+    assert (tarea.stage, tarea.status) == ("esperar_pago", "active")
+    [pedido] = await _filas(ctx, "select id, public_order_number, payment_status from pack_commerce_orders "
+                                 "where tenant_id = :t and customer_id = :c", c=ctx.customer_id)
+    assert _valor(tarea, "order_id") == str(pedido.id)
+    return pedido
+
+
+async def _webhook(tid: uuid.UUID, reference: str, estado: str, monto: float, provider_reference: str | None = None) -> None:
+    """El webhook verificado de la pasarela, por el camino real de pack-payments (transacción y outbox)."""
+    from pack_payments.module import _apply_webhook_event
+    from pack_payments.providers.base import WebhookEvent
+
+    from core.shared.tenant import tenant_scope
+
+    evento = WebhookEvent(reference=reference, provider_reference=provider_reference or f"sim-{reference}",
+                          status=estado, raw={"simulado": True}, amount=monto)
+    async with tenant_scope(tid):
+        assert await _apply_webhook_event(evento, {"simulado": True}, "simulado") is not None
+
+
+async def _despachar(tid: uuid.UUID) -> None:
+    """Entrega el outbox del negocio como el worker (`entregar_evento`), en varias rondas."""
+    ctx = journeys.Contexto(tid, uuid.uuid4(), uuid.uuid4(), None)
+    await journeys.paso_outbox(ctx, {"outbox": True, "rondas": 5}, [])
+
+
+async def _eventos(ctx: Any, topic: str) -> list[Any]:
+    return await _filas(ctx, "select payload, status from domain_events where tenant_id = :t and topic = :p",
+                        p=topic)
+
+
+async def _mi_order_paid(ctx: Any, order_id: Any) -> list[Any]:
+    return [e for e in await _eventos(ctx, "order.paid") if e.payload.get("order_id") == str(order_id)]
+
+
+async def test_el_pago_confirmado_por_el_webhook_cierra_la_tarea(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    tid, pagos = negocio
+    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset())
+    ctx = await _cliente(tid, pagos)
+    pedido = await _hasta_el_link(ctx, monkeypatch)
+
+    # Mientras espera: solo las acciones de la espera (más las del core y los comandos); el pedido ya
+    # existe, así que el método de pago no se puede cambiar (sería un segundo pedido).
+    _, guion = await _turno(ctx, monkeypatch, "¿Ya quedó mi pago? Mejor lo pago por transferencia", [
+        ("verificar_pago_pedido", {}),
+        ("actualizar_tarea", {"slots": {"payment_method": "transferencia"}}),
+        ("crear_pedido", {"payment_method": "transferencia", "customer_data": {}}),
+        "Todavía no veo tu pago.",
+    ])
+    ofrecidas = set(guion.tools[0])
+    assert {"verificar_pago_pedido", "confirmar_pago_pedido", "consultar_inventario"} <= ofrecidas
+    assert not ofrecidas & {"crear_pedido", "confirmar_cotizacion", "cotizar_plan", "generar_cotizacion"}
+    assert "pago_pendiente" in guion.resultados[0]
+    assert "ya no se puede cambiar" in guion.resultados[1]
+    assert "no corresponde a la etapa" in guion.resultados[2]
+    tarea = await _tarea(ctx)
+    assert (tarea.stage, tarea.status, _valor(tarea, "payment_method")) == ("esperar_pago", "active", "pago_en_linea")
+
+    await _webhook(tid, pedido.public_order_number, "aprobado", 600000)
+    await _despachar(tid)
+    tarea = await _tarea(ctx)
+    assert (tarea.status, tarea.stage) == ("completed", "esperar_pago")
+    cierre = await _filas(ctx, "select data from task_events where tenant_id = :t and task_id = :k and type = 'completed'",
+                          k=tarea.id)
+    assert [c.data.get("event") for c in cierre] == ["pack_commerce.order.paid"]
+    [estado] = await _filas(ctx, "select payment_status from pack_commerce_orders where tenant_id = :t and id = :o",
+                            o=pedido.id)
+    assert estado.payment_status == "pagado"
+    assert [e.status for e in await _mi_order_paid(ctx, pedido.id)] == ["entregado"]
+
+    # Un webhook repetido no emite otro `order.paid` ni toca la tarea cerrada.
+    await _webhook(tid, pedido.public_order_number, "aprobado", 600000)
+    await _despachar(tid)
+    assert len(await _mi_order_paid(ctx, pedido.id)) == 1
+
+
+async def test_pago_rechazado_sigue_esperando_y_el_reintento_aprobado_cierra(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    tid, pagos = negocio
+    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset())
+    ctx = await _cliente(tid, pagos)
+    pedido = await _hasta_el_link(ctx, monkeypatch)
+
+    await _webhook(tid, pedido.public_order_number, "rechazado", 600000)
+    await _despachar(tid)
+    tarea = await _tarea(ctx)
+    assert (tarea.stage, tarea.status) == ("esperar_pago", "active")  # el cliente puede reintentar
+    assert await _mi_order_paid(ctx, pedido.id) == []  # un rechazo no emite nada
+    _, guion = await _turno(ctx, monkeypatch, "Ya pagué", [("verificar_pago_pedido", {}), "Tu pago fue rechazado."])
+    assert "pago_rechazado" in guion.resultados[0]
+    assert (await _tarea(ctx)).status == "active"
+
+    await _webhook(tid, pedido.public_order_number, "aprobado", 600000)  # reintento en el mismo link
+    await _despachar(tid)
+    tarea = await _tarea(ctx)
+    assert tarea.status == "completed"
+
+
+async def test_link_vencido_sale_uno_nuevo_y_el_pago_en_el_nuevo_cierra(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import pack_payments.payments as capacidad
+    from pack_payments.providers.base import PaymentLinkResult
+
+    tid, pagos = negocio
+    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset())
+    ctx = await _cliente(tid, pagos)
+    pedido = await _hasta_el_link(ctx, monkeypatch)
+    viejo = _valor(await _tarea(ctx), "link")
+    await _filas(ctx, "update pack_payments_transactions set created_at = now() - interval '25 hours' "
+                      "where tenant_id = :t and reference = :r returning id", r=pedido.public_order_number)
+
+    original = capacidad.build_provider
+
+    def segundo_link(config: Any) -> Any:  # la pasarela da otro link y otra referencia propia
+        proveedor = original(config)
+        crear = proveedor.create_payment_link
+
+        async def create_payment_link(**kwargs: Any) -> Any:
+            r = await crear(**kwargs)
+            return PaymentLinkResult(provider_reference=f"{r.provider_reference}-2", payment_link_url=f"{r.payment_link_url}?n=2")
+
+        proveedor.create_payment_link = create_payment_link
+        return proveedor
+
+    monkeypatch.setattr(capacidad, "build_provider", segundo_link)
+    await _turno(ctx, monkeypatch, "El link ya no me abre", [("confirmar_pago_pedido", {}), "Te mando uno nuevo."])
+    tarea = await _tarea(ctx)
+    nuevo = _valor(tarea, "link")
+    assert nuevo == f"{viejo}?n=2" and tarea.stage == "esperar_pago"  # el resultado de la acción sí se anota
+    transacciones = await _filas(ctx, "select status, deleted_at from pack_payments_transactions where tenant_id = :t "
+                                      "and reference = :r order by created_at", r=pedido.public_order_number)
+    assert [(t.status, t.deleted_at is not None) for t in transacciones] == [("expirado", True), ("pendiente", False)]
+
+    await _webhook(tid, pedido.public_order_number, "aprobado", 600000, provider_reference=f"sim-{pedido.public_order_number}-2")
+    await _despachar(tid)
+    assert (await _tarea(ctx)).status == "completed"
+
+
+async def test_ya_pague_con_el_pedido_pagado_cierra_aunque_el_evento_no_haya_llegado(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    tid, pagos = negocio
+    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset())
+    ctx = await _cliente(tid, pagos)
+    pedido = await _hasta_el_link(ctx, monkeypatch)
+    await _filas(ctx, "update pack_commerce_orders set payment_status = 'pagado' where tenant_id = :t and id = :o "
+                      "returning id", o=pedido.id)
+    _, guion = await _turno(ctx, monkeypatch, "Ya pagué", [("verificar_pago_pedido", {}), "¡Recibimos tu pago!"])
+    assert "pago_confirmado" in guion.resultados[0]
+    tarea = await _tarea(ctx)
+    assert tarea.status == "completed" and _valor(tarea, "pago_confirmado") is True
+
+
+async def test_un_pago_de_otro_negocio_o_de_otro_pedido_no_cierra_la_tarea(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from core.events.outbox import emit_domain
+    from core.shared.tenant import tenant_scope
+    from core.tenants import deactivate_tenant, purge_tenant
+
+    tid, pagos = negocio
+    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset())
+    ctx = await _cliente(tid, pagos)
+    pedido = await _hasta_el_link(ctx, monkeypatch)
+    slug_b = f"aos07b-{uuid.uuid4().hex[:8]}"
+    tid_b = await journeys.preparar_negocio(
+        {"nombre": "Otro comercio", "packs": ["pack_commerce", "pack_payments"], "plan": "premium",
+         "config": {"pack_payments": {"public_key": "pub_test_b", "private_key": "prv_test_b",
+                                      "events_secret": "test_events_b", "sandbox": True}},
+         "catalogo": CATALOGO},
+        pagos, slug=slug_b,
+    )
+    try:
+        await _banderas(tid_b, True)
+        # En el otro negocio: un pago con el MISMO número público y un `order.paid` con el id del
+        # pedido de este negocio (lo que llegaría si alguien lo inyectara allá).
+        async with tenant_scope(tid_b):
+            from core.db.session import get_session
+
+            async with get_session() as s:
+                await emit_domain(s, tenant_id=tid_b, topic="payment.confirmed", dedupe_key=f"t:{uuid.uuid4()}",
+                                  payload={"reference": pedido.public_order_number, "provider": "simulado",
+                                           "provider_reference": "sim-x", "amount": 600000})
+                await emit_domain(s, tenant_id=tid_b, topic="order.paid", dedupe_key=f"t:{uuid.uuid4()}",
+                                  payload={"order_id": str(pedido.id), "public_order_number": pedido.public_order_number})
+        await _despachar(tid_b)
+        # En este negocio: el `order.paid` de OTRO pedido.
+        async with tenant_scope(tid):
+            async with get_session() as s:
+                await emit_domain(s, tenant_id=tid, topic="order.paid", dedupe_key=f"t:{uuid.uuid4()}",
+                                  payload={"order_id": str(uuid.uuid4()), "public_order_number": "OC-9999"})
+        await _despachar(tid)
+        tarea = await _tarea(ctx)
+        assert (tarea.stage, tarea.status) == ("esperar_pago", "active")
+        [estado] = await _filas(ctx, "select payment_status from pack_commerce_orders where tenant_id = :t and id = :o",
+                                o=pedido.id)
+        assert estado.payment_status == "pendiente"
+    finally:
+        await deactivate_tenant(str(tid_b))
+        await purge_tenant(str(tid_b), f"ELIMINAR {slug_b}")
+    await _webhook(tid, pedido.public_order_number, "aprobado", 600000)
+    await _despachar(tid)
+    assert (await _tarea(ctx)).status == "completed"
+
+
+async def test_una_espera_sin_pago_vence_y_no_toca_las_recientes(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from core.kernel.procedures.esperas import MOTIVO, vencer_esperas_del_negocio
+
+    tid, pagos = negocio
+    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset())
+    vieja, reciente = await _cliente(tid, pagos), await _cliente(tid, pagos)
+    await _hasta_el_link(vieja, monkeypatch)
+    await _hasta_el_link(reciente, monkeypatch)
+    tarea_vieja = await _tarea(vieja)
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from core.config import get_settings
+
+    settings = get_settings()
+    engine = create_async_engine(settings.migrations_database_url or settings.database_url)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("update conversation_tasks set updated_at = now() - interval '73 hours' "
+                                    "where tenant_id = :t and id = :k"), {"t": tid, "k": tarea_vieja.id})
+    finally:
+        await engine.dispose()
+    assert await vencer_esperas_del_negocio(tid) == 1
+    cerrada = await _filas(vieja, "select status, status_reason from conversation_tasks where tenant_id = :t and id = :k",
+                           k=tarea_vieja.id)
+    assert [(c.status, c.status_reason) for c in cerrada] == [("cancelled", MOTIVO)]
+    assert (await _tarea(reciente)).status == "active"
+    assert await vencer_esperas_del_negocio(tid) == 0  # idempotente
+
+
+async def test_pedido_para_recoger_pagado_en_linea_tambien_espera_el_pago(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    tid, pagos = negocio
+    ctx = await _cliente(tid, pagos)
+    await _turno(ctx, monkeypatch, "Seis hamburguesas para recoger, pago en línea", [
+        ("iniciar_procedimiento", {"procedure_id": PEDIDO}),
+        ("generar_cotizacion", {"items": [{"variant_id": "HAM-1", "quantity": 6}]}),
+        ("actualizar_tarea", {"slots": {"delivery_method": "recoger_en_tienda", "payment_method": "pago_en_linea"}}),
+        ("confirmar_cotizacion", {}),
+        "Te muestro el total.",
+    ])
+    assert (await _tarea(ctx)).stage == "confirmar"
+    await _turno(ctx, monkeypatch, "Sí, confirmo", [
+        ("confirmar_tarea", {}),
+        ("confirmar_cotizacion", {}),
+        ("crear_pedido", {"payment_method": "pago_en_linea", "delivery_method": "recoger_en_tienda",
+                          "customer_data": {"full_name": "Ana", "phone": "3001"}}),
+        ("confirmar_pago_pedido", {}),
+        "Listo, ya puedes pagar.",
+    ])
+    tarea = await _tarea(ctx)
+    assert (tarea.procedure_id, tarea.stage, tarea.status) == (PEDIDO, "esperar_pago", "active")
+    [pedido] = await _filas(ctx, "select public_order_number, total from pack_commerce_orders where tenant_id = :t "
+                                 "and customer_id = :c", c=ctx.customer_id)
+    await _webhook(tid, pedido.public_order_number, "aprobado", float(pedido.total))
+    await _despachar(tid)
+    assert (await _tarea(ctx)).status == "completed"

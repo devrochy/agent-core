@@ -1023,7 +1023,7 @@ async def order_update_status(request: Request, order_id: uuid.UUID, status: str
 class CRMModule(BaseModule):
     id = PLUGIN_ID
     name = "CRM"
-    version = "2.1.0"
+    version = "2.2.0"
     description = "Leads, catálogo (menú), promociones y pedidos para el negocio"
     display_name = "Comercio"
     category = "Ventas"
@@ -1308,11 +1308,31 @@ class CRMModule(BaseModule):
                         f"pago con monto distinto al total ({received} != {expected})"
                     )
                     return
+            ya_pagado = order.payment_status == "pagado"
             order.payment_status = payment_status
             order.status_changed_at = datetime.now(UTC)
             log.info("order_payment_status_updated", order_id=str(order.id), payment_status=payment_status)
             if payment_status == "pagado":
                 await self._activate_plans_for_order(session, order)
+                if not ya_pagado:
+                    await self._emitir_pedido_pagado(session, tenant_id, order)
+
+    @staticmethod
+    async def _emitir_pedido_pagado(session, tenant_id, order: Order) -> None:  # type: ignore[no-untyped-def]
+        """`order.paid` al outbox (ADR-0107) en la MISMA transacción que marca el pedido pagado,
+        solo en esa transición y con el monto ya validado: cierra las tareas de `contratar_plan` y
+        `tomar_pedido` que esperan el pago (HU-AOS-07), por el `order_id` que fijó `crear_pedido`.
+        Idempotente por pedido (un webhook repetido o un reintento del despachador no duplica)."""
+        from core.events.outbox import emit_domain
+        from core.shared.events import ON_ORDER_PAID
+
+        await emit_domain(
+            session,
+            tenant_id=tenant_id,
+            topic=ON_ORDER_PAID,
+            dedupe_key=f"{ON_ORDER_PAID}:{order.id}",
+            payload={"order_id": str(order.id), "public_order_number": order.public_order_number},
+        )
 
     async def _activate_plans_for_order(self, session, order: Order) -> None:
         """Plan como producto (ADR-0083, D-16): ver `pack_commerce.planes`."""

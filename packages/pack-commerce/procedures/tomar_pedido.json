@@ -1,7 +1,7 @@
 {
   "contract": "procedure/1",
   "id": "pack_commerce.tomar_pedido",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "title": "Tomar un pedido",
   "triggers": {
     "description": "El cliente quiere pedir o comprar productos del catálogo, para recoger o a domicilio.",
@@ -50,6 +50,14 @@
       "type": "string",
       "format": "uri",
       "setBy": "action:confirmar_pago_pedido",
+      "requiredWhen": {
+        "slot": "payment_method",
+        "equals": "pago_en_linea"
+      }
+    },
+    "pago_confirmado": {
+      "type": "boolean",
+      "setBy": "action:verificar_pago_pedido",
       "requiredWhen": {
         "slot": "payment_method",
         "equals": "pago_en_linea"
@@ -120,8 +128,28 @@
           "link"
         ]
       }
+    },
+    {
+      "id": "esperar_pago",
+      "goal": "El link ya salió: esperar a que el pago en línea se confirme. Si el cliente dice que ya pagó, verificarlo; si pide el link o venció, reenviarlo (sale uno nuevo si venció). Con transferencia, contraentrega o sin cobro la etapa no aplica.",
+      "actions": [
+        "verificar_pago_pedido",
+        "confirmar_pago_pedido",
+        "consultar_inventario"
+      ],
+      "exitWhen": {
+        "slots": [
+          "pago_confirmado"
+        ]
+      }
     }
   ],
+  "completion": {
+    "events": [
+      "pack_commerce.order.paid"
+    ],
+    "returnControl": true
+  },
   "recovery": {
     "actionError": "explicar"
   },

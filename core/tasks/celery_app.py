@@ -186,6 +186,32 @@ celery.conf.beat_schedule[_MEMORY_CONSOLIDATION_TASK] = {
     "schedule": crontab(hour="3", minute="30"),
 }
 
+# Esperas vencidas del motor de procedimientos (HU-AOS-07): una tarea que espera el pago y no lo
+# recibe en 72 h se cancela con `espera_vencida`. Sin negocios con `aos_procedures`, no hace nada.
+_KERNEL_ESPERAS_TASK = "core.kernel_esperas_vencidas"
+
+
+@celery.task(name=_KERNEL_ESPERAS_TASK)
+def _kernel_esperas_vencidas() -> None:
+    from core.kernel.procedures.esperas import vencer_esperas
+    from core.plugin_manager import plugin_manager
+
+    async def _correr() -> None:
+        # Los procedimientos los registran los packs al activarse (como el despachador).
+        await plugin_manager.ensure_process_activation()
+        await vencer_esperas()
+
+    try:
+        run_async(_correr())
+    except Exception:
+        log.exception("cron_task_failed", task=_KERNEL_ESPERAS_TASK)
+
+
+celery.conf.beat_schedule[_KERNEL_ESPERAS_TASK] = {
+    "task": _KERNEL_ESPERAS_TASK,
+    "schedule": crontab(minute="25"),
+}
+
 # Antiabuso del alta (HU-SH-07, ADR-0125): las huellas de teléfono y documento de los
 # pedidos de alta se vacían a los 12 meses (ya no sirven para ninguna regla).
 _ALTA_HUELLAS_RETENCION_TASK = "core.alta_huellas_retencion"

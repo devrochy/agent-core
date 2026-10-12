@@ -81,6 +81,11 @@ ON_PLATFORM_PERIOD_PAID = "platform.period_paid"
 #   avisa por el canal preferido del negocio. payload: referencia, plan_id, plan_nombre, monto,
 #   moneda, periodo_inicio, periodo_fin.
 ON_PLATFORM_RENEWAL_DUE = "platform.renewal_due"
+# HU-AOS-07 (cierre por pago, decisión del dueño 2026-10-11): pack-commerce lo escribe en el
+# outbox en la misma transacción en que un pedido pasa a `pagado` (ya validado el monto contra
+# el total). Cierra las tareas de `contratar_plan` y `tomar_pedido` que esperan el pago, por el
+# `order_id` que fijó `crear_pedido`. payload: order_id, public_order_number.
+ON_ORDER_PAID = "order.paid"
 
 # Claves del payload que identifican el objeto de cada evento (HU-AOS-05). El motor de
 # procedimientos solo cierra una tarea por estas claves (nunca por montos, proveedores ni el
@@ -92,6 +97,7 @@ CLAVES_DE_CORRELACION: dict[str, tuple[str, ...]] = {
     ON_SUBSCRIPTION_ACTIVATED: ("subscription_id", "referencia"),
     ON_SUBSCRIPTION_CHARGE_PAID: ("charge_id",),
     ON_APPOINTMENT_CONFIRMED: ("appointment_id",),
+    ON_ORDER_PAID: ("order_id",),
 }
 
 
