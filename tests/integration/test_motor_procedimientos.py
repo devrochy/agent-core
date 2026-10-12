@@ -61,6 +61,9 @@ PROCEDIMIENTO = {
         {"id": "confirmar", "actions": ["cotizar_m", "aceptar_m"], "confirmation": "interactive_button",
          "exitWhen": {"action": "aceptar_m", "ok": True}},
         {"id": "pagar", "actions": ["crear_pedido_m"], "exitWhen": {"slots": ["reference"]}},
+        # Última etapa sin `exitWhen`: espera el evento de cierre (al salir de una última etapa con
+        # `exitWhen` la tarea se completa, HU-AOS-07).
+        {"id": "esperar", "actions": []},
     ],
     "completion": {"events": ["core.payment.confirmed"]},
 }
@@ -339,7 +342,7 @@ async def test_accion_fuera_de_etapa_no_se_ofrece_y_se_deniega(negocios: dict[st
     assert accion == "denied"
     # La tarjeta llega con la definición del procedimiento.
     dinamico = guion.system[0][-1]
-    assert '"Compra de prueba"' in dinamico and "1/3 datos" in dinamico and "plan: FALTA" in dinamico
+    assert '"Compra de prueba"' in dinamico and "1/4 datos" in dinamico and "plan: FALTA" in dinamico
 
 
 async def test_resolver_rechaza_el_plan_inexistente_y_no_guarda(negocios: dict[str, uuid.UUID]) -> None:
@@ -456,7 +459,7 @@ async def test_confirmacion_de_accion_atada_a_sus_argumentos_y_avance(negocios: 
     assert LLAMADAS == ["aceptar_m", "crear_pedido_m"]
     assert "crear_pedido_m" not in guion.tools[0] and "crear_pedido_m" in guion.tools[2]  # acciones de la etapa nueva
     p = await _proyeccion(conv, task)
-    assert p.stage == "pagar" and p.status == "active"  # espera el evento de pago
+    assert p.stage == "esperar" and p.status == "active"  # espera el evento de pago
     assert p.slots["reference"] == {**p.slots["reference"], "value": "REF-1", "source": "action:crear_pedido_m"}
 
 

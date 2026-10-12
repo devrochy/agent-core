@@ -33,3 +33,12 @@ async def banderas_del_negocio(session: AsyncSession, tenant_id: uuid.UUID) -> B
     if fila is None:
         return APAGADAS
     return BanderasAOS(runtime=fila[0], procedimientos=bool(fila[1]))
+
+
+async def negocios_con_procedimientos(session: AsyncSession) -> list[uuid.UUID]:
+    """Negocios vivos con `aos_procedures` encendida (crons del kernel, HU-AOS-07). `tenants` es
+    tabla de sistema, sin RLS: cada negocio se recorre después bajo su `tenant_scope`."""
+    filas = await session.execute(
+        text("SELECT id FROM tenants WHERE aos_procedures AND deleted_at IS NULL ORDER BY id")
+    )
+    return [fila[0] for fila in filas]

@@ -171,11 +171,22 @@ def etapa_de_retroceso(proc: Procedure, tarea: Proyeccion) -> Stage | None:
     return None
 
 
-def datos_congelados(stage: Stage, eventos_etapa: Sequence[Evento]) -> bool:
-    """En una etapa `risk: high` en la que ya terminó bien una acción (hubo un efecto: el pedido
-    existe), los datos con valor ya no cambian: cambiarlos dejaría el efecto viejo vivo junto al
-    nuevo (dos pedidos). La salida es cancelar el recorrido."""
-    return stage.risk == "high" and any(e.type == "action_succeeded" for e in eventos_etapa)
+def datos_congelados(proc: Procedure, eventos: Sequence[Evento]) -> bool:
+    """Desde la primera acción que terminó bien en una visita a una etapa `risk: high` (hubo un
+    efecto: el pedido existe), los datos con valor ya no cambian por el resto de la tarea, también
+    en las etapas que siguen (la espera del pago, HU-AOS-07): cambiarlos dejaría el efecto viejo
+    vivo junto al nuevo (dos pedidos). La salida es cancelar el recorrido. Solo frena lo que
+    escriben el modelo o un botón; el resultado de una acción (un link nuevo) sí se anota.
+    `eventos`: todos los de la tarea, en orden de `seq`."""
+    etapa_vigente: Stage | None = None
+    for e in eventos:
+        if e.type == "started":
+            etapa_vigente = etapa(proc, str(e.data.get("stage") or ""))
+        elif e.type in ("stage_entered", "revalidated"):
+            etapa_vigente = etapa(proc, str(e.data.get("to_stage") or ""))
+        elif e.type == "action_succeeded" and etapa_vigente is not None and etapa_vigente.risk == "high":
+            return True
+    return False
 
 
 # ---------------------------------------------------------------- argumentos ligados (HU-AOS-07)

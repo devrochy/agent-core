@@ -112,3 +112,8 @@ def con_evento(topic: str) -> Mapping[str, Procedure]:
         for p in _todos()
         if p.completion is not None and any(e.split(".", 1)[1] == topic for e in p.completion.events)
     }
+
+
+def con_cierre_por_evento() -> list[Procedure]:
+    """Procedimientos del binario que se cierran por un evento de dominio (`completion.events`)."""
+    return [p for p in _todos() if p.completion is not None and p.completion.events]

@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from agentcore_contracts import Procedure, Slot, Stage
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db.models import ConversationTask
@@ -769,10 +769,11 @@ class ContextoMotor:
                     return  # otra escritura movió la tarea mientras corrían las precondiciones
                 destino = motor.siguiente(foco.proc, foco.stage)
                 if destino is None:
-                    if not (foco.proc.completion and foco.proc.completion.events):
-                        await _completar(s, foco.fila, foco.proc, "etapa_final")
-                        self._cambio = True
-                    return  # con eventos de cierre, la tarea espera el evento
+                    # Salió la última etapa: el recorrido terminó, declare o no eventos de cierre
+                    # (HU-AOS-07). Solo una última etapa SIN `exitWhen` espera su evento (arriba).
+                    await _completar(s, foco.fila, foco.proc, "etapa_final")
+                    self._cambio = True
+                    return
                 await _registrar(
                     s, foco.fila, "stage_entered", {"from_stage": foco.stage.id, "to_stage": destino.id}, "kernel"
                 )
@@ -917,7 +918,7 @@ class ContextoMotor:
             if errores:  # todo o nada: el modelo corrige, nunca se adivina
                 return ResultadoComando(False, errores, list(foco.stage.actions))
             cambian = {n: p for n, v in validos.items() if (p := _previo(foco.tarea, n, v)) is not None}
-            if cambian and motor.datos_congelados(foco.stage, motor.eventos_de_la_etapa(await _eventos(s, foco))):
+            if cambian and motor.datos_congelados(foco.proc, await _eventos(s, foco)):
                 errores = [mensaje("dato_bloqueado", dato=n) for n in cambian]
                 return ResultadoComando(False, errores, list(foco.stage.actions))
             por_confirmar: str | None = None
@@ -1427,7 +1428,7 @@ async def _dato_interactivo(
         log.info("motor_dato_interactivo_rechazado", procedure_id=foco.proc.id, dato=nombre)
         return
     previo = _previo(foco.tarea, nombre, v)
-    if previo is not None and motor.datos_congelados(foco.stage, motor.eventos_de_la_etapa(await _eventos(s, foco))):
+    if previo is not None and motor.datos_congelados(foco.proc, await _eventos(s, foco)):
         log.info("motor_dato_interactivo_congelado", procedure_id=foco.proc.id, dato=nombre)
         return
     fila = await _registrar(
@@ -1457,6 +1458,21 @@ async def cerrar_por_evento(
     procs = registro.con_evento(topic) if claves else {}
     if not procs or not claves:
         return 0
+    # Solo las tareas con el MISMO valor en alguna clave (HU-AOS-07): las que esperan un pago
+    # viven horas y muchas abiertas del negocio no pueden tapar la del evento. `correlaciona`
+    # sigue siendo el filtro final (dato del procedimiento fijado por una acción).
+    por_valor = [
+        ConversationTask.slots[nombre]["value"].astext == str(payload[nombre])
+        for nombre in claves
+        if payload.get(nombre) is not None and len(str(payload[nombre])) <= 200
+    ]
+    if not por_valor:
+        return 0
+    from core.kernel.banderas import banderas_del_negocio
+
+    # La bandera primero: con el motor apagado no se consulta ninguna tarea (una lectura por PK).
+    if not (await banderas_del_negocio(session, tenant_id)).procedimientos:
+        return 0
     filas = (
         await session.execute(
             select(ConversationTask)
@@ -1464,9 +1480,10 @@ async def cerrar_por_evento(
                 ConversationTask.tenant_id == tenant_id,
                 ConversationTask.status.in_(state.ABIERTOS),
                 ConversationTask.procedure_id.in_(list(procs)),
+                or_(*por_valor),
             )
             .order_by(ConversationTask.conversation_id, ConversationTask.id)
-            .limit(200)
+            .limit(50)
         )
     ).scalars().all()
     candidatas: list[tuple[uuid.UUID, uuid.UUID, Procedure]] = []
@@ -1476,10 +1493,6 @@ async def cerrar_por_evento(
         if proc is not None and motor.correlaciona(proc, tarea, payload, claves):
             candidatas.append((fila.conversation_id, fila.id, proc))
     if not candidatas:
-        return 0
-    from core.kernel.banderas import banderas_del_negocio
-
-    if not (await banderas_del_negocio(session, tenant_id)).procedimientos:
         return 0
     permitidos = await registro.packs_permitidos(tenant_id)
     candidatas = [c for c in candidatas if registro.gobernable(c[2], permitidos)]

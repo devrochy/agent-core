@@ -1343,6 +1343,26 @@ class OrderSkill(BaseSkill):
                 },
                 handler=self.confirmar_pago_pedido,
             ),
+            # Solo la ofrece el motor de procedimientos, en la etapa `esperar_pago` de
+            # `contratar_plan` y `tomar_pedido` (HU-AOS-07, cierre por pago): ninguna sección de
+            # flow.json la nombra y su predicado la apaga sin `tenants.aos_procedures`.
+            MCPTool(
+                name="verificar_pago_pedido",
+                description=(
+                    "Verifica si el pago en línea del pedido ya se confirmó. Úsala cuando el "
+                    "cliente diga que ya pagó o pregunte por su pago. Nunca des un pago por "
+                    "confirmado sin esta respuesta."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "order_id": {"type": "string", "description": "ID del pedido creado por crear_pedido"},
+                    },
+                    "required": ["order_id"],
+                },
+                handler=self.verificar_pago_pedido,
+                connection_predicate=solo_con_motor_activo(),
+            ),
         ]
 
     # ------------------------------------------------------------ handlers
@@ -2124,6 +2144,38 @@ class OrderSkill(BaseSkill):
             "link": link.url or link.qr_payload,
             # SafeRenderer: el link exacto lo adjunta el core.
             "_safe_append": f"💳 Podés pagar tu pedido {base_reference} aquí: {link.url}",
+        }
+
+    async def verificar_pago_pedido(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Estado del pago en línea del pedido del cliente (HU-AOS-07), solo lectura.
+
+        Con el pedido `pagado` (el webhook ya llegó y el monto coincidió con el total) devuelve
+        `pago_confirmado`, el dato que cierra la etapa `esperar_pago`; si no, un `error` de negocio
+        (pendiente o rechazado) sin montos. El pedido se busca solo entre los del cliente de la
+        conversación, y el motor liga el `order_id` al de la tarea."""
+        order_id = str(arguments.get("order_id", ""))
+        if _parse_uuid(order_id) is None:
+            return {"error": "Pedido no encontrado."}
+        async with get_session() as session:
+            order = await _order_del_cliente(session, order_id, context.customer_id)
+            if order is None:
+                return {"error": "Pedido no encontrado."}
+            estado, numero = order.payment_status, order.public_order_number
+        if estado == "pagado":
+            # Un valor fijo del enum del dato: nunca un booleano que un `false` pudiera "llenar".
+            return {"order_id": order_id, "public_order_number": numero, "pago_confirmado": "confirmado"}
+        if estado == "rechazado":
+            return {
+                "error": "pago_rechazado",
+                "detail": f"El último intento de pago del pedido {numero} fue rechazado.",
+                "hint": "Ofrécele reintentar con el link (confirmar_pago_pedido lo reenvía, o genera "
+                "uno nuevo si venció).",
+            }
+        return {
+            "error": "pago_pendiente",
+            "detail": f"El pago del pedido {numero} todavía no se ha confirmado.",
+            "hint": "Si ya pagó, puede tardar unos minutos. Si el link venció, confirmar_pago_pedido "
+            "genera uno nuevo.",
         }
 
     async def _payment_capability(self):  # type: ignore[no-untyped-def]

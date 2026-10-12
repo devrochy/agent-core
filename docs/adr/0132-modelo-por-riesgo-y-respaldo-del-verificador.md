@@ -1,6 +1,6 @@
 # ADR-0132 — Modelo por riesgo: thinking con tools en etapas de riesgo alto y respaldo del verificador
 
-- **Estado:** propuesto (requiere la aprobación del dueño antes del merge)
+- **Estado:** aceptado (dueño, 2026-10-11)
 - **Fecha:** 2026-10-11
 - **Contexto:** HU-AOS-09 (SPEC-26, design §7.1 "Política de modelo por riesgo"; D-SPEC-26-6).
 - **Supersede parcialmente:** ADR-0086 §2 (thinking solo sin tools). **Usa:** ADR-0050 (fallback),

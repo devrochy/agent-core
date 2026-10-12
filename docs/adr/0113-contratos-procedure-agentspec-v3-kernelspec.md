@@ -245,17 +245,22 @@ revisó el agente `arquitecto` antes de escribir código.
     `core.payment.confirmed` ↔ `payment.confirmed`). El linter exige que el dueño sea el core, la
     habilidad o una de `requires`.
   - Correlación: solo por las claves de identidad de cada topic (`CLAVES_DE_CORRELACION` en
-    `core/shared/events.py`, p. ej. `payment.confirmed → reference`), nunca por montos ni
-    proveedores. Una tarea correlaciona si un dato fijado por una acción (`source = action:*`) tiene
-    el mismo nombre y valor. Un topic sin claves no cierra tareas. Si el evento correlaciona con
-    tareas de más de una conversación, no cierra ninguna (log `motor_evento_ambiguo`).
+    `core/shared/events.py`, p. ej. `payment.confirmed → reference`, `order.paid → order_id`), nunca
+    por montos ni proveedores. Una tarea correlaciona si un dato fijado por una acción
+    (`source = action:*`) tiene el mismo nombre y valor. Un topic sin claves no cierra tareas. Si el
+    evento correlaciona con tareas de más de una conversación, no cierra ninguna (log
+    `motor_evento_ambiguo`). Las candidatas se buscan por el valor de la clave en SQL (HU-AOS-07): las
+    tareas que esperan un pago viven horas y muchas abiertas del negocio no tapan la del evento.
   - El outbox no guarda quién emitió el evento, así que en runtime el dueño del evento es
     documental: cualquier código del binario que emita ese topic para el negocio cierra la tarea.
   - Corre en un savepoint de la transacción del despachador: un fallo del motor se loguea y no
     revierte lo que hicieron los handlers (p. ej. marcar un pago).
   - Las tareas de una habilidad que se deshabilitó o se auto-desactivó para el negocio no las
     gobierna el motor, ni sus resolvers corren.
-  - Una etapa final sin `completion.events` completa la tarea al salir. `returnControl` retoma la
+  - Al salir de la última etapa (se cumple su `exitWhen`) la tarea se completa, declare o no
+    `completion.events`; una última etapa **sin** `exitWhen` espera el evento. Con `completion.events`
+    el evento la completa desde cualquier etapa. (Ajustado por HU-AOS-07, cierre por pago: antes una
+    última etapa con `exitWhen` y eventos de cierre también esperaba.) `returnControl` retoma la
     primera tarea en pausa.
 - **Recuperación:** `actionError = relevo_humano` escala la tarea y el turno. `timeout` y
   `explicar_y_reintentar_una_vez` quedan para una HU siguiente.
@@ -357,7 +362,7 @@ son tools del core que arma el motor por turno (`core/kernel/procedures/comandos
 
 ## Adenda de implementación (2026-10-11, HU-AOS-09): confirmación con botón y clasificador
 
-**Estado:** propuesta; requiere la aprobación del dueño antes del merge. Cierra el "Pendiente para
+**Estado:** aceptada (dueño, 2026-10-11). Cierra el "Pendiente para
 HU-AOS-09" de la adenda de HU-AOS-05. No cambia la forma de ningún contrato. La revisó el agente
 `arquitecto` antes de escribir código. La política de modelo por riesgo está en ADR-0132.
 
@@ -526,8 +531,8 @@ antes de escribir código. No cambia la forma de ningún contrato ni el motor.
 
 ## Adenda de implementación (2026-10-11, HU-AOS-07): procedimientos de comercio
 
-**Estado:** propuesta; requiere la aprobación del dueño antes del merge (fija convenciones nuevas del
-motor). No cambia la forma de ningún contrato ni el esquema. La revisó el agente `arquitecto` antes
+**Estado:** aceptada (dueño, 2026-10-11), con el cierre por pago que pidió el dueño ese día (sección
+"Cierre"). No cambia la forma de ningún contrato ni el esquema. La revisó el agente `arquitecto` antes
 de escribir código. Todo rige solo con `tenants.aos_procedures`; con la bandera apagada el modelo ve
 lo mismo (el gate en replay pasa sin regrabar).
 
@@ -569,10 +574,12 @@ lo mismo (el gate en replay pasa sin regrabar).
     hacia atrás, que también descarta la confirmación pendiente).
   - Así, cambiar de plan en `confirmar` borra la cotización y vuelve a `cotizar`: la acción que
     confirma queda fuera de etapa y, con la ligadura, la cotización vieja no se puede usar.
-- **Datos congelados tras un efecto** (`motor.datos_congelados`). En una etapa `risk: high` en la que
-  ya terminó bien una acción (el pedido existe), cambiar un dato con valor se rechaza
-  (`dato_bloqueado`); la salida es `cancelar_tarea`. Antes del efecto sí se puede (pasar de pago en
-  línea a transferencia tras el rechazo por el mínimo). Le da a `risk` un segundo significado,
+- **Datos congelados tras un efecto** (`motor.datos_congelados`). Desde la primera acción que terminó
+  bien en una visita a una etapa `risk: high` (el pedido existe), cambiar un dato con valor se rechaza
+  (`dato_bloqueado`) por el resto de la tarea, también en la espera del pago que viene después; la
+  salida es `cancelar_tarea`. Antes del efecto sí se puede (pasar de pago en línea a transferencia
+  tras el rechazo por el mínimo). Solo frena lo que escriben el modelo (`actualizar_tarea`) o un
+  botón: el resultado de una acción sí se anota (el link nuevo cuando venció el anterior). Le da a `risk` un segundo significado,
   además de la política de modelo de ADR-0132: se migra a los metadatos de efecto de las acciones
   con HU-AOS-34.
 - **Resumen de confirmación que provee el pack** (cierra el pendiente de la adenda de HU-AOS-09).
@@ -622,14 +629,66 @@ lo mismo (el gate en replay pasa sin regrabar).
   verifica nada nuevo. Se respaldan con las acciones (del turno y anteriores, como las de los packs) y
   con el estado: el dato que declara la `claim` (`order_id` para "pedido creado"). Las
   `COMPLETION_CLAIMS` de commerce siguen como siempre.
-- **Cierre:** sin `completion.events`. La tarea se completa con el pedido y, si paga en línea, con el
-  link. El cierre por `payment.confirmed` correlaciona por el dato `reference`, que hoy ninguna acción
-  devuelve; agregarlo al resultado de `confirmar_pago_pedido` cambiaría lo que ve el modelo con la
-  bandera apagada.
+- **Cierre (decisión del dueño, 2026-10-11): el procedimiento se completa cuando el pago se confirma,
+  no al crear el pedido y el link.** `contratar_plan` y `tomar_pedido` (v1.1.0, pack-commerce 2.2.0)
+  declaran `completion.events: ["pack_commerce.order.paid"]`.
+  - **Evento y correlación, sin cambiar lo que ve el modelo.** pack-commerce escribe `order.paid`
+    (`{order_id, public_order_number}`) en el outbox (ADR-0107) en la MISMA transacción en que su
+    handler de `payment.confirmed` marca el pedido `pagado`: solo en esa transición, con el monto ya
+    validado contra el total (ADR-0087 §3) y con `dedupe_key` por pedido (un webhook repetido o un
+    reintento del despachador no lo duplica). `CLAVES_DE_CORRELACION[order.paid] = ("order_id",)`: la
+    tarea correlaciona por el `order_id` que fijó `crear_pedido`. Ninguna acción cambia su resultado
+    ni su schema, así que con la bandera apagada el modelo ve lo mismo; lo único nuevo en un negocio
+    sin motor es una fila de `domain_events` por pedido pagado, que se entrega sin handlers (el aviso
+    `domain_event_sin_handlers` no sale si un procedimiento declara el topic).
+  - **Descartado:** agregar `reference` al resultado de `confirmar_pago_pedido` (cambia lo que ve el
+    modelo) y un correlador del core que resuelva la referencia de pago contra los pedidos (la misma
+    forma que descartó la adenda 2026-10-10 de ADR-0087; duplicaría la regla `-rN` y el chequeo de
+    monto en otra sesión del despachador).
+  - **Espera** (etapa `esperar_pago`, última, `risk: low`: sin thinking de ADR-0132). Sale con el dato
+    `pago_confirmado` (`setBy: action:verificar_pago_pedido`, `enum: ["confirmado"]` para que ningún
+    otro valor lo llene, `requiredWhen` pago en línea): con
+    transferencia, contraentrega o un plan Free el dato no aplica, la etapa sale enseguida y la tarea
+    se completa al crear el pedido, como antes. Acciones: `verificar_pago_pedido` (tool nueva de
+    solo lectura, con `solo_con_motor_activo`: sin la bandera ni se ofrece ni se ejecuta; devuelve
+    `pago_confirmado` con el pedido pagado y si no `pago_pendiente`/`pago_rechazado`),
+    `confirmar_pago_pedido` (reenvía el link o genera uno nuevo si venció) y `consultar_inventario`.
+    Si el cliente escribe mientras espera, el modelo ve la tarjeta (`pago_confirmado: FALTA`) y solo
+    esas acciones, las del core y los comandos; para otra compra, `cancelar_tarea`. Una tarea en
+    espera no bloquea otra conversación: el lock es por conversación y el cierre busca por valor.
+  - **Al salir de la última etapa la tarea se completa** aunque declare `completion.events` (ajuste de
+    la adenda de HU-AOS-05); una última etapa sin `exitWhen` espera el evento.
+  - **Pago rechazado:** no cierra ni emite nada. El cliente puede reintentar en el mismo link mientras
+    siga vigente o pedir otro; `verificar_pago_pedido` le dice al modelo que fue rechazado. Si después
+    se aprueba, `order.paid` cierra la tarea.
+  - **Link vencido:** no hay evento (pack-payments calcula la vigencia al pedir el link).
+    `confirmar_pago_pedido` en la espera genera uno nuevo y el dato `link` se actualiza; el pago en el
+    link nuevo cierra la tarea por el pedido.
+  - **Que no quede abierta para siempre:** el episodio siguiente ya la cancela si el cliente vuelve a
+    escribir (ADR-0114). Si no vuelve, el cron `core.kernel_esperas_vencidas` (cada hora,
+    `core/kernel/procedures/esperas.py`) cancela con motivo `espera_vencida` (actor `kernel`) las
+    tareas de procedimientos con `completion.events` que siguen en su última etapa sin actividad hace
+    más de 72 h (el link vence a las 24 h por defecto). No le escribe al cliente ni escala; recorre
+    solo negocios con `aos_procedures`, una transacción por tarea y `FOR UPDATE SKIP LOCKED` sobre la
+    conversación (nunca espera a un turno). No es `recovery.timeout` del contrato, que sigue
+    pendiente: cuando llegue, la duración debe pasar a ser dato del procedimiento y este cron, usarla.
+    Si el cliente paga después de la cancelación, el pedido se marca pagado igual. Filtra la última
+    etapa en SQL, así las tareas abandonadas en etapas anteriores no tapan las que esperan.
+  - **Sin `claim` nueva de "pago confirmado":** respaldarla con `slot:pago_confirmado` daría falsos
+    positivos cuando el cierre llegó por `order.paid` (el dato no se fija) y el modelo lo dice bien
+    tras `consultar_estado_pedido`. El "nunca des un pago por confirmado sin esta respuesta" queda en
+    la descripción de `verificar_pago_pedido`; revisable con el verificador sobre estado.
+  - El dueño de un evento de cierre sigue siendo documental (adenda de HU-AOS-05): cualquier código
+    del binario que emita `order.paid` para el negocio cierra la tarea del pedido.
 - **Política de modelo (ADR-0132):** `pagar` es `risk: high`, pero el turno en que el cliente toca
   «Confirmar» empieza en `confirmar` y corre `crear_pedido` sin thinking. Se deja así por costo: el
   thinking aplica a los turnos que empiezan en `pagar` (términos, datos faltantes).
 - **Pendientes antes de encender `aos_procedures` en un negocio:**
+  - La espera del pago dura horas: durante ella la conversación queda limitada a las acciones de
+    `esperar_pago` ("agrégame una gaseosa" u otra compra exigen `cancelar_tarea`, y si el cliente paga
+    después la tarea queda `cancelled` aunque la venta ocurrió). La pila de tareas (HU-AOS-20) lo
+    resuelve. También agranda la ventana del pendiente siguiente: si la release cambia mientras espera,
+    `revalidar_tareas` escala la tarea (`crear_pedido` ya corrió y no declara efecto).
   - `ReleaseCongelada.procedimientos()` solo deriva los abiertos del flujo: un cambio de release
     escala la tarea de un procedimiento publicado al primer `action_succeeded` (la acción no declara
     efecto). Lo resuelve HU-AOS-16, junto con los procedimientos por agente: hasta entonces todo

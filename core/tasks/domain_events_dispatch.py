@@ -17,6 +17,7 @@ from core.db.admin_enum import admin_domain_events_due
 from core.db.models import DomainEvent, utcnow
 from core.db.session import get_session
 from core.events.outbox import payload_para_handlers
+from core.kernel.procedures import registro
 from core.kernel.procedures.ejecucion import cerrar_por_evento
 from core.shared.async_bridge import run_async
 from core.shared.events import event_bus
@@ -77,10 +78,11 @@ async def entregar_evento(event_id: uuid.UUID, tenant_id: uuid.UUID, ahora: date
                     # conexión que salta la RLS entregaría el payload de otro negocio.
                     log.warning("domain_event_tenant_no_coincide", event_id=str(event_id))
                     return False
-                if not event_bus.has_subscribers(evento.topic):
+                if not event_bus.has_subscribers(evento.topic) and not registro.con_evento(evento.topic):
                     # No es un fallo (un topic puede no tener handlers),
                     # pero se deja rastro: así se vio que el worker no
-                    # tenía los packs activados.
+                    # tenía los packs activados. Un topic que solo cierra
+                    # tareas (`order.paid`, HU-AOS-07) no tiene handlers.
                     log.warning(
                         "domain_event_sin_handlers",
                         event_id=str(event_id),
