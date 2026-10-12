@@ -438,12 +438,14 @@ antes de escribir código. No cambia la forma de ningún contrato ni el motor.
   demo es un tipo de cita; los textos propios de un negocio llegan como `overrides` con HU-AOS-13/14),
   `pack_subscriptions.cambiar_plan` y `pack_cobranza.promesa_de_pago`.
 - **Acciones solo de procedimiento:** `sub_cotizar_cambio_plan`, `sub_aplicar_cambio_plan` (core, adenda de
-  ADR-0111) y `cob_registrar_promesa_saldo` (pack-cobranza). Ningún `flow.json` las nombra y no son
+  ADR-0111), `cob_registrar_promesa_saldo` y `cob_opciones_promesa` (pack-cobranza; la segunda, desde la
+  decisión del dueño del 2026-10-11, ver abajo). Ningún `flow.json` las nombra y no son
   `always_available`: el loop legacy no las ofrece (siempre hay flujo: `core/flow.json`), no entran en los
   bindings del General v3 y solo aparecen cuando el motor las pone en `stage.actions` de la tarea en foco.
 - **Convención del monto esperado:** el motor no ata los argumentos de una acción a los datos de la tarea.
   En lo que mueve dinero o compromete un monto, la acción que compromete recibe el monto como argumento,
-  **con el mismo nombre que el campo fuente de la afirmación `amount`** (`monto_a_pagar`, `saldo`): así el
+  **con el mismo nombre que el campo fuente de la afirmación `amount`** (`monto_a_pagar`; en la promesa,
+  `monto`, que desde el 2026-10-11 es un dato de la tarea y además tiene resumen del pack, ver abajo): así el
   resumen del botón lo muestra como monto del servidor y el kernel ya rechaza el resumen si el argumento
   difiere de la fuente del turno. El servidor recalcula y no hace nada si no coincide; el valor del modelo
   nunca se usa como monto.
@@ -456,7 +458,8 @@ antes de escribir código. No cambia la forma de ningún contrato ni el motor.
   s): si el día no tiene cupo, remite a `find_next_available`.
 - **Reglas de cobranza en el resolver** (configuración del pack, nunca del prompt): fecha no pasada, a lo
   sumo `max_dias_prorroga` días, no domingo si la cartera lo marca no laborable y no más de
-  `max_reprogramaciones` promesas pendientes. El monto es el saldo de `cob_consultar_saldo`.
+  `max_reprogramaciones` promesas pendientes. ~~El monto es el saldo de `cob_consultar_saldo`.~~ Enmendado
+  el 2026-10-11 (decisión del dueño, abajo): el monto es el de la opción elegida, lo vencido o el saldo total.
 - **Afirmaciones compiladas: no se registran todavía.** `register_afirmaciones` no va detrás de la bandera:
   compilar "promesa registrada" con respaldo en `cob_registrar_promesa_saldo` daría falsos positivos en
   legacy. Límite: con el motor activo, las frases de los `claims` de estos procedimientos no las verifica
@@ -478,7 +481,53 @@ antes de escribir código. No cambia la forma de ningún contrato ni el motor.
     atado pero no hay botón. Negarlas en `antes_de_accion` sin foco es un cambio del motor que queda para
     una HU siguiente.
   - Costo: cada predicado lee la bandera del negocio (una consulta por tool reemplazada o nueva y por
-    turno, hasta cinco). Si se nota en la latencia, se cachea por turno.
+    turno, hasta cinco; seis con `cob_opciones_promesa`). Si se nota en la latencia, se cachea por turno.
+- **Decisión del dueño (2026-10-11): la promesa puede ser por lo vencido o por el saldo total**, para dar
+  flexibilidad. Enmienda las dos frases tachadas o anotadas arriba. La revisó el agente `arquitecto`.
+  - **Montos del servidor.** Lo vencido es la suma de las cuotas abiertas (`pendiente`/`atrasada`) que
+    vencieron antes de hoy, la misma cuenta que la mora; el saldo total, la de `cob_consultar_saldo`. Las
+    opciones salen de una función pura (`pack_cobranza.procedimientos.opciones_de_promesa`): lo vencido se
+    ofrece aparte solo si es mayor que 0 y menor que el saldo; si es 0 o igual al saldo hay una sola opción
+    (el saldo total). Un valor de configuración desconocido se trata como `saldo_total` (lo de antes).
+  - **Configuración del negocio** junto a las demás reglas de negociación:
+    `pack_cobranza_reglas_negociacion.alcance_promesa` (`ambos` por defecto, `vencido` o `saldo_total`;
+    migración del pack `pack_cobranza_0017`, con CHECK). Se lee y se escribe por `GET/PUT
+    /api/v1/pack/cobranza/rules`; en el PUT, omitir el campo conserva el valor (el panel de hoy no lo manda
+    y el PUT reemplaza el resto). Con solo `vencido` y nada vencido no hay promesa que registrar.
+  - **El alcance lo fija la acción con la elección del cliente.** `cob_opciones_promesa(eleccion?)` (solo de
+    procedimiento, `solo_con_motor_activo`) devuelve `saldo_total`, `vencido` y las `opciones` con sus montos
+    (y las agrega tal cual al final de la respuesta con `_safe_append`); con una `eleccion` ofrecida, o si hay
+    una sola opción, devuelve además `alcance` y `monto`. Los cuatro son datos `setBy:
+    action:cob_opciones_promesa`, así `alcance` y `monto` se escriben en el mismo lote y nunca quedan
+    desparejos; cambiar de opción es volver a llamarla. **`eleccion` no se llama como el dato `alcance` a
+    propósito:** es una elección que el servidor valida contra lo que ofrece en ese momento, no el id de un
+    objeto que fija el servidor; con el mismo nombre, la ligadura de HU-AOS-07 la negaría (un dato
+    `setBy: action:` que la tarea aún no tiene, o uno que cambia sin resolver).
+  - **Monto esperado, ahora ligado:** `cob_registrar_promesa_saldo(fecha, alcance, monto)` (cambia su schema;
+    es solo de procedimiento) tiene los tres argumentos obligatorios con el nombre de datos de la tarea: la
+    ligadura los completa o niega uno distinto (`argumento_ligado`). En la transacción, con el préstamo
+    bloqueado, recalcula las opciones con la regla del negocio; si el alcance no está ofrecido o el `monto`
+    no es el del servidor (redondeo de `mismo_saldo`), devuelve `error` y no registra. La promesa guarda
+    `valor_prometido` = monto del servidor y `alcance`.
+  - **Resumen del pack** (`register_resumen`, HU-AOS-07): el botón muestra el monto del servidor para el
+    alcance elegido, el alcance ("lo vencido" / "el saldo total") y la fecha. Si el alcance ya no se ofrece o
+    el monto firmado no es el del servidor (un pago entre la elección y el sí), no hay resumen: sale el texto
+    fijo sin botón; al reconsultar las opciones, el cambio de `saldo_total`/`vencido` invalida `alcance` y
+    `monto` y la tarea vuelve a `opciones`.
+  - **Seguimiento (cumplida/incumplida):** hoy no hay job automático: lo marca el gestor o el panel
+    (`POST /promises/{id}/status`) contra `valor_prometido` y la fecha. Con alcance `vencido`, la promesa es
+    por lo vencido al registrarla; las cuotas que venzan después no forman parte de ella. La columna
+    `pack_cobranza_promesas.alcance` (NULL en las de antes, las del gestor y las de la tool de siempre) sale
+    en `GET /promises` para que ese seguimiento sepa por qué monto fue. `max_reprogramaciones` cuenta las
+    pendientes sin importar el alcance. La APK (sync) no la recibe todavía.
+  - **Sin cambio con la bandera apagada:** `cob_registrar_promesa_pago` (la de siempre) no cambia de schema
+    ni de conducta, `cob_consultar_saldo` devuelve lo mismo y las dos tools nuevas no se ofrecen; el gate en
+    replay pasa sin regrabar. El procedimiento sube a 2.0.0 y pack-cobranza a 0.6.0 (lock regenerado): una
+    tarea abierta en 1.0.0 deja de estar gobernada, y hoy ningún negocio tiene `aos_procedures` encendida.
+  - **Límites:** `_hoy()` usa la fecha del servidor, no la zona del negocio (ADR-0091): entre la medianoche
+    UTC y la del negocio, una cuota que vence hoy puede contar como vencida. Ya pasaba con la mora y las
+    reglas de fecha; ahora mueve un monto, pero el monto esperado lo protege (si cambia, no se registra). Queda
+    para una HU. El panel no tiene todavía el campo: hasta su PR, el valor se cambia solo por la API.
 
 ## Adenda de implementación (2026-10-11, HU-AOS-07): procedimientos de comercio
 
