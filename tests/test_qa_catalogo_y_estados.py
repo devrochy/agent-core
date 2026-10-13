@@ -149,10 +149,10 @@ def test_informe_ordena_fallas_primero_y_separa_sin_correr():
 
 def test_informe_markdown_y_correo():
     inf = _informe()
-    md = informe_markdown(inf, enlace_adjunto="/api/qa/adjuntos/")
+    md = informe_markdown(inf, enlace_adjunto="/api/qa/attachments/")
     assert "# Informe de pruebas · Ciclo 1" in md
     assert "### Falla · Prueba B" in md
-    assert "[pantalla.png](/api/qa/adjuntos/abc)" in md
+    assert "[pantalla.png](/api/qa/attachments/abc)" in md
     assert "## Sin correr (1)" in md
     correo = cuerpo_correo(inf, "https://panel/pruebas/informes/r1")
     assert "Falla: Prueba B" in correo and "https://panel/pruebas/informes/r1" in correo

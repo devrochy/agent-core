@@ -419,7 +419,7 @@ async def get_run_markdown(
         raise _error(exc) from exc
     if not run.get("informe"):
         raise ApiError(409, "conflict", "La ejecución todavía no tiene informe: falta enviarla.")
-    texto = informe_markdown(run["informe"], enlace_adjunto="/api/qa/adjuntos/")
+    texto = informe_markdown(run["informe"], enlace_adjunto="/api/qa/attachments/")
     return PlainTextResponse(
         texto,
         media_type="text/markdown; charset=utf-8",
