@@ -784,8 +784,8 @@ quedaron vacías y no hubo botón.
 
 ## Adenda (2026-10-12): confirmaciones de datos visibles y sí a secas para datos
 
-**Estado:** propuesta; requiere la aprobación del dueño antes del merge (el punto 3 revierte para los
-DATOS la decisión aceptada de HU-AOS-09 "el sí a secas no confirma"). La revisó el agente `arquitecto`
+**Estado:** aceptada (dueño, 2026-10-13). El punto 3 revierte para los DATOS la decisión aceptada
+de HU-AOS-09 "el sí a secas no confirma"; para acciones con monto o efecto sigue igual. La revisó el agente `arquitecto`
 antes de escribir código. No cambia la forma de ningún contrato, ni el esquema, ni el reductor de
 `state.py`, ni lo que ve el modelo con `tenants.aos_procedures` apagada (el gate en replay pasa sin
 regrabar). Origen: prueba real en test del 2026-10-12 (23:45–23:52 UTC y 02:43 del 13),
