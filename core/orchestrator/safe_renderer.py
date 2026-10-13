@@ -48,9 +48,17 @@ def extract_safe_extras(tool_results: list[dict[str, Any]]) -> SafeExtras:
     return extras
 
 
-def apply_safe_extras(response_text: str, extras: SafeExtras) -> str:
+def apply_safe_extras(response_text: str, extras: SafeExtras, *, por_enlace: bool = False) -> str:
+    """El texto con los appends de las tools al final, sin repetir.
+
+    `por_enlace` (solo con el motor de procedimientos activo, adenda 2026-10-13 de ADR-0113): si el
+    texto del modelo ya trae el link de un append, se quitan del texto las líneas con ese link y el
+    append del core queda (el cliente ve el link una sola vez, con el texto exacto de la tool). Un
+    append sin URL (los datos de una transferencia) se agrega como siempre."""
     if not extras.safe_appends:
         return response_text
+    if por_enlace:
+        response_text = _sin_lineas_con_enlaces(response_text, extras.safe_appends)
     # Dedup: no repetir un append que el modelo ya escribió en su respuesta
     # (p. ej. copió el link del resultado de la tool) ni repetir appends
     # idénticos de varias tools en el mismo turno.
@@ -66,6 +74,22 @@ def apply_safe_extras(response_text: str, extras: SafeExtras) -> str:
     texto = _sin_lineas_huerfanas(response_text, pending).rstrip()
     bloque = "\n\n".join(pending)
     return f"{texto}\n\n{bloque}" if texto else bloque
+
+
+def _sin_lineas_con_enlaces(texto: str, appends: list[str]) -> str:
+    """El texto sin las líneas que traen una URL de algún append (la línea del core la reemplaza)."""
+    urls = {u.rstrip(_COLA_URL) for append in appends for u in URL_RE.findall(append)} - {""}
+    if not urls:
+        return texto
+    lineas = [
+        linea for linea in texto.splitlines()
+        if not any(u.rstrip(_COLA_URL) in urls for u in URL_RE.findall(linea))
+    ]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lineas)).strip()
+
+
+# Puntuación de la oración pegada al final de una URL ("…/abc." o "…/abc*").
+_COLA_URL = ".,;:!?¡¿*_~"
 
 
 # Viñetas y puntuación que no cambian una línea ("- 💳 Paga aquí:" es "💳 Paga aquí").

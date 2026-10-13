@@ -21,6 +21,11 @@ confirmación y las acciones de la etapa.
 - Con tarea en foco, una línea dice qué falta para salir de la etapa (`para_avanzar`, adenda
   2026-10-12 de ADR-0113, `motor.faltas_de_salida`): si el motor sabe por qué no avanza, el modelo
   también, y no inventa que le falta una herramienta.
+- Con tarea en foco, otra línea dice qué datos pedir AHORA (`pide_ahora`, adenda 2026-10-13 de
+  ADR-0113, `motor.siguientes_datos`): todos los que faltan, en el orden del procedimiento y con
+  el rótulo de la habilidad, para pedirlos en UN mensaje como lista numerada (el cliente los
+  puede mandar juntos); si ya dio una parte, solo lo que falta. Si la etapa no espera datos del
+  cliente, `no_pidas_datos`.
 - Sin tarea en foco y con procedimientos que iniciar, el motor le agrega la pista de iniciar el
   recorrido (`pista_sin_foco`, adenda 2026-10-12 de ADR-0113): la tarjeta deja de ser "" aunque no
   haya tareas.
@@ -74,6 +79,10 @@ CLAVES = {
     "falta_confirmar_dato": ("nombre",),
     "falta_confirmar_etapa": ("nombre",),
     "falta_accion": ("nombre",),
+    # Qué pedir ahora (adenda 2026-10-13 de ADR-0113).
+    "pide_ahora": ("datos",),
+    "dato_a_pedir": ("numero", "dato", "rotulo"),
+    "no_pidas_datos": (),
 }
 MAX_EN_PAUSA = 3          # maxStack por defecto (KernelSpec, HU-AOS-12)
 MAX_VALOR_CHARS = 200
@@ -90,6 +99,8 @@ _ESCAPAR = frozenset({"Cc", "Cf", "Zl", "Zp", "Co", "Cs", "Pi", "Pf"})
 _SELECTORES = ((0xFE00, 0xFE0F), (0xE0100, 0xE01EF), (0x180B, 0x180F))
 
 ResolverProcedimiento = Callable[[str, str], Procedure | None]
+# Rótulos humanos de los datos de un procedimiento (`MCPHost.register_rotulos` de su habilidad).
+RotulosDe = Callable[[Procedure], Mapping[str, str]]
 
 
 class RotulosInvalidos(ValueError):
@@ -128,6 +139,10 @@ def rotulos() -> dict[str, str]:
     from core.agents.playbooks import load_core_playbook
 
     return parsear_rotulos(load_core_playbook(PLAYBOOK))
+
+
+def _rotulos_del_playbook() -> dict[str, str]:
+    return rotulos()
 
 
 # ---------------------------------------------------------------- serialización
@@ -180,7 +195,12 @@ def _requerido(slot: Slot, valores: Mapping[str, Any]) -> bool:
 
 
 def _lineas_de_tarea(
-    r: Mapping[str, str], tarea: Proyeccion, proc: Procedure | None, *, en_foco: bool
+    r: Mapping[str, str],
+    tarea: Proyeccion,
+    proc: Procedure | None,
+    *,
+    en_foco: bool,
+    rotulos: Mapping[str, str] | None = None,
 ) -> list[str]:
     etapa = tarea.stage if _NOMBRE.fullmatch(tarea.stage or "") else "?"
     titulo = proc.title if proc is not None else tarea.procedure_id
@@ -225,9 +245,13 @@ def _lineas_de_tarea(
     if en_foco and proc is not None:
         etapa_def = next((s for s in proc.stages if s.id == etapa), None)
         if etapa_def is not None:
+            pedir = describir_lo_que_se_pide(proc, etapa_def, tarea, r, rotulos)
             faltas = describir_faltas(proc, etapa_def, tarea, r)
-            if faltas:
+            # Con datos que pedir, la lista numerada ya dice qué falta (adenda 2026-10-13).
+            if faltas and (pedir is None or pedir == r["no_pidas_datos"]):
                 lineas.append(r["para_avanzar"].format(faltas=faltas))
+            if pedir is not None:
+                lineas.append(pedir)
         acciones = [a for a in (etapa_def.actions if etapa_def else []) if _ACCION.fullmatch(a)]
         if acciones:
             lineas.append(r["acciones"].format(acciones=", ".join(acciones)))
@@ -249,12 +273,40 @@ def describir_faltas(proc: Procedure, stage: Any, tarea: Proyeccion, r: Mapping[
     return "; ".join(piezas)
 
 
+def describir_lo_que_se_pide(
+    proc: Procedure,
+    stage: Any,
+    tarea: Proyeccion,
+    r: Mapping[str, str] | None = None,
+    rotulos: Mapping[str, str] | None = None,
+) -> str | None:
+    """La línea `pide_ahora` (los datos que faltan, en orden, numerados, con su rótulo escapado
+    como dato) o `no_pidas_datos` si la etapa espera otra cosa; None en una etapa sin salida.
+    Solo nombres validados."""
+    from core.kernel.procedures.motor import siguientes_datos
+
+    if stage.exitWhen is None:
+        return None
+    r = r or _rotulos_del_playbook()
+    datos = [n for n in siguientes_datos(proc, stage, tarea) if _NOMBRE.fullmatch(n)]
+    if not datos:
+        return r["no_pidas_datos"]
+    piezas = [
+        r["dato_a_pedir"].format(
+            numero=i, dato=n, rotulo=escapar((rotulos or {}).get(n) or n.replace("_", " "))
+        )
+        for i, n in enumerate(datos, start=1)
+    ]
+    return r["pide_ahora"].format(datos="; ".join(piezas))
+
+
 def renderizar_tarjeta(
     tareas: Sequence[Proyeccion],
     *,
     r: Mapping[str, str] | None = None,
     procedimientos: ResolverProcedimiento | None = None,
     max_chars: int = MAX_TARJETA_CHARS,
+    rotulos_de: RotulosDe | None = None,
 ) -> str:
     """La tarjeta para el prompt, o "" si no hay tareas abiertas. Pura.
 
@@ -276,11 +328,18 @@ def renderizar_tarjeta(
     salida = [r["encabezado"], r["aviso"]]
     usado = sum(len(linea) + 1 for linea in salida)
     if foco is not None:
-        for linea in _lineas_de_tarea(r, foco, proc(foco), en_foco=True):
-            if usado + len(linea) + 1 > max_chars:
-                continue
-            salida.append(linea)
-            usado += len(linea) + 1
+        proc_foco = proc(foco)
+        propios = rotulos_de(proc_foco) if rotulos_de is not None and proc_foco is not None else None
+        lineas = _lineas_de_tarea(r, foco, proc_foco, en_foco=True, rotulos=propios)
+        # Si no cabe todo, primero las instrucciones (líneas sin sangría: qué falta, qué pedir,
+        # acciones) y después los datos, sin cambiar el orden.
+        elegidas: set[int] = set()
+        for prioridad in (False, True):
+            for i, linea in enumerate(lineas):
+                if linea.startswith(" ") is prioridad and usado + len(linea) + 1 <= max_chars:
+                    elegidas.add(i)
+                    usado += len(linea) + 1
+        salida.extend(linea for i, linea in enumerate(lineas) if i in elegidas)
     omitidas = max(0, len(pausa) - MAX_EN_PAUSA)
     for tarea in pausa[:MAX_EN_PAUSA]:
         bloque = _lineas_de_tarea(r, tarea, proc(tarea), en_foco=False)

@@ -899,3 +899,146 @@ pudo pagar.
     (medida con el set del verificador), no aquí.
 - **Sin cambio:** sombra, bandera apagada, reductor, contratos, esquema, botones y la confirmación
   estricta de acciones y etapas.
+
+## Adenda (2026-10-13): conversación ordenada con el motor
+
+**Estado:** propuesta; requiere la aprobación del dueño antes del merge. **Aceptadas por el dueño
+(2026-10-13)** las dos decisiones marcadas abajo: el correo se confirma dentro del resumen único y los
+términos se aceptan con el mismo «Sí, confirmo» (esta, en la adenda del mismo día de ADR-0125). La
+revisó el agente `arquitecto` antes de escribir código. No cambia la forma de ningún contrato ni el
+esquema (sin migración), ni lo que ve el modelo con `tenants.aos_procedures` apagada: el gate en replay
+pasa sin regrabar. En sombra (`aos_runtime = v3` con el motor apagado) tampoco cambia nada (test).
+
+Origen: segunda prueba real en test (chat web, negocio `solvershub`, 2026-10-13 05:55–06:09 UTC,
+`pack_commerce.contratar_plan` v1.1.0). El dueño pidió que el asistente sea coherente y ordenado al
+pedir los datos, con listas, breve y sin pedir de a tandas, y aprobó este flujo de cuatro mensajes:
+el plan con la lista numerada de todos los datos → solo lo que falta → un resumen único (plan, total,
+datos del cliente y documentos que acepta) → el pedido con el link.
+
+- **1. Escalamiento falso por el tope de vueltas.**
+  - **Causa raíz:** el turno del "Si" gastó las 6 vueltas (`policies.maxToolCallsPerTurn`) entre
+    comandos del hilo (`iniciar_procedimiento`, dos `actualizar_tarea`) y dos negaciones del kernel
+    (`aplicar_promocion` y `cotizar_plan` fuera de `datos`). Al agotarse, el loop escala
+    (`max_iterations`) aunque la tarea en foco sabía exactamente qué faltaba.
+  - **Cambio (`loop.py`, aislado):** con el motor activo, una vuelta cuyo lote fue solo de comandos del
+    hilo no gasta el tope, hasta `VUELTAS_LIBRES_DE_COMANDOS = 3`. Llevar el estado no es trabajo del
+    cliente.
+  - **Decisión tomada, revisable:** las negaciones del kernel SÍ cuentan. Son el síntoma de un modelo
+    perdido, y reembolsarlas duplicaba el costo y la latencia de un turno patológico sin mejorar el
+    final (revisión del `arquitecto`). Lo que evita el escalamiento falso es el punto siguiente.
+  - **Al agotarse con una tarea en foco, el turno no escala** (`ContextoMotor.salida_al_agotar`). Si el
+    turno pidió una confirmación, sale su mensaje. Si faltan datos del cliente, sale la pregunta del
+    kernel con todos los que faltan, numerados y en orden, más el cierre «Puedes enviármelos en un solo
+    mensaje». Si lo único que falta es confirmar un dato, se pide. Si falta una acción o un dato del
+    servidor, o no hay foco, escala como siempre. Se audita `core:motor` `sin_vueltas` (sin valores).
+  - **El bloque dinámico se refresca al cambiar la etapa** (`prompt_builder.bloque_dinamico`, puro). Tras
+    `cotizar_plan` (una acción, no un comando) el modelo redactaba con la tarjeta de `elegir_plan` y pedía
+    todos los `pide_*` a la vez. Ahora, cuando `tras_lote()` cambió algo, el loop reemplaza solo el último
+    bloque del prompt con la tarjeta y las capacidades vigentes. El prefijo cacheado y `contexto_urls` no
+    cambian.
+    - **Enmienda la adenda HU-AOS-06:** ~~"el prompt del sistema no se reconstruye"~~. La tarjeta más
+      reciente manda, sea la del bloque o la de un comando.
+    - **Costo aceptado:** en esa vuelta se pierde la caché de los mensajes.
+    - `active_skills_summary` desactualizado tras el lote era un bug y queda corregido.
+- **2. Pedir los datos en orden y en un solo mensaje** (cambio de criterio del dueño, 2026-10-13: ya no
+  "máximo 2 por mensaje").
+  - `motor.siguientes_datos` da todos los datos del cliente (también los de botón o contenido) que
+    faltan para salir de la etapa, en el orden de `exitWhen`. Se corta en la primera falta que no es del
+    cliente.
+  - La tarjeta lleva la línea `pide_ahora`: numerada, con el rótulo de la habilidad escapado como dato.
+    Pide todo en un mensaje como lista numerada, cerrando con «puedes enviármelos en un solo mensaje».
+    Si el cliente ya dio una parte, pide solo lo que falta. Si el modelo acaba de explicar el plan, va
+    primero lo esencial del plan.
+  - Si la etapa no espera datos del cliente, la línea es `no_pidas_datos`. Con datos que pedir, la lista
+    reemplaza la línea `para_avanzar`.
+  - Si la tarjeta no cabe, entran primero las instrucciones y después los datos, sin cambiar el orden.
+  - `sin_foco`: no se piden datos antes de iniciar el recorrido.
+  - `aviso`: no se pregunta si un dato está correcto (lo muestra el resumen).
+  - **`contratar_plan` 1.2.0 (pack-commerce 2.3.0, lock regenerado):** `datos` sale con `business_name,
+    vertical, full_name, id_document, email, phone, address, municipality, city, payment_method`. Es el
+    orden que aprobó el dueño y que usa el playbook de solvershub-comercial. Los `slots` se declaran en
+    ese orden.
+  - **Las tareas abiertas en 1.1.0 dejan de estar gobernadas** (versión fuera del binario, flujo v2 de
+    respaldo). Hay que cancelarlas en test antes de probar.
+  - **Por qué no `KernelSpec.composition.maxQuestions`:** cuenta preguntas por mensaje, no datos por
+    pregunta. Con la lista única no hace falta un tope de datos. Si un negocio quisiera otro estilo,
+    sería un campo de la release, con su ADR.
+- **3. Un solo resumen, y el correo se confirma dentro de él (decisión del dueño, ACEPTADA 2026-10-13).**
+  - **Causa raíz de la doble confirmación:** el modelo pidió el correo en su texto y después el kernel
+    lo pidió con su mensaje (adenda 2026-10-12, punto 1, porque `datos` exigía `confirmed: ["email"]`).
+  - **Cambio:** `contratar_plan` 1.2.0 ya no exige `confirmed: ["email"]` ni marca `email` con
+    `confirm`. El resumen de una acción con resumen del pack (`confirmar_cotizacion`) es el **resumen
+    único**:
+    - las líneas del pack (plan, descuento, total);
+    - después los datos que dio el cliente en la tarea (`motor.datos_del_cliente`: escritos por el
+      modelo con sus palabras, una persona, un botón o el contenido; nunca los de una acción ni los de
+      pago), en el orden del procedimiento;
+    - al final, los documentos que acepta.
+  - **La huella del resumen incluye esos datos:** si uno cambia después del sí, se pide otro sí. Así el
+    correo queda confirmado por el «Sí, confirmo» al resumen que lo muestra, y el kernel no vuelve a
+    preguntarlo.
+  - El mecanismo de la adenda 2026-10-12 (confirmar un dato que exige la salida de una etapa) sigue para
+    los demás procedimientos, como la dirección de `tomar_pedido` (test de integración).
+  - **Consecuencia anotada, revisable:** el correo de `contratar_plan` ya no queda `confirmed` en la
+    tarea. La consolidación de memoria (adenda HU-AOS-36) solo toma datos confirmados o fijados por una
+    acción, así que ya no lo pasa a `memory_facts`. El pedido sí lo lleva (`datos_alta`).
+  - **Descartado:** "confirmado por respuesta directa" (que un "sí" a un mensaje del modelo que mostraba
+    el correo lo diera por confirmado). Revertía una guarda aceptada en la revisión de seguridad del
+    2026-10-12, y el resumen único lo hace innecesario.
+- **4. Mensajes del kernel claros** (playbook `confirmacion_boton`, `core/kernel/confirmacion.py`).
+  - **Formato:**
+    - un encabezado breve: "Antes de seguir, revisa que todo esté bien:" (ya no "Para confirmar:
+      <título>");
+    - una viñeta por dato ("• Plan: Premium mensual", "• Total: $600.000");
+    - los documentos en su bloque;
+    - la instrucción en la última línea: «Si todo está bien y aceptas los términos, responde *Sí,
+      confirmo*»; con botón, «toca «Confirmar»».
+  - Para un dato, "¿Está bien este dato?". La pregunta del punto 1 va numerada.
+  - **Montos:**
+    - en un resumen sin `completo` van al final y nunca se recortan. Enmienda HU-AOS-09, que decía "va
+      primero";
+    - en el resumen único, en el orden del pack (plan, total), y nada se recorta;
+    - si el resumen pasa de 1024 caracteres sale como texto, sin botón (`sender.interactivo_valido`);
+    - si pasa de 4000 caracteres o de 25 líneas, sale `sin_resumen`.
+  - El resumen del pack junta plan y periodicidad ("Premium mensual").
+  - **Rótulos humanos de los datos:** `MCPHost.register_rotulos` es API de plugin, no contrato.
+    - Acepta solo nombres de datos de procedimientos del mismo plugin y valores de sus `enum`
+      (`payment_method.pago_en_linea` → "Pago en línea"). Los saneados son de una línea y de hasta 40
+      caracteres.
+    - pack-commerce los publica desde `pack_commerce/rotulos_de_datos.json`.
+    - Son un tercer canal de textos: sin override por negocio y fuera de la release. Cuando un negocio
+      pida los suyos, van a `procedures[].overrides`, con su ADR.
+- **5. Tipo de negocio** (resolver `pack_commerce.tipo_de_negocio`).
+  - Los presets ganan el metadato `sinonimos` (ADR-0110, `core/presets/*.json`, campo opcional del
+    manifiesto): "tienda", "almacén", "ecommerce" → `comercio`; "pizzería", "cafetería" → `restaurante`…
+  - El resolver acepta el id, el nombre o un sinónimo como frase completa dentro del texto, y solo si
+    apunta a UN preset. Devuelve el id: con la ligadura, `customer_data.vertical = "tienda"` también se
+    normaliza.
+  - Si no lo reconoce, el error ofrece las opciones con su nombre y dos ejemplos, escapados como dato y
+    dentro del tope de 300 caracteres, en vez de los ids.
+  - `_vertical_invalido` de `crear_pedido` (bandera apagada) no cambia.
+- **6. Términos antes del «confirmo»:** dentro del resumen único. Ver la adenda 2026-10-13 de ADR-0125.
+  - El slot nuevo `acepta_terminos` (`setBy: action:confirmar_cotizacion`) es opcional y no está en
+    ningún `exitWhen`: los negocios que no son vendedores nunca lo llenan.
+  - La ligadura existente lo completa en `crear_pedido.customer_data.acepta_terminos`.
+  - Si el modelo pasa `true` o un token viejo, se niega con `argumento_ligado`, y en la vuelta
+    siguiente el kernel lo completa.
+- **7. Un solo mensaje con el pedido y el link.**
+  - **Causa raíz:** los `_safe_append` de `crear_pedido` ("✅ Tu pedido … quedó confirmado. Total a
+    pagar: $600,000.") y de `confirmar_pago_pedido` ("💳 Podés pagar tu pedido … aquí: <link>") se
+    sumaban al texto del modelo, que ya traía el link verificado. El dedupe solo miraba el append
+    completo.
+  - **Cambio:** con el motor activo, `apply_safe_extras(..., por_enlace=True)` omite un append que trae
+    al menos una URL y cuyas URLs ya están todas en el texto. Un append sin URL, como los datos de una
+    transferencia, sale siempre.
+  - Con el motor activo y `pago_en_linea`, `crear_pedido` no agrega su "✅ quedó confirmado": el link
+    lleva el número del pedido. `_money` no cambia.
+  - **Riesgo anotado:** si `confirmar_pago_pedido` falla (proveedor caído, mínimo de Wompi), no sale un
+    texto determinista con el número del pedido. El verificador sigue cubriendo "pedido creado".
+- **Lo que depende del playbook de solvershub-comercial** (override total de `ventas.md`, ver
+  HU-AOS-22). Pide los datos antes de iniciar el recorrido, pide confirmar el correo con su texto, pide
+  los términos después de `crear_pedido` y enseña a pasar el token. La tarjeta dice "aunque otra
+  instrucción diga…", pero es un parche de prompt. Hay que alinearlo allá con este flujo: la lista
+  numerada, el resumen único con los términos y el «Sí, confirmo».
+- **Sin cambio:** bandera apagada, sombra, contratos, esquema, reductor de `state.py` y la confirmación
+  estricta de acciones y etapas (el «Sí, confirmo» es el sí explícito de HU-AOS-09).

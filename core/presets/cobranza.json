@@ -3,6 +3,14 @@
   "version": 1,
   "nombre": "Cobranza",
   "descripcion": "Cartera de créditos: saldo, estado de cuenta, negociación y promesas de pago.",
+  "sinonimos": [
+    "cartera",
+    "créditos",
+    "préstamos",
+    "financiera",
+    "cobros",
+    "recaudo"
+  ],
   "plan_minimo": "premium",
   "packs": [
     "pack_cobranza"

@@ -1,0 +1,19 @@
+{
+  "variant_id": "Plan",
+  "business_name": "Nombre del negocio",
+  "vertical": "Tipo de negocio",
+  "full_name": "Nombre completo",
+  "id_document": "Documento",
+  "email": "Correo",
+  "phone": "Teléfono",
+  "address": "Dirección",
+  "municipality": "Barrio o municipio",
+  "city": "Ciudad",
+  "payment_method": "Forma de pago",
+  "payment_method.pago_en_linea": "Pago en línea",
+  "payment_method.transferencia": "Transferencia",
+  "payment_method.efectivo_contraentrega": "Efectivo contra entrega",
+  "delivery_method": "Entrega",
+  "delivery_method.domicilio": "A domicilio",
+  "delivery_method.recoger_en_tienda": "Recoger en tienda"
+}

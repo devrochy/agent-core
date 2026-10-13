@@ -201,6 +201,54 @@ def faltas_de_salida(proc: Procedure, stage: Stage, tarea: Proyeccion) -> list[F
     return []
 
 
+# Clases de `Falta` que se le piden al cliente (adenda 2026-10-13: pedir de a poco y en orden).
+CLASES_QUE_SE_PIDEN = frozenset({"dato_cliente", "dato_boton", "dato_contenido"})
+
+
+def siguientes_datos(proc: Procedure, stage: Stage, tarea: Proyeccion) -> list[str]:
+    """Los datos que el cliente tiene que dar AHORA (adenda 2026-10-13 de ADR-0113): todos los que
+    faltan para salir de la etapa, en el orden de `exitWhen` (el del procedimiento), solo de las
+    clases que se le piden al cliente. Vacío si lo primero que falta no es un dato del cliente
+    (una confirmación, una acción o un dato del servidor): entonces no se le pide nada. Pura."""
+    salida: list[str] = []
+    for falta in faltas_de_salida(proc, stage, tarea):
+        if falta.clase not in CLASES_QUE_SE_PIDEN:
+            break
+        salida.append(falta.nombre)
+    return salida
+
+
+def orden_de_datos(proc: Procedure) -> list[str]:
+    """Los datos en el orden del procedimiento: los de `exitWhen` de cada etapa, en orden, y
+    después los demás en el orden en que se declaran. Pura."""
+    salida: list[str] = []
+    for stage in proc.stages:
+        for n in (stage.exitWhen.slots if stage.exitWhen else []):
+            if n in proc.slots and n not in salida:
+                salida.append(n)
+    return salida + [n for n in proc.slots if n not in salida]
+
+
+def datos_del_cliente(proc: Procedure, tarea: Proyeccion) -> list[tuple[str, Any]]:
+    """(nombre, valor) de los datos que dio el cliente en la tarea (escritos por el modelo con sus
+    palabras, una persona, un botón o el contenido que envió; nunca los que fija una acción), en
+    el orden del procedimiento, que aplican, escalares y sin los de pago (adenda 2026-10-13: van
+    en el resumen único que confirma). Pura."""
+    vals = valores(tarea)
+    salida: list[tuple[str, Any]] = []
+    for nombre in orden_de_datos(proc):
+        meta = tarea.slots.get(nombre) or {}
+        valor, origen = meta.get("value"), str(meta.get("source") or "")
+        slot = proc.slots[nombre]
+        if valor is None or isinstance(valor, dict | list) or slot.dataClass == "payment":
+            continue
+        if not (origen in ("llm", "human") or origen.startswith(("interactive:", "content:"))):
+            continue
+        if _aplica(proc, vals, nombre):
+            salida.append((nombre, valor))
+    return salida
+
+
 def dato_por_confirmar(proc: Procedure, stage: Stage, tarea: Proyeccion) -> str | None:
     """El dato que el kernel debe pedir que el cliente confirme AHORA, o None: el primero de
     `exitWhen.confirmed` de la etapa vigente, con valor y sin confirmar, cuando eso es lo ÚNICO que

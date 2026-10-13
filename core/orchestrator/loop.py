@@ -14,6 +14,7 @@ El LLM propone, las tools deciden (contra la BD), el core arbitra.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -31,7 +32,11 @@ from core.kernel.decisions import anotar_uso, bloquear, en_turno, enrutar, marca
 from core.kernel.ingress import QUOTA_EXHAUSTED_REPLY as QUOTA_EXHAUSTED_REPLY
 from core.kernel.ingress import conversacion_bloqueada, politicas_del_turno
 from core.kernel.procedures import comandos as comandos_del_hilo
-from core.kernel.procedures.ejecucion import ContextoMotor, contexto_del_motor
+from core.kernel.procedures.ejecucion import (
+    VUELTAS_LIBRES_DE_COMANDOS,
+    ContextoMotor,
+    contexto_del_motor,
+)
 from core.kernel.release_del_turno import con_release, fijar_release_del_turno
 from core.llm import resolve_provider
 from core.llm.difficulty_router import (
@@ -40,7 +45,12 @@ from core.llm.difficulty_router import (
     TURNOS_SIN_RESOLVER_THRESHOLD,
     route_model,
 )
-from core.llm.prompt_builder import DEFAULT_TIMEZONE, PromptContext, build_system_blocks
+from core.llm.prompt_builder import (
+    DEFAULT_TIMEZONE,
+    PromptContext,
+    bloque_dinamico,
+    build_system_blocks,
+)
 from core.llm.types import LLMMessage, LLMToolCall
 from core.mcp.host import mcp_host, new_tool_context
 from core.mcp.translator import skills_summary, to_llm_schemas
@@ -434,7 +444,12 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     )
 
     max_iterations = max(1, min(50, spec.policies.maxToolCallsPerTurn))
-    for _iteration in range(max_iterations):
+    # Con el motor activo, una vuelta que solo llevó comandos del hilo no gasta el tope, hasta
+    # `VUELTAS_LIBRES_DE_COMANDOS` (adenda 2026-10-13 de ADR-0113).
+    tope = max_iterations
+    techo = min(50, max_iterations + VUELTAS_LIBRES_DE_COMANDOS)
+    _iteration = -1
+    while (_iteration := _iteration + 1) < tope:
         # Presupuesto (ADR-0015): se mide ANTES de llamar al LLM, en la cabecera.
         if budget is not None:
             spent = await conversation_spent(conversation_id) + turn_cost
@@ -556,6 +571,17 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             if motor is not None and await motor.tras_lote():
                 active_tools = motor.herramientas()
                 tool_schemas = to_llm_schemas(active_tools) if routing.allow_tools else None
+                if motor.activo:
+                    # Adenda 2026-10-13: y ve la tarjeta y las capacidades vigentes (solo el bloque
+                    # dinámico, el último; el prefijo cacheado y `contexto_urls` no cambian).
+                    prompt_ctx = dataclasses.replace(
+                        prompt_ctx, state_card=motor.tarjeta, active_skills_summary=skills_summary(active_tools)
+                    )
+                    system_blocks = [*system_blocks[:-1], bloque_dinamico(prompt_ctx)]
+            if motor is not None and motor.activo and tope < techo and all(
+                motor.es_comando(tc.name) for tc in response.tool_calls
+            ):
+                tope += 1
             continue
 
         # ---- refusal
@@ -687,7 +713,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             and _persona_excede_largo(borrador, spec)
             # Sin una vuelta libre, el reintento terminaría en `max_iterations` y
             # escalaría; sin presupuesto, en el cierre por presupuesto.
-            and _iteration + 1 < max_iterations
+            and _iteration + 1 < tope
             and (budget is None or await conversation_spent(conversation_id) + turn_cost < budget)
         ):
             # Tope blando (adenda de ADR-0050): un solo reintento propio, que no toca
@@ -715,7 +741,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                 entregado = "guardado" if entrega_guardada else "reintento"
             await _registrar_largo_excedido(conversation_id, spec, len(borrador), entregado)
         extras = extract_safe_extras(all_tool_results)
-        final_text = apply_safe_extras(borrador, extras)
+        # Adenda 2026-10-13: con el motor activo, un append cuyo link el texto ya trae no se repite.
+        final_text = apply_safe_extras(borrador, extras, por_enlace=motor is not None and motor.activo)
         # HU-AOS-09: si el turno pidió una confirmación, el cliente confirma lo que armó el
         # servidor (args firmados y datos de la tarea), no el texto del modelo.
         confirmacion = await motor.confirmacion_del_turno() if motor is not None else None
@@ -739,7 +766,28 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             resultado.confirmacion = confirmacion
         return resultado
 
-    # Se agotaron las iteraciones
+    # Se agotaron las iteraciones. Con el motor activo y una tarea en foco, el kernel responde con
+    # lo que falta en vez de escalar (adenda 2026-10-13 de ADR-0113); si no lo sabe, escala.
+    salida = await motor.salida_al_agotar() if motor is not None and motor.activo else None
+    if salida is not None:
+        texto_kernel, confirmacion = salida
+        if veredicto is not None and motivos_verificador:
+            # Las vueltas se fueron en reintentos del verificador: queda su rastro, como al escalar.
+            await registrar_veredicto(
+                conversation_id, veredicto, resultado="fallo", intentos=guardrail_retries + 1,
+                motivos=motivos_verificador,
+            )
+        extras = extract_safe_extras(all_tool_results)
+        if confirmacion is None:
+            texto_kernel = apply_safe_extras(texto_kernel, extras, por_enlace=True)
+        resultado = await _close_turn(
+            conversation_id, spec, app_settings, usage, turn_span, latest_message, texto_kernel,
+            resolved=bool(all_tool_results) or hubo_comando_ok,
+            image_url=extras.image_url if confirmacion is None else None,
+        )
+        if confirmacion is not None and not resultado.escalated:
+            resultado.confirmacion = confirmacion
+        return resultado
     await escalate(conversation_id, reason="max_iterations", summary="Loop sin resolución")
     usage.escalated = True
     await _write_usage_ledger(conversation_id, spec, usage, turn_span)

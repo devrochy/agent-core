@@ -1,7 +1,7 @@
 {
   "contract": "procedure/1",
   "id": "pack_commerce.contratar_plan",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "title": "Contratar un plan",
   "triggers": {
     "description": "El cliente quiere comprar, contratar o pagar un plan o suscripción del negocio.",
@@ -63,41 +63,6 @@
       "type": "boolean",
       "setBy": "action:cotizar_plan"
     },
-    "full_name": {
-      "type": "string",
-      "requiredWhen": {
-        "slot": "pide_full_name",
-        "equals": true
-      },
-      "dataClass": "pii"
-    },
-    "id_document": {
-      "type": "string",
-      "requiredWhen": {
-        "slot": "pide_id_document",
-        "equals": true
-      },
-      "dataClass": "pii"
-    },
-    "phone": {
-      "type": "string",
-      "requiredWhen": {
-        "slot": "pide_phone",
-        "equals": true
-      },
-      "dataClass": "pii",
-      "format": "phone"
-    },
-    "email": {
-      "type": "string",
-      "requiredWhen": {
-        "slot": "pide_email",
-        "equals": true
-      },
-      "dataClass": "pii",
-      "format": "email",
-      "confirm": true
-    },
     "business_name": {
       "type": "string",
       "requiredWhen": {
@@ -115,6 +80,40 @@
       },
       "dataClass": "public",
       "resolver": "pack_commerce.tipo_de_negocio"
+    },
+    "full_name": {
+      "type": "string",
+      "requiredWhen": {
+        "slot": "pide_full_name",
+        "equals": true
+      },
+      "dataClass": "pii"
+    },
+    "id_document": {
+      "type": "string",
+      "requiredWhen": {
+        "slot": "pide_id_document",
+        "equals": true
+      },
+      "dataClass": "pii"
+    },
+    "email": {
+      "type": "string",
+      "requiredWhen": {
+        "slot": "pide_email",
+        "equals": true
+      },
+      "dataClass": "pii",
+      "format": "email"
+    },
+    "phone": {
+      "type": "string",
+      "requiredWhen": {
+        "slot": "pide_phone",
+        "equals": true
+      },
+      "dataClass": "pii",
+      "format": "phone"
     },
     "address": {
       "type": "string",
@@ -151,6 +150,10 @@
         "equals": true
       },
       "resolver": "pack_commerce.metodo_de_pago"
+    },
+    "acepta_terminos": {
+      "type": "string",
+      "setBy": "action:confirmar_cotizacion"
     },
     "order_id": {
       "type": "string",
@@ -207,31 +210,28 @@
     },
     {
       "id": "datos",
-      "goal": "Pedir los datos que el negocio exige para el plan y confirmar el correo.",
+      "goal": "Pedir en un solo mensaje, como lista numerada, los datos que el negocio exige para el plan; si el cliente da una parte, pedir solo lo que falta.",
       "actions": [
         "consultar_inventario"
       ],
       "exitWhen": {
         "slots": [
-          "full_name",
-          "id_document",
-          "phone",
-          "email",
           "business_name",
           "vertical",
+          "full_name",
+          "id_document",
+          "email",
+          "phone",
           "address",
           "municipality",
           "city",
           "payment_method"
-        ],
-        "confirmed": [
-          "email"
         ]
       }
     },
     {
       "id": "confirmar",
-      "goal": "Mostrar el total del servidor y pedir la confirmación explícita del cliente.",
+      "goal": "Mostrar el resumen único del servidor (plan, total, datos del cliente y, si el negocio los exige, los documentos que acepta) y pedir la confirmación explícita del cliente.",
       "actions": [
         "confirmar_cotizacion",
         "consultar_inventario"

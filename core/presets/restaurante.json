@@ -3,6 +3,19 @@
   "version": 1,
   "nombre": "Restaurante",
   "descripcion": "Restaurante o domicilios: menú, pedido para domicilio o para recoger y pago en línea.",
+  "sinonimos": [
+    "restaurante",
+    "pizzería",
+    "cafetería",
+    "panadería",
+    "comidas rápidas",
+    "comida rápida",
+    "domicilios de comida",
+    "asadero",
+    "heladería",
+    "bar",
+    "food truck"
+  ],
   "plan_minimo": "basic",
   "packs": [
     "pack_commerce",

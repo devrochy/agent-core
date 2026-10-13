@@ -328,3 +328,38 @@ Cambia el § 2.1.
 - **Journeys y playground.** El runner de journeys y el playground guardan en `messages` el mensaje
   del cliente y la respuesta, como el consumidor y el envío. Sin eso no podía haber aceptación. Los
   de la conversación `test` no cuentan para la cuota de `mensajes` ni para el tablero.
+
+## Adenda (2026-10-13): con el motor, los términos se aceptan en el resumen que se confirma
+
+**Estado:** **aceptada por el dueño (2026-10-13)** en lo de fondo: los términos se aceptan con el mismo
+«Sí, confirmo» del resumen que trae los enlaces, nunca después. La redacción legal queda revisable
+por el abogado (HU-GTM-02). Cambia el § 2.1 solo con el motor de procedimientos activo
+(`tenants.aos_procedures`, adenda del mismo día de ADR-0113). Sin el motor nada cambia.
+
+- **Defecto.** En la segunda prueba real en test (2026-10-13), `crear_pedido` respondió
+  `terminos_pendientes` DESPUÉS del «confirmo» al total. El cliente tuvo que aceptar los documentos en
+  un mensaje más, ya con el pedido "confirmado".
+- **Aceptación en el resumen único.**
+  - El resumen de `confirmar_cotizacion` (pack-commerce) de un pedido con un plan, en un vendedor con
+    los tres documentos publicados, lleva los tres enlaces bajo "Documentos que aceptas al confirmar:".
+    Cierra con «Si todo está bien y aceptas los términos, responde *Sí, confirmo*».
+  - Los enlaces nunca se recortan. Si el resumen no cabe en el botón, sale como texto.
+  - La huella del resumen los incluye: otra versión u otro enlace piden otro sí.
+- **El marcador fijo por versión no cambia** (adenda 2026-10-09).
+  - `antiabuso.terminos_del_resumen(conversation_id, anotar=True)` lo pone con `SET NX` al armar el
+    resumen, antes de que salga el mensaje que lleva los enlaces. Armar el resumen otra vez no lo mueve.
+  - Enmienda para esto el "solo lectura" del resumen de un pack (adendas HU-AOS-07/09 de ADR-0113).
+- **`crear_pedido` sigue exigiendo la aceptación** (`preparar_pedido_de_alta` sin cambios).
+  - `confirmar_cotizacion`, solo con el motor activo, devuelve el token (`acepta_terminos`).
+  - El procedimiento lo guarda, y la ligadura del kernel lo pone en `customer_data.acepta_terminos`.
+  - El pedido valida el token y que haya un mensaje del cliente posterior a la respuesta que llevó los
+    enlaces: el «Sí, confirmo». Ese mensaje queda como evidencia en `pedidos_de_alta`, como siempre.
+  - Si algo falla (sin Redis no hay marcador, otra versión publicada en medio), vuelve
+    `terminos_pendientes` y queda el camino de siempre: se comparten los enlaces y se repite con el
+    token.
+- **Caso límite aceptado.** Un resumen armado cuyo mensaje no sale (escalamiento a mitad del turno,
+  `sin_resumen`) deja el marcador puesto. El primer saliente posterior entonces no lleva los enlaces,
+  y eso se aparta de la frase "la respuesta que llevó los enlaces" del § 2.1. Lo cubre la huella:
+  `confirmar_cotizacion` solo se ejecuta tras el sí a un resumen que los mostró.
+- **Revisable por el abogado (HU-GTM-02):** una sola respuesta acepta la compra, los términos, la
+  privacidad y el DPA. La autorización del tratamiento de datos (Ley 1581) es la parte delicada.

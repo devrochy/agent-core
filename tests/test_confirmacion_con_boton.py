@@ -26,8 +26,8 @@ def test_cuerpo_desde_los_datos_del_servidor() -> None:
          Dato("correo", "ana@empresa.co")],
         PAYLOAD,
     )
-    assert c.cuerpo.splitlines()[0] == "Para confirmar: Contratar un plan"
-    assert "Periodicidad: anual" in c.cuerpo and "Total: $600.000" in c.cuerpo and "Correo: ana@empresa.co" in c.cuerpo
+    assert c.cuerpo.splitlines()[0] == "Antes de seguir, revisa que todo esté bien:"
+    assert "• Periodicidad: anual" in c.cuerpo and "Total: $600.000" in c.cuerpo and "Correo: ana@empresa.co" in c.cuerpo
     assert "Q-9" not in c.cuerpo  # los ids internos no se muestran
     assert "Confirmar" in c.cuerpo and "confirmo" in c.texto
     assert c.interactivo() == {"type": "button", "body": c.cuerpo, "buttons": [{"id": PAYLOAD, "title": "Confirmar"}]}
@@ -54,14 +54,16 @@ def test_args_sin_credenciales_ni_reservados_ni_objetos() -> None:
 
 def test_un_valor_no_tacha_ni_reordena_lo_que_se_confirma() -> None:
     c = confirmacion.armar("t", [Dato("nota", "~2~ *3* \u202e9\u202c\u200b\x0bx\x85y")], PAYLOAD)
-    linea = next(linea for linea in c.cuerpo.splitlines() if linea.startswith("Nota"))
-    assert linea == "Nota: 2 3 9 x y"
+    linea = next(linea for linea in c.cuerpo.splitlines() if linea.startswith("• Nota"))
+    assert linea == "• Nota: 2 3 9 x y"
 
 
-def test_montos_van_primero_y_no_se_recortan() -> None:
-    datos = [Dato(f"d{i}", "v" * 80) for i in range(20)] + [Dato("total", 600000, es_monto=True)]
+def test_montos_van_al_final_y_no_se_recortan() -> None:
+    datos = [Dato("total", 600000, es_monto=True)] + [Dato(f"d{i}", "v" * 80) for i in range(20)]
     c = confirmacion.armar("t", datos, PAYLOAD)
-    assert c.cuerpo.splitlines()[1] == "Total: $600.000"
+    lineas = c.cuerpo.splitlines()
+    assert lineas[-3] == "• Total: $600.000" and len(c.cuerpo) <= confirmacion.MAX_CUERPO
+    assert lineas[-1].startswith("Si todo está bien")
 
 
 def test_sin_resumen_es_texto_fijo_sin_boton() -> None:
