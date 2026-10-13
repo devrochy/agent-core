@@ -54,6 +54,48 @@ def test_parsea_v1_y_v2():
     assert len(cat.sha256) == 64
 
 
+CATALOGO_V6 = """
+version: 6
+fecha: '2026-10-13'
+items:
+- id: pruebas-cartera
+  seccion: pruebas
+  modulo: Cobranza
+  entorno: apk
+  area: Cartera del gestor
+  grupo: Visitas
+  titulo: Registrar un pago en la ruta
+  requiere: [datos-cuentas-propias]
+  pasos:
+  - accion: Abrir la ruta.
+    esperado: Aparece Juana Pérez en mora.
+- id: datos-cuentas-propias
+  seccion: datos
+  grupo: Cuentas
+  titulo: Tus cuentas de prueba
+  porque: Cada tester prueba con su propio negocio.
+  como: En Pruebas, pestaña Datos de prueba, botón Preparar mis datos.
+"""
+
+
+def test_v6_entorno_area_requiere_y_guia_de_datos():
+    cat = parse_catalogo(CATALOGO_V6)
+    prueba, guia = cat.items
+    assert prueba.entorno == "apk" and prueba.area == "Cartera del gestor"
+    assert prueba.requiere == ["datos-cuentas-propias"]
+    assert guia.seccion == "datos" and guia.pasos == []
+
+
+def test_v6_rechaza_entorno_desconocido_y_requiere_inexistente():
+    malo = CATALOGO_V6.replace("entorno: apk", "entorno: tablet").replace(
+        "requiere: [datos-cuentas-propias]", "requiere: [datos-que-no-esta]"
+    )
+    with pytest.raises(CatalogoInvalido) as exc:
+        parse_catalogo(malo)
+    texto = " ".join(exc.value.errores)
+    assert "entorno 'tablet'" in texto and "datos-que-no-esta" in texto
+
+
 def test_mismo_contenido_mismo_hash():
     assert parse_catalogo(CATALOGO_V2).sha256 == parse_catalogo(CATALOGO_V2.encode()).sha256
 

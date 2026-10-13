@@ -1,0 +1,39 @@
+{
+  "seed": {
+    "timezone": "America/Bogota",
+    "tipos": [
+      {
+        "name": "Asesoría",
+        "duration_minutes": 30,
+        "description": "Asesoría de 30 minutos para elegir el café o la cafetera."
+      },
+      {
+        "name": "Cata de café",
+        "duration_minutes": 60,
+        "description": "Cata guiada de tres orígenes en la tienda."
+      }
+    ],
+    "citas": [
+      {
+        "tipo": "Asesoría",
+        "en_dias": 1,
+        "hora": "10:00",
+        "title": "Asesoría con Juana Pérez"
+      },
+      {
+        "tipo": "Cata de café",
+        "en_dias": 3,
+        "hora": "16:00",
+        "title": "Cata con Carlos Ruiz"
+      }
+    ],
+    "bloqueos": [
+      {
+        "en_dias": 2,
+        "desde": "12:00",
+        "hasta": "14:00",
+        "reason": "Almuerzo del equipo"
+      }
+    ]
+  }
+}

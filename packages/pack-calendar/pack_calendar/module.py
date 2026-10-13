@@ -372,6 +372,13 @@ class GoogleCalendarModule(BaseModule):
 
         registrar(host, PLUGIN_ID)
 
+    async def seed_data(self, tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
+        """Datos de ejemplo de la agenda (ADR-0083): tipos de cita, citas y bloqueos.
+        Idempotente (ver `pack_calendar.seed`)."""
+        from pack_calendar.seed import sembrar_agenda
+
+        return await sembrar_agenda(tenant_id, data)
+
     async def contenido_cargado(self, tenant_id: uuid.UUID) -> ContenidoCargado:
         """Tipos de cita activos (los servicios que se agendan) para el paso «catálogo o
         servicios» de los primeros pasos (HU-SH-06, ADR-0124). Solo lee."""

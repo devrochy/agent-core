@@ -1998,7 +1998,11 @@ class QaItem(Base):
     __tablename__ = "qa_items"
     __table_args__ = (
         UniqueConstraint("catalog_version_id", "slug", name="uq_qa_items_version_slug"),
-        CheckConstraint("seccion in ('pruebas', 'test', 'prod')", name="ck_qa_items_seccion"),
+        CheckConstraint("seccion in ('pruebas', 'test', 'prod', 'datos')", name="ck_qa_items_seccion"),
+        CheckConstraint(
+            "entorno is null or entorno in ('panel', 'apk', 'whatsapp', 'web', 'api')",
+            name="ck_qa_items_entorno",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -2026,6 +2030,11 @@ class QaItem(Base):
     quien: Mapped[str | None] = mapped_column(Text)
     hu: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
     origen: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    # Dónde se ejecuta (panel, apk, whatsapp, web, api) y en qué sección o pantalla (HU-QA-08).
+    entorno: Mapped[str | None] = mapped_column(Text)
+    area: Mapped[str | None] = mapped_column(Text)
+    # Slugs de la guía de datos (sección `datos`) que la prueba necesita (HU-QA-07).
+    requiere: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
 
 
 class QaCycle(Base):
@@ -2149,6 +2158,34 @@ class QaEvent(Base):
     despues: Mapped[str | None] = mapped_column(Text)
     admin_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id"))
     en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class QaTesterDataset(Base):
+    """Negocio de prueba de un tester y sus cuentas de dueño, gestor y colaborador (HU-QA-07).
+
+    Tabla de SISTEMA (sin RLS): de la plataforma, como el resto de `qa_*`; se consulta sin
+    tenant. `tenant_id` es FK lógica (si el negocio se purga, se vuelve a preparar). Las
+    contraseñas no se guardan: se muestran una sola vez.
+    """
+
+    __tablename__ = "qa_tester_datasets"
+    __table_args__ = (
+        UniqueConstraint("admin_id", name="uq_qa_tester_datasets_admin"),
+        UniqueConstraint("slug", name="uq_qa_tester_datasets_slug"),
+        CheckConstraint("estado in ('creando', 'listo', 'error')", name="ck_qa_tester_datasets_estado"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("admins.id", ondelete="CASCADE"))
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    slug: Mapped[str] = mapped_column(Text)
+    dueno_admin_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id", ondelete="SET NULL"))
+    gestor_admin_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id", ondelete="SET NULL"))
+    colaborador_admin_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id", ondelete="SET NULL"))
+    estado: Mapped[str] = mapped_column(Text, default="creando")
+    error: Mapped[str | None] = mapped_column(Text)
+    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    actualizado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class QaTesterInvitation(Base):

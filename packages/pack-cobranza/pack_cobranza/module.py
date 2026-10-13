@@ -132,6 +132,15 @@ class CobranzaModule(BaseModule):
                 )
         log.info("cobranza_gestor_creado", tenant_id=str(tid), admin_id=str(aid))
 
+    async def seed_data(self, tenant_id: Any, data: dict[str, Any]) -> list[str]:
+        """Datos de ejemplo de la cartera (ADR-0083): carteras, caja, gestor y clientes con
+        préstamos al día y en mora. Idempotente (ver `pack_cobranza.seed`)."""
+        import uuid as _uuid
+
+        from pack_cobranza.seed import sembrar_cartera
+
+        return await sembrar_cartera(_uuid.UUID(str(tenant_id)), data)
+
     async def contenido_cargado(self, tenant_id: Any) -> ContenidoCargado:
         """Clientes de cartera para el paso «catálogo o servicios» de los primeros pasos
         (HU-SH-06, ADR-0124). Solo lee."""

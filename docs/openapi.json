@@ -15393,7 +15393,8 @@
                   "enum": [
                     "pruebas",
                     "test",
-                    "prod"
+                    "prod",
+                    "datos"
                   ],
                   "type": "string"
                 },
@@ -16606,6 +16607,157 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/QaTesterOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/datos": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Get Mis Datos",
+        "description": "Negocio de prueba y cuentas del tester (sin contraseñas).",
+        "operationId": "get_mis_datos_api_v1_admin_qa_datos_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaMisDatos"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Preparar Mis Datos",
+        "description": "Prepara el negocio de prueba del tester con sus datos y cuentas. 409 si ya existe.",
+        "operationId": "preparar_mis_datos_api_v1_admin_qa_datos_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaDatos"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/datos/contrasenas": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Contrasenas Nuevas",
+        "description": "Contraseñas nuevas para las tres cuentas de prueba; cierra sus sesiones.",
+        "operationId": "contrasenas_nuevas_api_v1_admin_qa_datos_contrasenas_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaDatos"
                 }
               }
             }
@@ -25707,7 +25859,8 @@
             "enum": [
               "pruebas",
               "test",
-              "prod"
+              "prod",
+              "datos"
             ],
             "title": "Seccion"
           },
@@ -25867,10 +26020,49 @@
             "title": "Origen",
             "default": []
           },
+          "entorno": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "panel",
+                  "apk",
+                  "whatsapp",
+                  "web",
+                  "api"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entorno",
+            "description": "Pruebas: dónde se ejecuta (HU-QA-08)."
+          },
+          "area": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area",
+            "description": "Pruebas: sección del panel o pantalla de la APK."
+          },
+          "requiere": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Requiere",
+            "description": "Pruebas: slugs de la guía de datos que necesita."
+          },
           "estado": {
             "type": "string",
             "title": "Estado",
-            "description": "Pruebas: estado consolidado del ciclo. Test/prod: estado de la configuración."
+            "description": "Pruebas: estado consolidado del ciclo. Test/prod: estado de la configuración. Datos: `guia`."
           },
           "ejecuciones": {
             "additionalProperties": {
@@ -30933,6 +31125,215 @@
         "additionalProperties": false,
         "type": "object",
         "title": "ConnectionAgentPatch"
+      },
+      "QaDatos": {
+        "properties": {
+          "estado": {
+            "type": "string",
+            "enum": [
+              "creando",
+              "listo",
+              "error",
+              "purgado"
+            ],
+            "title": "Estado"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "negocio": {
+            "$ref": "#/components/schemas/QaDatosNegocio"
+          },
+          "cuentas": {
+            "items": {
+              "$ref": "#/components/schemas/QaDatosCuenta"
+            },
+            "type": "array",
+            "title": "Cuentas"
+          },
+          "contenido": {
+            "items": {
+              "$ref": "#/components/schemas/QaDatosContenido"
+            },
+            "type": "array",
+            "title": "Contenido"
+          },
+          "creado_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creado En"
+          },
+          "actualizado_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actualizado En"
+          },
+          "contrasenas": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contrasenas",
+            "description": "Solo al preparar o al pedir contraseñas nuevas: se muestran una vez y no se guardan."
+          }
+        },
+        "type": "object",
+        "required": [
+          "estado",
+          "negocio",
+          "cuentas",
+          "contenido"
+        ],
+        "title": "QaDatos"
+      },
+      "QaDatosContenido": {
+        "properties": {
+          "habilidad": {
+            "type": "string",
+            "title": "Habilidad"
+          },
+          "detalle": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Detalle"
+          }
+        },
+        "type": "object",
+        "required": [
+          "habilidad",
+          "detalle"
+        ],
+        "title": "QaDatosContenido"
+      },
+      "QaDatosCuenta": {
+        "properties": {
+          "rol": {
+            "type": "string",
+            "enum": [
+              "dueno",
+              "gestor",
+              "colaborador"
+            ],
+            "title": "Rol"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "uso": {
+            "type": "string",
+            "title": "Uso"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "creada": {
+            "type": "boolean",
+            "title": "Creada"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rol",
+          "titulo",
+          "uso",
+          "email",
+          "creada"
+        ],
+        "title": "QaDatosCuenta"
+      },
+      "QaDatosNegocio": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "nombre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombre"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "slug"
+        ],
+        "title": "QaDatosNegocio"
+      },
+      "QaMisDatos": {
+        "properties": {
+          "disponible": {
+            "type": "boolean",
+            "title": "Disponible",
+            "description": "`QA_TESTERS_ENABLED` en este entorno: los datos solo existen en test."
+          },
+          "datos": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QaDatos"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "contenido": {
+            "items": {
+              "$ref": "#/components/schemas/QaDatosContenido"
+            },
+            "type": "array",
+            "title": "Contenido"
+          }
+        },
+        "type": "object",
+        "required": [
+          "disponible",
+          "datos",
+          "contenido"
+        ],
+        "title": "QaMisDatos"
       }
     }
   }
