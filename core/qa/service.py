@@ -695,8 +695,14 @@ async def _avisar_informe(destinatarios: list[str], informe: dict[str, Any], run
 
     base = get_settings().panel_base_url.rstrip("/")
     enlace = f"{base}/pruebas/informes/{run_id}" if base else None
+    from core.shared.texto_seguro import enmascarar_correo
+
     tester = informe.get("tester") or {}
-    asunto = f"Informe de pruebas de {tester.get('nombre') or tester.get('email')} · {(informe.get('ciclo') or {}).get('nombre')}"
+    # El asunto puede terminar en un log (correo sin SMTP): nunca el correo completo.
+    quien = tester.get("nombre") or ""
+    if "@" in quien:
+        quien = enmascarar_correo(quien)
+    asunto = f"Informe de pruebas de {quien} · {(informe.get('ciclo') or {}).get('nombre')}"
     cuerpo = cuerpo_correo(informe, enlace)
     for destino in destinatarios:
         try:
@@ -730,13 +736,24 @@ async def obtener_ejecucion(admin: Admin, run_id: uuid.UUID) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------ historial y ciclos
-async def historial(slug: str, cycle_id: uuid.UUID | None = None, limite: int = 100) -> list[dict[str, Any]]:
+async def historial(
+    admin: Admin, slug: str, cycle_id: uuid.UUID | None = None, limite: int = 100
+) -> list[dict[str, Any]]:
+    """Historial de una prueba. El master ve el de todos; el resto, el de su ejecución y los
+    eventos sin ejecución (ciclo y configuración): las notas ajenas no se leen por aquí."""
     async with get_session() as session:
         if cycle_id is None:
             ciclo = await _ciclo_abierto(session)
             if ciclo is None:
                 return []
             cycle_id = ciclo.id
+        propio = None
+        if not ve_todas_las_ejecuciones(admin):
+            propio = (
+                await session.execute(
+                    select(QaRun.id).where(QaRun.cycle_id == cycle_id, QaRun.admin_id == admin.id)
+                )
+            ).scalar_one_or_none()
         # La config de test y de producción no se reinicia por ciclo: su historial es completo.
         filas = (
             await session.execute(
@@ -745,6 +762,9 @@ async def historial(slug: str, cycle_id: uuid.UUID | None = None, limite: int = 
                 .where(
                     QaEvent.item_slug == slug,
                     (QaEvent.cycle_id == cycle_id) | QaEvent.campo.like("config.%"),
+                    True
+                    if ve_todas_las_ejecuciones(admin)
+                    else (QaEvent.run_id.is_(None) | (QaEvent.run_id == propio)),
                 )
                 .order_by(QaEvent.en.desc())
                 .limit(min(max(limite, 1), 500))

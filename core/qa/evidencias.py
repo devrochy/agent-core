@@ -32,6 +32,19 @@ def raiz() -> Path:
     return tenants_root() / ".plataforma" / "pruebas"
 
 
+def _firma_coincide(tipo: str, contenido: bytes) -> bool:
+    """Los primeros bytes confirman el tipo declarado por el navegador."""
+    if tipo == "image/png":
+        return contenido.startswith(b"\x89PNG\r\n\x1a\n")
+    if tipo == "image/jpeg":
+        return contenido.startswith(b"\xff\xd8\xff")
+    if tipo == "image/webp":
+        return contenido[:4] == b"RIFF" and contenido[8:12] == b"WEBP"
+    if tipo == "application/pdf":
+        return contenido.startswith(b"%PDF-")
+    return False
+
+
 def tipo_normalizado(mimetype: str | None) -> str:
     return (mimetype or "").split(";")[0].strip().lower()
 
@@ -46,6 +59,8 @@ def guardar(run_id: uuid.UUID, mimetype: str | None, contenido: bytes) -> tuple[
         raise EvidenciaInvalida("El archivo está vacío.")
     if len(contenido) > MAX_BYTES:
         raise EvidenciaInvalida("El archivo supera 5 MB.")
+    if not _firma_coincide(tipo, contenido):
+        raise EvidenciaInvalida("El contenido no corresponde a una imagen o PDF válido.")
     carpeta = raiz() / str(run_id)
     carpeta.mkdir(parents=True, exist_ok=True)
     nombre = f"{uuid.uuid4().hex}{ext}"

@@ -264,7 +264,7 @@ async def item_history(
     cycle_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> list[dict[str, Any]]:
     """Historial de una prueba en el ciclo (abierto por defecto) o de un punto de configuración."""
-    return await service.historial(slug, cycle_id)
+    return await service.historial(principal.admin, slug, cycle_id)
 
 
 # ------------------------------------------------------------------ mi ejecución
@@ -439,7 +439,11 @@ async def close_cycle(
     payload: QaCerrarCicloIn,
     principal: Annotated[Principal, Depends(_escribir)],
 ) -> dict[str, Any]:
-    """Cierra el ciclo abierto (foto fija) y abre uno nuevo con la última versión del catálogo."""
+    """Cierra el ciclo abierto (foto fija) y abre uno nuevo con la última versión del catálogo.
+
+    Congela las ejecuciones en curso de todos: solo el admin de plataforma."""
+    if principal.admin.role != "master":
+        raise ApiError.forbidden("Solo el admin de plataforma cierra un ciclo.")
     try:
         return await service.cerrar_ciclo(principal.admin, payload.nombre)
     except service.QaError as exc:

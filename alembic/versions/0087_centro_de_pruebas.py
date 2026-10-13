@@ -3,7 +3,7 @@
 Tabla de SISTEMA (sin RLS): las nueve tablas `qa_*` son de la plataforma, no de un
 negocio (D-SPEC-30-3, ADR-0133). No llevan `tenant_id`: las usan master y el rol
 tester desde la sección global `qa`, y ninguna query de negocio las toca. Grants
-mínimos a app_runtime; `qa_events` solo admite insertar y leer.
+mínimos a app_runtime por tabla; `qa_events` solo admite insertar y leer.
 
 Revision ID: 0087
 Revises: 0086
@@ -170,19 +170,22 @@ def upgrade() -> None:
     )
     op.create_index("ix_qa_events_cycle_item", "qa_events", ["cycle_id", "item_slug", "en"])
 
-    for table in (
-        "qa_catalog_versions",
-        "qa_items",
-        "qa_cycles",
-        "qa_runs",
-        "qa_step_results",
-        "qa_item_results",
-        "qa_attachments",
-        "qa_config_status",
-    ):
-        op.execute(f"grant select, insert, update, delete on {table} to app_runtime")
-    # El historial es de solo agregar (el `set null` del FK lo hace el dueño de la tabla).
-    op.execute("grant select, insert on qa_events to app_runtime")
+    # Grants mínimos por tabla. Primero `revoke all`: los default privileges de la 0003 dan
+    # todo a app_runtime sobre cada tabla nueva. El historial es de solo agregar.
+    grants = {
+        "qa_catalog_versions": "select, insert",
+        "qa_items": "select, insert",
+        "qa_cycles": "select, insert, update",
+        "qa_runs": "select, insert, update",
+        "qa_step_results": "select, insert, update",
+        "qa_item_results": "select, insert, update",
+        "qa_attachments": "select, insert, delete",
+        "qa_config_status": "select, insert, update",
+        "qa_events": "select, insert",
+    }
+    for table, privilegios in grants.items():
+        op.execute(f"revoke all on {table} from app_runtime")
+        op.execute(f"grant {privilegios} on {table} to app_runtime")
 
 
 def downgrade() -> None:

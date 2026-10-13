@@ -156,3 +156,18 @@ def test_informe_markdown_y_correo():
     assert "## Sin correr (1)" in md
     correo = cuerpo_correo(inf, "https://panel/pruebas/informes/r1")
     assert "Falla: Prueba B" in correo and "https://panel/pruebas/informes/r1" in correo
+
+
+def test_captura_con_contenido_que_no_coincide_se_rechaza(tmp_path, monkeypatch):
+    import uuid
+
+    from core.config import get_settings
+    from core.qa import evidencias
+
+    monkeypatch.setattr(get_settings(), "tenants_root", str(tmp_path))
+    run = uuid.uuid4()
+    with pytest.raises(evidencias.EvidenciaInvalida):
+        evidencias.guardar(run, "image/png", b"<html>no es png</html>")
+    ruta, tipo, tamano = evidencias.guardar(run, "image/png; charset=binary", b"\x89PNG\r\n\x1a\n" + b"0" * 10)
+    assert tipo == "image/png" and tamano == 18 and evidencias.resolver(ruta) is not None
+    assert evidencias.resolver("../../etc/passwd") is None

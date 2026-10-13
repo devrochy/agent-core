@@ -242,9 +242,19 @@ async def test_otro_tester_consolida_y_no_ve_lo_ajeno(app_client, qa_listo) -> N
     r = await app_client.get(f"/api/v1/admin/qa/runs/{ajena['id']}", headers=tester)
     assert r.status_code == 404
 
-    # Solo el master importa el catálogo.
+    # Solo el master importa el catálogo y cierra el ciclo.
     r = await app_client.post("/api/v1/admin/qa/catalog/import", json={"contenido": CATALOGO}, headers=tester)
     assert r.status_code == 403
+    r = await app_client.post("/api/v1/admin/qa/cycles/close", json={"nombre": "x"}, headers=tester)
+    assert r.status_code == 403
+
+    # El historial no muestra las notas de la ejecución del master a otro tester.
+    r = await app_client.get("/api/v1/admin/qa/items/pruebas-uno/history", headers=tester)
+    textos = [e["despues"] for e in r.json()]
+    assert "No pasa nada" not in textos and "Revisar el botón" not in textos
+    assert all(e["por"] != "admin@local" for e in r.json() if e["run_id"])
+    r = await app_client.get("/api/v1/admin/qa/items/pruebas-uno/history", headers=master)
+    assert "No pasa nada" in [e["despues"] for e in r.json()]
 
 
 async def test_config_y_cierre_de_ciclo(app_client, qa_listo) -> None:
@@ -270,6 +280,25 @@ async def test_config_y_cierre_de_ciclo(app_client, qa_listo) -> None:
     assert items["test-smtp"]["estado"] == "listo" and items["pruebas-uno"]["estado"] == "sin_correr"
     r = await app_client.get("/api/v1/admin/qa/runs/me", headers=master)
     assert r.json() is None
+
+
+async def test_historial_es_de_solo_agregar_para_el_runtime(qa_listo) -> None:
+    engine = create_async_engine(os.environ["MIGRATIONS_DATABASE_URL"])
+    try:
+        async with engine.connect() as conn:
+            fila = (
+                await conn.execute(
+                    text(
+                        "select has_table_privilege('app_runtime', 'qa_events', 'UPDATE'), "
+                        "has_table_privilege('app_runtime', 'qa_events', 'DELETE'), "
+                        "has_table_privilege('app_runtime', 'qa_events', 'INSERT'), "
+                        "has_table_privilege('app_runtime', 'qa_runs', 'DELETE')"
+                    )
+                )
+            ).one()
+    finally:
+        await engine.dispose()
+    assert tuple(fila) == (False, False, True, False)
 
 
 @pytest.mark.aislamiento
