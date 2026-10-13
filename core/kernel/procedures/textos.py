@@ -5,7 +5,9 @@ viajan con el binario y ningún negocio reemplaza. Fail-closed: un playbook roto
 un test de CI), en vez de dejar al motor sin sus mensajes.
 
 La confirmación escrita la decide el clasificador conservador de `clasificador.py` (HU-AOS-09):
-"dale", "ok", "listo" o "sí" a secas no confirman. El botón firmado es la vía preferida.
+"dale", "ok", "listo" o "sí" a secas no confirman una acción ni una etapa. El botón firmado es la
+vía preferida. La confirmación de un DATO acepta un asentimiento (`confirmacion_suficiente`,
+adenda 2026-10-12 de ADR-0113).
 """
 
 from __future__ import annotations
@@ -35,6 +37,11 @@ MENSAJES = {
     "argumento_ligado": ("dato",),
     "dato_bloqueado": ("dato",),
     "sin_recorrido": ("accion", "procedimientos"),
+    # Adenda 2026-10-12 de ADR-0113 (confirmaciones de datos visibles).
+    "fuera_de_etapa_falta": ("accion", "etapa", "faltas"),
+    "dato_no_dicho": ("dato",),
+    "confirmacion_vencida": ("accion",),
+    "confirmacion_repedida": (),
 }
 _SECCION = re.compile(r"^## ([a-z_]+)$")
 _MAX_ERROR_RESOLVER = 300
@@ -130,3 +137,20 @@ def confirmacion_alta(texto: str, lexico: frozenset[str] | None = None) -> bool:
     from core.kernel.procedures.clasificador import es_confirmacion
 
     return es_confirmacion(texto)
+
+
+def confirmacion_suficiente(texto: str, *, kind: str | None, data_class: str | None = None) -> bool:
+    """¿El texto del cliente basta para confirmar lo pendiente? Un único criterio para el kernel al
+    empezar el turno y para `confirmar_tarea` (adenda 2026-10-12 de ADR-0113):
+
+    - un DATO personal (`kind = slot`, `dataClass = pii`: correo, dirección, nombre): un
+      asentimiento ("sí", "ok", "sí, el correo está bien"; `clasificador.es_asentimiento`): no
+      compromete nada y el cliente acaba de verlo;
+    - cualquier otra cosa (una acción o una etapa, un dato `public` que puede llevar monto o
+      efecto, un dato `payment`): solo la confirmación explícita de HU-AOS-09. Lista permitida, no
+      exclusión (revisión de seguridad)."""
+    if kind == "slot" and data_class == "pii":
+        from core.kernel.procedures.clasificador import es_asentimiento
+
+        return es_asentimiento(texto)
+    return confirmacion_alta(texto)

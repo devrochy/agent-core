@@ -137,6 +137,159 @@ def salida_cumplida(proc: Procedure, stage: Stage, tarea: Proyeccion, eventos_et
     return not (salida.action is not None and not accion_terminada(eventos_etapa, salida.action, salida.ok))
 
 
+# ---------------------------------------------------------------- qué bloquea la etapa (adenda 2026-10-12)
+
+
+@dataclass(frozen=True)
+class Falta:
+    """Una condición de salida de la etapa vigente que no se cumple.
+
+    `clase`: `dato_cliente` (lo da el cliente), `dato_boton` (lo elige con un botón o lista),
+    `dato_contenido` (lo envía: ubicación, foto…), `dato_accion` (lo fija una acción del servidor),
+    `confirmar_dato`, `confirmar_etapa` o `accion`. `nombre`: el dato, la etapa o la acción."""
+
+    clase: str
+    nombre: str
+
+
+def _aplica(proc: Procedure, vals: Mapping[str, Any], nombre: str) -> bool:
+    slot = proc.slots.get(nombre)
+    if slot is None or slot.requiredWhen is None:
+        return True
+    return vals.get(slot.requiredWhen.slot) == slot.requiredWhen.equals
+
+
+def _clase_de_dato(slot: Slot | None) -> str:
+    origen = str((slot.setBy if slot is not None else None) or "")
+    if origen.startswith("action:"):
+        return "dato_accion"
+    if origen.startswith("interactive:") or (slot is not None and slot.candidates is not None):
+        return "dato_boton"
+    if origen.startswith("content:") or (slot is not None and slot.type in ("location", "media")):
+        return "dato_contenido"
+    return "dato_cliente"
+
+
+def faltas_de_salida(proc: Procedure, stage: Stage, tarea: Proyeccion) -> list[Falta]:
+    """Lo que falta para que la etapa vigente salga, en el orden de `exitWhen`: datos sin valor,
+    datos sin confirmar, la confirmación de la etapa (puerta de salida) y la acción de salida
+    (esta última solo si los datos ya están: sin los eventos no se sabe si corrió). Pura: la usan
+    la tarjeta de estado y el error `fuera_de_etapa`, para que el modelo diga qué falta en vez de
+    inventar que le falta una herramienta."""
+    salida = stage.exitWhen
+    if salida is None:
+        return []
+    vals = valores(tarea)
+    faltas: list[Falta] = []
+    for nombre in salida.slots:
+        if _aplica(proc, vals, nombre) and vals.get(nombre) is None:
+            faltas.append(Falta(_clase_de_dato(proc.slots.get(nombre)), nombre))
+    for nombre in salida.confirmed:
+        if not _aplica(proc, vals, nombre):
+            continue
+        if vals.get(nombre) is None:
+            if not any(f.nombre == nombre for f in faltas):
+                faltas.append(Falta(_clase_de_dato(proc.slots.get(nombre)), nombre))
+        elif (tarea.slots.get(nombre) or {}).get("confirmed") is not True:
+            faltas.append(Falta("confirmar_dato", nombre))
+    if faltas:
+        return faltas
+    if puerta_de_salida(stage):
+        return [Falta("confirmar_etapa", stage.id)]
+    if salida.action is not None:
+        return [Falta("accion", salida.action)]
+    return []
+
+
+def dato_por_confirmar(proc: Procedure, stage: Stage, tarea: Proyeccion) -> str | None:
+    """El dato que el kernel debe pedir que el cliente confirme AHORA, o None: el primero de
+    `exitWhen.confirmed` de la etapa vigente, con valor y sin confirmar, cuando eso es lo ÚNICO que
+    falta para salir (una pregunta a la vez: el cliente confirma el dato al final, no a mitad de
+    darlos) y no hay otra confirmación pendiente."""
+    if tarea.pending_confirmation is not None:
+        return None
+    faltas = faltas_de_salida(proc, stage, tarea)
+    if not faltas or any(f.clase != "confirmar_dato" for f in faltas):
+        return None
+    return faltas[0].nombre
+
+
+# ---------------------------------------------------------------- lo que dijo el cliente (adenda 2026-10-12)
+
+_DIGITOS = re.compile(r"\+?\d[\d\s().\-]*\d")
+_MIN_DIGITOS = 5
+_MIN_DIGITOS_SUFIJO = 10  # un teléfono nacional al que el modelo le agregó el indicativo
+
+
+def _normalizar(texto: str) -> str:
+    from core.kernel.procedures.textos import normalizar
+
+    return normalizar(texto)
+
+
+def _numeros_dichos(texto: str) -> list[str]:
+    """Los números que escribió el cliente: cada tirada de dígitos (con espacios, puntos, guiones o
+    paréntesis) da los números que salen de unir grupos SEGUIDOS de ella ("300 123 4567" da
+    3001234567; "1012345678 3001234567" da los dos por separado)."""
+    salida: list[str] = []
+    for tirada in _DIGITOS.findall(texto or ""):
+        grupos = re.findall(r"\d+", tirada)[:12]
+        for a in range(len(grupos)):
+            for b in range(a, len(grupos)):
+                salida.append("".join(grupos[a : b + 1]))
+    return salida
+
+
+def _digitos_dichos(valor: str, textos: Sequence[str]) -> bool:
+    """El número del valor es un número que escribió el cliente, entero; o le sobra o le falta solo
+    un indicativo de país (1 a 3 dígitos) delante de un número de 10 dígitos o más. Un fragmento
+    no cuenta (revisión de seguridad: "los últimos dígitos del documento" no son el teléfono)."""
+    vd = re.sub(r"\D", "", valor)
+    for texto in textos:
+        for numero in _numeros_dichos(texto):
+            if vd == numero:
+                return True
+            largo, corto = (vd, numero) if len(vd) > len(numero) else (numero, vd)
+            if len(corto) >= _MIN_DIGITOS_SUFIJO and largo.endswith(corto) and len(largo) - len(corto) <= 3:
+                return True
+    return False
+
+
+def dicho_por_el_cliente(valores: Sequence[Any], textos: Sequence[str], telefonos: Sequence[str] = ()) -> bool:
+    """¿Alguno de `valores` (el que mandó el modelo y el normalizado) aparece en lo que escribió el
+    cliente? Pura. Conservadora hacia el rechazo (el modelo vuelve a pedir el dato):
+
+    - número (sin letras, 5 dígitos o más; teléfono, documento): un número entero que escribió el
+      cliente (tolera separadores y el indicativo de país), o el teléfono que verifica el canal
+      (`telefonos`, que quien llama pasa solo para un dato con `format: phone`);
+    - correo (lleva `@`): la secuencia normalizada, contigua, dentro de un mensaje;
+    - lo demás (nombre, dirección, ciudad): cada palabra normalizada del valor está entre las que
+      escribió el cliente (el modelo puede quitar palabras, no agregarlas: "Rob" no sale de
+      "Roberto").
+    Un valor que no es texto ni número (booleano, objeto, lista) nunca cuenta como dicho."""
+    normalizados = [_normalizar(t) for t in textos]
+    palabras = {p for t in normalizados for p in t.split()}
+    for valor in valores:
+        if isinstance(valor, bool) or valor is None:
+            continue
+        if not isinstance(valor, str | int | float):
+            continue  # un objeto o una lista no se puede respaldar con el texto: no cuenta
+        crudo = str(valor).strip()
+        norm = _normalizar(crudo)
+        if not norm:
+            continue
+        digitos = re.sub(r"\D", "", crudo)
+        if not re.search(r"[^\W\d_]", crudo) and len(digitos) >= _MIN_DIGITOS:
+            if _digitos_dichos(crudo, [*textos, *telefonos]):
+                return True
+        elif "@" in crudo:
+            if any(f" {norm} " in f" {t} " for t in normalizados):
+                return True
+        elif set(norm.split()) <= palabras:
+            return True
+    return False
+
+
 # ---------------------------------------------------------------- cambios de datos (HU-AOS-07)
 
 

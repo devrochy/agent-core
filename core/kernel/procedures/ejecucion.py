@@ -44,7 +44,7 @@ from core.db.models import ConversationTask
 from core.kernel import state
 from core.kernel.procedures import comandos, motor, registro
 from core.kernel.procedures.catalogo import CORE_OWNER
-from core.kernel.procedures.textos import confirmacion_alta, error_de_resolver, mensaje
+from core.kernel.procedures.textos import confirmacion_suficiente, error_de_resolver, mensaje
 from core.kernel.state import Evento, Proyeccion
 from core.shared import turno as turno_vigente
 from core.shared.logger import get_logger
@@ -169,6 +169,74 @@ async def _ultimo_inbound_respondido(session: AsyncSession, tenant_id: uuid.UUID
             {"t": tenant_id, "c": conversation_id},
         )
     ).scalar_one_or_none()
+
+
+def _fresca(peticion: Evento | None, respondido: Any) -> bool:
+    """¿La petición de confirmación es posterior al último mensaje del cliente que ya tuvo
+    respuesta? (la hizo el turno inmediatamente anterior o este): solo a esa contesta un sí."""
+    return peticion is not None and respondido is not None and peticion.created_at > respondido
+
+
+async def _contesta_el_mensaje_del_kernel(
+    session: AsyncSession, tenant_id: uuid.UUID, conversation_id: uuid.UUID, peticion: Evento | None
+) -> bool:
+    """¿El mensaje del cliente de este turno contesta DIRECTO el mensaje que llevó la petición?
+    (revisión de seguridad, para el sí a secas de un dato): después de la petición salió UN solo
+    mensaje al cliente (no fallido: el del kernel) y el último mensaje del cliente es posterior a
+    él. Un aviso proactivo ("¿confirmas tu cita? responde sí") o un mensaje de una persona del
+    equipo en el medio, o un "sí" escrito antes de ver la pregunta, no confirman el dato."""
+    if peticion is None:
+        return False
+    fila = (
+        await session.execute(
+            text(
+                "SELECT count(*) FILTER (WHERE direction = 'outbound') AS salidas, "
+                "max(created_at) FILTER (WHERE direction = 'outbound') AS salida, "
+                "max(created_at) FILTER (WHERE direction = 'inbound') AS entrada "
+                "FROM messages WHERE tenant_id = :t AND conversation_id = :c AND deleted_at IS NULL "
+                "AND created_at > :p AND (direction = 'inbound' OR status <> 'failed')"
+            ),
+            {"t": tenant_id, "c": conversation_id, "p": peticion.created_at},
+        )
+    ).first()
+    if fila is None or fila.salidas != 1 or fila.salida is None or fila.entrada is None:
+        return False
+    return bool(fila.entrada > fila.salida)
+
+
+def _datos_de_peticion(peticion: Evento | None, pendiente: Mapping[str, Any]) -> dict[str, Any]:
+    """Los datos para volver a pedir la MISMA confirmación (target, hash de args y huella)."""
+    data: dict[str, Any] = {"target": {"kind": pendiente.get("kind"), "name": pendiente.get("name")}}
+    for clave in ("args_hash", "resumen"):
+        if peticion is not None and peticion.data.get(clave):
+            data[clave] = peticion.data[clave]
+    return data
+
+
+# Máximo de mensajes del cliente que se revisan para saber si dijo un dato (adenda 2026-10-12).
+_MAX_INBOUND_DICHOS = 100
+
+
+async def _lo_dicho_por_el_cliente(
+    session: AsyncSession, tenant_id: uuid.UUID, conversation_id: uuid.UUID, customer_id: uuid.UUID
+) -> tuple[list[str], list[str]]:
+    """(textos que escribió el cliente en la conversación, teléfonos del canal). Una consulta:
+    los últimos mensajes entrantes (texto y transcripción de audio o imagen) y el teléfono
+    verificado por el canal (`contact_phone`, `external_id`)."""
+    filas = (
+        await session.execute(
+            text(
+                "SELECT 'm' AS k, left(coalesce(m.content, ''), 2000) || ' ' || left(coalesce(m.media_transcription, ''), 2000) AS t "
+                "FROM (SELECT content, media_transcription FROM messages WHERE tenant_id = :t "
+                "AND conversation_id = :c AND deleted_at IS NULL AND direction = 'inbound' "
+                "ORDER BY created_at DESC LIMIT :n) m "
+                "UNION ALL SELECT 'p', coalesce(contact_phone, '') || ' ' || coalesce(external_id, '') "
+                "FROM customers WHERE tenant_id = :t AND id = :cu"
+            ),
+            {"t": tenant_id, "c": conversation_id, "cu": customer_id, "n": _MAX_INBOUND_DICHOS},
+        )
+    ).all()
+    return [str(f.t) for f in filas if f.k == "m"], [str(f.t) for f in filas if f.k == "p"]
 
 
 # ---------------------------------------------------------------- utilidades de BD
@@ -562,9 +630,7 @@ class ContextoMotor:
                 if foco is None:
                     return await self._negar_sin_foco(s, accion, h) if puerta else Previo()
                 if accion not in foco.stage.actions:
-                    return Previo(Decision(
-                        {"error": mensaje("fuera_de_etapa", accion=accion, etapa=foco.stage.id)}, "denied", h
-                    ))
+                    return Previo(Decision({"error": _fuera_de_etapa(foco, accion)}, "denied", h))
                 # Argumentos ligados a los datos de la tarea (HU-AOS-07): la cotización vigente, el
                 # plan elegido, la dirección confirmada. Lo distinto se niega (salvo que el resolver
                 # del dato lo lleve al mismo valor: un SKU por el uuid de la variante).
@@ -592,6 +658,14 @@ class ContextoMotor:
                             and (peticion.data.get("resumen") or None) == (huella or None)
                             and not motor.accion_confirmada(eventos, accion, h)
                         )
+                        if misma and int(pendiente.get("seq") or 0) <= self._seq_al_empezar.get(foco.fila.id, 0):
+                            # Adenda 2026-10-12: una petición de un turno anterior que el cliente ya
+                            # tuvo para contestar (vencida) se vuelve a pedir, así sale otra vez el
+                            # mensaje del kernel y el "confirmo" siguiente vale. La del turno
+                            # inmediatamente anterior sigue sirviendo (acción → confirmar_tarea →
+                            # acción).
+                            respondido = await _ultimo_inbound_respondido(s, self.tenant_id, self.conversation_id)
+                            misma = _fresca(peticion, respondido)
                         if not misma:
                             datos_peticion: dict[str, Any] = {"target": {"kind": "action", "name": accion}, "args_hash": h}
                             if huella:
@@ -796,6 +870,86 @@ class ContextoMotor:
             await self._avanzar(task_id)
         except Exception as exc:
             log.warning("motor_avanzar_fallo", task_id=str(task_id), error=type(exc).__name__)
+        try:
+            await self._pedir_dato_debido(task_id)
+        except Exception as exc:
+            log.warning("motor_pedir_dato_fallo", task_id=str(task_id), error=type(exc).__name__)
+
+    async def _pedir_dato_debido(self, task_id: uuid.UUID) -> None:
+        """Punto de reposo (adenda 2026-10-12 de ADR-0113): si lo único que le falta a la etapa
+        vigente es que el cliente confirme un dato y no hay otra confirmación pendiente, el kernel
+        la pide (`confirmation_requested` de tipo dato). Así ninguna confirmación que exige la
+        salida queda sin pedir: ni la que venció con un cambio de etapa (`stage_entered` vacía la
+        pendiente) ni la de un dato que llegó por otro camino. Sale el mensaje del kernel al
+        cerrar el turno (`confirmacion_del_turno`)."""
+        async with _con_lock(self.tenant_id, self.conversation_id) as s:
+            foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
+            if foco is None or foco.fila.id != task_id:
+                return
+            nombre = motor.dato_por_confirmar(foco.proc, foco.stage, foco.tarea)
+            if nombre is None:
+                return
+            await _registrar(s, foco.fila, "confirmation_requested", {"target": {"kind": "slot", "name": nombre}}, "kernel")
+            self._cambio = True
+            log.info("motor_dato_por_confirmar", procedure_id=foco.proc.id, etapa=foco.stage.id)
+
+    # -- al empezar el turno (adenda 2026-10-12 de ADR-0113)
+    async def al_empezar_turno(self) -> None:
+        """Confirmaciones de DATOS al empezar el turno, antes de que el modelo vea la tarjeta.
+
+        - Pendiente de un dato pedida en el turno inmediatamente anterior y el cliente asiente
+          ("sí", "ok", "sí, el correo está bien"): el kernel la confirma (la evidencia la pone el
+          kernel, como el botón) y la tarea avanza.
+        - Pendiente de un dato vencida y el cliente asiente: se vuelve a pedir (sale el mensaje del
+          kernel; un sí a una pregunta vieja no vale).
+        - Sin pendiente y con un dato que es lo único que bloquea la etapa (una tarea que quedó
+          así, p. ej. por un dato que llegó con un botón): se pide.
+
+        Acciones y etapas no cambian: siguen con su confirmación estricta. Sin nada de eso en la
+        proyección que ya se leyó, no toca la base. Best-effort: un fallo se loguea y el turno sigue."""
+        if self.modo != "activo" or self._foco is None:
+            return
+        tarea, proc, stage = self._foco.tarea, self._foco.proc, self._foco.stage
+        pendiente = tarea.pending_confirmation
+        de_dato = isinstance(pendiente, Mapping) and pendiente.get("kind") == "slot"
+        if not de_dato and motor.dato_por_confirmar(proc, stage, tarea) is None:
+            return
+        task_id = self._foco.fila.id
+        try:
+            confirmo = await self._confirmaciones_al_empezar(task_id)
+            if confirmo:
+                await self._avanzar_seguro(task_id)
+            await self._releer_seguro()
+        except Exception as exc:
+            log.warning("motor_al_empezar_fallo", error=type(exc).__name__)
+
+    async def _confirmaciones_al_empezar(self, task_id: uuid.UUID) -> bool:
+        """True si confirmó un dato. Todo se relee bajo el lock (el botón del consumer compite)."""
+        async with _con_lock(self.tenant_id, self.conversation_id) as s:
+            foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
+            if foco is None or foco.fila.id != task_id:
+                return False
+            pendiente = foco.tarea.pending_confirmation
+            if pendiente is None:
+                nombre = motor.dato_por_confirmar(foco.proc, foco.stage, foco.tarea)
+                if nombre is not None:
+                    await _registrar(s, foco.fila, "confirmation_requested", {"target": {"kind": "slot", "name": nombre}}, "kernel")
+                    log.info("motor_dato_por_confirmar", procedure_id=foco.proc.id, etapa=foco.stage.id)
+                return False
+            if pendiente.get("kind") != "slot":
+                return False
+            slot = foco.proc.slots.get(str(pendiente.get("name") or ""))
+            clase = slot.dataClass if slot is not None else "payment"
+            if not confirmacion_suficiente(self.texto_cliente, kind="slot", data_class=clase):
+                return False  # el cliente dijo otra cosa: el modelo responde (o corrige el dato)
+            peticion = _evento_por_seq(await _eventos(s, foco), pendiente.get("seq"))
+            if not await _contesta_el_mensaje_del_kernel(s, self.tenant_id, self.conversation_id, peticion):
+                await _registrar(s, foco.fila, "confirmation_requested", _datos_de_peticion(peticion, pendiente), "kernel")
+                log.info("motor_confirmacion_de_dato_repedida", procedure_id=foco.proc.id)
+                return False
+            await _confirmar_pendiente(s, foco)
+            log.info("motor_dato_confirmado_al_empezar", procedure_id=foco.proc.id)
+            return True
 
     async def _avanzar(self, task_id: uuid.UUID) -> None:
         for _ in range(_MAX_AVANCES):
@@ -991,6 +1145,10 @@ class ContextoMotor:
                 return ResultadoComando(False, [mensaje("resolver_no_disponible", dato="los datos")], list(foco.stage.actions))
             if errores:  # todo o nada: el modelo corrige, nunca se adivina
                 return ResultadoComando(False, errores, list(foco.stage.actions))
+            no_dichos = await self._no_dichos(s, proc, slots, validos)
+            if no_dichos:  # todo o nada, como los demás errores
+                errores = [mensaje("dato_no_dicho", dato=n) for n in no_dichos]
+                return ResultadoComando(False, errores, list(foco.stage.actions))
             cambian = {n: p for n, v in validos.items() if (p := _previo(foco.tarea, n, v)) is not None}
             if cambian and motor.datos_congelados(foco.proc, await _eventos(s, foco)):
                 errores = [mensaje("dato_bloqueado", dato=n) for n in cambian]
@@ -1001,7 +1159,10 @@ class ContextoMotor:
                     s, foco.fila, "slot_set",
                     {"slot": nombre, "value": v, "source": "llm", "data_class": proc.slots[nombre].dataClass}, "llm",
                 )
-                if proc.slots[nombre].confirm and por_confirmar is None:
+                # La confirmación de un dato que exige la salida de una etapa la pide el punto de
+                # reposo cuando es lo único que falta (`_pedir_dato_debido`, adenda 2026-10-12);
+                # aquí solo la de un dato `confirm` que ninguna etapa exige (como antes).
+                if proc.slots[nombre].confirm and por_confirmar is None and nombre not in _confirmados_por_salida(proc):
                     por_confirmar = nombre
                 foco = _Foco(fila=fila, tarea=state.proyeccion_de(fila), proc=proc, stage=foco.stage)
             if cambian:
@@ -1012,6 +1173,27 @@ class ContextoMotor:
                 )
             task_id = foco.fila.id
         return await self._terminar_comando(task_id)
+
+    async def _no_dichos(
+        self, s: AsyncSession, proc: Procedure, crudos: Mapping[str, Any], validos: Mapping[str, Any]
+    ) -> list[str]:
+        """Datos personales (`pii`/`payment`) que el modelo quiere fijar y el cliente NO escribió en
+        la conversación (adenda 2026-10-12 de ADR-0113): se rechazan. El caso real: el nombre del
+        perfil de WhatsApp fijado como `full_name` sin que el cliente lo diera. El teléfono que
+        verifica el canal sí vale. Una consulta por comando, solo si hay un dato personal."""
+        personales = [n for n in validos if proc.slots[n].dataClass in ("pii", "payment")]
+        if not personales:
+            return []
+        textos, telefonos = await _lo_dicho_por_el_cliente(s, self.tenant_id, self.conversation_id, self.customer_id)
+        if self.texto_cliente:
+            textos.append(self.texto_cliente)
+        # El teléfono del canal solo respalda un dato que ES un teléfono (no un documento).
+        return [
+            n for n in personales
+            if not motor.dicho_por_el_cliente(
+                [crudos.get(n), validos[n]], textos, telefonos if proc.slots[n].format == "phone" else ()
+            )
+        ]
 
     async def _confirmar(self) -> ResultadoComando:
         """Exige la evidencia del turno, que pone el kernel (nunca un argumento del LLM): un "sí"
@@ -1028,11 +1210,33 @@ class ContextoMotor:
             peticion = _evento_por_seq(await _eventos(s, foco), pendiente.get("seq"))
             respondido = await _ultimo_inbound_respondido(s, self.tenant_id, self.conversation_id)
             # El sí escrito contesta la petición del turno inmediatamente anterior, no una vieja.
-            del_turno_anterior = (
-                peticion is not None and respondido is not None and peticion.created_at > respondido
+            del_turno_anterior = _fresca(peticion, respondido)
+            kind = pendiente.get("kind")
+            slot = foco.proc.slots.get(str(pendiente.get("name") or "")) if kind == "slot" else None
+            # Un dato acepta un asentimiento; una acción o una etapa, solo el sí explícito
+            # (adenda 2026-10-12 de ADR-0113, el mismo criterio que al empezar el turno).
+            # Un dato que ya no está en el procedimiento cuenta como de pago: criterio estricto.
+            suficiente = confirmacion_suficiente(
+                self.texto_cliente, kind=kind, data_class=slot.dataClass if slot is not None else "payment"
             )
-            if pedida_en_este_turno or not del_turno_anterior or not confirmacion_alta(self.texto_cliente):
+            if kind == "slot" and slot is not None and slot.dataClass == "pii":
+                # El sí a secas de un dato contesta solo el mensaje que llevó la petición.
+                del_turno_anterior = del_turno_anterior and await _contesta_el_mensaje_del_kernel(
+                    s, self.tenant_id, self.conversation_id, peticion
+                )
+            if pedida_en_este_turno or not suficiente:
                 return ResultadoComando(False, [mensaje("falta_confirmacion")], list(foco.stage.actions))
+            if not del_turno_anterior:
+                # El cliente quiere confirmar, pero la petición venció: se vuelve a pedir y sale el
+                # mensaje del kernel (adenda 2026-10-12). La de una acción la vuelve a pedir la
+                # acción misma (con sus argumentos, para un resumen fiel).
+                if kind == "action":
+                    return ResultadoComando(
+                        False, [mensaje("confirmacion_vencida", accion=str(pendiente.get("name") or ""))],
+                        list(foco.stage.actions),
+                    )
+                await _registrar(s, foco.fila, "confirmation_requested", _datos_de_peticion(peticion, pendiente), "kernel")
+                return ResultadoComando(False, [mensaje("confirmacion_repedida")], list(foco.stage.actions))
             await _confirmar_pendiente(s, foco)
             task_id = foco.fila.id
         return await self._terminar_comando(task_id)
@@ -1091,6 +1295,9 @@ class ContextoMotor:
                 log.info("motor_confirmacion_sin_resumen", task_id=str(foco.fila.id))
                 return ConfirmacionDelTurno(confirmacion=sin_resumen(), modo="explicit")
             boton = payload_de_confirmacion(self.tenant_id, foco.fila.id, seq, args_hash)
+            if pendiente.get("kind") == "slot":
+                # Un dato sale siempre como texto, y basta un sí (adenda 2026-10-12 de ADR-0113).
+                return ConfirmacionDelTurno(confirmacion=armar(foco.proc.title, datos, boton, es_dato=True), modo="explicit")
             modo = "interactive_button" if foco.stage.confirmation == "interactive_button" else "explicit"
             return ConfirmacionDelTurno(confirmacion=armar(foco.proc.title, datos, boton), modo=modo)
         except Exception as exc:
@@ -1191,7 +1398,8 @@ class ContextoMotor:
             salida = foco.stage.exitWhen
             datos = de_la_tarea([*(salida.slots if salida else []), *(salida.confirmed if salida else [])])
         elif kind == "slot":
-            datos = de_la_tarea([nombre])
+            # Un dato no tiene monto: el resumen es solo ese dato (adenda 2026-10-12).
+            return de_la_tarea([nombre]) or None
         else:
             return None
         for claim in proc.claims:
@@ -1215,6 +1423,22 @@ class ContextoMotor:
                 datos = [d for d in datos if d.nombre != campo]
                 datos.append(Dato(campo, monto, es_monto=True))
         return datos
+
+
+def _fuera_de_etapa(foco: _Foco, accion: str) -> str:
+    """El error de una acción fuera de la etapa, con lo que falta para salir de ella si el motor lo
+    sabe (adenda 2026-10-12): el modelo no tiene que adivinar ni decir que le falta una herramienta."""
+    from core.kernel.tarjeta import describir_faltas
+
+    faltas = describir_faltas(foco.proc, foco.stage, foco.tarea)
+    if faltas:
+        return mensaje("fuera_de_etapa_falta", accion=accion, etapa=foco.stage.id, faltas=faltas)
+    return mensaje("fuera_de_etapa", accion=accion, etapa=foco.stage.id)
+
+
+def _confirmados_por_salida(proc: Procedure) -> frozenset[str]:
+    """Datos que alguna etapa exige confirmados para salir (`exitWhen.confirmed`)."""
+    return frozenset(n for st in proc.stages if st.exitWhen is not None for n in st.exitWhen.confirmed)
 
 
 @dataclass(frozen=True)

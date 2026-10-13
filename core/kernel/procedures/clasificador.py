@@ -22,6 +22,17 @@ que el asistente vuelva a pedir la confirmación. Reglas, en orden:
 Así "sí", "dale", "ok" o "listo" solos no confirman, porque no traen núcleo (decisión del dueño),
 y cualquier palabra fuera del léxico tampoco ("sí, pero cambia el correo", "confirmo mañana").
 
+4. (Adenda 2026-10-12) Una frase exacta de `## si` con frases de `cortesia` intercaladas también
+   confirma ("sí, está bien, gracias" → "si esta bien"), con las mismas guardas: todo en el
+   léxico y ninguna negación. La cortesía nunca suma núcleo: "sí, gracias" sigue sin confirmar.
+
+**Confirmación de un DATO** (`es_asentimiento`, adenda 2026-10-12 de ADR-0113): un dato que el
+cliente acaba de dar no compromete nada (sin monto ni efecto), así que como respuesta inmediata a
+la pregunta del kernel basta un asentimiento: "sí", "ok", "dale", "sí, el correo está bien". Usa
+además las secciones `asiente_dato` y `objetos_de_dato` del léxico, que `es_confirmacion` NO lee:
+"confirmo el correo" nunca confirma una acción con monto. Mismas guardas (pregunta, símbolos,
+largo, negaciones). Solo lo usa el motor para una confirmación pendiente de tipo dato.
+
 El léxico vive en el playbook del kernel `confirmacion` (invariante 3): aquí solo está la gramática.
 Se mide con `tests/fixtures/confirmacion/etiquetado.jsonl`, sin LLM: el test exige precisión 1.0.
 """
@@ -57,7 +68,7 @@ def _solo_lo_legible(crudo: str) -> bool:
             if c not in _EMOJIS_OK and c not in _TONOS and c != "\ufe0f":
                 return False
     return True
-_SECCIONES = ("si", "nucleo", "prefijos", "cortesia", "negaciones")
+_SECCIONES = ("si", "nucleo", "prefijos", "cortesia", "negaciones", "asiente_dato", "objetos_de_dato")
 
 
 @dataclass(frozen=True)
@@ -67,14 +78,21 @@ class Lexico:
     prefijos: frozenset[str]
     cortesia: frozenset[str]
     negaciones: frozenset[str]
+    # Solo para confirmar un DATO (`es_asentimiento`), nunca una acción o una etapa.
+    asiente_dato: frozenset[str] = frozenset()
+    objetos_de_dato: frozenset[str] = frozenset()
 
     @property
     def permitidas(self) -> frozenset[str]:
         return self.nucleo | self.prefijos | self.cortesia
 
     @property
+    def permitidas_dato(self) -> frozenset[str]:
+        return self.permitidas | self.asiente_dato | self.objetos_de_dato
+
+    @property
     def largo_max_frase(self) -> int:
-        return max((len(f.split()) for f in self.permitidas | self.negaciones), default=1)
+        return max((len(f.split()) for f in self.permitidas_dato | self.negaciones), default=1)
 
 
 def parsear_lexico(contenido: str) -> Lexico:
@@ -92,10 +110,17 @@ def parsear_lexico(contenido: str) -> Lexico:
     lexico = Lexico(
         exactas=valores["si"], nucleo=valores["nucleo"], prefijos=valores["prefijos"],
         cortesia=valores["cortesia"], negaciones=valores["negaciones"],
+        asiente_dato=valores["asiente_dato"], objetos_de_dato=valores["objetos_de_dato"],
     )
-    choque = lexico.permitidas & lexico.negaciones
+    choque = lexico.permitidas_dato & lexico.negaciones
     if choque:
         raise RotulosInvalidos(f"frases permitidas y negadas a la vez: {sorted(choque)}")
+    # Por palabra también: una frase permitida de varias palabras con una negación adentro ("no hay
+    # problema") se tragaría el "no" al partir el texto (la frase más larga gana).
+    sueltas = {n for n in lexico.negaciones if " " not in n}
+    con_negacion = sorted(f for f in lexico.permitidas_dato if sueltas & set(f.split()))
+    if con_negacion:
+        raise RotulosInvalidos(f"frases permitidas con una negación adentro: {con_negacion}")
     return lexico
 
 
@@ -123,28 +148,64 @@ def _frases(palabras: list[str], conocidas: frozenset[str], largo_max: int) -> l
     return salida
 
 
-def es_confirmacion(texto: str, lex: Lexico | None = None) -> bool:
-    """¿El texto es una confirmación explícita, con confianza alta?"""
+def _normalizado_seguro(texto: str) -> str | None:
+    """El texto normalizado, o None si nunca puede confirmar (vacío, pregunta o símbolos que la
+    normalización borraría)."""
     from core.kernel.procedures.textos import normalizar
 
-    lx = lex if lex is not None else lexico()
     crudo = unicodedata.normalize("NFKC", texto or "")
     norm = normalizar(crudo)
     if not norm or any(c in _PREGUNTA for c in crudo):
-        return False  # una pregunta nunca confirma ("¿confirmo?")
+        return None  # una pregunta nunca confirma ("¿confirmo?")
     if not _solo_lo_legible(crudo):
-        return False  # un símbolo o una letra que la normalización borraría ("confirmo ❌")
-    if norm in lx.exactas:
-        return True
+        return None  # un símbolo o una letra que la normalización borraría ("confirmo ❌")
+    return norm
+
+
+def _frases_sin_negacion(norm: str, conocidas: frozenset[str], lx: Lexico) -> list[str] | None:
+    """Las frases del léxico del texto, o None si es largo, trae una palabra fuera del léxico o
+    una negación (en cualquier parte descarta)."""
     palabras = norm.split()
     if len(palabras) > MAX_PALABRAS:
+        return None
+    frases = _frases(palabras, conocidas | lx.negaciones, lx.largo_max_frase)
+    if frases is None or any(f in lx.negaciones for f in frases):
+        return None
+    return frases
+
+
+def es_confirmacion(texto: str, lex: Lexico | None = None) -> bool:
+    """¿El texto es una confirmación explícita, con confianza alta? (acciones, etapas y datos)"""
+    lx = lex if lex is not None else lexico()
+    norm = _normalizado_seguro(texto)
+    if norm is None:
         return False
-    frases = _frases(palabras, lx.permitidas | lx.negaciones, lx.largo_max_frase)
+    if norm in lx.exactas:
+        return True
+    frases = _frases_sin_negacion(norm, lx.permitidas, lx)
     if frases is None:
-        return False  # una palabra fuera del léxico
-    if any(f in lx.negaciones for f in frases):
-        return False  # una negación o duda en cualquier parte descarta
-    return any(f in lx.nucleo for f in frases)
+        return False
+    if any(f in lx.nucleo for f in frases):
+        return True
+    # Regla 4: una frase exacta de `## si` con cortesía intercalada.
+    resto = " ".join(f for f in frases if f not in lx.cortesia)
+    return bool(resto) and resto in lx.exactas
 
 
-__all__ = ["MAX_PALABRAS", "Lexico", "es_confirmacion", "lexico", "parsear_lexico"]
+def es_asentimiento(texto: str, lex: Lexico | None = None) -> bool:
+    """¿El texto asiente a la confirmación de un DATO? (`sí`, `ok`, `sí, el correo está bien`).
+
+    Nunca para una acción o una etapa: ahí rige `es_confirmacion`, más estricto."""
+    lx = lex if lex is not None else lexico()
+    if es_confirmacion(texto, lx):
+        return True
+    norm = _normalizado_seguro(texto)
+    if norm is None:
+        return False
+    frases = _frases_sin_negacion(norm, lx.permitidas_dato, lx)
+    if frases is None:
+        return False
+    return any(f in lx.nucleo or f in lx.prefijos or f in lx.asiente_dato for f in frases)
+
+
+__all__ = ["MAX_PALABRAS", "Lexico", "es_asentimiento", "es_confirmacion", "lexico", "parsear_lexico"]

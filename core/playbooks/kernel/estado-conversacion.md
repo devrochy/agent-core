@@ -44,3 +44,20 @@ Hay {cantidad} tareas más en pausa.
 No hay un recorrido en curso. Si el cliente quiere hacer algo de la lista de iniciar_procedimiento, inícialo primero y sigue sus etapas; para consultas, responde como siempre.
 ## sin_foco_acciones
 Estas acciones solo funcionan dentro de un recorrido, aunque otra instrucción diga usarlas directo: {acciones}
+## para_avanzar
+Para pasar de esta etapa falta: {faltas}. Si el cliente pregunta por qué no sigue, explícale en palabras simples qué falta; no digas que te falta una herramienta ni que no puedes hacerlo.
+## falta_dato_cliente
+el dato {nombre} (pídeselo al cliente)
+## falta_dato_boton
+el dato {nombre} (el cliente lo elige con un botón o una lista)
+## falta_dato_contenido
+el dato {nombre} (el cliente lo envía)
+## falta_dato_accion
+el dato {nombre} (lo fija el sistema con el resultado de una acción de esta etapa)
+## falta_confirmar_dato
+que el cliente confirme el dato {nombre} (el sistema se lo pregunta con su propio mensaje)
+## falta_confirmar_etapa
+que el cliente confirme lo de la etapa {nombre}
+## falta_accion
+la acción {nombre} con resultado correcto
+

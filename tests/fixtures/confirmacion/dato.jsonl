@@ -1,0 +1,48 @@
+{"texto": "Si", "asiente": true}
+{"texto": "sí", "asiente": true}
+{"texto": "Sí.", "asiente": true}
+{"texto": "ok", "asiente": true}
+{"texto": "dale", "asiente": true}
+{"texto": "listo", "asiente": true}
+{"texto": "claro", "asiente": true}
+{"texto": "perfecto", "asiente": true}
+{"texto": "correcto", "asiente": true}
+{"texto": "sí, está bien", "asiente": true}
+{"texto": "Sí, confirmo", "asiente": true}
+{"texto": "Sí, confirmo el correo", "asiente": true}
+{"texto": "Si, el correo está bien", "asiente": true}
+{"texto": "sí, el correo es correcto", "asiente": true}
+{"texto": "sí, ese es", "asiente": true}
+{"texto": "todo bien", "asiente": true}
+{"texto": "sí, mis datos están bien", "asiente": true}
+{"texto": "ok gracias", "asiente": true}
+{"texto": "sí, el correo", "asiente": true}
+{"texto": "confirmo mi correo", "asiente": true}
+{"texto": "está bien", "asiente": true}
+{"texto": "de acuerdo", "asiente": true}
+{"texto": "no", "asiente": false}
+{"texto": "No, está mal", "asiente": false}
+{"texto": "el correo está mal", "asiente": false}
+{"texto": "sí, pero cambia el correo", "asiente": false}
+{"texto": "no, mi correo es otro", "asiente": false}
+{"texto": "ana@empresa.co", "asiente": false}
+{"texto": "mi correo es ana@empresa.co", "asiente": false}
+{"texto": "sí, el correo es ana@empresa.co", "asiente": false}
+{"texto": "¿cuál correo?", "asiente": false}
+{"texto": "sí?", "asiente": false}
+{"texto": "gracias", "asiente": false}
+{"texto": "el correo", "asiente": false}
+{"texto": "hola", "asiente": false}
+{"texto": "espera", "asiente": false}
+{"texto": "cambia el nombre", "asiente": false}
+{"texto": "👍", "asiente": false}
+{"texto": "incorrecto", "asiente": false}
+{"texto": "ese no es", "asiente": false}
+{"texto": "mejor otro correo", "asiente": false}
+{"texto": "sí, el otro", "asiente": false}
+{"texto": "quiero cambiar el correo", "asiente": false}
+{"texto": "todavía no", "asiente": false}
+{"texto": "confirmo ❌", "asiente": false}
+{"texto": "¿para qué necesitan el correo?", "asiente": false}
+{"texto": "sí, el correo de mi esposa", "asiente": false}
+{"texto": "bien pero cambia el nombre", "asiente": false}

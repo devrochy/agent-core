@@ -781,3 +781,121 @@ quedaron vacías y no hubo botón.
 - **Sin cambio:** sombra, bandera apagada, verificador y afirmaciones (una negación es un `error` y no
   respalda nada), política de modelo (ADR-0132, solo con foco) y autoescalado (una llamada negada no
   resuelve el turno; si el modelo insiste turno tras turno, escala).
+
+## Adenda (2026-10-12): confirmaciones de datos visibles y sí a secas para datos
+
+**Estado:** propuesta; requiere la aprobación del dueño antes del merge (el punto 3 revierte para los
+DATOS la decisión aceptada de HU-AOS-09 "el sí a secas no confirma"). La revisó el agente `arquitecto`
+antes de escribir código. No cambia la forma de ningún contrato, ni el esquema, ni el reductor de
+`state.py`, ni lo que ve el modelo con `tenants.aos_procedures` apagada (el gate en replay pasa sin
+regrabar). Origen: prueba real en test del 2026-10-12 (23:45–23:52 UTC y 02:43 del 13),
+`pack_commerce.contratar_plan` v1.1.0 en WhatsApp: la tarea quedó atascada en `datos` y el cliente nunca
+pudo pagar.
+
+- **Causa raíz.** `actualizar_tarea` pidió la confirmación del correo al fijarlo en `elegir_plan`. En el
+  mismo comando la tarea avanzó a `cotizar` y el `stage_entered` vació la pendiente (regla del reductor y
+  de HU-AOS-07: un cambio de etapa vence la confirmación). Al cerrar el turno no había nada pendiente, así
+  que salió el texto del modelo. Después nadie la volvió a pedir: solo `actualizar_tarea` la pedía, al
+  fijar el dato. `confirmar_tarea` no se ofrece sin pendiente, `datos` exige `confirmed: ["email"]` y la
+  tarjeta no decía qué faltaba. El modelo terminó diciendo "no tengo la herramienta para generar el
+  pedido" y, horas después, tomó un "Si, confirmo" como un sí a escalar.
+- **1. La confirmación de un dato se pide en la etapa que la exige, cuando es lo único que falta**
+  (`motor.dato_por_confirmar`; `ContextoMotor._pedir_dato_debido`, al final de cada avance). Es debido
+  el primer dato de `exitWhen.confirmed` de la etapa vigente, con valor, sin confirmar y que aplica
+  (`requiredWhen`), si es lo único que bloquea la salida y no hay otra confirmación pendiente. Es una
+  pregunta a la vez: el cliente confirma el correo al final de dar sus datos, no a mitad. Un dato
+  `confirm: true` que ninguna etapa exige se sigue pidiendo al fijarlo, como antes. Como la petición
+  queda registrada en el turno, sale el mensaje del kernel (adenda HU-AOS-09, reemplaza el texto del
+  modelo).
+  - Un dato sale siempre como texto, sin botón y sin montos de `claims`, con la instrucción propia
+    `instruccion_dato` del playbook `confirmacion_boton` ("responde «sí»"). Esto corrige un desvío:
+    antes tomaba el modo de la etapa.
+- **2. Al empezar el turno** (`ContextoMotor.al_empezar_turno`, una línea en `loop.py` después de fijar
+  el ejecutor y antes de la tarjeta y las tools). Solo con el motor activo y una tarea en foco. Si la
+  proyección leída no tiene un dato pendiente ni uno debido, no toca la base. Bajo el lock y releyendo:
+  - **Dato pendiente y el cliente asiente contestando DIRECTO el mensaje del kernel:** lo confirma el
+    kernel (`confirmed`, actor `kernel`), igual que el botón del consumer, y la tarea avanza. No hace
+    falta que el modelo llame `confirmar_tarea`. "Directo" (revisión de seguridad,
+    `_contesta_el_mensaje_del_kernel`) quiere decir que después de la petición salió un solo mensaje
+    no fallido y que el mensaje del cliente es posterior a él. Así no confirman un aviso proactivo
+    ("¿confirmas tu cita? responde sí"), un mensaje de una persona del equipo en el medio ni un "sí"
+    escrito antes de ver la pregunta. Un turno que empezó con un botón no confirma por texto (marca
+    de HU-AOS-05).
+  - **Dato pendiente vencido y el cliente asiente:** se vuelve a pedir y sale el mensaje del kernel,
+    porque un sí a una pregunta vieja no vale. Si el cliente pregunta otra cosa, no se re-pide nada y la
+    respuesta del modelo llega (revisión del arquitecto: re-pedir sin intención de confirmar tapaba una
+    respuesta cada dos turnos).
+  - **Sin pendiente y con un dato debido** (p. ej. una tarea atascada antes de este cambio, o un dato
+    que llegó con un botón en el consumer): se pide.
+- **3. "Sí" a secas para un DATO** (`textos.confirmacion_suficiente`, único criterio para el hook y para
+  `confirmar_tarea`).
+  - Un dato `pii` se confirma con un asentimiento (`clasificador.es_asentimiento`): "sí", "ok",
+    "dale", "listo", "correcto", "sí, el correo está bien". Es una lista permitida: un dato `public`
+    puede llevar monto o efecto (cantidad, plan), y uno `payment`, o uno que ya no está en el
+    procedimiento, sigue con el criterio estricto. Usa las secciones `asiente_dato` y
+    `objetos_de_dato` del playbook `confirmacion`, que `es_confirmacion` no lee: "confirmo el correo"
+    nunca confirma una acción con monto. Las guardas son las mismas: sin preguntas, sin símbolos raros,
+    8 palabras o menos y ninguna negación. El léxico falla al cargar si una frase permitida trae una
+    negación adentro.
+  - Acciones y etapas, lo que tiene monto o efecto, siguen con el sí explícito de HU-AOS-09.
+  - Set propio `tests/fixtures/confirmacion/dato.jsonl` (48 frases): precisión 1.0 y recall 100 %
+    (22/22).
+  - Recall del clasificador estricto: regla 4 (una frase exacta de `si` con cortesía intercalada, p. ej.
+    "sí, está bien, gracias") y "con el pago/la compra/el pedido" en `cortesia`. Set etiquetado: 194 →
+    213 frases (66 positivas, 147 negativas, con los objetos de dato como negativos). Antes: precisión 1.0
+    y recall 98,4 % (60/61). Ahora: precisión 1.0 y recall 100 % (66/66).
+- **4. La tarjeta y los errores dicen qué bloquea la etapa** (`motor.faltas_de_salida`,
+  `tarjeta.describir_faltas`). En foco, la línea `para_avanzar` del playbook `estado-conversacion` lista,
+  en palabras del sistema:
+  - datos del cliente, de un botón, de contenido o de una acción;
+  - datos por confirmar;
+  - la confirmación de la etapa o la acción de salida.
+
+  Le pide al modelo explicar qué falta y no decir que le falta una herramienta. El error de una acción
+  fuera de etapa trae lo mismo (`fuera_de_etapa_falta`, playbook `motor`).
+- **5. Un dato personal que el cliente no escribió no se acepta** (decisión conservadora, revisable;
+  `motor.dicho_por_el_cliente`).
+  - **Regla:** en `actualizar_tarea`, un dato `pii`/`payment` tiene que aparecer en lo que escribió el
+    cliente en la conversación: los últimos 100 entrantes, con la transcripción de audio o imagen, más
+    el texto del turno. Si no, se rechaza todo el comando (`dato_no_dicho`) y el modelo lo pide. Caso
+    real: `full_name = "Rob"`, el nombre del perfil de WhatsApp.
+  - **Comparación** (sobre el valor del modelo y el normalizado; un objeto o una lista nunca cuenta):
+    - números: un número entero que escribió el cliente, con separadores y, en uno de 10 dígitos o
+      más, el indicativo de país (un fragmento no cuenta);
+    - correo: secuencia contigua;
+    - nombres y direcciones: por palabras, con regla de subconjunto (el modelo puede quitar palabras,
+      no agregarlas).
+
+    El teléfono que verifica el canal (`contact_phone`/`external_id`) vale solo para un dato con
+    `format: phone`. Es una sola consulta por comando, solo si hay un dato personal, con cada texto
+    acotado a 2000 caracteres.
+  - **Límites aceptados:**
+    - una abreviatura que el modelo expande ("Cra" → "Carrera") se rechaza y cuesta una vuelta;
+    - una palabra suelta de otro mensaje cuenta (el nombre "Rob" pasaría si el cliente escribió "Tienda
+      Rob").
+  - **Tensión con ADR-0114** ("los datos no se piden dos veces"): con un lector v3 de `memory_facts`, los
+    hechos con procedencia `tool`/`human` deberían aceptarse sin que el cliente los repita. Hoy no hay
+    ese camino; cuando llegue, se amplía esta regla.
+- **6. Una confirmación de acción vencida no atasca.**
+  - **En `antes_de_accion`:** si el modelo vuelve a llamar la acción y la petición pendiente es de un
+    turno anterior que el cliente ya tuvo para contestar, se registra otra. Así sale el mensaje del
+    kernel con resumen fiel y botón nuevo. La del turno inmediatamente anterior sigue valiendo (acción
+    → `confirmar_tarea` → acción, con test).
+  - **En `confirmar_tarea`:** con intención de confirmar y la petición vencida, una de dato o de etapa
+    se vuelve a pedir (`confirmacion_repedida`). Para una de acción, el texto `confirmacion_vencida`
+    pide volver a llamar la acción.
+  - **En `_avanzar`:** no se re-pide nada vencido (ahí se tragaba la respuesta tras cualquier
+    consulta).
+- **Datos de la misma conversación (02:43 del 13), anotados:**
+  - `core_decisions.focus_task_id` no lo escribe ningún código: la columna de 0069 no tiene escritor y
+    la cabecera se escribe antes de que el motor lea las tareas. NULL no significa "sin foco". El
+    episodio (720 min) no había vencido a las 3 h y la tarea seguía en foco. El cron de 72 h solo
+    cancela tareas en su última etapa, así que una tarea atascada en una etapa intermedia vive hasta
+    que el cliente vuelve tras 12 h. El hook de arriba la desatasca. Queda un issue aparte para
+    escribir `focus_task_id`.
+  - "Ya te comuniqué con una persona" sin fila en `escalations`: por código, `escalate()` solo audita
+    `escalate` después del commit de la escalación. No se pudo reproducir sin leer test. Una afirmación
+    del core sobre escalamiento para el verificador va en su propio PR y con su adenda de ADR-0119
+    (medida con el set del verificador), no aquí.
+- **Sin cambio:** sombra, bandera apagada, reductor, contratos, esquema, botones y la confirmación
+  estricta de acciones y etapas.

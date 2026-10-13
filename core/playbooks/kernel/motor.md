@@ -38,3 +38,12 @@ El valor de {dato} no coincide con el dato vigente del recorrido. Usa el de la t
 El dato {dato} ya no se puede cambiar: el pedido de este recorrido ya se creó. Si el cliente quiere otra cosa, cancela este recorrido y empieza uno nuevo.
 ## sin_recorrido
 La acción {accion} solo se puede usar dentro de un recorrido y no hay uno en curso. Inicia primero el recorrido con iniciar_procedimiento (procedure_id, uno de: {procedimientos}) y sigue sus etapas: la acción se ofrece cuando toca.
+## fuera_de_etapa_falta
+La acción {accion} no corresponde a la etapa actual ({etapa}) del recorrido en curso. Para pasar de esta etapa falta: {faltas}. Usa solo las acciones de esta etapa; si el cliente pregunta, explícale en palabras simples qué falta (nunca digas que te falta una herramienta).
+## dato_no_dicho
+El valor de {dato} no aparece en lo que escribió el cliente en esta conversación. Pídeselo al cliente o usa sus mismas palabras; no lo tomes del perfil del canal ni lo completes.
+## confirmacion_vencida
+La confirmación que se le pidió al cliente ya venció (pasó más de un turno). Vuelve a llamar {accion} con los mismos datos: el sistema le pedirá la confirmación de nuevo.
+## confirmacion_repedida
+La confirmación que se le pidió al cliente ya venció (pasó más de un turno): el sistema se la vuelve a pedir con su propio mensaje. No la pidas tú ni la des por hecha.
+
