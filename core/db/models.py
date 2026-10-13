@@ -1972,3 +1972,180 @@ class PackInstallationRecord(Base):
     installed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ---------------------------------------------------------------- centro de pruebas (SPEC-30, ADR-0133)
+# Tablas de SISTEMA (sin RLS): son de la plataforma, no de un negocio. Solo las usan
+# master y el rol tester (sección global `qa`); ninguna query de negocio las toca.
+# Los resultados se guardan por `item_slug` (estable entre versiones del catálogo).
+class QaCatalogVersion(Base):
+    """Una importación del catálogo `11-pruebas/catalogo.yaml` de solvershub-docs."""
+
+    __tablename__ = "qa_catalog_versions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    version: Mapped[int] = mapped_column(Integer)
+    fecha: Mapped[str] = mapped_column(Text, default="")
+    commit_docs: Mapped[str | None] = mapped_column(Text)
+    contenido_sha256: Mapped[str] = mapped_column(Text, unique=True)
+    importado_por: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id"))
+    importado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class QaItem(Base):
+    """Prueba, configuración de test o punto de producción de una versión del catálogo."""
+
+    __tablename__ = "qa_items"
+    __table_args__ = (
+        UniqueConstraint("catalog_version_id", "slug", name="uq_qa_items_version_slug"),
+        CheckConstraint("seccion in ('pruebas', 'test', 'prod')", name="ck_qa_items_seccion"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    catalog_version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("qa_catalog_versions.id", ondelete="CASCADE")
+    )
+    slug: Mapped[str] = mapped_column(Text)
+    seccion: Mapped[str] = mapped_column(Text)
+    orden: Mapped[int] = mapped_column(Integer, default=0)
+    modulo: Mapped[str | None] = mapped_column(Text)
+    grupo: Mapped[str] = mapped_column(Text, default="")
+    titulo: Mapped[str] = mapped_column(Text)
+    resumen: Mapped[str | None] = mapped_column(Text)
+    contexto: Mapped[str | None] = mapped_column(Text)
+    prioridad: Mapped[str | None] = mapped_column(Text)
+    plataforma: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    precondiciones: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    datos: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    # [{"accion": str, "esperado": str | None}]
+    pasos: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    esperado: Mapped[str | None] = mapped_column(Text)
+    porque: Mapped[str | None] = mapped_column(Text)
+    como: Mapped[str | None] = mapped_column(Text)
+    vars: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    quien: Mapped[str | None] = mapped_column(Text)
+    hu: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    origen: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+
+
+class QaCycle(Base):
+    """Ronda de pruebas. Un solo ciclo abierto a la vez (índice parcial en la migración)."""
+
+    __tablename__ = "qa_cycles"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    nombre: Mapped[str] = mapped_column(Text)
+    catalog_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("qa_catalog_versions.id"))
+    abierto_por: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id"))
+    abierto_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    cerrado_por: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id"))
+    cerrado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resumen: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class QaRun(Base):
+    """Ejecución de un tester en un ciclo: sus pasos, notas, capturas e informe."""
+
+    __tablename__ = "qa_runs"
+    __table_args__ = (
+        UniqueConstraint("cycle_id", "admin_id", name="uq_qa_runs_cycle_admin"),
+        CheckConstraint("estado in ('en_curso', 'enviada')", name="ck_qa_runs_estado"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cycle_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("qa_cycles.id"))
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("admins.id"))
+    estado: Mapped[str] = mapped_column(Text, default="en_curso")
+    comentario: Mapped[str | None] = mapped_column(Text)
+    informe: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    iniciada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    enviada_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class QaStepResult(Base):
+    """Resultado de un paso de una prueba en una ejecución."""
+
+    __tablename__ = "qa_step_results"
+    __table_args__ = (
+        CheckConstraint(
+            "estado in ('ok', 'falla', 'bloqueado', 'omitido')", name="ck_qa_step_results_estado"
+        ),
+    )
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("qa_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    item_slug: Mapped[str] = mapped_column(Text, primary_key=True)
+    paso: Mapped[int] = mapped_column(Integer, primary_key=True)
+    estado: Mapped[str | None] = mapped_column(Text)
+    nota: Mapped[str | None] = mapped_column(Text)
+    actualizado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class QaItemResult(Base):
+    """Estado de una prueba en una ejecución (derivado de sus pasos) y su nota general."""
+
+    __tablename__ = "qa_item_results"
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("qa_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    item_slug: Mapped[str] = mapped_column(Text, primary_key=True)
+    estado: Mapped[str] = mapped_column(Text, default="sin_correr")
+    nota: Mapped[str | None] = mapped_column(Text)
+    actualizado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class QaAttachment(Base):
+    """Captura de un paso. El archivo vive en `TENANTS_ROOT/.plataforma/pruebas/<run_id>/`."""
+
+    __tablename__ = "qa_attachments"
+    __table_args__ = (Index("ix_qa_attachments_run_item", "run_id", "item_slug"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("qa_runs.id", ondelete="CASCADE"))
+    item_slug: Mapped[str] = mapped_column(Text)
+    paso: Mapped[int] = mapped_column(Integer)
+    ruta: Mapped[str] = mapped_column(Text)
+    nombre_original: Mapped[str | None] = mapped_column(Text)
+    mimetype: Mapped[str] = mapped_column(Text)
+    tamano: Mapped[int] = mapped_column(Integer)
+    subido_por: Mapped[uuid.UUID] = mapped_column(ForeignKey("admins.id"))
+    subido_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class QaConfigStatus(Base):
+    """Estado de un ítem de configuración de test o de producción (no se reinicia por ciclo)."""
+
+    __tablename__ = "qa_config_status"
+    __table_args__ = (
+        CheckConstraint(
+            "estado in ('pendiente', 'en_curso', 'listo', 'no_aplica')",
+            name="ck_qa_config_status_estado",
+        ),
+    )
+
+    item_slug: Mapped[str] = mapped_column(Text, primary_key=True)
+    estado: Mapped[str] = mapped_column(Text, default="pendiente")
+    nota: Mapped[str | None] = mapped_column(Text)
+    actualizado_por: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id"))
+    actualizado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class QaEvent(Base):
+    """Historial de cambios del centro de pruebas. Solo se inserta; nunca se borra."""
+
+    __tablename__ = "qa_events"
+    __table_args__ = (Index("ix_qa_events_cycle_item", "cycle_id", "item_slug", "en"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cycle_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("qa_cycles.id"))
+    run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("qa_runs.id", ondelete="SET NULL"))
+    item_slug: Mapped[str | None] = mapped_column(Text)
+    paso: Mapped[int | None] = mapped_column(Integer)
+    campo: Mapped[str] = mapped_column(Text)
+    antes: Mapped[str | None] = mapped_column(Text)
+    despues: Mapped[str | None] = mapped_column(Text)
+    admin_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id"))
+    en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
