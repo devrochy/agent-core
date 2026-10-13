@@ -15,6 +15,7 @@ from sqlalchemy import delete, func, select
 
 from core.admin.auth import hash_password
 from core.admin.permissions import OWNER_GRANTABLE_SECTIONS, catalog, pack_section_keys
+from core.admin.roles import ROLES_DE_PLATAFORMA
 from core.db.models import Admin, AdminPermission, Tenant, TenantUser
 from core.db.session import get_session
 from core.plugin_manager import plugin_manager
@@ -57,13 +58,14 @@ async def ensure_tenant_link(admin_id: uuid.UUID, tenant_id: uuid.UUID, role: st
 
 
 async def target_allowed_for_owner(admin_id: uuid.UUID, tid: uuid.UUID | None) -> bool:
-    """Un owner solo gestiona cuentas EXCLUSIVAS de su tenant (no masters, ni
-    cuentas con permisos globales o vinculadas a otros tenants)."""
+    """Un owner solo gestiona cuentas EXCLUSIVAS de su tenant (no masters ni testers,
+    ni cuentas con permisos globales o vinculadas a otros tenants)."""
     if tid is None:
         return False
     async with get_session() as session:
         target = await session.get(Admin, admin_id)
-        if target is None or target.role == "master":
+        # Un tester (ADR-0134) es una cuenta de plataforma, como un master.
+        if target is None or target.role in ROLES_DE_PLATAFORMA:
             return False
         link = (
             await session.execute(

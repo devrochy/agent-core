@@ -185,6 +185,7 @@ Columnas A/W/B: la variable va en la API, el worker o el beat. Fuente de verdad 
 | `PUBLIC_BASE_URL` | ✓ | ✓ | ✓ | fijo: `https://app.solvershub.site`. Es la base de las URL de webhook que el panel muestra y que están registradas en Meta y Wompi (`core/tenants.py:80-89`); cambiarla a `api.` es parte de HU-ARCH-02 |
 | `PANEL_BASE_URL` | ✓ | ✓ | ✓ | fijo: `https://app.solvershub.site` (retorno de OAuth de Google, ADR-0093) |
 | `LANDING_BASE_URL` | ✓ | ✓ | ✓ | fijo: `https://www.solvershub.site` (fragmento del chat web) |
+| `QA_TESTERS_ENABLED` | — | — | — | **no se carga en producción**: habilita el rol tester del centro de pruebas, que actúa como master (ADR-0134). Solo test la pone en `true` |
 | `ROOT_PATH` | ✓ | ✓ | ✓ | fijo: vacío |
 | `TRUSTED_PROXY_CIDRS` | ✓ | ✓ | ✓ | sin definir: el valor por defecto (redes privadas y loopback, `core/config.py:76-79`) cubre cloudflared y la red de Coolify |
 | `TOKEN_MASTER_KEYS` | ✓ | ✓ | ✓ | heredada **más** una clave nueva generada para producción: sin las claves viejas no se descifran los secretos migrados (`core/shared/crypto.py:1-21`) |
@@ -376,7 +377,8 @@ Variables que cambian respecto de producción: `PUBLIC_BASE_URL=https://test.sol
 `DATABASE_URL` apunta a `48h2r2laml64eyrggfg6eqld:5432` como `app_runtime`;
 `MIGRATIONS_DATABASE_URL` usa el superusuario `postgres` de ese contenedor; `REDIS_URL` apunta a
 `rqkxxnen7ysp7xmqhocrbidw:6379`; `APP_ENV=production`; si test activa Sentry,
-`SENTRY_ENVIRONMENT=test`. El resto de los secretos (`APP_SECRET_KEY`, `TOKEN_*`,
+`SENTRY_ENVIRONMENT=test`; `QA_TESTERS_ENABLED=true` en app, worker y beat (rol tester del centro de pruebas,
+ADR-0134). El resto de los secretos (`APP_SECRET_KEY`, `TOKEN_*`,
 `MASTER_ENCRYPTION_KEY`, `LLM_*`, Meta, `WOMPI_*`) tienen que ser **propios de test**
 ([Separación de test](#separación-de-test)).
 

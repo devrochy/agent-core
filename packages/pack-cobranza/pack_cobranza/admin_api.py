@@ -1759,7 +1759,11 @@ async def create_collector(
         ).scalar_one_or_none()
         if existente is not None:
             from core.admin.invitations_service import crear_invitacion
+            from core.admin.roles import es_tester
 
+            if es_tester(principal.admin):
+                # Invitar una cuenta existente a un negocio es gestionar cuentas (ADR-0134).
+                raise ApiError(409, "conflict", "Ese correo ya tiene una cuenta. Un tester solo crea gestores con una cuenta nueva.")
             error = await crear_invitacion(
                 tenant_id=tid,
                 admin_id=existente.id,

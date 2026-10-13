@@ -35,6 +35,7 @@ from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.admin.permissions import effective_access
+from core.admin.roles import actua_como_master
 from core.agents import instancias as svc
 from core.agents.versiones import escritura_habilitada
 from core.api.deps import Principal, require
@@ -98,7 +99,7 @@ def _tenant(principal: Principal) -> uuid.UUID:
 
 async def _puede_escribir(principal: Principal) -> uuid.UUID:
     tid = _tenant(principal)
-    if principal.admin.role == "master":
+    if actua_como_master(principal.admin):
         return tid
     # Además de `settings` con escritura, ver la conexión (`connections`): nadie cambia los
     # agentes de una conexión que no puede ver.

@@ -17,6 +17,7 @@ import bcrypt
 from fastapi import Request
 from sqlalchemy import select
 
+from core.admin.roles import cuenta_habilitada
 from core.db.models import Admin, AdminSession
 from core.db.session import get_session
 
@@ -48,6 +49,9 @@ async def login(email_or_username: str, password: str) -> str | None:
             )
         ).scalar_one_or_none()
         if admin is None or not verify_password(password, admin.password_hash):
+            return None
+        if not cuenta_habilitada(admin):
+            # Tester con el rol apagado (producción, ADR-0134): no entra.
             return None
         return nueva_sesion(session, admin.id)
 
@@ -96,7 +100,7 @@ async def admin_from_token(token: str) -> Admin | None:
         if stored is None or stored.expires_at < datetime.now(UTC):
             return None
         admin = await session.get(Admin, stored.admin_id)
-        if admin is None or not admin.active:
+        if not cuenta_habilitada(admin):
             return None
         return admin
 

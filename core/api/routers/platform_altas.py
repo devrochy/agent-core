@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
+from core.admin.roles import actua_como_master
 from core.api.deps import Principal, get_principal
 from core.api.errors import ApiError
 from core.db.models import ProvisioningRequest, Tenant
@@ -37,7 +38,7 @@ EstadoAlta = Literal["en_curso", "completado", "revision", "omitido"]
 
 
 def _require_master(principal: Principal) -> None:
-    if principal.admin.role != "master":
+    if not actua_como_master(principal.admin):
         raise ApiError.forbidden("Solo el admin de plataforma puede gestionar el alta automática.")
 
 

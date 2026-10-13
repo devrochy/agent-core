@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import delete, select, update
 
 from core.admin.auth import hash_password
+from core.admin.invitations_service import SIN_CONTRASENA
 from core.db.models import Admin, AdminSession, PasswordResetToken
 from core.db.session import get_session
 from core.gateway.system_email import send_system_email
@@ -52,6 +53,9 @@ async def solicitar_reset(identifier: str) -> None:
             )
         ).scalar_one_or_none()
         if admin is None:
+            return
+        if admin.role == "tester" and admin.password_hash == SIN_CONTRASENA:
+            # Un tester define su contraseña solo con su enlace (vence en 7 días, ADR-0134).
             return
 
         # Limpia expirados (acota el escaneo de `aplicar_reset`) e invalida los

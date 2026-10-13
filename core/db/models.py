@@ -2149,3 +2149,30 @@ class QaEvent(Base):
     despues: Mapped[str | None] = mapped_column(Text)
     admin_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id"))
     en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class QaTesterInvitation(Base):
+    """Enlace de un solo uso para que un tester defina su contraseña (ADR-0134).
+
+    Tabla de SISTEMA (sin RLS): identidad de plataforma; se consulta sin tenant.
+    El token no se guarda: es `<id>.<HMAC(APP_SECRET_KEY, id + nonce)>`.
+    """
+
+    __tablename__ = "qa_tester_invitations"
+    __table_args__ = (
+        Index("ix_qa_tester_invitations_admin", "admin_id"),
+        CheckConstraint(
+            "estado in ('pendiente', 'aceptada', 'revocada', 'reemplazada')",
+            name="ck_qa_tester_invitations_estado",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("admins.id"))
+    email: Mapped[str] = mapped_column(Text)
+    token_nonce: Mapped[str | None] = mapped_column(Text)
+    estado: Mapped[str] = mapped_column(Text, default="pendiente")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    invitado_por: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id"))
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    respondida_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

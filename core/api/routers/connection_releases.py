@@ -31,6 +31,7 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import DBAPIError
 
+from core.admin.roles import actua_como_master
 from core.agents.versiones import escritura_habilitada
 from core.api.deps import Principal, require, require_owner_or_master
 from core.api.errors import ApiError
@@ -129,7 +130,7 @@ def _tenant(principal: Principal) -> uuid.UUID:
 
 async def _puede_escribir(principal: Principal) -> uuid.UUID:
     tid = _tenant(principal)
-    if principal.admin.role != "master" and not await escritura_habilitada(tid):
+    if not actua_como_master(principal.admin) and not await escritura_habilitada(tid):
         raise ApiError(
             403,
             "aos_runtime_legacy",

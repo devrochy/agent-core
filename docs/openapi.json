@@ -210,6 +210,49 @@
         }
       }
     },
+    "/api/v1/auth/accept-tester-invitation": {
+      "post": {
+        "tags": [
+          "api",
+          "auth"
+        ],
+        "summary": "Post Accept Tester Invitation",
+        "description": "Canjea el enlace de un tester (SPEC-30, ADR-0134): define su contraseña y abre su sesión.\nInválido, usado, vencido o con el rol apagado: 400 sin decir cuál. Mismo bloqueo\nprogresivo del login, por IP y por invitación.",
+        "operationId": "post_accept_tester_invitation_api_v1_auth_accept_tester_invitation_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptTesterInvitationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptTesterInvitationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/agents": {
       "get": {
         "tags": [
@@ -7522,7 +7565,7 @@
           "admin · plataforma"
         ],
         "summary": "Purge Tenant Endpoint",
-        "description": "Eliminación física IRREVERSIBLE (invariante 8).\n\nExige el tenant suspendido (409 `tenant_not_suspended`) y la frase `ELIMINAR <slug>`.",
+        "description": "Eliminación física IRREVERSIBLE (invariante 8).\n\nExige el tenant suspendido (409 `tenant_not_suspended`) y la frase `ELIMINAR <slug>`.\nSolo el master, también en test (invariante 8: el tester no purga).",
         "operationId": "purge_tenant_endpoint_api_v1_admin_platform_tenants__tenant_id__purge_post",
         "parameters": [
           {
@@ -16286,7 +16329,7 @@
           "admin · centro de pruebas"
         ],
         "summary": "Close Cycle",
-        "description": "Cierra el ciclo abierto (foto fija) y abre uno nuevo con la última versión del catálogo.",
+        "description": "Cierra el ciclo abierto (foto fija) y abre uno nuevo con la última versión del catálogo.\n\nCongela las ejecuciones en curso de todos: master, o tester en test (ADR-0134).",
         "operationId": "close_cycle_api_v1_admin_qa_cycles_close_post",
         "parameters": [
           {
@@ -16393,6 +16436,176 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/QaConfig"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/testers": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "List Testers",
+        "operationId": "list_testers_api_v1_admin_qa_testers_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaTestersOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Invite Tester",
+        "description": "Invita (o reinvita) a un tester por correo con un enlace de un solo uso.",
+        "operationId": "invite_tester_api_v1_admin_qa_testers_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QaInvitarTesterIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaTesterInvitado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/testers/{tester_id}/revoke": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Revoke Tester",
+        "description": "Desactiva al tester y cierra sus sesiones: el siguiente pedido ya falla.",
+        "operationId": "revoke_tester_api_v1_admin_qa_testers__tester_id__revoke_post",
+        "parameters": [
+          {
+            "name": "tester_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tester Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaTesterOut"
                 }
               }
             }
@@ -16766,6 +16979,53 @@
         ],
         "title": "AcceptInvitationResponse",
         "description": "Sesión del dueño que acaba de definir su contraseña (ADR-0124), como la del login."
+      },
+      "AcceptTesterInvitationRequest": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Token",
+            "description": "Lo que va después de `#` en `/invitacion-tester#…`."
+          },
+          "new_password": {
+            "type": "string",
+            "minLength": 8,
+            "title": "New Password",
+            "description": "Contraseña nueva del tester (8+)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "token",
+          "new_password"
+        ],
+        "title": "AcceptTesterInvitationRequest"
+      },
+      "AcceptTesterInvitationResponse": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          },
+          "admin_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Admin Id"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In",
+            "description": "Segundos de vigencia de la sesión."
+          }
+        },
+        "type": "object",
+        "required": [
+          "token",
+          "admin_id",
+          "expires_in"
+        ],
+        "title": "AcceptTesterInvitationResponse"
       },
       "AccessAttempt": {
         "properties": {
@@ -21459,6 +21719,11 @@
           "invitaciones_pendientes": {
             "type": "integer",
             "title": "Invitaciones Pendientes"
+          },
+          "qa_testers_habilitados": {
+            "type": "boolean",
+            "title": "Qa Testers Habilitados",
+            "default": false
           }
         },
         "type": "object",
@@ -25416,6 +25681,21 @@
         ],
         "title": "QaImportIn"
       },
+      "QaInvitarTesterIn": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "minLength": 3,
+            "title": "Email"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "QaInvitarTesterIn"
+      },
       "QaItem": {
         "properties": {
           "slug": {
@@ -25850,6 +26130,131 @@
           "email"
         ],
         "title": "QaTester"
+      },
+      "QaTesterInvitado": {
+        "properties": {
+          "tester": {
+            "$ref": "#/components/schemas/QaTesterOut"
+          },
+          "correo_enviado": {
+            "type": "boolean",
+            "title": "Correo Enviado"
+          },
+          "enlace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enlace",
+            "description": "Enlace de un solo uso, solo si el correo no salió (SMTP de sistema sin configurar)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "tester",
+          "correo_enviado"
+        ],
+        "title": "QaTesterInvitado"
+      },
+      "QaTesterOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "invitado",
+              "activo",
+              "vencido",
+              "revocado"
+            ],
+            "title": "Estado"
+          },
+          "creado_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creado En"
+          },
+          "invitado_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invitado En"
+          },
+          "expira_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expira En"
+          },
+          "aceptado_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aceptado En"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "estado"
+        ],
+        "title": "QaTesterOut"
+      },
+      "QaTestersOut": {
+        "properties": {
+          "habilitado": {
+            "type": "boolean",
+            "title": "Habilitado",
+            "description": "`QA_TESTERS_ENABLED` en este entorno."
+          },
+          "testers": {
+            "items": {
+              "$ref": "#/components/schemas/QaTesterOut"
+            },
+            "type": "array",
+            "title": "Testers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "habilitado",
+          "testers"
+        ],
+        "title": "QaTestersOut"
       },
       "ReadinessItem": {
         "properties": {

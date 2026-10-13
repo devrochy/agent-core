@@ -42,6 +42,7 @@ from core.admin.meta_templates_service import (
     list_templates,
     sync_templates_now,
 )
+from core.admin.roles import actua_como_master
 from core.admin.waweb_service import (
     accept_risk as waweb_accept_risk,
 )
@@ -191,7 +192,7 @@ async def get_webhooks(
 ) -> WebhooksResponse:
     rows = await webhook_subscriptions_status(
         principal.tenant_id,
-        es_master=principal.admin.role == "master",
+        es_master=actua_como_master(principal.admin),
         puede_registrar=_es_owner_o_master(principal),
     )
     return WebhooksResponse(subscriptions=[SubscriptionItem(**row) for row in rows])
@@ -207,7 +208,7 @@ async def register_connection_webhook_route(
     _require_owner_or_master(principal)
     try:
         await register_connection_webhook(
-            principal.tenant_id, connection_id, es_master=principal.admin.role == "master"
+            principal.tenant_id, connection_id, es_master=actua_como_master(principal.admin)
         )
     except WebhookRegistroError as exc:
         raise _api_error(exc) from exc
@@ -221,7 +222,7 @@ async def register_webhook(
 ) -> Response:
     """Obsoleta: usa `POST /connections/{connection_id}/webhook/register`."""
     _require_owner_or_master(principal)
-    es_master = principal.admin.role == "master"
+    es_master = actua_como_master(principal.admin)
     try:
         if payload.connection_id is not None:
             await register_connection_webhook(principal.tenant_id, str(payload.connection_id), es_master=es_master)
@@ -842,7 +843,7 @@ async def checklist_requirements(
         tenant = await session.get(Tenant, principal.tenant_id)
         slug = tenant.slug if tenant else ""
     checks = await run_preflight(
-        principal.tenant_id, slug, include_platform_app=principal.admin.role == "master"
+        principal.tenant_id, slug, include_platform_app=actua_como_master(principal.admin)
     )
     return ChecklistOut(
         steps=steps,

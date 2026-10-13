@@ -56,7 +56,7 @@ MAX_NOTA = 4000
 
 
 class QaError(Exception):
-    """Error de dominio del centro de pruebas. `tipo`: invalido | no_encontrado | conflicto."""
+    """Error de dominio del centro de pruebas. `tipo`: invalido | no_encontrado | conflicto | prohibido."""
 
     def __init__(self, tipo: str, mensaje: str) -> None:
         super().__init__(mensaje)
@@ -879,6 +879,9 @@ async def actualizar_config(
         ).scalar_one_or_none()
         if item is None:
             raise QaError("no_encontrado", "Ese punto no está en el catálogo.")
+        if item.seccion == "prod" and admin.role != "master":
+            # El checklist de paso a producción lo cierra el dueño (incluye el control del rol tester).
+            raise QaError("prohibido", "Solo el admin de plataforma marca el checklist de paso a producción.")
         actual = await session.get(QaConfigStatus, slug)
         if actual is None:
             actual = QaConfigStatus(item_slug=slug, estado="pendiente")

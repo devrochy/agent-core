@@ -87,6 +87,22 @@ async def _phone_claimed_by_other(phone_number_id: str, tenant_id: uuid.UUID | N
 
 
 
+async def motivo_para_rechazar_alta_de_tester(slug: str, admin_email: str | None) -> str | None:
+    """Un tester (ADR-0134) da de alta negocios nuevos, pero no gestiona cuentas: no puede
+    reusar el slug de un negocio que ya existe (el alta es idempotente y vincularía al owner
+    que mande) ni vincular como owner una cuenta que ya existe. `None` = puede seguir."""
+    async with get_session() as session:
+        existe = (await session.execute(select(Tenant.id).where(Tenant.slug == slug))).scalar_one_or_none()
+        if existe is not None:
+            return "Ya existe un negocio con ese slug. Un tester solo da de alta negocios nuevos."
+        correo = (admin_email or "").strip().lower()
+        if correo:
+            cuenta = (await session.execute(select(Admin.id).where(Admin.email == correo))).scalar_one_or_none()
+            if cuenta is not None:
+                return "Ese correo ya tiene una cuenta. Un tester solo da de alta negocios con una cuenta nueva."
+    return None
+
+
 async def onboard_tenant(
     *,
     name: str,

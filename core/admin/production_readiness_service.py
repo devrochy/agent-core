@@ -33,6 +33,7 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
+from core.admin.roles import actua_como_master
 from core.db.models import MetaConnection, MetaProductionCheck, PlatformReadinessRun, utcnow
 from core.db.session import get_owned, get_session
 from core.gateway.meta_preflight import PreflightCheck
@@ -318,7 +319,7 @@ async def live_connection_ids(tenant_id: uuid.UUID) -> list[uuid.UUID]:
 # ------------------------------------------------------------------------ plataforma
 def _require_master(admin: Any) -> None:
     """Defensa en profundidad: la ruta ya lo exige, pero el servicio no confía en eso."""
-    if getattr(admin, "role", None) != "master":
+    if not actua_como_master(admin):
         raise NotMaster("Solo el admin de plataforma ve la App de Meta.")
 
 

@@ -207,3 +207,44 @@ async def post_accept_invitation(payload: AcceptInvitationRequest, request: Requ
     if error == CUENTA_EXISTENTE:
         raise ApiError(409, "account_exists", error)
     raise ApiError(400, "invalid_token", error or ENLACE_INVALIDO)
+
+
+class AcceptTesterInvitationRequest(BaseModel):
+    token: str = Field(max_length=200, description="Lo que va después de `#` en `/invitacion-tester#…`.")
+    new_password: str = Field(min_length=8, description="Contraseña nueva del tester (8+).")
+
+
+class AcceptTesterInvitationResponse(BaseModel):
+    token: str
+    admin_id: uuid.UUID
+    expires_in: int = Field(description="Segundos de vigencia de la sesión.")
+
+
+@router.post("/accept-tester-invitation", response_model=AcceptTesterInvitationResponse)
+async def post_accept_tester_invitation(
+    payload: AcceptTesterInvitationRequest, request: Request
+) -> AcceptTesterInvitationResponse:
+    """Canjea el enlace de un tester (SPEC-30, ADR-0134): define su contraseña y abre su sesión.
+    Inválido, usado, vencido o con el rol apagado: 400 sin decir cuál. Mismo bloqueo
+    progresivo del login, por IP y por invitación."""
+    from core.qa.testers import ENLACE_INVALIDO, canjear_invitacion
+    from core.security.login_lockout import (
+        client_ip,
+        is_blocked,
+        register_failure,
+        register_success,
+    )
+
+    ip = client_ip(request)
+    partes = partes_del_token(payload.token)
+    identificador = f"tester:{partes[0]}" if partes else None
+    if await is_blocked("invitacion", identificador, ip):
+        raise ApiError(
+            429, "auth_bloqueado", "Demasiados intentos. Espera unos minutos e inténtalo de nuevo."
+        )
+    error, token, admin_id = await canjear_invitacion(payload.token, payload.new_password)
+    if error is None and token is not None and admin_id is not None:
+        await register_success("invitacion", identificador, ip)
+        return AcceptTesterInvitationResponse(token=token, admin_id=admin_id, expires_in=SESSION_TTL_HOURS * 3600)
+    await register_failure("invitacion", identificador, ip)
+    raise ApiError(400, "invalid_token", error or ENLACE_INVALIDO)

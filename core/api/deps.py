@@ -34,6 +34,7 @@ from core.admin.permissions import (
     pack_section_keys,
     permissions_for,
 )
+from core.admin.roles import actua_como_master
 from core.api.errors import ApiError
 from core.db.models import Admin
 from core.plugin_manager import plugin_manager
@@ -118,8 +119,8 @@ def require(section: str, *, write: bool = False) -> Callable[..., AsyncIterator
 
 
 def es_owner_o_master(principal: Principal) -> bool:
-    """¿Propietario del negocio activo o admin de plataforma?"""
-    if principal.admin.role == "master":
+    """¿Propietario del negocio activo o admin de plataforma (master, o tester en test)?"""
+    if actua_como_master(principal.admin):
         return True
     role = next((role for (tid, _name, role) in principal.tenants if tid == principal.tenant_id), None)
     return role == "owner"
