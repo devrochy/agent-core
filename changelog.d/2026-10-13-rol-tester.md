@@ -18,3 +18,9 @@
 - **Sin la variable**, un tester no entra al panel ni a la app de campo, y sus sesiones dejan de valer.
   `/me` expone `qa_testers_habilitados`.
 - **CLI:** `agent-core admin create --role tester`, rechazado si el rol no está habilitado.
+- **Límites del tester (revisión de seguridad):**
+  - el alta de negocios solo admite slug y cuenta nuevos;
+  - no purga, no invita gestores existentes ni marca el checklist de producción;
+  - sin contraseña no recibe código de recuperación.
+- **App de campo:** revalida la cuenta en cada pedido y rechaza el refresh token como acceso. Desactivar a un
+  admin ahora corta la app al instante.

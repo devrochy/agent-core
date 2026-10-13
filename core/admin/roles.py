@@ -42,6 +42,11 @@ def actua_como_master(admin: Any) -> bool:
     return es_master(admin) or (es_tester(admin) and testers_habilitados())
 
 
+def rol_actua_como_master(role: str | None) -> bool:
+    """Lo mismo que `actua_como_master`, para quien solo tiene el texto del rol."""
+    return role == ROL_MASTER or (role == ROL_TESTER and testers_habilitados())
+
+
 def cuenta_habilitada(admin: Any) -> bool:
     """¿La cuenta puede iniciar sesión o usar una sesión? Activa, y si es tester, con el rol
     habilitado. Lo llaman el login del panel, la validación de sesión y la app de campo."""

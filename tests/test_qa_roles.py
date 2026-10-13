@@ -67,3 +67,40 @@ async def test_permissions_for_del_tester_oculta_colaboradores(habilitar):
     assert await effective_access(tester, "tenants", None) == "write"
     habilitar(False)
     assert await permissions_for(tester, ["dashboard", "collaborators"]) == {"dashboard": None, "collaborators": None}
+
+
+async def test_app_de_campo_no_acepta_refresh_ni_cuentas_deshabilitadas(habilitar, monkeypatch):
+    import uuid
+
+    import pack_cobranza.api_gestor as api_gestor
+
+    tenant = uuid.uuid4()
+    admin_id = uuid.uuid4()
+    payloads = {"refresh": {"typ": "refresh", "admin_id": str(admin_id)}, "access": {"typ": "access", "admin_id": str(admin_id)}}
+
+    async def _token_tenant(token):
+        return tenant, payloads[token]
+
+    cuenta = {"admin": SimpleNamespace(role="tester", active=True)}
+
+    class _Sesion:
+        async def get(self, _modelo, _id):
+            return cuenta["admin"]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(api_gestor, "token_tenant", _token_tenant)
+    monkeypatch.setattr(api_gestor, "get_session", lambda: _Sesion())
+
+    habilitar(True)
+    assert await api_gestor._auth("Bearer refresh") is None
+    assert await api_gestor._auth("Bearer access") is not None
+    habilitar(False)  # producción: el tester queda fuera aunque su token no haya vencido
+    assert await api_gestor._auth("Bearer access") is None
+    habilitar(True)
+    cuenta["admin"] = SimpleNamespace(role="colaborador", active=False)  # revocado
+    assert await api_gestor._auth("Bearer access") is None

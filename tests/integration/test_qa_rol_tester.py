@@ -201,3 +201,71 @@ async def test_sin_la_variable_el_tester_no_existe(app_client, tenant_setup, mon
     assert r.status_code == 409
     r = await app_client.get("/api/v1/admin/me", headers=master)
     assert r.json()["qa_testers_habilitados"] is False
+
+
+async def test_tester_no_gestiona_cuentas_por_el_alta_ni_purga(app_client, tenant_setup, testers_on) -> None:
+    t1, _t2 = tenant_setup
+    master = await api_headers(app_client, t1)
+    email = _uniq("tester-alta")
+    await _invitar_y_aceptar(app_client, master, email)
+    headers = await api_headers(app_client, t1, email=email, password=PASSWORD)
+
+    # Reusar el slug de un negocio existente vincularía un owner títere: 409.
+    r = await app_client.post(
+        "/api/v1/admin/platform/tenants",
+        json={"name": "Alpha", "slug": "test-alpha", "admin_email": _uniq("titere"), "admin_password": "Passw0rd!"},
+        headers=headers,
+    )
+    assert r.status_code == 409, r.text
+    # Vincular como owner una cuenta que ya existe: 409.
+    r = await app_client.post(
+        "/api/v1/admin/platform/tenants",
+        json={"name": "Nuevo", "slug": f"qa-{uuid.uuid4().hex[:6]}", "admin_email": "admin@local", "admin_password": "Passw0rd!"},
+        headers=headers,
+    )
+    assert r.status_code == 409, r.text
+    # Un negocio nuevo con una cuenta nueva sí (probar el alta es operar).
+    slug = f"qa-{uuid.uuid4().hex[:6]}"
+    r = await app_client.post(
+        "/api/v1/admin/platform/tenants",
+        json={"name": "Negocio QA", "slug": slug, "admin_email": _uniq("owner-qa"), "admin_password": "Passw0rd!"},
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    tenant_id = r.json()["tenant_id"]
+
+    # Purgar es solo del master, también en test (invariante 8).
+    r = await app_client.post(
+        f"/api/v1/admin/platform/tenants/{tenant_id}/purge",
+        json={"confirm_phrase": f"ELIMINAR {slug}"},
+        headers=headers,
+    )
+    assert r.status_code == 403
+
+
+async def test_checklist_de_produccion_es_del_master(app_client, tenant_setup, testers_on) -> None:
+    t1, _t2 = tenant_setup
+    master = await api_headers(app_client, t1)
+    catalogo = (
+        "version: 99\nfecha: '2026-10-13'\nitems:\n"
+        "- {id: prod-qa-rol, seccion: prod, grupo: Seguridad, titulo: Rol apagado, porque: p, como: c}\n"
+        "- {id: test-qa-var, seccion: test, grupo: Variables, titulo: Variable, porque: p, como: c}\n"
+        "- {id: pruebas-qa-x, seccion: pruebas, grupo: G, titulo: X, pasos: [Hacer], esperado: Pasa}\n"
+    )
+    r = await app_client.post("/api/v1/admin/qa/catalog/import", json={"contenido": catalogo}, headers=master)
+    assert r.status_code == 200, r.text
+    email = _uniq("tester-prod")
+    await _invitar_y_aceptar(app_client, master, email)
+    headers = await api_headers(app_client, t1, email=email, password=PASSWORD)
+
+    r = await app_client.put("/api/v1/admin/qa/config/prod-qa-rol", json={"estado": "listo"}, headers=headers)
+    assert r.status_code == 403
+    r = await app_client.put("/api/v1/admin/qa/config/test-qa-var", json={"estado": "listo"}, headers=headers)
+    assert r.status_code == 200
+    r = await app_client.put("/api/v1/admin/qa/config/prod-qa-rol", json={"estado": "en_curso"}, headers=master)
+    assert r.status_code == 200
+    # El tester cierra el ciclo (actúa como master); no importa el catálogo.
+    r = await app_client.post("/api/v1/admin/qa/cycles/close", json={"nombre": "Ciclo del tester"}, headers=headers)
+    assert r.status_code == 200, r.text
+    r = await app_client.post("/api/v1/admin/qa/catalog/import", json={"contenido": catalogo}, headers=headers)
+    assert r.status_code == 403

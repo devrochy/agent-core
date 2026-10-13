@@ -37,10 +37,22 @@
    - leer las ejecuciones de otros testers.
 
    Un owner trata a un tester como a un master: no lo gestiona, no lo vincula y no lo invita.
+
+   Límites del tester dentro de lo que opera (revisión de seguridad del 2026-10-13):
+   - **Alta de negocios:** solo negocios **nuevos** con una cuenta **nueva**. Reusar un slug existente (el alta
+     es idempotente y vincularía al owner que se mande) o un correo con cuenta da 409. El tester no queda como
+     owner del negocio que crea.
+   - **Purga:** solo master, también en test (invariante 8).
+   - **Gestores de cobranza:** crea gestores con cuenta nueva, que es parte de probar el campo; no invita
+     cuentas existentes (409).
+   - **Checklist de paso a producción:** lo marca solo el master; el tester marca la configuración de test.
+   - **Recuperar contraseña:** a un tester sin contraseña no se le manda código. Solo entra por su enlace, que
+     vence a los 7 días.
 4. **`admin_tenants()` (migración 0088)** devuelve todos los negocios activos a `master` y `tester`.
 5. **Solo en test.** Sin la variable, ni el login del panel ni el de la app de campo admiten a un tester. La
    validación de sesión de cada request y el refresh de la app tampoco, así que apagarla corta las sesiones
-   abiertas. Tampoco se puede crear un tester por la API ni por el CLI. Producción no carga la variable; está
+   abiertas. La app de campo revalida la cuenta en cada pedido y no acepta el refresh token como acceso: revocar
+   o apagar la variable la corta en el siguiente pedido, no cuando vence el token. Tampoco se puede crear un tester por la API ni por el CLI. Producción no carga la variable; está
    en el checklist de paso a producción (`prod-rol-tester-apagado-en-produccion`).
 6. **Alta solo por invitación del master.** `POST /api/v1/admin/qa/testers` crea la cuenta sin contraseña y
    manda por el correo de sistema un enlace de un solo uso: `<id>.<HMAC>` en el `#`, con vigencia de 7 días y
@@ -51,6 +63,12 @@
    contraseña.
 
 ## Consecuencias
+
+- **Pendientes que no bloquean:**
+  - el login SSR clásico y el login unificado de la app de campo no tienen bloqueo progresivo (es anterior a
+    este ADR);
+  - confirmar que test usa una App de Meta propia: el tester hereda las operaciones de Meta del master;
+  - un chequeo al arrancar que impida `QA_TESTERS_ENABLED` con las URL de producción.
 
 - Todo chequeo nuevo de master tiene que elegir entre `actua_como_master` (operar) y `role == "master"`
   (gestionar cuentas).

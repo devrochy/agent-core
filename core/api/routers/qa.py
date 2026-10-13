@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -35,6 +35,8 @@ def _error(exc: service.QaError) -> ApiError:
         return ApiError.not_found(exc.mensaje)
     if exc.tipo == "conflicto":
         return ApiError(409, "conflict", exc.mensaje)
+    if exc.tipo == "prohibido":
+        return ApiError.forbidden(exc.mensaje)
     return ApiError(422, "invalid", exc.mensaje)
 
 
@@ -493,7 +495,10 @@ class QaInvitarTesterIn(BaseModel):
 
 class QaTesterInvitado(BaseModel):
     tester: QaTesterOut
-    enlace: str = Field(description="Enlace de un solo uso, por si el correo de sistema no está configurado.")
+    correo_enviado: bool
+    enlace: str | None = Field(
+        default=None, description="Enlace de un solo uso, solo si el correo no salió (SMTP de sistema sin configurar)."
+    )
 
 
 def _solo_master(principal: Principal) -> None:
@@ -514,6 +519,7 @@ async def list_testers(principal: Annotated[Principal, Depends(_leer)]) -> dict[
 @router.post("/testers", response_model=QaTesterInvitado, status_code=201)
 async def invite_tester(
     payload: QaInvitarTesterIn,
+    response: Response,
     principal: Annotated[Principal, Depends(_escribir)],
 ) -> dict[str, Any]:
     """Invita (o reinvita) a un tester por correo con un enlace de un solo uso."""
@@ -521,10 +527,12 @@ async def invite_tester(
 
     _solo_master(principal)
     try:
-        tester, url = await testers.invitar_tester(principal.admin, payload.email)
+        tester, url, enviado = await testers.invitar_tester(principal.admin, payload.email)
     except service.QaError as exc:
         raise _error(exc) from exc
-    return {"tester": tester, "enlace": url}
+    response.headers["Cache-Control"] = "no-store"
+    # El enlace solo vuelve si el correo no salió (sin SMTP de sistema): el master lo comparte a mano.
+    return {"tester": tester, "enlace": None if enviado else url, "correo_enviado": enviado}
 
 
 @router.post("/testers/{tester_id}/revoke", response_model=QaTesterOut)

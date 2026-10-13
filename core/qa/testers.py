@@ -100,9 +100,9 @@ async def listar_testers() -> list[dict[str, Any]]:
         return [_a_dict(t, await _ultima_invitacion(session, t.id), ahora) for t in testers]
 
 
-async def invitar_tester(actor: Admin, email: str) -> tuple[dict[str, Any], str]:
-    """Invita (o reinvita) a un tester. Devuelve el tester y el enlace (el master lo puede
-    compartir a mano si el correo de sistema no está configurado)."""
+async def invitar_tester(actor: Admin, email: str) -> tuple[dict[str, Any], str, bool]:
+    """Invita (o reinvita) a un tester. Devuelve el tester, el enlace y si el correo salió
+    (sin SMTP de sistema el master lo comparte a mano)."""
     _exigir_habilitado()
     correo = (email or "").strip().lower()
     if not _EMAIL_RE.fullmatch(correo) or len(correo) > 254:
@@ -142,12 +142,12 @@ async def invitar_tester(actor: Admin, email: str) -> tuple[dict[str, Any], str]
         await session.flush()
         salida = _a_dict(admin, invitacion, ahora)
         url = enlace(invitacion.id, nonce)
-    await _enviar_correo(correo, url)
-    log.info("qa_tester_invitado", tester_id=salida["id"])
-    return salida, url
+    enviado = await _enviar_correo(correo, url)
+    log.info("qa_tester_invitado", tester_id=salida["id"], correo_enviado=enviado)
+    return salida, url, enviado
 
 
-async def _enviar_correo(correo: str, url: str) -> None:
+async def _enviar_correo(correo: str, url: str) -> bool:
     from core.gateway.system_email import send_system_email
 
     cuerpo = (
@@ -157,9 +157,10 @@ async def _enviar_correo(correo: str, url: str) -> None:
         "Es un entorno de pruebas: los negocios y los datos son de prueba.\n"
     )
     try:
-        await send_system_email(correo, "Invitación para probar SolversHub", cuerpo)
-    except Exception as exc:  # el enlace igual vuelve al master para compartirlo a mano
+        return await send_system_email(correo, "Invitación para probar SolversHub", cuerpo) is not None
+    except Exception as exc:  # el enlace vuelve al master para compartirlo a mano
         log.warning("qa_tester_correo_fallo", error=type(exc).__name__)
+        return False
 
 
 async def revocar_tester(admin_id: uuid.UUID) -> dict[str, Any]:

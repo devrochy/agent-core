@@ -93,9 +93,30 @@ def _usuario_de(admin: Admin) -> str:
 
 
 async def _auth(authorization: str | None) -> tuple[uuid.UUID, dict[str, Any]] | None:
+    """Token de acceso de campo válido Y de una cuenta habilitada.
+
+    El refresh token (30 días) no sirve como acceso, y la cuenta se revalida en cada pedido:
+    desactivar a un admin, revocar a un tester o apagar `QA_TESTERS_ENABLED` corta la app en
+    el siguiente pedido, no cuando vence el token (ADR-0134)."""
     if not authorization or not authorization.lower().startswith("bearer "):
         return None
-    return await token_tenant(authorization.split(" ", 1)[1].strip())
+    auth = await token_tenant(authorization.split(" ", 1)[1].strip())
+    if auth is None:
+        return None
+    _tenant_id, payload = auth
+    if payload.get("typ") == "refresh":
+        return None
+    admin_id = payload.get("admin_id")
+    if admin_id:
+        try:
+            admin_uuid = uuid.UUID(str(admin_id))
+        except (TypeError, ValueError):
+            return None
+        async with get_session() as session:
+            admin = await session.get(Admin, admin_uuid)
+        if not cuenta_habilitada(admin):
+            return None
+    return auth
 
 
 def _membresia_token(admin_id: uuid.UUID) -> str:

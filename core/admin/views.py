@@ -78,7 +78,7 @@ from core.admin.meta_templates_service import (
 )
 from core.admin.permissions import OWNER_GRANTABLE_SECTIONS
 from core.admin.permissions import catalog as sections_catalog
-from core.admin.roles import actua_como_master
+from core.admin.roles import actua_como_master, es_master, es_tester
 from core.admin.settings_service import (
     format_business_ranges,
     parse_business_ranges,
@@ -534,6 +534,13 @@ async def tenants_create(
             status_code=303,
         )
 
+    if es_tester(admin):
+        from core.alta_negocio import motivo_para_rechazar_alta_de_tester
+
+        motivo = await motivo_para_rechazar_alta_de_tester(tenant_slug, admin_email or None)
+        if motivo:
+            return RedirectResponse(f"/admin/tenants/nuevo?flash={motivo}&flash_type=danger", status_code=303)
+
     triggers = [t.strip() for t in escalation_triggers.split(",") if t.strip()]
     try:
         from core.alta_negocio import onboard_tenant
@@ -546,13 +553,14 @@ async def tenants_create(
             persona={"role": "asistente", "tone": tone},
             escalation_triggers=triggers or None,
             packs=packs or None,
-            admin_email=admin_email or admin.email,
+            # Un tester no queda como owner del negocio (ADR-0134): ya los ve todos.
+            admin_email=admin_email or (None if es_tester(admin) else admin.email),
             admin_password=admin_password or None,
             whatsapp=None,
         )
         # El master que crea el tenant siempre queda vinculado (si el admin del
         # tenant es otro email), para no perderlo del selector de tenant.
-        if admin_email and admin_email != admin.email:
+        if admin_email and admin_email != admin.email and not es_tester(admin):
             await _ensure_tenant_link(admin.id, tid, "owner")
     except Exception as exc:
         log.exception("tenant_create_failed")
@@ -642,9 +650,10 @@ async def tenants_purge(request: Request, tenant_id: uuid.UUID, confirm_phrase: 
     """Eliminación física IRREVERSIBLE (excepción a la invariante #8).
 
     Exige el tenant suspendido y que `confirm_phrase` sea exactamente "ELIMINAR <slug>".
-    Solo master.
+    Solo master (también en test: el tester no purga, invariante 8).
     """
-    if not await _require_master(request):
+    purgador = await current_admin(request)
+    if purgador is None or not es_master(purgador):
         return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
     from urllib.parse import quote
 
@@ -701,6 +710,9 @@ async def _require_collaborators(request: Request, *, write: bool = False) -> bo
         return False
     if admin.role == "master":
         return True
+    if es_tester(admin):
+        # El tester nunca gestiona cuentas (ADR-0134), aunque sea owner de un negocio.
+        return False
     return await _tenant_role(admin.id, get_current_tenant_id()) == "owner"
 
 

@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 
 from core.admin.plan_view import subscription_overview_or_none
-from core.admin.roles import actua_como_master
+from core.admin.roles import actua_como_master, es_master, es_tester
 from core.api.deps import Principal, get_principal
 from core.api.errors import ApiError
 from core.api.pagination import Page, PageParams, build_page, page_params
@@ -132,6 +132,12 @@ async def create_tenant(
     admin_email = payload.admin_email.strip().lower()
     if admin_email and len(payload.admin_password) < 8:
         raise ApiError.bad_request("La contraseña del administrador necesita 8+ caracteres.")
+    if es_tester(principal.admin):
+        from core.alta_negocio import motivo_para_rechazar_alta_de_tester
+
+        motivo = await motivo_para_rechazar_alta_de_tester(slug, admin_email or None)
+        if motivo:
+            raise ApiError(409, "conflict", motivo)
 
     try:
         tenant_id, steps = await onboard_tenant(
@@ -233,8 +239,10 @@ async def purge_tenant_endpoint(
     """Eliminación física IRREVERSIBLE (invariante 8).
 
     Exige el tenant suspendido (409 `tenant_not_suspended`) y la frase `ELIMINAR <slug>`.
+    Solo el master, también en test (invariante 8: el tester no purga).
     """
-    _require_master(principal)
+    if not es_master(principal.admin):
+        raise ApiError.forbidden("Solo el admin de plataforma puede eliminar un negocio.")
     from core.tenants import TenantNotSuspendedError, purge_tenant
 
     try:

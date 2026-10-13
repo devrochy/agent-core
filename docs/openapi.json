@@ -7565,7 +7565,7 @@
           "admin · plataforma"
         ],
         "summary": "Purge Tenant Endpoint",
-        "description": "Eliminación física IRREVERSIBLE (invariante 8).\n\nExige el tenant suspendido (409 `tenant_not_suspended`) y la frase `ELIMINAR <slug>`.",
+        "description": "Eliminación física IRREVERSIBLE (invariante 8).\n\nExige el tenant suspendido (409 `tenant_not_suspended`) y la frase `ELIMINAR <slug>`.\nSolo el master, también en test (invariante 8: el tester no purga).",
         "operationId": "purge_tenant_endpoint_api_v1_admin_platform_tenants__tenant_id__purge_post",
         "parameters": [
           {
@@ -26136,16 +26136,27 @@
           "tester": {
             "$ref": "#/components/schemas/QaTesterOut"
           },
+          "correo_enviado": {
+            "type": "boolean",
+            "title": "Correo Enviado"
+          },
           "enlace": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Enlace",
-            "description": "Enlace de un solo uso, por si el correo de sistema no está configurado."
+            "description": "Enlace de un solo uso, solo si el correo no salió (SMTP de sistema sin configurar)."
           }
         },
         "type": "object",
         "required": [
           "tester",
-          "enlace"
+          "correo_enviado"
         ],
         "title": "QaTesterInvitado"
       },
