@@ -14,9 +14,9 @@ def test_fragmentos_qa_de_los_tres_packs():
 
 
 def test_correos_y_slug_por_tester_en_dominio_reservado():
-    tester = uuid.UUID("afe5d7cc-0000-4000-8000-000000000000")
-    assert datos.slug_de(tester) == "qa-afe5d7cc"
-    assert datos.correo_de("gestor", tester) == "gestor.afe5d7cc@pruebas.solvershub.test"
+    tester = uuid.UUID("afe5d7cc-1234-4000-8000-000000000000")
+    assert datos.slug_de(tester) == "qa-afe5d7cc1234"
+    assert datos.correo_de("gestor", tester) == "gestor.afe5d7cc1234@pruebas.solvershub.test"
 
 
 def test_contenido_describe_clientes_en_mora_al_dia_y_sin_prestamo():

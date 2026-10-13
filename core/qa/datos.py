@@ -25,7 +25,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from core.admin.auth import hash_password
-from core.admin.roles import testers_habilitados
+from core.admin.roles import DOMINIO_DE_PRUEBA, testers_habilitados
 from core.db.models import Admin, AdminPermission, AdminSession, QaTesterDataset, Tenant, TenantUser
 from core.db.session import get_session
 from core.qa.service import QaError
@@ -36,7 +36,7 @@ log = get_logger(__name__)
 PACKS = ("pack_commerce", "pack_calendar", "pack_cobranza")
 PLAN = "premium"
 VERTICAL = "qa"
-DOMINIO = "pruebas.solvershub.test"
+DOMINIO = DOMINIO_DE_PRUEBA
 # Una corrida que quedó en «creando» más de esto se considera caída y se puede retomar.
 CORRIDA_VENCIDA = timedelta(minutes=10)
 
@@ -65,7 +65,7 @@ PERMISOS_COLABORADOR = (("dashboard", "read"), ("conversations", "write"), ("lea
 
 
 def _corto(admin_id: uuid.UUID) -> str:
-    return admin_id.hex[:8]
+    return admin_id.hex[:12]
 
 
 def slug_de(admin_id: uuid.UUID) -> str:
@@ -211,6 +211,7 @@ async def _reclamar(admin: Admin) -> QaTesterDataset:
                 tenant_id=uuid.uuid4(),
                 slug=slug_de(admin.id),
                 estado="creando",
+                corrida=uuid.uuid4(),
                 creado_en=ahora,
                 actualizado_en=ahora,
             )
@@ -235,13 +236,37 @@ async def _reclamar(admin: Admin) -> QaTesterDataset:
         elif ds.estado == "creando" and ds.actualizado_en > ahora - CORRIDA_VENCIDA:
             raise QaError("conflicto", "Tus datos de prueba se están preparando. Espera un momento.")
         ds.estado = "creando"
+        ds.corrida = uuid.uuid4()
         ds.error = None
         ds.actualizado_en = ahora
         await session.commit()
         return ds
 
 
-async def _cuenta(ds_id: uuid.UUID, columna: str, email: str, password: str) -> uuid.UUID:
+async def _sigue_siendo_de_prueba(session, cuenta: Admin, email: str, tenant_id: uuid.UUID) -> bool:  # type: ignore[no-untyped-def]
+    """¿La cuenta sigue siendo exclusiva del negocio de prueba? Mismo criterio que
+    `target_allowed_for_owner`: colaborador, su correo de prueba, sin permisos globales y
+    sin vínculos ni permisos en otros negocios. Si el master la promovió o la vinculó a otro
+    negocio, el tester ya no la toca."""
+    if cuenta.role != "colaborador" or cuenta.email != email:
+        return False
+    otros_vinculos = (
+        await session.execute(
+            select(TenantUser.id).where(TenantUser.admin_id == cuenta.id, TenantUser.tenant_id != tenant_id)
+        )
+    ).first()
+    otros_permisos = (
+        await session.execute(
+            select(AdminPermission.id).where(
+                AdminPermission.admin_id == cuenta.id,
+                (AdminPermission.tenant_id.is_(None)) | (AdminPermission.tenant_id != tenant_id),
+            )
+        )
+    ).first()
+    return otros_vinculos is None and otros_permisos is None
+
+
+async def _cuenta(ds_id: uuid.UUID, columna: str, email: str, password: str, tenant_id: uuid.UUID) -> uuid.UUID:
     """Crea la cuenta (o reutiliza la que esta misma fila ya creó) con una contraseña nueva."""
     async with get_session() as session:
         ds = await session.get(QaTesterDataset, ds_id)
@@ -257,9 +282,33 @@ async def _cuenta(ds_id: uuid.UUID, columna: str, email: str, password: str) -> 
             await session.flush()
             setattr(ds, columna, existente.id)
         else:
+            if not existente.active:
+                # La desactivó el admin de plataforma: solo él la reactiva.
+                raise QaError("conflicto", f"La cuenta {email} está desactivada. Pídele al admin de plataforma que la revise.")
+            if not await _sigue_siendo_de_prueba(session, existente, email, tenant_id):
+                raise QaError("conflicto", f"La cuenta {email} ya no es solo de tu negocio de prueba.")
             existente.password_hash = hash_password(password)
-            existente.active = True
+            await session.execute(delete(AdminSession).where(AdminSession.admin_id == existente.id))
         return existente.id
+
+
+async def _reservar_negocio(ds: QaTesterDataset, nombre: str) -> None:
+    """Crea la fila del negocio con el id y el slug de la corrida antes del alta: el único
+    de `tenants.slug` hace de candado y `onboard_tenant` no puede reutilizar un negocio
+    ajeno con ese slug."""
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        async with get_session() as session:
+            tenant = (await session.execute(select(Tenant).where(Tenant.slug == ds.slug))).scalar_one_or_none()
+            if tenant is not None and tenant.id != ds.tenant_id:
+                raise QaError("conflicto", f"Ya existe otro negocio con el slug {ds.slug}.")
+            if tenant is None:
+                session.add(
+                    Tenant(id=ds.tenant_id, name=nombre, slug=ds.slug, status="active", settings={"language": "es"})
+                )
+    except IntegrityError as exc:
+        raise QaError("conflicto", f"Ya existe otro negocio con el slug {ds.slug}.") from exc
 
 
 async def _vincular(tenant_id: uuid.UUID, admin_id: uuid.UUID, rol: str) -> None:
@@ -316,22 +365,19 @@ async def preparar(admin: Admin) -> dict[str, Any]:
     _exigir_habilitado()
     ds = await _reclamar(admin)
     try:
-        async with get_session() as session:
-            otro = (
-                await session.execute(select(Tenant.id).where(Tenant.slug == ds.slug, Tenant.id != ds.tenant_id))
-            ).scalar_one_or_none()
-        if otro is not None:
-            raise QaError("conflicto", f"Ya existe otro negocio con el slug {ds.slug}.")
+        nombre = f"QA · {admin.username or _corto(admin.id)}"
+        await _reservar_negocio(ds, nombre)
 
         contrasenas: dict[str, str] = {}
         ids: dict[str, uuid.UUID] = {}
         for c in CUENTAS:
             contrasenas[c["rol"]] = _contrasena()
-            ids[c["rol"]] = await _cuenta(ds.id, c["columna"], correo_de(c["rol"], admin.id), contrasenas[c["rol"]])
+            ids[c["rol"]] = await _cuenta(
+                ds.id, c["columna"], correo_de(c["rol"], admin.id), contrasenas[c["rol"]], ds.tenant_id
+            )
 
-        etiqueta = admin.username or _corto(admin.id)
-        await onboard_tenant(
-            name=f"QA · {etiqueta}",
+        creado, _pasos_alta = await onboard_tenant(
+            name=nombre,
             slug=ds.slug,
             business_description=(
                 "Negocio de prueba del centro de pruebas: tienda de café con agenda de asesorías "
@@ -342,6 +388,8 @@ async def preparar(admin: Admin) -> dict[str, Any]:
             tenant_id=ds.tenant_id,
             plan=PLAN,
         )
+        if creado != ds.tenant_id:
+            raise QaError("conflicto", f"Ya existe otro negocio con el slug {ds.slug}.")
         await _vincular(ds.tenant_id, ids["gestor"], "colaborador")
         await apply_pack_roles(["pack_cobranza:gestor"], ds.tenant_id, ids["gestor"])
         await _vincular(ds.tenant_id, ids["colaborador"], "colaborador")
@@ -352,17 +400,35 @@ async def preparar(admin: Admin) -> dict[str, Any]:
         async with get_session() as session:
             await session.execute(
                 update(QaTesterDataset)
-                .where(QaTesterDataset.id == ds.id)
+                .where(QaTesterDataset.id == ds.id, QaTesterDataset.corrida == ds.corrida)
                 .values(estado="error", error=mensaje, actualizado_en=datetime.now(UTC))
             )
-        log.warning("qa_datos_fallo", admin_id=str(admin.id), slug=ds.slug, exc_info=not isinstance(exc, QaError))
+        # Sin `exc_info` para errores de base: el traceback llevaría los parámetros SQL
+        # (entre ellos el hash de la contraseña).
+        from sqlalchemy.exc import DBAPIError
+
+        log.warning(
+            "qa_datos_fallo",
+            admin_id=str(admin.id),
+            slug=ds.slug,
+            error=type(exc).__name__,
+            exc_info=not isinstance(exc, QaError | DBAPIError),
+        )
         if isinstance(exc, QaError):
             raise
         raise QaError("conflicto", mensaje) from exc
 
     async with get_session() as session:
-        fila = await session.get(QaTesterDataset, ds.id)
-        assert fila is not None
+        fila = (
+            await session.execute(
+                select(QaTesterDataset)
+                .where(QaTesterDataset.id == ds.id, QaTesterDataset.corrida == ds.corrida)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if fila is None:
+            # Otra corrida retomó la preparación (esta pasó el plazo): manda la otra.
+            raise QaError("conflicto", "Otra preparación de tus datos tomó el relevo. Recarga la página.")
         fila.estado = "listo"
         fila.error = None
         fila.actualizado_en = datetime.now(UTC)
@@ -390,7 +456,9 @@ async def contrasenas_nuevas(admin: Admin) -> dict[str, Any]:
             if cuenta_id is None:
                 continue
             cuenta = await session.get(Admin, cuenta_id)
-            if cuenta is None:
+            if cuenta is None or not cuenta.active:
+                continue
+            if not await _sigue_siendo_de_prueba(session, cuenta, correo_de(c["rol"], admin.id), ds.tenant_id):
                 continue
             contrasenas[c["rol"]] = _contrasena()
             cuenta.password_hash = hash_password(contrasenas[c["rol"]])
@@ -401,3 +469,23 @@ async def contrasenas_nuevas(admin: Admin) -> dict[str, Any]:
     log.info("qa_datos_contrasenas_nuevas", admin_id=str(admin.id))
     salida["contrasenas"] = contrasenas
     return salida
+
+
+async def desactivar_cuentas_de(session, tester_id: uuid.UUID) -> int:  # type: ignore[no-untyped-def]
+    """Al revocar a un tester, sus cuentas de prueba también quedan fuera: se desactivan y se
+    cierran sus sesiones. Solo las que siguen siendo exclusivas de su negocio de prueba."""
+    ds = (
+        await session.execute(select(QaTesterDataset).where(QaTesterDataset.admin_id == tester_id))
+    ).scalar_one_or_none()
+    if ds is None:
+        return 0
+    apagadas = 0
+    for c in CUENTAS:
+        cuenta_id = getattr(ds, c["columna"])
+        cuenta = await session.get(Admin, cuenta_id) if cuenta_id else None
+        if cuenta is None or not await _sigue_siendo_de_prueba(session, cuenta, correo_de(c["rol"], tester_id), ds.tenant_id):
+            continue
+        cuenta.active = False
+        await session.execute(delete(AdminSession).where(AdminSession.admin_id == cuenta.id))
+        apagadas += 1
+    return apagadas

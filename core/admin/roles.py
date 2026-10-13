@@ -23,6 +23,9 @@ from core.config import get_settings
 ROL_MASTER = "master"
 ROL_TESTER = "tester"
 ROLES_DE_PLATAFORMA = frozenset({ROL_MASTER, ROL_TESTER})
+# Dominio reservado de las cuentas de prueba de cada tester (HU-QA-07, ADR-0135): sin
+# `QA_TESTERS_ENABLED` tampoco entran, como el tester.
+DOMINIO_DE_PRUEBA = "pruebas.solvershub.test"
 
 # Secciones que un tester no usa. Vacía desde el 2026-10-13: el dueño habilitó Colaboradores
 # para probarla. Ahí el tester actúa como dueño del negocio activo, no como master: los
@@ -57,7 +60,9 @@ def cuenta_habilitada(admin: Any) -> bool:
     habilitado. Lo llaman el login del panel, la validación de sesión y la app de campo."""
     if admin is None or not getattr(admin, "active", False):
         return False
-    return not es_tester(admin) or testers_habilitados()
+    if es_tester(admin) or str(getattr(admin, "email", "")).endswith("@" + DOMINIO_DE_PRUEBA):
+        return testers_habilitados()
+    return True
 
 
 def acceso_de_plataforma(admin: Any, section: str) -> str | None:

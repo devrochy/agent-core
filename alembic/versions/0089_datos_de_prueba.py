@@ -54,6 +54,7 @@ def upgrade() -> None:
         _admin_fk("gestor_admin_id"),
         _admin_fk("colaborador_admin_id"),
         sa.Column("estado", sa.Text(), nullable=False, server_default="creando"),
+        sa.Column("corrida", UUID(as_uuid=True)),
         sa.Column("error", sa.Text()),
         sa.Column("creado_en", _TS, nullable=False),
         sa.Column("actualizado_en", _TS, nullable=False),

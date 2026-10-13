@@ -171,6 +171,10 @@ async def revocar_tester(admin_id: uuid.UUID) -> dict[str, Any]:
             raise QaError("no_encontrado", "Tester no encontrado.")
         admin.active = False
         await session.execute(delete(AdminSession).where(AdminSession.admin_id == admin.id))
+        # Sus cuentas de prueba (dueño, gestor y colaborador, HU-QA-07) también quedan fuera.
+        from core.qa.datos import desactivar_cuentas_de
+
+        await desactivar_cuentas_de(session, admin.id)
         await session.execute(
             update(QaTesterInvitation)
             .where(QaTesterInvitation.admin_id == admin.id, QaTesterInvitation.estado == "pendiente")

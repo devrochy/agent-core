@@ -2183,6 +2183,8 @@ class QaTesterDataset(Base):
     gestor_admin_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id", ondelete="SET NULL"))
     colaborador_admin_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id", ondelete="SET NULL"))
     estado: Mapped[str] = mapped_column(Text, default="creando")
+    # Token de la corrida en curso: solo ella puede cerrar la fila como lista o con error.
+    corrida: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     error: Mapped[str | None] = mapped_column(Text)
     creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     actualizado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

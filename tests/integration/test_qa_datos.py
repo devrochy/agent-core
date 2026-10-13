@@ -158,3 +158,41 @@ async def test_un_colaborador_de_negocio_no_prepara_datos(app_client, tenant_set
     assert r.status_code == 403
     r = await app_client.get("/api/v1/admin/qa/datos", headers=headers)
     assert r.status_code == 403
+
+
+async def test_revocar_al_tester_apaga_sus_cuentas_y_sin_la_variable_no_entran(app_client, tenant_setup, testers_on) -> None:
+    from sqlalchemy import select
+
+    from core.config import get_settings
+    from core.db.models import Admin
+    from core.db.session import get_session
+    from core.qa import testers
+
+    t1, _t2 = tenant_setup
+    headers, email = await _tester(app_client, t1)
+    r = await app_client.post("/api/v1/admin/qa/datos", headers=headers)
+    assert r.status_code == 201, r.text
+    datos = r.json()
+    dueno = next(c for c in datos["cuentas"] if c["rol"] == "dueno")
+    login = {"identifier": dueno["email"], "password": datos["contrasenas"]["dueno"]}
+
+    # Sin QA_TESTERS_ENABLED las cuentas de prueba tampoco entran.
+    testers_on.setattr(get_settings(), "qa_testers_enabled", False)
+    r = await app_client.post("/api/v1/auth/login", json=login)
+    assert r.status_code == 401
+    testers_on.setattr(get_settings(), "qa_testers_enabled", True)
+    r = await app_client.post("/api/v1/auth/login", json=login)
+    assert r.status_code == 200, r.text
+
+    async with get_session() as session:
+        tester_id = (await session.execute(select(Admin.id).where(Admin.email == email))).scalar_one()
+    await testers.revocar_tester(tester_id)
+    async with get_session() as session:
+        activas = (
+            await session.execute(
+                select(Admin.active).where(Admin.email.in_([c["email"] for c in datos["cuentas"]]))
+            )
+        ).scalars().all()
+    assert activas == [False, False, False]
+    r = await app_client.post("/api/v1/auth/login", json=login)
+    assert r.status_code == 401

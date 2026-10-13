@@ -31,7 +31,15 @@
    corrida con un INSERT condicional. Si una corrida falla a medias, la siguiente reutiliza el negocio y las
    cuentas que esa misma fila creó, y nunca toma una cuenta ajena con el mismo correo. `tenant_id` es FK lógica:
    si el master purga el negocio, el tester lo vuelve a preparar.
-5. **Catálogo v6 (HU-QA-08):** cada prueba lleva `entorno` (panel, apk, whatsapp, web o api), `area` (la sección
+5. **Las cuentas de prueba siguen al tester.** Viven en el dominio reservado `pruebas.solvershub.test`:
+   `cuenta_habilitada` las rechaza sin `QA_TESTERS_ENABLED`, igual que al tester, y revocar al tester las
+   desactiva y cierra sus sesiones. El flujo solo toca una cuenta de su fila si sigue siendo exclusiva del negocio
+   de prueba (colaborador, su correo, sin permisos globales ni vínculos con otros negocios) y nunca reactiva una
+   cuenta que el master desactivó.
+6. **Sin carreras con otras altas:** la fila del negocio se crea con el id y el slug de la corrida antes de
+   `onboard_tenant` (el único de `tenants.slug` hace de candado), y un token de corrida en la fila impide que una
+   corrida vencida cierre la de otra.
+7. **Catálogo v6 (HU-QA-08):** cada prueba lleva `entorno` (panel, apk, whatsapp, web o api), `area` (la sección
    del panel o la pantalla de la APK) y `requiere` (slugs de la sección nueva `datos`, la guía de datos externos).
 
 ## Consecuencias

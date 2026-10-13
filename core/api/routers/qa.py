@@ -597,11 +597,18 @@ class QaMisDatos(BaseModel):
     contenido: list[QaDatosContenido]
 
 
+def _solo_plataforma(principal: Principal) -> None:
+    # Un colaborador con permiso explícito de `qa` no se crea negocios premium propios.
+    if not actua_como_master(principal.admin):
+        raise ApiError.forbidden("Los datos de prueba son del admin de plataforma y de los testers.")
+
+
 @router.get("/datos", response_model=QaMisDatos)
 async def get_mis_datos(principal: Annotated[Principal, Depends(_leer)]) -> dict[str, Any]:
     """Negocio de prueba y cuentas del tester (sin contraseñas)."""
     from core.qa import datos
 
+    _solo_plataforma(principal)
     return await datos.mis_datos(principal.admin)
 
 
@@ -612,6 +619,7 @@ async def preparar_mis_datos(
     """Prepara el negocio de prueba del tester con sus datos y cuentas. 409 si ya existe."""
     from core.qa import datos
 
+    _solo_plataforma(principal)
     try:
         salida = await datos.preparar(principal.admin)
     except service.QaError as exc:
@@ -627,6 +635,7 @@ async def contrasenas_nuevas(
     """Contraseñas nuevas para las tres cuentas de prueba; cierra sus sesiones."""
     from core.qa import datos
 
+    _solo_plataforma(principal)
     try:
         salida = await datos.contrasenas_nuevas(principal.admin)
     except service.QaError as exc:
