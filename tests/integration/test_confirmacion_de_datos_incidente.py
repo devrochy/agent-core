@@ -9,9 +9,12 @@ nombre del perfil del canal ("Rob") sin que el cliente lo escribiera.
 
 - `test_el_caso_del_incidente_llega_a_pagar_con_link`: la misma secuencia, con el arreglo, llega a
   confirmar → pagar con link (etapa `esperar_pago`).
-- `test_una_tarea_atascada_como_la_de_test_se_desatasca`: el estado exacto de test (todos los datos,
-  correo sin confirmar y sin confirmación pendiente) se reproduce con el código de antes (sin los
-  puntos nuevos) y el turno siguiente lo desatasca.
+
+Desde `contratar_plan` 1.2.0 (adenda 2026-10-13, decisión del dueño) el correo se confirma dentro
+del resumen único y no con una pregunta aparte: el estado atascado de test ya no puede darse con
+este procedimiento. El mecanismo de confirmar un dato que exige la salida de una etapa sigue para
+los demás (la dirección de `tomar_pedido`): lo cubre
+`test_procedimientos_de_comercio.py::test_una_direccion_sin_confirmar_atascada_se_desatasca`.
 """
 
 from __future__ import annotations
@@ -233,8 +236,8 @@ async def _hasta_los_datos(ctx: Any, monkeypatch: Any, vertical: str) -> None:
     assert "full_name no aparece en lo que escribió el cliente" in guion.resultados[0]
     tarea = await _tarea(ctx)
     assert _valor(tarea, "full_name") is None and _valor(tarea, "id_document") == datos["documento"]
-    # La tarjeta dice qué falta para salir de la etapa (adenda 2026-10-12).
-    assert "Para pasar de esta etapa falta:" in guion.system[0] and "el dato full_name" in guion.system[0]
+    # La tarjeta pide lo que falta, en orden y como lista (adenda 2026-10-13).
+    assert "Faltan estos datos, en este orden:" in guion.system[0] and "full_name" in guion.system[0]
 
     await _turno(ctx, monkeypatch, "Roberto Pérez", [
         ("actualizar_tarea", {"slots": {"full_name": "Roberto Pérez"}}),
@@ -250,30 +253,20 @@ async def test_el_caso_del_incidente_llega_a_pagar_con_link(negocio, monkeypatch
     ctx = await _cliente(tid, pagos)
     await _hasta_los_datos(ctx, monkeypatch, list_presets()[0].id)
 
-    # 23:48:04: con el método de pago, lo único que falta es confirmar el correo: lo pide el kernel
-    # con su propio mensaje (texto, basta un sí), en vez del texto del modelo.
-    resultado, _ = await _turno(ctx, monkeypatch, "Pago en linea", [
+    # 23:48:04: con el método de pago ya no falta nada en `datos` (el correo se confirma en el
+    # resumen único, adenda 2026-10-13): la tarea pasa a confirmar y sale el resumen del kernel con
+    # el plan, el total y los datos del cliente, incluido el correo.
+    resultado, guion = await _turno(ctx, monkeypatch, "Pago en linea", [
         ("actualizar_tarea", {"slots": {"payment_method": "pago_en_linea"}}),
+        ("confirmar_cotizacion", {}),
         "¿Confirmás todo?",
     ])
     tarea = await _tarea(ctx)
-    assert tarea.stage == "datos"
-    assert tarea.pending_confirmation is not None and tarea.pending_confirmation["name"] == "email"
-    assert resultado.confirmacion is not None and resultado.confirmacion.modo == "explicit"
-    assert "contacto@pizzeriaroma.co" in resultado.text and "responde «sí»" in resultado.text
-    assert "¿Confirmás todo?" not in resultado.text
-
-    # "Si" a secas confirma el DATO (al empezar el turno, lo pone el kernel) y la tarea pasa a
-    # confirmar, donde la acción sí pide el sí explícito con botón.
-    resultado, guion = await _turno(ctx, monkeypatch, "Si", [
-        ("confirmar_cotizacion", {}),
-        "Te muestro el resumen.",
-    ])
-    tarea = await _tarea(ctx)
-    assert _confirmado(tarea, "email") and tarea.stage == "confirmar"
-    assert "confirmar_tarea" not in guion.tools[0]  # nada pendiente: el kernel ya lo confirmó
+    assert tarea.stage == "confirmar" and tarea.pending_confirmation["kind"] == "action"
     assert resultado.confirmacion is not None and resultado.confirmacion.modo == "interactive_button"
-    assert "Total: $600.000" in resultado.text
+    assert "• Correo: contacto@pizzeriaroma.co" in resultado.text and "• Total: $600.000" in resultado.text
+    assert "¿Confirmás todo?" not in resultado.text
+    assert "confirmation_requested" not in [t for t, d in await _eventos(ctx, tarea.id) if (d.get("target") or {}).get("kind") == "slot"]
 
     # Un "Si" a secas NO confirma la acción con monto (HU-AOS-09 sigue estricto).
     _, guion = await _turno(ctx, monkeypatch, "Si", [
@@ -309,64 +302,6 @@ async def test_el_caso_del_incidente_llega_a_pagar_con_link(negocio, monkeypatch
     assert _valor(tarea, "full_name") == "Roberto Pérez"
 
 
-async def test_una_tarea_atascada_como_la_de_test_se_desatasca(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from core.kernel.procedures.ejecucion import ContextoMotor
-    from core.presets import list_presets
-
-    tid, pagos = negocio
-    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset({tid}))
-    ctx = await _cliente(tid, pagos)
-
-    # El código de antes: nadie vuelve a pedir la confirmación del dato.
-    async def _nada(*_: Any, **__: Any) -> None:
-        return None
-
-    with monkeypatch.context() as antes:
-        antes.setattr(ContextoMotor, "_pedir_dato_debido", _nada)
-        antes.setattr(ContextoMotor, "al_empezar_turno", _nada)
-        await _hasta_los_datos(ctx, monkeypatch, list_presets()[0].id)
-        resultado, _ = await _turno(ctx, monkeypatch, "Pago en linea", [
-            ("actualizar_tarea", {"slots": {"payment_method": "pago_en_linea"}}),
-            "¿Confirmás todo?",
-        ])
-        assert resultado.confirmacion is None and resultado.text == "¿Confirmás todo?"
-        _, guion = await _turno(ctx, monkeypatch, "Si", [
-            ("crear_pedido", {"payment_method": "pago_en_linea", "customer_data": {}}),
-            "Te aviso.",
-        ])
-    tarea = await _tarea(ctx)
-    # El estado de test: `datos` con todo, el correo sin confirmar y nada pendiente.
-    assert tarea.stage == "datos" and tarea.pending_confirmation is None and not _confirmado(tarea, "email")
-    # Aun así, la negación dice qué falta (el modelo no tiene que inventar "no tengo la herramienta").
-    assert "que el cliente confirme el dato email" in guion.resultados[0]
-
-    # Con el arreglo: el turno siguiente pide la confirmación del correo con el mensaje del kernel.
-    resultado, guion = await _turno(ctx, monkeypatch, "¿y entonces?", ["Estoy revisando."])
-    assert resultado.confirmacion is not None and "contacto@pizzeriaroma.co" in resultado.text
-    assert "Para pasar de esta etapa falta: que el cliente confirme el dato email" in guion.system[0]
-
-    # Dos preguntas seguidas: las respuestas del modelo llegan (no se tapan con la confirmación).
-    resultado, _ = await _turno(ctx, monkeypatch, "¿para qué necesitan el correo?", ["Para enviarte la factura."])
-    assert resultado.text == "Para enviarte la factura." and resultado.confirmacion is None
-    resultado, _ = await _turno(ctx, monkeypatch, "¿y lo comparten con alguien?", ["No, solo lo usamos para eso."])
-    assert resultado.text == "No, solo lo usamos para eso." and resultado.confirmacion is None
-
-    # Un "sí" a una petición vencida no confirma: el kernel la vuelve a pedir.
-    resultado, _ = await _turno(ctx, monkeypatch, "sí", ["Ok."])
-    assert resultado.confirmacion is not None and "contacto@pizzeriaroma.co" in resultado.text
-    assert not _confirmado(await _tarea(ctx), "email")
-
-    resultado, _ = await _turno(ctx, monkeypatch, "Sí, el correo está bien", [
-        ("confirmar_cotizacion", {}),
-        "Te muestro el resumen.",
-    ])
-    tarea = await _tarea(ctx)
-    assert _confirmado(tarea, "email") and tarea.stage == "confirmar"
-    assert resultado.confirmacion is not None and "Total: $600.000" in resultado.text
-    tipos = [t for t, _ in await _eventos(ctx, tarea.id)]
-    assert tipos.count("confirmed") == 1
-
-
 async def test_accion_antes_de_confirmar_tarea_sigue_funcionando(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Camino feliz que la re-petición de una confirmación vencida no puede romper: en el turno
     siguiente a la petición, el modelo llama primero la acción, después `confirmar_tarea` y otra vez
@@ -377,8 +312,11 @@ async def test_accion_antes_de_confirmar_tarea_sigue_funcionando(negocio, monkey
     monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset({tid}))
     ctx = await _cliente(tid, pagos)
     await _hasta_los_datos(ctx, monkeypatch, list_presets()[0].id)
-    await _turno(ctx, monkeypatch, "Pago en linea", [("actualizar_tarea", {"slots": {"payment_method": "pago_en_linea"}}), "Ok."])
-    await _turno(ctx, monkeypatch, "Sí", [("confirmar_cotizacion", {}), "Te muestro el resumen."])
+    await _turno(ctx, monkeypatch, "Pago en linea", [
+        ("actualizar_tarea", {"slots": {"payment_method": "pago_en_linea"}}),
+        ("confirmar_cotizacion", {}),
+        "Te muestro el resumen.",
+    ])
     tarea = await _tarea(ctx)
     pedida = tarea.pending_confirmation
     assert tarea.stage == "confirmar" and pedida is not None and pedida["kind"] == "action"

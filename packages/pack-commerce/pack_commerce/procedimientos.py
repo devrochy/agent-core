@@ -10,16 +10,28 @@ Los procedimientos son datos del pack (`procedures/*.json`, invariante 3): `cont
     Reusa el catálogo de commerce (el mismo que `CatalogoDePlanes`, ADR-0111), no lo duplica.
   - `metodo_de_pago`: `pago_en_linea` solo si el negocio tiene pagos en línea y el plan se cobra.
   - `tipo_de_negocio` y `nombre_de_negocio`: las mismas reglas de `crear_pedido` (ADR-0121/0129),
-    antes de confirmar en vez de después.
+    antes de confirmar en vez de después. El tipo acepta cómo lo llama el cliente ("tienda",
+    "pizzería": los `sinonimos` de cada preset) y, si no lo reconoce, ofrece las opciones con su
+    nombre y descripción (adenda 2026-10-13 de ADR-0113).
 - **Resumen de `confirmar_cotizacion`**: lo que el cliente confirma sale de la cotización
-  vigente en la base (plan o productos, descuento y total), no de los argumentos ni del modelo.
+  vigente en la base (plan o productos, descuento y total), no de los argumentos ni del modelo. En
+  un vendedor de planes de la plataforma lleva además los términos, la privacidad y el DPA que el
+  cliente acepta con el mismo «Sí, confirmo» (adenda 2026-10-13 de ADR-0125); el kernel le suma los
+  datos del cliente de la tarea (resumen único).
+- **Rótulos** de los datos (`rotulos_de_datos.json`): los nombres que ve el cliente en los
+  mensajes que arma el kernel ("Correo" en vez de `email`).
 """
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 import uuid
+from collections.abc import Mapping
+from functools import cache
+from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
@@ -53,6 +65,14 @@ def registrar(host: MCPHost) -> None:
     host.register_resolver(f"{PLUGIN_ID}.tipo_de_negocio", validar=tipo_de_negocio)
     host.register_resolver(f"{PLUGIN_ID}.nombre_de_negocio", validar=nombre_de_negocio)
     host.register_resumen("confirmar_cotizacion", resumen_de_cotizacion)
+    host.register_rotulos(rotulos_de_datos())
+
+
+@cache
+def rotulos_de_datos() -> Mapping[str, str]:
+    """Rótulos humanos de los datos de los procedimientos del pack (dato del pack, no código)."""
+    crudo = json.loads((Path(__file__).resolve().parent / "rotulos_de_datos.json").read_text(encoding="utf-8"))
+    return MappingProxyType({str(k): str(v) for k, v in crudo.items()})
 
 
 # ------------------------------------------------------------------ resolvers
@@ -134,15 +154,58 @@ async def metodo_de_pago(valor: Any, ctx: ToolContext, datos: dict[str, Any]) ->
     return ResolverResult(ok=True)
 
 
-async def tipo_de_negocio(valor: Any, ctx: ToolContext, datos: dict[str, Any]) -> ResolverResult:
-    """El tipo de negocio es el id de un preset (ADR-0121), como en `crear_pedido`."""
-    from pack_commerce.skills import _vertical_invalido
+def _presets_con_sinonimos() -> list[tuple[str, str, str, list[str]]]:
+    """(id, nombre, descripción, sinónimos) de los presets del core (ADR-0110); [] si no cargan."""
+    from core.presets import PresetError, list_presets
 
-    rechazo = _vertical_invalido(valor)
-    if rechazo is None:
-        return ResolverResult(ok=True)
-    ids = ", ".join(o["id"] for o in rechazo.get("opciones") or [])
-    return ResolverResult(ok=False, error=f"Tipo de negocio no válido. Opciones: {ids}.")
+    try:
+        return [(p.id, p.nombre, p.descripcion, list(p.sinonimos)) for p in list_presets()]
+    except PresetError:
+        log.warning("tipos_de_negocio_no_disponibles", exc_info=True)
+        return []
+
+
+def tipo_desde_texto(texto: str, presets: list[tuple[str, str, str, list[str]]]) -> str | None:
+    """El id del ÚNICO preset que nombra el texto del cliente: su id, su nombre o uno de sus
+    sinónimos, como frase completa dentro del texto ("una tienda de ropa" → comercio). None si no
+    nombra ninguno o nombra más de uno. Pura."""
+    norm = f" {_normalizar(texto)} "
+    if not norm.strip():
+        return None
+    encontrados = set()
+    for pid, nombre, _desc, sinonimos in presets:
+        for frase in (pid, nombre, *sinonimos):
+            f = _normalizar(frase)
+            if f and f" {f} " in norm:
+                encontrados.add(pid)
+                break
+    return encontrados.pop() if len(encontrados) == 1 else None
+
+
+async def tipo_de_negocio(valor: Any, ctx: ToolContext, datos: dict[str, Any]) -> ResolverResult:
+    """El tipo de negocio es el id de un preset (ADR-0121), como en `crear_pedido`. Acepta cómo lo
+    dice el cliente (`sinonimos` del preset): "tienda" → `comercio`. Si no lo reconoce, el error
+    trae las opciones con su nombre y descripción (escapados como dato) para preguntarle al
+    cliente con sus palabras (nombre y ejemplos de cada preset), no una lista de ids."""
+    from core.kernel.tarjeta import escapar
+
+    presets = _presets_con_sinonimos()
+    texto = str(valor or "").strip()[:200]
+    if texto in {p[0] for p in presets}:
+        return ResolverResult(ok=True, value=texto)
+    elegido = tipo_desde_texto(texto, presets)
+    if elegido is not None:
+        return ResolverResult(ok=True, value=elegido)
+    # El error del resolver se acota a 300 caracteres (`textos.error_de_resolver`): nombre y dos
+    # ejemplos de cada opción, como dato.
+    opciones = "; ".join(
+        f"{escapar(nombre)} ({escapar(', '.join(sin[:2]))})" if sin else escapar(nombre)
+        for _pid, nombre, _desc, sin in presets
+    )
+    return ResolverResult(
+        ok=False,
+        error=f"No reconocí el tipo de negocio. Pregúntale cuál se parece más al suyo: {opciones}.",
+    )
 
 
 async def nombre_de_negocio(valor: Any, ctx: ToolContext, datos: dict[str, Any]) -> ResolverResult:
@@ -153,9 +216,15 @@ async def nombre_de_negocio(valor: Any, ctx: ToolContext, datos: dict[str, Any])
 
 
 # ------------------------------------------------------------------ resumen de la confirmación
+def _nombre_de_plan(nombre: str, periodicidad: str | None) -> str:
+    """"Plan Premium" + "mensual" → "Premium mensual": el rótulo ya dice que es un plan."""
+    limpio = re.sub(r"^\s*plan\s+", "", nombre or "", flags=re.IGNORECASE).strip() or (nombre or "").strip()
+    return f"{limpio} {periodicidad}".strip() if periodicidad else limpio
+
 async def resumen_de_cotizacion(args: dict[str, Any], ctx: ToolContext) -> list[DatoDeResumen] | None:
     """Lo que el cliente confirma con `confirmar_cotizacion`: la cotización VIGENTE del cliente
-    (plan y periodicidad, o productos y cantidades; descuento y total). None si no es suya o ya no
+    (el plan con su periodicidad, o productos y cantidades; descuento y total) y, en el pedido de
+    un plan de un vendedor de la plataforma, los documentos que acepta. None si no es suya o ya no
     está en curso: el kernel manda el texto fijo sin datos ni botón."""
     from pack_commerce.skills import QUOTE_STATUS_VIGENTE, _float, _quote_del_cliente
 
@@ -184,18 +253,37 @@ async def resumen_de_cotizacion(args: dict[str, Any], ctx: ToolContext) -> list[
         descuento, total = _float(quote.discount), _float(quote.total)
     if not lineas:
         return None
-    # Los montos primero: si el resumen se recorta por largo, nunca se pierde el total.
+    # Lo que se compra, después los montos (el kernel no los recorta) y al final los documentos
+    # que se aceptan (adenda 2026-10-13).
     datos: list[DatoDeResumen] = []
-    if descuento > 0:
-        datos.append(DatoDeResumen("descuento", descuento, es_monto=True))
-    datos.append(DatoDeResumen("total", total, es_monto=True))
     if len(lineas) == 1 and lineas[0][1].billing_period and lineas[0][0].quantity == 1:
         _item, variant, product = lineas[0]
-        datos += [DatoDeResumen("plan", product.name), DatoDeResumen("periodicidad", variant.billing_period)]
+        datos.append(DatoDeResumen("plan", _nombre_de_plan(product.name, variant.billing_period)))
     else:
         vistos: set[str] = set()
         for item, variant, product in lineas:
             nombre = product.name if product.name not in vistos else f"{product.name} {variant.sku}"
             vistos.add(nombre)
             datos.append(DatoDeResumen(nombre, int(item.quantity)))
-    return datos[:20]
+    if descuento > 0:
+        datos.append(DatoDeResumen("descuento", descuento, es_monto=True))
+    datos.append(DatoDeResumen("total", total, es_monto=True))
+    if any(variant.billing_period for _item, variant, _product in lineas):
+        # Pedido de un plan en un vendedor de la plataforma (ADR-0125): los documentos se aceptan
+        # con el mismo «Sí, confirmo» del resumen. Anota el marcador fijo por versión antes de que
+        # salga el mensaje que los lleva (SET NX: armar el resumen otra vez no lo mueve).
+        from core.provisioning.antiabuso import terminos_del_resumen
+
+        terminos = await terminos_del_resumen(ctx.conversation_id, anotar=True)
+        if terminos is not None:
+            datos += [
+                DatoDeResumen(str(d.get("nombre") or ""), str(d.get("url") or ""), documento_aceptado=True)
+                for d in terminos.documentos
+            ]
+            # La versión de cada documento entra en la huella sin mostrarse (un nombre `*_id` no se
+            # muestra): otra versión con el mismo enlace pide otro sí.
+            versiones = ",".join(f"{d.get('tipo')}:{d.get('version')}" for d in terminos.documentos)
+            datos.append(DatoDeResumen("documentos_version_id", versiones))
+    if len(datos) > 20:
+        return None  # sin recortar: el cliente confirma todo lo que ve
+    return datos

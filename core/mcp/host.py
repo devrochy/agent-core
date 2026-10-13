@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Mapping
 from typing import Any
 
 from agentcore_contracts import Procedure
@@ -58,6 +59,8 @@ class MCPHost:
         self._resolvers: dict[str, Resolver] = {}
         # Resúmenes de confirmación por acción (HU-AOS-07): acción -> (fn, plugin_id).
         self._resumenes: dict[str, tuple[ResumenFn, str]] = {}
+        # Rótulos humanos de los datos de los procedimientos de cada plugin (adenda 2026-10-13).
+        self._rotulos: dict[str, dict[str, str]] = {}
         self._resources: dict[str, MCPResource] = {}
         self._plugin_handlers: dict[str, list[EventHandler]] = {}
         self._active_plugin: str = ""  # plugin en proceso de activación
@@ -196,6 +199,34 @@ class MCPHost:
         """(fn, plugin_id) del resumen de una acción, o None (el motor filtra por packs permitidos)."""
         return self._resumenes.get(accion)
 
+    def register_rotulos(self, rotulos: Mapping[str, str]) -> None:
+        """Rótulos humanos de los datos de los procedimientos del plugin que se activa (adenda
+        2026-10-13 de ADR-0113): `{"email": "Correo"}`, y de los valores de una lista:
+        `{"payment_method.pago_en_linea": "Pago en línea"}`. Los usa el kernel en los mensajes que
+        arma él (confirmación, pregunta de lo que falta) y en la tarjeta de estado; sin rótulo, el
+        nombre del dato con espacios. Solo claves que son datos de un procedimiento que el mismo
+        plugin ya registró; el texto se sanea a una línea de hasta 40 caracteres. Son datos de la
+        habilidad: sin override por negocio y fuera de la release (ver la adenda)."""
+        from core.kernel.confirmacion import limpiar
+
+        plugin_id = self._active_plugin
+        datos: set[str] = set()
+        for proc in self._procedimientos.get(plugin_id, []):
+            for n, slot in proc.slots.items():
+                datos.add(n)
+                datos.update(f"{n}.{v}" for v in (slot.enum or []))
+        propios: dict[str, str] = {}
+        for nombre, rotulo in rotulos.items():
+            texto = limpiar(rotulo, 40) if isinstance(rotulo, str) else ""
+            if nombre not in datos or not texto:
+                raise PluginError(plugin_id, f"Rótulo inválido: {nombre}")
+            propios[str(nombre)] = texto
+        self._rotulos[plugin_id] = propios
+
+    def get_rotulos(self, plugin_id: str) -> dict[str, str]:
+        """Rótulos de los datos de los procedimientos de un plugin ({} si no publicó)."""
+        return dict(self._rotulos.get(plugin_id, {}))
+
     def register_resource(self, resource: MCPResource) -> None:
         resource.plugin_id = self._active_plugin
         self._resources[resource.uri] = resource
@@ -221,6 +252,7 @@ class MCPHost:
         self._procedimientos.pop(plugin_id, None)
         self._resolvers = {k: v for k, v in self._resolvers.items() if v.plugin_id != plugin_id}
         self._resumenes = {k: v for k, v in self._resumenes.items() if v[1] != plugin_id}
+        self._rotulos.pop(plugin_id, None)
         self._resources = {k: v for k, v in self._resources.items() if v.plugin_id != plugin_id}
         handlers = self._plugin_handlers.pop(plugin_id, [])
         event_bus.unsubscribe_all(handlers)

@@ -426,6 +426,40 @@ async def _limite_por_origen(vendedor: uuid.UUID, origen: str) -> bool:
     return await hit(cupo, name="alta_pedidos")
 
 
+@dataclass(frozen=True)
+class TerminosDelResumen:
+    """Los documentos que el cliente acepta junto con el resumen que confirma (adenda 2026-10-13
+    de ADR-0125) y el token que ata esa aceptación a la conversación y al juego de versiones."""
+
+    documentos: list[dict[str, str]]
+    token: str
+
+
+async def terminos_del_resumen(conversation_id: uuid.UUID | None, *, anotar: bool) -> TerminosDelResumen | None:
+    """Con el motor de procedimientos (adenda 2026-10-13 de ADR-0125): los términos, la privacidad
+    y el DPA vigentes del vendedor van DENTRO del resumen que el cliente confirma, y su «Sí,
+    confirmo» es la aceptación. None si el negocio no es vendedor o le falta un documento (como en
+    `preparar_pedido_de_alta`, el pedido sigue sin aceptación y el alta va a revisión).
+
+    `anotar=True` pone el marcador fijo por juego de versiones (`SET NX`, adenda 2026-10-09): se
+    llama al armar el resumen, antes de que salga el mensaje que lleva los enlaces, así el
+    «Sí, confirmo» posterior es el mensaje que acepta. No cambia `preparar_pedido_de_alta`: el
+    pedido sigue exigiendo el token y un mensaje del cliente posterior a los enlaces."""
+    vendedor = get_current_tenant_id()
+    if vendedor is None or conversation_id is None or not await es_vendedor(vendedor):
+        return None
+    vigentes = await legal.documentos_vigentes(vendedor)
+    if legal.faltantes(vigentes):
+        return None
+    version = legal.version_legal(vigentes)
+    if anotar:
+        await _anotar_terminos_mostrados(vendedor, conversation_id, version)
+    return TerminosDelResumen(
+        documentos=[vigentes[tipo].para_aceptar() for tipo in legal.TIPOS],
+        token=token_de_terminos(conversation_id, version),
+    )
+
+
 async def preparar_pedido_de_alta(
     *,
     customer_id: uuid.UUID | None,

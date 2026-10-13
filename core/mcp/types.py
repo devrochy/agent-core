@@ -413,12 +413,18 @@ class ResolverResult:
 class DatoDeResumen:
     """Una línea del resumen que el cliente confirma (HU-AOS-07). Lo arma el pack desde SU
     estado (p. ej. la cotización vigente), nunca desde el texto del modelo. El core muestra
-    `nombre` como rótulo y sanea `valor` (`core/kernel/confirmacion.py`); `es_monto` va primero y
-    con el formato de dinero."""
+    `nombre` como rótulo y sanea `valor` (`core/kernel/confirmacion.py`); `es_monto` va con el
+    formato de dinero y nunca se recorta.
+
+    `documento_aceptado` (adenda 2026-10-13 de ADR-0113 y de ADR-0125): `valor` es el enlace https
+    de un documento que el cliente ACEPTA al confirmar (términos, privacidad, DPA). El kernel lo
+    muestra bajo "Al confirmar aceptas:", sin recortar el enlace; si no es un enlace https ASCII,
+    el resumen no sale (`sin_resumen`). Úsalo solo para eso: el rótulo dice que se acepta."""
 
     nombre: str
     valor: Any
     es_monto: bool = False
+    documento_aceptado: bool = False
 
 
 @dataclass(frozen=True)

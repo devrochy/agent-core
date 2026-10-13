@@ -12,7 +12,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from agentcore_contracts.contracts import Tone
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
@@ -53,6 +53,9 @@ class PresetManifest(BaseModel):
     version: int = Field(ge=1)
     nombre: str = Field(max_length=80)
     descripcion: str = Field(default="", max_length=300)
+    # Cómo lo llama un cliente ("tienda", "pizzería"): el resolver del tipo de negocio de un plan
+    # (pack-commerce, adenda 2026-10-13 de ADR-0113) lo lleva al id del preset. Dato del preset.
+    sinonimos: list[Annotated[str, Field(min_length=2, max_length=40)]] = Field(default_factory=list, max_length=40)
     plan_minimo: str
     packs: list[str] = Field(min_length=1)
     playbooks: list[str] = Field(default_factory=list)

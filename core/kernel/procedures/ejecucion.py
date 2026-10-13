@@ -69,6 +69,11 @@ _PRESUPUESTO_RESOLVERS_S = 5.0
 _MARCA_INTERACTIVO = "aos:interactivo"
 _TTL_MARCA_S = 900
 _MAX_AVANCES = 31  # una vuelta por etapa (el contrato admite hasta 30)
+# Vueltas del turno que solo llevaron comandos del hilo y no gastan el tope de vueltas del agente
+# (adenda 2026-10-13 de ADR-0113): llevar el estado no es trabajo del cliente. Las negaciones del
+# kernel sí cuentan (son el síntoma de un modelo perdido; al agotarse, el kernel pregunta lo que
+# falta en vez de escalar).
+VUELTAS_LIBRES_DE_COMANDOS = 3
 
 
 class _NoGobierna(Exception):
@@ -211,6 +216,16 @@ def _datos_de_peticion(peticion: Evento | None, pendiente: Mapping[str, Any]) ->
         if peticion is not None and peticion.data.get(clave):
             data[clave] = peticion.data[clave]
     return data
+
+
+def rotulos_de(proc: Procedure | None) -> dict[str, str]:
+    """Rótulos humanos de los datos que publicó la habilidad dueña del procedimiento
+    (`MCPHost.register_rotulos`, adenda 2026-10-13); {} si no publicó."""
+    if proc is None:
+        return {}
+    from core.mcp.host import mcp_host
+
+    return mcp_host.get_rotulos(proc.owner)
 
 
 # Máximo de mensajes del cliente que se revisan para saber si dijo un dato (adenda 2026-10-12).
@@ -464,6 +479,12 @@ class ContextoMotor:
 
     # -- lo que ve el modelo
     @property
+    def activo(self) -> bool:
+        """Motor activo (`tenants.aos_procedures`); en sombra, False: nada de lo que ve el modelo
+        ni de la salida cambia."""
+        return self.modo == "activo"
+
+    @property
     def en_foco(self) -> bool:
         return self.modo == "activo" and self._foco is not None
 
@@ -643,7 +664,7 @@ class ContextoMotor:
                     eventos = await _eventos(s, foco)
                     # HU-AOS-07: con resumen del pack, la confirmación vale para ESE resumen (el
                     # total leído del estado): si cambió con los mismos args, se pide otra vez.
-                    huella = await self._huella_del_pack(accion, args)
+                    huella = await self._huella_del_pack(foco, accion, args)
                     confirmada = motor.accion_confirmada(eventos, accion, h) and (
                         huella is None or (huella != "" and huella == motor.huella_pedida(eventos, accion, h))
                     )
@@ -838,7 +859,7 @@ class ContextoMotor:
                 filas = await state.tareas_abiertas(s, tenant_id=self.tenant_id, conversation_id=self.conversation_id)
                 self._abiertas = frozenset(f.procedure_id for f in filas)
                 tarjeta = renderizar_tarjeta(
-                    [state.proyeccion_de(f) for f in filas], procedimientos=registro.definicion
+                    [state.proyeccion_de(f) for f in filas], procedimientos=registro.definicion, rotulos_de=rotulos_de
                 )
                 self._foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
                 self._sin_gobierno = _sin_gobierno(filas, self._foco)
@@ -1293,16 +1314,102 @@ class ContextoMotor:
                 datos = self._datos_a_confirmar(foco, pendiente, args_hash)
             if datos is None:
                 log.info("motor_confirmacion_sin_resumen", task_id=str(foco.fila.id))
+                await self._anular_peticion(foco.fila.id, seq, pendiente)
                 return ConfirmacionDelTurno(confirmacion=sin_resumen(), modo="explicit")
             boton = payload_de_confirmacion(self.tenant_id, foco.fila.id, seq, args_hash)
             if pendiente.get("kind") == "slot":
                 # Un dato sale siempre como texto, y basta un sí (adenda 2026-10-12 de ADR-0113).
-                return ConfirmacionDelTurno(confirmacion=armar(foco.proc.title, datos, boton, es_dato=True), modo="explicit")
+                return ConfirmacionDelTurno(
+                    confirmacion=armar(foco.proc.title, datos, boton, es_dato=True, rotulos=rotulos_de(foco.proc)),
+                    modo="explicit",
+                )
             modo = "interactive_button" if foco.stage.confirmation == "interactive_button" else "explicit"
-            return ConfirmacionDelTurno(confirmacion=armar(foco.proc.title, datos, boton), modo=modo)
+            # El resumen único (con los datos del cliente) no se recorta (adenda 2026-10-13).
+            completo = pendiente.get("kind") == "action" and self._resumen_registrado(str(pendiente.get("name") or "")) is not None
+            return ConfirmacionDelTurno(
+                confirmacion=armar(foco.proc.title, datos, boton, rotulos=rotulos_de(foco.proc), completo=completo),
+                modo=modo,
+            )
         except Exception as exc:
             log.warning("motor_confirmacion_del_turno_fallo", error=type(exc).__name__)
+            await self._anular_peticion(foco.fila.id, seq, pendiente)
             return ConfirmacionDelTurno(confirmacion=sin_resumen(), modo="explicit")
+
+    async def _anular_peticion(self, task_id: uuid.UUID, seq: int, pendiente: Mapping[str, Any]) -> None:
+        """Sale `sin_resumen` para una petición de ACCIÓN de este turno (revisión de seguridad,
+        adenda 2026-10-13): el cliente no vio lo que confirmaría (ni los documentos que aceptaría).
+        Se reemplaza por una petición anulada (`args_hash` que ninguna llamada produce), así un «Sí,
+        confirmo» a `sin_resumen` no confirma nada y la acción, al volver a llamarse, pide otra vez
+        con su resumen. Bajo el lock; si la petición ya no es la vigente, no hace nada."""
+        if pendiente.get("kind") != "action":
+            return
+        try:
+            async with _con_lock(self.tenant_id, self.conversation_id) as s:
+                foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
+                actual = foco.tarea.pending_confirmation if foco is not None else None
+                if foco is None or foco.fila.id != task_id or not actual or int(actual.get("seq") or 0) != seq:
+                    return
+                await _registrar(
+                    s, foco.fila, "confirmation_requested",
+                    {"target": {"kind": "action", "name": str(pendiente.get("name") or "")}, "args_hash": "anulada"},
+                    "kernel",
+                )
+            log.info("motor_peticion_anulada_sin_resumen", task_id=str(task_id))
+        except Exception as exc:
+            log.warning("motor_anular_peticion_fallo", error=type(exc).__name__)
+
+    async def salida_al_agotar(self) -> tuple[str, ConfirmacionDelTurno | None] | None:
+        """Se agotaron las vueltas del turno con el motor activo (adenda 2026-10-13 de ADR-0113):
+        en vez de escalar, el kernel responde con lo que falta, si lo sabe.
+
+        - el turno pidió una confirmación → su mensaje (como al cerrar un turno normal);
+        - lo primero que falta son datos del cliente → la pregunta del kernel con todos los que
+          faltan, en orden y como lista numerada;
+        - lo único que falta es confirmar un dato → se pide y sale su mensaje.
+
+        None (el loop escala como siempre) sin foco, si falta una acción o un dato del servidor, o
+        si algo falla. Se audita sin valores."""
+        if self.modo != "activo":
+            return None
+        try:
+            confirmacion = await self.confirmacion_del_turno()
+            if confirmacion is not None:
+                return await self._auditar_sin_vueltas("confirmacion", confirmacion.confirmacion.texto, confirmacion)
+            async with _con_lock(self.tenant_id, self.conversation_id) as s:
+                foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
+                if foco is None:
+                    return None
+                datos = motor.siguientes_datos(foco.proc, foco.stage, foco.tarea)
+                if not datos:
+                    nombre = motor.dato_por_confirmar(foco.proc, foco.stage, foco.tarea)
+                    if nombre is None:
+                        return None
+                    await _registrar(
+                        s, foco.fila, "confirmation_requested", {"target": {"kind": "slot", "name": nombre}}, "kernel"
+                    )
+            if datos:
+                from core.kernel.confirmacion import pregunta
+
+                return await self._auditar_sin_vueltas("pregunta", pregunta(datos, rotulos_de(foco.proc)), None)
+            confirmacion = await self.confirmacion_del_turno()
+            if confirmacion is None:
+                return None
+            return await self._auditar_sin_vueltas("confirmacion_de_dato", confirmacion.confirmacion.texto, confirmacion)
+        except Exception as exc:
+            log.warning("motor_salida_al_agotar_fallo", error=type(exc).__name__)
+            return None
+
+    async def _auditar_sin_vueltas(
+        self, salida: str, texto: str, confirmacion: ConfirmacionDelTurno | None
+    ) -> tuple[str, ConfirmacionDelTurno | None]:
+        from core.shared.audit import record_audit
+
+        log.warning("motor_turno_sin_vueltas", salida=salida)
+        await record_audit(
+            actor="core:motor", action="sin_vueltas", conversation_id=self.conversation_id,
+            input_data={"salida": salida},
+        )
+        return texto, confirmacion
 
     def _resumen_registrado(self, accion: str) -> Any:
         """La función de resumen de la acción, solo si su pack está permitido en el turno."""
@@ -1334,12 +1441,29 @@ class ContextoMotor:
                 return None
         return list(lineas)
 
-    async def _huella_del_pack(self, accion: str, args: Mapping[str, Any]) -> str | None:
-        """Huella del resumen que el cliente confirma (HU-AOS-07): None si la acción no tiene
-        resumen del pack; "" si lo tiene pero no se pudo armar (nunca coincide)."""
+    async def _lineas_del_resumen(self, foco: _Foco, accion: str, args: Mapping[str, Any]) -> list[Any] | None:
+        """El resumen ÚNICO que el cliente confirma (adenda 2026-10-13 de ADR-0113): las líneas del
+        pack (plan, total…), después los datos que dio el cliente en esta tarea (en el orden del
+        procedimiento: así el correo se confirma aquí, sin pregunta aparte) y al final los
+        documentos que acepta. None si el pack no lo pudo armar."""
+        from core.mcp.types import DatoDeResumen
+
+        lineas = await self._lineas_del_pack(accion, args)
+        if not lineas:
+            return None
+        propias = [x for x in lineas if not getattr(x, "documento_aceptado", False)]
+        documentos = [x for x in lineas if getattr(x, "documento_aceptado", False)]
+        ya = {str(getattr(x, "nombre", "")) for x in propias}
+        del_cliente = [DatoDeResumen(n, v) for n, v in motor.datos_del_cliente(foco.proc, foco.tarea) if n not in ya]
+        return [*propias, *del_cliente, *documentos]
+
+    async def _huella_del_pack(self, foco: _Foco, accion: str, args: Mapping[str, Any]) -> str | None:
+        """Huella del resumen que el cliente confirma (HU-AOS-07; con los datos del cliente desde
+        la adenda 2026-10-13: si uno cambia después del sí, se pide otro): None si la acción no
+        tiene resumen del pack; "" si lo tiene pero no se pudo armar (nunca coincide)."""
         if self._resumen_registrado(accion) is None:
             return None
-        lineas = await self._lineas_del_pack(accion, args)
+        lineas = await self._lineas_del_resumen(foco, accion, args)
         return motor.huella_de_resumen(lineas) if lineas else ""
 
     async def _resumen_del_pack(
@@ -1361,13 +1485,16 @@ class ContextoMotor:
         pedida = self._pedidas.get(args_hash)
         if pedida is None or pedida[0] != accion or not await self._sigue_sano(foco.proc):
             return None
-        lineas = await self._lineas_del_pack(accion, pedida[1])
+        lineas = await self._lineas_del_resumen(foco, accion, pedida[1])
         atada = str((peticion.data.get("resumen") if peticion is not None else "") or "")
         if not lineas or motor.huella_de_resumen(lineas) != atada:
             return None
         de_pago = frozenset(n for n, slot in foco.proc.slots.items() if slot.dataClass == "payment")
         datos = [
-            Dato(str(linea.nombre), linea.valor, es_monto=bool(linea.es_monto))
+            Dato(
+                str(linea.nombre), linea.valor, es_monto=bool(linea.es_monto),
+                documento_aceptado=bool(getattr(linea, "documento_aceptado", False)),
+            )
             for linea in lineas
             if str(getattr(linea, "nombre", "") or "") and str(linea.nombre) not in de_pago
         ]
@@ -1602,7 +1729,7 @@ async def contexto_del_motor(
             )
             filas = await state.tareas_abiertas(session, tenant_id=tenant_id, conversation_id=conversation_id)
             tareas = [state.proyeccion_de(f) for f in filas]
-            tarjeta = renderizar_tarjeta(tareas, procedimientos=registro.definicion)
+            tarjeta = renderizar_tarjeta(tareas, procedimientos=registro.definicion, rotulos_de=rotulos_de)
             foco = await _foco(session, tenant_id, conversation_id, permitidos)
     if banderas.procedimientos:
         # Si el inbound fue un botón, su título no es un sí escrito: el turno no confirma por texto.

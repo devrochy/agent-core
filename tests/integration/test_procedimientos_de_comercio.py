@@ -192,7 +192,7 @@ async def _tarea(ctx: Any) -> Any:
     async with tenant_scope(ctx.tenant_id):
         async with get_session() as s:
             return (await s.execute(text(
-                "select id, procedure_id, stage, status, slots from conversation_tasks "
+                "select id, procedure_id, stage, status, slots, pending_confirmation from conversation_tasks "
                 "where tenant_id = :t and conversation_id = :c order by created_at desc limit 1"
             ), {"t": ctx.tenant_id, "c": ctx.conversation_id})).first()
 
@@ -229,7 +229,8 @@ DATOS_ANA = {"full_name": "Ana Gómez", "id_document": "1012345678", "phone": "3
 
 
 async def _hasta_el_resumen(ctx: Any, monkeypatch: Any, plan: str, pago: str) -> Any:
-    """Turnos 1-3 de contratar un plan: elegir, cotizar, datos, confirmar el correo y pedir el sí."""
+    """Turnos 1-2 de contratar un plan: elegir y cotizar; los datos y el resumen único para el sí
+    (el correo se confirma dentro del resumen, adenda 2026-10-13)."""
     resultado, guion = await _turno(ctx, monkeypatch, f"Hola, quiero contratar el plan {plan}", [
         ("iniciar_procedimiento", {"procedure_id": PLAN}),
         ("actualizar_tarea", {"slots": {"variant_id": plan}}),
@@ -242,20 +243,15 @@ async def _hasta_el_resumen(ctx: Any, monkeypatch: Any, plan: str, pago: str) ->
     assert (tarea.procedure_id, tarea.stage) == (PLAN, "datos")
     assert _valor(tarea, "requiere_pago") is (plan != "free")
 
-    resultado, _ = await _turno(ctx, monkeypatch, "Ana Gómez, 1012345678, 3001234567, Ana@Example.com", [
+    resultado, guion = await _turno(ctx, monkeypatch, "Ana Gómez, 1012345678, 3001234567, Ana@Example.com", [
         ("actualizar_tarea", {"slots": {**DATOS_ANA, **({"payment_method": pago} if pago else {})}}),
-        "¿Me confirmas tu correo?",
-    ])
-    assert resultado.confirmacion is not None and "ana@example.com" in resultado.text
-
-    resultado, guion = await _turno(ctx, monkeypatch, "Sí, confirmo", [
-        ("confirmar_tarea", {}),
         ("confirmar_cotizacion", {}),
         "Te muestro el resumen para que lo confirmes.",
     ])
     tarea = await _tarea(ctx)
     assert tarea.stage == "confirmar"
     assert "aplicar_promocion" not in guion.tools[1]  # en confirmar nada cambia el total
+    assert resultado.confirmacion is not None and "ana@example.com" in resultado.text
     return resultado
 
 
@@ -268,8 +264,8 @@ async def test_contratar_premium_mensual_pedido_y_link_del_servidor(negocio, mon
     ctx = await _cliente(tid, pagos)
     resultado = await _hasta_el_resumen(ctx, monkeypatch, "premium mensual", "pago_en_linea")
     # El cliente confirma lo que leyó el servidor de la cotización, no lo que redactó el modelo.
-    assert "Total: $600.000" in resultado.text and "Plan: Plan Premium" in resultado.text
-    assert "Periodicidad: mensual" in resultado.text and "resumen para que" not in resultado.text
+    assert "• Total: $600.000" in resultado.text and "• Plan: Premium mensual" in resultado.text
+    assert "• Nombre completo: Ana Gómez" in resultado.text and "resumen para que" not in resultado.text
 
     resultado, guion = await _turno(ctx, monkeypatch, "Sí, confirmo", [
         ("confirmar_tarea", {}),
@@ -354,7 +350,7 @@ async def test_cambio_de_plan_antes_de_confirmar_recalcula_y_no_usa_la_vieja(neg
     tarea = await _tarea(ctx)
     nueva = _valor(tarea, "quote_id")
     assert tarea.stage == "confirmar" and nueva and nueva != vieja
-    assert "Total: $6.000.000" in resultado.text and "Periodicidad: anual" in resultado.text
+    assert "Total: $6.000.000" in resultado.text and "Plan: Premium anual" in resultado.text
 
     await _turno(ctx, monkeypatch, "Sí, confirmo", [
         ("confirmar_tarea", {}),
@@ -417,6 +413,45 @@ async def test_pedido_a_domicilio_no_pasa_a_confirmar_sin_la_direccion_confirmad
     assert [(f.delivery_address, float(f.total)) for f in pedido] == [("Calle 1 # 2-3", 50000)]
 
 
+async def test_una_direccion_sin_confirmar_atascada_se_desatasca(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """El caso de test del 2026-10-12 (adenda de ADR-0113), ahora con la dirección de `tomar_pedido`
+    (desde `contratar_plan` 1.2.0 el correo se confirma en el resumen único): con el código de antes
+    la etapa queda con todo, sin confirmar y sin nada pendiente; el turno siguiente lo pide con el
+    mensaje del kernel y un "sí" a ese mensaje lo confirma."""
+    from core.kernel.procedures.ejecucion import ContextoMotor
+
+    tid, pagos = negocio
+    ctx = await _cliente(tid, pagos)
+
+    async def _nada(*_: Any, **__: Any) -> None:
+        return None
+
+    with monkeypatch.context() as antes:
+        antes.setattr(ContextoMotor, "_pedir_dato_debido", _nada)
+        antes.setattr(ContextoMotor, "al_empezar_turno", _nada)
+        await _turno(ctx, monkeypatch, "Quiero dos hamburguesas a domicilio, pago por transferencia", [
+            ("iniciar_procedimiento", {"procedure_id": PEDIDO}),
+            ("generar_cotizacion", {"items": [{"variant_id": "HAM-1", "quantity": 2}]}),
+            ("actualizar_tarea", {"slots": {"delivery_method": "domicilio", "payment_method": "transferencia"}}),
+            "¿A qué dirección te lo envío?",
+        ])
+        resultado, _ = await _turno(ctx, monkeypatch, "Calle 1 # 2-3", [
+            ("actualizar_tarea", {"slots": {"address": "Calle 1 # 2-3"}}),
+            "Anotado.",
+        ])
+        assert resultado.confirmacion is None
+    tarea = await _tarea(ctx)
+    assert tarea.stage == "entrega" and tarea.pending_confirmation is None
+
+    resultado, _ = await _turno(ctx, monkeypatch, "¿y entonces?", ["Estoy revisando."])
+    assert resultado.confirmacion is not None and "• Dirección: Calle 1 # 2-3" in resultado.text
+    assert "responde «sí»" in resultado.text
+
+    await _turno(ctx, monkeypatch, "sí", [("confirmar_cotizacion", {}), "Te muestro el total."])
+    tarea = await _tarea(ctx)
+    assert tarea.stage == "confirmar" and (tarea.slots.get("address") or {}).get("confirmed") is True
+
+
 async def test_free_sin_link_y_sin_pago_en_linea(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     tid, pagos = negocio
     monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset())
@@ -432,11 +467,13 @@ async def test_free_sin_link_y_sin_pago_en_linea(negocio, monkeypatch) -> None: 
     assert _valor(tarea, "requiere_pago") is False and _valor(tarea, "email") is None  # todo o nada
 
 
-async def test_el_negocio_vendedor_pide_sus_datos_antes_de_confirmar_y_los_terminos_en_pagar(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+async def test_el_negocio_vendedor_pide_sus_datos_y_los_terminos_van_en_el_resumen(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Como solvershub: `checkout_fields` del plan con tipo y nombre del negocio, y los términos del
-    alta (ADR-0125) que `crear_pedido` exige en `pagar`, igual que sin procedimientos."""
+    alta (ADR-0125) DENTRO del resumen único: el «Sí, confirmo» los acepta y `crear_pedido` los
+    sigue exigiendo (token y mensaje del cliente posterior a los enlaces), sin pedirlos después
+    (adenda 2026-10-13 de ADR-0125, decisión del dueño)."""
     from core.plugin_manager import plugin_manager
-    from core.presets import list_presets
+    from core.provisioning.antiabuso import pedido_de_alta
     from core.shared.tenant import tenant_scope
 
     tid, pagos = negocio
@@ -450,53 +487,58 @@ async def test_el_negocio_vendedor_pide_sus_datos_antes_de_confirmar_y_los_termi
     try:
         ctx = await _cliente(tid, pagos)
         datos = {**journeys.datos_unicos(ctx.customer_id)}
+        correo = f"ana+{ctx.customer_id.hex[:8]}@example.com"
         _, guion = await _turno(ctx, monkeypatch, "Quiero el premium mensual", [
             ("iniciar_procedimiento", {"procedure_id": PLAN}),
             ("actualizar_tarea", {"slots": {"variant_id": "premium mensual"}}),
             ("cotizar_plan", {}),
             ("actualizar_tarea", {"slots": {
                 "full_name": "Ana Gómez", "id_document": datos["documento"], "phone": datos["celular"],
-                "email": f"ana+{ctx.customer_id.hex[:8]}@example.com", "business_name": "Pizzería Roma",
-                "vertical": "no-existe", "payment_method": "transferencia",
+                "email": correo, "business_name": "Pizzería Roma", "vertical": "astronautas",
+                "payment_method": "transferencia",
             }}),
             "¿Qué tipo de negocio tienes?",
         ])
-        assert "Tipo de negocio no válido" in guion.resultados[-1]
+        # El tipo que no se reconoce vuelve con las opciones en lenguaje del cliente, no con ids.
+        errores = " ".join(json.loads(guion.resultados[-1])["errors"])
+        assert "No reconocí el tipo de negocio" in errores and "Restaurante" in errores and "pizzería" in errores
         tarea = await _tarea(ctx)
         assert tarea.stage == "datos" and _valor(tarea, "business_name") is None  # todo o nada
-        vertical = list_presets()[0].id
-        # El cliente escribe sus datos: un dato personal que no escribió no se acepta (adenda
-        # 2026-10-12 de ADR-0113).
-        correo = f"ana+{ctx.customer_id.hex[:8]}@example.com"
-        await _turno(ctx, monkeypatch, f"Ana Gómez, {datos['documento']}, {datos['celular']}, {correo}. Es un {vertical}", [
-            ("actualizar_tarea", {"slots": {
-                "full_name": "Ana Gómez", "id_document": datos["documento"], "phone": datos["celular"],
-                "email": f"ana+{ctx.customer_id.hex[:8]}@example.com", "business_name": "Pizzería Roma",
-                "vertical": vertical, "payment_method": "transferencia",
-            }}),
-            "¿Confirmas tu correo?",
-        ])
-        await _turno(ctx, monkeypatch, "Sí, confirmo", [("confirmar_tarea", {}), ("confirmar_cotizacion", {}), "Resumen."])
-        assert (await _tarea(ctx)).stage == "confirmar"
-        _, guion = await _turno(ctx, monkeypatch, "Sí, confirmo", [
+        # "pizzería" es un sinónimo del preset `restaurante`.
+        resultado, _ = await _turno(
+            ctx, monkeypatch, f"Ana Gómez, {datos['documento']}, {datos['celular']}, {correo}. Es una pizzería", [
+                ("actualizar_tarea", {"slots": {
+                    "full_name": "Ana Gómez", "id_document": datos["documento"], "phone": datos["celular"],
+                    "email": correo, "business_name": "Pizzería Roma", "vertical": "pizzería",
+                    "payment_method": "transferencia",
+                }}),
+                ("confirmar_cotizacion", {}),
+                "Resumen.",
+            ])
+        tarea = await _tarea(ctx)
+        assert tarea.stage == "confirmar" and _valor(tarea, "vertical") == "restaurante"
+        assert resultado.confirmacion is not None
+        assert all(f"https://solvershub.test/legal/{t}" in resultado.text for t in ("terminos", "privacidad", "dpa"))
+        assert resultado.text.splitlines()[-1].startswith("Si todo está bien y aceptas los términos")
+        resultado, guion = await _turno(ctx, monkeypatch, "Sí, confirmo", [
             ("confirmar_tarea", {}),
             ("confirmar_cotizacion", {}),
             ("crear_pedido", {"payment_method": "transferencia", "customer_data": {}}),
-            "Antes de seguir, revisa y acepta los documentos.",
-        ])
-        assert "terminos_pendientes" in guion.resultados[-1]
-        token = json.loads(guion.resultados[-1])["acepta_terminos"]
-        tarea = await _tarea(ctx)
-        assert tarea.stage == "pagar" and tarea.status == "active"
-        await _turno(ctx, monkeypatch, "Sí, acepto los términos, el aviso de privacidad y el DPA.", [
-            ("crear_pedido", {"payment_method": "transferencia", "customer_data": {"acepta_terminos": token}}),
             "Listo.",
         ])
+        assert "terminos_pendientes" not in "".join(guion.resultados), guion.resultados
         tarea = await _tarea(ctx)
         assert tarea.status == "completed"
-        pedido = await _filas(ctx, "select datos_alta from pack_commerce_orders where tenant_id = :t "
-                                   "and customer_id = :c", c=ctx.customer_id)
-        assert pedido[0].datos_alta["vertical"] == vertical and pedido[0].datos_alta["negocio"] == "Pizzería Roma"
+        pedido = await _filas(ctx, "select datos_alta, public_order_number from pack_commerce_orders "
+                                   "where tenant_id = :t and customer_id = :c", c=ctx.customer_id)
+        assert pedido[0].datos_alta["vertical"] == "restaurante" and pedido[0].datos_alta["negocio"] == "Pizzería Roma"
+        # La aceptación queda registrada como siempre, con el «Sí, confirmo» como evidencia.
+        async with tenant_scope(tid):
+            registro = await pedido_de_alta(tid, pedido[0].public_order_number)
+        confirmo = await _filas(ctx, "select id from messages where tenant_id = :t and conversation_id = :c "
+                                     "and direction = 'inbound' and content = 'Sí, confirmo'", c=ctx.conversation_id)
+        assert registro is not None and registro.aceptacion["mensaje_id"] == str(confirmo[0].id)
+        assert {d["version"] for d in registro.aceptacion["documentos"]} == {"aos07"}
     finally:
         async with tenant_scope(tid):
             await plugin_manager.save_config("pack_commerce", {"checkout_fields": CHECKOUT})

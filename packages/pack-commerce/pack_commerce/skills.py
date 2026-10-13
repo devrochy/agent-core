@@ -634,6 +634,28 @@ def _respuesta_del_alta_frenada(frenado: Any) -> dict[str, Any]:
     return {"error": "No se pudo crear el pedido del plan."}
 
 
+async def _motor_activo_seguro() -> bool:
+    from core.kernel.oferta import motor_activo
+
+    return await motor_activo() is True
+
+
+async def _token_de_terminos_aceptados(context: ToolContext) -> str | None:
+    """Con el motor de procedimientos (adenda 2026-10-13 de ADR-0125): el cliente aceptó los
+    términos con el «Sí, confirmo» del resumen que los traía (`resumen_de_cotizacion`), así que
+    `confirmar_cotizacion` devuelve el token de esa aceptación; el procedimiento lo guarda
+    (`acepta_terminos`) y el kernel lo liga a `crear_pedido.customer_data`. El pedido sigue
+    validando el token y el mensaje del cliente posterior a los enlaces (`preparar_pedido_de_alta`).
+    Sin la bandera, sin vendedor o sin los tres documentos, None: nada cambia."""
+    from core.kernel.oferta import motor_activo
+    from core.provisioning.antiabuso import terminos_del_resumen
+
+    if await motor_activo() is not True:
+        return None
+    terminos = await terminos_del_resumen(context.conversation_id, anotar=False)
+    return terminos.token if terminos is not None else None
+
+
 # ------------------------------------------------------------------ datos del alta (HU-SH-03)
 _ESPACIOS = re.compile(r"\s+")
 
@@ -1625,7 +1647,11 @@ class OrderSkill(BaseSkill):
             quote.status = "aceptada"
             total = _float(quote.total)
 
-        return {"quote_id": quote_id, "status": "aceptada", "total": round(total, 2)}
+        resultado: dict[str, Any] = {"quote_id": quote_id, "status": "aceptada", "total": round(total, 2)}
+        token = await _token_de_terminos_aceptados(context)
+        if token is not None:
+            resultado["acepta_terminos"] = token
+        return resultado
 
     @staticmethod
     def _line_matches_promo(line: dict[str, Any], promo: Promotion) -> bool:
@@ -1961,6 +1987,10 @@ class OrderSkill(BaseSkill):
                     "Te enviaremos los datos para pagar en breve."
                 )
             result["_safe_append"] = message
+        elif payment_method == "pago_en_linea" and await _motor_activo_seguro():
+            # Con el motor (adenda 2026-10-13 de ADR-0113): el link de `confirmar_pago_pedido`
+            # lleva el número del pedido; un "✅ quedó confirmado" más, en el mismo envío, duplica.
+            pass
         else:
             symbol = getattr(config, "currency_symbol", "$") or "$"
             template = getattr(config, "order_confirmed_message", "") or ""

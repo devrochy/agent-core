@@ -3,6 +3,20 @@
   "version": 1,
   "nombre": "Planes por suscripción",
   "descripcion": "Negocio que vende planes recurrentes por WhatsApp: informa planes, agenda demos o citas y cobra el período en línea.",
+  "sinonimos": [
+    "suscripción",
+    "membresías",
+    "gimnasio",
+    "academia",
+    "escuela",
+    "clases",
+    "consultorio",
+    "spa",
+    "salón de belleza",
+    "peluquería",
+    "barbería",
+    "servicios por plan"
+  ],
   "plan_minimo": "premium",
   "packs": [
     "pack_commerce",

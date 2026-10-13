@@ -25,9 +25,18 @@ from core.kernel.tarjeta import describir_faltas, renderizar_tarjeta
 
 T0 = datetime(2026, 10, 12, 23, 45, tzinfo=UTC)
 RAIZ = Path(__file__).resolve().parents[1]
-PLAN = Procedure.model_validate(
-    json.loads((RAIZ / "packages/pack-commerce/procedures/contratar_plan.json").read_text(encoding="utf-8"))
-)
+def _plan_con_correo_confirmado() -> Procedure:
+    """`contratar_plan` con la confirmación aparte del correo en `datos`, como en 1.1.0: el
+    mecanismo del kernel sigue para los procedimientos que confirman un dato por separado. Desde
+    1.2.0 (adenda 2026-10-13) el plan lo confirma dentro del resumen único."""
+    crudo = json.loads((RAIZ / "packages/pack-commerce/procedures/contratar_plan.json").read_text(encoding="utf-8"))
+    for etapa in crudo["stages"]:
+        if etapa["id"] == "datos":
+            etapa["exitWhen"]["confirmed"] = ["email"]
+    return Procedure.model_validate(crudo)
+
+
+PLAN = _plan_con_correo_confirmado()
 _SET_DATO = Path(__file__).parent / "fixtures" / "confirmacion" / "dato.jsonl"
 
 
@@ -206,7 +215,7 @@ def test_el_mensaje_de_un_dato_es_texto_y_basta_un_si() -> None:
     assert c.payload == "" and c.titulo_boton == "" and c.cuerpo == c.texto
     assert "Email: rob@tienda.co" in c.texto and "responde «sí»" in c.texto
     accion = confirmacion.armar("Contratar un plan", [confirmacion.Dato("email", "rob@tienda.co")], "confirmar:x")
-    assert accion.payload == "confirmar:x" and "«confirmo»" in accion.texto
+    assert accion.payload == "confirmar:x" and "*Sí, confirmo*" in accion.texto
 
 
 def test_los_mensajes_nuevos_del_motor_cargan() -> None:

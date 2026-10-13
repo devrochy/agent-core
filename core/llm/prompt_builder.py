@@ -145,6 +145,31 @@ async def _render_playbook(
         return content
 
 
+def bloque_dinamico(ctx: PromptContext) -> str:
+    """El último bloque del prompt: el contexto dinámico del turno (capacidades, perfil, memorias,
+    referencias, tarjeta de estado y la fecha y hora al final). Puro. Lo usa `build_system_blocks`
+    y, con el motor activo, el loop para refrescar solo este bloque cuando la etapa cambia a mitad
+    del turno (adenda 2026-10-13 de ADR-0113): el prefijo cacheado no se toca."""
+    dynamic_parts: list[str] = []
+    if ctx.active_skills_summary:
+        dynamic_parts.append(f"## Capacidades activas en este turno\n{ctx.active_skills_summary}")
+    if ctx.entity_profile:
+        dynamic_parts.append(f"## Lo que sabes de este cliente\n{ctx.entity_profile}")
+    if ctx.recalled_memories:
+        recalled = "\n".join(f"- {m}" for m in ctx.recalled_memories)
+        dynamic_parts.append(f"## Hechos relevantes de interacciones pasadas\n{recalled}")
+    if ctx.referencias:
+        # Ya saneadas por el core (`core/orchestrator/referencias.py`): solo datos.
+        referencias = "\n".join(ctx.referencias)
+        dynamic_parts.append(f"## Referencias vigentes de esta conversación\n{referencias}")
+    if ctx.state_card:
+        # Ya serializada y escapada por el kernel (`core/kernel/tarjeta.py`), justo antes de la fecha.
+        dynamic_parts.append(ctx.state_card)
+    # Siempre la última parte: cambia cada minuto y no debe tocar el prefijo cacheado.
+    dynamic_parts.append(_current_datetime_part(ctx))
+    return "\n\n".join(dynamic_parts)
+
+
 async def build_system_blocks(spec: AgentSpec, ctx: PromptContext) -> list[str]:
     """Ensambla los bloques del system prompt desde el spec + playbooks + turno."""
     blocks: list[str] = []
@@ -192,23 +217,5 @@ async def build_system_blocks(spec: AgentSpec, ctx: PromptContext) -> list[str]:
         )
 
     # 3. Contexto dinámico del turno (va al final; no invalida el cache estable)
-    dynamic_parts: list[str] = []
-    if ctx.active_skills_summary:
-        dynamic_parts.append(f"## Capacidades activas en este turno\n{ctx.active_skills_summary}")
-    if ctx.entity_profile:
-        dynamic_parts.append(f"## Lo que sabes de este cliente\n{ctx.entity_profile}")
-    if ctx.recalled_memories:
-        recalled = "\n".join(f"- {m}" for m in ctx.recalled_memories)
-        dynamic_parts.append(f"## Hechos relevantes de interacciones pasadas\n{recalled}")
-    if ctx.referencias:
-        # Ya saneadas por el core (`core/orchestrator/referencias.py`): solo datos.
-        referencias = "\n".join(ctx.referencias)
-        dynamic_parts.append(f"## Referencias vigentes de esta conversación\n{referencias}")
-    if ctx.state_card:
-        # Ya serializada y escapada por el kernel (`core/kernel/tarjeta.py`), justo antes de la fecha.
-        dynamic_parts.append(ctx.state_card)
-    # Siempre la última parte: cambia cada minuto y no debe tocar el prefijo cacheado.
-    dynamic_parts.append(_current_datetime_part(ctx))
-    blocks.append("\n\n".join(dynamic_parts))
-
+    blocks.append(bloque_dinamico(ctx))
     return blocks
