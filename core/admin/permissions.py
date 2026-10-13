@@ -22,6 +22,7 @@ from collections.abc import Iterable
 from fastapi import Request
 from sqlalchemy import select
 
+from core.admin.roles import acceso_de_plataforma, es_master, es_tester
 from core.db.models import Admin, AdminPermission, TenantUser
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
@@ -132,8 +133,10 @@ async def effective_access(
     admin: Admin, section: str, tenant_id: uuid.UUID | None
 ) -> str | None:
     """Acceso efectivo del admin a una sección en el tenant activo (`None` = denegado)."""
-    if admin.role == "master":
-        return "write"
+    plataforma = acceso_de_plataforma(admin, section)
+    if plataforma is not None:
+        # Master y tester (ADR-0134): el rol decide; el tester nunca hereda Colaboradores.
+        return None if plataforma == "none" else plataforma
     role = await _tenant_user_role(admin.id, tenant_id)
     # Gestionar cuentas nunca se hereda por grant: es del `owner` del tenant.
     if section in OWNER_ONLY_SECTIONS:
@@ -153,8 +156,12 @@ async def effective_access(
 async def permissions_for(admin: Admin, sections: Iterable[str]) -> dict[str, str | None]:
     """Mapa sección → acceso efectivo del admin en el tenant activo (para el menú)."""
     sections = list(sections)
-    if admin.role == "master":
-        return {section: "write" for section in sections}
+    if es_master(admin) or es_tester(admin):
+        result_plataforma: dict[str, str | None] = {}
+        for section in sections:
+            acceso = acceso_de_plataforma(admin, section)
+            result_plataforma[section] = None if acceso in (None, "none") else acceso
+        return result_plataforma
 
     tenant_id = get_current_tenant_id()
     async with get_session() as session:

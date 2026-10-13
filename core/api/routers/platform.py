@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 
 from core.admin.plan_view import subscription_overview_or_none
+from core.admin.roles import actua_como_master
 from core.api.deps import Principal, get_principal
 from core.api.errors import ApiError
 from core.api.pagination import Page, PageParams, build_page, page_params
@@ -27,7 +28,8 @@ router = APIRouter(prefix="/admin/platform", tags=["admin · plataforma"])
 
 
 def _require_master(principal: Principal) -> None:
-    if principal.admin.role != "master":
+    # Master, o tester en test (ADR-0134): operar negocios no es gestionar cuentas.
+    if not actua_como_master(principal.admin):
         raise ApiError.forbidden("Solo el admin de plataforma puede gestionar negocios.")
 
 

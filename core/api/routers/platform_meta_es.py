@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, Field
 
 from core.admin.platform_meta_es import RequisitoError, estado_app_meta, marcar_requisito
+from core.admin.roles import actua_como_master
 from core.api.deps import Principal, get_principal
 from core.api.errors import ApiError
 
@@ -64,7 +65,7 @@ class EsStepIn(BaseModel):
 
 
 def _master(principal: Principal) -> str:
-    if principal.admin.role != "master":
+    if not actua_como_master(principal.admin):
         raise ApiError.forbidden("Solo el admin de plataforma puede ver esto.")
     return principal.admin.role
 

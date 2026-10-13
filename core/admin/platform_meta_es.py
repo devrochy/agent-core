@@ -23,6 +23,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from core.admin.roles import ROLES_DE_PLATAFORMA
 from core.config import get_settings
 from core.db.models import PlatformMetaAppRequirement, utcnow
 from core.db.session import get_session
@@ -133,7 +134,7 @@ class EstadoAppMeta:
 
 def _exigir_master(role: str) -> None:
     # Defensa en profundidad: la ruta ya lo exige.
-    if role != "master":
+    if role not in ROLES_DE_PLATAFORMA:
         raise RequisitoError("Solo el admin de plataforma puede ver esto.", code="forbidden", status=403)
 
 

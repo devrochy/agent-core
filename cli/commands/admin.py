@@ -75,7 +75,7 @@ async def _get_tenant(slug: str) -> uuid.UUID:
 def create(
     email: str = typer.Option(..., "--email", help="Email del admin (identificador de login)"),
     password: str = typer.Option("", "--password", help="Contraseña (vacío = se genera)"),
-    role: str = typer.Option("colaborador", "--role", help="master | colaborador"),
+    role: str = typer.Option("colaborador", "--role", help="master | colaborador | tester (solo con QA_TESTERS_ENABLED)"),
     username: str = typer.Option("", "--username", help="Usuario alternativo de login (opcional)"),
 ) -> None:
     """Crea un admin. `master` es superusuario (bypass); el resto usa permisos."""
@@ -85,9 +85,16 @@ def create(
     from core.db.models import Admin
     from core.db.session import get_session
 
-    if role not in ("master", "colaborador"):
-        console.print("[red]--role debe ser master o colaborador[/red]")
+    if role not in ("master", "colaborador", "tester"):
+        console.print("[red]--role debe ser master, colaborador o tester[/red]")
         raise typer.Exit(1)
+    if role == "tester":
+        from core.admin.roles import testers_habilitados
+
+        if not testers_habilitados():
+            # El rol tester solo existe en test (ADR-0134).
+            console.print("[red]El rol tester no está habilitado: falta QA_TESTERS_ENABLED=true.[/red]")
+            raise typer.Exit(1)
     generated = not password
     password = password or secrets.token_urlsafe(12)
 

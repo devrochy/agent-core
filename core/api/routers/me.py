@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from core.admin.invitations_service import contar_pendientes
+from core.admin.roles import testers_habilitados
 from core.api.deps import Principal, get_principal
 from core.api.schemas import TenantOption
 
@@ -33,6 +34,7 @@ class MeResponse(BaseModel):
     tenant_count: int
     permissions: dict[str, str | None]
     invitaciones_pendientes: int
+    qa_testers_habilitados: bool = False
 
 
 @router.get("/me", response_model=MeResponse)
@@ -55,4 +57,6 @@ async def get_me(principal: Annotated[Principal, Depends(get_principal)]) -> MeR
         tenant_count=len(principal.tenants),
         permissions=principal.permissions,
         invitaciones_pendientes=await contar_pendientes(admin.id),
+        # El panel muestra «Testers» y su aviso solo si el rol existe en este entorno (ADR-0134).
+        qa_testers_habilitados=testers_habilitados(),
     )

@@ -28,6 +28,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from core.admin.roles import actua_como_master
 from core.agents import versiones as svc
 from core.agents.contrato_v3 import MAX_SPEC_BYTES
 from core.api.deps import Principal, require
@@ -177,7 +178,7 @@ def _tenant(principal: Principal) -> uuid.UUID:
 
 async def _puede_escribir(principal: Principal) -> uuid.UUID:
     tid = _tenant(principal)
-    if principal.admin.role != "master" and not await svc.escritura_habilitada(tid):
+    if not actua_como_master(principal.admin) and not await svc.escritura_habilitada(tid):
         raise ApiError(
             403,
             "aos_runtime_legacy",

@@ -78,6 +78,7 @@ from core.admin.meta_templates_service import (
 )
 from core.admin.permissions import OWNER_GRANTABLE_SECTIONS
 from core.admin.permissions import catalog as sections_catalog
+from core.admin.roles import actua_como_master
 from core.admin.settings_service import (
     format_business_ranges,
     parse_business_ranges,
@@ -378,7 +379,7 @@ def _slugify(value: str) -> str:
 
 async def _require_master(request: Request) -> bool:
     admin = await current_admin(request)
-    if admin is None or admin.role != "master":
+    if admin is None or not actua_como_master(admin):
         return False
     return True
 

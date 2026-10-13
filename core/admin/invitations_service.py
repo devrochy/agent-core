@@ -59,6 +59,9 @@ async def _invitado_valido(admin_id: uuid.UUID) -> str | None:
             return "usuario no encontrado"
         if target.role == "master":
             return "no se puede invitar a un master de plataforma"
+        if target.role == "tester":
+            # Cuenta de plataforma del centro de pruebas (ADR-0134): no entra a un negocio.
+            return "no se puede invitar a un tester de plataforma"
         global_perms = (
             await session.execute(
                 select(func.count())

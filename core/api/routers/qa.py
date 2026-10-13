@@ -2,8 +2,9 @@
 
 Sección RBAC `qa`, global (no se hereda del rol en un negocio): la tienen el master
 y, en test, el rol tester. Lectura con GET; el resto exige escritura. Importar el
-catálogo es solo del master. Cada tester escribe únicamente sobre su propia
-ejecución del ciclo abierto.
+catálogo y gestionar testers es solo del master; cerrar el ciclo, del master o un
+tester (ADR-0134). Cada tester escribe únicamente sobre su propia ejecución del
+ciclo abierto.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
+from core.admin.roles import actua_como_master
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.qa import service
@@ -441,8 +443,8 @@ async def close_cycle(
 ) -> dict[str, Any]:
     """Cierra el ciclo abierto (foto fija) y abre uno nuevo con la última versión del catálogo.
 
-    Congela las ejecuciones en curso de todos: solo el admin de plataforma."""
-    if principal.admin.role != "master":
+    Congela las ejecuciones en curso de todos: master, o tester en test (ADR-0134)."""
+    if not actua_como_master(principal.admin):
         raise ApiError.forbidden("Solo el admin de plataforma cierra un ciclo.")
     try:
         return await service.cerrar_ciclo(principal.admin, payload.nombre)
@@ -465,5 +467,76 @@ async def update_config(
             nota=payload.nota,
             cambiar_nota="nota" in payload.model_fields_set,
         )
+    except service.QaError as exc:
+        raise _error(exc) from exc
+
+
+# ------------------------------------------------------------------ testers (HU-QA-04, ADR-0134)
+class QaTesterOut(BaseModel):
+    id: uuid.UUID
+    email: str
+    estado: Literal["invitado", "activo", "vencido", "revocado"]
+    creado_en: str | None = None
+    invitado_en: str | None = None
+    expira_en: str | None = None
+    aceptado_en: str | None = None
+
+
+class QaTestersOut(BaseModel):
+    habilitado: bool = Field(description="`QA_TESTERS_ENABLED` en este entorno.")
+    testers: list[QaTesterOut]
+
+
+class QaInvitarTesterIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+
+class QaTesterInvitado(BaseModel):
+    tester: QaTesterOut
+    enlace: str = Field(description="Enlace de un solo uso, por si el correo de sistema no está configurado.")
+
+
+def _solo_master(principal: Principal) -> None:
+    # Gestionar cuentas es solo del master: un tester no invita ni revoca testers.
+    if principal.admin.role != "master":
+        raise ApiError.forbidden("Solo el admin de plataforma gestiona testers.")
+
+
+@router.get("/testers", response_model=QaTestersOut)
+async def list_testers(principal: Annotated[Principal, Depends(_leer)]) -> dict[str, Any]:
+    from core.admin.roles import testers_habilitados
+    from core.qa import testers
+
+    _solo_master(principal)
+    return {"habilitado": testers_habilitados(), "testers": await testers.listar_testers()}
+
+
+@router.post("/testers", response_model=QaTesterInvitado, status_code=201)
+async def invite_tester(
+    payload: QaInvitarTesterIn,
+    principal: Annotated[Principal, Depends(_escribir)],
+) -> dict[str, Any]:
+    """Invita (o reinvita) a un tester por correo con un enlace de un solo uso."""
+    from core.qa import testers
+
+    _solo_master(principal)
+    try:
+        tester, url = await testers.invitar_tester(principal.admin, payload.email)
+    except service.QaError as exc:
+        raise _error(exc) from exc
+    return {"tester": tester, "enlace": url}
+
+
+@router.post("/testers/{tester_id}/revoke", response_model=QaTesterOut)
+async def revoke_tester(
+    tester_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(_escribir)],
+) -> dict[str, Any]:
+    """Desactiva al tester y cierra sus sesiones: el siguiente pedido ya falla."""
+    from core.qa import testers
+
+    _solo_master(principal)
+    try:
+        return await testers.revocar_tester(tester_id)
     except service.QaError as exc:
         raise _error(exc) from exc

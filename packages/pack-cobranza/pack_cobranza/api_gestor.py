@@ -31,6 +31,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from core.admin.auth import hash_password, verify_password
+from core.admin.roles import cuenta_habilitada
 from core.db.models import Admin, Tenant, TenantUser
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
@@ -142,6 +143,9 @@ async def _admin_por_credenciales(session, usuario: str, password: str) -> Admin
         )
     ).scalar_one_or_none()
     if admin is None or not verify_password(password, admin.password_hash):
+        return None
+    # Tester con el rol apagado (producción, ADR-0134): tampoco entra a la app de campo.
+    if not cuenta_habilitada(admin):
         return None
     return admin
 
@@ -541,7 +545,7 @@ async def refresh(request: Request) -> JSONResponse:
             return JSONResponse({"error": "pack sin secreto de firma"}, status_code=503)
         async with get_session() as session:
             admin = (await session.execute(select(Admin).where(Admin.id == uuid.UUID(str(admin_id)), Admin.active.is_(True)))).scalar_one_or_none()
-            if admin is None:
+            if admin is None or not cuenta_habilitada(admin):
                 return JSONResponse({"error": "admin inactivo"}, status_code=401)
             gestor_id = uuid.UUID(str(payload["gestor_id"])) if payload.get("gestor_id") else None
             tokens = _par_tokens(secret, tenant_id, admin.id, rol=str(payload.get("rol") or "gestor"), gestor_id=gestor_id)
@@ -1150,7 +1154,7 @@ async def _password_ok(session, payload: dict[str, Any], password: str) -> bool:
     if not admin_id or not password:
         return False
     admin = (await session.execute(select(Admin).where(Admin.id == uuid.UUID(str(admin_id)), Admin.active.is_(True)))).scalar_one_or_none()
-    return admin is not None and verify_password(password, admin.password_hash)
+    return admin is not None and cuenta_habilitada(admin) and verify_password(password, admin.password_hash)
 
 
 async def _caja(session, tenant_id: uuid.UUID, cartera_id: uuid.UUID) -> Caja:
