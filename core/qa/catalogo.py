@@ -2,7 +2,9 @@
 
 Acepta el esquema v1 (pasos en texto y un `esperado` general) y el v2 (pasos
 `{accion, esperado}`, `modulo`, `prioridad`, `plataforma`, `contexto`,
-`precondiciones`, `datos`, `origen`). Las mismas reglas las aplica
+`precondiciones`, `datos`, `origen`). Desde la v6 cada prueba lleva `entorno` (dónde se
+ejecuta), `area` (la sección del panel o la pantalla de la APK, HU-QA-08) y `requiere`
+(slugs de la guía de datos, sección `datos`, HU-QA-07). Las mismas reglas las aplica
 `herramientas/regenerar.py --check` en el CI de solvershub-docs; aquí no se
 verifica que las HU existan (eso vive en docs).
 """
@@ -16,9 +18,10 @@ from typing import Any
 
 import yaml
 
-SECCIONES = ("pruebas", "test", "prod")
+SECCIONES = ("pruebas", "test", "prod", "datos")
 PRIORIDADES = ("P0", "P1", "P2")
 PLATAFORMAS = ("panel", "app", "whatsapp", "web", "api", "correo")
+ENTORNOS = ("panel", "apk", "whatsapp", "web", "api")
 _ID_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 MAX_ITEMS = 2000
 
@@ -53,6 +56,9 @@ class ItemCatalogo:
     quien: str | None = None
     hu: list[str] = field(default_factory=list)
     origen: list[str] = field(default_factory=list)
+    entorno: str | None = None
+    area: str | None = None
+    requiere: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -168,6 +174,9 @@ def parse_catalogo(contenido: str | bytes) -> Catalogo:
             quien=_texto(it.get("quien")),
             hu=_lista(it.get("hu")),
             origen=_lista(it.get("origen")),
+            entorno=_texto(it.get("entorno")),
+            area=_texto(it.get("area")),
+            requiere=_lista(it.get("requiere")),
         )
         if seccion == "pruebas":
             item.pasos = _pasos(it.get("pasos"), donde, errores)
@@ -178,11 +187,19 @@ def parse_catalogo(contenido: str | bytes) -> Catalogo:
             for plataforma in item.plataforma:
                 if plataforma not in PLATAFORMAS:
                     errores.append(f"{donde}: plataforma {plataforma!r} inválida")
+            if item.entorno and item.entorno not in ENTORNOS:
+                errores.append(f"{donde}: entorno {item.entorno!r} inválido")
         else:
             for campo in ("porque", "como"):
                 if not getattr(item, campo):
                     errores.append(f"{donde}: falta {campo}")
         items.append(item)
+
+    guia = {i.slug for i in items if i.seccion == "datos"}
+    for item in items:
+        for requerido in item.requiere:
+            if requerido not in guia:
+                errores.append(f"{item.slug}: requiere {requerido!r}, que no está en la sección datos")
 
     if errores:
         raise CatalogoInvalido(errores)

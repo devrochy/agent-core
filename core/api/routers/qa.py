@@ -59,7 +59,7 @@ class QaProgreso(BaseModel):
 
 class QaItem(BaseModel):
     slug: str
-    seccion: Literal["pruebas", "test", "prod"]
+    seccion: Literal["pruebas", "test", "prod", "datos"]
     orden: int
     modulo: str | None = None
     grupo: str
@@ -78,7 +78,14 @@ class QaItem(BaseModel):
     quien: str | None = None
     hu: list[str] = []
     origen: list[str] = []
-    estado: str = Field(description="Pruebas: estado consolidado del ciclo. Test/prod: estado de la configuración.")
+    entorno: Literal["panel", "apk", "whatsapp", "web", "api"] | None = Field(
+        default=None, description="Pruebas: dónde se ejecuta (HU-QA-08)."
+    )
+    area: str | None = Field(default=None, description="Pruebas: sección del panel o pantalla de la APK.")
+    requiere: list[str] = Field(default_factory=list, description="Pruebas: slugs de la guía de datos que necesita.")
+    estado: str = Field(
+        description="Pruebas: estado consolidado del ciclo. Test/prod: estado de la configuración. Datos: `guia`."
+    )
     ejecuciones: dict[str, int] = Field(default_factory=dict, description="Pruebas: cuántas ejecuciones hay en cada estado.")
     nota: str | None = None
     actualizado_en: str | None = None
@@ -231,7 +238,7 @@ class QaEvento(BaseModel):
 @router.get("/catalog", response_model=QaCatalogo)
 async def get_catalog(
     principal: Annotated[Principal, Depends(_leer)],
-    seccion: Annotated[Literal["pruebas", "test", "prod"] | None, Query()] = None,
+    seccion: Annotated[Literal["pruebas", "test", "prod", "datos"] | None, Query()] = None,
 ) -> dict[str, Any]:
     """Catálogo del ciclo abierto con el estado consolidado de cada prueba y el de la config."""
     return await service.catalogo_con_estado(seccion)
@@ -548,3 +555,90 @@ async def revoke_tester(
         return await testers.revocar_tester(tester_id)
     except service.QaError as exc:
         raise _error(exc) from exc
+
+
+# ------------------------------------------------------------------ datos de prueba (HU-QA-07)
+class QaDatosCuenta(BaseModel):
+    rol: Literal["dueno", "gestor", "colaborador"]
+    titulo: str
+    uso: str
+    email: str
+    creada: bool
+
+
+class QaDatosContenido(BaseModel):
+    habilidad: str
+    detalle: list[str]
+
+
+class QaDatosNegocio(BaseModel):
+    id: uuid.UUID
+    slug: str
+    nombre: str | None = None
+
+
+class QaDatos(BaseModel):
+    estado: Literal["creando", "listo", "error", "purgado"]
+    error: str | None = None
+    negocio: QaDatosNegocio
+    cuentas: list[QaDatosCuenta]
+    contenido: list[QaDatosContenido]
+    creado_en: str | None = None
+    actualizado_en: str | None = None
+    contrasenas: dict[str, str] | None = Field(
+        default=None,
+        description="Solo al preparar o al pedir contraseñas nuevas: se muestran una vez y no se guardan.",
+    )
+
+
+class QaMisDatos(BaseModel):
+    disponible: bool = Field(description="`QA_TESTERS_ENABLED` en este entorno: los datos solo existen en test.")
+    datos: QaDatos | None
+    contenido: list[QaDatosContenido]
+
+
+def _solo_plataforma(principal: Principal) -> None:
+    # Un colaborador con permiso explícito de `qa` no se crea negocios premium propios.
+    if not actua_como_master(principal.admin):
+        raise ApiError.forbidden("Los datos de prueba son del admin de plataforma y de los testers.")
+
+
+@router.get("/datos", response_model=QaMisDatos)
+async def get_mis_datos(principal: Annotated[Principal, Depends(_leer)]) -> dict[str, Any]:
+    """Negocio de prueba y cuentas del tester (sin contraseñas)."""
+    from core.qa import datos
+
+    _solo_plataforma(principal)
+    return await datos.mis_datos(principal.admin)
+
+
+@router.post("/datos", response_model=QaDatos, status_code=201)
+async def preparar_mis_datos(
+    response: Response, principal: Annotated[Principal, Depends(_escribir)]
+) -> dict[str, Any]:
+    """Prepara el negocio de prueba del tester con sus datos y cuentas. 409 si ya existe."""
+    from core.qa import datos
+
+    _solo_plataforma(principal)
+    try:
+        salida = await datos.preparar(principal.admin)
+    except service.QaError as exc:
+        raise _error(exc) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return salida
+
+
+@router.post("/datos/contrasenas", response_model=QaDatos)
+async def contrasenas_nuevas(
+    response: Response, principal: Annotated[Principal, Depends(_escribir)]
+) -> dict[str, Any]:
+    """Contraseñas nuevas para las tres cuentas de prueba; cierra sus sesiones."""
+    from core.qa import datos
+
+    _solo_plataforma(principal)
+    try:
+        salida = await datos.contrasenas_nuevas(principal.admin)
+    except service.QaError as exc:
+        raise _error(exc) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return salida

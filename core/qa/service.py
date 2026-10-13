@@ -111,6 +111,9 @@ def item_a_dict(item: QaItem) -> dict[str, Any]:
         "quien": item.quien,
         "hu": list(item.hu or []),
         "origen": list(item.origen or []),
+        "entorno": item.entorno,
+        "area": item.area,
+        "requiere": list(item.requiere or []),
     }
 
 
@@ -352,6 +355,9 @@ async def importar_catalogo(
                         quien=it.quien,
                         hu=it.hu,
                         origen=it.origen,
+                        entorno=it.entorno,
+                        area=it.area,
+                        requiere=it.requiere,
                     )
                 )
         ciclo = await _ciclo_abierto(session)
@@ -417,6 +423,9 @@ async def catalogo_con_estado(seccion: str | None = None) -> dict[str, Any]:
                     conteo[estado] += 1
                 fila["ejecuciones"] = dict(conteo)
                 consolidados[item.slug] = fila["estado"]
+            elif item.seccion == "datos":
+                # La guía de datos no se marca: solo se lee.
+                fila["estado"] = "guia"
             else:
                 cfg = config.get(item.slug)
                 fila["estado"] = cfg.estado if cfg else "pendiente"

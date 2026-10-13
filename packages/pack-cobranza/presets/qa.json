@@ -1,0 +1,70 @@
+{
+  "seed": {
+    "carteras": [
+      {
+        "nombre": "Cartera Centro",
+        "descripcion": "Cartera de prueba con clientes al día, en mora y sin préstamo.",
+        "tipo_interes": 20,
+        "num_cuotas": 20,
+        "saldo_caja": 3000000,
+        "gestor": {
+          "permisos": "todos"
+        },
+        "clientes": [
+          {
+            "nombre": "Juana",
+            "apellido": "Pérez",
+            "numero_documento": "1000000001",
+            "negocio": "Tienda La Esquina",
+            "color_riesgo": "rojo",
+            "prestamo": {
+              "valor": 500000,
+              "num_cuotas": 20,
+              "tipo_interes": 20,
+              "dias_entre_cuotas": 1,
+              "hace_dias": 15,
+              "cuotas_pagadas": 5
+            }
+          },
+          {
+            "nombre": "Carlos",
+            "apellido": "Ruiz",
+            "numero_documento": "1000000002",
+            "negocio": "Panadería Ruiz",
+            "color_riesgo": "blanco",
+            "prestamo": {
+              "valor": 300000,
+              "num_cuotas": 20,
+              "tipo_interes": 20,
+              "dias_entre_cuotas": 1,
+              "hace_dias": 10,
+              "cuotas_pagadas": 10
+            }
+          },
+          {
+            "nombre": "Pedro",
+            "apellido": "Gómez",
+            "numero_documento": "1000000004",
+            "negocio": "Ferretería Gómez",
+            "color_riesgo": "azul",
+            "prestamo": {
+              "valor": 800000,
+              "num_cuotas": 8,
+              "tipo_interes": 15,
+              "dias_entre_cuotas": 7,
+              "hace_dias": 2,
+              "cuotas_pagadas": 0
+            }
+          },
+          {
+            "nombre": "Ana",
+            "apellido": "Gómez",
+            "numero_documento": "1000000003",
+            "negocio": "Papelería Ana",
+            "color_riesgo": "blanco"
+          }
+        ]
+      }
+    ]
+  }
+}

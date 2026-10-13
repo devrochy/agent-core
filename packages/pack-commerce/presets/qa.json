@@ -1,0 +1,89 @@
+{
+  "seed": {
+    "category_paths": [
+      [
+        "Café"
+      ],
+      [
+        "Café",
+        "Molido"
+      ],
+      [
+        "Accesorios"
+      ]
+    ],
+    "products": [
+      {
+        "name": "Café de origen 500 g",
+        "description": "Café tostado medio de Huila, en grano.",
+        "category_path": [
+          "Café"
+        ],
+        "variants": [
+          {
+            "sku": "QA-CAFE-500",
+            "price": 38000,
+            "stock": 25,
+            "attributes": {
+              "presentación": "grano"
+            }
+          },
+          {
+            "sku": "QA-CAFE-500-M",
+            "price": 38000,
+            "stock": 12,
+            "attributes": {
+              "presentación": "molido"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Café molido 250 g",
+        "description": "Molienda media para cafetera de goteo.",
+        "category_path": [
+          "Café",
+          "Molido"
+        ],
+        "variants": [
+          {
+            "sku": "QA-CAFE-250",
+            "price": 21000,
+            "stock": 40,
+            "attributes": {}
+          }
+        ]
+      },
+      {
+        "name": "Prensa francesa 600 ml",
+        "description": "Vidrio de borosilicato y filtro de acero.",
+        "category_path": [
+          "Accesorios"
+        ],
+        "variants": [
+          {
+            "sku": "QA-PRENSA-600",
+            "price": 89000,
+            "stock": 6,
+            "attributes": {}
+          }
+        ]
+      },
+      {
+        "name": "Filtros de papel x100",
+        "description": "Para cafetera de goteo, tamaño 4.",
+        "category_path": [
+          "Accesorios"
+        ],
+        "variants": [
+          {
+            "sku": "QA-FILTROS-100",
+            "price": 12000,
+            "stock": 0,
+            "attributes": {}
+          }
+        ]
+      }
+    ]
+  }
+}
