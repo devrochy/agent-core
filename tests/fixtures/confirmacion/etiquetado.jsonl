@@ -192,3 +192,22 @@
 {"texto": "confirmo 👍🏽", "confirma": true}
 {"texto": "✅ confirmo", "confirma": true}
 {"texto": "confirmo​", "confirma": false}
+{"texto": "Sí, está bien, gracias", "confirma": true}
+{"texto": "sí, es correcto, gracias", "confirma": true}
+{"texto": "Sí, de acuerdo, por favor", "confirma": true}
+{"texto": "sí confirmado, gracias", "confirma": true}
+{"texto": "confirmo, adelante con la compra", "confirma": true}
+{"texto": "Sí, confirmo el correo", "confirma": false}
+{"texto": "Si, el correo está bien", "confirma": false}
+{"texto": "sí, el correo es correcto", "confirma": false}
+{"texto": "el correo está bien", "confirma": false}
+{"texto": "mis datos están bien", "confirma": false}
+{"texto": "sí, el correo", "confirma": false}
+{"texto": "el correo está mal", "confirma": false}
+{"texto": "sí, el correo no", "confirma": false}
+{"texto": "confirmo el correo de mi esposa", "confirma": false}
+{"texto": "el correo está bien pero cambia el nombre", "confirma": false}
+{"texto": "sí, gracias, está bien?", "confirma": false}
+{"texto": "sí, está bien, pero cambia la dirección", "confirma": false}
+{"texto": "está bien, gracias", "confirma": false}
+{"texto": "sí, por favor, gracias", "confirma": false}

@@ -28,7 +28,7 @@ MAX_VALOR = 80
 MAX_LINEAS = 10
 _SECCIONES = (
     "encabezado", "linea", "monto", "verdadero", "falso", "boton", "instruccion_boton", "instruccion_texto",
-    "sin_resumen",
+    "sin_resumen", "instruccion_dato",
 )
 _CAMPOS = {"encabezado": ("titulo",), "linea": ("rotulo", "valor"), "monto": ("valor",)}
 # Un identificador interno no le dice nada al cliente (uuid, o ids tipo `Q-9f3a…` largos).
@@ -147,8 +147,13 @@ def _rotulo(nombre: str) -> str | None:
     return limpiar(nombre.replace("_", " ").strip().capitalize(), 40) or None
 
 
-def armar(titulo: str, datos: Sequence[Dato], payload: str, r: Rotulos | None = None) -> Confirmacion:
-    """El mensaje de confirmación de UNA petición. `payload` es el id firmado del botón."""
+def armar(
+    titulo: str, datos: Sequence[Dato], payload: str, r: Rotulos | None = None, *, es_dato: bool = False
+) -> Confirmacion:
+    """El mensaje de confirmación de UNA petición. `payload` es el id firmado del botón.
+
+    `es_dato`: la petición es de un dato (adenda 2026-10-12 de ADR-0113): sale siempre como texto y
+    con la instrucción `instruccion_dato` (basta un "sí")."""
     rot = r if r is not None else rotulos()
     lineas: list[str] = []
     vistos: set[str] = set()
@@ -171,6 +176,9 @@ def armar(titulo: str, datos: Sequence[Dato], payload: str, r: Rotulos | None = 
             propias.pop()
         return "\n".join([encabezado, *propias, "", instruccion])[:MAX_CUERPO]
 
+    if es_dato:
+        texto = cuerpo(rot.textos["instruccion_dato"])
+        return Confirmacion(cuerpo=texto, payload="", titulo_boton="", texto=texto)
     return Confirmacion(
         cuerpo=cuerpo(rot.textos["instruccion_boton"]),
         payload=payload,

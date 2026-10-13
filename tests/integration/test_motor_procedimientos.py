@@ -349,7 +349,7 @@ async def test_resolver_rechaza_el_plan_inexistente_y_no_guarda(negocios: dict[s
     a = negocios["a"]
     await _banderas(a, "v3", True)
     try:
-        conv = await _conversacion(a)
+        conv = await _conversacion(a, "el premium, mi correo es Ana@Correo.co")
         task = await _tarea(conv)
         motor = await _motor(conv)
         r = await _comando(conv, motor, "actualizar_tarea", {"slots": {"plan": "oro", "correo": "ana@correo.co"}})
@@ -383,7 +383,9 @@ async def _boton(conv: Any, task: uuid.UUID, *, seq_extra: int = 0) -> str:
     return payload_de_confirmacion(conv.tenant_id, task, seq + seq_extra, args_hash or "")
 
 
-async def test_dale_no_confirma_y_el_si_escrito_solo_contesta_la_peticion_anterior(negocios: dict[str, uuid.UUID]) -> None:
+async def test_lo_ambiguo_no_confirma_y_el_si_escrito_solo_contesta_la_peticion_anterior(negocios: dict[str, uuid.UUID]) -> None:
+    """Un dato acepta un asentimiento ("dale", adenda 2026-10-12 de ADR-0113), pero una pregunta
+    no lo confirma, ni un sí del mismo turno de la petición."""
     a = negocios["a"]
     await _banderas(a, "v3", True)
     try:
@@ -396,9 +398,9 @@ async def test_dale_no_confirma_y_el_si_escrito_solo_contesta_la_peticion_anteri
         motor.texto_cliente = "sí, confirmo"
         assert not (await _comando(conv, motor, "confirmar_tarea", {})).ok
         await _mensaje(conv, "outbound", "¿Confirmas que tu correo es a@b.co?", datetime.now(UTC))
-        await _mensaje(conv, "inbound", "dale", datetime.now(UTC))
-        # Turno siguiente, "dale": ambiguo → no avanza y se vuelve a pedir.
-        r = await _comando(conv, motor := await _motor(conv, "dale"), "confirmar_tarea", {})
+        await _mensaje(conv, "inbound", "¿para qué lo necesitan?", datetime.now(UTC))
+        # Turno siguiente, una pregunta: no confirma y se vuelve a pedir.
+        r = await _comando(conv, motor := await _motor(conv, "¿para qué lo necesitan?"), "confirmar_tarea", {})
         assert not r.ok and "Falta la confirmación explícita" in r.errores[0]
         assert "confirmed" not in await _tipos(conv, task)
 
@@ -422,7 +424,7 @@ async def test_el_boton_firmado_confirma_sin_llm_y_uno_falso_no(negocios: dict[s
     a = negocios["a"]
     await _banderas(a, "v3", True)
     try:
-        conv = await _conversacion(a)
+        conv = await _conversacion(a, "a@b.co")
         task = await _tarea(conv, plan=("var-basico", "llm", False))
         motor = await _motor(conv)
         assert (await _comando(conv, motor, "actualizar_tarea", {"slots": {"correo": "a@b.co"}})).ok

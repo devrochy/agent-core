@@ -293,6 +293,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     )
     if motor is not None:
         motor.ejecutor = _ejecutor_del_motor(conversation, customer, spec)
+        # Confirmaciones de datos al empezar el turno (adenda 2026-10-12 de ADR-0113); solo activo.
+        await motor.al_empezar_turno()
         active_tools = motor.herramientas()
     state_card = motor.tarjeta if motor is not None else ""
 

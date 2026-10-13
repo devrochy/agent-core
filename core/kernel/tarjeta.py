@@ -18,6 +18,9 @@ confirmación y las acciones de la etapa.
   idéntico al de siempre. La arma el motor al empezar el turno
   (`core/kernel/procedures/ejecucion.contexto_del_motor`, HU-AOS-05), con las definiciones de
   los procedimientos (título, etapas, datos requeridos y acciones).
+- Con tarea en foco, una línea dice qué falta para salir de la etapa (`para_avanzar`, adenda
+  2026-10-12 de ADR-0113, `motor.faltas_de_salida`): si el motor sabe por qué no avanza, el modelo
+  también, y no inventa que le falta una herramienta.
 - Sin tarea en foco y con procedimientos que iniciar, el motor le agrega la pista de iniciar el
   recorrido (`pista_sin_foco`, adenda 2026-10-12 de ADR-0113): la tarjeta deja de ser "" aunque no
   haya tareas.
@@ -62,6 +65,15 @@ CLAVES = {
     "mas_en_pausa": ("cantidad",),
     "sin_foco": (),
     "sin_foco_acciones": ("acciones",),
+    # Qué bloquea la salida de la etapa (adenda 2026-10-12 de ADR-0113).
+    "para_avanzar": ("faltas",),
+    "falta_dato_cliente": ("nombre",),
+    "falta_dato_boton": ("nombre",),
+    "falta_dato_contenido": ("nombre",),
+    "falta_dato_accion": ("nombre",),
+    "falta_confirmar_dato": ("nombre",),
+    "falta_confirmar_etapa": ("nombre",),
+    "falta_accion": ("nombre",),
 }
 MAX_EN_PAUSA = 3          # maxStack por defecto (KernelSpec, HU-AOS-12)
 MAX_VALOR_CHARS = 200
@@ -212,10 +224,29 @@ def _lineas_de_tarea(
 
     if en_foco and proc is not None:
         etapa_def = next((s for s in proc.stages if s.id == etapa), None)
+        if etapa_def is not None:
+            faltas = describir_faltas(proc, etapa_def, tarea, r)
+            if faltas:
+                lineas.append(r["para_avanzar"].format(faltas=faltas))
         acciones = [a for a in (etapa_def.actions if etapa_def else []) if _ACCION.fullmatch(a)]
         if acciones:
             lineas.append(r["acciones"].format(acciones=", ".join(acciones)))
     return lineas
+
+
+def describir_faltas(proc: Procedure, stage: Any, tarea: Proyeccion, r: Mapping[str, str] | None = None) -> str:
+    """Lo que falta para salir de la etapa (`motor.faltas_de_salida`) en una línea, con los
+    rótulos del playbook; "" si no falta nada. Solo nombres validados (dato, etapa, acción)."""
+    from core.kernel.procedures.motor import faltas_de_salida
+
+    r = r or rotulos()
+    piezas: list[str] = []
+    for falta in faltas_de_salida(proc, stage, tarea):
+        patron = _ACCION if falta.clase == "accion" else _NOMBRE
+        clave = f"falta_{falta.clase}"
+        if clave in r and patron.fullmatch(falta.nombre):
+            piezas.append(r[clave].format(nombre=falta.nombre))
+    return "; ".join(piezas)
 
 
 def renderizar_tarjeta(

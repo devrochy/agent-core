@@ -465,7 +465,10 @@ async def test_el_negocio_vendedor_pide_sus_datos_antes_de_confirmar_y_los_termi
         tarea = await _tarea(ctx)
         assert tarea.stage == "datos" and _valor(tarea, "business_name") is None  # todo o nada
         vertical = list_presets()[0].id
-        await _turno(ctx, monkeypatch, f"Es un {vertical}", [
+        # El cliente escribe sus datos: un dato personal que no escribió no se acepta (adenda
+        # 2026-10-12 de ADR-0113).
+        correo = f"ana+{ctx.customer_id.hex[:8]}@example.com"
+        await _turno(ctx, monkeypatch, f"Ana Gómez, {datos['documento']}, {datos['celular']}, {correo}. Es un {vertical}", [
             ("actualizar_tarea", {"slots": {
                 "full_name": "Ana Gómez", "id_document": datos["documento"], "phone": datos["celular"],
                 "email": f"ana+{ctx.customer_id.hex[:8]}@example.com", "business_name": "Pizzería Roma",
