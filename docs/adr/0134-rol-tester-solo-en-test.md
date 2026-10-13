@@ -1,4 +1,4 @@
-# ADR-0134 — Rol tester: master sin Colaboradores, solo en test
+# ADR-0134 — Rol tester: master en la operación, dueño en Colaboradores, solo en test
 
 - **Estado:** aceptado (dueño, 2026-10-13)
 - **Fecha:** 2026-10-13
@@ -10,6 +10,8 @@
 - El dueño quiere que testers internos y externos «puedan ejecutar las acciones de un master, pero el único
   acceso al que no pueden tener es el de colaboradores». También pidió que el rol exista **solo en test**: en
   producción un tester vería datos reales de clientes.
+- El mismo día el dueño pidió habilitar también Colaboradores «para que pueda hacer las pruebas de esta
+  sección». Se habilitó como **dueño del negocio activo**, no como master (decisión 3).
 - Hasta ahora el master se decidía comparando `role == "master"` en cada sitio, más la función SQL
   `admin_tenants()`.
 
@@ -18,8 +20,9 @@
 1. **`admins.role = 'tester'`.** `core/admin/roles.py` concentra la regla:
    - `actua_como_master(admin)`: master, o tester con `QA_TESTERS_ENABLED=true`;
    - `cuenta_habilitada(admin)`: activa y, si es tester, con el rol habilitado;
-   - `acceso_de_plataforma(admin, sección)`: master tiene `write` en todo; el tester tiene `write` salvo en
-     `collaborators`, que se le niega siempre.
+   - `acceso_de_plataforma(admin, sección)`: master y tester habilitado tienen `write` en todas las
+     secciones, incluida `collaborators`. `SECCIONES_VEDADAS_AL_TESTER` queda vacía, lista para volver a vedar
+     una sección si hiciera falta.
 2. **Qué cuenta como operar** y pasa a `actua_como_master`:
    - `effective_access` y `permissions_for` (y con ellas `require`, el middleware SSR, la búsqueda, el sync y
      los primeros pasos);
@@ -29,9 +32,20 @@
    - cerrar un ciclo de pruebas.
 
    La app de campo ya trataba como `master` el rol `global` de `admin_tenants()`.
-3. **Qué cuenta como gestionar cuentas** y sigue siendo `role == "master"`:
-   - colaboradores e invitaciones a negocios, porque la sección `collaborators` se niega al tester;
+3. **Colaboradores: el tester actúa como dueño del negocio activo.** Entra a la sección y los servicios de
+   cuentas lo llevan por el camino del owner, porque siguen preguntando `role == "master"`. Así:
+   - crea colaboradores y owners en el negocio activo;
+   - invita, da y quita permisos de negocio (nunca `tenants` ni `qa`);
+   - cambia contraseñas, desactiva y revoca invitaciones, solo de cuentas exclusivas de ese negocio.
+
+   El panel clásico y la revocación de invitaciones lo tratan igual. **Riesgo aceptado:** las cuentas que el
+   tester cree en test siguen vivas después de revocarlo. Solo existen en la base de test, separada de
+   producción.
+
+   **Qué cuenta como gestionar cuentas de plataforma** y sigue siendo `role == "master"`:
    - crear masters;
+   - tocar cuentas de master, tester o con permisos globales;
+   - vincular cuentas entre negocios;
    - invitar y revocar testers;
    - importar el catálogo de pruebas;
    - leer las ejecuciones de otros testers.
@@ -71,8 +85,8 @@
   - un chequeo al arrancar que impida `QA_TESTERS_ENABLED` con las URL de producción.
 
 - Todo chequeo nuevo de master tiene que elegir entre `actua_como_master` (operar) y `role == "master"`
-  (gestionar cuentas).
-- Un tester en test ve todos los negocios de test y puede crearlos, modificarlos y purgarlos. Es lo pedido:
-  test no tiene datos reales.
+  (gestionar cuentas de plataforma).
+- Un tester en test ve todos los negocios de test, puede crearlos y modificarlos, y gestiona sus
+  colaboradores como dueño (no los purga). Es lo pedido: test no tiene datos reales.
 - Las cuentas tester no aparecen como colaboradores de ningún negocio. Se gestionan en Plataforma › Pruebas ›
   Testers.

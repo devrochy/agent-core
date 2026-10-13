@@ -53,7 +53,7 @@ async def _invitar_y_aceptar(app_client, master: dict[str, str], email: str) -> 
     return token, body["tester"]
 
 
-async def test_tester_invitado_es_master_sin_colaboradores(app_client, tenant_setup, testers_on) -> None:
+async def test_tester_invitado_opera_como_master_y_colaboradores_como_dueno(app_client, tenant_setup, testers_on) -> None:
     t1, _t2 = tenant_setup
     master = await api_headers(app_client, t1)
     email = _uniq("tester")
@@ -69,7 +69,7 @@ async def test_tester_invitado_es_master_sin_colaboradores(app_client, tenant_se
     r = await app_client.get("/api/v1/admin/me", headers=headers)
     me = r.json()
     assert me["role"] == "tester" and me["qa_testers_habilitados"] is True
-    assert me["permissions"]["collaborators"] is None
+    assert me["permissions"]["collaborators"] == "write"
     assert me["permissions"]["tenants"] == "write" and me["permissions"]["qa"] == "write"
     assert me["tenant_count"] >= 2  # ve todos los negocios, como un master
 
@@ -77,11 +77,28 @@ async def test_tester_invitado_es_master_sin_colaboradores(app_client, tenant_se
     r = await app_client.get("/api/v1/admin/platform/tenants", headers=headers)
     assert r.status_code == 200
 
-    # Pero no gestiona cuentas: colaboradores, invitaciones a negocios ni testers.
+    # Colaboradores como dueño del negocio activo: lista, crea e invita en ese negocio.
+    r = await app_client.get("/api/v1/admin/collaborators", headers=headers)
+    assert r.status_code == 200, r.text
+    nuevo = _uniq("colab-del-tester")
+    r = await app_client.post(
+        "/api/v1/admin/collaborators",
+        json={"email": nuevo, "password": "clave-12345", "role": "colaborador"},
+        headers=headers,
+    )
+    assert r.status_code in (200, 201), r.text
+    r = await app_client.get("/api/v1/admin/collaborators", headers=headers)
+    creado = next(c for c in r.json() if c["email"] == nuevo)
+    r = await app_client.post(f"/api/v1/admin/collaborators/{creado['id']}/password", json={"password": "otra-clave-123"}, headers=headers)
+    assert r.status_code < 400, r.text
+
+    # Pero no como master: no crea masters, no toca cuentas de plataforma, no vincula ni gestiona testers.
+    master_id = (await app_client.get("/api/v1/admin/me", headers=master)).json()["admin_id"]
     for metodo, ruta, cuerpo in (
-        ("get", "/api/v1/admin/collaborators", None),
-        ("post", "/api/v1/admin/collaborators", {"email": _uniq("x"), "password": "clave-12345", "role": "colaborador"}),
-        ("post", "/api/v1/admin/invitations", {"identifier": _uniq("y"), "role": "colaborador"}),
+        ("post", "/api/v1/admin/collaborators", {"email": _uniq("m"), "password": "clave-12345", "role": "master"}),
+        ("post", f"/api/v1/admin/collaborators/{master_id}/password", {"password": "hackeada-123"}),
+        ("post", f"/api/v1/admin/collaborators/{master_id}/toggle", None),
+        ("post", f"/api/v1/admin/collaborators/{creado['id']}/link", {"tenant": "test-beta", "role": "owner"}),
         ("get", "/api/v1/admin/qa/testers", None),
         ("post", "/api/v1/admin/qa/testers", {"email": _uniq("z")}),
     ):
@@ -89,7 +106,9 @@ async def test_tester_invitado_es_master_sin_colaboradores(app_client, tenant_se
         if cuerpo is not None:
             kwargs["json"] = cuerpo
         r = await getattr(app_client, metodo)(ruta, **kwargs)
-        assert r.status_code == 403, f"{metodo} {ruta}: {r.status_code} {r.text}"
+        assert r.status_code >= 400, f"{metodo} {ruta}: {r.status_code} {r.text}"
+    # El master sigue entrando con su contraseña.
+    await api_headers(app_client, t1)
 
     # El master lo ve en la lista.
     r = await app_client.get("/api/v1/admin/qa/testers", headers=master)

@@ -1,14 +1,17 @@
 """Roles de plataforma de un admin (ADR-0047, ADR-0134).
 
 - `master`: el dueño de la plataforma. Bypass total y gestión de cuentas.
-- `tester` (SPEC-30, D-SPEC-30-2): **actúa como master en todo salvo Colaboradores**, y
-  solo si `QA_TESTERS_ENABLED` está activa (entorno de test). Con la variable apagada
-  (producción) la cuenta no inicia sesión ni conserva sesiones, y no se puede crear.
+- `tester` (SPEC-30, D-SPEC-30-2): **actúa como master en la operación y como dueño del
+  negocio activo en Colaboradores**, y solo si `QA_TESTERS_ENABLED` está activa (entorno
+  de test). Con la variable apagada (producción) la cuenta no inicia sesión ni conserva
+  sesiones, y no se puede crear.
 
 Regla para el resto del código: los chequeos de **operación** (negocios, Meta, búsqueda,
 sync, onboarding, app de campo) preguntan `actua_como_master`; los de **gestión de
-cuentas** (colaboradores, invitaciones a negocios, testers, crear masters, importar el
-catálogo de pruebas) siguen siendo `role == "master"`.
+cuentas de plataforma** (crear masters, tocar cuentas de master o tester, vincular entre
+negocios, gestionar testers, importar el catálogo de pruebas) siguen siendo
+`role == "master"`. En Colaboradores el tester cae en el camino del dueño: gestiona las
+cuentas exclusivas del negocio activo y nada más.
 """
 
 from __future__ import annotations
@@ -21,8 +24,10 @@ ROL_MASTER = "master"
 ROL_TESTER = "tester"
 ROLES_DE_PLATAFORMA = frozenset({ROL_MASTER, ROL_TESTER})
 
-# Lo único que un tester nunca usa: gestionar cuentas.
-SECCIONES_VEDADAS_AL_TESTER: frozenset[str] = frozenset({"collaborators"})
+# Secciones que un tester no usa. Vacía desde el 2026-10-13: el dueño habilitó Colaboradores
+# para probarla. Ahí el tester actúa como dueño del negocio activo, no como master: los
+# servicios de cuentas siguen preguntando `role == "master"`.
+SECCIONES_VEDADAS_AL_TESTER: frozenset[str] = frozenset()
 
 
 def testers_habilitados() -> bool:

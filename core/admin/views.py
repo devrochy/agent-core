@@ -711,8 +711,8 @@ async def _require_collaborators(request: Request, *, write: bool = False) -> bo
     if admin.role == "master":
         return True
     if es_tester(admin):
-        # El tester nunca gestiona cuentas (ADR-0134), aunque sea owner de un negocio.
-        return False
+        # El tester gestiona colaboradores como dueño del negocio activo (ADR-0134), no como master.
+        return actua_como_master(admin)
     return await _tenant_role(admin.id, get_current_tenant_id()) == "owner"
 
 

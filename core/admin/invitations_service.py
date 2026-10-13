@@ -27,6 +27,7 @@ from typing import Any
 from sqlalchemy import func, or_, select, update
 
 from core.admin.collaborators_service import apply_pack_roles, ensure_tenant_link
+from core.admin.roles import actua_como_master
 from core.db.models import Admin, AdminPermission, Tenant, TenantInvitation, TenantUser
 from core.db.session import get_session
 from core.shared.logger import get_logger
@@ -262,7 +263,8 @@ async def revocar_invitacion(
             return "invitación no encontrada"
         if invitacion.tenant_id != tenant_id and not is_master:
             return "no podés revocar esa invitación"
-        if not is_master:
+        # Un tester habilitado actúa como dueño del negocio activo (ADR-0134).
+        if not is_master and not actua_como_master(actor):
             link = (
                 await session.execute(
                     select(TenantUser.role).where(
