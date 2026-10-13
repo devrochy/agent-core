@@ -7522,7 +7522,7 @@
           "admin · plataforma"
         ],
         "summary": "Purge Tenant Endpoint",
-        "description": "Eliminación física IRREVERSIBLE: exige la frase `ELIMINAR <slug>` (invariante 8).",
+        "description": "Eliminación física IRREVERSIBLE (invariante 8).\n\nExige el tenant suspendido (409 `tenant_not_suspended`) y la frase `ELIMINAR <slug>`.",
         "operationId": "purge_tenant_endpoint_api_v1_admin_platform_tenants__tenant_id__purge_post",
         "parameters": [
           {
@@ -9031,7 +9031,7 @@
           "admin · configuración"
         ],
         "summary": "Get Raw Spec",
-        "description": "AgentSpec activo (editor crudo de Configuración → Avanzado), con los headers sensibles\nde las tools declarativas enmascarados (HU-AOS-12).",
+        "description": "AgentSpec activo (editor crudo de Configuración → Avanzado), con los headers sensibles\nde las tools declarativas enmascarados (HU-AOS-12). El `tenantId` mostrado es el del\nnegocio de la sesión, aunque la fila traiga otro.",
         "operationId": "get_raw_spec_api_v1_admin_settings_advanced_spec_get",
         "parameters": [
           {
@@ -9080,7 +9080,7 @@
           "admin · configuración"
         ],
         "summary": "Save Raw Spec",
-        "description": "Valida el JSON contra el contrato del AgentSpec y guarda si cambió.\n\n`save_spec_if_changed` solo crea versión cuando el contenido difiere, así que\nguardar el mismo spec es un no-op (no ensucia el historial).",
+        "description": "Valida el JSON contra el contrato del AgentSpec y guarda si cambió.\n\n`save_spec_if_changed` solo crea versión cuando el contenido difiere, así que\nguardar el mismo spec es un no-op (no ensucia el historial). El `tenantId` es\nsiempre el del negocio de la sesión: el del cuerpo se ignora.",
         "operationId": "save_raw_spec_api_v1_admin_settings_advanced_spec_put",
         "parameters": [
           {
@@ -15330,6 +15330,1086 @@
         }
       }
     },
+    "/api/v1/admin/qa/catalog": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Get Catalog",
+        "description": "Catálogo del ciclo abierto con el estado consolidado de cada prueba y el de la config.",
+        "operationId": "get_catalog_api_v1_admin_qa_catalog_get",
+        "parameters": [
+          {
+            "name": "seccion",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pruebas",
+                    "test",
+                    "prod"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Seccion"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaCatalogo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/catalog/import": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Import Catalog",
+        "description": "Importa el catálogo (solo master). Idempotente: el mismo contenido no se duplica.",
+        "operationId": "import_catalog_api_v1_admin_qa_catalog_import_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QaImportIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaImport"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/items/{slug}/history": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Item History",
+        "description": "Historial de una prueba en el ciclo (abierto por defecto) o de un punto de configuración.",
+        "operationId": "item_history_api_v1_admin_qa_items__slug__history_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "cycle_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cycle Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QaEvento"
+                  },
+                  "title": "Response Item History Api V1 Admin Qa Items  Slug  History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/runs/me": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Get My Run",
+        "description": "Mi ejecución del ciclo abierto (`null` si todavía no la empecé).",
+        "operationId": "get_my_run_api_v1_admin_qa_runs_me_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/QaEjecucion"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get My Run Api V1 Admin Qa Runs Me Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/runs/me/start": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Start My Run",
+        "description": "Empieza (o devuelve) mi ejecución del ciclo abierto.",
+        "operationId": "start_my_run_api_v1_admin_qa_runs_me_start_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaEjecucion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/runs/me/items/{slug}/steps/{paso}": {
+      "put": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Mark Step",
+        "description": "Marca un paso de mi ejecución (guardado inmediato) y recalcula la prueba.",
+        "operationId": "mark_step_api_v1_admin_qa_runs_me_items__slug__steps__paso__put",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "paso",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Paso"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QaPasoIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaEjecucion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/runs/me/items/{slug}": {
+      "put": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Note Item",
+        "description": "Nota general de una prueba en mi ejecución.",
+        "operationId": "note_item_api_v1_admin_qa_runs_me_items__slug__put",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QaNotaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaEjecucion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/runs/me/attachments": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Upload Attachment",
+        "description": "Adjunta una captura (jpeg, png, webp o pdf; hasta 5 MB) a un paso de mi ejecución.",
+        "operationId": "upload_attachment_api_v1_admin_qa_runs_me_attachments_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_attachment_api_v1_admin_qa_runs_me_attachments_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaAdjunto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/attachments/{adjunto_id}": {
+      "delete": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Delete Attachment",
+        "description": "Quita una captura de mi ejecución en curso.",
+        "operationId": "delete_attachment_api_v1_admin_qa_attachments__adjunto_id__delete",
+        "parameters": [
+          {
+            "name": "adjunto_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Adjunto Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Get Attachment",
+        "description": "Sirve una captura (dueño de la ejecución o master).",
+        "operationId": "get_attachment_api_v1_admin_qa_attachments__adjunto_id__get",
+        "parameters": [
+          {
+            "name": "adjunto_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Adjunto Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/runs/me/submit": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Submit My Run",
+        "description": "Envía mi informe: la ejecución queda en solo lectura y se avisa por correo al dueño.",
+        "operationId": "submit_my_run_api_v1_admin_qa_runs_me_submit_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QaEnviarIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaEjecucion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/runs": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "List Runs",
+        "description": "Ejecuciones e informes: el master ve todos, el resto solo los suyos.",
+        "operationId": "list_runs_api_v1_admin_qa_runs_get",
+        "parameters": [
+          {
+            "name": "cycle_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cycle Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QaEjecucion"
+                  },
+                  "title": "Response List Runs Api V1 Admin Qa Runs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Get Run",
+        "operationId": "get_run_api_v1_admin_qa_runs__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaEjecucion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/runs/{run_id}/report.md": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Get Run Markdown",
+        "description": "Informe enviado en Markdown, para descargar.",
+        "operationId": "get_run_markdown_api_v1_admin_qa_runs__run_id__report_md_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/cycles": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "List Cycles",
+        "description": "Ciclos con su progreso consolidado; los cerrados, con la foto guardada al cerrarlos.",
+        "operationId": "list_cycles_api_v1_admin_qa_cycles_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QaCiclo"
+                  },
+                  "title": "Response List Cycles Api V1 Admin Qa Cycles Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/cycles/close": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Close Cycle",
+        "description": "Cierra el ciclo abierto (foto fija) y abre uno nuevo con la última versión del catálogo.",
+        "operationId": "close_cycle_api_v1_admin_qa_cycles_close_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QaCerrarCicloIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaCerrarCiclo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/config/{slug}": {
+      "put": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Update Config",
+        "description": "Estado y nota de un punto de configuración de test o de paso a producción.",
+        "operationId": "update_config_api_v1_admin_qa_config__slug__put",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QaConfigIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaConfig"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/meta/wizard/cancel": {
       "post": {
         "tags": [
@@ -16623,6 +17703,30 @@
           "file"
         ],
         "title": "Body_import_products_csv_api_v1_pack_commerce_products_import_post"
+      },
+      "Body_upload_attachment_api_v1_admin_qa_runs_me_attachments_post": {
+        "properties": {
+          "item_slug": {
+            "type": "string",
+            "title": "Item Slug"
+          },
+          "paso": {
+            "type": "integer",
+            "title": "Paso"
+          },
+          "archivo": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "Archivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "item_slug",
+          "paso",
+          "archivo"
+        ],
+        "title": "Body_upload_attachment_api_v1_admin_qa_runs_me_attachments_post"
       },
       "BotState": {
         "properties": {
@@ -23663,6 +24767,1089 @@
           "token"
         ],
         "title": "PushTokenRequest"
+      },
+      "QaAdjunto": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "paso": {
+            "type": "integer",
+            "title": "Paso"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "mimetype": {
+            "type": "string",
+            "title": "Mimetype"
+          },
+          "tamano": {
+            "type": "integer",
+            "title": "Tamano"
+          },
+          "subido_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subido En"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "paso",
+          "nombre",
+          "mimetype",
+          "tamano"
+        ],
+        "title": "QaAdjunto"
+      },
+      "QaCatalogo": {
+        "properties": {
+          "ciclo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QaCicloRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "catalogo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QaCatalogoRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "progreso": {
+            "$ref": "#/components/schemas/QaProgreso"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/QaItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ciclo",
+          "catalogo",
+          "progreso",
+          "items"
+        ],
+        "title": "QaCatalogo"
+      },
+      "QaCatalogoRef": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "fecha": {
+            "type": "string",
+            "title": "Fecha"
+          },
+          "commit_docs": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Docs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "fecha"
+        ],
+        "title": "QaCatalogoRef"
+      },
+      "QaCerrarCiclo": {
+        "properties": {
+          "cerrado_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cerrado Id"
+          },
+          "abierto_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Abierto Id"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cerrado_id",
+          "abierto_id",
+          "nombre"
+        ],
+        "title": "QaCerrarCiclo"
+      },
+      "QaCerrarCicloIn": {
+        "properties": {
+          "nombre": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Nombre",
+            "description": "Nombre del ciclo que se abre."
+          }
+        },
+        "type": "object",
+        "required": [
+          "nombre"
+        ],
+        "title": "QaCerrarCicloIn"
+      },
+      "QaCiclo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "abierto_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Abierto En"
+          },
+          "cerrado_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cerrado En"
+          },
+          "abierto": {
+            "type": "boolean",
+            "title": "Abierto"
+          },
+          "catalogo": {
+            "$ref": "#/components/schemas/QaCatalogoRef"
+          },
+          "progreso": {
+            "$ref": "#/components/schemas/QaProgreso"
+          },
+          "por_prueba": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Por Prueba",
+            "description": "Estado consolidado por slug."
+          },
+          "ejecuciones": {
+            "items": {
+              "$ref": "#/components/schemas/QaCicloEjecucion"
+            },
+            "type": "array",
+            "title": "Ejecuciones",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "nombre",
+          "abierto",
+          "catalogo",
+          "progreso"
+        ],
+        "title": "QaCiclo"
+      },
+      "QaCicloEjecucion": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          },
+          "tester": {
+            "type": "string",
+            "title": "Tester"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "enviada_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enviada En"
+          },
+          "progreso": {
+            "$ref": "#/components/schemas/QaProgreso"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "tester",
+          "estado",
+          "progreso"
+        ],
+        "title": "QaCicloEjecucion"
+      },
+      "QaCicloRef": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "abierto_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Abierto En"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "nombre"
+        ],
+        "title": "QaCicloRef"
+      },
+      "QaConfig": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "nota": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nota"
+          },
+          "actualizado_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actualizado En"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "estado"
+        ],
+        "title": "QaConfig"
+      },
+      "QaConfigIn": {
+        "properties": {
+          "estado": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "pendiente",
+                  "en_curso",
+                  "listo",
+                  "no_aplica"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estado"
+          },
+          "nota": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nota",
+            "description": "Si se envía (aunque sea `null`), reemplaza la nota."
+          }
+        },
+        "type": "object",
+        "title": "QaConfigIn"
+      },
+      "QaEjecucion": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "cycle_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cycle Id"
+          },
+          "ciclo_nombre": {
+            "type": "string",
+            "title": "Ciclo Nombre"
+          },
+          "tester": {
+            "$ref": "#/components/schemas/QaTester"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "en_curso",
+              "enviada"
+            ],
+            "title": "Estado"
+          },
+          "editable": {
+            "type": "boolean",
+            "title": "Editable"
+          },
+          "comentario": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comentario"
+          },
+          "iniciada_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Iniciada En"
+          },
+          "actualizada_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actualizada En"
+          },
+          "enviada_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enviada En"
+          },
+          "progreso": {
+            "$ref": "#/components/schemas/QaProgreso"
+          },
+          "resultados": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/QaResultadoPrueba"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resultados",
+            "description": "Por slug de prueba."
+          },
+          "informe": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Informe",
+            "description": "Informe congelado al enviar (formato 1)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "cycle_id",
+          "ciclo_nombre",
+          "tester",
+          "estado",
+          "editable",
+          "progreso"
+        ],
+        "title": "QaEjecucion"
+      },
+      "QaEnviarIn": {
+        "properties": {
+          "comentario": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comentario"
+          }
+        },
+        "type": "object",
+        "title": "QaEnviarIn"
+      },
+      "QaEvento": {
+        "properties": {
+          "campo": {
+            "type": "string",
+            "title": "Campo"
+          },
+          "paso": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paso"
+          },
+          "antes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Antes"
+          },
+          "despues": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Despues"
+          },
+          "por": {
+            "type": "string",
+            "title": "Por"
+          },
+          "en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "En"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campo",
+          "por"
+        ],
+        "title": "QaEvento"
+      },
+      "QaImport": {
+        "properties": {
+          "version_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Version Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "items": {
+            "type": "integer",
+            "title": "Items"
+          },
+          "creada": {
+            "type": "boolean",
+            "title": "Creada"
+          },
+          "ciclo_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Ciclo Id"
+          },
+          "ciclo_nombre": {
+            "type": "string",
+            "title": "Ciclo Nombre"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version_id",
+          "version",
+          "items",
+          "creada",
+          "ciclo_id",
+          "ciclo_nombre"
+        ],
+        "title": "QaImport"
+      },
+      "QaImportIn": {
+        "properties": {
+          "contenido": {
+            "type": "string",
+            "maxLength": 5000000,
+            "title": "Contenido",
+            "description": "El YAML completo de `11-pruebas/catalogo.yaml`."
+          },
+          "commit_docs": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Docs",
+            "description": "Commit de solvershub-docs del que sale."
+          }
+        },
+        "type": "object",
+        "required": [
+          "contenido"
+        ],
+        "title": "QaImportIn"
+      },
+      "QaItem": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "seccion": {
+            "type": "string",
+            "enum": [
+              "pruebas",
+              "test",
+              "prod"
+            ],
+            "title": "Seccion"
+          },
+          "orden": {
+            "type": "integer",
+            "title": "Orden"
+          },
+          "modulo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Modulo"
+          },
+          "grupo": {
+            "type": "string",
+            "title": "Grupo"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "resumen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resumen"
+          },
+          "contexto": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contexto"
+          },
+          "prioridad": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prioridad"
+          },
+          "plataforma": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Plataforma",
+            "default": []
+          },
+          "precondiciones": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Precondiciones",
+            "default": []
+          },
+          "datos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Datos",
+            "default": []
+          },
+          "pasos": {
+            "items": {
+              "$ref": "#/components/schemas/QaPaso"
+            },
+            "type": "array",
+            "title": "Pasos",
+            "default": []
+          },
+          "esperado": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Esperado"
+          },
+          "porque": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Porque"
+          },
+          "como": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Como"
+          },
+          "vars": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Vars",
+            "default": []
+          },
+          "quien": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quien"
+          },
+          "hu": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hu",
+            "default": []
+          },
+          "origen": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Origen",
+            "default": []
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado",
+            "description": "Pruebas: estado consolidado del ciclo. Test/prod: estado de la configuración."
+          },
+          "ejecuciones": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Ejecuciones",
+            "description": "Pruebas: cuántas ejecuciones hay en cada estado."
+          },
+          "nota": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nota"
+          },
+          "actualizado_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actualizado En"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "seccion",
+          "orden",
+          "grupo",
+          "titulo",
+          "estado"
+        ],
+        "title": "QaItem"
+      },
+      "QaNotaIn": {
+        "properties": {
+          "nota": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nota"
+          }
+        },
+        "type": "object",
+        "title": "QaNotaIn"
+      },
+      "QaPaso": {
+        "properties": {
+          "accion": {
+            "type": "string",
+            "title": "Accion"
+          },
+          "esperado": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Esperado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "accion"
+        ],
+        "title": "QaPaso"
+      },
+      "QaPasoIn": {
+        "properties": {
+          "estado": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "falla",
+                  "bloqueado",
+                  "omitido"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estado",
+            "description": "`null` desmarca el paso."
+          },
+          "nota": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nota",
+            "description": "Si se envía (aunque sea `null`), reemplaza la nota."
+          }
+        },
+        "type": "object",
+        "title": "QaPasoIn"
+      },
+      "QaPasoResultado": {
+        "properties": {
+          "estado": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estado"
+          },
+          "nota": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nota"
+          }
+        },
+        "type": "object",
+        "title": "QaPasoResultado"
+      },
+      "QaProgreso": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "terminadas": {
+            "type": "integer",
+            "title": "Terminadas"
+          },
+          "sin_correr": {
+            "type": "integer",
+            "title": "Sin Correr"
+          },
+          "en_curso": {
+            "type": "integer",
+            "title": "En Curso"
+          },
+          "omitida": {
+            "type": "integer",
+            "title": "Omitida"
+          },
+          "ok": {
+            "type": "integer",
+            "title": "Ok"
+          },
+          "bloqueada": {
+            "type": "integer",
+            "title": "Bloqueada"
+          },
+          "falla": {
+            "type": "integer",
+            "title": "Falla"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "terminadas",
+          "sin_correr",
+          "en_curso",
+          "omitida",
+          "ok",
+          "bloqueada",
+          "falla"
+        ],
+        "title": "QaProgreso"
+      },
+      "QaResultadoPrueba": {
+        "properties": {
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "nota": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nota"
+          },
+          "pasos": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/QaPasoResultado"
+            },
+            "type": "object",
+            "title": "Pasos",
+            "description": "Por número de paso (desde 1)."
+          },
+          "adjuntos": {
+            "items": {
+              "$ref": "#/components/schemas/QaAdjunto"
+            },
+            "type": "array",
+            "title": "Adjuntos",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "estado"
+        ],
+        "title": "QaResultadoPrueba"
+      },
+      "QaTester": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "nombre",
+          "email"
+        ],
+        "title": "QaTester"
       },
       "ReadinessItem": {
         "properties": {

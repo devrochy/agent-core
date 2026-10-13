@@ -47,6 +47,8 @@ dependencies = [
     "sentry-sdk>=2.69.2",
     # Utilidades (QR de pago, ADR-0067)
     "qrcode[png]>=7.4",
+    # Catálogo del centro de pruebas (SPEC-30): YAML de solvershub-docs
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

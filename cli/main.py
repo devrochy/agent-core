@@ -12,6 +12,7 @@ Comandos:
   agent-core meta doctor                  Diagnóstico de WhatsApp Cloud API (Meta)
   agent-core procedures lint <archivos>   Validador y linter de procedure/1 (ADR-0113)
   agent-core agent lint <archivos>        Validador y linter de agentspec/3 y kernelspec/1 (ADR-0113)
+  agent-core qa validar|importar <yaml>   Catálogo del centro de pruebas (SPEC-30)
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from cli.commands.init import init_command
 from cli.commands.meta import app as meta_app
 from cli.commands.plugin import app as plugin_app
 from cli.commands.procedures import app as procedures_app
+from cli.commands.qa import app as qa_app
 from cli.commands.sdd import app as sdd_app
 from cli.commands.tenant import app as tenant_app
 
@@ -52,6 +54,7 @@ app.add_typer(flow_app, name="flow", help="Flujo de atención por pack/tenant (A
 app.add_typer(procedures_app, name="procedures", help="Validador y linter de procedure/1 (ADR-0113)")
 app.add_typer(admin_app, name="admin", help="Admins del panel: alta y permisos (ADR-0047)")
 app.add_typer(meta_app, name="meta", help="Diagnóstico de WhatsApp Cloud API (Meta)")
+app.add_typer(qa_app, name="qa", help="Catálogo del centro de pruebas (SPEC-30, ADR-0133)")
 
 
 @app.command()

@@ -39,11 +39,13 @@ CORE_SECTIONS: dict[str, str] = {
     "settings": "Configuración",
     "tenants": "Tenants",
     "collaborators": "Colaboradores",
+    # Centro de pruebas de la plataforma (SPEC-30, ADR-0133): global, de master y testers.
+    "qa": "Pruebas",
 }
 
 # Secciones que NUNCA se heredan del rol del `tenant_user`: son de master o de
 # permiso explícito (gestión de plataforma).
-GLOBAL_ONLY_SECTIONS: frozenset[str] = frozenset({"tenants"})
+GLOBAL_ONLY_SECTIONS: frozenset[str] = frozenset({"tenants", "qa"})
 
 # Secciones que solo el `owner` del tenant (o master) puede usar: el `colaborador`
 # no las hereda. Gestionar cuentas no es una capacidad de colaborador.
