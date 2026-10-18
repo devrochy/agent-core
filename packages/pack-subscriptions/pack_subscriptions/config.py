@@ -25,6 +25,8 @@ class SubscriptionConfig(BasePluginConfig):
     )
     trial_dias: int = Field(
         default=30,
+        ge=0,
+        le=365,
         description="Días de prueba por defecto del plan Free. Solo un plan de $0 tiene prueba (D-16).",
     )
     dias_gracia: int = Field(

@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 
 from core.admin.plan_view import subscription_overview_or_none
@@ -101,7 +101,8 @@ class TenantCreate(BaseModel):
 
 class TenantPlanUpdate(BaseModel):
     plan_id: str
-    extend_days: int = 0
+    # Días que se suman al período; negativo no tiene sentido (422).
+    extend_days: int = Field(default=0, ge=0, le=3660)
 
 
 class PurgeRequest(BaseModel):

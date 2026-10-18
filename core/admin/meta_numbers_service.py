@@ -85,6 +85,9 @@ async def list_numbers(
                     select(PhoneNumber).where(
                         PhoneNumber.connection_id == connection.id,
                         PhoneNumber.tenant_id == tenant_id,
+                        # Solo números vivos (ADR-0122 §5): uno dado de baja (p. ej. el de prueba
+                        # tras «Pasar a producción») ya no es de la conexión ni cuenta.
+                        PhoneNumber.deleted_at.is_(None),
                     )
                 )
             )
@@ -133,6 +136,51 @@ def _meta_error_text(exc) -> str:  # type: ignore[no-untyped-def]
 
 
 _NOT_THIS_CONNECTION = "El número no es de esta conexión"
+
+# Meta rechaza agregar un número cuando el portafolio llegó a su tope (una cuenta sin verificar
+# admite muy pocos; la de prueba, solo el número de prueba). Es un límite de META, no un límite
+# del plan de SolversHub: no existe una cuota de números por plan (`core/billing/metrics.py`).
+_PALABRAS_LIMITE = ("limit", "límite", "limite", "maximum", "máximo", "maximo", "exceed", "exced")
+
+
+def es_error_de_limite_de_numeros(exc) -> bool:  # type: ignore[no-untyped-def]
+    """¿Meta respondió que no caben más números? Se mira el texto porque Meta lo manda como
+    `(#100) Invalid parameter` con el motivo en `error_user_msg` (localizado)."""
+    from core.gateway.meta_errors import GraphError
+
+    if not isinstance(exc, GraphError):
+        return False
+    texto = " ".join(p for p in (exc.message, exc.error_user_title, exc.error_user_msg) if p).lower()
+    return any(p in texto for p in _PALABRAS_LIMITE) and any(
+        n in texto for n in ("phone", "number", "número", "numero", "teléfono", "telefono")
+    )
+
+
+def mensaje_limite_de_numeros(exc, vivos: int) -> str:  # type: ignore[no-untyped-def]
+    return (
+        "Meta no permite agregar más números a esta cuenta de WhatsApp Business: el límite lo "
+        "fija Meta por portafolio y por verificación del negocio, no es un límite del plan de "
+        f"SolversHub (esta conexión tiene {vivos} número(s) activo(s) aquí). Verifica el negocio en "
+        "Meta Business Manager o revisa «Números del portafolio» para ver cuáles cuentan. "
+        f"Motivo de Meta: {_meta_error_text(exc)}"
+    )
+
+
+async def _numeros_vivos(connection: MetaConnection) -> int:
+    from sqlalchemy import func
+
+    async with get_session() as session:
+        return int(
+            (
+                await session.execute(
+                    select(func.count()).select_from(PhoneNumber).where(
+                        PhoneNumber.tenant_id == connection.tenant_id,
+                        PhoneNumber.connection_id == connection.id,
+                        PhoneNumber.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one()
+        )
 
 
 async def _phone_of_connection(connection: MetaConnection, phone_number_id: str) -> PhoneNumber | None:
@@ -190,6 +238,8 @@ async def add_number(
             verified_name=verified_name,
         )
     except (GraphError, MetaAssetError) as exc:
+        if es_error_de_limite_de_numeros(exc):
+            return mensaje_limite_de_numeros(exc, await _numeros_vivos(connection))
         return _meta_error_text(exc)
     return None
 
@@ -526,6 +576,7 @@ async def business_numbers(tenant_id: uuid.UUID, connection_id: str) -> tuple[di
                     select(PhoneNumber.phone_number_id).where(
                         PhoneNumber.connection_id == connection.id,
                         PhoneNumber.tenant_id == connection.tenant_id,
+                        PhoneNumber.deleted_at.is_(None),
                     )
                 )
             ).scalars()

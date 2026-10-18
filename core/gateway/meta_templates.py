@@ -276,20 +276,28 @@ async def update_template(
 
 
 async def delete_template_all_languages(
-    waba_id: str, name: str, token: str, app_secret: str, version: str, connection_id: uuid.UUID, tenant_id: uuid.UUID
+    waba_id: str,
+    name: str,
+    token: str,
+    app_secret: str,
+    version: str,
+    connection_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    *,
+    waba_account_id: uuid.UUID | None = None,
 ) -> None:
     """`DELETE /{WABA_ID}/message_templates?name={NAME}` -- borra TODAS las
-    versiones de idioma de esa plantilla."""
+    versiones de idioma de esa plantilla. Con `waba_account_id` solo marca las filas de esa
+    WABA (el mismo nombre puede existir en otra WABA del negocio y allá sigue viva)."""
     await graph_fetch(
         f"/{waba_id}/message_templates", method="DELETE", token=token, app_secret=app_secret,
         query={"name": name}, version=version, connection_id=connection_id, tenant_id=tenant_id,
     )
     async with get_session() as session:
-        rows = (
-            await session.execute(
-                select(MessageTemplate).where(MessageTemplate.name == name, MessageTemplate.tenant_id == tenant_id)
-            )
-        ).scalars().all()
+        query = select(MessageTemplate).where(MessageTemplate.name == name, MessageTemplate.tenant_id == tenant_id)
+        if waba_account_id is not None:
+            query = query.where(MessageTemplate.waba_account_id == waba_account_id)
+        rows = (await session.execute(query)).scalars().all()
         for row in rows:
             row.status = "DELETED"
 

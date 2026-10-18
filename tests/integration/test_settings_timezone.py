@@ -97,11 +97,17 @@ async def test_put_sin_zona_ni_accion_no_las_pisa(app_client) -> None:
     assert resp.json()["guardrail_fail_action"] == "neutral"
 
 
-async def test_reintentos_del_guardrail_se_acotan_a_5(app_client) -> None:
+async def test_reintentos_del_guardrail_fuera_de_rango_se_rechazan(app_client) -> None:
+    """Antes se recortaba a 5 en silencio; desde el P0 de pruebas 2026-10-17 el rango 0–5 se
+    valida y fuera de él responde 422 con el campo marcado."""
     cookie = await _cookie_for_new_tenant(app_client, "tzret")
     current = await _identity(app_client, cookie)
 
     resp = await _put(app_client, cookie, dict(current, guardrail_max_retries=9))
+    assert resp.status_code == 422, resp.text
+    assert "guardrail_max_retries" in resp.json()["error"]["fields"]
+
+    resp = await _put(app_client, cookie, dict(current, guardrail_max_retries=5))
     assert resp.status_code == 200, resp.text
     assert resp.json()["guardrail_max_retries"] == 5
 

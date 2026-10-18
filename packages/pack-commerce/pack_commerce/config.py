@@ -27,29 +27,30 @@ class CRMConfig(BasePluginConfig):
         description="Crear un lead automáticamente cuando inicia una conversación nueva",
     )
     follow_up_hours: int = Field(
-        default=24, description="Horas sin actividad antes de marcar un lead para seguimiento"
+        default=24, ge=0, le=8760, description="Horas sin actividad antes de marcar un lead para seguimiento"
     )
     scoring_mode: Literal["manual", "auto"] = Field(
         default="auto", description="Cómo se puntúan los leads (auto = el agente pregunta y califica)"
     )
 
     # ---------------------------------------------------------------- segmentación de clientes
+    # Conteos y días: al menos 1 (422 si no; P0 de pruebas 2026-10-17).
     customer_frecuente_min_pedidos: int = Field(
-        default=2, description="Mínimo de pedidos para considerarse 'frecuente'"
+        default=2, ge=1, le=10_000, description="Mínimo de pedidos para considerarse 'frecuente'"
     )
     customer_frecuente_intervalo_max_dias: int = Field(
-        default=45, description="Días máximos entre pedidos para mantenerse 'frecuente'"
+        default=45, ge=1, le=3650, description="Días máximos entre pedidos para mantenerse 'frecuente'"
     )
     customer_fiel_min_pedidos: int = Field(
-        default=5, description="Mínimo de pedidos para considerarse 'fiel'"
+        default=5, ge=1, le=10_000, description="Mínimo de pedidos para considerarse 'fiel'"
     )
     customer_inactivo_dias_sin_comprar: int = Field(
-        default=120, description="Días sin comprar para marcar al cliente como 'inactivo'"
+        default=120, ge=1, le=3650, description="Días sin comprar para marcar al cliente como 'inactivo'"
     )
 
     # ---------------------------------------------------------------- montos y pagos
     monto_alto_threshold: float = Field(
-        default=1_000_000, description="Monto en COP que dispara escalamiento a humano"
+        default=1_000_000, ge=0, le=9_999_999_999, allow_inf_nan=False, description="Monto en COP que dispara escalamiento a humano"
     )
     # Umbral propio para planes recurrentes (HU-COM-02). `None` = un plan nunca
     # escala por monto alto: el cobro ya pasa por el snapshot del servidor
@@ -57,6 +58,9 @@ class CRMConfig(BasePluginConfig):
     # Empresarial (1,8M) sin fricción.
     monto_alto_planes_threshold: float | None = Field(
         default=None,
+        ge=0,
+        le=9_999_999_999,
+        allow_inf_nan=False,
         description="Monto en COP que dispara escalamiento para planes recurrentes; None = nunca",
     )
     # Gate determinístico en crear_pedido (incidente real 2026-09-11, tenant
@@ -71,6 +75,9 @@ class CRMConfig(BasePluginConfig):
     # tarde para redirigir la conversación con naturalidad.
     pago_en_linea_monto_minimo: float = Field(
         default=150_000,
+        ge=0,
+        le=9_999_999_999,
+        allow_inf_nan=False,
         description="Monto mínimo en COP para aceptar pago_en_linea al crear un pedido",
     )
     # Cuentas de transferencia visibles al cliente (nunca pasan por el LLM).
@@ -115,10 +122,14 @@ class CRMConfig(BasePluginConfig):
     @field_validator("checkout_fields")
     @classmethod
     def _campos_conocidos(cls, valor: dict[str, list[str]]) -> dict[str, list[str]]:
-        for tipo, campos in (valor or {}).items():
+        for campos in (valor or {}).values():
             desconocidos = [c for c in campos if c not in _CAMPOS_VALIDOS]
             if desconocidos:
-                raise ValueError(f"checkout_fields['{tipo}'] con campos desconocidos: {desconocidos}")
+                # Mensaje fijo (sin el valor recibido): termina en `error.fields` de la respuesta.
+                raise ValueError(
+                    "checkout_fields tiene campos desconocidos; los válidos son: "
+                    + ", ".join(sorted(_CAMPOS_VALIDOS))
+                )
         return valor
 
     # ---------------------------------------------------------------- copy (ADR-0017: CONFIG editable)

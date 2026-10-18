@@ -16,6 +16,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, SecretStr
+from sqlalchemy import select
 
 from core.api.deps import Principal, require, require_owner_or_master
 from core.api.errors import ApiError
@@ -460,6 +461,10 @@ class WizardByokOut(BaseModel):
     phoneNumberId: str
     needsRegistration: bool = False
     registrationError: str | None = None
+    # `True` si ya existía una conexión viva de esta app y entorno y se ACTUALIZÓ en vez de
+    # crear otra (una por app y entorno, `uq_meta_connections_tenant_app`): la lista de
+    # conexiones muestra la misma fila, no una nueva.
+    reused: bool = False
 
 
 @router.post("/wizard/byok", response_model=WizardByokOut, status_code=201)
@@ -486,6 +491,7 @@ async def wizard_byok(
         # registrar el webhook, solo el propietario del negocio o el master (ADR-0127).
         require_owner_or_master(principal)
     phone_number_id = payload.phone_number_id.strip()
+    existente = await _conexion_viva_de_la_app(principal.tenant_id, payload.app_id.strip(), payload.environment)
     try:
         connection = await save_byok_connection(
             principal.tenant_id,
@@ -522,7 +528,26 @@ async def wizard_byok(
         phoneNumberId=phone_number_id,
         needsRegistration=status == "pending",
         registrationError=registration_error,
+        reused=existente is not None and existente == connection.id,
     )
+
+
+async def _conexion_viva_de_la_app(tenant_id: uuid.UUID, app_id: str, environment: str) -> uuid.UUID | None:
+    """La conexión viva de WhatsApp de esta app y entorno, si ya hay una (el alta la reutiliza)."""
+    from core.db.models import MetaConnection
+
+    async with get_session() as session:
+        return (
+            await session.execute(
+                select(MetaConnection.id).where(
+                    MetaConnection.tenant_id == tenant_id,
+                    MetaConnection.channel == "whatsapp",
+                    MetaConnection.environment == environment,
+                    MetaConnection.meta_app_id == app_id,
+                    MetaConnection.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
 
 
 class ManualConnectionIn(BaseModel):

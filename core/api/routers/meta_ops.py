@@ -56,11 +56,20 @@ from core.api.deps import Principal, es_owner_o_master, require, require_owner_o
 from core.api.errors import ApiError
 from core.api.schemas import ReadinessRun, readiness_run_out
 from core.db.session import get_session
+from core.gateway.meta_connection_state import get_live_meta_connection
 
 if TYPE_CHECKING:
     from core.gateway.meta_credentials import MetaCredentials
 
 router = APIRouter(prefix="/admin/meta", tags=["admin · meta"])
+
+
+def _uuid_o_none(valor: str) -> uuid.UUID:
+    """UUID de la ruta; uno inválido se trata como inexistente (404), nunca como 500."""
+    try:
+        return uuid.UUID(valor)
+    except ValueError:
+        return uuid.UUID(int=0)
 
 
 class HealthCheck(BaseModel):
@@ -439,9 +448,15 @@ async def sync_connection_templates(
     connection_id: str,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> Response:
+    """Sincroniza las plantillas con Meta ahora mismo (sin el candado horario del cron).
+
+    429 `sync_rate_limited`: ya se sincronizó a mano hace menos de un minuto. 400 `sync_failed`:
+    Meta rechazó la consulta (el mensaje trae el motivo)."""
     error = await sync_templates_now(principal.tenant_id, connection_id)
     if error is not None:
-        raise ApiError.bad_request(error, "sync_failed")
+        if error.code == "rate_limited":
+            raise ApiError(429, "sync_rate_limited", error.message)
+        raise ApiError.bad_request(error.message, "sync_failed")
     return Response(status_code=204)
 
 
@@ -451,10 +466,17 @@ async def delete_connection_template(
     template_id: str,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> Response:
-    """Borra TODAS las versiones de idioma de la plantilla."""
+    """Borra TODAS las versiones de idioma de la plantilla.
+
+    409 `template_not_deletable`: Meta no permite borrarla (sus plantillas de ejemplo); la
+    plantilla sigue como estaba. 404 `not_found` si no es de este negocio."""
     error = await delete_template(principal.tenant_id, connection_id, template_id)
     if error is not None:
-        raise ApiError.bad_request(error, "delete_failed")
+        if error.code == "not_deletable":
+            raise ApiError(409, "template_not_deletable", error.message)
+        if error.code == "not_found":
+            raise ApiError.not_found(error.message)
+        raise ApiError.bad_request(error.message, "delete_failed")
     return Response(status_code=204)
 
 
@@ -497,7 +519,14 @@ async def reset_waweb_session(
 
 
 class MetaConnectionAction(BaseModel):
-    action: Literal["activate", "deactivate", "delete"]
+    action: Literal["activate", "deactivate", "delete", "primary"]
+
+
+PRIMARY_NOT_APPLICABLE = (
+    "Las conexiones de Meta no se marcan como principal: el asistente responde por el número por el "
+    "que escribió cada cliente y usa las credenciales de su propia cuenta de Meta. «Principal» solo "
+    "aplica a las conexiones manuales (credenciales cargadas a mano), como respaldo del envío."
+)
 
 
 @router.post("/connections/{connection_id}/action", status_code=204)
@@ -506,7 +535,17 @@ async def meta_connection_action(
     payload: MetaConnectionAction,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> Response:
-    """Activa, desactiva o elimina (soft-delete) una conexión de Meta."""
+    """Activa, desactiva o elimina (soft-delete) una conexión de Meta.
+
+    `primary` responde 409 `primary_not_applicable` con la explicación: la primacía es el respaldo
+    de credenciales de las conexiones manuales (ADR-0069); una cuenta de Meta resuelve las suyas y su
+    conexión canónica nace y queda con `is_primary = false` (ADR-0115 §1)."""
+    if payload.action == "primary":
+        async with get_session() as session:
+            existe = await get_live_meta_connection(session, _uuid_o_none(connection_id), principal.tenant_id)
+        if existe is None:
+            raise ApiError.not_found("Conexión no encontrada.")
+        raise ApiError(409, "primary_not_applicable", PRIMARY_NOT_APPLICABLE)
     if payload.action == "delete":
         error = await soft_delete_connection(principal.tenant_id, connection_id)
     else:
