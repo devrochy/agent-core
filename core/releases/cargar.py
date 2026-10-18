@@ -17,7 +17,7 @@ import copy
 import json
 import uuid
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -26,15 +26,48 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.kernel.episodio import DEFAULT_IDLE_MINUTES
 from core.shared.logger import get_logger
-from core.shared.release_vigente import ArtefactosDeRelease
+from core.shared.release_vigente import AgenteCongelado, ArtefactosDeRelease
 
 if TYPE_CHECKING:
     from agentcore_contracts import Procedure
 
 log = get_logger(__name__)
 
-# 64 MiB: holgado para 300 negocios con overrides de 8 KiB.
+# 64 MiB: holgado para 300 negocios con overrides de 8 KiB (y las versiones de sus agentes,
+# HU-AOS-15: el General más grande de hoy pesa unos 20 KiB).
 MAX_BYTES = 64 * 1024 * 1024
+
+
+class ErrorDeRelease(RuntimeError):
+    """La release no se puede ejecutar (p. ej. sin especialista en foco). Fail-closed con
+    `aos_runtime = 'v3'`: sube por el camino de error del turno."""
+
+
+def elegir_foco(
+    agentes: Iterable[AgenteCongelado], kernel: Mapping[str, Any] | None, owner_instance_id: uuid.UUID | None
+) -> AgenteCongelado:
+    """El especialista que atiende el turno (HU-AOS-15; el router llega con HU-AOS-17):
+    (1) el dueño vigente de la conversación si es un especialista de ESTA release;
+    (2) si no, el especialista cuya key es `routing.defaultAgent` del KernelSpec;
+    (3) si no, el único especialista. Sin especialista (o con varios y ninguno por defecto):
+    `ErrorDeRelease`. El Coordinador nunca atiende (ADR-0112 §1)."""
+    especialistas = [a for a in agentes if a.role == "specialist"]
+    if owner_instance_id is not None:
+        dueno = next((a for a in especialistas if a.instance_id == owner_instance_id), None)
+        if dueno is not None:
+            return dueno
+    routing = kernel.get("routing") if isinstance(kernel, Mapping) else None
+    por_defecto = routing.get("defaultAgent") if isinstance(routing, Mapping) else None
+    elegido = next((a for a in especialistas if a.key == por_defecto), None)
+    if elegido is not None:
+        return elegido
+    if len(especialistas) == 1:
+        return especialistas[0]
+    raise ErrorDeRelease(
+        "sin_especialista_en_foco: la release no tiene un especialista por defecto"
+        if especialistas
+        else "sin_especialista: la release no tiene especialistas"
+    )
 
 
 @dataclass
@@ -47,6 +80,9 @@ class ReleaseCongelada:
     manifest: Mapping[str, Any]
     idle_minutes: int
     bytes: int
+    # Versiones congeladas de los agentes (HU-AOS-15), cargadas por `agent_version_id` desde
+    # los `components` del manifiesto: nunca desde las instancias o agentes vivos.
+    componentes: tuple[AgenteCongelado, ...] = ()
     _procedimientos: dict[str, Procedure] | None = field(default=None, repr=False)
 
     @property
@@ -66,7 +102,19 @@ class ReleaseCongelada:
         flujo = self.manifest.get("flow_tenant")
         return flujo.get("sections") if isinstance(flujo, Mapping) else None
 
-    def artefactos(self, lane: str = "stable") -> ArtefactosDeRelease:
+    @property
+    def kernel(self) -> AgenteCongelado | None:
+        return next((c for c in self.componentes if c.role == "core"), None)
+
+    @property
+    def tenant_plugins(self) -> list[str]:
+        return [str(p) for p in self.manifest.get("tenant_plugins", [])]
+
+    def foco(self, owner_instance_id: uuid.UUID | None = None) -> AgenteCongelado:
+        kernel = self.kernel
+        return elegir_foco(self.componentes, kernel.content if kernel is not None else None, owner_instance_id)
+
+    def artefactos(self, lane: str = "stable", foco: AgenteCongelado | None = None) -> ArtefactosDeRelease:
         return ArtefactosDeRelease(
             tenant_id=self.tenant_id,
             connection_id=self.connection_id,
@@ -77,6 +125,10 @@ class ReleaseCongelada:
             playbooks=self.playbooks,
             # Copia: lo de la caché es de todos los turnos de la release y nadie debe mutarlo.
             flow_tenant=copy.deepcopy(self.flow_tenant),
+            agentes=self.componentes,
+            foco=foco,
+            skills=tuple(self.skills),
+            tenant_plugins=tuple(self.tenant_plugins),
         )
 
     def procedimientos(self) -> dict[str, Procedure]:
@@ -167,24 +219,72 @@ async def cargar_release(
     if fila is None:
         return None
     texto: str = fila[4]
+    manifest = json.loads(texto)
+    componentes, bytes_agentes = await _componentes(session, tenant_id, manifest)
     release = ReleaseCongelada(
         id=fila[0],
         tenant_id=tenant_id,
         connection_id=fila[1],
         number=fila[2],
         manifest_hash=fila[3],
-        manifest=json.loads(texto),
+        manifest=manifest,
         idle_minutes=int(fila[5]) if fila[5] else DEFAULT_IDLE_MINUTES,
-        bytes=len(texto.encode("utf-8")),
+        bytes=len(texto.encode("utf-8")) + bytes_agentes,
+        componentes=componentes,
     )
     _guardar(release)
     return release
 
 
+async def _componentes(
+    session: AsyncSession, tenant_id: uuid.UUID, manifest: Mapping[str, Any]
+) -> tuple[tuple[AgenteCongelado, ...], int]:
+    """Las versiones de los `components` del manifiesto, por su `agent_version_id` (inmutables;
+    `release_components` las ata al negocio y a la conexión). Un componente cuya versión no
+    está (imposible por la FK) se omite con un log de error."""
+    crudos = [c for c in manifest.get("components", []) if isinstance(c, Mapping)]
+    ids = [c["agent_version_id"] for c in crudos if c.get("agent_version_id")]
+    if not ids:
+        return (), 0
+    filas = (
+        await session.execute(
+            text(
+                "SELECT id, content::text FROM agent_versions "
+                "WHERE tenant_id = :t AND id = ANY(cast(:ids AS uuid[]))"
+            ),
+            {"t": tenant_id, "ids": ids},
+        )
+    ).all()
+    por_id = {str(f[0]): str(f[1]) for f in filas}
+    salida: list[AgenteCongelado] = []
+    total = 0
+    for c in crudos:
+        contenido = por_id.get(str(c.get("agent_version_id")))
+        if contenido is None:
+            log.error("release_component_sin_version", agent_key=c.get("agent_key"))
+            continue
+        total += len(contenido.encode("utf-8"))
+        salida.append(
+            AgenteCongelado(
+                instance_id=uuid.UUID(str(c["instance_id"])),
+                agent_id=uuid.UUID(str(c["agent_id"])),
+                key=str(c["agent_key"]),
+                role=str(c["role"]),
+                version_id=uuid.UUID(str(c["agent_version_id"])),
+                version=int(c.get("version") or 0),
+                contract=str(c.get("contract") or ""),
+                content=json.loads(contenido),
+            )
+        )
+    return tuple(salida), total
+
+
 __all__ = [
     "MAX_BYTES",
+    "ErrorDeRelease",
     "ReleaseCongelada",
     "cargar_release",
     "derivar_procedimientos",
+    "elegir_foco",
     "vaciar_cache",
 ]
