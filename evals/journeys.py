@@ -476,6 +476,60 @@ async def _herramientas_desde(ctx: Contexto, desde: datetime) -> list[dict[str, 
     return [{"nombre": f.actor.removeprefix("tool:"), "entrada": f.input or {}, "salida": f.output or {}} for f in filas]
 
 
+async def runtime_efectivo(tenant_id: uuid.UUID) -> dict[str, Any]:
+    """Banderas del negocio de la corrida tal como quedaron en la base (prueba del runtime)."""
+    from sqlalchemy import text
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            fila = (
+                await session.execute(
+                    text("select aos_runtime, aos_procedures from tenants where id = :t"), {"t": tenant_id}
+                )
+            ).first()
+    if fila is None:
+        return {"aos_runtime": None, "aos_procedures": None}
+    return {"aos_runtime": fila[0], "aos_procedures": bool(fila[1])}
+
+
+async def motivo_del_relevo(ctx: Contexto, desde: datetime) -> str:
+    """Por qué escaló el turno, desde `audit_log` (solo códigos): el guardrail que agotó los
+    reintentos (`core:guardrail`) y los motivos del verificador (`core:verificador`). En el
+    canal `test` la escalación no deja fila en `escalations`."""
+    from sqlalchemy import select
+
+    from core.db.models import AuditLog
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(ctx.tenant_id):
+        async with get_session() as session:
+            filas = (
+                await session.execute(
+                    select(AuditLog)
+                    .where(
+                        AuditLog.tenant_id == ctx.tenant_id,
+                        AuditLog.conversation_id == ctx.conversation_id,
+                        AuditLog.actor.in_(("core:guardrail", "core:verificador")),
+                        AuditLog.created_at >= desde,
+                    )
+                    .order_by(AuditLog.created_at)
+                )
+            ).scalars().all()
+    partes: list[str] = []
+    for fila in filas:
+        datos = fila.input or {}
+        if fila.action == "guardrail_escalated":
+            afirmacion = datos.get("afirmacion")
+            partes.append(f"guardrail={datos.get('guardrail')}" + (f" ({afirmacion})" if afirmacion else ""))
+        elif fila.action == "verificacion" and datos.get("resultado") == "fallo":
+            partes.append(f"verificador={','.join(map(str, datos.get('motivos') or []))}")
+    return "; ".join(partes)
+
+
 def _revisar_turno(texto: str, herramientas: list[str], escalo: bool, espera: dict[str, Any]) -> list[str]:
     fallas: list[str] = []
     bajo = texto.lower()
@@ -690,7 +744,13 @@ async def paso_simulado(ctx: Contexto, paso: dict[str, Any], registro: list[str]
     registro.append(f"    simulador: fin={fin}, turnos={ctx.simulador['turnos']}, herramientas={nombres}")
     esperados = paso.get("espera_fin")
     if esperados and fin not in esperados:
-        raise FallaJourney(f"la conversación terminó por «{fin}», se esperaba {esperados}")
+        motivo = ""
+        if fin == "relevo":
+            motivo = await motivo_del_relevo(ctx, inicio)
+            registro.append(f"    motivo del relevo: {motivo or 'sin rastro'}")
+        raise FallaJourney(
+            f"la conversación terminó por «{fin}», se esperaba {esperados}" + (f" [{motivo}]" if motivo else "")
+        )
 
 
 def _coincide(valor: Any, esperado: Any) -> bool:
@@ -984,7 +1044,11 @@ async def _correr_set(args: argparse.Namespace, set_id: str, rutas: list[Path], 
         texto_resumen,
     )
 
-    print(f"Corriendo {len(rutas)} journeys del set {set_id} con k={k} (negocio {tenant_id})...\n")
+    efectivo = await runtime_efectivo(tenant_id)
+    print(
+        f"Corriendo {len(rutas)} journeys del set {set_id} con k={k} (negocio {tenant_id}, "
+        f"aos_runtime={efectivo['aos_runtime']}, aos_procedures={efectivo['aos_procedures']})...\n"
+    )
 
     import grabaciones
 
@@ -1014,7 +1078,10 @@ async def _correr_set(args: argparse.Namespace, set_id: str, rutas: list[Path], 
     if cassette.modo_activo() != "replay":
         await _guardar(tenant_id, set_id, resultados, k, simulador)
     if args.reporte:
-        escribir_reporte(args.reporte, reporte(set_id, resultados, k, simulador))
+        datos = reporte(set_id, resultados, k, simulador)
+        # Lo que de verdad corrió el negocio (no solo lo pedido con `--runtime`).
+        datos["runtime"] = {"pedido": getattr(args, "runtime", None), **await runtime_efectivo(tenant_id)}
+        escribir_reporte(args.reporte, datos)
     # El gate del 0A no cambia (ADR-0119): se mide sobre pass@1; pass^k se reporta.
     return 0 if resumen.pass_1 >= args.umbral else 1
 
