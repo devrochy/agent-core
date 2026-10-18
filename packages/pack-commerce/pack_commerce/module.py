@@ -129,7 +129,9 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
             r"\b(?:qued[oó]|est[aá]|fue)\s+(?:ya\s+)?(?:armad|generad)a\s+(?:tu|la)\s+cotizaci[oó]n",
             re.IGNORECASE,
         ),
-        {"generar_cotizacion"},
+        # `cotizar_plan` (HU-AOS-07) es la misma cotización con una unidad, la del procedimiento
+        # `contratar_plan`: "te armé la cotización" tras cotizar_plan es verdad (pass^4, 2026-10-18).
+        {"generar_cotizacion", "cotizar_plan"},
     ),
     "cotizacion_aceptada": (
         re.compile(
@@ -188,6 +190,13 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
 
 # Afirmaciones que también respalda una URL devuelta por una tool del turno.
 _LINK_CON_URL = frozenset({"link_de_pago"})
+
+# Datos de contacto de los procedimientos del pack (`tomar_pedido`, `contratar_plan`): con el motor
+# activo, "anoté tu dirección" lo respalda el dato fijado en este turno (`Afirmacion.datos`).
+_DATOS_DE_CONTACTO = frozenset(
+    {"full_name", "id_document", "phone", "email", "address", "city", "municipality"}
+)
+_DATOS_QUE_RESPALDAN = {"dato_de_contacto_guardado": _DATOS_DE_CONTACTO}
 
 _MAX_CUSTOM_COMPLETION_CLAIM_LINES = 50
 
@@ -1363,6 +1372,12 @@ class CRMModule(BaseModule):
                 claims.pop(name, None)
             claims.update(_parse_custom_completion_claims(config.completion_claims_custom or ""))
         return [
-            Afirmacion(label=label, patron=pattern, tools=frozenset(tools), basta_url=label in _LINK_CON_URL)
+            Afirmacion(
+                label=label,
+                patron=pattern,
+                tools=frozenset(tools),
+                basta_url=label in _LINK_CON_URL,
+                datos=_DATOS_QUE_RESPALDAN.get(label, frozenset()),
+            )
             for label, (pattern, tools) in claims.items()
         ]

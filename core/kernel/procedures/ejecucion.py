@@ -463,6 +463,9 @@ class ContextoMotor:
         self.tarjeta = tarjeta
         self.texto_cliente = texto_cliente
         self.ejecutor: Ejecutor | None = None
+        # Datos de la tarea en foco que el motor fijó en ESTE turno por `actualizar_tarea` (todo o
+        # nada: solo los aceptados). Evidencia del verificador para "anoté tu dirección" (ADR-0119).
+        self.datos_fijados: set[str] = set()
         self._base = list(herramientas_base)
         self._candidatas = list(candidatas)
         self._core = frozenset(t.name for t in self._base if getattr(t, "plugin_id", "") == CORE_OWNER)
@@ -1281,6 +1284,7 @@ class ContextoMotor:
                 if proc.slots[nombre].confirm and por_confirmar is None and nombre not in _confirmados_por_salida(proc):
                     por_confirmar = nombre
                 foco = _Foco(fila=fila, tarea=state.proyeccion_de(fila), proc=proc, stage=foco.stage)
+            self.datos_fijados.update(str(n) for n in validos)
             if cambian:
                 foco = await self._tras_cambio(s, foco, cambian, set(validos))
             if por_confirmar is not None and foco.tarea.pending_confirmation is None:

@@ -361,3 +361,16 @@ def test_un_pack_no_puede_registrar_un_nombre_del_verificador(nombre: str) -> No
     host.begin_activation("pack_x")
     with pytest.raises(PluginError):
         host.register_guardrail(nombre, guardrail)
+
+
+def test_cotizacion_generada_la_respalda_cotizar_plan() -> None:
+    """`cotizar_plan` (procedimiento `contratar_plan`) es la misma cotización de una unidad."""
+    from pack_commerce.module import COMPLETION_CLAIMS
+
+    patron, tools = COMPLETION_CLAIMS["cotizacion_generada"]
+    afirmacion = Afirmacion(label="cotizacion_generada", patron=patron, tools=frozenset(tools))
+    texto = "Listo, te generé la cotización del Plan Premium mensual."
+    con = verificar(texto, Evidencia.desde([{"_tool_name": "cotizar_plan", "total": 600000}]), [afirmacion])
+    assert con.passed, con.motivo
+    sin = verificar(texto, Evidencia.desde([{"_tool_name": "consultar_inventario"}]), [afirmacion])
+    assert not sin.passed and sin.motivo == "status_sin_evidencia"

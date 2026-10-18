@@ -935,7 +935,11 @@ async def _estado_del_verificador(motor: ContextoMotor | None, referencias: list
     tareas = await motor.instantaneas() if motor is not None else None
     if tareas is None:
         return None
-    return EstadoTareas(tareas=tuple(tareas), referencias_vigentes=tuple(referencias))
+    return EstadoTareas(
+        tareas=tuple(tareas),
+        referencias_vigentes=tuple(referencias),
+        datos_fijados=tuple(sorted(motor.datos_fijados)) if motor is not None else (),
+    )
 
 
 async def _ejecutar_comando(conversation: Conversation, motor: ContextoMotor, tool_call: LLMToolCall) -> dict[str, Any]:

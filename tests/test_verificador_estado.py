@@ -182,3 +182,44 @@ def test_un_dato_que_ninguna_afirmacion_declara_no_respalda_cierres() -> None:
     lectura = _tarea(estado=("pendiente", "action:crear_pedido"))
     v = _con_estado("Tu pedido quedó creado.", lectura)
     assert not v.passed and v.motivo == "status_sin_evidencia"
+
+
+# ---------------------------------------------------------------- datos que fijó el motor (pass^4, 2026-10-18)
+# "Anoté tu dirección" tras un `actualizar_tarea` aceptado escalaba en v3: el comando no es una tool.
+
+GUARDADO = Afirmacion(
+    label="dato_de_contacto_guardado",
+    patron=re.compile(r"(?:guard[eé]|registr[eé]|anot[eé])\s+(?:tu|el|los?|la)\s*(?:direcci[oó]n|tel[eé]fono)", re.IGNORECASE),
+    tools=frozenset({"crear_lead", "update_customer_profile"}),
+    datos=frozenset({"address", "phone"}),
+)
+ANOTE = "Anoté tu dirección: Calle 10 # 20-30, Bogotá. ¿Es correcta?"
+
+
+def _guardado(texto: str, *, fijados: tuple[str, ...] | None, resultados: list[dict] | None = None):
+    estado = None if fijados is None else EstadoTareas(tareas=(), datos_fijados=fijados)
+    return verificar(texto, Evidencia.desde(resultados or [], "", estado), [GUARDADO])
+
+
+def test_dato_fijado_por_el_motor_en_el_turno_respalda_anote_tu_direccion() -> None:
+    v = _guardado(ANOTE, fijados=("address",))
+    assert v.passed, v.motivo
+
+
+def test_sin_dato_fijado_sigue_fallando() -> None:
+    for fijados in (None, ()):
+        v = _guardado(ANOTE, fijados=fijados)
+        assert not v.passed and v.motivo == "status_sin_evidencia" and v.afirmacion == "dato_de_contacto_guardado"
+
+
+def test_un_dato_que_la_afirmacion_no_declara_no_la_respalda() -> None:
+    v = _guardado(ANOTE, fijados=("delivery_method", "payment_method"))
+    assert not v.passed and v.motivo == "status_sin_evidencia"
+
+
+def test_un_dato_fijado_no_respalda_otras_afirmaciones_ni_montos() -> None:
+    estado = EstadoTareas(tareas=(), datos_fijados=("address",))
+    v = verificar("Tu pedido OC-0042 quedó creado.", Evidencia.desde([], "", estado), [CREADO])
+    assert not v.passed and v.motivo == "status_sin_evidencia"
+    v = verificar("Anoté tu dirección, el total es $99.000.", Evidencia.desde([], "", estado), [GUARDADO])
+    assert not v.passed and v.motivo == "monto_sin_evidencia"

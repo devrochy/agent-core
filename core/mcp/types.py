@@ -364,6 +364,10 @@ class Afirmacion:
     - `basta_url`: también la respalda cualquier tool del turno que haya
       devuelto una URL (un link de pago lo puede dar el pedido, la suscripción
       o pagos en línea; así el pack no lista tools de otros packs).
+    - `datos`: con el motor de procedimientos activo, también la respalda que el
+      motor haya fijado en este turno alguno de esos datos de la tarea en foco
+      (`actualizar_tarea` aceptado: validado y, si es personal, dicho por el
+      cliente). "Anoté tu dirección" es verdad aunque no corra `crear_lead`.
 
     El verificador descarta solo las preguntas, las negaciones y los
     condicionales ("para generar el link…"): eso es español genérico y vive en
@@ -374,6 +378,7 @@ class Afirmacion:
     patron: re.Pattern[str]
     tools: frozenset[str] = frozenset()
     basta_url: bool = False
+    datos: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
