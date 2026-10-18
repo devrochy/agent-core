@@ -1,0 +1,11 @@
+{
+  "key": "agenda",
+  "nombre": "Agenda",
+  "descripcion": "Agenda citas, demos y reuniones en los horarios disponibles del negocio.",
+  "habilidades": ["pack_calendar"],
+  "procedimientos": ["pack_calendar.agendar_cita"],
+  "playbooks": ["citas"],
+  "reglas": [
+    {"id": "preset_agenda_palabras", "when": {"keywordAny": ["agendar", "cita", "reservar", "demo"]}}
+  ]
+}

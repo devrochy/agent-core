@@ -1,6 +1,6 @@
 {
   "id": "comercio",
-  "version": 1,
+  "version": 2,
   "nombre": "Comercio",
   "descripcion": "Tienda que vende por WhatsApp: catálogo, cotización, pedido y pago en línea.",
   "sinonimos": [
@@ -49,5 +49,8 @@
     "cargar_catalogo",
     "configurar_pagos"
   ],
-  "golden_set": "comercio-base"
+  "golden_set": "comercio-base",
+  "agentes": [
+    "ventas"
+  ]
 }

@@ -1,0 +1,34 @@
+{
+  "key": "ventas",
+  "nombre": "Ventas",
+  "descripcion": "Vende el catálogo del negocio: pedidos, cotizaciones, planes y links de pago.",
+  "habilidades": [
+    "pack_commerce"
+  ],
+  "opcionales": [
+    "pack_payments"
+  ],
+  "procedimientos": [
+    "pack_commerce.tomar_pedido",
+    "pack_commerce.contratar_plan"
+  ],
+  "playbooks": [
+    "ventas",
+    "seguimiento",
+    "pagos"
+  ],
+  "reglas": [
+    {
+      "id": "preset_ventas_palabras",
+      "when": {
+        "keywordAny": [
+          "comprar",
+          "hacer un pedido",
+          "precio",
+          "cotización",
+          "link de pago"
+        ]
+      }
+    }
+  ]
+}
