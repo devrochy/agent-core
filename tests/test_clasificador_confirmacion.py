@@ -79,3 +79,22 @@ def test_el_playbook_del_kernel_carga() -> None:
     lx = clasificador.lexico()
     assert "confirmo" in lx.nucleo and "si" in lx.prefijos and "no" in lx.negaciones
     assert "si" not in lx.nucleo  # un "sí" solo nunca es núcleo
+
+
+# pass^4 de los procedimientos (2026-10-18): "Sí, confirmo. Pasame el link de pago" no confirmaba y la
+# compra terminaba en relevo. Pedir el paso siguiente es cortesía: el núcleo sigue siendo obligatorio.
+@pytest.mark.parametrize(
+    "texto",
+    ["Sí, confirmo. Pasame el link de pago", "Sí, confirmo. Espero el link.", "Confirmo, envíame el link de pago"],
+)
+def test_confirmo_y_pedir_el_link_confirma(texto: str) -> None:
+    assert clasificador.es_confirmacion(texto), texto
+
+
+@pytest.mark.parametrize(
+    "texto",
+    ["Pasame el link", "Pasame el link de pago", "no, pasame el link", "¿me pasás el link?", "Sí, pasame el link",
+     "Espero el link", "no confirmo, mandame el link"],
+)
+def test_pedir_el_link_sin_confirmar_no_confirma(texto: str) -> None:
+    assert not clasificador.es_confirmacion(texto), texto

@@ -495,6 +495,15 @@ async def runtime_efectivo(tenant_id: uuid.UUID) -> dict[str, Any]:
     return {"aos_runtime": fila[0], "aos_procedures": bool(fila[1])}
 
 
+def pidio_relevo(herramientas: list[dict[str, Any]]) -> bool:
+    """¿El turno pasó a un humano con `escalate_to_human`? En el canal `test` la tool no pausa el
+    bot (`escalate` no aplica ahí), así que el loop no marca el turno como escalado: sin esto la
+    conversación seguía hasta el tope de turnos (pass^4 de los procedimientos, 2026-10-18)."""
+    return any(
+        h.get("nombre") == "escalate_to_human" and not (h.get("salida") or {}).get("error") for h in herramientas
+    )
+
+
 async def motivo_del_relevo(ctx: Contexto, desde: datetime) -> str:
     """Por qué escaló el turno, desde `audit_log` (solo códigos): el guardrail que agotó los
     reintentos (`core:guardrail`) y los motivos del verificador (`core:verificador`). En el
@@ -513,7 +522,7 @@ async def motivo_del_relevo(ctx: Contexto, desde: datetime) -> str:
                     .where(
                         AuditLog.tenant_id == ctx.tenant_id,
                         AuditLog.conversation_id == ctx.conversation_id,
-                        AuditLog.actor.in_(("core:guardrail", "core:verificador")),
+                        AuditLog.actor.in_(("core:guardrail", "core:verificador", "tool:escalate_to_human")),
                         AuditLog.created_at >= desde,
                     )
                     .order_by(AuditLog.created_at)
@@ -525,6 +534,8 @@ async def motivo_del_relevo(ctx: Contexto, desde: datetime) -> str:
         if fila.action == "guardrail_escalated":
             afirmacion = datos.get("afirmacion")
             partes.append(f"guardrail={datos.get('guardrail')}" + (f" ({afirmacion})" if afirmacion else ""))
+        elif fila.actor == "tool:escalate_to_human":
+            partes.append("tool=escalate_to_human")  # sin el motivo: lo escribe el modelo
         elif fila.action == "verificacion" and datos.get("resultado") == "fallo":
             partes.append(f"verificador={','.join(map(str, datos.get('motivos') or []))}")
     return "; ".join(partes)
@@ -726,13 +737,14 @@ async def paso_simulado(ctx: Contexto, paso: dict[str, Any], registro: list[str]
             fin = "se_rindio"
             break
         cliente.anotar("cliente", mensaje)
+        inicio_turno = datetime.now(UTC) - timedelta(seconds=1)
         resultado = await _turno(ctx, mensaje)
         if resultado is None:
             fin = "relevo"
             break
         cliente.anotar("asistente", resultado.text)
         registro.append(f"    cliente: {mensaje}\n    asistente: {resultado.text}")
-        if resultado.escalated:
+        if resultado.escalated or pidio_relevo(await _herramientas_desde(ctx, inicio_turno)):
             fin = "relevo"
             break
     herramientas = await _herramientas_desde(ctx, inicio)

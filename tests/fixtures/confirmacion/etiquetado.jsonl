@@ -211,3 +211,16 @@
 {"texto": "sí, está bien, pero cambia la dirección", "confirma": false}
 {"texto": "está bien, gracias", "confirma": false}
 {"texto": "sí, por favor, gracias", "confirma": false}
+{"texto": "Sí, confirmo. Pasame el link de pago.", "confirma": true}
+{"texto": "Sí, confirmo. Espero el link.", "confirma": true}
+{"texto": "Confirmo, mándame el link de pago", "confirma": true}
+{"texto": "Pasame el link", "confirma": false}
+{"texto": "Pasame el link de pago", "confirma": false}
+{"texto": "no, pasame el link", "confirma": false}
+{"texto": "¿me pasás el link?", "confirma": false}
+{"texto": "Sí, pasame el link", "confirma": false}
+{"texto": "Espero el link", "confirma": false}
+{"texto": "confirmo pero pasame el link mañana", "confirma": false}
+{"texto": "no confirmo, mandame el link", "confirma": false}
+{"texto": "adelante, pasame el link", "confirma": true}
+{"texto": "sí por favor, pasame el link", "confirma": false}
