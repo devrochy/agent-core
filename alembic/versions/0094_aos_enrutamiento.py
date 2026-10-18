@@ -12,7 +12,7 @@
 
 **Orden del rollback:** primero el código (banderas.py lee `aos_routing` en cada turno y
 decisions.py escribe `shadow_route`), después el `downgrade`, que además borra el historial de
-`shadow_route`. La revisión se re-encadena sobre el head real de develop al mergear (0090–0093 están
+`shadow_route`. La revisión se re-encadena sobre el head real de develop al mergear (0091–0093 están
 reservadas para PRs en paralelo).
 
 Columnas con default constante o nullables: sin reescritura. Cada tabla en su propia transacción
