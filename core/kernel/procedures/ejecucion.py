@@ -409,9 +409,15 @@ async def _validar_dato(
 
 def _contexto_de_herramienta(conversation_id: uuid.UUID, customer_id: uuid.UUID, channel: str, clave: str) -> Any:
     from core.mcp.host import new_tool_context
+    from core.shared import release_vigente
 
     return new_tool_context(
-        conversation_id=conversation_id, customer_id=customer_id, idempotency_key=clave, channel=channel
+        conversation_id=conversation_id,
+        customer_id=customer_id,
+        idempotency_key=clave,
+        channel=channel,
+        # Mismo permiso de memoria que el loop (ADR-0114 §3, HU-AOS-15); None en legacy.
+        write_namespaces=release_vigente.write_namespaces_del_turno(),
     )
 
 
@@ -501,6 +507,11 @@ class ContextoMotor:
     @property
     def en_foco(self) -> bool:
         return self.modo == "activo" and self._foco is not None
+
+    @property
+    def foco_task_id(self) -> uuid.UUID | None:
+        """Id de la tarea en foco al empezar el turno (`core_decisions.focus_task_id`, HU-AOS-15)."""
+        return self._foco.fila.id if self.en_foco and self._foco is not None else None
 
     def herramientas(self) -> list[Any]:
         """Acciones a ofrecer: las de siempre sin foco; con foco, las de la etapa más las del core
@@ -1783,14 +1794,14 @@ async def contexto_del_motor(
         # (scope de la conexión) y la oferta es fail-closed por el agente en foco.
         from core.kernel.oferta import declaradas_por
 
-        packs = frozenset(release.skills)
+        packs = frozenset((*release.skills, *release.tenant_plugins))
         comunes["permitidos"] = frozenset((packs | {CORE_OWNER}) - set(disabled))
         comunes["de_la_release"] = {
             pid: p for pid, p in release.procedimientos.items() if p.version != "0.0.0"
         }
         comunes["packs_de_la_release"] = packs
         # Sin agente en foco (release con solo el Coordinador): fail-closed, solo core y comandos.
-        comunes["declaradas_por_el_agente"] = declaradas_por(release_vigente.agente_en_foco()) or frozenset()
+        comunes["declaradas_por_el_agente"] = declaradas_por(release_vigente.agente_del_turno()) or frozenset()
     async with get_session() as session:
         banderas = await banderas_del_negocio(session, tenant_id)
         if banderas.procedimientos:

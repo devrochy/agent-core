@@ -107,8 +107,10 @@ solo lee lo nuevo cuando tiene una release en la ranura.
 - **Runtime:** `cargar_release` lee además los `procedure/1` de `pack_versions` (caché global en
   proceso por `(pack_id, version)`: son inmutables) y el `content` de las versiones de los agentes.
   La ranura (`ArtefactosDeRelease`, sigue hoja) lleva las habilidades, los procedimientos de toda la
-  release, los agentes y el agente en foco (el `is_default`; `fijar_agente` es el enganche del router
-  de HU-AOS-15/17). Con el motor activo, `iniciar_procedimiento` ofrece solo los procedimientos
+  release y, por `instance_id`, los de cada agente. Los agentes son los `AgenteCongelado` de HU-AOS-15
+  (contenido por `agent_version_id`), que con `release/2` traen además `is_default` y sus
+  procedimientos resueltos; el agente en foco es el `foco` que elige `elegir_foco` (HU-AOS-15) y
+  `procedimientos_del_agente()` deriva de él (un solo modelo, sin enganche propio). Con el motor activo, `iniciar_procedimiento` ofrece solo los procedimientos
   PUBLICADOS que declara el agente en foco (nunca los abiertos `0.0.0`, que solo sirven a la
   revalidación); las tools pasan si son del core, comandos, de la etapa en foco o declaradas por el
   agente, y nunca las de un pack fuera de las habilidades de la release (`fuera_del_agente`). Las

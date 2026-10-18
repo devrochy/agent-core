@@ -145,6 +145,71 @@ def backfill_releases(
         raise typer.Exit(1)
 
 
+@app.command("migrar-a-v3")
+def migrar_a_v3(
+    tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
+    todos: bool = typer.Option(False, "--todos", help="Todos los negocios vivos."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="No escribe: reporta precondiciones, bloqueos y avisos."),
+    volver: bool = typer.Option(False, "--volver", help="Devuelve el negocio a `aos_runtime = legacy`."),
+    construir: bool = typer.Option(
+        False, "--construir", help="Si la release activa está desactualizada, construye y promueve una nueva."
+    ),
+    apagar_procedimientos: bool = typer.Option(
+        False, "--apagar-procedimientos", help="Con --volver: apaga también `aos_procedures` si estaba encendida."
+    ),
+    database_url: str | None = typer.Option(
+        None, "--database-url", help="Para escribir las banderas; por defecto MIGRATIONS_DATABASE_URL (el rol dueño)."
+    ),
+) -> None:
+    """Agent OS (HU-AOS-15): enciende `tenants.aos_runtime = 'v3'` (nunca `aos_procedures`) en un
+    negocio listo: backfills de conexiones, agentes y releases hechos, `AOS_CONNECTION_ROUTING`
+    encendida y la release activa de cada conexión al día y ejecutable. Un negocio que no cumple
+    queda bloqueado con el motivo. Corre primero con `--dry-run`. Precondición de producto
+    (runbook del PR): el pass^4 del negocio medido antes; si después de migrar empeora, `--volver`."""
+    import asyncio
+
+    from rich.table import Table
+
+    from cli.tenant_ref import resolve_tenant
+    from core.plugin_manager import plugin_manager
+    from core.releases.migracion_v3 import ReporteMigracion
+    from core.releases.migracion_v3 import migrar_a_v3 as correr
+
+    if bool(tenant) == todos:
+        raise typer.BadParameter("Indica --tenant <slug> o --todos (uno de los dos).")
+    if construir and todos:
+        raise typer.BadParameter("--construir promueve releases: solo con --tenant, nunca con --todos.")
+
+    async def _run() -> ReporteMigracion:
+        ids = [await resolve_tenant(tenant)] if tenant else None
+        return await correr(
+            tenant_ids=ids,
+            dry_run=dry_run,
+            volver=volver,
+            construir=construir,
+            apagar_procedimientos=apagar_procedimientos,
+            modules=plugin_manager.scan(),
+            database_url=database_url,
+        )
+
+    reporte = asyncio.run(_run())
+    titulo = "Migración a v3" if not volver else "Vuelta a legacy"
+    tabla = Table(title=titulo + (" (dry-run: no se escribió nada)" if dry_run else ""))
+    for columna in ("Negocio", "Antes", "Acción", "Conexiones"):
+        tabla.add_column(columna)
+    for n in reporte.negocios:
+        antes = n.runtime_antes + (" + procedimientos" if n.procedimientos else "")
+        tabla.add_row(n.slug, antes, n.accion, str(n.conexiones))
+    console.print(tabla)
+    for n in reporte.negocios:
+        for aviso in n.avisos:
+            console.print(f"[yellow]Aviso:[/yellow] {n.slug}: {aviso}")
+        for bloqueo in n.bloqueos:
+            console.print(f"[red]Bloqueado:[/red] {n.slug}: {bloqueo}")
+    if reporte.fallo:
+        raise typer.Exit(1)
+
+
 @app.command("backfill-agentes")
 def backfill_agentes(
     dry_run: bool = typer.Option(False, "--dry-run", help="No escribe: reporta lo que haría."),

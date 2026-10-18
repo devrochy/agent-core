@@ -17,3 +17,6 @@
   `procedures` resueltos.
 - **Sin cambio** con las banderas apagadas; sin migración. El primer build tras el deploy crea una
   release nueva por conexión (`release/2` entra al hash).
+- **Un solo modelo de agentes de la release** con HU-AOS-15: los procedimientos por agente cuelgan del
+  `AgenteCongelado` y se aplican al especialista en foco que elige `elegir_foco`; con `release/2`, el
+  `is_default` de la conexión gana sobre el `routing.defaultAgent` del KernelSpec.

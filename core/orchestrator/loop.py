@@ -25,10 +25,18 @@ from sqlalchemy import func, select
 from core.agents.flow import confirmed_actions_v2, render_flow, resolve_flow
 from core.agents.responses import load_response
 from core.agents.spec import enabled_packs, load_active_spec
+from core.agents.spec_de_release import spec_del_turno
 from core.config import get_settings
 from core.db.models import AppSettings, AuditLog, Conversation, Customer, Message, UsageLedger
 from core.db.session import get_session
-from core.kernel.decisions import anotar_uso, bloquear, en_turno, enrutar, marcar_neutral
+from core.kernel.decisions import (
+    anotar_foco,
+    anotar_uso,
+    bloquear,
+    en_turno,
+    enrutar,
+    marcar_neutral,
+)
 from core.kernel.ingress import QUOTA_EXHAUSTED_REPLY as QUOTA_EXHAUSTED_REPLY
 from core.kernel.ingress import conversacion_bloqueada, politicas_del_turno
 from core.kernel.procedures import comandos as comandos_del_hilo
@@ -77,6 +85,7 @@ from core.orchestrator.verificador import (
     registrar_veredicto,
     verificar_seguro,
 )
+from core.shared import release_vigente
 from core.shared.audit import record_audit
 from core.shared.crypto import get_secret_box
 from core.shared.exceptions import BusinessError, LLMProviderError, PluginError
@@ -158,12 +167,19 @@ async def _write_usage_ledger(
     """Una fila append-only por turno. Best-effort: nunca interrumpe la respuesta."""
     try:
         anotar_uso(usage.input_tokens, usage.output_tokens, usage.cost_usd)  # turn_outcomes (HU-AOS-10)
+        # Release y agente del turno (HU-AOS-15): NULL con `aos_runtime = legacy`.
+        release = release_vigente.vigente()
+        agente = release.foco if release is not None else None
         async with get_session() as session:
             session.add(
                 UsageLedger(
                     tenant_id=get_current_tenant_id(),
                     conversation_id=conversation_id,
                     agent_spec_version=spec.version,
+                    connection_id=release.connection_id if release is not None else None,
+                    release_id=release.release_id if release is not None else None,
+                    agent_instance_id=agente.instance_id if agente is not None else None,
+                    agent_version_id=agente.version_id if agente is not None else None,
                     model=usage.model or spec.model.primary,
                     input_tokens=usage.input_tokens,
                     output_tokens=usage.output_tokens,
@@ -216,13 +232,16 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
 
     # ---------------- 0. AgentSpec del tenant (Sprint 2, ADR-0014)
     spec = await load_active_spec()
+    # Release del turno, sticky por episodio (ADR-0117 §4): no hace nada con aos_runtime = legacy.
+    # Con v3 (HU-AOS-15) el turno ejecuta la versión congelada del especialista en foco y el
+    # KernelSpec de la release, en la forma v2 que lee este loop; sin release, el mismo v2.
+    await fijar_release_del_turno(conversation)
+    spec = spec_del_turno(spec)
 
     # Cuota del período (ADR-0045) y presupuesto agotado (ADR-0015): políticas del kernel.
     bloqueo = await politicas_del_turno(conversation, spec)
     if bloqueo is not None:
         return TurnResult(text=bloqueo.texto) if bloqueo.texto is not None else None
-    # Release del turno, sticky por episodio (ADR-0117 §4): no hace nada con aos_runtime = legacy.
-    await fijar_release_del_turno(conversation)
 
     # ---------------- 1. Memoria y contexto
     history = await _load_history(conversation_id)
@@ -306,6 +325,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # Confirmaciones de datos al empezar el turno (adenda 2026-10-12 de ADR-0113); solo activo.
         await motor.al_empezar_turno()
         active_tools = motor.herramientas()
+    # Tarea en foco al empezar el turno → `core_decisions.focus_task_id` (HU-AOS-15), antes de decidir.
+    anotar_foco(motor.foco_task_id if motor is not None else None)
     state_card = motor.tarjeta if motor is not None else ""
 
     prompt_ctx = PromptContext(
@@ -931,6 +952,8 @@ async def _execute_tool_safely(
         idempotency_key=f"{conversation.id}:{tool_call.id}",
         channel=conversation.channel,
         http=_http_for_tool(tool_call.name, declarative),
+        # `memory.writeNamespaces` del agente en foco (ADR-0114 §3, HU-AOS-15); None en legacy.
+        write_namespaces=release_vigente.write_namespaces_del_turno(),
     )
 
     # Enablement + consentimiento de la tool por tenant (ADR-0019). Aunque las

@@ -2,16 +2,18 @@
 
 - rangos de versión de un `ProcedureRef` y su resolución contra lo que publica una release;
 - el lector tolerante DECLARA en el General los procedimientos publicados (`^M.0`);
-- `ReleaseCongelada`: procedimientos por agente, `procedimiento_para` por major, agente por
-  defecto y la regla transitoria con un manifiesto `release/1`;
+- `ReleaseCongelada`: procedimientos por agente, `procedimiento_para` por major, el `is_default`
+  en `elegir_foco` (HU-AOS-15) y la regla transitoria con un manifiesto `release/1`;
 - la oferta fail-closed por agente y por scope (`core/kernel/oferta.py`);
-- la ranura del turno (`fijar_agente`) y `registro.disponibles`/`definicion` con una release.
+- la ranura del turno (el `foco` de HU-AOS-15) y `registro.disponibles`/`definicion` con una
+  release.
 Lo que necesita Postgres está en `tests/integration/test_habilidades_por_agente_loop.py`.
 """
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import types
 import uuid
 from typing import Any
@@ -23,8 +25,9 @@ from core.kernel.procedures import registro
 from core.kernel.release_del_turno import con_release
 from core.releases import manifiesto as man
 from core.releases import procedimientos as rp
-from core.releases.cargar import AgenteDeRelease, ReleaseCongelada
+from core.releases.cargar import ErrorDeRelease, ReleaseCongelada
 from core.shared import release_vigente
+from core.shared.release_vigente import AgenteCongelado
 
 T = uuid.uuid4()
 PLAN = "pack_commerce.contratar_plan"
@@ -107,21 +110,26 @@ def test_el_general_declara_los_publicados_con_rango_compatible() -> None:
 
 
 # ---------------------------------------------------------------- release congelada
-def _agente(iid: str, key: str, *, role: str = "specialist", default: bool = False, procs: Any = (), tools: list[str] = (), contract: str = "agentspec/3") -> AgenteDeRelease:  # type: ignore[assignment]
-    return AgenteDeRelease(
-        instance_id=iid,
-        agent_id=f"a-{iid}",
+def _iid(nombre: str) -> uuid.UUID:
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"instancia/{nombre}")
+
+
+def _agente(nombre: str, key: str, *, role: str = "specialist", default: bool = False, procs: Any = (), tools: list[str] | tuple[str, ...] = (), contract: str = "agentspec/3") -> AgenteCongelado:
+    return AgenteCongelado(
+        instance_id=_iid(nombre),
+        agent_id=uuid.uuid5(uuid.NAMESPACE_URL, f"agente/{nombre}"),
         key=key,
         role=role,
-        is_default=default,
-        version_id=f"v-{iid}",
+        version_id=uuid.uuid5(uuid.NAMESPACE_URL, f"version/{nombre}"),
+        version=1,
         contract=contract,
         content={"tools": [{"tool": t, "enabled": True} for t in tools], "declarativeTools": [{"name": "consultar_envio"}]},
+        is_default=default,
         procedimientos=procs,
     )
 
 
-def _release(schema: str = man.SCHEMA, *, agentes: dict[str, AgenteDeRelease] | None = None, skills: list[str] | None = None) -> ReleaseCongelada:
+def _release(schema: str = man.SCHEMA, *, agentes: tuple[AgenteCongelado, ...] = (), skills: list[str] | None = None) -> ReleaseCongelada:
     congelados = {
         (PLAN, "1.2.0"): _proc(PLAN, "1.2.0", etapas=[{"id": "confirmar", "actions": ["confirmar_cotizacion"], "confirmation": "explicit", "exitWhen": {"action": "confirmar_cotizacion"}}]),
         (CITA, "1.0.0"): _proc(CITA, "1.0.0"),
@@ -136,7 +144,7 @@ def _release(schema: str = man.SCHEMA, *, agentes: dict[str, AgenteDeRelease] | 
         manifest={"schema": schema, "skills": [{"pack_id": p} for p in (skills or ["pack_commerce", "pack_calendar", "pack_cobranza"])], "tenant_plugins": []},
         idle_minutes=720,
         bytes=10,
-        agentes=agentes or {},
+        componentes=agentes,
         congelados=congelados,
     )
     # Sin flujo del binario: los abiertos no importan para estas reglas.
@@ -145,33 +153,39 @@ def _release(schema: str = man.SCHEMA, *, agentes: dict[str, AgenteDeRelease] | 
     return release
 
 
-def test_procedimientos_por_agente_y_agente_por_defecto() -> None:
-    ventas = _agente("i-ventas", "ventas", default=True, procs=((PLAN, "1.2.0"),), tools=["informar_plan"])
-    general = _agente("i-general", "general", procs=((PLAN, "1.2.0"), (CITA, "1.0.0"), ("core.saludo", "0.0.0")))
-    core = _agente("i-core", "coordinador", role="core", procs=(), contract="kernelspec/1")
-    release = _release(agentes={"i-core": core, "i-ventas": ventas, "i-general": general})
-    assert release.agente_por_defecto() == "i-ventas"
-    assert set(release.procedimientos_de("i-ventas")) == {PLAN}
-    assert set(release.procedimientos_de("i-general")) == {PLAN, CITA}  # sin los abiertos
-    assert release.procedimientos_de("i-core") == {} and release.procedimientos_de("no-existe") == {}
+def test_procedimientos_por_agente_y_foco_por_defecto() -> None:
+    ventas = _agente("ventas", "ventas", default=True, procs=((PLAN, "1.2.0"),), tools=["informar_plan"])
+    general = _agente("general", "general", procs=((PLAN, "1.2.0"), (CITA, "1.0.0"), ("core.saludo", "0.0.0")))
+    core = _agente("core", "coordinador", role="core", procs=(), contract="kernelspec/1")
+    release = _release(agentes=(core, ventas, general))
+    # El `is_default` de la conexión gana sobre el `routing.defaultAgent` (sin KernelSpec: general).
+    assert release.foco() == ventas
+    assert set(release.procedimientos_de(ventas.instance_id)) == {PLAN}
+    assert set(release.procedimientos_de(general.instance_id)) == {PLAN, CITA}  # sin los abiertos
+    assert release.procedimientos_de(core.instance_id) == {} and release.procedimientos_de(uuid.uuid4()) == {}
     # La promesa requiere pack_subscriptions, que no está en la release: no es de la release.
     assert "pack_cobranza.promesa_de_pago" not in release.procedimientos()
-    artefactos = release.artefactos("stable")
-    assert artefactos.agente_en_foco == "i-ventas" and artefactos.procedimientos_por_agente is not None
-    assert set(artefactos.procedimientos_por_agente["i-general"]) == {PLAN, CITA}
+    artefactos = release.artefactos("stable", foco=release.foco())
+    assert artefactos.foco == ventas and artefactos.procedimientos_por_agente is not None
+    assert set(artefactos.procedimientos_por_agente[general.instance_id]) == {PLAN, CITA}
     assert artefactos.skills == ("pack_commerce", "pack_calendar", "pack_cobranza")
-    # Sin `is_default`: el General; sin General, el primer especialista.
-    sin_defecto = _release(agentes={"i-core": core, "i-general": general, "i-x": _agente("i-x", "x")})
-    assert sin_defecto.agente_por_defecto() == "i-general"
-    assert _release(agentes={"i-core": core, "i-x": _agente("i-x", "x")}).agente_por_defecto() == "i-x"
-    assert _release(agentes={"i-core": core}).agente_por_defecto() is None
+    # Sin `is_default`: la elección de HU-AOS-15 (dueño → `routing.defaultAgent` → único).
+    x = _agente("x", "x")
+    kernel = dataclasses.replace(core, content={"routing": {"defaultAgent": "general"}})
+    assert _release(agentes=(kernel, general, x)).foco() == general
+    assert _release(agentes=(kernel, general, x)).foco(x.instance_id) == x  # el dueño manda
+    assert _release(agentes=(core, x)).foco() == x
+    with pytest.raises(ErrorDeRelease):
+        _release(agentes=(core,)).foco()
+    with pytest.raises(ErrorDeRelease):
+        _release(agentes=(core, general, x)).foco()  # varios y ninguno por defecto
 
 
 def test_release_uno_sin_procedimientos_por_agente_rige_la_regla_transitoria() -> None:
-    general = _agente("i-general", "general", default=True, procs=None)
-    release = _release(man.SCHEMA_SIN_PROCEDIMIENTOS, agentes={"i-general": general})
+    general = _agente("general", "general", procs=None)
+    release = _release(man.SCHEMA_SIN_PROCEDIMIENTOS, agentes=(general,))
     assert not release.con_procedimientos_por_agente
-    assert release.procedimientos_de("i-general") == {}
+    assert release.procedimientos_de(general.instance_id) == {}
     assert release.artefactos("stable").procedimientos_por_agente is None
     # El manifiesto `release/2` sí lleva `is_default` y `procedures` en el hash.
     base = {
@@ -213,7 +227,7 @@ def test_oferta_fail_closed_por_agente_y_por_scope() -> None:
         _tool("otra_declarativa", "declarative"),
         _tool("iniciar_procedimiento", "core"),
     ]
-    agente = _agente("i-ventas", "ventas", tools=["informar_plan"])
+    agente = _agente("ventas", "ventas", tools=["informar_plan"])
     declaradas = oferta.declaradas_por(agente)
     assert declaradas == {"informar_plan", "consultar_envio"}
     ofrecidas = oferta.ofrecidas_para_el_agente(tools, packs={"pack_commerce"}, del_agente=declaradas, comandos={"iniciar_procedimiento"})
@@ -239,26 +253,28 @@ async def _en_scope(fn: Any) -> Any:
         return await fn()
 
 
-def test_fijar_agente_y_registro_con_release(monkeypatch: Any) -> None:
-    ventas = _agente("i-ventas", "ventas", default=True, procs=((PLAN, "1.2.0"),))
-    agenda = _agente("i-agenda", "agenda", procs=((CITA, "1.0.0"),))
-    release = _release(agentes={"i-ventas": ventas, "i-agenda": agenda})
+def test_foco_del_turno_y_registro_con_release(monkeypatch: Any) -> None:
+    ventas = _agente("ventas", "ventas", default=True, procs=((PLAN, "1.2.0"),))
+    agenda = _agente("agenda", "agenda", procs=((CITA, "1.0.0"),))
+    release = _release(agentes=(ventas, agenda))
     monkeypatch.setattr(registro, "_valido", lambda proc: True)
     monkeypatch.setattr(registro, "_todos", lambda: [_proc(PLAN, "9.9.9"), _proc(CITA, "1.0.0")])
 
     @con_release
     async def turno() -> dict[str, Any]:
-        assert not release_vigente.fijar_agente("i-ventas")  # sin release fijada, no hay agente
-        assert release_vigente.fijar(release.artefactos("stable"))
+        assert release_vigente.procedimientos_del_agente() is None  # sin release fijada
+        assert release_vigente.fijar(release.artefactos("stable", foco=release.foco()))
         salida: dict[str, Any] = {}
         salida["defecto"] = sorted(registro.disponibles(["pack_commerce", "pack_calendar"]))
         salida["definicion_release"] = registro.definicion(PLAN, "1.2.0").version
         salida["definicion_binario"] = registro.definicion(PLAN, "9.9.9").version
         salida["definicion_ninguna"] = registro.definicion(PLAN, "1.1.0")
-        assert release_vigente.fijar_agente("i-agenda") and not release_vigente.fijar_agente("no-existe")
+        # Agenda es la dueña de la conversación: `elegir_foco` la mantiene en foco.
+        assert release_vigente.fijar(release.artefactos("stable", foco=release.foco(agenda.instance_id)))
         salida["agenda"] = sorted(registro.disponibles(["pack_commerce", "pack_calendar"]))
         salida["agenda_roto"] = sorted(registro.disponibles(["pack_commerce", "pack_calendar"], ["pack_calendar"]))
-        salida["en_foco"] = release_vigente.agente_en_foco().key
+        agente = release_vigente.agente_del_turno()
+        salida["en_foco"] = agente.key if agente is not None else None
         return salida
 
     r = asyncio.run(_en_scope(turno))
@@ -266,7 +282,7 @@ def test_fijar_agente_y_registro_con_release(monkeypatch: Any) -> None:
     assert (r["definicion_release"], r["definicion_binario"], r["definicion_ninguna"]) == ("1.2.0", "9.9.9", None)
     # Fuera del turno la ranura está vacía: el binario, como siempre.
     assert release_vigente.procedimientos_del_agente() is None
-    assert release_vigente.agente_en_foco() is None
+    assert release_vigente.agente_del_turno() is None
 
 
 def test_sin_release_disponibles_sigue_el_binario(monkeypatch: Any) -> None:
@@ -281,14 +297,16 @@ def test_sin_release_disponibles_sigue_el_binario(monkeypatch: Any) -> None:
 
 
 def test_release_sin_agente_en_foco_es_fail_closed() -> None:
-    """Una `release/2` con solo el Coordinador no ofrece procedimientos (no cae al binario)."""
-    core = _agente("i-core", "coordinador", role="core", procs=(), contract="kernelspec/1")
-    release = _release(agentes={"i-core": core})
+    """Una `release/2` sin especialista en foco no ofrece procedimientos (no cae al binario).
+    En el turno real `elegir_foco` ya falla antes (`ErrorDeRelease`); la ranura es fail-closed
+    igual si alguien la fija sin foco."""
+    core = _agente("core", "coordinador", role="core", procs=(), contract="kernelspec/1")
+    release = _release(agentes=(core,))
 
     @con_release
     async def turno() -> Any:
         assert release_vigente.fijar(release.artefactos("stable"))
-        return release_vigente.agente_en_foco(), release_vigente.procedimientos_del_agente()
+        return release_vigente.agente_del_turno(), release_vigente.procedimientos_del_agente()
 
     en_foco, procs = asyncio.run(_en_scope(turno))
     assert en_foco is None and procs == {}

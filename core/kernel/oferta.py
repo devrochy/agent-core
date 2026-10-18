@@ -106,7 +106,7 @@ def ofrecidas_para_el_agente(
 
 
 def declaradas_por(agente: Any) -> frozenset[str] | None:
-    """Lo que la versión de un `AgenteDeRelease` declara: `tools` habilitadas y declarativas.
+    """Lo que la versión de un `AgenteCongelado` declara: `tools` habilitadas y declarativas.
     None sin agente (sin release en el turno)."""
     if agente is None:
         return None

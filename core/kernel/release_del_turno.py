@@ -27,6 +27,14 @@ consulta) y el runtime lee `agent_specs`, el disco y `AppSettings` como siempre.
   orquestador es precondición de `aos_procedures` (el kernel no importa el orquestador); por eso
   se devuelven los ids escalados.
 
+**Agente en foco y dueño** (HU-AOS-15): el turno lo atiende un especialista de la release
+(`cargar.elegir_foco`): el dueño vigente (`conversations.active_agent_instance_id`) si sigue
+siendo especialista de la release y el episodio no cambió, si no el `routing.defaultAgent`
+del KernelSpec. Al empezar un episodio nuevo el dueño se suelta (NULL → por defecto), como
+piden `kernelspec.Episode` y ADR-0116 (el handoff en dos fases es de HU-AOS-19: aquí nunca
+se escribe uno, solo quién atendió). Si el que atiende cambia, se escribe
+`active_agent_instance_id` y `owner_since` en la misma transacción, bajo el lock.
+
 Efecto en el turno: deja la release en `core.shared.release_vigente` (la ranura que abre
 `con_release`) y en `core_decisions` (`anotar_release`).
 """
@@ -52,6 +60,7 @@ if TYPE_CHECKING:
 
     from core.kernel.state import Proyeccion
     from core.releases.cargar import ReleaseCongelada
+    from core.shared.release_vigente import AgenteCongelado
 
 log = get_logger(__name__)
 
@@ -86,6 +95,9 @@ class Asignacion:
     revalidadas: tuple[uuid.UUID, ...] = ()
     canceladas: tuple[uuid.UUID, ...] = ()
     escaladas: tuple[uuid.UUID, ...] = ()
+    # Especialista que atiende el turno (HU-AOS-15) y si cambió el dueño de la conversación.
+    foco: AgenteCongelado | None = None
+    dueno_cambio: bool = False
 
 
 # ------------------------------------------------------------------ reglas (puras)
@@ -260,14 +272,18 @@ async def asignar(
     if punteros is None or punteros[0] is None:
         return None
     activa, canary = punteros
-    actual = (
+    fila_conv = (
         await session.execute(
             text(
-                "SELECT release_id FROM conversations WHERE tenant_id = :t AND id = :c FOR UPDATE"
+                "SELECT release_id, active_agent_instance_id FROM conversations "
+                "WHERE tenant_id = :t AND id = :c FOR UPDATE"
             ),
             {"t": tenant_id, "c": conversation_id},
         )
-    ).scalar_one_or_none()
+    ).first()
+    if fila_conv is None:
+        return None
+    actual, dueno = fila_conv[0], fila_conv[1]
     del_episodio = await cargar_release(session, tenant_id, actual or activa)
     if del_episodio is None:  # la FK compuesta lo impide; por si acaso, la activa
         del_episodio = await cargar_release(session, tenant_id, activa)
@@ -319,6 +335,24 @@ async def asignar(
             release_number=hacia.number,
             reason=motivo,
         )
+    # Agente en foco (HU-AOS-15): un episodio nuevo suelta al dueño; el anterior solo cuenta si
+    # sigue siendo especialista de la release de destino. Sin especialista: `ErrorDeRelease`.
+    foco = hacia.foco(None if nuevo else dueno)
+    dueno_cambio = foco.instance_id != dueno
+    if dueno_cambio:
+        await session.execute(
+            text(
+                "UPDATE conversations SET active_agent_instance_id = :i, owner_since = now() "
+                "WHERE tenant_id = :t AND id = :c"
+            ),
+            {"t": tenant_id, "c": conversation_id, "i": foco.instance_id},
+        )
+        log.info(
+            "conversation_agent_assigned",
+            conversation_id=str(conversation_id),
+            agent_key=foco.key,
+            reason="episodio_nuevo" if nuevo else ("primera" if dueno is None else "dueno_fuera_de_release"),
+        )
     asignacion = Asignacion(
         release_id=destino,
         lane=lane,
@@ -327,6 +361,8 @@ async def asignar(
         revalidadas=tuple(revalidadas),
         canceladas=tuple(canceladas),
         escaladas=tuple(escaladas),
+        foco=foco,
+        dueno_cambio=dueno_cambio,
     )
     return asignacion, hacia
 
@@ -359,11 +395,18 @@ async def fijar_release_del_turno(conversation: Any) -> Asignacion | None:
             connection_id=connection_id,
         )
     if resultado is None:
-        log.warning("release_missing", connection_id=str(connection_id))
+        # v3 sin release activa: el turno sigue con el v2 (legacy silencioso). Pendiente con
+        # dueño (adenda HU-AOS-15 de ADR-0117): release al alta de la conexión.
+        log.error("release_missing", connection_id=str(connection_id))
+        release_vigente.marcar_v3_sin_release(tenant_id)
         return None
     asignacion, release = resultado
-    release_vigente.fijar(release.artefactos(asignacion.lane))
-    anotar_release(asignacion.release_id, asignacion.lane)
+    release_vigente.fijar(release.artefactos(asignacion.lane, foco=asignacion.foco))
+    anotar_release(
+        asignacion.release_id,
+        asignacion.lane,
+        active_instance_id=asignacion.foco.instance_id if asignacion.foco is not None else None,
+    )
     return asignacion
 
 

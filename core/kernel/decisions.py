@@ -97,6 +97,9 @@ class Turno:
     # Release del turno (HU-AOS-14): NULL con `aos_runtime = 'legacy'`.
     release_id: uuid.UUID | None = None
     release_lane: str | None = None
+    # Agente que atiende y tarea en foco (HU-AOS-15): NULL con `legacy` o sin motor activo.
+    active_instance_id: uuid.UUID | None = None
+    focus_task_id: uuid.UUID | None = None
     _token_vigente: Any = None
 
     def ms(self) -> int:
@@ -242,9 +245,10 @@ async def decidir(
                 text(
                     "INSERT INTO core_decisions (id, tenant_id, connection_id, conversation_id, "
                     "inbound_message_ids, outcome, blocked_by, route_source, latency_ms, trace_id, "
-                    "release_id, release_lane) "
+                    "release_id, release_lane, active_instance_id, focus_task_id) "
                     "VALUES (:id, :tenant_id, :connection_id, :conversation_id, :inbound, :outcome, "
-                    ":blocked_by, :route_source, :latency_ms, :trace_id, :release_id, :release_lane)"
+                    ":blocked_by, :route_source, :latency_ms, :trace_id, :release_id, :release_lane, "
+                    ":active_instance_id, :focus_task_id)"
                 ).bindparams(bindparam("inbound", type_=ARRAY(UUID(as_uuid=True)))),
                 {
                     "id": turno.id,
@@ -261,6 +265,8 @@ async def decidir(
                     "trace_id": turno.trace_id,
                     "release_id": turno.release_id,
                     "release_lane": turno.release_lane,
+                    "active_instance_id": turno.active_instance_id,
+                    "focus_task_id": turno.focus_task_id,
                 },
             )
     except Exception:
@@ -289,12 +295,23 @@ async def bloquear(conversation: Any, motivo: str, *, status: str | None = None)
 
 
 # ------------------------------------------------------------------ acumuladores del resultado
-def anotar_release(release_id: uuid.UUID, lane: str) -> None:
-    """Release y carril del turno (HU-AOS-14), antes de decidir: `core_decisions.release_id`."""
+def anotar_release(
+    release_id: uuid.UUID, lane: str, *, active_instance_id: uuid.UUID | None = None
+) -> None:
+    """Release, carril y agente que atiende (HU-AOS-14/15), antes de decidir:
+    `core_decisions.release_id` y `active_instance_id`."""
     turno = turno_actual()
     if turno is not None and not turno.decidido:
         turno.release_id = release_id
         turno.release_lane = lane
+        turno.active_instance_id = active_instance_id
+
+
+def anotar_foco(task_id: uuid.UUID | None) -> None:
+    """Tarea en foco al empezar el turno (HU-AOS-15): `core_decisions.focus_task_id`."""
+    turno = turno_actual()
+    if turno is not None and not turno.decidido:
+        turno.focus_task_id = task_id
 
 
 def anotar_entrada(message_id: uuid.UUID | None) -> None:
@@ -360,8 +377,9 @@ async def _registrar_resultado(turno: Turno) -> None:
             await session.execute(
                 text(
                     "INSERT INTO turn_outcomes (turn_id, tenant_id, status, verifier, verifier_retries, "
-                    "tokens_in, tokens_out, cost_usd, latency_ms) VALUES (:turn_id, :tenant_id, :status, "
-                    "CAST(:verifier AS jsonb), :retries, :tokens_in, :tokens_out, :cost_usd, :latency_ms)"
+                    "tokens_in, tokens_out, cost_usd, latency_ms, final_instance_id) VALUES (:turn_id, "
+                    ":tenant_id, :status, CAST(:verifier AS jsonb), :retries, :tokens_in, :tokens_out, "
+                    ":cost_usd, :latency_ms, :final_instance_id)"
                 ),
                 {
                     "turn_id": turno.id,
@@ -373,6 +391,8 @@ async def _registrar_resultado(turno: Turno) -> None:
                     "tokens_out": turno.tokens_out,
                     "cost_usd": round(turno.cost_usd, 6),
                     "latency_ms": turno.ms(),
+                    # Sin handoff (HU-AOS-19) el que termina es el que atendió.
+                    "final_instance_id": turno.active_instance_id,
                 },
             )
     except Exception:
