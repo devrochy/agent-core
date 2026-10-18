@@ -112,3 +112,10 @@ el `flow.json` del pack.
 - `packages/pack-*/presets/<vertical>.json` (fragmentos); `seed_data` implementado en `pack_commerce`.
 - `core/onboarding.py` y `cli/commands/tenant.py` (`--preset`; el CLI deja de importar `pack_commerce.models`).
 - Panel: primeros pasos desde `tenants.settings["preset"].pendientes` (HU-SH-06).
+
+
+## Adenda (2026-10-18, HU-AOS-46): presets v2
+
+El manifiesto gana `agentes` (keys de plantillas de agente del core) y, en un negocio con `aos_runtime = 'v3'` y
+`AOS_CONNECTION_ROUTING`, `apply_preset` crea además los agentes especialistas, sus instancias, las reglas del
+Coordinador y una release candidata sin activarla. Los cuatro presets pasan a `version` 2. Detalle en ADR-0139.
