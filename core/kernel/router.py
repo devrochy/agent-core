@@ -51,6 +51,8 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 MODOS = ("off", "shadow", "active")
+# Tope del texto que miran las reglas (`keywordAny`); el puntaje recorta aún más.
+MAX_TEXTO = 2000
 FUENTES = ("task", "rule", "trigger", "coprocessor", "default")
 VENTANA_ESTABILIDAD = 6
 
@@ -341,6 +343,9 @@ async def _hechos(
         text(
             "SELECT namespace, key, value FROM memory_facts WHERE tenant_id = :t AND customer_id = :c "
             "AND superseded_at IS NULL AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > now()) "
+            # Solo hechos del sistema (acciones, personas, importación): uno que el modelo extrajo
+            # de lo que dijo el cliente no decide la ruta (invariante 7).
+            "AND source <> 'agent' "
             "AND namespace = ANY(:ns) AND key = ANY(:ks)"
         ),
         {"t": tenant_id, "c": customer_id, "ns": sorted({n for n, _ in claves}), "ks": sorted({k for _, k in claves})},
@@ -381,7 +386,7 @@ async def leer_entrada(
     alguna regla los usa."""
     claves, con_hora = necesita(routing)
     return Entrada(
-        texto=texto,
+        texto=(texto or "")[:MAX_TEXTO],
         payload=payload,
         channel=channel,
         dueno=dueno,
@@ -412,7 +417,8 @@ async def cambios_de_dueno(session: AsyncSession, tenant_id: uuid.UUID, conversa
 # escribe `entrada_sin_llm` (consumer) solo con `aos_routing` ≠ off y lo consume el turno con
 # GETDEL: con debounce el turno corre en otra tarea y el payload no viaja en `latest_message`.
 _PAYLOAD = "aos:ruteo:payload"
-_TTL_PAYLOAD_S = 900
+# Corto: un payload de un turno que se abortó no debe disparar una regla en un mensaje posterior.
+_TTL_PAYLOAD_S = 120
 MAX_PAYLOAD = 256
 
 
@@ -421,7 +427,13 @@ def _clave_payload(tenant_id: uuid.UUID, conversation_id: uuid.UUID) -> str:
 
 
 async def guardar_payload(tenant_id: uuid.UUID, conversation_id: uuid.UUID, payload: str) -> None:
-    """Best-effort: sin el payload, una regla de botón no aplica y atiende el de siempre."""
+    """Best-effort: sin el payload, una regla de botón no aplica y atiende el de siempre. Solo
+    dentro del `tenant_scope` del mismo negocio."""
+    from core.shared.tenant import get_current_tenant_id
+
+    if get_current_tenant_id() != tenant_id:
+        log.warning("ruteo_payload_fuera_de_scope")
+        return
     try:
         from core.memory.working import get_redis
 

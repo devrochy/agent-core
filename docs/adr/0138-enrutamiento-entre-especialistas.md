@@ -25,12 +25,13 @@ embeddings en producción (P-19, R-AOS-11) y la tanda no permite gastar LLM.
       con dos tareas es de HU-AOS-20.
    2. **Reglas** (`routing.rules`), la primera que cumple todas sus condiciones (`rule`, `rule_id`, confianza 1):
       `interactivePayloadPrefix`, `keywordAny` (frase normalizada completa), `customerFact` (hecho vigente de
-      `memory_facts`), `flowStage`, `channel`, `withinHours` (zona del negocio). `agent` → ese especialista;
+      `memory_facts` escrito por el sistema: se excluye `source = 'agent'`, lo que el modelo extrajo de lo que
+      dijo el cliente, invariante 7), `flowStage`, `channel`, `withinHours` (zona del negocio). `agent` → ese especialista;
       `start` → el especialista que declara el procedimiento, y **el motor** lo inicia con `_iniciar` al empezar
       el turno (`ContextoMotor.al_empezar_turno`), después de las políticas, con sus guardas de salud del pack y
       de tarea en curso. El router nunca escribe tareas. El payload del botón llega por Redis
-      (`aos:ruteo:payload:{negocio}:{conversación}`, 15 min, GETDEL): lo guarda `entrada_sin_llm` solo con el
-      ruteo encendido. El `started` de esa tarea queda con `turn_id` NULL (como las confirmaciones al empezar:
+      (`aos:ruteo:payload:{negocio}:{conversación}`, 2 min, GETDEL): lo guarda `entrada_sin_llm` solo con el
+      ruteo encendido. El motor solo inicia un procedimiento que el agente del turno declara. El `started` de esa tarea queda con `turn_id` NULL (como las confirmaciones al empezar:
       la cabecera del turno se escribe después; ADR-0112 lo admite). Reaplicar el payload a la tarea nueva
       (llenar el dato del botón) queda fuera de alcance.
    3. **Disparadores** (`trigger`): con un candidato ≥ `strongScore` y `margin` sobre el segundo, atiende el

@@ -192,8 +192,12 @@ def test_payload_en_redis_con_el_negocio_primero(monkeypatch: Any) -> None:
 
     monkeypatch.setattr("core.memory.working.get_redis", lambda: _Redis())
     t, c = uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr("core.shared.tenant.get_current_tenant_id", lambda: uuid.uuid4())
+    asyncio.run(router.guardar_payload(t, c, "plan:x"))
+    assert guardado == {}  # fuera del scope del negocio no se escribe
+    monkeypatch.setattr("core.shared.tenant.get_current_tenant_id", lambda: t)
     asyncio.run(router.guardar_payload(t, c, "plan:" + "x" * 1000))
     ((clave, (valor, ex)),) = guardado.items()
-    assert clave == f"aos:ruteo:payload:{t}:{c}" and len(valor) == router.MAX_PAYLOAD and ex <= 24 * 3600
+    assert clave == f"aos:ruteo:payload:{t}:{c}" and len(valor) == router.MAX_PAYLOAD and ex <= 300
     assert asyncio.run(router.tomar_payload(t, c)).startswith("plan:")
     assert asyncio.run(router.tomar_payload(t, c)) == ""  # se consume una vez

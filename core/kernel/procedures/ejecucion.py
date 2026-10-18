@@ -1027,6 +1027,11 @@ class ContextoMotor:
         procedure_id = release_vigente.tomar_inicio()
         if procedure_id is None or self._foco is not None:
             return
+        # Defensa en profundidad: solo un procedimiento que el agente del turno declara.
+        del_agente = release_vigente.procedimientos_del_agente()
+        if del_agente is not None and procedure_id not in del_agente:
+            log.warning("motor_inicio_por_regla_ajeno", procedure_id=procedure_id)
+            return
         try:
             resultado = await self._iniciar(procedure_id)
         except Exception as exc:
