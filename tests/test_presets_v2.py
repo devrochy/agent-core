@@ -154,7 +154,8 @@ def test_agregar_reglas_solo_las_nuevas_sin_tocar_las_del_dueno() -> None:
         {"id": "preset_agenda_palabras", "when": {"keywordAny": ["turno"]}, "agent": "general"},
     ]
     nuevo, agregadas, avisos = agregar_reglas(kernel, [load_plantilla("agenda"), load_plantilla("ventas")])
-    assert agregadas == ["preset_ventas_palabras"] and avisos == []
+    assert agregadas == ["preset_ventas_palabras"]
+    assert avisos == ["la regla preset_agenda_palabras ya existe con otro destino: se respeta"]
     reglas = {r["id"]: r for r in nuevo["routing"]["rules"]}
     assert reglas["preset_agenda_palabras"]["agent"] == "general"
     assert reglas["preset_ventas_palabras"]["agent"] == "ventas"

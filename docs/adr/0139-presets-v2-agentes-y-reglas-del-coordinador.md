@@ -108,6 +108,13 @@ la última corrida; `audit_log` registra `preset_agentes_aplicados`. Volver a ap
 - no agrega una regla que ya está ni una que el preset agregó y el dueño borró (lápida);
 - no construye release si nada cambió.
 
+**Concurrencia y cortes** (revisión de seguridad): una sola corrida a la vez por negocio
+(`pg_try_advisory_xact_lock` sobre `preset_v2:<negocio>`, mantenido en una sesión abierta; la otra queda
+`en_curso`); la key se anota en `creados` apenas se crea el agente, así una corrida cortada antes de publicar o
+instanciar se completa en la siguiente; el registro se relee y se une bajo el `FOR UPDATE` de `tenants`. El control
+optimista del Coordinador (comparar la versión antes de publicar) deja una ventana mínima frente a una publicación
+del dueño en paralelo: `versiones.publicar` no recibe versión esperada; se acepta y queda anotado.
+
 ### 7. Entradas
 
 - `apply_preset` (ADR-0110 §3) llama a `aplicar_agentes` al final, en el mismo `tenant_scope`. Un error se registra y

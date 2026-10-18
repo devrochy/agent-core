@@ -442,3 +442,43 @@ async def test_reglas_solo_de_agentes_en_todas_las_conexiones() -> None:
     # Límite conocido de HU-AOS-16: el General de la conexión con instalaciones propias declara
     # todo lo del negocio y su build falla; se reporta por conexión sin tumbar la otra.
     assert reporte.releases[str(otra)].startswith("error:")
+
+
+async def test_backfill_de_varios_negocios_no_mezcla_y_un_lock_por_negocio() -> None:
+    import asyncio
+
+    from core.presets.agentes import backfill_presets_v2
+
+    tid_a, _ = await _negocio()
+    tid_b, _ = await _negocio()
+    # Dos corridas a la vez sobre el mismo negocio: una aplica y la otra queda `en_curso`
+    # (o, si llega después, ya no tiene nada que hacer).
+    uno, dos = await asyncio.gather(_aplicar(tid_a, "comercio"), _aplicar(tid_a, "comercio"))
+    estados = sorted([uno.omitido or "aplicada", dos.omitido or "aplicada"])
+    assert estados in (["aplicada", "en_curso"], ["aplicada", "aplicada"])
+    assert (await _foto(tid_a))["versiones"]["ventas"] == 1
+
+    await _sql(tid_b, "update tenants set settings = jsonb_set(coalesce(settings, '{}'), '{preset}', "
+               "'{\"id\": \"cobranza\"}') where id = :t", t=tid_b)
+    reportes = await backfill_presets_v2(tenant_ids=[tid_a, tid_b], aplicar=True, modules=_modules())
+    por_negocio = {r.tenant_id: r for r in reportes}
+    assert por_negocio[tid_b].preset == "cobranza"
+    assert [(a.key, a.estado) for a in por_negocio[tid_b].agentes] == [("cobranza", "sin_habilidades")]
+    assert (await _foto(tid_b))["versiones"].get("ventas") is None
+
+
+async def test_corrida_cortada_tras_crear_el_agente_se_completa() -> None:
+    """El agente quedó creado y anotado sin versión (la corrida se cortó): la siguiente lo publica
+    y lo instancia, en vez de dejarlo sin conexión (D-35)."""
+    from core.agents import versiones
+    from core.presets.agentes import _anotar_creado
+    from core.shared.tenant import tenant_scope
+
+    tid, cid = await _negocio()
+    async with tenant_scope(tid):
+        await versiones.crear_agente(tid, key="ventas", kind="specialist", name="Ventas")
+        await _anotar_creado(tid, "ventas")
+    reporte = await _aplicar(tid, "comercio")
+    [ventas] = reporte.agentes
+    assert ventas.estado == "reactivado" and ventas.instancias == {str(cid): "creada"}
+    assert (await _foto(tid))["versiones"]["ventas"] == 1

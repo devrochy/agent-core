@@ -198,12 +198,16 @@ def agregar_reglas(
 
     nuevo = KernelSpec.model_validate(kernel).model_dump(mode="json", by_alias=True)
     reglas = list(nuevo["routing"]["rules"])
-    existentes = {r["id"] for r in reglas} | set(excluir)
+    presentes = {r["id"] for r in reglas}
+    existentes = presentes | set(excluir)
     agregadas: list[str] = []
     avisos: list[str] = []
     for plantilla in plantillas:
         for regla in plantilla.reglas:
             if regla.id in existentes:
+                destino = next((r.get("agent") for r in reglas if r["id"] == regla.id), plantilla.key)
+                if regla.id in presentes and destino != plantilla.key:
+                    avisos.append(f"la regla {regla.id} ya existe con otro destino: se respeta")
                 continue
             if len(reglas) >= MAX_REGLAS:
                 avisos.append(f"el Coordinador ya tiene {MAX_REGLAS} reglas: no entra {regla.id}")
@@ -362,6 +366,27 @@ async def _instalar_plantilla(
     if not destino:
         return ResultadoAgente(plantilla.key, "sin_conexion", avisos=["ninguna conexión tiene sus habilidades"])
 
+    def _derivar() -> tuple[dict[str, Any], list[str]]:
+        return derivar_contenido(
+            plantilla,
+            general,
+            catalogo=catalogo,
+            habilitados=habilitados,
+            publicados=publicados,
+            playbooks_de_packs=playbooks_de_packs,
+        )
+
+    async def _publicar_v1(aid: uuid.UUID, contenido: dict[str, Any]) -> int:
+        version, _ = await versiones.publicar(
+            tenant_id,
+            aid,
+            catalogo=catalogo,  # type: ignore[arg-type]
+            contenido=contenido,
+            label=f"preset {manifest.id}",
+            notes=f"Plantilla '{plantilla.key}' del preset {manifest.id} v{manifest.version} (HU-AOS-46).",
+        )
+        return version.version
+
     existente = await _agente_por_key(tenant_id, plantilla.key)
     nuevo = False  # el preset lo crea o lo reactiva en esta corrida
     agent_id: uuid.UUID | None = None
@@ -374,7 +399,15 @@ async def _instalar_plantilla(
             return ResultadoAgente(plantilla.key, "key_ocupada")
         ultima = await _ultima_version(tenant_id, agent_id)
         if ultima is None:
-            return ResultadoAgente(plantilla.key, "sin_version")
+            # El preset lo creó y la corrida se cortó antes de publicar: se publica ahora.
+            try:
+                contenido, avisos = _derivar()
+            except PresetError:
+                return ResultadoAgente(plantilla.key, "sin_procedimientos")
+            if aplicar:
+                await _publicar_v1(agent_id, contenido)
+            ultima = (1, contenido)
+            nuevo = True
         if estado != "active":
             if plantilla.key not in registro.archivados:
                 return ResultadoAgente(plantilla.key, "archivado")
@@ -385,14 +418,7 @@ async def _instalar_plantilla(
         resultado = ResultadoAgente(plantilla.key, "reactivado" if nuevo else "ya_estaba", version=ultima[0])
     else:
         try:
-            contenido, avisos = derivar_contenido(
-                plantilla,
-                general,
-                catalogo=catalogo,
-                habilitados=habilitados,
-                publicados=publicados,
-                playbooks_de_packs=playbooks_de_packs,
-            )
+            contenido, avisos = _derivar()
         except PresetError:
             return ResultadoAgente(plantilla.key, "sin_procedimientos")
         resultado = ResultadoAgente(plantilla.key, "creado", version=1, avisos=avisos)
@@ -407,15 +433,9 @@ async def _instalar_plantilla(
                 # Otro proceso (la CLI y un `apply_preset` a la vez) lo creó: la próxima corrida sigue.
                 return ResultadoAgente(plantilla.key, "ya_estaba", avisos=["creado en paralelo"])
             agent_id = agente.id
-            version, _ = await versiones.publicar(
-                tenant_id,
-                agent_id,
-                catalogo=catalogo,  # type: ignore[arg-type]
-                contenido=contenido,
-                label=f"preset {manifest.id}",
-                notes=f"Plantilla '{plantilla.key}' del preset {manifest.id} v{manifest.version} (HU-AOS-46).",
-            )
-            resultado.version = version.version
+            # Se anota antes de publicar e instanciar: si la corrida se corta, la siguiente lo adopta.
+            await _anotar_creado(tenant_id, plantilla.key)
+            resultado.version = await _publicar_v1(agent_id, contenido)
 
     previas = await _instancias_previas(tenant_id, agent_id) if agent_id is not None else {}
     for cid in efectivas:
@@ -491,6 +511,27 @@ async def _reglas_del_coordinador(
     return creada
 
 
+def _lista(valor: Any) -> set[str]:
+    return {str(x) for x in valor} if isinstance(valor, list) else set()
+
+
+async def _anotar_creado(tenant_id: uuid.UUID, key: str) -> None:
+    """Anota la key en `creados` apenas se crea el agente (bajo el lock de la fila del negocio)."""
+    from core.db.models import Tenant
+
+    async with get_session() as session:
+        tenant = await session.get(Tenant, tenant_id, with_for_update=True)
+        if tenant is None:
+            return
+        settings = dict(tenant.settings or {})
+        preset = dict(settings.get("preset") or {})
+        agentes = dict(preset.get("agentes") or {})
+        agentes["creados"] = sorted(_lista(agentes.get("creados")) | {key})
+        preset["agentes"] = agentes
+        settings["preset"] = preset
+        tenant.settings = settings
+
+
 async def _registrar(tenant_id: uuid.UUID, reporte: ReportePresetV2, registro: Registro) -> None:
     from core.db.models import Tenant
     from core.shared.audit import record_audit
@@ -505,6 +546,11 @@ async def _registrar(tenant_id: uuid.UUID, reporte: ReportePresetV2, registro: R
         if tenant is not None:
             settings = dict(tenant.settings or {})
             preset = dict(settings.get("preset") or {})
+            # Lo guardado se relee bajo el lock y se une: nunca se pierde una key ni una lápida.
+            previo = preset.get("agentes")
+            guardado: dict[str, Any] = previo if isinstance(previo, dict) else {}
+            creados |= _lista(guardado.get("creados"))
+            reglas = set(registro.reglas) | _lista(guardado.get("reglas")) | set(reporte.reglas_nuevas)
             preset["agentes"] = {
                 "preset": reporte.preset,
                 "version": reporte.version,
@@ -512,7 +558,7 @@ async def _registrar(tenant_id: uuid.UUID, reporte: ReportePresetV2, registro: R
                 # Acumulados entre corridas: idempotencia (ver `Registro`).
                 "creados": sorted(creados),
                 "archivados": sorted(archivados),
-                "reglas": sorted(set(registro.reglas) | set(reporte.reglas_nuevas)),
+                "reglas": sorted(reglas),
                 "ultima": resumen,
             }
             settings["preset"] = preset
@@ -533,12 +579,7 @@ async def aplicar_agentes(
     aplicar: bool = True,
 ) -> ReportePresetV2:
     """Instala los agentes del preset v2 en el negocio (ver el docstring del módulo)."""
-    from core.agents.instancias import agentes_base
-    from core.agents.spec import enabled_business_packs, leer_spec_activo
-    from core.agents.tolerante import KEY_COORDINADOR, KEY_GENERAL
-    from core.kernel.procedures import catalogo_de_acciones
     from core.orchestrator.ruta_de_conversacion import ruteo_por_conexion
-    from core.plugin_manager import plugin_manager
 
     _exigir_scope(tenant_id)
     reporte = ReportePresetV2(tenant_id, manifest.id, manifest.version, aplicar)
@@ -549,6 +590,38 @@ async def aplicar_agentes(
         reporte.omitido = "banderas_apagadas"
         return reporte
     plantillas = plantillas_del_preset(manifest)
+
+    # Una sola corrida a la vez por negocio (la CLI y un `apply_preset`): el lock de transacción
+    # se mantiene en una sesión abierta mientras las escrituras van en sus propias sesiones.
+    async with get_session() as candado:
+        tomado = (
+            await candado.execute(
+                text("SELECT pg_try_advisory_xact_lock(hashtextextended('preset_v2:' || :t, 0))"),
+                {"t": str(tenant_id)},
+            )
+        ).scalar_one()
+        if not tomado:
+            reporte.omitido = "en_curso"
+            return reporte
+        return await _aplicar(
+            tenant_id, manifest, plantillas, reporte, modules=modules, aplicar=aplicar
+        )
+
+
+async def _aplicar(
+    tenant_id: uuid.UUID,
+    manifest: PresetManifest,
+    plantillas: list[PlantillaAgente],
+    reporte: ReportePresetV2,
+    *,
+    modules: Iterable[Any] | None,
+    aplicar: bool,
+) -> ReportePresetV2:
+    from core.agents.instancias import agentes_base
+    from core.agents.spec import enabled_business_packs, leer_spec_activo
+    from core.agents.tolerante import KEY_COORDINADOR, KEY_GENERAL
+    from core.kernel.procedures import catalogo_de_acciones
+    from core.plugin_manager import plugin_manager
 
     leido = await leer_spec_activo(tenant_id)
     if leido is None:
@@ -650,7 +723,7 @@ async def _candidata(
     except ErrorDelBuild as exc:
         log.warning(
             "preset_agentes_build_fallo", tenant_id=str(tenant_id), connection_id=str(connection_id),
-            codigo=exc.codigo, detalle=exc.detalle[:5],
+            codigo=exc.codigo,
         )
         return f"error:{exc.codigo}"
     return str(build.number)
@@ -699,6 +772,11 @@ async def backfill_presets_v2(
                     reporte = await aplicar_agentes(tid, manifest, modules=modules, aplicar=aplicar)
                 except PresetError as exc:
                     reporte = ReportePresetV2(tid, pid, manifest.version, aplicar, errores=[str(exc)[:300]])
+                except Exception as exc:  # un negocio que falla no frena a los demás
+                    log.error("preset_agentes_backfill_fallo", tenant=slug, error_type=type(exc).__name__)
+                    reporte = ReportePresetV2(
+                        tid, pid, manifest.version, aplicar, errores=[f"error inesperado: {type(exc).__name__}"]
+                    )
         log.info("preset_agentes_backfill", tenant=slug, omitido=reporte.omitido, errores=len(reporte.errores))
         reportes.append(reporte)
     return reportes

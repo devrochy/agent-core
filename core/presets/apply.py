@@ -201,7 +201,7 @@ async def _agentes_v2(tenant_id: uuid.UUID, manifest: PresetManifest, resultado:
     except Exception as exc:
         log.error(
             "preset_agentes_fallo", tenant_id=str(tenant_id), preset=manifest.id,
-            error_type=type(exc).__name__, exc_info=True,
+            error_type=type(exc).__name__,
         )
         resultado.pasos.append("agentes del preset: falló (reintenta con `agent-core db presets-v2`)")
         return
