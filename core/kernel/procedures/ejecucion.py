@@ -1284,7 +1284,6 @@ class ContextoMotor:
                 if proc.slots[nombre].confirm and por_confirmar is None and nombre not in _confirmados_por_salida(proc):
                     por_confirmar = nombre
                 foco = _Foco(fila=fila, tarea=state.proyeccion_de(fila), proc=proc, stage=foco.stage)
-            self.datos_fijados.update(str(n) for n in validos)
             if cambian:
                 foco = await self._tras_cambio(s, foco, cambian, set(validos))
             if por_confirmar is not None and foco.tarea.pending_confirmation is None:
@@ -1292,6 +1291,8 @@ class ContextoMotor:
                     s, foco.fila, "confirmation_requested", {"target": {"kind": "slot", "name": por_confirmar}}, "kernel"
                 )
             task_id = foco.fila.id
+        # Solo con la transacción ya confirmada: un fallo dentro del bloque no deja el dato contado.
+        self.datos_fijados.update(str(n) for n in validos)
         return await self._terminar_comando(task_id)
 
     async def _no_dichos(

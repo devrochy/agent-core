@@ -1377,7 +1377,9 @@ class CRMModule(BaseModule):
                 patron=pattern,
                 tools=frozenset(tools),
                 basta_url=label in _LINK_CON_URL,
-                datos=_DATOS_QUE_RESPALDAN.get(label, frozenset()),
+                # Solo la afirmación incorporada: una etiqueta que el negocio reescribe con frases
+                # propias no hereda los datos (revisión de seguridad, 2026-10-18).
+                datos=_DATOS_QUE_RESPALDAN.get(label, frozenset()) if pattern is COMPLETION_CLAIMS.get(label, (None,))[0] else frozenset(),
             )
             for label, (pattern, tools) in claims.items()
         ]
