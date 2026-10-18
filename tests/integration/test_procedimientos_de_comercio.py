@@ -30,6 +30,7 @@ import sys
 import types
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -850,3 +851,52 @@ async def test_pedido_para_recoger_pagado_en_linea_tambien_espera_el_pago(negoci
     await _webhook(tid, pedido.public_order_number, "aprobado", float(pedido.total))
     await _despachar(tid)
     assert (await _tarea(ctx)).status == "completed"
+
+
+# ---------------------------------------------------------------- «Anoté tu dirección» (pass^4, 2026-10-18)
+ANOTE = "Anoté tu dirección: Calle 10 # 20-30, Bogotá. ¿Es correcta?"
+
+
+async def _pedido_en_entrega(negocio: Any, monkeypatch: Any) -> Any:
+    tid, pagos = negocio
+    ctx = await _cliente(tid, pagos)
+    await _turno(ctx, monkeypatch, "Quiero dos hamburguesas a domicilio, pago por transferencia", [
+        ("iniciar_procedimiento", {"procedure_id": PEDIDO}),
+        ("generar_cotizacion", {"items": [{"variant_id": "HAM-1", "quantity": 2}]}),
+        ("actualizar_tarea", {"slots": {"delivery_method": "domicilio", "payment_method": "transferencia"}}),
+        "¿A qué dirección te lo envío?",
+    ])
+    assert (await _tarea(ctx)).stage == "entrega"
+    return ctx
+
+
+async def test_anote_tu_direccion_con_el_dato_fijado_por_el_motor_no_escala(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """v3: el modelo fija la dirección con `actualizar_tarea` y dice «Anoté tu dirección». El
+    comando aceptado del turno respalda la afirmación (antes escalaba por `dato_de_contacto_guardado`)."""
+    ctx = await _pedido_en_entrega(negocio, monkeypatch)
+    resultado, _ = await _turno(ctx, monkeypatch, "Calle 10 # 20-30, Bogotá", [
+        ("actualizar_tarea", {"slots": {"address": "Calle 10 # 20-30, Bogotá"}}),
+        # El modelo insiste igual en el reintento: sin evidencia, el turno escalaría.
+        ANOTE, ANOTE,
+    ])
+    assert resultado is not None and not resultado.escalated, resultado
+    # El motor pide confirmar la dirección (dato `confirm`): el turno sigue, no hay relevo.
+    assert "Calle 10 # 20-30, Bogotá" in resultado.text
+    assert ((await _tarea(ctx)).slots.get("address") or {}).get("value") == "Calle 10 # 20-30, Bogotá"
+
+
+async def test_anote_tu_direccion_sin_fijarla_sigue_escalando(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Sin el comando (o con uno rechazado) no hay evidencia: el verificador reintenta y escala."""
+    ctx = await _pedido_en_entrega(negocio, monkeypatch)
+    resultado, _ = await _turno(ctx, monkeypatch, "Calle 10 # 20-30, Bogotá", [ANOTE, ANOTE])
+    assert resultado is not None and resultado.escalated
+    motivo = await journeys.motivo_del_relevo(ctx, datetime.now(UTC) - timedelta(minutes=1))
+    assert "dato_de_contacto_guardado" in motivo, motivo
+
+    ctx = await _pedido_en_entrega(negocio, monkeypatch)
+    resultado, _ = await _turno(ctx, monkeypatch, "Calle 10 # 20-30, Bogotá", [
+        # Un dato que el procedimiento no tiene: el comando se rechaza entero (todo o nada).
+        ("actualizar_tarea", {"slots": {"address": "Calle 10 # 20-30, Bogotá", "apodo": "Anita"}}),
+        ANOTE, ANOTE,
+    ])
+    assert resultado is not None and resultado.escalated

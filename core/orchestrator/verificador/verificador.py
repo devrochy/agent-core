@@ -218,6 +218,8 @@ def verificar(
                 or (afirmacion.basta_url and bool(evidencia.urls_enlace))
                 # Con estado: la acción ya fijó su dato en la tarea en foco (HU-AOS-06).
                 or bool(afirmacion.tools & evidencia.acciones_estado)
+                # Con estado: el motor fijó en este turno un dato que la afirmación declara.
+                or bool(afirmacion.datos & evidencia.datos_fijados)
             )
             if not respaldada and not cierre_fallido:
                 cierre_fallido = afirmacion.label

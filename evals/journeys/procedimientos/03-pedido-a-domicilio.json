@@ -30,7 +30,9 @@
         "filas": 1,
         "espera": {
           "delivery_method": "domicilio",
-          "delivery_address": "$no_nulo",
+          "delivery_address": {
+            "$no_nulo": true
+          },
           "total": 50000
         }
       }

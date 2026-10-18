@@ -90,6 +90,12 @@ def test_los_journeys_del_repo_son_validos() -> None:
             assert journey["pasos"], ruta.name
             for paso in journey["pasos"]:
                 assert tipos & set(paso), f"{ruta.name}: paso sin tipo {paso}"
+                # Los operadores van como objeto (`{"$no_nulo": true}`): un string "$no_nulo" se
+                # compara literal y falla con cualquier valor real (corrida de pass^4, 2026-10-18).
+                for campo, valor in ((paso.get("verifica") or {}).get("espera") or {}).items():
+                    assert not (isinstance(valor, str) and valor.startswith("$")), (
+                        f"{ruta.name}: {campo} usa el operador {valor!r} como string"
+                    )
 
 
 def test_el_pago_simulado_tiene_la_firma_de_build_provider() -> None:
@@ -181,3 +187,23 @@ def test_documento_y_celular_unicos_por_intento() -> None:
         f"cédula {journeys.datos_unicos(ctx.customer_id)['documento']}, "
         f"celular {journeys.datos_unicos(ctx.customer_id)['celular']}"
     )
+
+
+def test_runtime_en_un_set_con_motor_mide_con_y_sin_procedimientos() -> None:
+    # pass^k con y sin el motor sobre el mismo set (ADR-0112): legacy es la línea base de un agente.
+    con_motor = {"motor_de_procedimientos": True}
+    assert journeys.modo_de_runtime(con_motor, None) == (None, False)  # lo de siempre: lo decide el set
+    assert journeys.modo_de_runtime(con_motor, "legacy") == (False, False)
+    assert journeys.modo_de_runtime(con_motor, "v3") == (True, False)  # el motor no monta releases
+    sin_motor: dict[str, object] = {}
+    assert journeys.modo_de_runtime(sin_motor, None) == (None, False)
+    assert journeys.modo_de_runtime(sin_motor, "legacy") == (False, False)
+    assert journeys.modo_de_runtime(sin_motor, "v3") == (False, True)  # release 1 por conexión (HU-AOS-15)
+
+
+def test_el_set_de_procedimientos_configura_solo_packs_que_activa() -> None:
+    negocio, rutas = journeys.rutas_del_set("procedimientos", [""])
+    assert negocio["motor_de_procedimientos"] is True
+    assert set(negocio["config"]) <= set(negocio["packs"])
+    assert "pack_calendar" in negocio["packs"]  # agendar_cita (04-agendar-una-demo)
+    assert {r.stem for r in rutas} >= {"04-agendar-una-demo"}

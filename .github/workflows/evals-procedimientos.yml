@@ -1,0 +1,130 @@
+name: pass^k de los procedimientos (LLM real, a demanda)
+
+# Mide la consistencia (pass^k, HU-ARCH-28 / ADR-0119) del set `procedimientos` con y sin el
+# motor del Agent OS (ADR-0112: comparar con la línea base de un agente antes de encender
+# `AOS_PROCEDURES`). Cada intento conversa con el LLM real (cliente simulado + asistente):
+# gasta saldo, solo se lanza a mano con OK del dueño. Nunca corre en PR ni en push.
+#
+#   runtime = legacy → `--runtime legacy`: el mismo set SIN el motor (línea base de un agente).
+#   runtime = v3     → `--runtime v3`: con el motor (`aos_runtime = v3` + `aos_procedures`).
+#   runtime = ambos  → las dos, una después de la otra, con reportes separados.
+#
+# El motor no usa conexión ni release (el turno de los journeys no tiene `connection_id`), así
+# que este set no necesita `AOS_CONNECTION_ROUTING`.
+on:
+  workflow_dispatch:
+    inputs:
+      k:
+        description: "Intentos por journey (cada intento gasta saldo del LLM)"
+        default: "4"
+        type: string
+      runtime:
+        description: "legacy (sin motor), v3 (con motor) o ambos"
+        default: ambos
+        type: choice
+        options:
+          - ambos
+          - legacy
+          - v3
+      patron:
+        description: "Subconjunto de journeys por nombre (ej: 01,04). Vacío = el set completo"
+        default: ""
+        type: string
+
+jobs:
+  pass-k-procedimientos:
+    runs-on: [self-hosted, linux, x64]
+    # Compartido con evals-nightly: nunca dos corridas contra el LLM real a la vez.
+    concurrency:
+      group: evals-nightly
+      cancel-in-progress: false
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      # Para bajar la imagen de Postgres del CI desde GHCR.
+      packages: read
+    services:
+      postgres:
+        # Misma imagen que producción y que `ci.yml` (pg17 + pgvector + PostGIS).
+        image: ghcr.io/${{ github.repository_owner }}/solvershub-postgres:pg17-postgis
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          POSTGRES_USER: agent_core
+          POSTGRES_PASSWORD: agent_core
+          POSTGRES_DB: agent_core
+        # Puerto del host dinámico: no choca con un job del CI en otro runner del host.
+        ports: ["5432"]
+        # Datos en memoria: no deja volúmenes anónimos en el runner self-hosted.
+        options: >-
+          --tmpfs /var/lib/postgresql/data
+          --health-cmd "pg_isready -U agent_core"
+          --health-interval 5s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: ["6379"]
+        options: >-
+          --tmpfs /data
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-retries 12
+    env:
+      MASTER_ENCRYPTION_KEY: GpsiZ2sgMd4SvLHGp4Bs5xdaQLlQ1cByyK6DCNxVwL4=
+      # Mismos que `ci.yml` y `evals-nightly.yml`: sin estas, los journeys fallan al cifrar.
+      TOKEN_MASTER_KEYS: '{"k1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}'
+      TOKEN_ACTIVE_KEY_ID: k1
+      APP_SECRET_KEY: ci-only-not-a-secret-app-key
+      APP_ENV: development
+      # Inputs por env (no interpolados en el script): `patron` es texto libre.
+      K: ${{ inputs.k }}
+      PATRON: ${{ inputs.patron }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: URLs del stack (puertos dinámicos)
+        run: |
+          PG=${{ job.services.postgres.ports['5432'] }}
+          RD=${{ job.services.redis.ports['6379'] }}
+          {
+            echo "DATABASE_URL=postgresql+asyncpg://app_runtime:app_runtime@localhost:${PG}/agent_core"
+            echo "MIGRATIONS_DATABASE_URL=postgresql+asyncpg://agent_core:agent_core@localhost:${PG}/agent_core"
+            echo "REDIS_URL=redis://localhost:${RD}/0"
+          } >> "$GITHUB_ENV"
+
+      - uses: ./.github/actions/preparar-entorno
+
+      - name: Migrar y sembrar
+        run: |
+          agent-core db migrate
+          python scripts/init_db.py
+
+      # El umbral es 0: esto mide, no es un gate. pass@1, pass^k y los inestables quedan en el
+      # log y en el reporte; un runtime que sale mal no le quita la medición al otro.
+      - name: Journeys sin el motor (legacy, línea base)
+        if: inputs.runtime == 'legacy' || inputs.runtime == 'ambos'
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: >-
+          python evals/journeys.py "$PATRON" --set procedimientos --runtime legacy
+          --k "$K" --umbral 0 --reporte evals/reportes/procedimientos-legacy.json
+
+      - name: Journeys con el motor (v3 + procedimientos)
+        if: always() && (inputs.runtime == 'v3' || inputs.runtime == 'ambos')
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: >-
+          python evals/journeys.py "$PATRON" --set procedimientos --runtime v3
+          --k "$K" --umbral 0 --reporte evals/reportes/procedimientos-v3.json
+
+      - name: Reportes de pass^k
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pass-k-procedimientos-${{ github.run_number }}
+          path: |
+            evals/reportes/procedimientos-legacy.json
+            evals/reportes/procedimientos-v3.json
+          if-no-files-found: warn
+          retention-days: 30

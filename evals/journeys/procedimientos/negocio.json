@@ -1,9 +1,10 @@
 {
   "nombre": "Comercio Journeys AOS",
-  "descripcion": "Academia que vende planes y una cafetería que vende a domicilio, con el motor de procedimientos encendido (HU-AOS-07).",
+  "descripcion": "Academia que vende planes y agenda demos, y una cafetería que vende a domicilio, con el motor de procedimientos encendido (HU-AOS-07, HU-AOS-08).",
   "packs": [
     "pack_commerce",
-    "pack_payments"
+    "pack_payments",
+    "pack_calendar"
   ],
   "plan": "premium",
   "motor_de_procedimientos": true,
@@ -36,6 +37,14 @@
           "email"
         ]
       }
+    },
+    "pack_calendar": {
+      "source": "interno",
+      "business_hours": "{\"mon\": \"09:00-18:00\", \"tue\": \"09:00-18:00\", \"wed\": \"09:00-18:00\", \"thu\": \"09:00-18:00\", \"fri\": \"09:00-18:00\", \"sat\": \"09:00-18:00\", \"sun\": \"09:00-18:00\"}",
+      "timezone": "America/Bogota",
+      "slot_minutes": 60,
+      "buffer_minutes": 0,
+      "event_duration_minutes": 60
     }
   },
   "catalogo": {

@@ -321,3 +321,38 @@ async def test_preguntar_por_disponibilidad_pasa():
 async def test_disponibilidad_de_productos_no_es_agenda(texto: str):
     verdict = await _check(texto)
     assert verdict.passed, verdict.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        # pass^4 de los procedimientos (2026-10-18): un pedido de comida en un negocio con agenda
+        # escalaba porque "tenemos disponibilidad" se leía como un horario libre.
+        "¡Sí, tenemos disponibilidad! La Hamburguesa doble carne cuesta $25,000.",
+        "Hay disponibilidad de hamburguesas, cada una a $25,000.",
+        "Tenemos cupos para el taller de cocina.",
+        "Hay espacio para tu pedido.",
+        "El envío queda libre de costo.",
+    ],
+)
+async def test_disponibilidad_generica_sin_dato_de_agenda_no_es_agenda(texto: str):
+    verdict = await _check(texto)
+    assert verdict.passed, verdict.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Tenemos disponibilidad el jueves.",
+        "Hay cupos a las 3 pm.",
+        "Para la demo hay espacio el lunes.",
+        "El martes a las 10:00 queda libre.",
+        "Tengo disponibilidad esta semana.",
+    ],
+)
+async def test_disponibilidad_generica_con_dato_de_agenda_bloquea(texto: str):
+    verdict = await _check(texto)
+    assert not verdict.passed, texto
+    assert "disponibilidad" in verdict.reason
