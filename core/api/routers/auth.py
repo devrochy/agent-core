@@ -17,13 +17,18 @@ sesión, igual que el login (ADR-0124).
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Request, Response
 from fastapi.background import BackgroundTasks
 from pydantic import BaseModel, Field
 
-from core.admin.auth import SESSION_TTL_HOURS, admin_from_token, login, logout
+from core.admin.auth import (
+    SESSION_TTL_HOURS,
+    NegocioSuspendido,
+    admin_from_token,
+    login,
+    logout,
+)
 from core.admin.invitations_service import (
     CUENTA_EXISTENTE,
     ENLACE_INVALIDO,
@@ -31,7 +36,7 @@ from core.admin.invitations_service import (
     partes_del_token,
 )
 from core.admin.password_reset_service import aplicar_reset, solicitar_reset
-from core.api.deps import Principal, get_principal
+from core.api.deps import session_token
 from core.api.errors import ApiError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -94,7 +99,11 @@ async def post_login(payload: LoginRequest, request: Request) -> LoginResponse:
         raise ApiError(
             429, "auth_bloqueado", "Demasiados intentos. Espera unos minutos e inténtalo de nuevo."
         )
-    token = await login(payload.identifier, payload.password)
+    try:
+        token = await login(payload.identifier, payload.password)
+    except NegocioSuspendido as exc:
+        # Credenciales correctas: no cuenta como intento fallido (ADR-0136).
+        raise ApiError(403, exc.code, exc.mensaje) from None
     if token is None:
         await register_failure("admin", identifier, ip)
         raise ApiError(401, "invalid_credentials", "Correo o contraseña incorrectos.")
@@ -106,11 +115,13 @@ async def post_login(payload: LoginRequest, request: Request) -> LoginResponse:
 
 
 @router.post("/logout", status_code=204)
-async def post_logout(
-    principal: Annotated[Principal, Depends(get_principal)],
-) -> Response:
-    if principal.token:
-        await logout(principal.token)
+async def post_logout(request: Request) -> Response:
+    """Cierra la sesión del token presentado. No resuelve negocio ni permisos: quien quedó
+    con un negocio suspendido (403 en el resto de la API) también puede salir (ADR-0136)."""
+    token = session_token(request)
+    if not token:
+        raise ApiError.unauthorized()
+    await logout(token)
     return Response(status_code=204)
 
 

@@ -26,6 +26,7 @@ from core.admin.advanced_service import (
 from core.admin.auth import (
     SESSION_COOKIE,
     TENANT_COOKIE,
+    NegocioSuspendido,
     current_admin,
     login,
     logout,
@@ -142,7 +143,7 @@ from core.plugin_manager import plugin_manager
 from core.shared.crypto import get_secret_box
 from core.shared.exceptions import PluginConfigError, PluginError
 from core.shared.logger import get_logger
-from core.shared.tenant import admin_tenants, get_current_tenant_id, tenant_scope
+from core.shared.tenant import get_current_tenant_id, negocios_de_cuenta, tenant_scope
 from core.shared.test_mode import TEST_CHANNEL
 
 log = get_logger(__name__)
@@ -253,7 +254,14 @@ async def login_page(request: Request) -> HTMLResponse:
 
 @router.post("/login")
 async def login_submit(request: Request, email: str = Form(...), password: str = Form(...)):
-    token = await login(email, password)
+    try:
+        token = await login(email, password)
+    except NegocioSuspendido as exc:
+        return _render(
+            "login.html",
+            {"request": request, "assistant_name": get_settings().app_name, "error": exc.mensaje},
+            status_code=403,
+        )
     if token is None:
         return _render(
             "login.html",
@@ -340,7 +348,7 @@ async def switch_tenant(request: Request, tenant_id: str = Form(...)) -> Redirec
     admin = await current_admin(request)
     if admin is None:
         return _login_redirect()
-    tenants = await admin_tenants(admin.id)
+    tenants = (await negocios_de_cuenta(admin)).operativos
     if any(str(t[0]) == tenant_id for t in tenants):
         response = RedirectResponse("/admin", status_code=303)
         response.set_cookie(

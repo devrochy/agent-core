@@ -24,6 +24,7 @@ from core.admin.collaborators_service import (
     reset_password,
     revoke_permission,
     toggle_active,
+    unlink_tenant,
 )
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
@@ -183,6 +184,10 @@ class LinkRequest(BaseModel):
     role: str = "colaborador"
 
 
+class UnlinkRequest(BaseModel):
+    tenant: str
+
+
 def _fail(error: str | None) -> None:
     if error is not None:
         raise ApiError.bad_request(error, "collaborator_error")
@@ -293,6 +298,20 @@ async def link_collaborator_tenant(
     audit(
         "link", principal.admin.email, str(admin_id), tenant=payload.tenant, role=payload.role
     )
+    return Response(status_code=204)
+
+
+@router.post("/{admin_id}/unlink", status_code=204)
+async def unlink_collaborator_tenant(
+    admin_id: uuid.UUID,
+    payload: UnlinkRequest,
+    principal: Annotated[Principal, Depends(require("collaborators", write=True))],
+) -> Response:
+    """Desvincula la cuenta de un negocio (ADR-0136). Un owner solo de su negocio activo y
+    solo a colaboradores; el master, de cualquiera. Nadie deja un negocio sin propietario."""
+    error = await unlink_tenant(actor=principal.admin, admin_id=admin_id, tenant_slug=payload.tenant)
+    _fail(error)
+    audit("unlink", principal.admin.email, str(admin_id), tenant=payload.tenant)
     return Response(status_code=204)
 
 

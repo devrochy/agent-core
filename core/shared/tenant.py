@@ -14,6 +14,8 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import Any
 
 _current_tenant_id: ContextVar[str | None] = ContextVar("current_tenant_id", default=None)
 
@@ -75,6 +77,62 @@ async def admin_tenants(admin_id: uuid.UUID) -> list[tuple[uuid.UUID, str, str]]
             )
         ).all()
         return [(uuid.UUID(str(r[0])), str(r[1]), str(r[2])) for r in rows]
+
+
+@dataclass(slots=True)
+class NegociosDeCuenta:
+    """Negocios de una cuenta separados por estado (ADR-0136).
+
+    `operativos`: los que puede usar en esta sesión (tuplas `(tenant_id, nombre, rol)` como
+    `admin_tenants`). `suspendidos`: ids vinculados por `tenant_user` que están suspendidos o
+    borrados; una cuenta que solo tiene de esos no entra (403 `tenant_suspended`). Para quien
+    actúa como master (master, tester habilitado) no se filtra nada: el master entra a un
+    negocio suspendido para reactivarlo o purgarlo.
+    """
+
+    operativos: list[tuple[uuid.UUID, str, str]]
+    suspendidos: set[uuid.UUID]
+
+    @property
+    def solo_suspendidos(self) -> bool:
+        return not self.operativos and bool(self.suspendidos)
+
+
+async def negocios_de_cuenta(admin: Any) -> NegociosDeCuenta:
+    """`admin_tenants` filtrado por el ciclo de vida del negocio (ADR-0136).
+
+    Único punto para resolver qué negocios ve una sesión: login, `get_principal`, el
+    middleware y el selector del panel clásico, la lista de `/admin/tenants` y la app de
+    campo. Las ramas `global` de `admin_tenants()` ya vienen filtradas por `status`; aquí se
+    filtran los vínculos directos de `tenant_user`, que la función SQL devuelve tal cual.
+    """
+    from sqlalchemy import select
+
+    from core.admin.roles import actua_como_master
+    from core.db.models import Tenant
+    from core.db.session import get_session
+
+    tenants = await admin_tenants(admin.id)
+    if not tenants or actua_como_master(admin):
+        return NegociosDeCuenta(operativos=list(tenants), suspendidos=set())
+    async with get_session() as session:
+        activos = set(
+            (
+                await session.execute(
+                    select(Tenant.id).where(
+                        Tenant.id.in_([t[0] for t in tenants]),
+                        Tenant.status == "active",
+                        Tenant.deleted_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return NegociosDeCuenta(
+        operativos=[t for t in tenants if t[0] in activos],
+        suspendidos={t[0] for t in tenants if t[0] not in activos},
+    )
 
 
 async def default_tenant() -> uuid.UUID | None:
