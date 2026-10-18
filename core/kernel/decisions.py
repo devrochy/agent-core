@@ -100,6 +100,13 @@ class Turno:
     # Agente que atiende y tarea en foco (HU-AOS-15): NULL con `legacy` o sin motor activo.
     active_instance_id: uuid.UUID | None = None
     focus_task_id: uuid.UUID | None = None
+    # Enrutamiento (HU-AOS-17): con `aos_routing` ≠ off. `route_source` es lo que pasó de verdad
+    # (en sombra, `default`); `shadow_route`, lo que el router habría hecho. Solo en turnos `routed`.
+    route_source: str | None = None
+    rule_id: str | None = None
+    candidates: list[dict[str, Any]] | None = None
+    confidence: float | None = None
+    shadow_route: dict[str, Any] | None = None
     _token_vigente: Any = None
 
     def ms(self) -> int:
@@ -239,16 +246,21 @@ async def decidir(
     turno.conversation_id = conversation.id
     if status is not None:
         turno.status = status
+    # Las columnas del router solo valen en un turno enrutado (`ck_core_decisions_routed` y
+    # `ck_core_decisions_shadow`): un turno bloqueado después de enrutar no las lleva.
+    enrutado = outcome == "routed"
     try:
         async with asyncio.timeout(_TIMEOUT_ESCRITURA_S), get_session() as session:
             await session.execute(
                 text(
                     "INSERT INTO core_decisions (id, tenant_id, connection_id, conversation_id, "
                     "inbound_message_ids, outcome, blocked_by, route_source, latency_ms, trace_id, "
-                    "release_id, release_lane, active_instance_id, focus_task_id) "
+                    "release_id, release_lane, active_instance_id, focus_task_id, rule_id, candidates, "
+                    "confidence, shadow_route) "
                     "VALUES (:id, :tenant_id, :connection_id, :conversation_id, :inbound, :outcome, "
                     ":blocked_by, :route_source, :latency_ms, :trace_id, :release_id, :release_lane, "
-                    ":active_instance_id, :focus_task_id)"
+                    ":active_instance_id, :focus_task_id, :rule_id, CAST(:candidates AS jsonb), "
+                    ":confidence, CAST(:shadow_route AS jsonb))"
                 ).bindparams(bindparam("inbound", type_=ARRAY(UUID(as_uuid=True)))),
                 {
                     "id": turno.id,
@@ -267,6 +279,10 @@ async def decidir(
                     "release_lane": turno.release_lane,
                     "active_instance_id": turno.active_instance_id,
                     "focus_task_id": turno.focus_task_id,
+                    "rule_id": turno.rule_id if enrutado else None,
+                    "candidates": json.dumps(turno.candidates) if enrutado and turno.candidates is not None else None,
+                    "confidence": turno.confidence if enrutado else None,
+                    "shadow_route": json.dumps(turno.shadow_route) if enrutado and turno.shadow_route else None,
                 },
             )
     except Exception:
@@ -283,8 +299,11 @@ async def decidir(
 
 
 async def enrutar(conversation: Any) -> None:
-    """El turno va al hilo del agente. Con el runtime legacy no hay router: `default`."""
-    await decidir(conversation, "routed", route_source="default")
+    """El turno va al hilo del agente. Sin router (legacy, o `aos_routing = off`): `default`; con
+    él, la fuente que anotó `anotar_ruta` (HU-AOS-17)."""
+    turno = turno_actual()
+    fuente = turno.route_source if turno is not None and turno.route_source else "default"
+    await decidir(conversation, "routed", route_source=fuente)
 
 
 async def bloquear(conversation: Any, motivo: str, *, status: str | None = None) -> None:
@@ -305,6 +324,26 @@ def anotar_release(
         turno.release_id = release_id
         turno.release_lane = lane
         turno.active_instance_id = active_instance_id
+
+
+def anotar_ruta(ruta: Any, *, activa: bool) -> None:
+    """La ruta del router (HU-AOS-17), antes de decidir. Activa: su fuente, regla y confianza son
+    las del turno. Sombra: el turno sigue con `default` y la ruta va a `shadow_route`. Los
+    candidatos (lo que vio el router) van siempre."""
+    turno = turno_actual()
+    if turno is None or turno.decidido:
+        return
+    turno.candidates = [dict(c) for c in ruta.candidates]
+    if activa:
+        turno.route_source = ruta.source
+        turno.rule_id = ruta.rule_id
+        turno.confidence = ruta.confidence
+        turno.shadow_route = None
+    else:
+        turno.route_source = "default"
+        turno.rule_id = None
+        turno.confidence = None
+        turno.shadow_route = ruta.sombra()
 
 
 def anotar_foco(task_id: uuid.UUID | None) -> None:

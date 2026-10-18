@@ -998,8 +998,14 @@ class ContextoMotor:
           así, p. ej. por un dato que llegó con un botón): se pide.
 
         Acciones y etapas no cambian: siguen con su confirmación estricta. Sin nada de eso en la
-        proyección que ya se leyó, no toca la base. Best-effort: un fallo se loguea y el turno sigue."""
-        if self.modo != "activo" or self._foco is None:
+        proyección que ya se leyó, no toca la base. Best-effort: un fallo se loguea y el turno sigue.
+
+        Antes, una regla `start` del router (HU-AOS-17) inicia su procedimiento por `_iniciar`
+        (salud del pack, una sola tarea en foco), después de las políticas del turno."""
+        if self.modo != "activo":
+            return
+        await self._iniciar_por_regla()
+        if self._foco is None:
             return
         tarea, proc, stage = self._foco.tarea, self._foco.proc, self._foco.stage
         pendiente = tarea.pending_confirmation
@@ -1014,6 +1020,19 @@ class ContextoMotor:
             await self._releer_seguro()
         except Exception as exc:
             log.warning("motor_al_empezar_fallo", error=type(exc).__name__)
+
+    async def _iniciar_por_regla(self) -> None:
+        from core.shared import release_vigente
+
+        procedure_id = release_vigente.tomar_inicio()
+        if procedure_id is None or self._foco is not None:
+            return
+        try:
+            resultado = await self._iniciar(procedure_id)
+        except Exception as exc:
+            log.warning("motor_inicio_por_regla_fallo", error=type(exc).__name__)
+            return
+        log.info("motor_inicio_por_regla", procedure_id=procedure_id, ok=resultado.ok)
 
     async def _confirmaciones_al_empezar(self, task_id: uuid.UUID) -> bool:
         """True si confirmó un dato. Todo se relee bajo el lock (el botón del consumer compite)."""
@@ -1175,7 +1194,7 @@ class ContextoMotor:
             fila = await state.iniciar(
                 s, tenant_id=self.tenant_id, conversation_id=self.conversation_id, procedure_id=proc.id,
                 procedure_version=proc.version, stage=proc.stages[0].id, actor="kernel",
-                turn_id=turno_vigente.turno_id(),
+                turn_id=turno_vigente.turno_id(), owner_instance_id=_agente_del_turno_id(),
             )
             task_id = fila.id
         self._seq_al_empezar[task_id] = 1
@@ -1756,6 +1775,15 @@ def _nombre_seguro(nombre: Any) -> str:
     return " ".join(str(nombre).split())[:40] or "?"
 
 
+def _agente_del_turno_id() -> uuid.UUID | None:
+    """El especialista que atiende el turno (HU-AOS-15/17): dueño de la tarea que se inicia, así
+    el router sabe quién la sigue. None sin release (legacy)."""
+    from core.shared import release_vigente
+
+    agente = release_vigente.agente_del_turno()
+    return agente.instance_id if agente is not None else None
+
+
 async def contexto_del_motor(
     conversation_id: uuid.UUID,
     *,
@@ -1867,8 +1895,14 @@ async def _entrada_sin_llm(conversation: Any, interactivo: str, media: list[Any]
 
     tenant_id, conversation_id = conversation.tenant_id, conversation.id
     async with get_session() as s:
-        if not (await banderas_del_negocio(s, tenant_id)).procedimientos:
-            return
+        banderas = await banderas_del_negocio(s, tenant_id)
+    if interactivo and banderas.ruteo != "off" and banderas.runtime == "v3":
+        # El payload del botón para las reglas del router (HU-AOS-17): solo con el ruteo encendido.
+        from core.kernel.router import guardar_payload
+
+        await guardar_payload(tenant_id, conversation_id, interactivo)
+    if not banderas.procedimientos:
+        return
     if interactivo:
         await _marcar_interactivo(tenant_id, conversation_id)
     permitidos = frozenset(await registro.packs_permitidos(tenant_id))

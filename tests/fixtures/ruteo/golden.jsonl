@@ -1,0 +1,80 @@
+{"catalogo": "planes", "texto": "quiero agendar una demo", "esperado": "pack_calendar.agendar_cita"}
+{"catalogo": "planes", "texto": "quisiera agendar una demostración del producto", "esperado": "pack_calendar.agendar_cita"}
+{"catalogo": "planes", "texto": "me pueden dar una cita para el martes", "esperado": "pack_calendar.agendar_cita"}
+{"catalogo": "planes", "texto": "¿tienen espacio mañana en la tarde?", "esperado": "pack_calendar.agendar_cita"}
+{"catalogo": "planes", "texto": "necesito una reunión con un asesor", "esperado": "pack_calendar.agendar_cita"}
+{"catalogo": "planes", "texto": "quiero reservar una cita", "esperado": "pack_calendar.agendar_cita"}
+{"catalogo": "planes", "texto": "¿a qué hora me pueden atender el lunes?", "esperado": "pack_calendar.agendar_cita"}
+{"catalogo": "planes", "texto": "agéndame una llamada para el jueves", "esperado": "pack_calendar.agendar_cita"}
+{"catalogo": "planes", "texto": "me gustaría separar un espacio para una demo", "esperado": "pack_calendar.agendar_cita"}
+{"catalogo": "planes", "texto": "puedo agendar una cita para conocer la plataforma", "esperado": "pack_calendar.agendar_cita"}
+{"catalogo": "planes", "texto": "quiero el plan premium", "esperado": "pack_commerce.contratar_plan"}
+{"catalogo": "planes", "texto": "quiero contratar el plan básico", "esperado": "pack_commerce.contratar_plan"}
+{"catalogo": "planes", "texto": "cómo pago el plan anual", "esperado": "pack_commerce.contratar_plan"}
+{"catalogo": "planes", "texto": "mándame el link para pagar el plan", "esperado": "pack_commerce.contratar_plan"}
+{"catalogo": "planes", "texto": "me quiero suscribir", "esperado": "pack_commerce.contratar_plan"}
+{"catalogo": "planes", "texto": "quiero comprar el plan pro", "esperado": "pack_commerce.contratar_plan"}
+{"catalogo": "planes", "texto": "lo quiero contratar ya", "esperado": "pack_commerce.contratar_plan"}
+{"catalogo": "planes", "texto": "cómo hago para contratar", "esperado": "pack_commerce.contratar_plan"}
+{"catalogo": "planes", "texto": "quiero adquirir una suscripción", "esperado": "pack_commerce.contratar_plan"}
+{"catalogo": "planes", "texto": "me interesa contratar el plan mensual", "esperado": "pack_commerce.contratar_plan"}
+{"catalogo": "planes", "texto": "envíame el enlace de pago del plan", "esperado": "pack_commerce.contratar_plan"}
+{"catalogo": "planes", "texto": "quiero pasarme al plan premium", "esperado": "pack_subscriptions.cambiar_plan"}
+{"catalogo": "planes", "texto": "cámbiame al plan básico", "esperado": "pack_subscriptions.cambiar_plan"}
+{"catalogo": "planes", "texto": "quiero mejorar mi plan", "esperado": "pack_subscriptions.cambiar_plan"}
+{"catalogo": "planes", "texto": "cuánto me cuesta subir de plan", "esperado": "pack_subscriptions.cambiar_plan"}
+{"catalogo": "planes", "texto": "quiero bajar mi plan a uno más barato", "esperado": "pack_subscriptions.cambiar_plan"}
+{"catalogo": "planes", "texto": "necesito cambiar de plan", "esperado": "pack_subscriptions.cambiar_plan"}
+{"catalogo": "planes", "texto": "quiero subir mi suscripción al plan pro", "esperado": "pack_subscriptions.cambiar_plan"}
+{"catalogo": "planes", "texto": "me quiero cambiar al plan anual", "esperado": "pack_subscriptions.cambiar_plan"}
+{"catalogo": "planes", "texto": "puedo hacer upgrade de mi plan", "esperado": "pack_subscriptions.cambiar_plan"}
+{"catalogo": "planes", "texto": "te pago el viernes", "esperado": "pack_cobranza.promesa_de_pago"}
+{"catalogo": "planes", "texto": "el 15 te cancelo lo que debo", "esperado": "pack_cobranza.promesa_de_pago"}
+{"catalogo": "planes", "texto": "la otra semana me pongo al día", "esperado": "pack_cobranza.promesa_de_pago"}
+{"catalogo": "planes", "texto": "pago cuando me llegue la quincena", "esperado": "pack_cobranza.promesa_de_pago"}
+{"catalogo": "planes", "texto": "el viernes te pago lo atrasado", "esperado": "pack_cobranza.promesa_de_pago"}
+{"catalogo": "planes", "texto": "me comprometo a pagar el lunes", "esperado": "pack_cobranza.promesa_de_pago"}
+{"catalogo": "planes", "texto": "te consigno el saldo pendiente la próxima semana", "esperado": "pack_cobranza.promesa_de_pago"}
+{"catalogo": "planes", "texto": "ya sé que estoy atrasado, pago a fin de mes", "esperado": "pack_cobranza.promesa_de_pago"}
+{"catalogo": "planes", "texto": "el martes me pongo al día con la deuda", "esperado": "pack_cobranza.promesa_de_pago"}
+{"catalogo": "planes", "texto": "hola", "esperado": null}
+{"catalogo": "planes", "texto": "buenas tardes", "esperado": null}
+{"catalogo": "planes", "texto": "gracias", "esperado": null}
+{"catalogo": "planes", "texto": "ok perfecto", "esperado": null}
+{"catalogo": "planes", "texto": "¿qué horario tienen?", "esperado": null}
+{"catalogo": "planes", "texto": "¿dónde quedan ubicados?", "esperado": null}
+{"catalogo": "planes", "texto": "¿quién eres?", "esperado": null}
+{"catalogo": "planes", "texto": "¿qué hace su empresa?", "esperado": null}
+{"catalogo": "planes", "texto": "no gracias, eso es todo", "esperado": null}
+{"catalogo": "planes", "texto": "jaja listo", "esperado": null}
+{"catalogo": "planes", "texto": "¿aceptan tarjeta?", "esperado": null}
+{"catalogo": "planes", "texto": "cuál es su correo", "esperado": null}
+{"catalogo": "tienda", "texto": "quiero pedir dos hamburguesas", "esperado": "pack_commerce.tomar_pedido"}
+{"catalogo": "tienda", "texto": "quiero hacer un pedido", "esperado": "pack_commerce.tomar_pedido"}
+{"catalogo": "tienda", "texto": "me lo mandan a la casa", "esperado": "pack_commerce.tomar_pedido"}
+{"catalogo": "tienda", "texto": "lo paso a recoger", "esperado": "pack_commerce.tomar_pedido"}
+{"catalogo": "tienda", "texto": "me regalas una pizza grande a domicilio", "esperado": "pack_commerce.tomar_pedido"}
+{"catalogo": "tienda", "texto": "quiero ordenar unas empanadas", "esperado": "pack_commerce.tomar_pedido"}
+{"catalogo": "tienda", "texto": "quiero comprar tres camisetas", "esperado": "pack_commerce.tomar_pedido"}
+{"catalogo": "tienda", "texto": "¿me pueden enviar el pedido a domicilio?", "esperado": "pack_commerce.tomar_pedido"}
+{"catalogo": "tienda", "texto": "quiero agendar una cita", "esperado": "pack_calendar.agendar_cita"}
+{"catalogo": "tienda", "texto": "¿tienen espacio el sábado?", "esperado": "pack_calendar.agendar_cita"}
+{"catalogo": "tienda", "texto": "quiero reservar turno para mañana", "esperado": "pack_calendar.agendar_cita"}
+{"catalogo": "tienda", "texto": "te pago el viernes", "esperado": "pack_cobranza.promesa_de_pago"}
+{"catalogo": "tienda", "texto": "me pongo al día la otra semana", "esperado": "pack_cobranza.promesa_de_pago"}
+{"catalogo": "tienda", "texto": "pago lo atrasado en la quincena", "esperado": "pack_cobranza.promesa_de_pago"}
+{"catalogo": "tienda", "texto": "hola, buenas", "esperado": null}
+{"catalogo": "tienda", "texto": "¿hasta qué hora abren?", "esperado": null}
+{"catalogo": "tienda", "texto": "muchas gracias", "esperado": null}
+{"catalogo": "tienda", "texto": "¿tienen parqueadero?", "esperado": null}
+{"catalogo": "planes", "texto": "quiero una cita con ventas para el miércoles", "esperado": "pack_calendar.agendar_cita"}
+{"catalogo": "planes", "texto": "¿me pueden llamar mañana para una demo?", "esperado": "pack_calendar.agendar_cita"}
+{"catalogo": "planes", "texto": "dónde pago la suscripción", "esperado": "pack_commerce.contratar_plan"}
+{"catalogo": "planes", "texto": "quiero el plan empresarial", "esperado": "pack_commerce.contratar_plan"}
+{"catalogo": "planes", "texto": "quisiera cambiar mi plan actual", "esperado": "pack_subscriptions.cambiar_plan"}
+{"catalogo": "planes", "texto": "el lunes sin falta te pago", "esperado": "pack_cobranza.promesa_de_pago"}
+{"catalogo": "planes", "texto": "¿cuánto cuesta el plan premium?", "esperado": null}
+{"catalogo": "planes", "texto": "¿qué incluye el plan básico?", "esperado": null}
+{"catalogo": "tienda", "texto": "quiero encargar un pastel para el sábado", "esperado": "pack_commerce.tomar_pedido"}
+{"catalogo": "tienda", "texto": "¿me mandan dos cafés?", "esperado": "pack_commerce.tomar_pedido"}
+{"catalogo": "tienda", "texto": "¿qué productos tienen?", "esperado": null}

@@ -1,4 +1,5 @@
-"""Banderas del Agent OS por negocio (ADR-0112): `tenants.aos_runtime` y `tenants.aos_procedures`.
+"""Banderas del Agent OS por negocio (ADR-0112): `tenants.aos_runtime`, `tenants.aos_procedures` y
+`tenants.aos_routing` (HU-AOS-17, ADR-0138).
 
 Las guarda la base (migración 0070, con el CHECK de orden `aos_procedures ⇒ aos_runtime = 'v3'`)
 y solo las edita el master. Se leen en cada turno, así un cambio surte efecto sin redeploy.
@@ -18,6 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 class BanderasAOS:
     runtime: str = "legacy"   # legacy | v3
     procedimientos: bool = False
+    # Enrutamiento entre especialistas (HU-AOS-17, migración 0094, ADR-0138): off | shadow | active.
+    ruteo: str = "off"
 
 
 APAGADAS = BanderasAOS()
@@ -27,12 +30,13 @@ async def banderas_del_negocio(session: AsyncSession, tenant_id: uuid.UUID) -> B
     """Banderas del negocio; apagadas si el negocio no existe (fail-closed hacia lo de siempre)."""
     fila = (
         await session.execute(
-            text("SELECT aos_runtime, aos_procedures FROM tenants WHERE id = :t"), {"t": tenant_id}
+            text("SELECT aos_runtime, aos_procedures, aos_routing FROM tenants WHERE id = :t"),
+            {"t": tenant_id},
         )
     ).first()
     if fila is None:
         return APAGADAS
-    return BanderasAOS(runtime=fila[0], procedimientos=bool(fila[1]))
+    return BanderasAOS(runtime=fila[0], procedimientos=bool(fila[1]), ruteo=str(fila[2] or "off"))
 
 
 async def negocios_con_procedimientos(session: AsyncSession) -> list[uuid.UUID]:

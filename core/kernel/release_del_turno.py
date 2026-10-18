@@ -35,6 +35,12 @@ piden `kernelspec.Episode` y ADR-0116 (el handoff en dos fases es de HU-AOS-19: 
 se escribe uno, solo quién atendió). Si el que atiende cambia, se escribe
 `active_agent_instance_id` y `owner_since` en la misma transacción, bajo el lock.
 
+**Enrutamiento** (HU-AOS-17, ADR-0138): con `tenants.aos_routing` ≠ off, `core.kernel.router`
+calcula la ruta (tarea en foco → reglas → disparadores → la de siempre) bajo el mismo lock. En
+`shadow` solo se registra (`core_decisions.shadow_route`); en `active` su agente es el foco y una
+regla `start` deja el procedimiento para el motor (`release_vigente.fijar_inicio`). Con `off`, ni
+una consulta ni una lectura de Redis más.
+
 Efecto en el turno: deja la release en `core.shared.release_vigente` (la ranura que abre
 `con_release`) y en `core_decisions` (`anotar_release`).
 """
@@ -58,6 +64,7 @@ from core.shared.tenant import get_current_tenant_id
 if TYPE_CHECKING:
     from agentcore_contracts import Procedure
 
+    from core.kernel.router import Ruta
     from core.kernel.state import Proyeccion
     from core.releases.cargar import ReleaseCongelada
     from core.shared.release_vigente import AgenteCongelado
@@ -98,6 +105,19 @@ class Asignacion:
     # Especialista que atiende el turno (HU-AOS-15) y si cambió el dueño de la conversación.
     foco: AgenteCongelado | None = None
     dueno_cambio: bool = False
+    # Enrutamiento (HU-AOS-17): el modo efectivo y la ruta calculada (None con `off`). En
+    # `shadow` la ruta solo se registra; en `active` su agente es el `foco`.
+    modo_ruteo: str = "off"
+    ruta: Ruta | None = None
+
+
+@dataclass(frozen=True)
+class ContextoRuteo:
+    """Lo que el turno le pasa a `asignar` para enrutar (solo con `aos_routing` ≠ off)."""
+
+    modo: str
+    texto: str = ""
+    payload: str = ""
 
 
 # ------------------------------------------------------------------ reglas (puras)
@@ -254,9 +274,10 @@ async def asignar(
     tenant_id: uuid.UUID,
     conversation_id: uuid.UUID,
     connection_id: uuid.UUID,
+    ruteo: ContextoRuteo | None = None,
 ) -> tuple[Asignacion, ReleaseCongelada] | None:
     """Asigna la release del turno (ver el docstring del módulo). None si la conexión no tiene
-    release activa. No hace commit."""
+    release activa. No hace commit. Con `ruteo`, el router elige el especialista (HU-AOS-17)."""
     from core.kernel.episodio import abrir_episodio
     from core.releases.cargar import cargar_release
 
@@ -275,7 +296,7 @@ async def asignar(
     fila_conv = (
         await session.execute(
             text(
-                "SELECT release_id, active_agent_instance_id FROM conversations "
+                "SELECT release_id, active_agent_instance_id, customer_id, channel FROM conversations "
                 "WHERE tenant_id = :t AND id = :c FOR UPDATE"
             ),
             {"t": tenant_id, "c": conversation_id},
@@ -284,6 +305,7 @@ async def asignar(
     if fila_conv is None:
         return None
     actual, dueno = fila_conv[0], fila_conv[1]
+    customer_id, channel = fila_conv[2], str(fila_conv[3] or "")
     del_episodio = await cargar_release(session, tenant_id, actual or activa)
     if del_episodio is None:  # la FK compuesta lo impide; por si acaso, la activa
         del_episodio = await cargar_release(session, tenant_id, activa)
@@ -337,7 +359,23 @@ async def asignar(
         )
     # Agente en foco (HU-AOS-15): un episodio nuevo suelta al dueño; el anterior solo cuenta si
     # sigue siendo especialista de la release de destino. Sin especialista: `ErrorDeRelease`.
-    foco = hacia.foco(None if nuevo else dueno)
+    dueno_vigente = None if nuevo else dueno
+    foco = hacia.foco(dueno_vigente)
+    modo, ruta = "off", None
+    if ruteo is not None:
+        modo, ruta = await _enrutar(
+            session,
+            hacia,
+            ruteo,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            customer_id=customer_id,
+            channel=channel,
+            dueno=dueno_vigente,
+            legacy=foco,
+        )
+        if modo == "active" and ruta is not None:
+            foco = ruta.agente
     dueno_cambio = foco.instance_id != dueno
     if dueno_cambio:
         await session.execute(
@@ -351,7 +389,13 @@ async def asignar(
             "conversation_agent_assigned",
             conversation_id=str(conversation_id),
             agent_key=foco.key,
-            reason="episodio_nuevo" if nuevo else ("primera" if dueno is None else "dueno_fuera_de_release"),
+            reason=(
+                f"ruta_{ruta.source}"
+                if modo == "active" and ruta is not None and ruta.source != "default"
+                else "episodio_nuevo"
+                if nuevo
+                else ("primera" if dueno is None else "dueno_fuera_de_release")
+            ),
         )
     asignacion = Asignacion(
         release_id=destino,
@@ -363,14 +407,64 @@ async def asignar(
         escaladas=tuple(escaladas),
         foco=foco,
         dueno_cambio=dueno_cambio,
+        modo_ruteo=modo,
+        ruta=ruta,
     )
     return asignacion, hacia
 
 
-async def fijar_release_del_turno(conversation: Any) -> Asignacion | None:
+async def _enrutar(
+    session: AsyncSession,
+    release: ReleaseCongelada,
+    ruteo: ContextoRuteo,
+    *,
+    tenant_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    customer_id: uuid.UUID | None,
+    channel: str,
+    dueno: uuid.UUID | None,
+    legacy: AgenteCongelado,
+) -> tuple[str, Ruta | None]:
+    """(modo efectivo, ruta) del router (HU-AOS-17). La estabilidad del dueño solo se consulta
+    cuando una regla o un disparador cambiaría al dueño vigente."""
+    from core.kernel import router
+
+    routing = release.ruteo()
+    modo = router.modo_efectivo(ruteo.modo, routing)
+    if modo == "off":
+        return modo, None
+    entrada = await router.leer_entrada(
+        session,
+        tenant_id=tenant_id,
+        conversation_id=conversation_id,
+        customer_id=customer_id,
+        routing=routing,
+        texto=ruteo.texto,
+        payload=ruteo.payload,
+        channel=channel,
+        dueno=dueno,
+    )
+    ruta = router.decidir(release, routing, entrada, legacy)
+    if ruta.source in ("rule", "trigger") and dueno is not None and ruta.agente.instance_id != dueno:
+        cambios = await router.cambios_de_dueno(session, tenant_id, conversation_id)
+        ruta = router.estabilizar(ruta, entrada, legacy, routing, cambios)
+    log.info(
+        "kernel_route",
+        mode=modo,
+        source=ruta.source,
+        agent_key=ruta.agente.key,
+        rule_id=ruta.rule_id,
+        procedure_id=ruta.procedure_id,
+        candidates=len(ruta.candidates),
+    )
+    return modo, ruta
+
+
+async def fijar_release_del_turno(conversation: Any, texto: str = "") -> Asignacion | None:
     """Punto de enganche del loop. None (sin consultas) con `AOS_CONNECTION_ROUTING` apagada;
     None con `aos_runtime = 'legacy'`, sin conexión o sin release activa (el turno sigue como
-    siempre). Fail-closed con v3: un error de base sube por el camino de error del turno."""
+    siempre). Fail-closed con v3: un error de base sube por el camino de error del turno.
+    `texto`: el mensaje del cliente, para el router (solo con `aos_routing` ≠ off)."""
     if not get_settings().aos_connection_routing:
         return None
     tenant_id = get_current_tenant_id()
@@ -383,16 +477,24 @@ async def fijar_release_del_turno(conversation: Any) -> Asignacion | None:
         return None
     from core.db.session import get_session
     from core.kernel.banderas import banderas_del_negocio
-    from core.kernel.decisions import anotar_release
+    from core.kernel.decisions import anotar_release, anotar_ruta
 
     async with get_session() as session:
-        if (await banderas_del_negocio(session, tenant_id)).runtime != "v3":
+        banderas = await banderas_del_negocio(session, tenant_id)
+        if banderas.runtime != "v3":
             return None
+        ruteo = None
+        if banderas.ruteo != "off":
+            from core.kernel.router import tomar_payload
+
+            payload = await tomar_payload(tenant_id, conversation.id)
+            ruteo = ContextoRuteo(modo=banderas.ruteo, texto=texto or "", payload=payload)
         resultado = await asignar(
             session,
             tenant_id=tenant_id,
             conversation_id=conversation.id,
             connection_id=connection_id,
+            ruteo=ruteo,
         )
     if resultado is None:
         # v3 sin release activa: el turno sigue con el v2 (legacy silencioso). Pendiente con
@@ -407,6 +509,10 @@ async def fijar_release_del_turno(conversation: Any) -> Asignacion | None:
         asignacion.lane,
         active_instance_id=asignacion.foco.instance_id if asignacion.foco is not None else None,
     )
+    if asignacion.ruta is not None:
+        anotar_ruta(asignacion.ruta, activa=asignacion.modo_ruteo == "active")
+        if asignacion.modo_ruteo == "active" and asignacion.ruta.start is not None:
+            release_vigente.fijar_inicio(tenant_id, asignacion.ruta.start)
     return asignacion
 
 
@@ -414,6 +520,7 @@ __all__ = [
     "LANE_ESTABLE",
     "MOTIVO_CAMBIO",
     "Asignacion",
+    "ContextoRuteo",
     "asignar",
     "carril",
     "con_release",

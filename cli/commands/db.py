@@ -210,6 +210,66 @@ def migrar_a_v3(
         raise typer.Exit(1)
 
 
+@app.command("ruteo")
+def ruteo(
+    tenant: str = typer.Option(..., "--tenant", help="El negocio (slug o UUID)."),
+    modo: str = typer.Option(..., "--modo", help="off | shadow | active"),
+    database_url: str | None = typer.Option(
+        None, "--database-url", help="Por defecto MIGRATIONS_DATABASE_URL (el rol dueño)."
+    ),
+) -> None:
+    """Agent OS (HU-AOS-17): fija `tenants.aos_routing` del negocio. `shadow` decide y registra la
+    ruta en `core_decisions.shadow_route` sin cambiar quién atiende; `active` enruta. Exige
+    `aos_runtime = 'v3'`. Runbook: una semana en `shadow` y `reporte-ruteo` antes de `active`."""
+    import asyncio
+
+    from cli.tenant_ref import resolve_tenant
+    from core.kernel.ruteo_sombra import escribir_modo
+
+    async def _run() -> None:
+        await escribir_modo(await resolve_tenant(tenant), modo, database_url)
+
+    try:
+        asyncio.run(_run())
+    except (ValueError, LookupError, PermissionError) as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from None
+    console.print(f"aos_routing = {modo}")
+
+
+@app.command("reporte-ruteo")
+def reporte_ruteo(
+    tenant: str = typer.Option(..., "--tenant", help="El negocio (slug o UUID)."),
+    dias: int = typer.Option(7, "--dias", min=1, max=31, help="Ventana en días."),
+) -> None:
+    """Agent OS (HU-AOS-17): precisión y recall por procedimiento del modo sombra frente a lo que
+    de verdad se inició. Meta de R3: ≥ 0,90 / ≥ 0,85 durante 7 días."""
+    import asyncio
+
+    from rich.table import Table
+
+    from cli.tenant_ref import resolve_tenant
+    from core.kernel.ruteo_sombra import Reporte, reporte_de_sombra
+    from core.shared.tenant import tenant_scope
+
+    async def _run() -> Reporte:
+        tenant_id = await resolve_tenant(tenant)
+        async with tenant_scope(tenant_id):
+            return await reporte_de_sombra(tenant_id, dias)
+
+    reporte = asyncio.run(_run())
+    tabla = Table(title=f"Ruteo en sombra: {reporte.turnos} turnos en {dias} días")
+    for columna in ("Procedimiento", "Predichos", "Reales", "Aciertos", "Precisión", "Recall"):
+        tabla.add_column(columna)
+
+    def _pct(valor: float | None) -> str:
+        return "-" if valor is None else f"{valor:.2f}"
+
+    for m in reporte.metricas:
+        tabla.add_row(m.procedure_id, str(m.predichos), str(m.reales), str(m.verdaderos), _pct(m.precision), _pct(m.recall))
+    console.print(tabla)
+
+
 @app.command("backfill-agentes")
 def backfill_agentes(
     dry_run: bool = typer.Option(False, "--dry-run", help="No escribe: reporta lo que haría."),

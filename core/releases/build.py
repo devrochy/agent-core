@@ -430,6 +430,32 @@ def _resolver_componentes(
     return salida
 
 
+def revisar_ruteo(instancias: list[_Instancia], componentes: list[man.Componente]) -> list[str]:
+    """Referencias del `routing` del KernelSpec contra la release (HU-AOS-17, ADR-0138): cada
+    `rules[].agent` es la key de un especialista de la conexión y cada `rules[].start` lo declara
+    algún especialista. `defaultAgent` no se exige (el lector tolerante lo fija en `general` y el
+    dueño puede quitar al General; `is_default` de la instancia gana, adenda HU-AOS-16 de
+    ADR-0117). Un `routing` que no valida lo rechaza antes el contrato."""
+    especialistas = {c.agent_key: c for c in componentes if c.role == "specialist"}
+    declarados = {pid for c in especialistas.values() for pid, _v in c.procedures}
+    problemas: list[str] = []
+    for inst in instancias:
+        if inst.componente.role != "core":
+            continue
+        routing = inst.contenido.get("routing")
+        reglas = routing.get("rules") if isinstance(routing, dict) else None
+        for regla in reglas if isinstance(reglas, list) else []:
+            if not isinstance(regla, dict):
+                continue
+            rid = str(regla.get("id"))[:40]
+            agente, start = regla.get("agent"), regla.get("start")
+            if isinstance(agente, str) and agente not in especialistas:
+                problemas.append(f"{rid}: el agente '{agente[:40]}' no es especialista de la conexión")
+            if isinstance(start, str) and start not in declarados:
+                problemas.append(f"{rid}: ningún especialista declara '{start[:80]}'")
+    return problemas
+
+
 # ------------------------------------------------------------------ 4-5. textos y AppSettings
 def _overrides(slug: str | None, nombres: Iterable[str]) -> dict[str, str]:
     from core.agents.playbooks import MAX_SIZE_BYTES
@@ -575,6 +601,9 @@ async def armar_manifiesto(
         publicados=publicados,
         habilidades={h.pack_id for h in habilidades} | set(plugins_del_negocio),
     )
+    ruteo = revisar_ruteo(instancias, componentes)
+    if ruteo:
+        raise ErrorDelBuild("ruteo_invalido", "Una regla de enrutamiento no apunta a la release.", ruteo[:10])
     return man.armar(
         componentes=componentes,
         habilidades=habilidades,

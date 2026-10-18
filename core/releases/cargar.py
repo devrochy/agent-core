@@ -39,6 +39,7 @@ from core.shared.release_vigente import AgenteCongelado, ArtefactosDeRelease
 
 if TYPE_CHECKING:
     from agentcore_contracts import Procedure
+    from agentcore_contracts.kernelspec import Routing
 
 log = get_logger(__name__)
 
@@ -101,6 +102,10 @@ class ReleaseCongelada:
     # `(id, version)` → procedimiento publicado por una habilidad congelada de la release.
     congelados: dict[tuple[str, str], Procedure] = field(default_factory=dict, repr=False)
     _procedimientos: dict[str, Procedure] | None = field(default=None, repr=False)
+    # HU-AOS-17: el `routing` del KernelSpec validado y el índice de disparadores, una vez por
+    # release (inmutable): no se valida ni se indexa en cada turno.
+    _ruteo: Any = field(default=None, repr=False)
+    _indice: Any = field(default=None, repr=False)
 
     @property
     def skills(self) -> list[str]:
@@ -140,6 +145,48 @@ class ReleaseCongelada:
     def foco(self, owner_instance_id: uuid.UUID | None = None) -> AgenteCongelado:
         kernel = self.kernel
         return elegir_foco(self.componentes, kernel.content if kernel is not None else None, owner_instance_id)
+
+    def ruteo(self) -> Routing:
+        """`routing` del KernelSpec congelado. Si no valida (una release vieja), los valores por
+        defecto (sin reglas) con un log: el turno no se cae por eso (el build ya lo valida)."""
+        if self._ruteo is None:
+            from agentcore_contracts.kernelspec import Routing
+            from pydantic import ValidationError
+
+            kernel = self.kernel
+            crudo = kernel.content.get("routing") if kernel is not None else None
+            try:
+                self._ruteo = Routing.model_validate(crudo if isinstance(crudo, Mapping) else {})
+            except ValidationError:
+                log.error("release_routing_invalido", release_number=self.number)
+                self._ruteo = Routing()
+        return self._ruteo
+
+    def indice_de_disparadores(self) -> tuple[Any, dict[str, str]]:
+        """Índice léxico de los procedimientos publicados de los especialistas (con los ejemplos
+        de `procedures[].overrides.examples` de cada agente) y la key del dueño de cada uno (el
+        primero por key si lo declaran varios; el router elige entre ellos)."""
+        if self._indice is None:
+            from core.kernel.disparadores import Indice, exponentes_de
+
+            procs: dict[str, Procedure] = {}
+            extras: dict[str, list[str]] = {}
+            duenos: dict[str, str] = {}
+            for agente in sorted(self.componentes, key=lambda a: a.key):
+                if agente.role != "specialist":
+                    continue
+                for pid, proc in self.procedimientos_de(agente.instance_id).items():
+                    procs.setdefault(pid, proc)
+                    duenos.setdefault(pid, agente.key)
+                for ref in agente.content.get("procedures") or []:
+                    if not isinstance(ref, Mapping) or ref.get("id") not in procs:
+                        continue
+                    sobre = ref.get("overrides")
+                    ejemplos = sobre.get("examples") if isinstance(sobre, Mapping) else None
+                    if isinstance(ejemplos, list):
+                        extras.setdefault(str(ref["id"]), []).extend(str(e) for e in ejemplos[:50])
+            self._indice = (Indice(exponentes_de(procs, extras)), duenos)
+        return self._indice
 
     def artefactos(self, lane: str = "stable", foco: AgenteCongelado | None = None) -> ArtefactosDeRelease:
         return ArtefactosDeRelease(

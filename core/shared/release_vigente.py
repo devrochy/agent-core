@@ -118,6 +118,9 @@ class _Ranura:
     # Negocio v3 cuyo turno no encontró release activa (HU-AOS-15): sin agente en foco, pero
     # `write_namespaces_del_turno` niega toda escritura de memoria en vez de no chequear.
     v3_sin_release: uuid.UUID | None = None
+    # HU-AOS-17: procedimiento que una regla `start` del router pide iniciar en este turno
+    # (lo consume el motor activo al empezar el turno, con sus guardas). Negocio + id.
+    inicio_de_regla: tuple[uuid.UUID, str] | None = None
 
 
 _ranura: ContextVar[_Ranura | None] = ContextVar("release_vigente", default=None)
@@ -134,6 +137,7 @@ def cerrar(token: Token[_Ranura | None]) -> None:
     if ranura is not None:
         ranura.valor = None
         ranura.v3_sin_release = None
+        ranura.inicio_de_regla = None
     _ranura.reset(token)
 
 
@@ -152,6 +156,24 @@ def marcar_v3_sin_release(tenant_id: uuid.UUID) -> None:
     ranura = _ranura.get()
     if ranura is not None:
         ranura.v3_sin_release = tenant_id
+
+
+def fijar_inicio(tenant_id: uuid.UUID, procedure_id: str) -> None:
+    """Una regla `start` del router (HU-AOS-17): el motor inicia ese procedimiento al empezar el
+    turno. No hace nada fuera de un turno."""
+    ranura = _ranura.get()
+    if ranura is not None:
+        ranura.inicio_de_regla = (tenant_id, procedure_id)
+
+
+def tomar_inicio() -> str | None:
+    """El procedimiento a iniciar por regla, una sola vez y solo para el negocio del `tenant_scope`."""
+    ranura = _ranura.get()
+    if ranura is None or ranura.inicio_de_regla is None:
+        return None
+    tenant_id, procedure_id = ranura.inicio_de_regla
+    ranura.inicio_de_regla = None
+    return procedure_id if tenant_id == get_current_tenant_id() else None
 
 
 def vigente() -> ArtefactosDeRelease | None:
@@ -234,10 +256,12 @@ __all__ = [
     "cerrar",
     "con_valores_de_release",
     "fijar",
+    "fijar_inicio",
     "idle_minutes",
     "kernel_del_turno",
     "marcar_v3_sin_release",
     "procedimientos_del_agente",
+    "tomar_inicio",
     "vigente",
     "write_namespaces_del_turno",
 ]
