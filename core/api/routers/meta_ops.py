@@ -554,6 +554,15 @@ async def meta_connection_action(
         )
     if error is not None:
         raise ApiError.bad_request(error, "meta_connection_failed")
+    from core.api.routers.connections import audit_connection_action
+
+    await audit_connection_action(
+        principal,
+        {"activate": "meta_connection.resumed", "deactivate": "meta_connection.paused", "delete": "meta_connection.deleted"}[
+            payload.action
+        ],
+        connection_id,
+    )
     return Response(status_code=204)
 
 class TemplateCreate(BaseModel):

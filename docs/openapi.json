@@ -17312,6 +17312,81 @@
         }
       }
     },
+    "/api/v1/admin/connections/console": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · conexiones"
+        ],
+        "summary": "Connections Console",
+        "description": "Consola de conexiones (HU-AOS-23): por cada conexión del negocio, su Coordinador y\nagentes con la versión de la release activa, salud y consumo de 7 días. Solo lectura.",
+        "operationId": "connections_console_api_v1_admin_connections_console_get",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Page Size"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionsConsole"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/agent-templates": {
       "get": {
         "tags": [
@@ -32286,6 +32361,441 @@
           "tenant"
         ],
         "title": "UnlinkRequest"
+      },
+      "ConnectionsConsole": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ConsoleConnection"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          },
+          "runtime": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "v3"
+            ],
+            "title": "Runtime"
+          },
+          "routing": {
+            "type": "string",
+            "enum": [
+              "off",
+              "shadow",
+              "active"
+            ],
+            "title": "Routing",
+            "description": "`tenants.aos_routing`, solo lectura."
+          },
+          "consistency": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConsoleConsistency"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "pass^k del último run del negocio."
+          },
+          "can_edit": {
+            "type": "boolean",
+            "title": "Can Edit",
+            "description": "Acceso de escritura a `connections`."
+          },
+          "unassigned_agents": {
+            "items": {
+              "$ref": "#/components/schemas/ConsoleUnassignedAgent"
+            },
+            "type": "array",
+            "title": "Unassigned Agents",
+            "description": "D-35: agentes publicados sin ninguna conexión (máx. 50)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "has_more",
+          "runtime",
+          "routing",
+          "consistency",
+          "can_edit",
+          "unassigned_agents"
+        ],
+        "title": "ConnectionsConsole",
+        "description": "Con la sección `connections` basta para el consumo (turnos y tokens), la consistencia del\nnegocio y los agentes de cada conexión: es lo que pide la consola (SPEC-26 §5.1,\n`conexiones:ver`). El costo en dinero sigue en `costs`."
+      },
+      "ConsoleAgent": {
+        "properties": {
+          "instance_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Instance Id"
+          },
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "core",
+              "specialist",
+              "backoffice"
+            ],
+            "title": "Role"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "priority": {
+            "type": "integer",
+            "title": "Priority"
+          },
+          "release_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Version",
+            "description": "Versión que corre en la release activa; null si no figura."
+          },
+          "latest_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Version",
+            "description": "Última versión publicada del agente."
+          }
+        },
+        "type": "object",
+        "required": [
+          "instance_id",
+          "agent_id",
+          "key",
+          "name",
+          "role",
+          "is_default",
+          "enabled",
+          "priority",
+          "release_version",
+          "latest_version"
+        ],
+        "title": "ConsoleAgent"
+      },
+      "ConsoleConnection": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "channel": {
+            "type": "string",
+            "title": "Channel"
+          },
+          "type_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "external_id": {
+            "type": "string",
+            "title": "External Id"
+          },
+          "conversational": {
+            "type": "boolean",
+            "title": "Conversational"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "is_primary": {
+            "type": "boolean",
+            "title": "Is Primary"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "meta_connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meta Connection Id"
+          },
+          "health": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded",
+              "error",
+              "paused",
+              "pending"
+            ],
+            "title": "Health"
+          },
+          "pause_scope": {
+            "type": "string",
+            "enum": [
+              "meta_account",
+              "connection",
+              "webchat_settings"
+            ],
+            "title": "Pause Scope"
+          },
+          "pausable": {
+            "type": "boolean",
+            "title": "Pausable",
+            "description": "La consola ofrece pausar: hoy solo la cuenta de Meta (ADR-0122)."
+          },
+          "coordinator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConsoleAgent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/ConsoleAgent"
+            },
+            "type": "array",
+            "title": "Agents",
+            "description": "Especialistas y back-office, sin el Coordinador."
+          },
+          "active_release": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConsoleRelease"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "canary_release": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConsoleRelease"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "usage_7d": {
+            "$ref": "#/components/schemas/ConsoleUsage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "channel",
+          "type_id",
+          "label",
+          "external_id",
+          "conversational",
+          "active",
+          "is_primary",
+          "created_at",
+          "meta_connection_id",
+          "health",
+          "pause_scope",
+          "pausable",
+          "coordinator",
+          "agents",
+          "active_release",
+          "canary_release",
+          "usage_7d"
+        ],
+        "title": "ConsoleConnection"
+      },
+      "ConsoleConsistency": {
+        "properties": {
+          "pass_k": {
+            "type": "number",
+            "title": "Pass K"
+          },
+          "k": {
+            "type": "integer",
+            "title": "K"
+          },
+          "measured_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Measured At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pass_k",
+          "k",
+          "measured_at"
+        ],
+        "title": "ConsoleConsistency"
+      },
+      "ConsoleRelease": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "number",
+          "created_at"
+        ],
+        "title": "ConsoleRelease"
+      },
+      "ConsoleUnassignedAgent": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "name"
+        ],
+        "title": "ConsoleUnassignedAgent"
+      },
+      "ConsoleUsage": {
+        "properties": {
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          },
+          "conversations": {
+            "type": "integer",
+            "title": "Conversations"
+          },
+          "input_tokens": {
+            "type": "integer",
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "title": "Output Tokens"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd",
+            "description": "Solo con acceso a la sección `costs`; si no, null."
+          }
+        },
+        "type": "object",
+        "required": [
+          "turns",
+          "conversations",
+          "input_tokens",
+          "output_tokens",
+          "cost_usd"
+        ],
+        "title": "ConsoleUsage"
       },
       "AgentTemplate": {
         "properties": {

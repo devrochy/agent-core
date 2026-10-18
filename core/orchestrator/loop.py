@@ -79,6 +79,7 @@ from core.orchestrator.safe_renderer import (
 from core.orchestrator.skill_router import select_relevant_skills
 from core.orchestrator.verificador import (
     EstadoTareas,
+    Veredicto,
     cargar_afirmaciones,
     instruccion_correctiva,
     normalizar_desactivados,
@@ -724,6 +725,14 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                     resolved=False,
                     image_url=extras.image_url,
                 )
+            # Rastro del motivo también en el canal `test` (donde `escalate` no deja fila): solo el
+            # identificador del guardrail y la etiqueta de la afirmación, sin texto del borrador.
+            await record_audit(
+                actor="core:guardrail",
+                action="guardrail_escalated",
+                conversation_id=conversation_id,
+                input_data={"guardrail": guardrail_id, "afirmacion": _etiqueta_del_bloqueo(verdict.reason, veredicto)},
+            )
             await escalate(conversation_id, reason="guardrail", summary=guardrail_id)
             usage.escalated = True
             await _write_usage_ledger(conversation_id, spec, usage, turn_span)
@@ -906,13 +915,31 @@ def _ejecutor_del_motor(conversation: Conversation, customer: Customer, spec):  
     return ejecutar
 
 
+# "Afirmación de 'agendada' sin…" (guardrails de cierre de los packs): la etiqueta sale del código
+# o de la config del negocio, nunca del borrador.
+_ETIQUETA_DEL_GUARDRAIL = re.compile(r"(?:Afirmaci[oó]n|Negaci[oó]n) de '(\w{1,60})'")
+
+
+def _etiqueta_del_bloqueo(reason: str, veredicto: Veredicto | None) -> str:
+    """Qué afirmación bloqueó el turno, solo como etiqueta (para el rastro de la escalación)."""
+    if veredicto is not None and veredicto.afirmacion:
+        return veredicto.afirmacion
+    detalle = reason.split(":", 1)[1].strip() if ":" in reason else ""
+    encontrada = _ETIQUETA_DEL_GUARDRAIL.match(detalle)
+    return encontrada.group(1) if encontrada else ""
+
+
 async def _estado_del_verificador(motor: ContextoMotor | None, referencias: list[str]) -> EstadoTareas | None:
     """El estado de las tareas para el verificador (HU-AOS-06): solo con el motor activo; None
     (verificación sin estado, como siempre) si no hay motor o la lectura falla."""
     tareas = await motor.instantaneas() if motor is not None else None
     if tareas is None:
         return None
-    return EstadoTareas(tareas=tuple(tareas), referencias_vigentes=tuple(referencias))
+    return EstadoTareas(
+        tareas=tuple(tareas),
+        referencias_vigentes=tuple(referencias),
+        datos_fijados=tuple(sorted(motor.datos_fijados)) if motor is not None else (),
+    )
 
 
 async def _ejecutar_comando(conversation: Conversation, motor: ContextoMotor, tool_call: LLMToolCall) -> dict[str, Any]:

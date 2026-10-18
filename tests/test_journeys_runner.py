@@ -90,6 +90,12 @@ def test_los_journeys_del_repo_son_validos() -> None:
             assert journey["pasos"], ruta.name
             for paso in journey["pasos"]:
                 assert tipos & set(paso), f"{ruta.name}: paso sin tipo {paso}"
+                # Los operadores van como objeto (`{"$no_nulo": true}`): un string "$no_nulo" se
+                # compara literal y falla con cualquier valor real (corrida de pass^4, 2026-10-18).
+                for campo, valor in ((paso.get("verifica") or {}).get("espera") or {}).items():
+                    assert not (isinstance(valor, str) and valor.startswith("$")), (
+                        f"{ruta.name}: {campo} usa el operador {valor!r} como string"
+                    )
 
 
 def test_el_pago_simulado_tiene_la_firma_de_build_provider() -> None:

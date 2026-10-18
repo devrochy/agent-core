@@ -112,6 +112,9 @@ class EstadoTareas:
 
     tareas: tuple[dict[str, Any], ...] = ()
     referencias_vigentes: tuple[str, ...] = ()
+    # Datos que el motor fijó en este turno por un comando aceptado (`ContextoMotor.datos_fijados`):
+    # respaldan solo las afirmaciones que los declaran (`Afirmacion.datos`), nunca montos ni links.
+    datos_fijados: tuple[str, ...] = ()
 
 
 def _datos_del_servidor(tarea: Any) -> tuple[dict[str, Any], set[str]]:
@@ -164,6 +167,8 @@ class Evidencia:
     # Prefijos de las referencias que el servidor fijó en las tareas (`OC`): solo esas
     # familias se exigen al borrador.
     familias_estado: set[str] = field(default_factory=set)
+    # Datos de la tarea en foco que el motor fijó en este turno (comando aceptado).
+    datos_fijados: set[str] = field(default_factory=set)
 
     @classmethod
     def desde(
@@ -202,6 +207,7 @@ class Evidencia:
 
     def _sumar_estado(self, estado: EstadoTareas) -> None:
         self.con_estado = True
+        self.datos_fijados.update(str(n) for n in estado.datos_fijados)
         for linea in estado.referencias_vigentes:
             if isinstance(linea, str):
                 self.referencias.update(REFERENCIA_RE.findall(linea))

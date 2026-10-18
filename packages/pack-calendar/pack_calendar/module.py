@@ -53,6 +53,21 @@ log = get_logger(__name__)
 _QUEDO = r"qued(?:ó|o|a|an|aron)\b"
 
 
+# "Disponibilidad" genérica: sin un dato de agenda cerca puede ser stock o cupo de un producto.
+_DISPONIBLE_GENERICO = (
+    r"(?:\b(?:est[áa]|queda|quedan)\s+libres?\b|"
+    r"\b(?:hay|tengo|tenemos)\s+(?:disponibilidad|cupos?|espacio)\b)"
+)
+# Dato de agenda: una hora, un día, una fecha o la palabra de la cita.
+_AGENDA = (
+    r"(?:\b(?:a\s+las?|desde\s+las?|entre\s+las?)\s+\d|\b\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.\s?m\.|p\.\s?m\.|hs?)\b|"
+    r"\b\d{1,2}:\d{2}\b|\b(?:horas?|horarios?|cita|citas|demo|demos|reuni[oó]n|agenda|turno|turnos|"
+    r"ma[ñn]ana|tarde|semana|fecha|lunes|martes|mi[ée]rcoles|jueves|viernes|s[áa]bado|domingo)\b)"
+)
+# Los dos en la misma oración (acotado: sin backtracking largo).
+_MISMA_ORACION = r"[^.!?\n]{0,120}?"
+
+
 @dataclass(frozen=True)
 class _Claim:
     tools: frozenset[str]
@@ -118,14 +133,17 @@ _CLAIMS: dict[str, _Claim] = {
     # que valida el horario en el servidor).
     "disponibilidad": _Claim(
         tools=frozenset({"check_availability", "find_next_available"}),
-        # Acotado a horarios: "el plan Basic está disponible" es venta, no agenda.
+        # Acotado a horarios: "el plan Basic está disponible" es venta, no agenda. Las formas
+        # genéricas ("tenemos disponibilidad", "hay cupos", "queda libre") solo cuentan con un
+        # dato de agenda en la misma oración: en un negocio que también vende, "¡Sí, tenemos
+        # disponibilidad! La hamburguesa cuesta…" es inventario y escalaba el pedido (pass^4 de
+        # los procedimientos, 2026-10-18).
         affirm=re.compile(
-            r"\b(?:est[áa]|queda|quedan)\s+libres?\b|"
             r"\bhorarios?\s+(?:libres?|disponibles?)\b|"
-            r"\bhay\s+(?:disponibilidad|cupos?|espacio)\b|"
-            r"\b(?:tengo|tenemos)\s+(?:disponibilidad|cupos?|espacio)\b|"
             r"\b(?:ese|este|el)\s+horario\s+(?:ya\s+)?(?:est[áa]|queda)\s+"
-            r"(?:ocupad|tomad|disponible|libre)\w*",
+            r"(?:ocupad|tomad|disponible|libre)\w*|"
+            rf"{_AGENDA}{_MISMA_ORACION}{_DISPONIBLE_GENERICO}|"
+            rf"{_DISPONIBLE_GENERICO}{_MISMA_ORACION}{_AGENDA}",
             re.IGNORECASE,
         ),
     ),
