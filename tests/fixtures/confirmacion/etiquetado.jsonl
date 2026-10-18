@@ -222,3 +222,5 @@
 {"texto": "Espero el link", "confirma": false}
 {"texto": "confirmo pero pasame el link mañana", "confirma": false}
 {"texto": "no confirmo, mandame el link", "confirma": false}
+{"texto": "adelante, pasame el link", "confirma": true}
+{"texto": "sí por favor, pasame el link", "confirma": false}
