@@ -18,15 +18,15 @@ from core.config import get_settings
 from core.db.models import AppSettings
 from core.db.session import get_session
 from core.plugin_manager import plugin_manager
-from core.shared.tenant import admin_tenants, get_current_tenant_id
+from core.shared.tenant import get_current_tenant_id, negocios_de_cuenta
 
 
-async def admin_tenant_options(admin_id) -> list[dict[str, str]]:
-    """Opciones del selector de tenant (C3): tenants del admin con nombre y activo."""
+async def admin_tenant_options(admin) -> list[dict[str, str]]:
+    """Opciones del selector de tenant (C3): negocios operativos del admin (ADR-0136)."""
     active = str(get_current_tenant_id()) if get_current_tenant_id() else ""
     return [
         {"id": str(tid), "name": tname, "role": trole, "active": str(tid) == active}
-        for (tid, tname, trole) in await admin_tenants(admin_id)
+        for (tid, tname, trole) in (await negocios_de_cuenta(admin)).operativos
     ]
 
 
@@ -108,7 +108,7 @@ async def base_context(request: Request, section: str) -> dict[str, Any] | None:
         "admin": admin,
         "assistant_name": app_settings.assistant_name if app_settings else get_settings().app_name,
         "plugin_menu": plugin_manager.active_admin_menu(tenant_enabled),
-        "tenants": await admin_tenant_options(admin.id),
+        "tenants": await admin_tenant_options(admin),
         "active_tenant_id": str(get_current_tenant_id()) if get_current_tenant_id() else "",
         "billing": billing,
         "perms": perms,

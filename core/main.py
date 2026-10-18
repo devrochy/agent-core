@@ -17,7 +17,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from core.admin.auth import SESSION_COOKIE, TENANT_COOKIE, current_admin
+from core.admin.auth import SESSION_COOKIE, TENANT_COOKIE, NegocioSuspendido, current_admin
 from core.admin.permissions import effective_access, pack_prefixes, required_section
 from core.admin.views import router as admin_router
 from core.api import api_router
@@ -29,7 +29,7 @@ from core.orchestrator.consumer import consume_loop
 from core.orchestrator.debounce import poll_debounce_loop, recover_orphaned_conversations
 from core.plugin_manager import plugin_manager
 from core.shared.logger import configure_logging, get_logger
-from core.shared.tenant import admin_tenants, tenant_scope
+from core.shared.tenant import negocios_de_cuenta, tenant_scope
 from core.tools.core_skill import register_core_skills
 
 configure_logging()
@@ -172,7 +172,11 @@ async def tenant_context_middleware(request: Request, call_next):
     if admin is None:
         return await call_next(request)
 
-    tenants = await admin_tenants(admin.id)
+    negocios = await negocios_de_cuenta(admin)
+    if negocios.solo_suspendidos:
+        # Dueño o colaborador cuyo(s) negocio(s) está(n) suspendido(s) (ADR-0136).
+        return HTMLResponse(NegocioSuspendido.mensaje, status_code=403)
+    tenants = negocios.operativos
     target: uuid.UUID | None = None
     if tenants:
         # Selector de tenant (C3, Sprint 4): la cookie ac_tenant decide el

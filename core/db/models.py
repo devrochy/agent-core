@@ -642,7 +642,8 @@ class AdminPermission(Base):
 
     Tabla de SISTEMA (sin RLS): se consulta al autenticar, antes de conocer el
     tenant. `tenant_id` null = el permiso vale para TODOS los tenants (global);
-    con valor = solo ese tenant. `access` es `read | write`.
+    con valor = solo ese tenant. `access` es `read | write | none`; `none` (denegado,
+    ADR-0136) solo existe con `tenant_id` (CHECK de la migración 0090).
     """
 
     __tablename__ = "admin_permissions"
@@ -659,7 +660,7 @@ class AdminPermission(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("admins.id"))
     section: Mapped[str] = mapped_column(Text)
-    access: Mapped[str] = mapped_column(Text, default="read")  # read | write
+    access: Mapped[str] = mapped_column(Text, default="read")  # read | write | none
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("tenants.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

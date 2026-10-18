@@ -31,11 +31,12 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from core.admin.auth import hash_password, verify_password
-from core.admin.roles import cuenta_habilitada
+from core.admin.roles import actua_como_master, cuenta_habilitada
 from core.db.models import Admin, Tenant, TenantUser
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
+from core.tenants import is_tenant_active
 from pack_cobranza.auth import issue_token, pack_secret, token_tenant, verify_token
 from pack_cobranza.estadisticas import conteos_cartera
 from pack_cobranza.evidencias import EvidenciaError, guardar_archivo, guardar_evidencia
@@ -97,14 +98,18 @@ async def _auth(authorization: str | None) -> tuple[uuid.UUID, dict[str, Any]] |
 
     El refresh token (30 días) no sirve como acceso, y la cuenta se revalida en cada pedido:
     desactivar a un admin, revocar a un tester o apagar `QA_TESTERS_ENABLED` corta la app en
-    el siguiente pedido, no cuando vence el token (ADR-0134)."""
+    el siguiente pedido, no cuando vence el token (ADR-0134). Igual el negocio y la membresía
+    (ADR-0136): un negocio suspendido o una cuenta desvinculada dejan de responder aunque el
+    token siga vigente (el master y el tester habilitado no necesitan vínculo)."""
     if not authorization or not authorization.lower().startswith("bearer "):
         return None
     auth = await token_tenant(authorization.split(" ", 1)[1].strip())
     if auth is None:
         return None
-    _tenant_id, payload = auth
+    tenant_id, payload = auth
     if payload.get("typ") == "refresh":
+        return None
+    if not await is_tenant_active(tenant_id):
         return None
     admin_id = payload.get("admin_id")
     if admin_id:
@@ -114,8 +119,10 @@ async def _auth(authorization: str | None) -> tuple[uuid.UUID, dict[str, Any]] |
             return None
         async with get_session() as session:
             admin = await session.get(Admin, admin_uuid)
-        if not cuenta_habilitada(admin):
-            return None
+            if not cuenta_habilitada(admin):
+                return None
+            if not actua_como_master(admin) and await _tenant_link(session, tenant_id, admin_uuid) is None:
+                return None
     return auth
 
 

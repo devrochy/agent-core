@@ -95,8 +95,18 @@ async def test_app_de_campo_no_acepta_refresh_ni_cuentas_deshabilitadas(habilita
         async def __aexit__(self, *exc):
             return False
 
+    negocio = {"activo": True, "vinculado": True}
+
+    async def _is_tenant_active(_tid):
+        return negocio["activo"]
+
+    async def _tenant_link(_session, _tid, _aid):
+        return object() if negocio["vinculado"] else None
+
     monkeypatch.setattr(api_gestor, "token_tenant", _token_tenant)
     monkeypatch.setattr(api_gestor, "get_session", lambda: _Sesion())
+    monkeypatch.setattr(api_gestor, "is_tenant_active", _is_tenant_active)
+    monkeypatch.setattr(api_gestor, "_tenant_link", _tenant_link)
 
     habilitar(True)
     assert await api_gestor._auth("Bearer refresh") is None
@@ -106,3 +116,14 @@ async def test_app_de_campo_no_acepta_refresh_ni_cuentas_deshabilitadas(habilita
     habilitar(True)
     cuenta["admin"] = SimpleNamespace(role="colaborador", active=False)  # revocado
     assert await api_gestor._auth("Bearer access") is None
+    # ADR-0136: negocio suspendido o cuenta desvinculada → fuera en el siguiente pedido.
+    cuenta["admin"] = SimpleNamespace(role="colaborador", active=True)
+    assert await api_gestor._auth("Bearer access") is not None
+    negocio["vinculado"] = False
+    assert await api_gestor._auth("Bearer access") is None
+    negocio["vinculado"] = True
+    negocio["activo"] = False
+    assert await api_gestor._auth("Bearer access") is None
+    cuenta["admin"] = SimpleNamespace(role="tester", active=True)
+    negocio["activo"], negocio["vinculado"] = True, False  # el tester no necesita vínculo
+    assert await api_gestor._auth("Bearer access") is not None
