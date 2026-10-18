@@ -207,3 +207,12 @@ def test_el_set_de_procedimientos_configura_solo_packs_que_activa() -> None:
     assert set(negocio["config"]) <= set(negocio["packs"])
     assert "pack_calendar" in negocio["packs"]  # agendar_cita (04-agendar-una-demo)
     assert {r.stem for r in rutas} >= {"04-agendar-una-demo"}
+
+
+def test_escalate_to_human_exitoso_cuenta_como_relevo() -> None:
+    # En el canal `test` la tool no pausa el bot: el runner lo cuenta él (si no, la conversación
+    # llegaba al tope de turnos, pass^4 de los procedimientos 2026-10-18).
+    assert journeys.pidio_relevo([{"nombre": "escalate_to_human", "salida": {"status": "escalated"}}])
+    assert not journeys.pidio_relevo([{"nombre": "escalate_to_human", "salida": {"error": "no disponible"}}])
+    assert not journeys.pidio_relevo([{"nombre": "crear_lead", "salida": {}}])
+    assert not journeys.pidio_relevo([])

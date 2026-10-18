@@ -74,6 +74,14 @@ los terminos
 con el pago
 con la compra
 con el pedido
+pasame el link
+pasame el link de pago
+mandame el link
+mandame el link de pago
+enviame el link
+enviame el link de pago
+espero el link
+espero el link de pago
 ## negaciones
 no
 nop
