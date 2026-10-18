@@ -11,7 +11,8 @@ el editor del panel necesita y no existía:
 - `GET  /api/v1/admin/agent-superpowers` — superpoderes que ofrece el negocio con sus frases.
 - `GET  /api/v1/admin/agent-models` — modelos de la tabla de precios del core, cuáles sirve el
   proveedor del negocio, si hay un modelo BYOK que manda y el costo estimado por 1.000 turnos
-  con el promedio real de tokens por turno del negocio (30 días); sin historial, `null`.
+  con el promedio real de tokens por turno del negocio (30 días); sin historial (o sin acceso a
+  la sección `costs`), `null`.
 - `GET  /api/v1/admin/agents/{id}/publish-targets` — conexiones donde se puede instalar.
 - `POST /api/v1/admin/agents/{id}/publish` — `{connection_ids, lock_version?, notes?}`. D-35:
   sin al menos una conexión no se publica. Publica la versión, instala el agente y construye la
@@ -22,9 +23,9 @@ Rutas con prefijos propios (`/agent-templates`, ...) para no depender del orden 
 frente a `/admin/agents/{agent_id}`. Toda lista va paginada (`page`, `page_size`).
 
 Permisos (ADR-0136): lectura con la sección `settings`; crear con `settings` en escritura;
-publicar, además, `connections` en escritura (construye releases, como su API) y las
-conexiones visibles. Como el resto del Agent OS, con `aos_runtime = 'legacy'` solo escribe el
-master (403 `aos_runtime_legacy`).
+publicar, además, la sección `connections` en escritura (construye releases, como su API); el
+consumo de `agent-models`, la sección `costs`. Como el resto del Agent OS, con
+`aos_runtime = 'legacy'` solo escribe el master (403 `aos_runtime_legacy`).
 """
 
 from __future__ import annotations
@@ -222,7 +223,10 @@ async def list_superpowers(
 async def list_models(
     principal: Annotated[Principal, Depends(require("settings"))], params: Paginados
 ) -> LlmModelCatalog:
-    ctx = await svc.contexto_de_modelos(_tenant(principal))
+    tid = _tenant(principal)
+    ctx = await svc.contexto_de_modelos(tid)
+    # El consumo (promedios y estimados) es de la sección Costos: sin ella, solo los precios.
+    ve_costos = actua_como_master(principal.admin) or await effective_access(principal.admin, "costs", tid) is not None
     items = [
         LlmModel(
             provider=m.provider,
@@ -231,7 +235,7 @@ async def list_models(
             output_usd_per_mtok=m.output_usd_per_mtok,
             selectable=m.selectable,
             retired=m.retired,
-            estimated_usd_per_1000_turns=m.estimated_usd_per_1000_turns,
+            estimated_usd_per_1000_turns=m.estimated_usd_per_1000_turns if ve_costos else None,
         )
         for m in ctx.models
     ]
@@ -240,9 +244,9 @@ async def list_models(
         **pagina.model_dump(),
         provider=ctx.provider,
         byok_model=ctx.byok_model,
-        avg_input_tokens=ctx.avg_input_tokens,
-        avg_output_tokens=ctx.avg_output_tokens,
-        sample_turns=ctx.sample_turns,
+        avg_input_tokens=ctx.avg_input_tokens if ve_costos else None,
+        avg_output_tokens=ctx.avg_output_tokens if ve_costos else None,
+        sample_turns=ctx.sample_turns if ve_costos else 0,
         min_phrases=svc.MIN_FRASES,
     )
 

@@ -295,6 +295,24 @@ async def test_catalogo_de_modelos_con_costo_estimado_del_consumo_real(app_clien
     # (2000 × 0,14 + 400 × 0,28) / 1e6 × 1000 turnos
     assert flash["estimated_usd_per_1000_turns"] == pytest.approx(0.392)
 
+    # Sin la sección Costos, solo los precios: ni promedios ni estimados.
+    from core.admin.auth import hash_password
+    from core.db.models import Admin, AdminPermission
+    from core.db.session import get_session
+
+    email = f"{uniq('sin-costos24')}@example.test"
+    async with get_session() as session:
+        admin = Admin(email=email, password_hash=hash_password(PASSWORD), role="colaborador")
+        session.add(admin)
+        await session.flush()
+        session.add(AdminPermission(admin_id=admin.id, section="settings", access="read", tenant_id=None))
+    lector = (await app_client.get(
+        "/api/v1/admin/agent-models", headers=await api_headers(app_client, tid, email=email, password=PASSWORD)
+    )).json()
+    assert (lector["sample_turns"], lector["avg_input_tokens"]) == (0, None)
+    assert all(m["estimated_usd_per_1000_turns"] is None for m in lector["items"])
+    assert next(m for m in lector["items"] if m["model"] == "deepseek-flash")["input_usd_per_mtok"] == 0.14
+
     # El otro negocio no ve este consumo.
     otro, _ = await _negocio()
     r = await app_client.get("/api/v1/admin/agent-models", headers=await _dueno(app_client, otro))

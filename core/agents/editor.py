@@ -41,7 +41,10 @@ from sqlalchemy import text
 
 from core.db.session import get_session
 from core.kernel.procedures import Issue
+from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+
+log = get_logger(__name__)
 
 # Frases mínimas de un superpoder (las de la habilidad más las propias del agente, distintas).
 MIN_FRASES = 3
@@ -128,13 +131,18 @@ def keys_de_plantillas() -> list[str]:
 
 
 def plantillas(habilitados: Iterable[str]) -> list[PlantillaVista]:
-    from core.presets import load_plantilla
+    from core.presets import PresetError, load_plantilla
 
     presentes = set(habilitados)
     por_id = {s.id: s for s in superpoderes(presentes)}
     salida: list[PlantillaVista] = []
     for key in keys_de_plantillas():
-        plantilla = load_plantilla(key)
+        try:
+            plantilla = load_plantilla(key)
+        except PresetError:
+            # Una plantilla rota (un deploy defectuoso) no tumba la lista: se omite y se registra.
+            log.error("plantilla_invalida", template=key)
+            continue
         faltan = tuple(sorted(set(plantilla.habilidades) - presentes))
         poderes = tuple(por_id[p] for p in plantilla.procedimientos if p in por_id)
         salida.append(
@@ -209,7 +217,11 @@ async def crear_desde_plantilla(
     _exigir_scope(tenant_id)
     if key_plantilla not in keys_de_plantillas():
         raise ErrorDelEditor(404, "not_found", "Plantilla no encontrada.")
-    plantilla = load_plantilla(key_plantilla)
+    try:
+        plantilla = load_plantilla(key_plantilla)
+    except PresetError:
+        log.error("plantilla_invalida", template=key_plantilla)
+        raise ErrorDelEditor(404, "not_found", "Plantilla no encontrada.") from None
     habilitados = await habilitados_del_negocio(tenant_id)
     faltan = sorted(set(plantilla.habilidades) - habilitados)
     if faltan:
@@ -427,6 +439,36 @@ class Destino:
     active_release_id: uuid.UUID | None
 
 
+async def _instaladas_por_conexion(tenant_id: uuid.UUID, conexiones: list[uuid.UUID]) -> dict[uuid.UUID, set[str]]:
+    """Las instalaciones propias ACTIVAS y vivas de cada conexión (sin `core`), en una sola
+    consulta: la misma regla que `instalaciones.instaladas_en_conexion` (ADR-0118 §2)."""
+    from sqlalchemy import select
+
+    from core.agents.instalaciones import ACTIVA, CORE_INSTALLATION_PACK, SCOPE_CONEXION
+    from core.db.models import PackInstallationRecord
+
+    if not conexiones:
+        return {}
+    async with get_session() as session:
+        filas = (
+            await session.execute(
+                select(PackInstallationRecord.connection_id, PackInstallationRecord.pack_id).where(
+                    PackInstallationRecord.tenant_id == tenant_id,
+                    PackInstallationRecord.scope == SCOPE_CONEXION,
+                    PackInstallationRecord.connection_id.in_(conexiones),
+                    PackInstallationRecord.status == ACTIVA,
+                    PackInstallationRecord.pack_id != CORE_INSTALLATION_PACK,
+                    PackInstallationRecord.deleted_at.is_(None),
+                )
+            )
+        ).all()
+    salida: dict[uuid.UUID, set[str]] = {}
+    for cid, pack in filas:
+        if cid is not None:
+            salida.setdefault(cid, set()).add(str(pack))
+    return salida
+
+
 def habilidades_del_contenido(contenido: Mapping[str, Any]) -> set[str]:
     """Las habilidades (dueños) de los superpoderes que declara el agente."""
     refs = contenido.get("procedures")
@@ -443,8 +485,6 @@ async def destinos(
     """Conexiones conversacionales vivas con Coordinador (donde se puede instalar un
     especialista), si el agente ya está en cada una y si sus habilidades efectivas (ADR-0118 §2)
     cubren las que necesita."""
-    from core.agents.instalaciones import instaladas_en_conexion
-
     _exigir_scope(tenant_id)
     async with get_session() as session:
         filas = (
@@ -463,10 +503,10 @@ async def destinos(
                 {"t": tenant_id, "a": agent_id},
             )
         ).all()
+    propias = await _instaladas_por_conexion(tenant_id, [f[0] for f in filas])
     salida: list[Destino] = []
     for cid, label, channel, activa, instalado in filas:
-        propias = await instaladas_en_conexion(tenant_id, cid)
-        efectivas = set(propias) if propias else set(habilitados)
+        efectivas = set(propias[cid]) if propias.get(cid) else set(habilitados)
         faltan = tuple(sorted(necesarias - efectivas))
         salida.append(
             Destino(
@@ -594,12 +634,20 @@ async def publicar_en_conexiones(
                     resultado.error = exc.code
                     continue
                 resultado.instance = "existing"
+            except (instancias.ConexionNoEncontrada, instancias.ConexionNoConversacional, instancias.AgenteNoInstanciable):
+                # La conexión (o el agente) cambió entre la validación y la escritura: se sigue
+                # con las demás y el reintento lo resuelve.
+                resultado.instance = resultado.error = "connection_unavailable"
+                continue
         try:
             hecha = await build.construir(
                 tenant_id, cid, actor=actor, created_by=admin_id, notas=f"Agente {agente.key} v{version.version}"
             )
         except build.ErrorDelBuild as exc:
             resultado.error = exc.codigo
+            continue
+        except build.ConexionNoEncontrada:
+            resultado.error = "connection_unavailable"
             continue
         resultado.release_id = hecha.release_id
         resultado.release_number = hecha.number
