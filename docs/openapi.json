@@ -17311,6 +17311,735 @@
           }
         }
       }
+    },
+    "/api/v1/admin/agents/overview": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Agents Overview",
+        "operationId": "agents_overview_api_v1_admin_agents_overview_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentsOverview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{ref}/conversations": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Agent Conversations",
+        "operationId": "agent_conversations_api_v1_admin_agents__ref__conversations_get",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ref"
+            }
+          },
+          {
+            "name": "desde",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Desde"
+            }
+          },
+          {
+            "name": "hasta",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hasta"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Page Size"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_AgentConversation_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{ref}/customers": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Agent Customers",
+        "operationId": "agent_customers_api_v1_admin_agents__ref__customers_get",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ref"
+            }
+          },
+          {
+            "name": "desde",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Desde"
+            }
+          },
+          {
+            "name": "hasta",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hasta"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Page Size"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_AgentCustomer_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{ref}/tasks": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Agent Tasks",
+        "operationId": "agent_tasks_api_v1_admin_agents__ref__tasks_get",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ref"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "open",
+                    "closed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "desde",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Desde"
+            }
+          },
+          {
+            "name": "hasta",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hasta"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Page Size"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_AgentTask_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{ref}/records": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Agent Records",
+        "operationId": "agent_records_api_v1_admin_agents__ref__records_get",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ref"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[a-z0-9_]{1,40}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "desde",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Desde"
+            }
+          },
+          {
+            "name": "hasta",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hasta"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Page Size"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_AgentRecordItem_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{ref}/usage": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Agent Usage",
+        "operationId": "agent_usage_api_v1_admin_agents__ref__usage_get",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ref"
+            }
+          },
+          {
+            "name": "desde",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Desde"
+            }
+          },
+          {
+            "name": "hasta",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hasta"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentUsage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -31844,6 +32573,952 @@
           "tenant"
         ],
         "title": "UnlinkRequest"
+      },
+      "Activity": {
+        "properties": {
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          },
+          "conversations": {
+            "type": "integer",
+            "title": "Conversations"
+          },
+          "cost_usd": {
+            "type": "number",
+            "title": "Cost Usd"
+          },
+          "last_activity_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Activity At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turns",
+          "conversations",
+          "cost_usd",
+          "last_activity_at"
+        ],
+        "title": "Activity"
+      },
+      "AgentConnection": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "enabled"
+        ],
+        "title": "AgentConnection"
+      },
+      "AgentConversation": {
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Conversation Id"
+          },
+          "customer_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Customer Id"
+          },
+          "customer_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Customer Name"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          },
+          "connection_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Label"
+          },
+          "agent_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Version"
+          },
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          },
+          "cost_usd": {
+            "type": "number",
+            "title": "Cost Usd"
+          },
+          "last_turn_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Turn At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "conversation_id",
+          "customer_id",
+          "customer_name",
+          "channel",
+          "status",
+          "connection_id",
+          "connection_label",
+          "agent_version",
+          "turns",
+          "cost_usd",
+          "last_turn_at"
+        ],
+        "title": "AgentConversation"
+      },
+      "AgentCustomer": {
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Customer Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel"
+          },
+          "conversations": {
+            "type": "integer",
+            "title": "Conversations"
+          },
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          },
+          "last_turn_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Turn At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "customer_id",
+          "name",
+          "channel",
+          "conversations",
+          "turns",
+          "last_turn_at"
+        ],
+        "title": "AgentCustomer"
+      },
+      "AgentOverviewItem": {
+        "properties": {
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          },
+          "conversations": {
+            "type": "integer",
+            "title": "Conversations"
+          },
+          "cost_usd": {
+            "type": "number",
+            "title": "Cost Usd"
+          },
+          "last_activity_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Activity At"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "virtual": {
+            "type": "boolean",
+            "title": "Virtual"
+          },
+          "published": {
+            "type": "boolean",
+            "title": "Published"
+          },
+          "connections": {
+            "items": {
+              "$ref": "#/components/schemas/AgentConnection"
+            },
+            "type": "array",
+            "title": "Connections"
+          },
+          "incluye_sin_atribuir": {
+            "type": "boolean",
+            "title": "Incluye Sin Atribuir"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turns",
+          "conversations",
+          "cost_usd",
+          "last_activity_at",
+          "id",
+          "ref",
+          "key",
+          "name",
+          "kind",
+          "status",
+          "virtual",
+          "published",
+          "connections",
+          "incluye_sin_atribuir"
+        ],
+        "title": "AgentOverviewItem"
+      },
+      "AgentRecordItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "pack_id": {
+            "type": "string",
+            "title": "Pack Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "record_ref": {
+            "type": "string",
+            "title": "Record Ref"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "tool": {
+            "type": "string",
+            "title": "Tool"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          },
+          "connection_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Label"
+          },
+          "agent_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Version"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "pack_id",
+          "kind",
+          "record_ref",
+          "label",
+          "tool",
+          "conversation_id",
+          "connection_id",
+          "connection_label",
+          "agent_version",
+          "created_at"
+        ],
+        "title": "AgentRecordItem"
+      },
+      "AgentTask": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "procedure_version": {
+            "type": "string",
+            "title": "Procedure Version"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "open": {
+            "type": "boolean",
+            "title": "Open"
+          },
+          "status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Reason"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "conversation_id",
+          "procedure_id",
+          "procedure_version",
+          "status",
+          "open",
+          "status_reason",
+          "stage",
+          "created_at",
+          "updated_at",
+          "completed_at",
+          "connection_id"
+        ],
+        "title": "AgentTask"
+      },
+      "AgentUsage": {
+        "properties": {
+          "periodo": {
+            "$ref": "#/components/schemas/UsagePeriod"
+          },
+          "incluye_sin_atribuir": {
+            "type": "boolean",
+            "title": "Incluye Sin Atribuir"
+          },
+          "total": {
+            "$ref": "#/components/schemas/UsageTotals"
+          },
+          "by_connection": {
+            "items": {
+              "$ref": "#/components/schemas/UsageByConnection"
+            },
+            "type": "array",
+            "title": "By Connection"
+          },
+          "by_day": {
+            "items": {
+              "$ref": "#/components/schemas/UsageByDay"
+            },
+            "type": "array",
+            "title": "By Day"
+          },
+          "consistency": {
+            "$ref": "#/components/schemas/Consistency"
+          }
+        },
+        "type": "object",
+        "required": [
+          "periodo",
+          "incluye_sin_atribuir",
+          "total",
+          "by_connection",
+          "by_day",
+          "consistency"
+        ],
+        "title": "AgentUsage"
+      },
+      "AgentsOverview": {
+        "properties": {
+          "runtime": {
+            "type": "string",
+            "title": "Runtime"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AgentOverviewItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "sin_atribuir": {
+            "$ref": "#/components/schemas/Activity"
+          }
+        },
+        "type": "object",
+        "required": [
+          "runtime",
+          "items",
+          "sin_atribuir"
+        ],
+        "title": "AgentsOverview"
+      },
+      "Consistency": {
+        "properties": {
+          "scope": {
+            "type": "string",
+            "const": "negocio",
+            "title": "Scope"
+          },
+          "measurements": {
+            "items": {
+              "$ref": "#/components/schemas/ConsistencyMeasurement"
+            },
+            "type": "array",
+            "title": "Measurements"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scope",
+          "measurements"
+        ],
+        "title": "Consistency"
+      },
+      "ConsistencyMeasurement": {
+        "properties": {
+          "measured_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Measured At"
+          },
+          "k": {
+            "type": "integer",
+            "title": "K"
+          },
+          "pass_1": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pass 1"
+          },
+          "pass_k": {
+            "type": "number",
+            "title": "Pass K"
+          },
+          "spec_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "measured_at",
+          "k",
+          "pass_1",
+          "pass_k",
+          "spec_version"
+        ],
+        "title": "ConsistencyMeasurement"
+      },
+      "Page_AgentConversation_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AgentConversation"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "has_more"
+        ],
+        "title": "Page[AgentConversation]"
+      },
+      "Page_AgentCustomer_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AgentCustomer"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "has_more"
+        ],
+        "title": "Page[AgentCustomer]"
+      },
+      "Page_AgentRecordItem_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AgentRecordItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "has_more"
+        ],
+        "title": "Page[AgentRecordItem]"
+      },
+      "Page_AgentTask_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AgentTask"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "has_more"
+        ],
+        "title": "Page[AgentTask]"
+      },
+      "UsageByConnection": {
+        "properties": {
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          },
+          "input_tokens": {
+            "type": "integer",
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "title": "Output Tokens"
+          },
+          "cost_usd": {
+            "type": "number",
+            "title": "Cost Usd"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          },
+          "connection_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turns",
+          "input_tokens",
+          "output_tokens",
+          "cost_usd",
+          "connection_id",
+          "connection_label"
+        ],
+        "title": "UsageByConnection"
+      },
+      "UsageByDay": {
+        "properties": {
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          },
+          "input_tokens": {
+            "type": "integer",
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "title": "Output Tokens"
+          },
+          "cost_usd": {
+            "type": "number",
+            "title": "Cost Usd"
+          },
+          "day": {
+            "type": "string",
+            "format": "date",
+            "title": "Day"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turns",
+          "input_tokens",
+          "output_tokens",
+          "cost_usd",
+          "day"
+        ],
+        "title": "UsageByDay"
+      },
+      "UsagePeriod": {
+        "properties": {
+          "desde": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Desde"
+          },
+          "hasta": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Hasta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "desde",
+          "hasta"
+        ],
+        "title": "UsagePeriod"
+      },
+      "UsageTotals": {
+        "properties": {
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          },
+          "input_tokens": {
+            "type": "integer",
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "title": "Output Tokens"
+          },
+          "cost_usd": {
+            "type": "number",
+            "title": "Cost Usd"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turns",
+          "input_tokens",
+          "output_tokens",
+          "cost_usd"
+        ],
+        "title": "UsageTotals"
       }
     }
   }

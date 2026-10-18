@@ -20,7 +20,7 @@ from sqlalchemy import select
 
 from core.db.session import get_owned, get_session
 from core.kernel.oferta import sin_motor_activo, solo_con_motor_activo
-from core.mcp.types import BaseSkill, MCPTool, ToolContext
+from core.mcp.types import BaseSkill, MCPTool, RegistroCreado, ToolContext
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from pack_cobranza.models import (
@@ -35,6 +35,13 @@ from pack_cobranza.models import (
 )
 
 log = get_logger(__name__)
+
+# HU-AOS-47: procedencia de la promesa (la del reintento trae `ya_existe`).
+_PROMESA_CREADA = RegistroCreado(
+    kind="promesa",
+    id_key="promesa_id",
+    es_nuevo=lambda r: r.get("registrada") is True and not r.get("ya_existe"),
+)
 
 
 def _hoy() -> date:
@@ -211,6 +218,7 @@ class CobranzaSkill(BaseSkill):
                     "required": ["fecha", "valor"],
                 },
                 handler=self.registrar_promesa,
+                crea_registro=_PROMESA_CREADA,
                 # Con el motor activo la promesa va por el procedimiento (HU-AOS-08).
                 connection_predicate=sin_motor_activo(),
             ),
@@ -261,6 +269,7 @@ class CobranzaSkill(BaseSkill):
                     "required": ["fecha", "alcance", "monto"],
                 },
                 handler=self.registrar_promesa_saldo,
+                crea_registro=_PROMESA_CREADA,
                 connection_predicate=solo_con_motor_activo(),
             ),
             MCPTool(

@@ -20,7 +20,7 @@ from sqlalchemy import or_, select, text
 
 from core.db.session import get_owned, get_session
 from core.kernel.oferta import solo_con_motor_activo
-from core.mcp.types import BaseSkill, MCPTool, Referencia, ToolContext
+from core.mcp.types import BaseSkill, MCPTool, Referencia, RegistroCreado, ToolContext
 from core.memory import entity as entity_memory
 from core.provisioning.antiabuso import (
     FreeNoDisponible,
@@ -739,6 +739,10 @@ class LeadSkill(BaseSkill):
                     "required": ["name", "interest"],
                 },
                 handler=self.crear_lead,
+                # HU-AOS-47: procedencia del lead (no cuenta el que ya existía ni el reintento).
+                crea_registro=RegistroCreado(
+                    kind="lead", id_key="lead_id", es_nuevo=lambda r: r.get("status") == "created"
+                ),
             ),
             MCPTool(
                 name="calificar_lead",
@@ -1297,6 +1301,13 @@ class OrderSkill(BaseSkill):
                     "required": ["quote_id", "payment_method", "customer_data"],
                 },
                 handler=self.crear_pedido,
+                # HU-AOS-47: procedencia del pedido (`duplicate` es el de la misma cotización).
+                crea_registro=RegistroCreado(
+                    kind="pedido",
+                    id_key="order_id",
+                    label_key="public_order_number",
+                    es_nuevo=lambda r: r.get("status") == "confirmed",
+                ),
             ),
             MCPTool(
                 name="agregar_item_pedido",
