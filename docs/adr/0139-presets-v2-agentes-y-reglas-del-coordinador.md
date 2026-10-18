@@ -168,3 +168,33 @@ seguido que los releases del core; que un negocio necesite agentes distintos por
   `core/presets/agentes.py` (nuevo), `core/presets/apply.py` (enganche), `core/presets/<id>.json` (v2).
 - `cli/commands/db.py` (`presets-v2`).
 - Tests: `tests/test_presets_v2.py`, `tests/integration/test_presets_v2_agentes.py`.
+
+## Adenda (2026-10-18): el editor de agentes como segunda entrada a las plantillas (HU-AOS-24)
+
+El dueño también crea especialistas desde las plantillas en el panel (`core/agents/editor.py`,
+`core/api/routers/agent_editor.py`). Lo que se decidió:
+
+- **Misma derivación, otra entrada.** `POST /admin/agent-templates/{key}/agents` crea el agente con la key de la
+  plantilla y guarda su borrador con `derivar_contenido` (desde la última versión del General o los defaults del
+  contrato). No publica. Si la key ya existe responde 409 `key_taken`: dos especialistas de la misma plantilla en
+  una conexión declaran los mismos procedimientos y, por el desempate de ADR-0138, uno quedaría muerto en silencio.
+- **El editor no escribe el registro del preset** (`tenants.settings.preset.agentes`). Si el editor crea `ventas`
+  antes que el preset, el preset lo reporta `key_ocupada` y no le pone la regla `preset_*`: ese agente recibe
+  tráfico por los disparadores léxicos de sus procedimientos, no por reglas.
+- **Frases.** Las de la habilidad (`triggers.examples`) no se copian a `overrides.examples`: ya cuentan en el
+  ruteo y una copia congelada en la versión del agente envejece cuando el pack las cambia. El editor exige al
+  menos 3 frases distintas por superpoder, contando las de la habilidad más las propias del agente; una propia
+  que, normalizada (`textos.normalizar`), repite una de la habilidad no suma. Error por campo
+  (`procedures[i].overrides.examples`).
+- **D-35 en el camino del editor.** `POST /admin/agents/{id}/publish` exige al menos una conexión conversacional
+  con Coordinador y con las habilidades del agente; valida todo antes de escribir y luego publica la versión,
+  instala el agente (nunca por defecto) y construye la release candidata de cada conexión, sin activarla (el
+  promote sigue siendo del propietario). Reintentar es el camino ante un fallo a mitad: versión, instancia y
+  release son idempotentes. `POST /admin/agents/{id}/versions` no cambia (CLI, master y presets): decisión
+  revisable si se quiere exigir D-35 en todos los caminos.
+- **Modelo.** El catálogo sale de las tablas `PRICING` del core; el editor rechaza un modelo de la tabla que el
+  proveedor del negocio no sirve o que está retirado. Si el negocio fija `llm_model` (BYOK), ese manda sobre el
+  del agente y la publicación lo avisa. El costo estimado usa el promedio real de tokens por turno del negocio
+  (30 días); sin historial no se estima.
+- **Pendiente:** el límite de agentes del plan Free. No hay métrica de agentes en `core.billing.metrics` y no se
+  inventa aquí.
