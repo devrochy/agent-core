@@ -2,7 +2,7 @@
 
 - **Vista por agente:** Ventas y Agenda en la misma conexión; cada uno ve sus conversaciones
   (con conexión y versión), tareas en curso y cerradas, clientes y registros, sin mezclar.
-- **Procedencia:** `procedencia.registrar` con la release del turno escribe instancia, versión,
+- **Procedencia:** el loop (`_execute_tool_safely`) y `procedencia.registrar` con la release del turno escriben instancia, versión,
   conexión y turno; sin release (legacy) no escribe; el primero que crea gana.
 - **Permisos (ADR-0136):** colaborador sin `agents` → 403; sin `conversations` → 403 en
   conversaciones y clientes y tareas sin `conversation_id`; sin el pack → sus registros no salen.
@@ -355,3 +355,79 @@ async def test_negocio_legacy_ve_al_general_con_lo_que_haya(app_client) -> None:
     assert (await app_client.get(f"{_BASE}/general/tasks", headers=h)).json()["total"] == 1
     assert (await app_client.get(f"{_BASE}/general/records", headers=h)).json()["total"] == 0
     assert (await app_client.get(f"{_BASE}/general/usage", headers=h)).json()["incluye_sin_atribuir"] is True
+
+
+async def test_el_loop_guarda_la_procedencia_al_ejecutar_la_tool() -> None:
+    """Plomería del turno: `_execute_tool_safely` (el único punto donde la tool corre) deja la
+    procedencia con el agente en foco de la release del turno."""
+    from core.db.models import Conversation, Customer
+    from core.db.session import get_session
+    from core.llm.types import LLMToolCall
+    from core.mcp.host import mcp_host
+    from core.mcp.types import BaseSkill, MCPTool, RegistroCreado
+    from core.orchestrator.loop import _execute_tool_safely
+    from core.shared import release_vigente
+    from core.shared.release_vigente import AgenteCongelado, ArtefactosDeRelease
+    from core.shared.tenant import tenant_scope
+
+    ref = f"R-{uuid.uuid4().hex[:8]}"
+
+    class _Crea(BaseSkill):
+        name = "skill_de_prueba_procedencia"
+
+        async def _handler(self, _args: dict, _ctx: Any) -> dict:
+            return {"reserva_id": ref, "status": "created"}
+
+        def get_tools(self) -> list[MCPTool]:
+            return [
+                MCPTool(
+                    name="tool_de_prueba_procedencia",
+                    description="crea una reserva de prueba",
+                    parameters={"type": "object", "properties": {}},
+                    handler=self._handler,
+                    crea_registro=RegistroCreado(
+                        kind="reserva", id_key="reserva_id", es_nuevo=lambda r: r.get("status") == "created"
+                    ),
+                )
+            ]
+
+    e = await _escenario()
+    tid = e["tid"]
+    mcp_host.begin_activation("pack_commerce")
+    mcp_host.register_skill(_Crea())
+    mcp_host.end_activation()
+    try:
+        async with tenant_scope(tid):
+            async with get_session() as session:
+                conversation = await session.get(Conversation, e["c1"])
+                customer = await session.get(Customer, conversation.customer_id) if conversation else None
+            assert conversation is not None and customer is not None
+            foco = AgenteCongelado(
+                instance_id=e["i_ventas"], agent_id=e["ventas"], key="ventas", role="specialist",
+                version_id=e["v_ventas"], version=3, contract="agentspec/3", content={},
+            )
+            token = release_vigente.abrir()
+            try:
+                release_vigente.fijar(
+                    ArtefactosDeRelease(
+                        tenant_id=tid, connection_id=e["cid"], release_id=uuid.uuid4(), lane="stable",
+                        idle_minutes=30, foco=foco,
+                    )
+                )
+                llamada = LLMToolCall(id=f"call_{uuid.uuid4().hex[:8]}", name="tool_de_prueba_procedencia", arguments={})
+                resultado = await _execute_tool_safely(conversation, customer, llamada)
+            finally:
+                release_vigente.cerrar(token)
+        assert resultado.get("reserva_id") == ref
+        filas = await _sql(
+            tid,
+            "select pack_id, kind, agent_instance_id, agent_version_id, connection_id, conversation_id, tool "
+            "from agent_record_origins where tenant_id = :t and record_ref = :r",
+            t=tid, r=ref,
+        )
+        assert [tuple(f) for f in filas] == [
+            ("pack_commerce", "reserva", e["i_ventas"], e["v_ventas"], e["cid"], e["c1"], "tool_de_prueba_procedencia")
+        ]
+    finally:
+        mcp_host._skills.pop("skill_de_prueba_procedencia", None)
+        mcp_host._tools.pop("tool_de_prueba_procedencia", None)
