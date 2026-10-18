@@ -18523,6 +18523,7 @@
           },
           "sort_order": {
             "type": "integer",
+            "maximum": 100000.0,
             "minimum": 0.0,
             "title": "Sort Order",
             "default": 0
@@ -19801,6 +19802,7 @@
           },
           "precio": {
             "type": "number",
+            "maximum": 999999999999.0,
             "minimum": 0.0,
             "title": "Precio",
             "description": "Valor del período.",
@@ -24581,12 +24583,14 @@
           },
           "price": {
             "type": "number",
+            "maximum": 9999999999.0,
             "minimum": 0.0,
             "title": "Price",
             "default": 0
           },
           "stock": {
             "type": "integer",
+            "maximum": 1000000000.0,
             "minimum": 0.0,
             "title": "Stock",
             "default": 0
@@ -27065,6 +27069,7 @@
           },
           "umbral_saldo_autonomo": {
             "type": "number",
+            "maximum": 999999999999.0,
             "minimum": 0.0,
             "title": "Umbral Saldo Autonomo",
             "default": 0.0
