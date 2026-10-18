@@ -9,6 +9,13 @@ descarta la menos usada. Un deploy la vacía (vive en el proceso).
 
 Los procedimientos abiertos (flujo del core y de los packs del binario + las secciones del
 negocio congeladas) se derivan al pedirlos por primera vez y quedan en la misma entrada.
+
+HU-AOS-16 (adenda de ADR-0118): la release también lee el **contenido congelado** de sus
+habilidades (los `procedure/1` del manifiesto de `pack_versions` de cada `(pack_id, version)`,
+validados; caché global en proceso por versión, no por release: son inmutables) y el `content`
+de las versiones de sus agentes. Con `release/2`, cada agente trae sus procedimientos RESUELTOS
+(`components[].procedures`); con `release/1` no hay procedimientos por agente y rige la regla
+transitoria de HU-AOS-05 (los del binario de los packs habilitados).
 """
 
 from __future__ import annotations
@@ -25,6 +32,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.kernel.episodio import DEFAULT_IDLE_MINUTES
+from core.releases.manifiesto import SCHEMA_SIN_PROCEDIMIENTOS
+from core.releases.procedimientos import OPEN_VERSION, major, ofrecible
 from core.shared.logger import get_logger
 from core.shared.release_vigente import ArtefactosDeRelease
 
@@ -35,6 +44,41 @@ log = get_logger(__name__)
 
 # 64 MiB: holgado para 300 negocios con overrides de 8 KiB.
 MAX_BYTES = 64 * 1024 * 1024
+KEY_GENERAL = "general"
+
+
+@dataclass(frozen=True)
+class AgenteDeRelease:
+    """Un componente de la release con el contenido congelado de su versión."""
+
+    instance_id: str
+    agent_id: str
+    key: str
+    role: str
+    is_default: bool
+    version_id: str
+    contract: str
+    content: Mapping[str, Any]
+    # `(id, versión exacta)` resueltos en el build (`release/2`); None en `release/1`.
+    procedimientos: tuple[tuple[str, str], ...] | None
+
+    @property
+    def tools(self) -> frozenset[str]:
+        """Acciones que la versión declara en `tools` (habilitadas): el consentimiento del
+        agente (ADR-0118 §3). Vacío para el Coordinador."""
+        return frozenset(
+            str(t.get("tool"))
+            for t in self.content.get("tools") or []
+            if isinstance(t, Mapping) and t.get("enabled", True) and isinstance(t.get("tool"), str)
+        )
+
+    @property
+    def declarativas(self) -> frozenset[str]:
+        return frozenset(
+            str(t.get("name"))
+            for t in self.content.get("declarativeTools") or []
+            if isinstance(t, Mapping) and isinstance(t.get("name"), str)
+        )
 
 
 @dataclass
@@ -47,11 +91,29 @@ class ReleaseCongelada:
     manifest: Mapping[str, Any]
     idle_minutes: int
     bytes: int
+    # instance_id → agente, con el contenido de su versión.
+    agentes: dict[str, AgenteDeRelease] = field(default_factory=dict)
+    # `(id, version)` → procedimiento publicado por una habilidad congelada de la release.
+    congelados: dict[tuple[str, str], Procedure] = field(default_factory=dict, repr=False)
     _procedimientos: dict[str, Procedure] | None = field(default=None, repr=False)
 
     @property
     def skills(self) -> list[str]:
         return [s["pack_id"] for s in self.manifest.get("skills", [])]
+
+    @property
+    def tenant_plugins(self) -> list[str]:
+        return [str(p) for p in self.manifest.get("tenant_plugins", [])]
+
+    @property
+    def packs(self) -> list[str]:
+        """Habilidades de la release: las de la plataforma más los plugins del negocio."""
+        return [*self.skills, *self.tenant_plugins]
+
+    @property
+    def con_procedimientos_por_agente(self) -> bool:
+        """`release/2`: los componentes traen sus procedimientos resueltos."""
+        return self.manifest.get("schema") != SCHEMA_SIN_PROCEDIMIENTOS
 
     @property
     def app_settings(self) -> dict[str, str | None]:
@@ -66,7 +128,10 @@ class ReleaseCongelada:
         flujo = self.manifest.get("flow_tenant")
         return flujo.get("sections") if isinstance(flujo, Mapping) else None
 
-    def artefactos(self, lane: str = "stable") -> ArtefactosDeRelease:
+    def artefactos(self, lane: str = "stable", agente: str | None = None) -> ArtefactosDeRelease:
+        """Lo que el turno lee de la release. `agente`: el `instance_id` en foco; por defecto el
+        agente por defecto de la release."""
+        en_foco = agente if agente in self.agentes else self.agente_por_defecto()
         return ArtefactosDeRelease(
             tenant_id=self.tenant_id,
             connection_id=self.connection_id,
@@ -77,13 +142,68 @@ class ReleaseCongelada:
             playbooks=self.playbooks,
             # Copia: lo de la caché es de todos los turnos de la release y nadie debe mutarlo.
             flow_tenant=copy.deepcopy(self.flow_tenant),
+            skills=tuple(self.packs),
+            procedimientos=self.procedimientos(),
+            agentes=self.agentes,
+            procedimientos_por_agente=(
+                {iid: self.procedimientos_de(iid) for iid in self.agentes}
+                if self.con_procedimientos_por_agente
+                else None
+            ),
+            agente_en_foco=en_foco,
         )
 
     def procedimientos(self) -> dict[str, Procedure]:
-        """Procedimientos de la release por id (hoy, los abiertos del flujo; ADR-0113 §5)."""
+        """TODOS los procedimientos de la release por id: los abiertos del flujo (ADR-0113 §5,
+        `0.0.0`) y los publicados por sus habilidades congeladas que son ofrecibles (su
+        habilidad y su `requires` en la release). Sirve a la revalidación y a las puertas; los
+        candidatos de un turno salen de `procedimientos_de`."""
         if self._procedimientos is None:
-            self._procedimientos = derivar_procedimientos(self.skills, self.flow_tenant)
+            salida = derivar_procedimientos(self.skills, self.flow_tenant)
+            packs = set(self.packs)
+            for (pid, _version), proc in sorted(self.congelados.items()):
+                if ofrecible(proc, packs):
+                    salida[pid] = proc
+            self._procedimientos = salida
         return self._procedimientos
+
+    def procedimientos_de(self, instance_id: str | None) -> dict[str, Procedure]:
+        """Los procedimientos PUBLICADOS del agente (sin los abiertos), por id: lo que su
+        versión declara, resuelto en el build. Vacío si la instancia no es de la release o la
+        release es `release/1`."""
+        agente = self.agentes.get(instance_id) if instance_id is not None else None
+        if agente is None or agente.procedimientos is None:
+            return {}
+        packs = set(self.packs)
+        salida: dict[str, Procedure] = {}
+        for pid, version in agente.procedimientos:
+            proc = self.congelados.get((pid, version))
+            if proc is not None and version != OPEN_VERSION and ofrecible(proc, packs):
+                salida[pid] = proc
+        return salida
+
+    def procedimiento_para(self, procedure_id: str, version: str) -> Procedure | None:
+        """El procedimiento de la release con el que sigue una tarea abierta en `version`: el
+        mismo id y el mismo major (ADR-0117 §4, HU-AOS-16); None si desapareció o cambió de
+        major (la tarea se cancela o se escala)."""
+        proc = self.procedimientos().get(procedure_id)
+        if proc is None or major(proc.version) != major(version):
+            return None
+        return proc
+
+    def agente_por_defecto(self) -> str | None:
+        """`instance_id` del agente por defecto de la release (`is_default`, `release/2`); en
+        una `release/1`, el General si está, si no el primer especialista."""
+        especialistas = [a for a in self.agentes.values() if a.role != "core"]
+        if not especialistas:
+            return None
+        for a in especialistas:
+            if a.is_default:
+                return a.instance_id
+        for a in especialistas:
+            if a.key == KEY_GENERAL:
+                return a.instance_id
+        return especialistas[0].instance_id
 
 
 def derivar_procedimientos(skills: list[str], flow_tenant: Any) -> dict[str, Procedure]:
@@ -113,6 +233,9 @@ def derivar_procedimientos(skills: list[str], flow_tenant: Any) -> dict[str, Pro
 
 _cache: OrderedDict[tuple[uuid.UUID, uuid.UUID], ReleaseCongelada] = OrderedDict()
 _bytes_en_cache = 0
+# Procedimientos publicados por versión de habilidad: `pack_versions` es inmutable (salvo
+# `yanked`), así que se cachean por `(pack_id, version)` para todo el proceso, no por release.
+_congelados_por_version: dict[tuple[str, str], tuple[Procedure, ...]] = {}
 
 
 def _guardar(release: ReleaseCongelada) -> None:
@@ -131,7 +254,103 @@ def vaciar_cache() -> None:
     """Solo para tests."""
     global _bytes_en_cache
     _cache.clear()
+    _congelados_por_version.clear()
     _bytes_en_cache = 0
+
+
+def _procedimientos_del_manifiesto(pack_id: str, version: str, texto: str) -> tuple[Procedure, ...]:
+    """Los `procedure/1` válidos del manifiesto registrado de una versión del pack."""
+    from core.kernel.procedures import validar
+
+    try:
+        crudos = json.loads(texto).get("provides", {}).get("procedures", [])
+    except (ValueError, AttributeError):
+        log.error("release_pack_manifest_invalido", pack_id=pack_id, version=version)
+        return ()
+    salida: list[Procedure] = []
+    for crudo in crudos if isinstance(crudos, list) else []:
+        proc, _problemas = validar(crudo)
+        if proc is None:
+            log.warning("release_pack_procedimiento_invalido", pack_id=pack_id, version=version)
+            continue
+        salida.append(proc)
+    return tuple(salida)
+
+
+async def _congelados(session: AsyncSession, manifest: Mapping[str, Any]) -> tuple[dict[tuple[str, str], Procedure], int]:
+    """Procedimientos publicados por las habilidades de la release, desde `pack_versions`
+    (tabla de sistema: `app_runtime` tiene SELECT). Devuelve también los bytes leídos."""
+    salida: dict[tuple[str, str], Procedure] = {}
+    leidos = 0
+    for skill in manifest.get("skills", []):
+        pack_id, version = str(skill.get("pack_id")), str(skill.get("version"))
+        clave = (pack_id, version)
+        if clave not in _congelados_por_version:
+            fila = (
+                await session.execute(
+                    text("SELECT manifest::text FROM pack_versions WHERE pack_id = :p AND version = :v"),
+                    {"p": pack_id, "v": version},
+                )
+            ).first()
+            if fila is None:
+                log.error("release_pack_version_missing", pack_id=pack_id, version=version)
+                _congelados_por_version[clave] = ()
+            else:
+                leidos += len(fila[0].encode("utf-8"))
+                _congelados_por_version[clave] = _procedimientos_del_manifiesto(pack_id, version, fila[0])
+        for proc in _congelados_por_version[clave]:
+            salida[(proc.id, proc.version)] = proc
+    return salida, leidos
+
+
+async def _agentes(
+    session: AsyncSession, tenant_id: uuid.UUID, manifest: Mapping[str, Any]
+) -> tuple[dict[str, AgenteDeRelease], int]:
+    """Los componentes con el `content` congelado de su versión (filtrado por `tenant_id` además
+    de RLS). Devuelve también los bytes leídos."""
+    componentes = [c for c in manifest.get("components", []) if isinstance(c, Mapping)]
+    ids = [uuid.UUID(str(c["agent_version_id"])) for c in componentes if c.get("agent_version_id")]
+    contenidos: dict[str, Mapping[str, Any]] = {}
+    leidos = 0
+    if ids:
+        filas = (
+            await session.execute(
+                text("SELECT id, content::text FROM agent_versions WHERE tenant_id = :t AND id = ANY(:ids)"),
+                {"t": tenant_id, "ids": ids},
+            )
+        ).all()
+        for vid, texto in filas:
+            leidos += len(texto.encode("utf-8"))
+            contenidos[str(vid)] = json.loads(texto)
+    con_procedimientos = manifest.get("schema") != SCHEMA_SIN_PROCEDIMIENTOS
+    salida: dict[str, AgenteDeRelease] = {}
+    for c in componentes:
+        vid = str(c.get("agent_version_id"))
+        if vid not in contenidos:
+            log.error("release_agent_version_missing", agent_version_id=vid)
+            continue
+        resueltos = (
+            tuple(
+                (str(p["id"]), str(p["version"]))
+                for p in c.get("procedures", [])
+                if isinstance(p, Mapping) and p.get("id") and p.get("version")
+            )
+            if con_procedimientos
+            else None
+        )
+        iid = str(c.get("instance_id"))
+        salida[iid] = AgenteDeRelease(
+            instance_id=iid,
+            agent_id=str(c.get("agent_id")),
+            key=str(c.get("agent_key")),
+            role=str(c.get("role")),
+            is_default=bool(c.get("is_default", False)),
+            version_id=vid,
+            contract=str(c.get("contract")),
+            content=contenidos[vid],
+            procedimientos=resueltos,
+        )
+    return salida, leidos
 
 
 async def cargar_release(
@@ -167,15 +386,20 @@ async def cargar_release(
     if fila is None:
         return None
     texto: str = fila[4]
+    manifest = json.loads(texto)
+    congelados, bytes_packs = await _congelados(session, manifest)
+    agentes, bytes_agentes = await _agentes(session, tenant_id, manifest)
     release = ReleaseCongelada(
         id=fila[0],
         tenant_id=tenant_id,
         connection_id=fila[1],
         number=fila[2],
         manifest_hash=fila[3],
-        manifest=json.loads(texto),
+        manifest=manifest,
         idle_minutes=int(fila[5]) if fila[5] else DEFAULT_IDLE_MINUTES,
-        bytes=len(texto.encode("utf-8")),
+        bytes=len(texto.encode("utf-8")) + bytes_packs + bytes_agentes,
+        agentes=agentes,
+        congelados=congelados,
     )
     _guardar(release)
     return release
@@ -183,6 +407,7 @@ async def cargar_release(
 
 __all__ = [
     "MAX_BYTES",
+    "AgenteDeRelease",
     "ReleaseCongelada",
     "cargar_release",
     "derivar_procedimientos",

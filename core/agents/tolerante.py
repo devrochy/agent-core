@@ -38,12 +38,13 @@ import re
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from agentcore_contracts import (
     AgentSpec,
     AgentSpecV3,
     KernelSpec,
+    Procedure,
 )
 from pydantic import SecretStr
 
@@ -64,9 +65,6 @@ from core.agents.flow import (
     flow_to_procedures,
 )
 from core.kernel.procedures.catalogo import CORE_OWNER, Catalogo
-
-if TYPE_CHECKING:
-    from agentcore_contracts import Procedure
 
 # Keys reservadas de los agentes que crea el lector tolerante (adenda de ADR-0113): el
 # backfill de HU-AOS-13 crea `coordinador` (core) y `general` (specialist) por negocio.
@@ -398,9 +396,15 @@ def convertir_v2(
     secciones: list[FlowSection] | None,
     candidatas: Iterable[str],
     siempre: set[str],
+    publicados: Iterable[Procedure] = (),
 ) -> ConversionV3:
     """Convierte el AgentSpec v2 según la tabla de ADR-0113 §5. Nunca lanza por datos v2:
     lo que no cabe en el contrato se normaliza con un aviso.
+
+    - `publicados`: los procedimientos que publican los packs habilitados (HU-AOS-16, adenda de
+      ADR-0118): el General los DECLARA en `procedures` con el rango compatible `^M.0`, como ya
+      declara en `tools` todas las acciones que hoy ofrece el loop. Así "todo lo que el negocio
+      tiene" sigue siendo una declaración de la versión del agente, no una regla por key.
 
     - `catalogo`: acciones del binario (`catalogo_de_acciones`).
     - `secciones`: el flujo compuesto ya resuelto contra `candidatas` (`ResolvedFlow`), o
@@ -466,7 +470,10 @@ def convertir_v2(
             "temperature": _acotar(float(spec.model.temperature), 0.0, 2.0, "model.temperature", avisos),
         },
         "playbooks": playbooks[:60],
-        "procedures": [{"id": p.id, "version": f"={OPEN_PROCEDURE_VERSION}"} for p in procedimientos],
+        "procedures": [
+            *({"id": p.id, "version": f"={OPEN_PROCEDURE_VERSION}"} for p in procedimientos),
+            *_declarados(publicados, {p.id for p in procedimientos}),
+        ],
         "memory": {
             "shortTermTurns": _acotar(spec.memory.shortTermTurns, 1, 500, "memory.shortTermTurns", avisos),
             "rag": {
@@ -520,6 +527,38 @@ class VistaV3:
     # Solo nombres: los valores se mueven a la instalación `core` con el backfill.
     secretos_por_migrar: list[str]
     avisos: list[str]
+
+
+def _declarados(publicados: Iterable[Procedure], ya: set[str]) -> list[dict[str, str]]:
+    """Refs `^M.0` de los procedimientos publicados, uno por id (la versión más alta), sin
+    repetir un id abierto (el linter rechaza repetidos)."""
+    from core.releases.procedimientos import parsear_version, rango_compatible
+
+    por_id: dict[str, Procedure] = {}
+    for proc in publicados:
+        actual = por_id.get(proc.id)
+        if actual is None or parsear_version(proc.version) > parsear_version(actual.version):
+            por_id[proc.id] = proc
+    return [
+        {"id": pid, "version": rango_compatible(por_id[pid].version)}
+        for pid in sorted(por_id)
+        if pid not in ya
+    ][:60]
+
+
+def procedimientos_publicados(spec: AgentSpec) -> list[Procedure]:
+    """Los procedimientos `procedure/1` que publican los packs habilitados del spec (de sus
+    carpetas `procedures/`, el mismo cargador que los registra), solo los ofrecibles: su
+    habilidad y todo su `requires` habilitados (ADR-0113 §1)."""
+    from core.agents.spec import enabled_packs
+    from core.kernel.procedures.de_pack import cargar
+    from core.releases.procedimientos import ofrecible
+
+    habilitados = enabled_packs(spec)
+    salida: list[Procedure] = []
+    for pack_id in sorted(habilitados - {CORE_OWNER}):
+        salida.extend(p for p in cargar(pack_id) if ofrecible(p, habilitados))
+    return salida
 
 
 def candidatas_del_spec(spec: AgentSpec, catalogo: Catalogo) -> tuple[list[str], set[str]]:
@@ -594,6 +633,7 @@ async def convertir_negocio(spec: AgentSpec, *, modules: Iterable[Any] | None = 
             secciones=flujo.sections if flujo is not None else None,
             candidatas=candidatas,
             siempre=siempre,
+            publicados=procedimientos_publicados(spec),
         )
     except ConversionFallida:
         del spec  # el v2 lleva los secretos literales: fuera de los locales del frame

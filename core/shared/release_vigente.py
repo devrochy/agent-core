@@ -44,6 +44,18 @@ class ArtefactosDeRelease:
     playbooks: Mapping[str, str] = field(default_factory=dict)
     # Secciones crudas del `flow.json` del negocio (lo que lee `load_tenant_flow`), o None.
     flow_tenant: Any = None
+    # HU-AOS-16: habilidades de la release (plataforma + plugins del negocio), los procedimientos
+    # congelados de TODA la release por id (`Procedure`; incluye los abiertos `0.0.0`, que solo
+    # sirven a la revalidación), los agentes por `instance_id` (`AgenteDeRelease`) y, por agente,
+    # sus procedimientos publicados resueltos (sin los abiertos). `agente_en_foco` es el
+    # `instance_id` del agente del turno (por defecto el `is_default` de la release; el router
+    # de AOS-15/17 lo cambia con `fijar_agente`). None en `procedimientos_por_agente` para una
+    # release `release/1`: rige la regla transitoria de HU-AOS-05 (procedimientos del binario).
+    skills: tuple[str, ...] = ()
+    procedimientos: Mapping[str, Any] = field(default_factory=dict)
+    agentes: Mapping[str, Any] = field(default_factory=dict)
+    procedimientos_por_agente: Mapping[str, Mapping[str, Any]] | None = None
+    agente_en_foco: str | None = None
 
 
 @dataclass
@@ -87,6 +99,33 @@ def vigente() -> ArtefactosDeRelease | None:
     return ranura.valor
 
 
+def fijar_agente(instance_id: str) -> bool:
+    """Fija el agente en foco del turno (enganche del router, HU-AOS-15/17). False si no hay
+    release en el turno o la instancia no es de la release."""
+    ranura = _ranura.get()
+    if ranura is None or ranura.valor is None or instance_id not in ranura.valor.agentes:
+        return False
+    ranura.valor = dataclasses.replace(ranura.valor, agente_en_foco=instance_id)
+    return True
+
+
+def agente_en_foco() -> Any | None:
+    """El `AgenteDeRelease` en foco, o None sin release (o sin agente por defecto)."""
+    actual = vigente()
+    if actual is None or actual.agente_en_foco is None:
+        return None
+    return actual.agentes.get(actual.agente_en_foco)
+
+
+def procedimientos_del_agente() -> Mapping[str, Any] | None:
+    """Los procedimientos publicados del agente en foco (id → `Procedure`). None sin release,
+    con una release `release/1` (regla transitoria) o sin agente en foco."""
+    actual = vigente()
+    if actual is None or actual.procedimientos_por_agente is None or actual.agente_en_foco is None:
+        return None
+    return actual.procedimientos_por_agente.get(actual.agente_en_foco, {})
+
+
 def idle_minutes(defecto: int) -> int:
     """`episode.idleMinutes` de la release del turno; `defecto` sin release."""
     actual = vigente()
@@ -111,9 +150,12 @@ __all__ = [
     "CAMPOS_DE_PROMPT",
     "ArtefactosDeRelease",
     "abrir",
+    "agente_en_foco",
     "cerrar",
     "con_valores_de_release",
     "fijar",
+    "fijar_agente",
     "idle_minutes",
+    "procedimientos_del_agente",
     "vigente",
 ]

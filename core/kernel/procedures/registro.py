@@ -11,8 +11,12 @@ sus *resolvers* con `MCPHost.register_resolver`. Este módulo es el único lecto
   tarea abierta ya no está en el binario (un deploy subió la versión), devuelve None: el motor no
   gobierna esa tarea (queda el flujo v2 de respaldo) hasta la revalidación de HU-AOS-14.
 
-Transitorio hasta HU-AOS-13/14: la fuente son los procedimientos del binario de los packs
-habilitados, no los `procedures` de la versión del agente ni la release de la conexión.
+Con una release en el turno (`aos_runtime = v3`, HU-AOS-16, adenda de ADR-0118) la fuente es
+la release: `disponibles` devuelve los procedimientos PUBLICADOS que la versión del agente en
+foco declara (resueltos en el build y congelados en `pack_versions`; nunca los abiertos
+`0.0.0`), y `definicion` busca primero en la release y después en el binario. Con una release
+`release/1` (sin procedimientos por agente) o sin release (legacy) rige la regla transitoria:
+los del binario de los packs habilitados.
 """
 
 from __future__ import annotations
@@ -62,8 +66,29 @@ def _valido(proc: Procedure) -> bool:
     return _revisados[clave]
 
 
+def _de_la_release(disabled: Iterable[str]) -> dict[str, Procedure] | None:
+    """Los del agente en foco de la release del turno, o None si rige el binario."""
+    from core.shared import release_vigente
+
+    del_agente = release_vigente.procedimientos_del_agente()
+    if del_agente is None:
+        return None
+    rotos = set(disabled)
+    salida: dict[str, Procedure] = {}
+    for pid, proc in sorted(del_agente.items()):
+        # La salud del pack (ADR-0024) sigue en caliente: un pack roto para el negocio no ofrece.
+        if proc.owner in rotos or any(r in rotos for r in proc.requires):
+            continue
+        if _valido(proc):
+            salida[pid] = proc
+    return salida
+
+
 def disponibles(enabled: Iterable[str], disabled: Iterable[str] = ()) -> dict[str, Procedure]:
-    """Procedimientos que el negocio puede usar en este turno, por id."""
+    """Procedimientos que el agente puede usar en este turno, por id."""
+    de_la_release = _de_la_release(disabled)
+    if de_la_release is not None:
+        return de_la_release
     habilitados = set(enabled) - set(disabled)
     habilitados.add(CORE_OWNER)
     salida: dict[str, Procedure] = {}
@@ -77,7 +102,15 @@ def disponibles(enabled: Iterable[str], disabled: Iterable[str] = ()) -> dict[st
 
 
 def definicion(procedure_id: str, version: str) -> Procedure | None:
-    """Definición exacta de una tarea (id y versión), o None si el binario no la trae."""
+    """Definición exacta de una tarea (id y versión): la de la release del turno si la congela
+    con esa versión, si no la del binario; None si ninguna la trae."""
+    from core.shared import release_vigente
+
+    release = release_vigente.vigente()
+    if release is not None:
+        proc = release.procedimientos.get(procedure_id)
+        if proc is not None and proc.version == version:
+            return proc if _valido(proc) else None
     for proc in _todos():
         if proc.id == procedure_id and proc.version == version:
             return proc if _valido(proc) else None

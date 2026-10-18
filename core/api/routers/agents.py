@@ -9,7 +9,10 @@
   y de CI) si el spec es inválido.
 - `GET/POST /api/v1/admin/agents/{id}/versions` — historial / publicar el borrador en una
   versión inmutable con `content_hash` (no la activa: la release llega con HU-AOS-14).
-- `GET /api/v1/admin/agents/{id}/versions/{vid}` — contenido congelado.
+- `GET /api/v1/admin/agents/{id}/versions/{vid}` — contenido congelado y, para un AgentSpec v3,
+  sus `procedures` resueltos (HU-AOS-16) contra lo que publican los packs habilitados del
+  negocio con este binario: `{id, range, resolved_version | null, problem | null}`. Lo que
+  congela una release puede diferir (otra versión del pack o instalaciones por conexión).
 
 Permisos: sección `settings` (lectura; `write` para escribir). Mientras el runtime del negocio
 sea `legacy` (ADR-0112) un agente no hace nada, así que las escrituras quedan para el master o
@@ -91,8 +94,16 @@ class AgentVersionSummary(BaseModel):
     created_at: datetime
 
 
+class ResolvedProcedure(BaseModel):
+    id: str
+    range: str
+    resolved_version: str | None
+    problem: str | None
+
+
 class AgentVersionDetail(AgentVersionSummary):
     content: dict[str, Any]
+    procedures: list[ResolvedProcedure] = []
 
 
 class AgentDetail(AgentSummary):
@@ -376,4 +387,32 @@ async def get_version(
         v = await svc.obtener_version(_tenant(principal), agent_id, version_id)
     except svc.AgenteNoEncontrado:
         raise ApiError.not_found("Versión no encontrada.") from None
-    return AgentVersionDetail(**_version(v).model_dump(), content=v.content)
+    return AgentVersionDetail(**_version(v).model_dump(), content=v.content, procedures=await _resueltos(v))
+
+
+async def _resueltos(v: Any) -> list[ResolvedProcedure]:
+    """Los `procedures` de un AgentSpec v3 resueltos contra los packs habilitados del negocio
+    (el binario de hoy). Vacío para un KernelSpec."""
+    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.tolerante import procedimientos_publicados
+    from core.releases.procedimientos import publicados_por_id, resolver_refs
+
+    refs = v.content.get("procedures") if v.contract == "agentspec/3" else None
+    if not isinstance(refs, list) or not refs:
+        return []
+    spec = await load_active_spec()
+    publicados = publicados_por_id(procedimientos_publicados(spec))
+    salida: list[ResolvedProcedure] = []
+    for ref in refs:
+        if not isinstance(ref, dict) or not isinstance(ref.get("id"), str) or not isinstance(ref.get("version"), str):
+            continue
+        resueltos, problemas = resolver_refs([ref], abiertos=(), publicados=publicados, habilidades=enabled_packs(spec))
+        salida.append(
+            ResolvedProcedure(
+                id=ref["id"],
+                range=ref["version"],
+                resolved_version=resueltos[0].version if resueltos else None,
+                problem=problemas[0] if problemas else None,
+            )
+        )
+    return salida

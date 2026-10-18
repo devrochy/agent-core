@@ -176,14 +176,15 @@ async def revalidar_tareas(
     )
     if not abiertas:
         return [], [], []
-    procedimientos = hacia.procedimientos()
     catalogo = catalogo_de_acciones(plugin_manager.list_modules())
     revalidadas: list[uuid.UUID] = []
     canceladas: list[uuid.UUID] = []
     escaladas: list[uuid.UUID] = []
     for fila in abiertas:
         tarea = state.proyeccion_de(fila)
-        nuevo = procedimientos.get(tarea.procedure_id)
+        # HU-AOS-16: el mismo procedimiento con el mismo major sigue (revalidada); si desaparece o
+        # cambia de major, se cancela o se escala.
+        nuevo = hacia.procedimiento_para(tarea.procedure_id, tarea.procedure_version)
         if nuevo is not None:
             datos = plan_revalidacion(tarea, nuevo, desde=desde, hacia=hacia.id)
             tipo = "revalidated"
