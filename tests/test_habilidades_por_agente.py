@@ -210,7 +210,7 @@ def test_oferta_fail_closed_por_agente_y_por_scope() -> None:
         _tool("check_availability", "pack_calendar"),
         _tool("escalate_to_human", "core"),
         _tool("consultar_envio", None),
-        _tool("otra_declarativa", None),
+        _tool("otra_declarativa", "declarative"),
         _tool("iniciar_procedimiento", "core"),
     ]
     agente = _agente("i-ventas", "ventas", tools=["informar_plan"])

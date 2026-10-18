@@ -55,6 +55,9 @@ async def motor_activo() -> bool | None:
 
 
 CORE_OWNER = "core"
+# `plugin_id` de las tools declarativas del negocio (`core.mcp.declarative.PLUGIN_ID`): no son de
+# un pack, así que el scope de la release no las filtra; solo lo que declara el agente.
+DECLARATIVA = "declarative"
 
 
 def permitida_para_el_agente(
@@ -66,12 +69,13 @@ def permitida_para_el_agente(
     de_la_etapa: Iterable[str] = (),
     comandos: Iterable[str] = (),
 ) -> bool:
-    """¿La acción `nombre` (de `plugin_id`; None = declarativa del negocio) se ofrece al agente?
+    """¿La acción `nombre` (de `plugin_id`; None, "" o `declarative` = declarativa del negocio) se ofrece al agente?
     `packs`: habilidades de la release (None = sin release: todo pasa). `del_agente`: lo que su
     versión declara (None = sin agente en foco: todo pasa)."""
     if plugin_id == CORE_OWNER or nombre in set(comandos):
         return True
-    if packs is not None and plugin_id is not None and plugin_id not in set(packs):
+    de_un_pack = plugin_id not in (None, "", DECLARATIVA)
+    if packs is not None and de_un_pack and plugin_id not in set(packs):
         return False
     if del_agente is None:
         return True
