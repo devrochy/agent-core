@@ -54,38 +54,11 @@
           "auth"
         ],
         "summary": "Post Logout",
+        "description": "Cierra la sesión del token presentado. No resuelve negocio ni permisos: quien quedó\ncon un negocio suspendido (403 en el resto de la API) también puede salir (ADR-0136).",
         "operationId": "post_logout_api_v1_auth_logout_post",
-        "parameters": [
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          }
-        ],
         "responses": {
           "204": {
             "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
           }
         }
       }
@@ -17274,6 +17247,70 @@
           }
         }
       }
+    },
+    "/api/v1/admin/collaborators/{admin_id}/unlink": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · colaboradores"
+        ],
+        "summary": "Unlink Collaborator Tenant",
+        "description": "Desvincula la cuenta de un negocio (ADR-0136). Un owner solo de su negocio activo y\nsolo a colaboradores; el master, de cualquiera. Nadie deja un negocio sin propietario.",
+        "operationId": "unlink_collaborator_tenant_api_v1_admin_collaborators__admin_id__unlink_post",
+        "parameters": [
+          {
+            "name": "admin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Admin Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnlinkRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -31794,6 +31831,19 @@
         ],
         "title": "MemoryUpdate",
         "description": "Entrada de `PUT /memory`: turnos de contexto 1–200, top-k 0–20 (0 = sin RAG) y\numbral 0–1 (los rangos de `save_memory`); fuera de rango responde 422."
+      },
+      "UnlinkRequest": {
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "title": "Tenant"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tenant"
+        ],
+        "title": "UnlinkRequest"
       }
     }
   }

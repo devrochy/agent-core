@@ -22,6 +22,19 @@ from core.db.models import Admin, AdminSession
 from core.db.session import get_session
 
 SESSION_COOKIE = "agent_core_session"
+
+
+class NegocioSuspendido(Exception):
+    """Credenciales válidas, pero todos los negocios de la cuenta están suspendidos
+    (ADR-0136). La API responde 403 `tenant_suspended`; el panel clásico, 403 con el
+    mismo texto. No se crea sesión."""
+
+    code = "tenant_suspended"
+    mensaje = "El negocio está suspendido. Contacta al administrador de la plataforma."
+
+    def __init__(self) -> None:
+        super().__init__(self.mensaje)
+
 TENANT_COOKIE = "ac_tenant"
 SESSION_TTL_HOURS = 24 * 7
 
@@ -38,7 +51,15 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 async def login(email_or_username: str, password: str) -> str | None:
-    """Devuelve el token de sesión o None si las credenciales son inválidas."""
+    """Devuelve el token de sesión o None si las credenciales son inválidas.
+
+    Lanza `NegocioSuspendido` (sin crear sesión) cuando la contraseña es correcta pero la
+    cuenta solo tiene negocios suspendidos (ADR-0136). Se comprueba DESPUÉS de la
+    contraseña: una credencial inválida responde igual exista o no el negocio. Una cuenta
+    sin negocios (invitada y sin aceptar) entra como siempre.
+    """
+    from core.shared.tenant import negocios_de_cuenta
+
     async with get_session() as session:
         admin = (
             await session.execute(
@@ -53,7 +74,11 @@ async def login(email_or_username: str, password: str) -> str | None:
         if not cuenta_habilitada(admin):
             # Tester con el rol apagado (producción, ADR-0134): no entra.
             return None
-        return nueva_sesion(session, admin.id)
+        admin_id = admin.id
+    if (await negocios_de_cuenta(admin)).solo_suspendidos:
+        raise NegocioSuspendido()
+    async with get_session() as session:
+        return nueva_sesion(session, admin_id)
 
 
 def nueva_sesion(session, admin_id: uuid.UUID) -> str:  # type: ignore[no-untyped-def]
@@ -76,6 +101,18 @@ async def logout(token: str) -> None:
         stored = await session.get(AdminSession, token)
         if stored is not None:
             await session.delete(stored)
+
+
+async def revocar_sesiones(session, admin_id: uuid.UUID) -> int:  # type: ignore[no-untyped-def]
+    """Borra TODAS las sesiones de un admin dentro de la transacción `session` y devuelve
+    cuántas había. Va junto al cambio que las invalida (desactivar la cuenta, cambiarle la
+    contraseña desde Colaboradores, renovar una cuenta de prueba), en la misma transacción:
+    así una cuenta reactivada no resucita sesiones viejas y el siguiente request del
+    panel o de la app responde 401 aunque el token siga en el cliente."""
+    from sqlalchemy import delete
+
+    result = await session.execute(delete(AdminSession).where(AdminSession.admin_id == admin_id))
+    return int(result.rowcount or 0)
 
 
 def bearer_token(request: Request) -> str | None:

@@ -25,6 +25,7 @@ from fastapi import Depends, Header, Request
 from core.admin.auth import (
     SESSION_COOKIE,
     TENANT_COOKIE,
+    NegocioSuspendido,
     admin_from_token,
     bearer_token,
 )
@@ -38,7 +39,7 @@ from core.admin.roles import actua_como_master
 from core.api.errors import ApiError
 from core.db.models import Admin
 from core.plugin_manager import plugin_manager
-from core.shared.tenant import admin_tenants, tenant_scope
+from core.shared.tenant import negocios_de_cuenta, tenant_scope
 
 
 @dataclass(slots=True)
@@ -55,6 +56,11 @@ class Principal:
 def session_token(request: Request) -> str | None:
     """Token de sesión del request: cookie `httpOnly` o `Authorization: Bearer`."""
     return request.cookies.get(SESSION_COOKIE) or bearer_token(request)
+
+
+def _negocio_suspendido() -> ApiError:
+    """403 con código propio: el panel y la app lo distinguen de «sin permiso» (ADR-0136)."""
+    return ApiError(403, NegocioSuspendido.code, NegocioSuspendido.mensaje)
 
 
 async def _resolve_admin(request: Request) -> Admin:
@@ -74,11 +80,18 @@ async def get_principal(
     """Resuelve identidad, tenant activo y permisos, y abre el scope de tenant."""
     token = session_token(request)
     admin = await _resolve_admin(request)
-    tenants = await admin_tenants(admin.id)
+    # Negocios suspendidos fuera, salvo para quien actúa como master (ADR-0136): la sesión de
+    # un dueño o colaborador cuyo negocio se suspendió responde 403 `tenant_suspended`.
+    negocios = await negocios_de_cuenta(admin)
+    tenants = negocios.operativos
     ids = {str(t[0]) for t in tenants}
 
     if x_tenant_id is not None and x_tenant_id not in ids:
+        if x_tenant_id in {str(t) for t in negocios.suspendidos}:
+            raise _negocio_suspendido()
         raise ApiError.forbidden("No tienes acceso a ese negocio.")
+    if negocios.solo_suspendidos:
+        raise _negocio_suspendido()
 
     target: uuid.UUID | None = None
     if tenants:
@@ -89,9 +102,10 @@ async def get_principal(
         target = next(t[0] for t in tenants if str(t[0]) == chosen)
 
     async with tenant_scope(target):
-        perms = await permissions_for(
-            admin, catalog(pack_section_keys(plugin_manager.list_modules()))
-        )
+        # Sub-secciones de los packs (ADR-0063) más el id de cada pack: así `/me` expone
+        # también el acceso «al pack completo» (p. ej. `pack_cobranza`, ADR-0136).
+        secciones = pack_section_keys(plugin_manager.list_modules()) | set(plugin_manager.active_ids())
+        perms = await permissions_for(admin, catalog(secciones))
         yield Principal(
             admin=admin,
             tenant_id=target,

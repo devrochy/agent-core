@@ -191,18 +191,25 @@ def link(
 def grant(
     email: str = typer.Option(..., "--email", help="Email del admin"),
     section: str = typer.Option(..., "--section", help="Sección (ej. costs, conversations)"),
-    access: str = typer.Option("read", "--access", help="read | write"),
+    access: str = typer.Option("read", "--access", help="read | write | none (denegado, solo con --tenant)"),
     tenant: str = typer.Option("", "--tenant", help="Slug del tenant (vacío = global, todos)"),
 ) -> None:
-    """Concede un permiso de sección. Sin `--tenant` el permiso es global."""
+    """Concede un permiso de sección. Sin `--tenant` el permiso es global.
+
+    `--access none` deniega la sección (o el pack completo) en ESE negocio aunque el rol la
+    heredara (ADR-0136); una denegación global no existe.
+    """
     from sqlalchemy import select
 
     from core.db.models import AdminPermission
     from core.db.session import get_session
 
     _validate_section(section)
-    if access not in ("read", "write"):
-        console.print("[red]--access debe ser read o write[/red]")
+    if access not in ("read", "write", "none"):
+        console.print("[red]--access debe ser read, write o none[/red]")
+        raise typer.Exit(1)
+    if access == "none" and not tenant:
+        console.print("[red]--access none exige --tenant: una denegación es por negocio[/red]")
         raise typer.Exit(1)
 
     async def _run() -> None:
@@ -243,7 +250,8 @@ def revoke(
     section: str = typer.Option(..., "--section", help="Sección a revocar"),
     tenant: str = typer.Option("", "--tenant", help="Slug del tenant (vacío = global)"),
 ) -> None:
-    """Revoca un permiso explícito de sección."""
+    """Borra la fila explícita de una sección (vuelve al default del rol). Para quitar una
+    sección que el rol hereda, usá `grant --access none --tenant <slug>` (ADR-0136)."""
     from sqlalchemy import delete
 
     from core.db.models import AdminPermission
