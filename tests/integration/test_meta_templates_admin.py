@@ -148,11 +148,17 @@ async def test_crear_sincronizar_webhook_y_borrar(app_client, monkeypatch):
     row = rows[0]
     assert row.meta_template_id == meta_template_id
 
-    # 3. Sync manual respeta el lock -- ya se sincronizó al listar.
+    # 3. Sync manual: no espera el turno horario del listado (P0 de pruebas 2026-10-17), pero
+    # a lo sumo una vez por minuto.
     r_sync = await app_client.post(
         f"/api/v1/admin/meta/connections/{connection_id}/templates/sync", headers=headers
     )
-    assert r_sync.status_code == 400
+    assert r_sync.status_code == 204, r_sync.text
+    r_sync_2 = await app_client.post(
+        f"/api/v1/admin/meta/connections/{connection_id}/templates/sync", headers=headers
+    )
+    assert r_sync_2.status_code == 429
+    assert r_sync_2.json()["error"]["code"] == "sync_rate_limited"
 
     # 4. Webhook de estado actualiza el listado (fuente de verdad real).
     from core.gateway.meta_template_webhooks import handle_template_status_update

@@ -1612,9 +1612,27 @@ async def configure_plugin_for_tenant(plugin_id: str, values: dict[str, Any]) ->
     lógica de cifrado, activación y cuota del pack no se duplica. Levanta
     `QuotaExceeded` si el plan no permite habilitar otro pack.
     """
+    # La cuota se decide ANTES de persistir: al tope del plan no se guarda nada (P0 de
+    # pruebas 2026-10-17; antes quedaba la config guardada con el pack deshabilitado).
+    await _verificar_cuota_si_no_habilitado(plugin_id)
     await plugin_manager.save_config(plugin_id, values)
     await plugin_manager.activate(plugin_id)
     await _enable_pack_for_tenant(plugin_id)
+
+
+async def _verificar_cuota_si_no_habilitado(pack: str) -> None:
+    spec = await load_active_spec()
+    if pack in spec.packs:
+        return
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return
+    from core.agents.spec import count_tenant_packs
+    from core.billing.enforcement import quota_decision
+
+    decision = await quota_decision(tenant_id, "plugins")
+    if not decision.allowed:
+        raise QuotaExceeded("plugins", count_tenant_packs(spec), decision.limit or 0)
 
 
 async def _enable_pack_for_tenant(pack: str) -> int | None:
@@ -2318,6 +2336,7 @@ async def meta_connection_plantilla_eliminar(request: Request, connection_id: st
 
     url = f"/admin/conexiones/meta/{connection_id}/plantillas"
     error = await delete_template(get_current_tenant_id(), connection_id, template_id)
+    error = str(error) if error is not None else None
     if error is not None:
         return RedirectResponse(f"{url}?flash={error}&flash_type=danger", status_code=303)
     return RedirectResponse(f"{url}?flash=Plantilla eliminada (todos los idiomas)", status_code=303)
@@ -2361,6 +2380,7 @@ async def meta_connection_plantillas_sync(request: Request, connection_id: str):
 
     url = f"/admin/conexiones/meta/{connection_id}/plantillas"
     error = await sync_templates_now(get_current_tenant_id(), connection_id)
+    error = str(error) if error is not None else None
     if error is not None:
         return RedirectResponse(f"{url}?flash={error}&flash_type=danger", status_code=303)
     return RedirectResponse(f"{url}?flash=Sincronizado", status_code=303)

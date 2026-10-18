@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -21,7 +22,7 @@ from core.admin.auth import SESSION_COOKIE, TENANT_COOKIE, current_admin
 from core.admin.permissions import effective_access, pack_prefixes, required_section
 from core.admin.views import router as admin_router
 from core.api import api_router
-from core.api.errors import ApiError, api_error_handler
+from core.api.errors import ApiError, api_error_handler, validation_error_handler
 from core.config import get_settings
 from core.gateway.webhooks import router as webhooks_router
 from core.mcp.host import mcp_host
@@ -81,6 +82,7 @@ app = FastAPI(
     openapi_url=None,
 )
 app.add_exception_handler(ApiError, api_error_handler)
+app.add_exception_handler(RequestValidationError, validation_error_handler)
 
 app.include_router(webhooks_router)
 app.include_router(admin_router)
