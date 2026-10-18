@@ -299,7 +299,9 @@ async def _congelados(session: AsyncSession, manifest: Mapping[str, Any]) -> tup
                 leidos += len(fila[0].encode("utf-8"))
                 _congelados_por_version[clave] = _procedimientos_del_manifiesto(pack_id, version, fila[0])
         for proc in _congelados_por_version[clave]:
-            salida[(proc.id, proc.version)] = proc
+            # Copia por release: `Procedure` no es frozen y la caché por versión es de todos los
+            # negocios; una mutación accidental no debe cruzar de un negocio a otro.
+            salida[(proc.id, proc.version)] = proc.model_copy(deep=True)
     return salida, leidos
 
 

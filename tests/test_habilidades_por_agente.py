@@ -297,3 +297,38 @@ def test_release_sin_agente_en_foco_es_fail_closed() -> None:
 def test_rangos_mal_formados_no_cumplen() -> None:
     assert rp.cumple("1.x.0", "^1.0") is False
     assert rp.cumple("1.0.0", "^uno") is False
+
+
+def test_veredicto_del_linter_por_contenido_no_por_id_del_objeto(monkeypatch: Any) -> None:
+    """Dos procedimientos abiertos con el mismo id y versión pero distinto contenido (flujos de
+    dos negocios) no comparten el veredicto aunque CPython reutilice la dirección del objeto."""
+    llamadas: list[str] = []
+
+    def _lint(proc: Any, _catalogo: Any) -> list[Any]:
+        llamadas.append(proc.title)
+        return [types.SimpleNamespace(code="x")] if proc.title == "malo" else []
+
+    monkeypatch.setattr(registro, "lint", _lint)
+    monkeypatch.setattr(registro, "catalogo_de_acciones", lambda _m: None)
+    monkeypatch.setattr(registro, "_revisados", registro.OrderedDict())
+    bueno = _proc("tenant.ventas", "0.0.0").model_copy(update={"title": "bueno"})
+    assert registro._valido(bueno)
+    direccion = id(bueno)
+    del bueno
+    malo = _proc("tenant.ventas", "0.0.0").model_copy(update={"title": "malo"})
+    # Aunque reciba la misma dirección, el contenido decide: se vuelve a revisar y falla.
+    assert not registro._valido(malo)
+    assert llamadas == ["bueno", "malo"]
+    assert registro._valido(_proc("tenant.ventas", "0.0.0").model_copy(update={"title": "bueno"}))
+    assert llamadas == ["bueno", "malo"]  # mismo contenido: veredicto en caché
+    del direccion
+
+
+def test_revisados_acotado(monkeypatch: Any) -> None:
+    monkeypatch.setattr(registro, "lint", lambda _p, _c: [])
+    monkeypatch.setattr(registro, "catalogo_de_acciones", lambda _m: None)
+    monkeypatch.setattr(registro, "_revisados", registro.OrderedDict())
+    monkeypatch.setattr(registro, "_MAX_REVISADOS", 3)
+    for i in range(5):
+        registro._valido(_proc(f"tenant.p{i}", "0.0.0"))
+    assert len(registro._revisados) == 3

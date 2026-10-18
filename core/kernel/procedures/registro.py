@@ -21,7 +21,10 @@ los del binario de los packs habilitados.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
+from collections import OrderedDict
 from collections.abc import Iterable, Mapping
 
 from agentcore_contracts import Procedure
@@ -34,9 +37,17 @@ from core.shared.logger import get_logger
 
 log = get_logger(__name__)
 
-# (id, versión) → resultado del linter. Los procedimientos del binario no cambian mientras el
-# proceso vive (si un plugin se recarga, sus objetos son otros y se vuelven a revisar).
-_revisados: dict[tuple[str, str, int], bool] = {}
+# (owner, id, versión, sha256 del JSON canónico) → resultado del linter, en LRU acotada. La clave
+# es el CONTENIDO, no `id()` del objeto: los abiertos `0.0.0` salen del `flow.json` de cada negocio
+# y se liberan con su release, y CPython reutiliza direcciones (un procedimiento de otro negocio
+# con el mismo id y versión heredaría el veredicto).
+_MAX_REVISADOS = 2048
+_revisados: OrderedDict[tuple[str, str, str, str], bool] = OrderedDict()
+
+
+def _clave(proc: Procedure) -> tuple[str, str, str, str]:
+    canonico = json.dumps(proc.model_dump(mode="json", by_alias=True), sort_keys=True, separators=(",", ":"))
+    return proc.owner, proc.id, proc.version, hashlib.sha256(canonico.encode()).hexdigest()
 
 
 def _todos() -> list[Procedure]:
@@ -50,8 +61,10 @@ def hay_procedimientos() -> bool:
 
 
 def _valido(proc: Procedure) -> bool:
-    clave = (proc.id, proc.version, id(proc))
-    if clave not in _revisados:
+    clave = _clave(proc)
+    if clave in _revisados:
+        _revisados.move_to_end(clave)
+    else:
         from core.plugin_manager import plugin_manager
 
         problemas = lint(proc, catalogo_de_acciones(plugin_manager.list_modules()))
@@ -63,6 +76,8 @@ def _valido(proc: Procedure) -> bool:
                 codigos=sorted({p.code for p in problemas})[:10],
             )
         _revisados[clave] = not problemas
+        while len(_revisados) > _MAX_REVISADOS:
+            _revisados.popitem(last=False)
     return _revisados[clave]
 
 
