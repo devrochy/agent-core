@@ -1,0 +1,36 @@
+{
+  "nombre": "agendar-una-demo",
+  "semilla": 5,
+  "descripcion": "Gherkin de agendar_cita (HU-AOS-08): el cliente simulado pide una demo, elige uno de los horarios libres que le ofrecen, da su correo y confirma. Queda una sola cita, con su correo y en un horario de la agenda. Para medir pass^4 en vivo (con OK del dueño).",
+  "pasos": [
+    {
+      "nota": "el cliente simulado agenda una demo",
+      "simulado": {
+        "objetivo": "Agendar una demo del Plan Premium para la próxima semana. Elige uno de los horarios que te ofrezcan (no inventes otro). Da tu correo solo cuando te lo pidan y confirma la cita cuando te la resuman. Tu objetivo se cumple cuando te dicen que la cita quedó agendada.",
+        "datos": {
+          "nombre": "Ana Gómez",
+          "correo": "ana+{cliente.id}@example.com",
+          "celular": "{cliente.celular}"
+        },
+        "max_turnos": 10
+      },
+      "espera_fin": [
+        "objetivo"
+      ]
+    },
+    {
+      "nota": "una sola cita, a nombre del cliente y con su correo",
+      "verifica": {
+        "tabla": "pack_calendar_appointments",
+        "donde": {
+          "attendee_email": "ana+{cliente.id}@example.com"
+        },
+        "filas": 1,
+        "espera": {
+          "status": "scheduled",
+          "start_at": "$no_nulo"
+        }
+      }
+    }
+  ]
+}

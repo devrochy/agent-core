@@ -35,7 +35,9 @@ el runner guarda en `messages` cada mensaje del cliente y cada respuesta. La cor
   - `config` por pack (sin secretos reales);
   - `pagos_simulados.monto_minimo`, el mínimo de la pasarela real;
   - `motor_de_procedimientos: true`: enciende el motor de procedimientos (`aos_runtime = v3` y
-    `aos_procedures`, HU-AOS-07) en el negocio de la corrida (set `procedimientos`);
+    `aos_procedures`, HU-AOS-07) en el negocio de la corrida (set `procedimientos`). Con `--runtime`
+    explícito manda la opción: `legacy` corre el mismo set **sin** el motor (línea base de un
+    agente) y `v3` lo enciende, para comparar pass^k con y sin procedimientos (ADR-0112);
   - `documentos_legales`: versiones de prueba de `terminos`, `privacidad` y `dpa`
     (`[{"tipo", "version", "url"}]`), publicadas como desde Plataforma (`legal.publicar`). En un
     vendedor, con los tres el pedido de un plan pide aceptarlos antes de crearse (ADR-0125).
@@ -111,6 +113,17 @@ paso `simulado` deja su traza en `eval_results.simulator`. Un journey con client
 valida por el **estado final** en la base, no por el texto exacto de las respuestas.
 
 `evals/runner.py` (golden) también acepta `--k`, `--umbral` y `--reporte`.
+
+## pass^k de los procedimientos (a demanda)
+
+El workflow `evals-procedimientos.yml` (Actions → Run workflow, con OK del dueño: gasta LLM) corre el
+set `procedimientos` con `--runtime legacy` (sin motor) y/o `--runtime v3` (con motor), con `k`
+intentos y un `patron` opcional, y sube `procedimientos-legacy.json` y `procedimientos-v3.json`. El
+umbral es 0: mide, no es un gate. Nunca corre en PR ni en push.
+
+```bash
+gh workflow run evals-procedimientos.yml --ref develop -f k=4 -f runtime=ambos
+```
 
 ## Umbral
 
