@@ -241,3 +241,42 @@ async def test_spec_del_turno_sin_release_es_el_mismo_y_con_release_la_vista(cat
     assert namespaces == frozenset({"perfil"})
     # Fuera del turno la ranura queda vacía: el siguiente turno no hereda nada.
     assert spec_del_turno(original) is original
+
+
+@pytest.mark.asyncio
+async def test_write_namespaces_legacy_none_y_v3_sin_release_niega_todo() -> None:
+    """Revisión de seguridad: un negocio v3 sin release activa no escribe memoria (fail-closed);
+    legacy sigue sin chequeo (None); otro negocio en el mismo contexto no hereda la marca."""
+    from core.shared.tenant import tenant_scope
+
+    token = release_vigente.abrir()
+    try:
+        async with tenant_scope(T):
+            assert release_vigente.write_namespaces_del_turno() is None
+            release_vigente.marcar_v3_sin_release(T)
+            assert release_vigente.write_namespaces_del_turno() == frozenset()
+        async with tenant_scope(uuid.uuid4()):
+            assert release_vigente.write_namespaces_del_turno() is None
+    finally:
+        release_vigente.cerrar(token)
+    assert release_vigente.write_namespaces_del_turno() is None
+
+
+def test_mensaje_de_migracion_no_lleva_valores_de_validacion() -> None:
+    from agentcore_contracts import AgentSpecV3
+    from pydantic import ValidationError
+
+    from core.releases.migracion_v3 import _mensaje  # pyright: ignore[reportPrivateUsage]
+
+    with pytest.raises(ValidationError) as info:
+        AgentSpecV3.model_validate({"persona": {"maxLength": "valor-secreto-xyz"}})
+    texto = _mensaje(info.value)
+    assert "valor-secreto-xyz" not in texto and "persona" in texto
+
+
+@pytest.mark.asyncio
+async def test_construir_con_todos_se_rechaza() -> None:
+    from core.releases.migracion_v3 import migrar_a_v3
+
+    with pytest.raises(ValueError, match="--construir"):
+        await migrar_a_v3(tenant_ids=None, dry_run=True, construir=True, modules=[])

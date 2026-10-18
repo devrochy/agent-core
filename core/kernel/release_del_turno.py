@@ -397,6 +397,7 @@ async def fijar_release_del_turno(conversation: Any) -> Asignacion | None:
         # v3 sin release activa: el turno sigue con el v2 (legacy silencioso). Pendiente con
         # dueño (adenda HU-AOS-15 de ADR-0117): release al alta de la conexión.
         log.error("release_missing", connection_id=str(connection_id))
+        release_vigente.marcar_v3_sin_release(tenant_id)
         return None
     asignacion, release = resultado
     release_vigente.fijar(release.artefactos(asignacion.lane, foco=asignacion.foco))

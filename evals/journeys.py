@@ -269,6 +269,19 @@ async def preparar_negocio(
     return tenant_id
 
 
+def _exigir_base_local(*urls: str | None, que: str) -> None:
+    """Las escrituras de banderas y conexiones van por la URL del dueño Y por la de la app:
+    las dos tienen que ser locales (si no, la corrida escribiría en una base real)."""
+    from sqlalchemy.engine import make_url
+
+    for url in urls:
+        if not url:
+            continue
+        host = (make_url(url).host or "").lower()
+        if host not in ("localhost", "127.0.0.1", "::1"):
+            raise SystemExit(f"{que} solo se enciende(n) en una base local, no en {host!r}.")
+
+
 async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
     """Runtime por releases (HU-AOS-15) para el negocio de la corrida: una conexión
     conversacional, su release 1 (`backfill_releases`, desde el AgentSpec v2) y
@@ -276,7 +289,6 @@ async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
     Devuelve la conexión: `nuevo_cliente` liga a ella las conversaciones de la corrida. Sirve para
     medir pass^k legacy vs v3 con el mismo set (`--runtime v3`)."""
     from sqlalchemy import text
-    from sqlalchemy.engine import make_url
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from core.config import get_settings
@@ -290,9 +302,7 @@ async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
     if not settings.aos_connection_routing:
         raise SystemExit("--runtime v3 exige AOS_CONNECTION_ROUTING=true (orden de banderas, ADR-0112).")
     url = settings.migrations_database_url or settings.database_url
-    host = (make_url(url).host or "").lower()
-    if host not in ("localhost", "127.0.0.1", "::1"):
-        raise SystemExit(f"El runtime v3 de los journeys solo se enciende en una base local, no en {host!r}.")
+    _exigir_base_local(url, settings.database_url, que="El runtime v3 de los journeys")
     conexion = uuid.uuid4()
     async with tenant_scope(tenant_id):
         async with get_session() as session:
@@ -330,16 +340,13 @@ async def encender_motor_de_procedimientos(tenant_id: uuid.UUID) -> None:
     en su `negocio.json`; el negocio es de la corrida, nunca uno real. Las banderas solo las
     escribe el rol dueño (el mismo que migra)."""
     from sqlalchemy import text
-    from sqlalchemy.engine import make_url
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from core.config import get_settings
 
     settings = get_settings()
     url = settings.migrations_database_url or settings.database_url
-    host = (make_url(url).host or "").lower()
-    if host not in ("localhost", "127.0.0.1", "::1"):
-        raise SystemExit(f"Las banderas del motor solo se encienden en una base local, no en {host!r}.")
+    _exigir_base_local(url, settings.database_url, que="Las banderas del motor")
     engine = create_async_engine(url)
     try:
         async with engine.begin() as conn:

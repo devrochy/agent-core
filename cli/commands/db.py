@@ -177,6 +177,8 @@ def migrar_a_v3(
 
     if bool(tenant) == todos:
         raise typer.BadParameter("Indica --tenant <slug> o --todos (uno de los dos).")
+    if construir and todos:
+        raise typer.BadParameter("--construir promueve releases: solo con --tenant, nunca con --todos.")
 
     async def _run() -> ReporteMigracion:
         ids = [await resolve_tenant(tenant)] if tenant else None

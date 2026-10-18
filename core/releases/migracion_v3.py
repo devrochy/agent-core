@@ -37,6 +37,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -79,8 +80,13 @@ class ReporteMigracion:
 
 
 def _mensaje(exc: Exception) -> str:
+    """Motivo para la consola y el log, sin valores: de un error de validación solo las rutas
+    (su texto incluye `input_value`, que puede ser contenido del negocio)."""
     if isinstance(exc, DBAPIError):
         return f"error de base de datos ({type(exc.orig).__name__})"
+    if isinstance(exc, ValidationError):
+        rutas = sorted({".".join(str(p) for p in e["loc"]) for e in exc.errors()})
+        return f"contenido que no pasa el contrato en: {', '.join(rutas)[:300]}"
     return f"{type(exc).__name__}: {str(exc)[:300]}"
 
 
@@ -186,24 +192,30 @@ async def _revisar_release(
         return [f"conexión {connection_id}: la release activa no carga"]
     prefijo = f"conexión {connection_id} (release {release.number})"
     try:
-        foco = release.foco()
+        release.foco()  # hay un especialista por defecto (o único)
     except ErrorDeRelease as exc:
         return [f"{prefijo}: {exc}"]
-    try:
-        v3, _ = validar_componentes(foco, release.kernel)
-    except VistaInvalida as exc:
-        return [f"{prefijo}: {exc}"]
-    if NAMESPACE_PERFIL not in v3.memory.writeNamespaces:
-        bloqueos.append(
-            f"{prefijo}: el agente '{foco.key}' no concede '{NAMESPACE_PERFIL}' en memory.writeNamespaces "
-            "(el v2 escribía el perfil del cliente): publícalo con ese namespace y construye la release"
-        )
-    omitidas = declarativas_omitidas(v3)
-    if omitidas:
-        bloqueos.append(
-            f"{prefijo}: tools declarativas con referencias a secretos en la URL o el body, que el runtime v3 "
-            f"todavía no resuelve: {', '.join(omitidas)} (muévelas a headers o espera la parte 2)"
-        )
+    # Cualquier especialista puede quedar de dueño de una conversación: se revisan todos.
+    for agente in (c for c in release.componentes if c.role == "specialist"):
+        try:
+            v3, _ = validar_componentes(agente, release.kernel)
+        except VistaInvalida as exc:
+            bloqueos.append(f"{prefijo}: agente '{agente.key}': {exc}")
+            continue
+        if NAMESPACE_PERFIL not in v3.memory.writeNamespaces:
+            bloqueos.append(
+                f"{prefijo}: el agente '{agente.key}' no concede '{NAMESPACE_PERFIL}' en memory.writeNamespaces "
+                "(el v2 escribía el perfil del cliente): publícalo con ese namespace y construye la release"
+            )
+        omitidas = declarativas_omitidas(v3)
+        if omitidas:
+            bloqueos.append(
+                f"{prefijo}: agente '{agente.key}': tools declarativas con referencias a secretos en la URL o el "
+                f"body, que el runtime v3 todavía no resuelve: {', '.join(omitidas)} (muévelas a headers o espera "
+                "la parte 2)"
+            )
+    if bloqueos:
+        return bloqueos
     # Al día: el manifiesto de hoy (sin refrescar versiones) y, en legacy, la conversión del v2.
     try:
         hoy = await armar_manifiesto(tenant_id, connection_id, modules=modulos, refrescar=False)
@@ -281,7 +293,10 @@ async def _tareas_gobernadas_abiertas(tenant_id: uuid.UUID) -> int:
 # ------------------------------------------------------------------ banderas (rol dueño)
 async def _escribir_bandera(database_url: str | None, tenant_id: uuid.UUID, *, runtime: str, procedimientos: bool | None) -> None:
     settings = get_settings()
-    url = database_url or settings.migrations_database_url or settings.database_url
+    url = database_url or settings.migrations_database_url
+    if not url:
+        # Nunca con el rol de la aplicación: `tenants` la cambia solo el rol dueño (ADR-0112).
+        raise PermissionError("falta MIGRATIONS_DATABASE_URL (rol dueño) para escribir las banderas")
     engine = create_async_engine(url)
     try:
         async with engine.begin() as conn:
@@ -402,6 +417,9 @@ async def migrar_a_v3(
     `tenant_ids=None`). Ver el docstring del módulo."""
     from core.plugin_manager import plugin_manager
 
+    if construir and tenant_ids is None:
+        # Construir y promover cambia la release activa: nunca en masa, negocio por negocio.
+        raise ValueError("--construir exige --tenant (no se permite con --todos)")
     modulos = list(modules if modules is not None else plugin_manager.list_modules())
     reporte = ReporteMigracion(dry_run=dry_run, volver=volver)
     for tid, slug, runtime, procedimientos in await _negocios(tenant_ids):

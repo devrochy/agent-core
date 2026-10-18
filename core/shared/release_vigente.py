@@ -81,6 +81,9 @@ class ArtefactosDeRelease:
 @dataclass
 class _Ranura:
     valor: ArtefactosDeRelease | None = None
+    # Negocio v3 cuyo turno no encontró release activa (HU-AOS-15): sin agente en foco, pero
+    # `write_namespaces_del_turno` niega toda escritura de memoria en vez de no chequear.
+    v3_sin_release: uuid.UUID | None = None
 
 
 _ranura: ContextVar[_Ranura | None] = ContextVar("release_vigente", default=None)
@@ -96,6 +99,7 @@ def cerrar(token: Token[_Ranura | None]) -> None:
     ranura = _ranura.get()
     if ranura is not None:
         ranura.valor = None
+        ranura.v3_sin_release = None
     _ranura.reset(token)
 
 
@@ -106,6 +110,14 @@ def fijar(valor: ArtefactosDeRelease) -> bool:
         return False
     ranura.valor = valor
     return True
+
+
+def marcar_v3_sin_release(tenant_id: uuid.UUID) -> None:
+    """El turno es de un negocio v3 sin release activa (sigue con el v2): fail-closed en
+    `write_namespaces_del_turno`. No hace nada fuera de un turno."""
+    ranura = _ranura.get()
+    if ranura is not None:
+        ranura.v3_sin_release = tenant_id
 
 
 def vigente() -> ArtefactosDeRelease | None:
@@ -134,10 +146,17 @@ def kernel_del_turno() -> AgenteCongelado | None:
 
 
 def write_namespaces_del_turno() -> frozenset[str] | None:
-    """`memory.writeNamespaces` del agente en foco (ADR-0114 §3). None = sin release
-    (runtime legacy): `ToolContext.write_namespaces` queda None y no se chequea nada."""
+    """`memory.writeNamespaces` del agente en foco (ADR-0114 §3). None = runtime legacy:
+    `ToolContext.write_namespaces` queda None y no se chequea nada. Un negocio v3 sin release
+    activa (`marcar_v3_sin_release`) recibe `frozenset()`: ninguna escritura (fail-closed)."""
     agente = agente_del_turno()
-    return agente.write_namespaces if agente is not None else None
+    if agente is not None:
+        return agente.write_namespaces
+    ranura = _ranura.get()
+    actual = get_current_tenant_id()
+    if ranura is not None and actual is not None and ranura.v3_sin_release == actual:
+        return frozenset()
+    return None
 
 
 def idle_minutes(defecto: int) -> int:
@@ -171,6 +190,7 @@ __all__ = [
     "fijar",
     "idle_minutes",
     "kernel_del_turno",
+    "marcar_v3_sin_release",
     "vigente",
     "write_namespaces_del_turno",
 ]

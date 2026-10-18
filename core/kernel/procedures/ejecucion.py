@@ -409,9 +409,15 @@ async def _validar_dato(
 
 def _contexto_de_herramienta(conversation_id: uuid.UUID, customer_id: uuid.UUID, channel: str, clave: str) -> Any:
     from core.mcp.host import new_tool_context
+    from core.shared import release_vigente
 
     return new_tool_context(
-        conversation_id=conversation_id, customer_id=customer_id, idempotency_key=clave, channel=channel
+        conversation_id=conversation_id,
+        customer_id=customer_id,
+        idempotency_key=clave,
+        channel=channel,
+        # Mismo permiso de memoria que el loop (ADR-0114 §3, HU-AOS-15); None en legacy.
+        write_namespaces=release_vigente.write_namespaces_del_turno(),
     )
 
 
