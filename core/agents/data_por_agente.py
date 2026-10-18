@@ -23,6 +23,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import ColumnElement, and_, false, func, literal, or_, select, text
@@ -269,6 +270,11 @@ async def resumen(tenant_id: uuid.UUID, *, ahora: datetime | None = None) -> dic
     return {"runtime": runtime, "items": items, "sin_atribuir": _sumar([sin_atribuir] if sin_atribuir else [])}
 
 
+def _a_float(valor: object) -> float | None:
+    """Numeric de Postgres (o None) a float; la consulta ya exige `pass_k` no nulo."""
+    return float(valor) if isinstance(valor, (int, float, Decimal)) else None
+
+
 def _etiqueta(label: str | None, channel: str | None, type_id: str | None) -> str:
     return (label or "").strip() or type_id or channel or "Conexión"
 
@@ -335,11 +341,15 @@ async def conversaciones(alcance: Alcance, filtros: Filtros, *, offset: int, lim
                 consulta.order_by(ultimo.desc(), UsageLedger.conversation_id).offset(offset).limit(limit)
             )
         ).all()
-        convs = await _conversaciones_con_cliente(session, alcance.tenant_id, [f[0] for f in filas])
+        convs = await _conversaciones_con_cliente(
+            session, alcance.tenant_id, [c for f in filas if (c := f[0]) is not None]
+        )
         versiones = await _numeros_de_version(session, alcance.tenant_id, [f[4] for f in filas if f[4]])
         conexiones = await _etiquetas_de_conexion(session, alcance.tenant_id, [f[5] for f in filas if f[5]])
     items = []
     for conv_id, turnos, costo, ult, version_id, conn_id in filas:
+        if conv_id is None:  # la consulta exige `conversation_id`; guarda para el tipo
+            continue
         conv = convs.get(conv_id)
         items.append(
             {
@@ -633,7 +643,9 @@ async def consumo(alcance: Alcance, filtros: Filtros) -> dict[str, Any]:
                 select(dia, *sumas).where(*condiciones).group_by(dia).order_by(dia.desc()).limit(MAX_DIAS_SERIE)
             )
         ).all()
-        etiquetas = await _etiquetas_de_conexion(session, alcance.tenant_id, [f[0] for f in por_conexion if f[0]])
+        etiquetas = await _etiquetas_de_conexion(
+            session, alcance.tenant_id, [c for f in por_conexion if (c := f[0]) is not None]
+        )
         mediciones = (
             await session.execute(
                 select(EvalRun.created_at, EvalRun.k, EvalRun.pass_1, EvalRun.pass_k, EvalRun.spec_version)
@@ -663,7 +675,7 @@ async def consumo(alcance: Alcance, filtros: Filtros) -> dict[str, Any]:
         "by_connection": [
             {
                 "connection_id": f[0],
-                "connection_label": etiquetas.get(f[0]) if f[0] else None,
+                "connection_label": etiquetas.get(c) if (c := f[0]) is not None else None,
                 **_fila(f, 1),
             }
             for f in por_conexion
@@ -676,8 +688,8 @@ async def consumo(alcance: Alcance, filtros: Filtros) -> dict[str, Any]:
                 {
                     "measured_at": m[0],
                     "k": int(m[1]),
-                    "pass_1": float(m[2]) if m[2] is not None else None,
-                    "pass_k": float(m[3]),
+                    "pass_1": _a_float(m[2]),
+                    "pass_k": _a_float(m[3]) or 0.0,
                     "spec_version": m[4],
                 }
                 for m in mediciones
