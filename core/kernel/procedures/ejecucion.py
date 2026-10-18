@@ -463,6 +463,9 @@ class ContextoMotor:
         self.tarjeta = tarjeta
         self.texto_cliente = texto_cliente
         self.ejecutor: Ejecutor | None = None
+        # Datos de la tarea en foco que el motor fijó en ESTE turno por `actualizar_tarea` (todo o
+        # nada: solo los aceptados). Evidencia del verificador para "anoté tu dirección" (ADR-0119).
+        self.datos_fijados: set[str] = set()
         self._base = list(herramientas_base)
         self._candidatas = list(candidatas)
         self._core = frozenset(t.name for t in self._base if getattr(t, "plugin_id", "") == CORE_OWNER)
@@ -1288,6 +1291,8 @@ class ContextoMotor:
                     s, foco.fila, "confirmation_requested", {"target": {"kind": "slot", "name": por_confirmar}}, "kernel"
                 )
             task_id = foco.fila.id
+        # Solo con la transacción ya confirmada: un fallo dentro del bloque no deja el dato contado.
+        self.datos_fijados.update(str(n) for n in validos)
         return await self._terminar_comando(task_id)
 
     async def _no_dichos(
