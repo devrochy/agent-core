@@ -235,7 +235,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # Release del turno, sticky por episodio (ADR-0117 §4): no hace nada con aos_runtime = legacy.
     # Con v3 (HU-AOS-15) el turno ejecuta la versión congelada del especialista en foco y el
     # KernelSpec de la release, en la forma v2 que lee este loop; sin release, el mismo v2.
-    await fijar_release_del_turno(conversation)
+    await fijar_release_del_turno(conversation, texto=latest_message)  # texto: router de HU-AOS-17
     spec = spec_del_turno(spec)
 
     # Cuota del período (ADR-0045) y presupuesto agotado (ADR-0015): políticas del kernel.

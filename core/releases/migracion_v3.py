@@ -300,11 +300,16 @@ async def _escribir_bandera(database_url: str | None, tenant_id: uuid.UUID, *, r
     engine = create_async_engine(url)
     try:
         async with engine.begin() as conn:
+            # Volver a legacy apaga también el enrutamiento (HU-AOS-17): el CHECK de 0094 lo exige
+            # (orden inverso de ADR-0112) y sin v3 no hay release que enrutar.
+            ruteo = "aos_routing = CASE WHEN :r = 'legacy' THEN 'off' ELSE aos_routing END"
             if procedimientos is None:
-                await conn.execute(text("UPDATE tenants SET aos_runtime = :r WHERE id = :t"), {"r": runtime, "t": tenant_id})
+                await conn.execute(
+                    text(f"UPDATE tenants SET aos_runtime = :r, {ruteo} WHERE id = :t"), {"r": runtime, "t": tenant_id}
+                )
             else:
                 await conn.execute(
-                    text("UPDATE tenants SET aos_runtime = :r, aos_procedures = :p WHERE id = :t"),
+                    text(f"UPDATE tenants SET aos_runtime = :r, aos_procedures = :p, {ruteo} WHERE id = :t"),
                     {"r": runtime, "p": procedimientos, "t": tenant_id},
                 )
     finally:

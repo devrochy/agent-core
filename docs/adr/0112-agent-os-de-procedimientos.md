@@ -187,3 +187,11 @@ nueva y sin cambio de conducta (gate en replay sin regrabar).
     de negocio y aun así queda NULL; se acepta.
   - `traceparent` sí viaja a las tareas encadenadas: una tarea puede compartir `trace_id` con el turno y tener
     `turn_id` NULL. Es intencional; no se deben igualar.
+
+
+## Adenda HU-AOS-17: bandera de enrutamiento (2026-10-18)
+
+Tercera bandera por negocio, `tenants.aos_routing` (`off` | `shadow` | `active`, migración 0094), con el CHECK
+`aos_routing = 'off' OR aos_runtime = 'v3'`. Orden de encendido: `AOS_CONNECTION_ROUTING` → `aos_runtime = v3` →
+(`aos_procedures`) → `aos_routing`; `migrar-a-v3 --volver` la apaga en el mismo UPDATE. `route_source` deja de ser
+siempre `default` cuando está en `active`. Detalle en ADR-0138.
