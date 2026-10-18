@@ -448,3 +448,82 @@ async def test_el_ruteo_exige_v3_y_volver_a_legacy_lo_apaga(_ruteo: None) -> Non
     assert (runtime, ruteo) == ("legacy", "off")
     with pytest.raises(ValueError):
         await _modo(tid, "active")
+
+
+# ---------------------------------------------------------------- punta a punta con los presets v2 (HU-AOS-46)
+async def test_preset_suscripciones_v2_con_ruteo_activo_de_punta_a_punta(_ruteo: None, monkeypatch: Any) -> None:
+    """`agent-core db presets-v2 --aplicar` (su función) crea Ventas, Agenda y Suscripciones con las
+    reglas `preset_*` del Coordinador; el build de la release no falla con `ruteo_invalido`; el
+    General (por defecto) también declara los procedimientos de los especialistas y aun así una
+    demo la atiende Agenda, por la regla o por el disparador."""
+    from core.alta_negocio import onboard_tenant
+    from core.plugin_manager import plugin_manager
+    from core.presets.agentes import backfill_presets_v2
+    from core.releases.promocion import promover
+    from core.releases.release_uno import backfill_releases
+    from core.shared.tenant import tenant_scope
+
+    slug = f"aos17p-{uuid.uuid4().hex[:8]}"
+    tid, _ = await onboard_tenant(
+        name=f"AOS17 {slug}", slug=slug, packs=["pack_commerce", "pack_calendar", "pack_subscriptions"],
+        sembrar_ejemplos=False, plan="premium",
+    )
+    async with tenant_scope(tid):
+        await plugin_manager.save_config("pack_calendar", {
+            "source": "interno", "business_hours": HORAS, "timezone": "America/Bogota",
+            "slot_minutes": 60, "buffer_minutes": 0, "event_duration_minutes": 60,
+        })
+    cid = uuid.uuid4()
+    await _sql(
+        tid,
+        "insert into channel_connections (id, tenant_id, channel, provider, external_id, type_id) "
+        "values (:id, :t, 'instagram', 'meta', :ext, 'instagram_meta')",
+        id=cid, t=tid, ext=f"ig-{uuid.uuid4().hex[:10]}",
+    )
+    assert not (await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())).fallo
+    await _banderas(tid, "v3", True)
+
+    (reporte,) = await backfill_presets_v2(tenant_ids=[tid], preset_id="suscripciones", aplicar=True, modules=_modules())
+    assert not reporte.fallo, reporte.errores
+    assert {a.key for a in reporte.agentes} >= {"ventas", "agenda", "suscripciones"}
+    assert set(reporte.reglas_nuevas) == {"preset_ventas_palabras", "preset_agenda_palabras", "preset_suscripciones_palabras"}
+    numero = reporte.releases[str(cid)]
+    assert numero.isdigit(), numero  # el build no falló (p. ej. con `ruteo_invalido`)
+    ((candidata, manifest),) = await _sql(
+        tid, "select id, manifest from connection_releases where connection_id = :c and number = :n", c=cid, n=int(numero)
+    )
+    async with tenant_scope(tid):
+        await promover(tid, cid, candidata, actor="test")
+    componentes = {c["agent_key"]: c for c in manifest["components"]}
+    declarados = {k: {p["id"] for p in c["procedures"]} for k, c in componentes.items() if c["role"] == "specialist"}
+    assert CITA in declarados["agenda"] and CITA in declarados["general"]  # la ambigüedad existe
+    assert componentes["general"]["is_default"] and not componentes["agenda"]["is_default"]
+    await _modo(tid, "active")
+    filas = await _sql(
+        tid,
+        "select a.key, i.id from agent_instances i join agents a on a.tenant_id = i.tenant_id and a.id = i.agent_id "
+        "where i.connection_id = :c and i.deleted_at is null",
+        c=cid,
+    )
+    inst = {k: i for k, i in filas}
+
+    # Por la regla del preset (palabra «agendar»).
+    conv = await _conversacion(tid, cid)
+    g = await _turno(tid, conv, monkeypatch, ["¿Para qué día?"], texto=DEMO)
+    d = await _decision(tid, conv)
+    assert d["route_source"] == "rule" and d["rule_id"] == "preset_agenda_palabras"
+    assert d["active_instance_id"] == str(inst["agenda"]) and await _dueno(tid, conv) == inst["agenda"]
+    assert g.enums[0] == [CITA]
+
+    # Por el disparador, sin palabra de regla: el General también declara `agendar_cita`, pero va a Agenda.
+    otra = await _conversacion(tid, cid)
+    await _turno(tid, otra, monkeypatch, ["¿A qué hora?"], texto="¿tienen espacio el jueves?")
+    d = await _decision(tid, otra)
+    assert d["route_source"] == "trigger" and d["active_instance_id"] == str(inst["agenda"])
+    assert d["candidates"][0] == {"procedure_id": CITA, "owner": "agenda", "score": d["candidates"][0]["score"]}
+
+    # Un saludo sigue con el General (el de siempre).
+    tercera = await _conversacion(tid, cid)
+    await _turno(tid, tercera, monkeypatch, ["Hola."], texto="hola, buenas tardes")
+    d = await _decision(tid, tercera)
+    assert d["route_source"] == "default" and d["active_instance_id"] == str(inst["general"])

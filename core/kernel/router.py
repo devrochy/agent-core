@@ -176,16 +176,37 @@ class _Release:
         ]
 
 
-def _elegir_dueno(candidatos: Sequence[AgenteCongelado], dueno: uuid.UUID | None, legacy: AgenteCongelado) -> AgenteCongelado | None:
-    """Entre varios especialistas que declaran el mismo procedimiento: el dueño vigente, luego el
-    de siempre, luego el primero por key."""
+def orden_de_duenos(
+    candidatos: Sequence[AgenteCongelado], generalista: uuid.UUID | None, dueno: uuid.UUID | None = None
+) -> list[AgenteCongelado]:
+    """Los especialistas que declaran un procedimiento, del más específico al menos: primero los
+    que declaran MENOS procedimientos (el General del lector tolerante declara los de todos los
+    packs, HU-AOS-46); entre empatados, el dueño vigente, luego el que no es el agente por
+    defecto de la conexión, luego por key."""
+    return sorted(
+        candidatos,
+        key=lambda a: (len(a.procedimientos or ()), a.instance_id != dueno, a.instance_id == generalista, a.key),
+    )
+
+
+def _elegir_dueno(
+    candidatos: Sequence[AgenteCongelado], dueno: uuid.UUID | None, generalista: uuid.UUID | None
+) -> AgenteCongelado | None:
+    """Entre varios especialistas que declaran el mismo procedimiento (ambigüedad con el General
+    de HU-AOS-46): el más específico (`orden_de_duenos`)."""
     if not candidatos:
         return None
-    for preferido in (dueno, legacy.instance_id):
-        elegido = next((a for a in candidatos if a.instance_id == preferido), None)
-        if elegido is not None:
-            return elegido
-    return sorted(candidatos, key=lambda a: a.key)[0]
+    return orden_de_duenos(candidatos, generalista, dueno)[0]
+
+
+def generalista(release: ReleaseCongelada, routing: Routing) -> uuid.UUID | None:
+    """El agente por defecto de la conexión: el `is_default` congelado (`release/2`) o, si no
+    hay, el de `routing.defaultAgent`."""
+    especialistas = [a for a in release.componentes if a.role == "specialist"]
+    elegido = next((a for a in especialistas if a.is_default), None) or next(
+        (a for a in especialistas if a.key == routing.defaultAgent), None
+    )
+    return elegido.instance_id if elegido is not None else None
 
 
 def decidir(
@@ -199,18 +220,19 @@ def decidir(
     """La ruta del turno. `legacy` es el foco de siempre (`elegir_foco`). `cambios_recientes`: los
     cambios de dueño en los últimos turnos (None = no se sabe, sin freno)."""
     r = _Release(release)
+    gen = generalista(release, routing)
     candidatos = _candidatos(release, routing, entrada) if entrada.tarea is None else ()
 
     # 1. Tarea en foco (con la excepción de las reglas sobre su etapa).
     if entrada.tarea is not None:
         for regla in routing.rules:
             if regla.when.flowStage is not None and cumple(regla, entrada):
-                ruta = _por_regla(r, regla, entrada, legacy, candidatos)
+                ruta = _por_regla(r, regla, entrada, legacy, candidatos, gen)
                 if ruta is not None:
                     return estabilizar(ruta, entrada, legacy, routing, cambios_recientes)
         tarea = entrada.tarea
         dueno = r.por_instancia.get(tarea.owner_instance_id) if tarea.owner_instance_id else None
-        dueno = dueno or _elegir_dueno(r.duenos_de(tarea.procedure_id), entrada.dueno, legacy)
+        dueno = dueno or _elegir_dueno(r.duenos_de(tarea.procedure_id), entrada.dueno, gen)
         return Ruta(
             agente=dueno or legacy,
             source="task",
@@ -221,7 +243,7 @@ def decidir(
     # 2. Reglas.
     for regla in routing.rules:
         if regla.when.flowStage is None and cumple(regla, entrada):
-            ruta = _por_regla(r, regla, entrada, legacy, candidatos)
+            ruta = _por_regla(r, regla, entrada, legacy, candidatos, gen)
             if ruta is not None:
                 return estabilizar(ruta, entrada, legacy, routing, cambios_recientes)
 
@@ -231,7 +253,7 @@ def decidir(
     puntajes = [Puntaje(c["procedure_id"], c["score"]) for c in candidatos]
     elegido = fuerte(puntajes, strong=routing.triggers.strongScore, margin=routing.triggers.margin)
     if elegido is not None:
-        agente = _elegir_dueno(r.duenos_de(elegido.procedure_id), entrada.dueno, legacy)
+        agente = _elegir_dueno(r.duenos_de(elegido.procedure_id), entrada.dueno, gen)
         if agente is not None:
             ruta = Ruta(
                 agente=agente,
@@ -247,7 +269,12 @@ def decidir(
 
 
 def _por_regla(
-    r: _Release, regla: RoutingRule, entrada: Entrada, legacy: AgenteCongelado, candidatos: tuple[dict[str, Any], ...]
+    r: _Release,
+    regla: RoutingRule,
+    entrada: Entrada,
+    legacy: AgenteCongelado,
+    candidatos: tuple[dict[str, Any], ...],
+    gen: uuid.UUID | None,
 ) -> Ruta | None:
     if regla.agent is not None:
         agente = r.por_key.get(regla.agent)
@@ -258,7 +285,7 @@ def _por_regla(
     assert regla.start is not None
     duenos = r.duenos_de(regla.start)
     if duenos:
-        agente = _elegir_dueno(duenos, entrada.dueno, legacy)
+        agente = _elegir_dueno(duenos, entrada.dueno, gen)
     elif not r.release.con_procedimientos_por_agente:
         agente = legacy  # `release/1`: sin procedimientos por agente, atiende el de siempre
     else:
@@ -465,10 +492,12 @@ __all__ = [
     "cumple",
     "decidir",
     "estabilizar",
+    "generalista",
     "guardar_payload",
     "leer_entrada",
     "modo_efectivo",
     "necesita",
+    "orden_de_duenos",
     "tarea_en_foco",
     "tomar_payload",
 ]

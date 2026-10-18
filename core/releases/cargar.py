@@ -164,20 +164,26 @@ class ReleaseCongelada:
 
     def indice_de_disparadores(self) -> tuple[Any, dict[str, str]]:
         """Índice léxico de los procedimientos publicados de los especialistas (con los ejemplos
-        de `procedures[].overrides.examples` de cada agente) y la key del dueño de cada uno (el
-        primero por key si lo declaran varios; el router elige entre ellos)."""
+        de `procedures[].overrides.examples` de cada agente) y la key del dueño de cada uno (el más
+        específico si lo declaran varios, `router.orden_de_duenos`; el router decide en cada turno)."""
         if self._indice is None:
             from core.kernel.disparadores import Indice, exponentes_de
 
             procs: dict[str, Procedure] = {}
             extras: dict[str, list[str]] = {}
             duenos: dict[str, str] = {}
-            for agente in sorted(self.componentes, key=lambda a: a.key):
-                if agente.role != "specialist":
-                    continue
+            from core.kernel.router import generalista, orden_de_duenos
+
+            gen = generalista(self, self.ruteo())
+            # Del más específico al menos (el General declara los de todos): el primero que
+            # declara un procedimiento es el dueño que se muestra en `candidates`.
+            for agente in orden_de_duenos([a for a in self.componentes if a.role == "specialist"], gen):
                 for pid, proc in self.procedimientos_de(agente.instance_id).items():
                     procs.setdefault(pid, proc)
                     duenos.setdefault(pid, agente.key)
+            for agente in self.componentes:
+                if agente.role != "specialist":
+                    continue
                 for ref in agente.content.get("procedures") or []:
                     if not isinstance(ref, Mapping) or ref.get("id") not in procs:
                         continue

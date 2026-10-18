@@ -94,11 +94,22 @@ Fuente única: el **KernelSpec del Coordinador** (`kernelspec/1`, `routing`), qu
 
 - `rules[].agent` = `agents.key` de un especialista instanciado en la conexión; `rules[].start` = id de un
   procedimiento que declara (en `procedures`) algún especialista de la conexión. Si no, el build falla.
-- El **dueño de un procedimiento** es el especialista que lo declara en `procedures`; si lo declaran varios,
-  gana el dueño vigente, luego el de siempre, luego el primero por key.
+- El **dueño de un procedimiento** es el especialista que lo declara en `procedures`. Si lo declaran varios
+  (con los presets v2 el General, por defecto, declara también los de Ventas, Agenda y Suscripciones), gana el
+  **más específico**: el que declara menos procedimientos; entre empatados, el dueño vigente, luego el que no es
+  el agente por defecto, luego por key. *Decisión revisable, conservadora:* no se quita nada al General (sigue
+  atendiendo lo que solo él declara y los saludos); solo deja de «ganar» los procedimientos que un especialista
+  también declara.
 - Ejemplos propios de un agente: `procedures[].overrides.examples` del AgentSpec v3 (suman a los del pack).
 - `is_default` de la instancia y `defaultAgent` siguen siendo dos fuentes; gana `is_default` (adenda HU-AOS-16 de
-  ADR-0117). Un preset coherente pone los dos iguales.
+  ADR-0117). Un preset coherente pone los dos iguales. **No se unifican en esta HU** (revisable): hacerlo exige
+  que el build rechace la diferencia (rompería a un dueño que cambió `is_default` por la API sin publicar el
+  Coordinador) o reescribir el KernelSpec al cambiar la instancia (otra versión del Coordinador por cada
+  cambio). Lo conservador es que `is_default` sea la fuente por conexión y `defaultAgent` solo el respaldo de una
+  `release/1`; retirarlo del contrato va con el próximo major de `kernelspec`.
+- Verificado de punta a punta con el preset `suscripciones` v2 (`presets-v2 --aplicar`): las reglas `preset_*`
+  (`keywordAny`) pasan el build y «quiero agendar una demo» la atiende Agenda (`rule`); sin palabra de regla,
+  «¿tienen espacio el jueves?» también (`trigger`), aunque el General declare `agendar_cita`.
 - Encender: `agent-core db ruteo --tenant X --modo shadow`; una semana y `reporte-ruteo` antes de `active`.
 
 ## Consecuencias

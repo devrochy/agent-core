@@ -201,3 +201,28 @@ def test_payload_en_redis_con_el_negocio_primero(monkeypatch: Any) -> None:
     assert clave == f"aos:ruteo:payload:{t}:{c}" and len(valor) == router.MAX_PAYLOAD and ex <= 300
     assert asyncio.run(router.tomar_payload(t, c)).startswith("plan:")
     assert asyncio.run(router.tomar_payload(t, c)) == ""  # se consume una vez
+
+
+def test_el_general_que_declara_todo_no_le_quita_el_procedimiento_al_especialista() -> None:
+    """HU-AOS-46: el General (por defecto) declara los procedimientos de todos los packs."""
+    general = _agente("general", [PLAN, CITA, "pack_commerce.tomar_pedido"], defecto=True)
+    agenda = _agente("agenda", [CITA])
+    rel: Any = _Release(general, agenda)
+    routing = Routing.model_validate({})
+    # Aunque el dueño vigente sea el General, el disparador de agenda va a Agenda.
+    ruta = decidir(rel, routing, Entrada(texto="quiero agendar una demo", dueno=general.instance_id), general)
+    assert (ruta.agente, ruta.source) == (agenda, "trigger")
+    # Un procedimiento que solo el General declara sigue siendo suyo.
+    ruta = decidir(rel, routing, Entrada(texto="quiero el plan premium", dueno=general.instance_id), general)
+    assert (ruta.agente, ruta.source) == (general, "trigger")
+    # Si el dueño vigente es otro especialista que lo declara, se queda con él.
+    otra = _agente("agenda2", [CITA])
+    rel2: Any = _Release(general, agenda, otra)
+    ruta = decidir(rel2, routing, Entrada(texto="quiero agendar una demo", dueno=otra.instance_id), otra)
+    assert ruta.agente == otra
+    assert router.orden_de_duenos([general, agenda], general.instance_id)[0] == agenda
+    # Al revés (Ventas por defecto y un General que declara todo): sigue ganando el específico.
+    ventas = _agente("ventas", [PLAN], defecto=True)
+    general2 = _agente("general", [PLAN, CITA])
+    assert router.orden_de_duenos([general2, ventas], ventas.instance_id, general2.instance_id)[0] == ventas
+    assert router.generalista(rel, routing) == general.instance_id

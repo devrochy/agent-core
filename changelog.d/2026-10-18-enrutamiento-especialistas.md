@@ -13,3 +13,6 @@
 - El build de la release rechaza reglas que apuntan a un agente o procedimiento que no está (`ruteo_invalido`).
 - Las tareas que inicia el motor llevan como dueño al especialista del turno.
 - Golden de ruteo de 80 casos (`tests/fixtures/ruteo/golden.jsonl`). Con la bandera apagada no cambia nada.
+- Con los presets v2 (HU-AOS-46) el General también declara los procedimientos de los especialistas: el
+  router le da cada procedimiento al especialista más específico (el que declara menos). Probado de punta a
+  punta con el preset `suscripciones` v2 y el ruteo en `active`.
