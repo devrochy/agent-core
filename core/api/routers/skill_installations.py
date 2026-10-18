@@ -117,7 +117,7 @@ async def create_installation(
 ) -> SkillInstallation:
     tid = await _puede_escribir(principal)
     # Un pack inexistente responde igual que uno no habilitado (no revela el catálogo).
-    habilitados = set(enabled_business_packs(await load_active_spec()))
+    habilitados = set(enabled_business_packs(await load_active_spec(tid)))
     try:
         vista, creada = await svc.instalar_en_conexion(
             tid,

@@ -177,6 +177,15 @@ async def instalar_en_conexion(
         ).scalar_one_or_none()
         if existente is not None:
             return _vista(existente), False
+        # El trigger contra plugins privados ajenos lanza P0001 (no `IntegrityError`): se mira
+        # antes, con el mismo mensaje que un pack no disponible.
+        dueno = (
+            await session.execute(
+                text("SELECT owner_tenant_id FROM plugins WHERE id = :p"), {"p": pack_id}
+            )
+        ).first()
+        if dueno is None or (dueno[0] is not None and dueno[0] != tenant_id):
+            raise ConflictoInstalacion("pack_unavailable", "La habilidad no está disponible para este negocio.")
         # Mismo conteo que `instaladas_en_conexion`, en esta sesión (con la conexión bloqueada).
         vivas = (
             await session.execute(
