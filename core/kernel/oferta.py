@@ -11,11 +11,19 @@ las candidatas del motor):
   bandera, aunque un flujo del negocio la nombre. Si la bandera no se puede leer, no se ofrece.
 
 Leen la bandera del negocio del contexto (`get_current_tenant_id()`) en cada evaluación.
+
+HU-AOS-16 (fail-closed por agente y por scope, ADR-0118 §2 y §3): con una release en el turno y
+el motor activo, `ofrecidas_para_el_agente` deja pasar solo las acciones de las habilidades de
+la release y, de ellas, las del core, los comandos del hilo, las de la etapa en foco y las que
+la versión del agente en foco declara (`tools` habilitadas y sus `declarativeTools`). Es una
+sola regla para cualquier agente: el General del lector tolerante declara todas las que hoy
+ofrece el loop, así nada cambia hasta que el dueño cree especialistas.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
+from typing import Any
 
 from core.shared.logger import get_logger
 
@@ -44,6 +52,65 @@ async def motor_activo() -> bool | None:
     except Exception:
         log.warning("oferta_bandera_ilegible", exc_info=True)
         return None
+
+
+CORE_OWNER = "core"
+# `plugin_id` de las tools declarativas del negocio (`core.mcp.declarative.PLUGIN_ID`): no son de
+# un pack, así que el scope de la release no las filtra; solo lo que declara el agente.
+DECLARATIVA = "declarative"
+
+
+def permitida_para_el_agente(
+    nombre: str,
+    plugin_id: str | None,
+    *,
+    packs: Iterable[str] | None,
+    del_agente: Iterable[str] | None,
+    de_la_etapa: Iterable[str] = (),
+    comandos: Iterable[str] = (),
+) -> bool:
+    """¿La acción `nombre` (de `plugin_id`; None, "" o `declarative` = declarativa del negocio) se ofrece al agente?
+    `packs`: habilidades de la release (None = sin release: todo pasa). `del_agente`: lo que su
+    versión declara (None = sin agente en foco: todo pasa)."""
+    if plugin_id == CORE_OWNER or nombre in set(comandos):
+        return True
+    de_un_pack = plugin_id not in (None, "", DECLARATIVA)
+    if packs is not None and de_un_pack and plugin_id not in set(packs):
+        return False
+    if del_agente is None:
+        return True
+    return nombre in set(del_agente) or nombre in set(de_la_etapa)
+
+
+def ofrecidas_para_el_agente(
+    tools: Iterable[Any],
+    *,
+    packs: Iterable[str] | None,
+    del_agente: Iterable[str] | None,
+    de_la_etapa: Iterable[str] = (),
+    comandos: Iterable[str] = (),
+) -> list[Any]:
+    """Las `tools` (objetos con `name` y `plugin_id`) que pasan `permitida_para_el_agente`."""
+    return [
+        t
+        for t in tools
+        if permitida_para_el_agente(
+            t.name,
+            getattr(t, "plugin_id", None),
+            packs=packs,
+            del_agente=del_agente,
+            de_la_etapa=de_la_etapa,
+            comandos=comandos,
+        )
+    ]
+
+
+def declaradas_por(agente: Any) -> frozenset[str] | None:
+    """Lo que la versión de un `AgenteCongelado` declara: `tools` habilitadas y declarativas.
+    None sin agente (sin release en el turno)."""
+    if agente is None:
+        return None
+    return frozenset(agente.tools) | frozenset(agente.declarativas)
 
 
 def sin_motor_activo(predicado: Predicado | None = None) -> Predicado:

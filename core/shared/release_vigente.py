@@ -7,6 +7,8 @@ Con `tenants.aos_runtime = 'v3'` el kernel asigna a la conversación una release
 KernelSpec. Con `legacy` la ranura queda vacía y todo se lee como siempre.
 HU-AOS-15: también las versiones congeladas de los agentes (`agentes`, `foco`): el loop
 ejecuta la del especialista en foco y el KernelSpec del Coordinador en vez del v2.
+HU-AOS-16: los procedimientos congelados de la release y, por agente, los que su versión
+declara; `procedimientos_del_agente` deriva del mismo `foco`.
 
 Módulo hoja (solo importa `core.shared.tenant`): lo leen `core.agents.playbooks`, `core.agents.flow` y
 `core.kernel.tarjeta`, y así no se arma el ciclo agents → kernel → releases → agents.
@@ -46,6 +48,31 @@ class AgenteCongelado:
     version: int
     contract: str
     content: Mapping[str, Any]
+    # HU-AOS-16 (`release/2`): el agente por defecto de la conexión, congelado, y los
+    # procedimientos que su versión declara resueltos en el build a `(id, versión exacta)`.
+    # En una `release/1` no vienen: `is_default` False y `procedimientos` None (regla
+    # transitoria de HU-AOS-05).
+    is_default: bool = False
+    procedimientos: tuple[tuple[str, str], ...] | None = None
+
+    @property
+    def tools(self) -> frozenset[str]:
+        """Acciones que la versión declara en `tools` (habilitadas): el consentimiento del
+        agente (ADR-0118 §3). Vacío para el Coordinador."""
+        return frozenset(
+            str(t.get("tool"))
+            for t in self.content.get("tools") or []
+            if isinstance(t, Mapping) and t.get("enabled", True) and isinstance(t.get("tool"), str)
+        )
+
+    @property
+    def declarativas(self) -> frozenset[str]:
+        """Nombres de las tools declarativas que la versión declara."""
+        return frozenset(
+            str(t.get("name"))
+            for t in self.content.get("declarativeTools") or []
+            if isinstance(t, Mapping) and isinstance(t.get("name"), str)
+        )
 
     @property
     def write_namespaces(self) -> frozenset[str]:
@@ -76,6 +103,13 @@ class ArtefactosDeRelease:
     playbooks: Mapping[str, str] = field(default_factory=dict)
     # Secciones crudas del `flow.json` del negocio (lo que lee `load_tenant_flow`), o None.
     flow_tenant: Any = None
+    # HU-AOS-16: los procedimientos congelados de TODA la release por id (`Procedure`; incluye
+    # los abiertos `0.0.0`, que solo sirven a la revalidación) y, por `instance_id` de cada
+    # componente, sus procedimientos publicados resueltos (sin los abiertos). El agente al que
+    # se aplican es el `foco` de HU-AOS-15. None en `procedimientos_por_agente` para una
+    # release `release/1`: rige la regla transitoria de HU-AOS-05 (procedimientos del binario).
+    procedimientos: Mapping[str, Any] = field(default_factory=dict)
+    procedimientos_por_agente: Mapping[uuid.UUID, Mapping[str, Any]] | None = None
 
 
 @dataclass
@@ -159,6 +193,18 @@ def write_namespaces_del_turno() -> frozenset[str] | None:
     return None
 
 
+def procedimientos_del_agente() -> Mapping[str, Any] | None:
+    """Los procedimientos publicados del especialista en foco (`agente_del_turno`, id →
+    `Procedure`). None sin release o con una release `release/1` (regla transitoria); vacío con
+    `release/2` sin agente en foco (fail-closed: ningún procedimiento)."""
+    actual = vigente()
+    if actual is None or actual.procedimientos_por_agente is None:
+        return None
+    if actual.foco is None:
+        return {}
+    return actual.procedimientos_por_agente.get(actual.foco.instance_id, {})
+
+
 def idle_minutes(defecto: int) -> int:
     """`episode.idleMinutes` de la release del turno; `defecto` sin release."""
     actual = vigente()
@@ -191,6 +237,7 @@ __all__ = [
     "idle_minutes",
     "kernel_del_turno",
     "marcar_v3_sin_release",
+    "procedimientos_del_agente",
     "vigente",
     "write_namespaces_del_turno",
 ]

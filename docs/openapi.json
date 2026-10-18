@@ -2494,7 +2494,7 @@
           "admin · habilidades"
         ],
         "summary": "Plugin Action",
-        "description": "Habilita/deshabilita el pack para el tenant, o limpia su salud de error.\n\nHabilitar aplica la cuota del plan; deshabilitar no toca a otros tenants; y\n`retry` reinicia la salud (ADR-0024). Reusa el servicio del panel SSR.",
+        "description": "Habilita/deshabilita el pack para el tenant, o limpia su salud de error.\n\nHabilitar aplica la cuota del plan (409 `plan_limit_plugins` con `used`/`limit` y\n`enabled: false`: nada cambia y `GET /admin/plugins` la sigue mostrando deshabilitada);\ndeshabilitar no toca a otros tenants; y `retry` reinicia la salud (ADR-0024). Reusa el\nservicio del panel SSR.",
         "operationId": "plugin_action_api_v1_admin_plugins__plugin_id__action_post",
         "parameters": [
           {
@@ -2536,6 +2536,9 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "409": {
+            "description": "El plan no permite habilitar más habilidades: `error.code = plan_limit_plugins`, `error.details = {metric, used, limit, enabled: false}`; la habilidad queda deshabilitada."
           },
           "422": {
             "description": "Validation Error",
@@ -2662,6 +2665,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "El plan no permite habilitar más habilidades: `error.code = plan_limit_plugins`, `error.details = {metric, used, limit, enabled: false}`; la habilidad queda deshabilitada."
           },
           "422": {
             "description": "Validation Error",
@@ -4603,6 +4609,7 @@
           "admin · meta"
         ],
         "summary": "Sync Connection Templates",
+        "description": "Sincroniza las plantillas con Meta ahora mismo (sin el candado horario del cron).\n\n429 `sync_rate_limited`: ya se sincronizó a mano hace menos de un minuto. 400 `sync_failed`:\nMeta rechazó la consulta (el mensaje trae el motivo).",
         "operationId": "sync_connection_templates_api_v1_admin_meta_connections__connection_id__templates_sync_post",
         "parameters": [
           {
@@ -4655,7 +4662,7 @@
           "admin · meta"
         ],
         "summary": "Delete Connection Template",
-        "description": "Borra TODAS las versiones de idioma de la plantilla.",
+        "description": "Borra TODAS las versiones de idioma de la plantilla.\n\n409 `template_not_deletable`: Meta no permite borrarla (sus plantillas de ejemplo); la\nplantilla sigue como estaba. 404 `not_found` si no es de este negocio.",
         "operationId": "delete_connection_template_api_v1_admin_meta_connections__connection_id__templates__template_id__delete_post",
         "parameters": [
           {
@@ -4854,7 +4861,7 @@
           "admin · meta"
         ],
         "summary": "Meta Connection Action",
-        "description": "Activa, desactiva o elimina (soft-delete) una conexión de Meta.",
+        "description": "Activa, desactiva o elimina (soft-delete) una conexión de Meta.\n\n`primary` responde 409 `primary_not_applicable` con la explicación: la primacía es el respaldo\nde credenciales de las conexiones manuales (ADR-0069); una cuenta de Meta resuelve las suyas y su\nconexión canónica nace y queda con `is_primary = false` (ADR-0115 §1).",
         "operationId": "meta_connection_action_api_v1_admin_meta_connections__connection_id__action_post",
         "parameters": [
           {
@@ -8542,7 +8549,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/BrainSettings"
+                "$ref": "#/components/schemas/BrainUpdate"
               }
             }
           }
@@ -8713,7 +8720,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MemorySettings"
+                "$ref": "#/components/schemas/MemoryUpdate"
               }
             }
           }
@@ -17047,6 +17054,200 @@
         }
       }
     },
+    "/api/v1/admin/skills/installations": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · habilidades"
+        ],
+        "summary": "List Installations",
+        "operationId": "list_installations_api_v1_admin_skills_installations_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SkillInstallation"
+                  },
+                  "title": "Response List Installations Api V1 Admin Skills Installations Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "admin · habilidades"
+        ],
+        "summary": "Create Installation",
+        "description": "Instala una habilidad solo para una conexión; 200 si ya estaba. Aplica con la próxima release de la conexión.",
+        "operationId": "create_installation_api_v1_admin_skills_installations_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillInstallationCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillInstallation"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillInstallation"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/skills/installations/{installation_id}": {
+      "delete": {
+        "tags": [
+          "api",
+          "admin · habilidades"
+        ],
+        "summary": "Delete Installation",
+        "description": "Quita la instalación. Aplica con la próxima release de la conexión.",
+        "operationId": "delete_installation_api_v1_admin_skills_installations__installation_id__delete",
+        "parameters": [
+          {
+            "name": "installation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Installation Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/collaborators/{admin_id}/unlink": {
       "post": {
         "tags": [
@@ -18553,6 +18754,8 @@
           },
           "sort_order": {
             "type": "integer",
+            "maximum": 100000.0,
+            "minimum": 0.0,
             "title": "Sort Order",
             "default": 0
           }
@@ -19830,6 +20033,8 @@
           },
           "precio": {
             "type": "number",
+            "maximum": 999999999999.0,
+            "minimum": 0.0,
             "title": "Precio",
             "description": "Valor del período.",
             "default": 0
@@ -19846,6 +20051,8 @@
           },
           "trial_dias": {
             "type": "integer",
+            "maximum": 365.0,
+            "minimum": 0.0,
             "title": "Trial Dias",
             "description": "Días de prueba (0 = sin prueba).",
             "default": 0
@@ -21047,6 +21254,8 @@
           },
           "guardrail_max_retries": {
             "type": "integer",
+            "maximum": 5.0,
+            "minimum": 0.0,
             "title": "Guardrail Max Retries",
             "default": 1
           },
@@ -21075,16 +21284,22 @@
           },
           "difficulty_long_message_threshold": {
             "type": "integer",
+            "maximum": 5000.0,
+            "minimum": 50.0,
             "title": "Difficulty Long Message Threshold",
             "default": 400
           },
           "difficulty_turnos_sin_resolver_threshold": {
             "type": "integer",
+            "maximum": 20.0,
+            "minimum": 1.0,
             "title": "Difficulty Turnos Sin Resolver Threshold",
             "default": 2
           },
           "difficulty_score_threshold": {
             "type": "integer",
+            "maximum": 10.0,
+            "minimum": 1.0,
             "title": "Difficulty Score Threshold",
             "default": 2
           },
@@ -21103,6 +21318,8 @@
           },
           "auto_escalate_after_turns": {
             "type": "integer",
+            "maximum": 1000.0,
+            "minimum": 0.0,
             "title": "Auto Escalate After Turns",
             "default": 0
           },
@@ -21113,6 +21330,8 @@
           },
           "persona_warmth": {
             "type": "integer",
+            "maximum": 5.0,
+            "minimum": 0.0,
             "title": "Persona Warmth",
             "default": 3
           },
@@ -21123,6 +21342,8 @@
           },
           "persona_max_length": {
             "type": "integer",
+            "maximum": 10000.0,
+            "minimum": 0.0,
             "title": "Persona Max Length",
             "default": 500
           },
@@ -22111,7 +22332,8 @@
             "enum": [
               "activate",
               "deactivate",
-              "delete"
+              "delete",
+              "primary"
             ],
             "title": "Action"
           }
@@ -24592,11 +24814,15 @@
           },
           "price": {
             "type": "number",
+            "maximum": 9999999999.0,
+            "minimum": 0.0,
             "title": "Price",
             "default": 0
           },
           "stock": {
             "type": "integer",
+            "maximum": 1000000000.0,
+            "minimum": 0.0,
             "title": "Stock",
             "default": 0
           },
@@ -24620,7 +24846,9 @@
           "trial_days": {
             "anyOf": [
               {
-                "type": "integer"
+                "type": "integer",
+                "maximum": 365.0,
+                "minimum": 0.0
               },
               {
                 "type": "null"
@@ -27051,21 +27279,29 @@
         "properties": {
           "max_dias_prorroga": {
             "type": "integer",
+            "maximum": 365.0,
+            "minimum": 0.0,
             "title": "Max Dias Prorroga",
             "default": 15
           },
           "min_abono_pct": {
             "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
             "title": "Min Abono Pct",
             "default": 10.0
           },
           "max_reprogramaciones": {
             "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
             "title": "Max Reprogramaciones",
             "default": 2
           },
           "umbral_saldo_autonomo": {
             "type": "number",
+            "maximum": 999999999999.0,
+            "minimum": 0.0,
             "title": "Umbral Saldo Autonomo",
             "default": 0.0
           },
@@ -28139,6 +28375,8 @@
           },
           "extend_days": {
             "type": "integer",
+            "maximum": 3660.0,
+            "minimum": 0.0,
             "title": "Extend Days",
             "default": 0
           }
@@ -28423,6 +28661,8 @@
           },
           "duration_minutes": {
             "type": "integer",
+            "maximum": 1440.0,
+            "minimum": 1.0,
             "title": "Duration Minutes",
             "default": 60
           },
@@ -28950,6 +29190,11 @@
               }
             ],
             "title": "Registrationerror"
+          },
+          "reused": {
+            "type": "boolean",
+            "title": "Reused",
+            "default": false
           }
         },
         "type": "object",
@@ -30526,6 +30771,14 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Content"
+          },
+          "procedures": {
+            "items": {
+              "$ref": "#/components/schemas/ResolvedProcedure"
+            },
+            "type": "array",
+            "title": "Procedures",
+            "default": []
           }
         },
         "type": "object",
@@ -31371,6 +31624,213 @@
           "contenido"
         ],
         "title": "QaMisDatos"
+      },
+      "ResolvedProcedure": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "range": {
+            "type": "string",
+            "title": "Range"
+          },
+          "resolved_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Version"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "range",
+          "resolved_version",
+          "problem"
+        ],
+        "title": "ResolvedProcedure"
+      },
+      "SkillInstallation": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "pack_id": {
+            "type": "string",
+            "title": "Pack Id"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "tenant",
+              "connection"
+            ],
+            "title": "Scope"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "installed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Installed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "pack_id",
+          "scope",
+          "connection_id",
+          "status",
+          "installed_at"
+        ],
+        "title": "SkillInstallation"
+      },
+      "SkillInstallationCreate": {
+        "properties": {
+          "pack_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]{1,60}$",
+            "title": "Pack Id"
+          },
+          "scope": {
+            "type": "string",
+            "const": "connection",
+            "title": "Scope",
+            "default": "connection"
+          },
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "pack_id",
+          "connection_id"
+        ],
+        "title": "SkillInstallationCreate"
+      },
+      "BrainUpdate": {
+        "properties": {
+          "model_primary": {
+            "type": "string",
+            "title": "Model Primary"
+          },
+          "model_fallback": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Fallback"
+          },
+          "model_router": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Router"
+          },
+          "model_temperature": {
+            "type": "number",
+            "maximum": 2.0,
+            "minimum": 0.0,
+            "title": "Model Temperature",
+            "default": 0.3
+          },
+          "policy_max_tool_calls": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Policy Max Tool Calls",
+            "default": 10
+          },
+          "policy_budget": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Policy Budget",
+            "default": 0.5
+          }
+        },
+        "type": "object",
+        "required": [
+          "model_primary"
+        ],
+        "title": "BrainUpdate",
+        "description": "Entrada de `PUT /brain`: mismos rangos que recorta `save_brain` (temperatura 0–2,\n1–50 llamadas a tools por turno, presupuesto ≥ 0); fuera de rango responde 422."
+      },
+      "MemoryUpdate": {
+        "properties": {
+          "short_term_turns": {
+            "type": "integer",
+            "maximum": 200.0,
+            "minimum": 1.0,
+            "title": "Short Term Turns"
+          },
+          "rag_top_k": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 0.0,
+            "title": "Rag Top K"
+          },
+          "rag_min_score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Rag Min Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "short_term_turns",
+          "rag_top_k",
+          "rag_min_score"
+        ],
+        "title": "MemoryUpdate",
+        "description": "Entrada de `PUT /memory`: turnos de contexto 1–200, top-k 0–20 (0 = sin RAG) y\numbral 0–1 (los rangos de `save_memory`); fuera de rango responde 422."
       },
       "UnlinkRequest": {
         "properties": {

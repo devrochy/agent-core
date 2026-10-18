@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from core.api.deps import Principal, require
@@ -75,7 +75,7 @@ class TypeOut(BaseModel):
 
 class TypeSave(BaseModel):
     name: str
-    duration_minutes: int = 60
+    duration_minutes: int = Field(default=60, ge=1, le=1440)
     description: str = ""
     responsable_admin_id: uuid.UUID | None = None
     enlace_reunion: str = ""

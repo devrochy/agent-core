@@ -37,6 +37,8 @@ MENSAJES = {
     "argumento_ligado": ("dato",),
     "dato_bloqueado": ("dato",),
     "sin_recorrido": ("accion", "procedimientos"),
+    # HU-AOS-16: fail-closed por agente y por scope de la conexión.
+    "fuera_del_agente": ("accion",),
     # Adenda 2026-10-12 de ADR-0113 (confirmaciones de datos visibles).
     "fuera_de_etapa_falta": ("accion", "etapa", "faltas"),
     "dato_no_dicho": ("dato",),

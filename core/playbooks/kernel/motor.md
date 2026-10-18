@@ -46,4 +46,5 @@ El valor de {dato} no aparece en lo que escribió el cliente en esta conversaci�
 La confirmación que se le pidió al cliente ya venció (pasó más de un turno). Vuelve a llamar {accion} con los mismos datos: el sistema le pedirá la confirmación de nuevo.
 ## confirmacion_repedida
 La confirmación que se le pidió al cliente ya venció (pasó más de un turno): el sistema se la vuelve a pedir con su propio mensaje. No la pidas tú ni la des por hecha.
-
+## fuera_del_agente
+La acción {accion} no está disponible para este agente en esta conexión. No insistas con ella: resuelve con las acciones ofrecidas o, si el cliente necesita otra cosa, díselo y sigue con lo que falta.

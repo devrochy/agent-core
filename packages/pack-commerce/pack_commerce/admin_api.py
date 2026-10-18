@@ -16,7 +16,7 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, File, Response, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from core.api.deps import Principal, require
@@ -132,11 +132,13 @@ class ProductSave(BaseModel):
     description: str = ""
     category_id: uuid.UUID | None = None
     sku: str = ""
-    price: float = 0
-    stock: int = 0
+    # Precio, stock y días de prueba nunca negativos (422 con el campo marcado). Topes: lo que
+    # cabe en la columna (`Numeric(12, 2)`, `Integer`) para no terminar en un 500 de la base.
+    price: float = Field(default=0, ge=0, le=9_999_999_999, allow_inf_nan=False)
+    stock: int = Field(default=0, ge=0, le=1_000_000_000)
     # HU-SUB-09: plan recurrente. None = no cambia; "" = no es recurrente.
     billing_period: Literal["mensual", "trimestral", "anual", ""] | None = None
-    trial_days: int | None = None
+    trial_days: int | None = Field(default=None, ge=0, le=365)
 
 
 async def _validar_plan(tenant_id: uuid.UUID | None, payload: ProductSave, ya_recurrente: bool) -> None:
@@ -325,7 +327,7 @@ class CategorySave(BaseModel):
     category_id: uuid.UUID | None = None
     name: str
     parent_id: uuid.UUID | None = None
-    sort_order: int = 0
+    sort_order: int = Field(default=0, ge=0, le=100_000)
 
 
 @router.get("/categories", response_model=list[CategoryOut])

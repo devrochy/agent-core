@@ -141,9 +141,11 @@ Revisada por el agente `arquitecto` antes de escribir código. No cambia contrat
   compara los hashes con `packages/pack-versions.lock.json` (`scripts/pack_versions_lock.py`): cambiar el
   contenido de un pack exige subir su versión.
 - **Pendiente para la segunda parte (decisión del dueño):** candidatas `origin = platform` al registrarse una
-  versión nueva de una habilidad y la promoción directa por `yanked`. Hasta que el runtime lea el contenido
+  versión nueva de una habilidad y la promoción directa por `yanked`. ~~Hasta que el runtime lea el contenido
   del pack desde `pack_versions` (HU-AOS-16) la candidata y la activa correrían el mismo contenido del
-  binario. Si van antes, cada candidata se deriva del manifiesto de la release activa cambiando solo esa
+  binario.~~ HU-AOS-16 parte 1 (adenda en ADR-0118): la release ya lee desde `pack_versions` los
+  procedimientos publicados de la versión congelada; el flujo y los playbooks del pack siguen saliendo
+  del binario hasta la parte 2. Si van antes, cada candidata se deriva del manifiesto de la release activa cambiando solo esa
   entrada, no de un build nuevo.
 - **Rutas:** viven en `/api/v1/admin/connections/{id}/releases` y `/rollback` por el realm (ADR-0077 §2).
 
@@ -181,7 +183,7 @@ sin `AOS_CONNECTION_ROUTING`) nada cambia: el gate en replay pasa sin regrabar.
   `owner_since` desde cuándo; `asignar` nunca escribe un handoff (dos fases, HU-AOS-19). El Coordinador
   nunca atiende (ADR-0112 §1). El router (`route_source ≠ default`) y el fail-closed de ADR-0118 §3 llegan
   con HU-AOS-17; `is_default` de la instancia y `routing.defaultAgent` siguen siendo dos fuentes hasta
-  entonces (hoy manda el KernelSpec).
+  entonces (hoy manda el KernelSpec). *Actualizado por HU-AOS-16, ver su sección al final.*
 - **`writeNamespaces` se aplica:** `ToolContext.write_namespaces` = `memory.writeNamespaces` del agente en
   foco (`new_tool_context`, HU-AOS-36): un agente sin `perfil` no puede guardar datos del cliente. En legacy
   sigue `None` (sin chequeo).
@@ -216,3 +218,15 @@ sin `AOS_CONNECTION_ROUTING`) nada cambia: el gate en replay pasa sin regrabar.
   legacy (`save_spec_version`, `activate_spec_version`) deja de tener efecto en un negocio v3 hasta
   construir una release; los clamps del lector tolerante (`maxLength`, `shortTermTurns`…) cambian un v2
   fuera de rango; `modelPolicy` del KernelSpec sigue sin leerse (ADR-0132 la toma de código).
+
+## Adenda HU-AOS-16: `is_default` en la elección del foco (2026-10-18)
+
+Al integrar HU-AOS-16 con HU-AOS-15 queda un solo modelo de agentes de la release
+(`AgenteCongelado`) y una sola elección del foco (`elegir_foco`). Con `release/2` cada componente
+congela `is_default` (el agente por defecto de la conexión), así que el orden pasa a ser:
+(1) el dueño vigente; (2) el especialista `is_default` de la release; (3) el `routing.defaultAgent`
+del KernelSpec; (4) el único especialista; si no, `ErrorDeRelease`. En una `release/1` no hay
+`is_default` y la elección es la de HU-AOS-15. **Decisión tomada, revisable:** la configuración de la
+conexión (más específica y explícita del dueño) gana sobre el `defaultAgent` del KernelSpec, que el
+lector tolerante fija siempre en `general`; HU-AOS-17 puede unificar las dos fuentes.
+
