@@ -119,10 +119,12 @@ def agente_en_foco() -> Any | None:
 
 def procedimientos_del_agente() -> Mapping[str, Any] | None:
     """Los procedimientos publicados del agente en foco (id → `Procedure`). None sin release,
-    con una release `release/1` (regla transitoria) o sin agente en foco."""
+    con una release `release/1` (regla transitoria); vacío con `release/2` sin agente en foco."""
     actual = vigente()
-    if actual is None or actual.procedimientos_por_agente is None or actual.agente_en_foco is None:
+    if actual is None or actual.procedimientos_por_agente is None:
         return None
+    if actual.agente_en_foco is None:
+        return {}  # release sin especialista: fail-closed, ningún procedimiento
     return actual.procedimientos_por_agente.get(actual.agente_en_foco, {})
 
 

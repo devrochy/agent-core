@@ -23,7 +23,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from core.agents.secretos import CORE_INSTALLATION_PACK
@@ -89,7 +89,7 @@ async def _conexion_conversacional(session, tenant_id: uuid.UUID, connection_id:
             text(
                 "SELECT ct.produces_conversations FROM channel_connections cc "
                 "LEFT JOIN connection_types ct ON ct.id = cc.type_id "
-                "WHERE cc.tenant_id = :t AND cc.id = :c AND cc.deleted_at IS NULL"
+                "WHERE cc.tenant_id = :t AND cc.id = :c AND cc.deleted_at IS NULL FOR UPDATE OF cc"
             ),
             {"t": tenant_id, "c": connection_id},
         )
@@ -177,7 +177,20 @@ async def instalar_en_conexion(
         ).scalar_one_or_none()
         if existente is not None:
             return _vista(existente), False
-        vivas = len(await instaladas_en_conexion(tenant_id, connection_id))
+        # Mismo conteo que `instaladas_en_conexion`, en esta sesión (con la conexión bloqueada).
+        vivas = (
+            await session.execute(
+                select(func.count())
+                .select_from(PackInstallationRecord)
+                .where(
+                    PackInstallationRecord.tenant_id == tenant_id,
+                    PackInstallationRecord.scope == SCOPE_CONEXION,
+                    PackInstallationRecord.connection_id == connection_id,
+                    PackInstallationRecord.pack_id != CORE_INSTALLATION_PACK,
+                    PackInstallationRecord.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one()
         if vivas >= MAX_POR_CONEXION:
             raise ConflictoInstalacion("too_many", f"La conexión ya tiene {MAX_POR_CONEXION} habilidades.")
         fila = PackInstallationRecord(
@@ -202,7 +215,9 @@ async def instalar_en_conexion(
     return vista, True
 
 
-async def desinstalar(tenant_id: uuid.UUID, installation_id: uuid.UUID) -> InstalacionVista:
+async def desinstalar(
+    tenant_id: uuid.UUID, installation_id: uuid.UUID, *, actor: uuid.UUID | None = None
+) -> InstalacionVista:
     """Borrado lógico de una instalación de conexión. La `core` de secretos no se toca."""
     _exigir_scope(tenant_id)
     async with get_session() as session:
@@ -224,7 +239,12 @@ async def desinstalar(tenant_id: uuid.UUID, installation_id: uuid.UUID) -> Insta
         fila.deleted_at = utcnow()
         await session.flush()
         vista = _vista(fila)
-    log.info("installation_removed", pack_id=vista.pack_id, connection_id=str(vista.connection_id))
+    log.info(
+        "installation_removed",
+        pack_id=vista.pack_id,
+        connection_id=str(vista.connection_id),
+        actor=str(actor) if actor else None,
+    )
     return vista
 
 

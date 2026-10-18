@@ -40,7 +40,14 @@ def major(texto: str) -> int:
 
 
 def cumple(version: str, rango: str) -> bool:
-    """¿`version` (semver exacta) satisface `rango`?"""
+    """¿`version` (semver exacta) satisface `rango`? Un texto mal formado no cumple."""
+    try:
+        return _cumple(version, rango)
+    except ValueError:
+        return False
+
+
+def _cumple(version: str, rango: str) -> bool:
     v = parsear_version(version)
     prefijo = rango[0] if rango and rango[0] in "^~=" else ""
     base_texto = rango[1:] if prefijo else rango

@@ -543,9 +543,19 @@ class ContextoMotor:
             return False
         from core.kernel.oferta import permitida_para_el_agente
 
+        if accion in self._plugin_de:
+            plugin_id = self._plugin_de[accion]
+        else:
+            # No estaba en lo que armó el loop: su dueño sale del registro; si no existe, se niega.
+            from core.mcp.host import mcp_host
+
+            tool = mcp_host.get_tool(accion)
+            if tool is None and accion not in comandos.NOMBRES:
+                return True
+            plugin_id = tool.plugin_id if tool is not None else CORE_OWNER
         return not permitida_para_el_agente(
             accion,
-            self._plugin_de.get(accion),
+            plugin_id,
             packs=self._packs,
             del_agente=self._del_agente,
             de_la_etapa=etapa,
@@ -1779,7 +1789,8 @@ async def contexto_del_motor(
             pid: p for pid, p in release.procedimientos.items() if p.version != "0.0.0"
         }
         comunes["packs_de_la_release"] = packs
-        comunes["declaradas_por_el_agente"] = declaradas_por(release_vigente.agente_en_foco())
+        # Sin agente en foco (release con solo el Coordinador): fail-closed, solo core y comandos.
+        comunes["declaradas_por_el_agente"] = declaradas_por(release_vigente.agente_en_foco()) or frozenset()
     async with get_session() as session:
         banderas = await banderas_del_negocio(session, tenant_id)
         if banderas.procedimientos:

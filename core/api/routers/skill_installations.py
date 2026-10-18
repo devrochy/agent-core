@@ -33,7 +33,6 @@ from core.agents.spec import enabled_business_packs, load_active_spec
 from core.agents.versiones import escritura_habilitada
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
-from core.plugin_manager import plugin_manager
 
 router = APIRouter(prefix="/admin/skills", tags=["admin · habilidades"])
 
@@ -117,8 +116,7 @@ async def create_installation(
     principal: Annotated[Principal, Depends(require("plugins", write=True))],
 ) -> SkillInstallation:
     tid = await _puede_escribir(principal)
-    if plugin_manager.get(payload.pack_id) is None:
-        raise ApiError.not_found("Habilidad no encontrada.")
+    # Un pack inexistente responde igual que uno no habilitado (no revela el catálogo).
     habilitados = set(enabled_business_packs(await load_active_spec()))
     try:
         vista, creada = await svc.instalar_en_conexion(
@@ -141,7 +139,7 @@ async def delete_installation(
 ) -> Response:
     tid = await _puede_escribir(principal)
     try:
-        await svc.desinstalar(tid, installation_id)
+        await svc.desinstalar(tid, installation_id, actor=principal.admin.id)
     except svc.InstalacionNoEncontrada as exc:
         raise _error(exc) from None
     return Response(status_code=204)

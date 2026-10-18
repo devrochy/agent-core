@@ -161,7 +161,7 @@ async def test_api_instalaciones_por_conexion(app_client) -> None:
     r = await app_client.post(BASE, headers=master, json={"pack_id": "pack_calendar", "scope": "tenant", "connection_id": str(cid)})
     assert r.status_code == 422  # el scope de negocio no se escribe por aquí
     r = await app_client.post(BASE, headers=master, json={"pack_id": "pack_inexistente", "connection_id": str(cid)})
-    assert r.status_code == 404
+    assert r.status_code == 409 and "pack_not_enabled" in r.text  # igual que uno no habilitado
 
     # Aislamiento: la conexión y la instalación de otro negocio no existen.
     r = await app_client.post(BASE, headers=master, json={"pack_id": "pack_commerce", "connection_id": str(ajena)})

@@ -278,3 +278,22 @@ def test_sin_release_disponibles_sigue_el_binario(monkeypatch: Any) -> None:
     monkeypatch.setattr(registro, "_valido", lambda proc: True)
     assert sorted(registro.disponibles(["pack_commerce"])) == [PLAN]
     assert sorted(registro.disponibles(["pack_commerce", "pack_calendar"], ["pack_calendar"])) == [PLAN]
+
+
+def test_release_sin_agente_en_foco_es_fail_closed() -> None:
+    """Una `release/2` con solo el Coordinador no ofrece procedimientos (no cae al binario)."""
+    core = _agente("i-core", "coordinador", role="core", procs=(), contract="kernelspec/1")
+    release = _release(agentes={"i-core": core})
+
+    @con_release
+    async def turno() -> Any:
+        assert release_vigente.fijar(release.artefactos("stable"))
+        return release_vigente.agente_en_foco(), release_vigente.procedimientos_del_agente()
+
+    en_foco, procs = asyncio.run(_en_scope(turno))
+    assert en_foco is None and procs == {}
+
+
+def test_rangos_mal_formados_no_cumplen() -> None:
+    assert rp.cumple("1.x.0", "^1.0") is False
+    assert rp.cumple("1.0.0", "^uno") is False
