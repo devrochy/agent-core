@@ -1,4 +1,5 @@
-"""Conexiones (lectura): `GET /api/v1/admin/connections`.
+"""Conexiones (lectura): `GET /api/v1/admin/connections` y la consola
+`GET /api/v1/admin/connections/console` (HU-AOS-23).
 
 Canales conectados del tenant: conexiones manuales (`channel_connections`) y las
 de Meta (Embedded Signup / BYOK). Mismos datos que la vista SSR `/admin/conexiones`.
@@ -11,14 +12,15 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from core.admin.permissions import effective_access
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.forms import coerce_schema_values, redact_secrets
-from core.db.models import PhoneNumber, utcnow
+from core.db.models import AuditLog, PhoneNumber, utcnow
 from core.db.session import get_owned, get_session
 from core.gateway.connection_types import setup_url
 from core.gateway.connections import administrada_aparte, list_connections
@@ -138,6 +140,193 @@ async def list_connections_endpoint(
         webhook_url = tenant_webhook_url(slug)
 
     return ConnectionsResponse(items=rows, webhook_url=webhook_url)
+
+
+# ------------------------------------------------------------------ consola (HU-AOS-23)
+class ConsoleAgent(BaseModel):
+    instance_id: uuid.UUID
+    agent_id: uuid.UUID
+    key: str
+    name: str
+    role: Literal["core", "specialist", "backoffice"]
+    is_default: bool
+    enabled: bool
+    priority: int
+    release_version: int | None = Field(description="Versión que corre en la release activa; null si no figura.")
+    latest_version: int | None = Field(description="Última versión publicada del agente.")
+
+
+class ConsoleRelease(BaseModel):
+    id: uuid.UUID
+    number: int
+    created_at: datetime
+
+
+class ConsoleUsage(BaseModel):
+    turns: int
+    conversations: int
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float | None = Field(description="Solo con acceso a la sección `costs`; si no, null.")
+
+
+class ConsoleConnection(BaseModel):
+    id: uuid.UUID
+    channel: str
+    type_id: str | None
+    label: str
+    external_id: str
+    conversational: bool
+    active: bool
+    is_primary: bool
+    created_at: datetime | None
+    meta_connection_id: uuid.UUID | None
+    health: Literal["ok", "degraded", "error", "paused", "pending"]
+    pause_scope: Literal["meta_account", "connection", "webchat_settings"]
+    pausable: bool = Field(description="La consola ofrece pausar: hoy solo la cuenta de Meta (ADR-0122).")
+    coordinator: ConsoleAgent | None
+    agents: list[ConsoleAgent] = Field(description="Especialistas y back-office, sin el Coordinador.")
+    active_release: ConsoleRelease | None
+    canary_release: ConsoleRelease | None
+    usage_7d: ConsoleUsage
+
+
+class ConsoleConsistency(BaseModel):
+    pass_k: float
+    k: int
+    measured_at: datetime
+
+
+class ConsoleUnassignedAgent(BaseModel):
+    id: uuid.UUID
+    key: str
+    name: str
+
+
+class ConnectionsConsole(BaseModel):
+    """Con la sección `connections` basta para el consumo (turnos y tokens), la consistencia del
+    negocio y los agentes de cada conexión: es lo que pide la consola (SPEC-26 §5.1,
+    `conexiones:ver`). El costo en dinero sigue en `costs`."""
+
+    items: list[ConsoleConnection]
+    total: int
+    page: int
+    page_size: int
+    has_more: bool
+    runtime: Literal["legacy", "v3"]
+    routing: Literal["off", "shadow", "active"] = Field(description="`tenants.aos_routing`, solo lectura.")
+    consistency: ConsoleConsistency | None = Field(description="pass^k del último run del negocio.")
+    can_edit: bool = Field(description="Acceso de escritura a `connections`.")
+    unassigned_agents: list[ConsoleUnassignedAgent] = Field(
+        description="D-35: agentes publicados sin ninguna conexión (máx. 50)."
+    )
+
+
+def _console_agent(a: Any) -> ConsoleAgent:
+    return ConsoleAgent(
+        instance_id=a.instance_id,
+        agent_id=a.agent_id,
+        key=a.key,
+        name=a.name,
+        role=a.role,
+        is_default=a.is_default,
+        enabled=a.enabled,
+        priority=a.priority,
+        release_version=a.release_version,
+        latest_version=a.latest_version,
+    )
+
+
+def _console_release(r: Any) -> ConsoleRelease | None:
+    return None if r is None else ConsoleRelease(id=r.id, number=r.number, created_at=r.created_at)
+
+
+@router.get("/console", response_model=ConnectionsConsole)
+async def connections_console(
+    principal: Annotated[Principal, Depends(require("connections"))],
+    page: Annotated[int, Query(ge=1, le=1000)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> ConnectionsConsole:
+    """Consola de conexiones (HU-AOS-23): por cada conexión del negocio, su Coordinador y
+    agentes con la versión de la release activa, salud y consumo de 7 días. Solo lectura."""
+    from core.gateway import consola_conexiones as svc
+
+    if principal.tenant_id is None:
+        raise ApiError.bad_request("Selecciona un negocio.", code="no_tenant")
+    tid = principal.tenant_id
+    datos = await svc.consola(tid, offset=(page - 1) * page_size, limite=page_size)
+    ve_costos = await effective_access(principal.admin, "costs", tid) is not None
+    can_edit = await effective_access(principal.admin, "connections", tid) == "write"
+
+    items: list[ConsoleConnection] = []
+    for c in datos.items:
+        core = next((a for a in c.agents if a.role == "core"), None)
+        items.append(
+            ConsoleConnection(
+                id=c.id,
+                channel=c.channel,
+                type_id=c.type_id,
+                label=c.label,
+                external_id=c.external_id,
+                conversational=c.conversational,
+                active=c.active,
+                is_primary=c.is_primary,
+                created_at=c.created_at,
+                meta_connection_id=c.meta_connection_id,
+                health=c.health,  # type: ignore[arg-type]
+                pause_scope=c.pause_scope,  # type: ignore[arg-type]
+                pausable=c.pausable,
+                coordinator=_console_agent(core) if core is not None else None,
+                agents=[_console_agent(a) for a in c.agents if a.role != "core"],
+                active_release=_console_release(c.active_release),
+                canary_release=_console_release(c.canary_release),
+                usage_7d=ConsoleUsage(
+                    turns=c.usage_7d.turns,
+                    conversations=c.usage_7d.conversations,
+                    input_tokens=c.usage_7d.input_tokens,
+                    output_tokens=c.usage_7d.output_tokens,
+                    cost_usd=round(c.usage_7d.cost_usd, 4) if ve_costos else None,
+                ),
+            )
+        )
+    return ConnectionsConsole(
+        items=items,
+        total=datos.total,
+        page=page,
+        page_size=page_size,
+        has_more=page * page_size < datos.total,
+        runtime="v3" if datos.runtime == "v3" else "legacy",
+        routing=datos.routing if datos.routing in ("off", "shadow", "active") else "off",  # type: ignore[arg-type]
+        consistency=(
+            ConsoleConsistency(
+                pass_k=datos.consistency.pass_k, k=datos.consistency.k, measured_at=datos.consistency.measured_at
+            )
+            if datos.consistency is not None
+            else None
+        ),
+        can_edit=can_edit,
+        unassigned_agents=[ConsoleUnassignedAgent(id=a.id, key=a.key, name=a.name) for a in datos.unassigned_agents],
+    )
+
+
+async def audit_connection_action(principal: Principal, action: str, connection_id: str) -> None:
+    """Rastro de una acción sobre una conexión (HU-AOS-23: la pausa queda auditada). Va después
+    del cambio, en su propia transacción: ver «Decisiones revisables» del PR."""
+    if principal.tenant_id is None:
+        return
+    try:
+        async with get_session() as session:
+            session.add(
+                AuditLog(
+                    tenant_id=principal.tenant_id,
+                    actor=f"admin:{principal.admin.email}",
+                    action=action,
+                    input={"connection_id": str(uuid.UUID(str(connection_id)))},
+                )
+            )
+    except Exception:
+        # La acción ya se aplicó: un 500 invitaría a repetirla. Queda en el log para revisar.
+        log.exception("connection_action_audit_failed", action=action, connection_id=str(connection_id))
 
 
 # ------------------------------------------------------------------ catálogo y alta manual
@@ -327,4 +516,13 @@ async def connection_action(
         await set_primary(connection_id)
     else:
         await delete_connection(connection_id)
+    await audit_connection_action(principal, _ACCION_AUDITADA[payload.action], str(connection_id))
     return Response(status_code=204)
+
+
+_ACCION_AUDITADA = {
+    "activate": "connection.resumed",
+    "deactivate": "connection.paused",
+    "primary": "connection.primary",
+    "delete": "connection.deleted",
+}
