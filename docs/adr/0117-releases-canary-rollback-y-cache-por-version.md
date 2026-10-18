@@ -230,3 +230,12 @@ del KernelSpec; (4) el único especialista; si no, `ErrorDeRelease`. En una `rel
 conexión (más específica y explícita del dueño) gana sobre el `defaultAgent` del KernelSpec, que el
 lector tolerante fija siempre en `general`; HU-AOS-17 puede unificar las dos fuentes.
 
+
+
+## Adenda HU-AOS-17: el router elige el foco (2026-10-18)
+
+Con `tenants.aos_routing` ≠ off, `asignar` calcula además la ruta del router (`core/kernel/router.py`) bajo el
+mismo lock: tarea en foco → reglas del KernelSpec → disparadores → `elegir_foco`. En `active` el especialista de
+la ruta es el foco del turno y se escribe como dueño (`active_agent_instance_id`, `owner_since`; no es un handoff);
+en `shadow` solo se registra en `core_decisions.shadow_route`. `ReleaseCongelada` guarda en su caché el `routing`
+validado y el índice de disparadores. Detalle en ADR-0138.
