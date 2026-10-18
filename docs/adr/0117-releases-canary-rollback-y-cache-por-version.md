@@ -146,3 +146,73 @@ Revisada por el agente `arquitecto` antes de escribir código. No cambia contrat
   binario. Si van antes, cada candidata se deriva del manifiesto de la release activa cambiando solo esa
   entrada, no de un build nuevo.
 - **Rutas:** viven en `/api/v1/admin/connections/{id}/releases` y `/rollback` por el realm (ADR-0077 §2).
+
+## Adenda de implementación (2026-10-18, HU-AOS-15 parte 1): el loop ejecuta la release
+
+Revisada por el agente `arquitecto` antes de escribir código. Cierra los **Límites hasta HU-AOS-15** de la
+adenda de HU-AOS-14. No cambia contratos ni esquema (sin migración 0092). Con `aos_runtime = 'legacy'` (o
+sin `AOS_CONNECTION_ROUTING`) nada cambia: el gate en replay pasa sin regrabar.
+
+- **Qué ejecuta un turno v3.** La release vigente de la conversación carga también las versiones congeladas
+  de sus componentes (`core/releases/cargar.py`, por el `agent_version_id` de cada `components[]` del
+  manifiesto, nunca desde las instancias ni los agentes vivos: una instancia deshabilitada después no
+  desaparece de una release inmutable). La ranura del turno (`core/shared/release_vigente.py`) lleva esos
+  agentes, el especialista **en foco** y las habilidades del manifiesto.
+- **Vista v2 de la release** (`core/agents/spec_de_release.py`, `spec_del_turno`): el único punto de enganche
+  del loop. El loop lee hoy la forma v2 en ~25 puntos, así que el turno recibe un objeto del contrato v2
+  `AgentSpec` armado desde el `agentspec/3` del especialista en foco y el `kernelspec/1` del Coordinador: la
+  inversa exacta de la tabla de ADR-0113 §5 (la voz desde `voice` del KernelSpec; tope y frases, modelo,
+  memoria, playbooks, bindings y `maxToolCallsPerTurn` del agente; `budgetUsdPerConversation` del
+  KernelSpec; `packs` desde `skills` + `tenant_plugins` del manifiesto; `guardrails` y `declarativeTools`
+  vuelven a `extensions`, lo único que v2 transportaba ahí). Es un lector tolerante **inverso y
+  transitorio**, decisión tomada y revisable: se retira cuando el loop lea v3 directo (HU-AOS-46); la vista
+  nunca se persiste ni vuelve a `agent_specs`; nada nuevo del v3 viaja por `extensions` (lo nuevo, como
+  `writeNamespaces`, va por la ranura). `usage_ledger.agent_spec_version` = `<key>@v3:<versión>`.
+  Invierte de forma transitoria la dirección de ADR-0113 «Impacto en el código» (loop lee v3).
+- **Orden del turno:** `fijar_release_del_turno` y `spec_del_turno` corren antes de `politicas_del_turno`,
+  así un turno bloqueado por cuota también lleva `release_id` y la instancia, y el texto de cuota sale de la
+  release.
+- **Agente en foco y dueño** (`core/releases/cargar.py::elegir_foco`, `release_del_turno.asignar`): (1) el
+  dueño vigente (`conversations.active_agent_instance_id`) si sigue siendo especialista de la release y el
+  episodio no cambió; (2) el `routing.defaultAgent` del KernelSpec; (3) el único especialista; sin
+  especialista o con varios sin uno por defecto, `ErrorDeRelease` (fail-closed: sube por el camino de error
+  del turno). Un episodio nuevo **suelta** al dueño (NULL → por defecto), como piden `kernelspec.Episode`
+  y ADR-0116. `active_agent_instance_id` significa «la instancia que atiende la conversación» y
+  `owner_since` desde cuándo; `asignar` nunca escribe un handoff (dos fases, HU-AOS-19). El Coordinador
+  nunca atiende (ADR-0112 §1). El router (`route_source ≠ default`) y el fail-closed de ADR-0118 §3 llegan
+  con HU-AOS-17; `is_default` de la instancia y `routing.defaultAgent` siguen siendo dos fuentes hasta
+  entonces (hoy manda el KernelSpec).
+- **`writeNamespaces` se aplica:** `ToolContext.write_namespaces` = `memory.writeNamespaces` del agente en
+  foco (`new_tool_context`, HU-AOS-36): un agente sin `perfil` no puede guardar datos del cliente. En legacy
+  sigue `None` (sin chequeo).
+- **Trazabilidad por agente** (plomería de «Mi agente y su data», HU-AOS-47): `usage_ledger.{connection_id,
+  release_id, agent_instance_id, agent_version_id}` (modelo mapeado), `core_decisions.active_instance_id`
+  (desde `anotar_release`) y `focus_task_id` (`anotar_foco`, la tarea en foco al empezar el turno con el
+  motor activo), `turn_outcomes.final_instance_id` (= la instancia que atendió, sin handoff). NULL en legacy.
+- **Rollback completo:** al volver a una release anterior, el siguiente turno ejecuta la versión congelada en
+  ella: persona, modelo, tools/bindings, guardrails, playbooks y `writeNamespaces` cambian (test de
+  integración con dos releases).
+- **Migración:** `agent-core db migrar-a-v3 --tenant <slug>|--todos [--dry-run] [--volver] [--construir]
+  [--apagar-procedimientos]` (`core/releases/migracion_v3.py`). Fail-closed por negocio: exige
+  `AOS_CONNECTION_ROUTING`, los backfills de conexiones y agentes sin trabajo pendiente, release activa en
+  toda conexión conversacional, y que esa release carga, tiene especialista en foco, pasa el contrato, el
+  General concede `perfil` y está **al día** (el hash del manifiesto que se construiría hoy, sin refrescar
+  versiones, es su `manifest_hash` y, en legacy, la
+  conversión actual del v2 coincide con las versiones congeladas; `--construir` reconstruye y promueve).
+  Enciende solo `aos_runtime`; `--volver` rechaza con `aos_procedures` encendida salvo
+  `--apagar-procedimientos` (orden inverso de ADR-0112) y reporta las tareas gobernadas abiertas. Escribe las
+  banderas con el rol dueño (`MIGRATIONS_DATABASE_URL`, como `sync-packs`); el setter `SECURITY DEFINER` de
+  la nota de la HU llega con el panel del master.
+- **Runbook (precondición de producto):** `AOS_CONNECTION_ROUTING` → por negocio: pass^4 antes
+  (`evals/journeys.py --k 4`), `migrar-a-v3 --dry-run`, `migrar-a-v3`, pass^4 después con `--runtime v3`
+  (igual o mejor; si no, `--volver`), una semana de observación; `aos_procedures` después, con su propio
+  pass^4. El `contract` (`connection_id` y `release_id` obligatorios) llega con 2 releases estables.
+  **Antes de desplegar en test:** `migrar-a-v3 --tenant solvershub --dry-run` (ya está en v3 + procedimientos:
+  al desplegar, su loop pasa del v2 a la release activa; si está desactualizada, `--construir`).
+- **Límites y pendientes (parte 2, con dueño HU-AOS-15):** v3 sin release activa (conexión nueva sin
+  `backfill-releases`) sigue en legacy con un log de error (`release_missing`): la release al alta de la
+  conexión; referencias a secretos en URL/body de las declarativas (enmienda en ADR-0113); los textos de
+  respaldo del consumer/ingress y `load_active_spec` dentro de tools del core siguen leyendo v2; el editor
+  legacy (`save_spec_version`, `activate_spec_version`) deja de tener efecto en un negocio v3 hasta
+  construir una release; los clamps del lector tolerante (`maxLength`, `shortTermTurns`…) cambian un v2
+  fuera de rango; `modelPolicy` del KernelSpec sigue sin leerse (ADR-0132 la toma de código).
