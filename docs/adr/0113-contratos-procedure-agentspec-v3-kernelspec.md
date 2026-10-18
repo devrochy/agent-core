@@ -148,6 +148,7 @@ Los textos del clasificador y del compositor viven en playbooks del core (invari
     - codificarlo al ponerlo en la query (`quote(safe="")`);
     - sustituir argumentos y secretos en una sola pasada;
     - entregar el secreto solo hacia los dominios a los que está atado, con `resolver_secretos(..., host)` también para las referencias de la URL y del body.
+    - **Enmienda (2026-10-18, HU-AOS-15):** el runtime v3 de la parte 1 solo resuelve referencias en headers; una tool con referencias en la URL o el body se omite de lo que ejecuta el turno (fail-closed, con aviso por nombre de tool) y `agent-core db migrar-a-v3` bloquea al negocio que la tenga. Resolverlas en `core/mcp/declarative.py` queda para la parte 2 de HU-AOS-15.
   - **Sin cambio de conducta:** el contrato `agentcore-contracts` no cambia, y el loop legacy (`core/mcp/declarative.py`) sigue con los literales del AgentSpec v2. El editor de tools declarativas v2 sigue con la lista del contrato: ampliarlo cambiaría lo que el loop legacy resuelve, así que lo decide el dueño.
   - **Límites conocidos:**
     - un secreto en la ruta de la URL (`/bot<token>/`) o bajo una clave de nombre neutro no se detecta;

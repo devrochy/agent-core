@@ -333,6 +333,7 @@ def new_tool_context(
     idempotency_key: str,
     channel: str,
     http: ScopedHttp | None = None,
+    write_namespaces: frozenset[str] | None = None,
 ) -> ToolContext:
     return ToolContext(
         conversation_id=conversation_id,
@@ -340,4 +341,5 @@ def new_tool_context(
         idempotency_key=idempotency_key,
         channel=channel,
         http=http,
+        write_namespaces=write_namespaces,
     )
