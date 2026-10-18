@@ -12,6 +12,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from core.api.routers import (
+    agent_editor,
     agents,
     audit,
     auth,
@@ -72,6 +73,7 @@ api_router.include_router(plugins.router)
 api_router.include_router(skill_installations.router)
 api_router.include_router(procedures.router)
 api_router.include_router(agents.router)
+api_router.include_router(agent_editor.router)
 api_router.include_router(connections.router)
 api_router.include_router(connection_agents.router)
 api_router.include_router(connection_releases.router)
