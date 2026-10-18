@@ -141,8 +141,10 @@ Revisada por el agente `arquitecto` antes de escribir código. No cambia contrat
   compara los hashes con `packages/pack-versions.lock.json` (`scripts/pack_versions_lock.py`): cambiar el
   contenido de un pack exige subir su versión.
 - **Pendiente para la segunda parte (decisión del dueño):** candidatas `origin = platform` al registrarse una
-  versión nueva de una habilidad y la promoción directa por `yanked`. Hasta que el runtime lea el contenido
+  versión nueva de una habilidad y la promoción directa por `yanked`. ~~Hasta que el runtime lea el contenido
   del pack desde `pack_versions` (HU-AOS-16) la candidata y la activa correrían el mismo contenido del
-  binario. Si van antes, cada candidata se deriva del manifiesto de la release activa cambiando solo esa
+  binario.~~ HU-AOS-16 parte 1 (adenda en ADR-0118): la release ya lee desde `pack_versions` los
+  procedimientos publicados de la versión congelada; el flujo y los playbooks del pack siguen saliendo
+  del binario hasta la parte 2. Si van antes, cada candidata se deriva del manifiesto de la release activa cambiando solo esa
   entrada, no de un build nuevo.
 - **Rutas:** viven en `/api/v1/admin/connections/{id}/releases` y `/rollback` por el realm (ADR-0077 §2).

@@ -689,10 +689,13 @@ lo mismo (el gate en replay pasa sin regrabar).
     después la tarea queda `cancelled` aunque la venta ocurrió). La pila de tareas (HU-AOS-20) lo
     resuelve. También agranda la ventana del pendiente siguiente: si la release cambia mientras espera,
     `revalidar_tareas` escala la tarea (`crear_pedido` ya corrió y no declara efecto).
-  - `ReleaseCongelada.procedimientos()` solo deriva los abiertos del flujo: un cambio de release
+  - ~~`ReleaseCongelada.procedimientos()` solo deriva los abiertos del flujo: un cambio de release
     escala la tarea de un procedimiento publicado al primer `action_succeeded` (la acción no declara
     efecto). Lo resuelve HU-AOS-16, junto con los procedimientos por agente: hasta entonces todo
-    negocio con commerce ve `contratar_plan` y `tomar_pedido` como candidatos.
+    negocio con commerce ve `contratar_plan` y `tomar_pedido` como candidatos.~~ Resuelto en
+    HU-AOS-16 parte 1 (adenda de HU-AOS-16 en ADR-0118): la release congela los procedimientos
+    publicados de sus habilidades, cada agente ve los que declara y un cambio de release con el
+    mismo procedimiento y el mismo major revalida la tarea.
   - Con el motor activo y sin tarea en foco, `confirmar_cotizacion` y `crear_pedido` se siguen
     ofreciendo (son las acciones de las etapas; el predicado de oferta filtra también las candidatas
     del motor): el modelo puede cerrar una venta por el camino de siempre, sin botón, con las guardas
