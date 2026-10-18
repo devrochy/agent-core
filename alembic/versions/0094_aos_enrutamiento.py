@@ -19,7 +19,7 @@ Columnas con default constante o nullables: sin reescritura. Cada tabla en su pr
 con `lock_timeout` de 5 s (patrón de 0070). Re-ejecutable.
 
 Revision ID: 0094
-Revises: 0089
+Revises: 0090
 Create Date: 2026-10-18
 """
 
@@ -28,7 +28,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "0094"
-down_revision = "0089"
+down_revision = "0090"
 branch_labels = None
 depends_on = None
 

@@ -15,6 +15,13 @@ import time
 import uuid
 from typing import Any
 
+from sqlalchemy import select
+
+from core.admin.roles import actua_como_master, cuenta_habilitada
+from core.db.models import Admin, AdminPermission, TenantUser
+from core.db.session import get_session
+from core.tenants import is_tenant_active
+
 PLUGIN_ID = "pack_cobranza"
 
 
@@ -116,3 +123,62 @@ async def token_tenant(token: str) -> tuple[uuid.UUID, dict[str, Any]] | None:
     if payload is None:
         return None
     return tenant_id, payload
+
+
+async def _vinculado(session: Any, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> bool:
+    """¿La cuenta sigue teniendo el negocio? Por `tenant_user` o, como la rama `global` de
+    `admin_tenants()` (0035/0088), por un permiso global (`admin_permissions.tenant_id` null),
+    que el login de campo trata como `master`. Tablas de sistema, sin RLS."""
+    row = (
+        await session.execute(
+            select(TenantUser.id).where(
+                TenantUser.tenant_id == tenant_id, TenantUser.admin_id == admin_id
+            )
+        )
+    ).scalar_one_or_none()
+    if row is not None:
+        return True
+    global_ = (
+        await session.execute(
+            select(AdminPermission.id)
+            .where(AdminPermission.admin_id == admin_id, AdminPermission.tenant_id.is_(None))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return global_ is not None
+
+
+async def acceso_de_campo(authorization: str | None) -> tuple[uuid.UUID, dict[str, Any]] | None:
+    """Único validador de los tokens de acceso de la app de campo (`api.py` y `api_gestor.py`).
+
+    Firma y vencimiento (`token_tenant`), y además, en CADA pedido (ADR-0134, ADR-0136):
+    - el refresh (30 días) y el token de membresía no sirven como acceso;
+    - el negocio sigue activo (suspenderlo corta la app en el siguiente pedido);
+    - si el token es de una cuenta (`admin_id`): la cuenta sigue habilitada (desactivarla o
+      apagar el rol tester corta la app) y sigue vinculada al negocio por `tenant_user`
+      (desvincularla también); el master y el tester habilitado no necesitan vínculo.
+    Los tokens de dispositivo (sin `admin_id`, `/auth/dispositivo`) solo dependen del negocio.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    auth = await token_tenant(authorization.split(" ", 1)[1].strip())
+    if auth is None:
+        return None
+    tenant_id, payload = auth
+    if payload.get("typ") in ("refresh", "membresia"):
+        return None
+    if not await is_tenant_active(tenant_id):
+        return None
+    admin_id = payload.get("admin_id")
+    if admin_id:
+        try:
+            admin_uuid = uuid.UUID(str(admin_id))
+        except (TypeError, ValueError):
+            return None
+        async with get_session() as session:
+            admin = await session.get(Admin, admin_uuid)
+            if not cuenta_habilitada(admin):
+                return None
+            if not actua_como_master(admin) and not await _vinculado(session, tenant_id, admin_uuid):
+                return None
+    return auth

@@ -75,6 +75,7 @@ async def test_app_de_campo_no_acepta_refresh_ni_cuentas_deshabilitadas(habilita
     import uuid
 
     import pack_cobranza.api_gestor as api_gestor
+    import pack_cobranza.auth as campo_auth
 
     tenant = uuid.uuid4()
     admin_id = uuid.uuid4()
@@ -95,8 +96,19 @@ async def test_app_de_campo_no_acepta_refresh_ni_cuentas_deshabilitadas(habilita
         async def __aexit__(self, *exc):
             return False
 
-    monkeypatch.setattr(api_gestor, "token_tenant", _token_tenant)
-    monkeypatch.setattr(api_gestor, "get_session", lambda: _Sesion())
+    negocio = {"activo": True, "vinculado": True}
+
+    async def _is_tenant_active(_tid):
+        return negocio["activo"]
+
+    async def _vinculado(_session, _tid, _aid):
+        return negocio["vinculado"]
+
+    # Un solo validador para `api.py` y `api_gestor.py` (ADR-0136).
+    monkeypatch.setattr(campo_auth, "token_tenant", _token_tenant)
+    monkeypatch.setattr(campo_auth, "get_session", lambda: _Sesion())
+    monkeypatch.setattr(campo_auth, "is_tenant_active", _is_tenant_active)
+    monkeypatch.setattr(campo_auth, "_vinculado", _vinculado)
 
     habilitar(True)
     assert await api_gestor._auth("Bearer refresh") is None
@@ -106,3 +118,23 @@ async def test_app_de_campo_no_acepta_refresh_ni_cuentas_deshabilitadas(habilita
     habilitar(True)
     cuenta["admin"] = SimpleNamespace(role="colaborador", active=False)  # revocado
     assert await api_gestor._auth("Bearer access") is None
+    # ADR-0136: negocio suspendido o cuenta desvinculada → fuera en el siguiente pedido.
+    cuenta["admin"] = SimpleNamespace(role="colaborador", active=True)
+    assert await api_gestor._auth("Bearer access") is not None
+    negocio["vinculado"] = False
+    assert await api_gestor._auth("Bearer access") is None
+    negocio["vinculado"] = True
+    negocio["activo"] = False
+    assert await api_gestor._auth("Bearer access") is None
+    cuenta["admin"] = SimpleNamespace(role="tester", active=True)
+    negocio["activo"], negocio["vinculado"] = True, False  # el tester no necesita vínculo
+    assert await api_gestor._auth("Bearer access") is not None
+    # La API de dispositivo (`api.py`) usa el mismo validador: desvinculado → fuera.
+    import pack_cobranza.api as api_campo
+
+    cuenta["admin"] = SimpleNamespace(role="colaborador", active=True)
+    negocio["vinculado"] = True
+    assert await api_campo._auth("Bearer access") is not None
+    negocio["vinculado"] = False
+    assert await api_campo._auth("Bearer access") is None
+    assert await api_campo._auth("Bearer refresh") is None

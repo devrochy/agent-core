@@ -11,12 +11,21 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 
-from core.admin.auth import hash_password
-from core.admin.permissions import OWNER_GRANTABLE_SECTIONS, catalog, pack_section_keys
-from core.admin.roles import ROLES_DE_PLATAFORMA
-from core.db.models import Admin, AdminPermission, Tenant, TenantUser
+from core.admin.auth import hash_password, revocar_sesiones
+from core.admin.permissions import (
+    ACCESS_NONE,
+    GLOBAL_ONLY_SECTIONS,
+    OWNER_GRANTABLE_SECTIONS,
+    OWNER_ONLY_SECTIONS,
+    VALID_ACCESS,
+    catalog,
+    pack_section_keys,
+    seccion_padre,
+)
+from core.admin.roles import ROLES_DE_PLATAFORMA, es_tester
+from core.db.models import Admin, AdminPermission, Tenant, TenantInvitation, TenantUser
 from core.db.session import get_session
 from core.plugin_manager import plugin_manager
 from core.shared.logger import get_logger
@@ -25,7 +34,6 @@ from core.shared.tenant import get_current_tenant_id
 log = get_logger(__name__)
 
 VALID_ROLES = ("master", "owner", "colaborador")
-VALID_ACCESS = ("read", "write")
 
 
 @dataclass(slots=True)
@@ -57,9 +65,15 @@ async def ensure_tenant_link(admin_id: uuid.UUID, tenant_id: uuid.UUID, role: st
             session.add(TenantUser(tenant_id=tenant_id, admin_id=admin_id, role=role))
 
 
-async def target_allowed_for_owner(admin_id: uuid.UUID, tid: uuid.UUID | None) -> bool:
+async def target_allowed_for_owner(
+    admin_id: uuid.UUID, tid: uuid.UUID | None, *, actor: Admin | None = None
+) -> bool:
     """Un owner solo gestiona cuentas EXCLUSIVAS de su tenant (no masters ni testers,
-    ni cuentas con permisos globales o vinculadas a otros tenants)."""
+    ni cuentas con permisos globales o vinculadas a otros tenants) y, desde ADR-0136,
+    solo las de rol `colaborador`: los propietarios son pares entre sí (un propietario
+    invitado no toca al propietario real, ni al revés); a un owner lo gestiona el master.
+    La regla es la misma para el tester (ADR-0134), que actúa como dueño del negocio
+    activo: gestiona colaboradores, no propietarios. `actor` queda por compatibilidad."""
     if tid is None:
         return False
     async with get_session() as session:
@@ -75,6 +89,8 @@ async def target_allowed_for_owner(admin_id: uuid.UUID, tid: uuid.UUID | None) -
             )
         ).scalar_one_or_none()
         if link is None:
+            return False
+        if link != "colaborador":
             return False
         global_perms = (
             await session.execute(
@@ -136,6 +152,10 @@ async def create_collaborator(
         return "rol inválido"
     if role == "master" and not is_master:
         return "no podés crear un master de plataforma"
+    if role == "owner" and not is_master and not es_tester(actor):
+        # ADR-0048 §3 y ADR-0136: un propietario crea colaboradores; otro propietario lo
+        # vincula el master.
+        return "un propietario solo crea colaboradores; a otro propietario lo vincula el master"
 
     if is_master:
         admin_role = "master" if role == "master" else "colaborador"
@@ -195,7 +215,7 @@ async def reset_password(*, actor: Admin, admin_id: uuid.UUID, password: str) ->
     if not password:
         return "la contraseña no puede estar vacía"
     if actor.role != "master" and not await target_allowed_for_owner(
-        admin_id, get_current_tenant_id()
+        admin_id, get_current_tenant_id(), actor=actor
     ):
         return "no podés cambiar esa contraseña"
     async with get_session() as session:
@@ -203,6 +223,9 @@ async def reset_password(*, actor: Admin, admin_id: uuid.UUID, password: str) ->
         if admin is None:
             return "admin no encontrado"
         admin.password_hash = hash_password(password)
+        # Cambiar la contraseña desde Colaboradores cierra las sesiones abiertas de esa
+        # cuenta (panel y app): quien tenía el token viejo vuelve al login.
+        await revocar_sesiones(session, admin_id)
     return None
 
 
@@ -234,11 +257,25 @@ async def grant_permission(
     else:
         if section in OWNER_GRANTABLE_SECTIONS:
             return "no podés otorgar esa sección"
-        if not await target_allowed_for_owner(admin_id, get_current_tenant_id()):
+        if not await target_allowed_for_owner(admin_id, get_current_tenant_id(), actor=actor):
             return "no podés otorgar permisos a esa cuenta"
         tenant_id = get_current_tenant_id()
+    if access == ACCESS_NONE and (tenant_id is None or section in OWNER_ONLY_SECTIONS):
+        # Una denegación es por negocio (ADR-0136); Colaboradores no se deniega por fila.
+        return "una denegación es por negocio"
 
     async with get_session() as session:
+        if access == ACCESS_NONE and seccion_padre(section) is None:
+            # Denegar un pack completo borra las filas de sus sub-secciones en ese negocio,
+            # igual que `revoke_permission`: si no, un grant viejo de sub-sección seguiría
+            # mandando sobre la denegación del pack (ADR-0136).
+            await session.execute(
+                delete(AdminPermission).where(
+                    AdminPermission.admin_id == admin_id,
+                    AdminPermission.section.like(f"{section}:%"),
+                    AdminPermission.tenant_id == tenant_id,
+                )
+            )
         row = (
             await session.execute(
                 select(AdminPermission).where(
@@ -268,25 +305,75 @@ async def revoke_permission(
     section: str,
     tenant_slug: str = "",
 ) -> str | None:
+    """Quita el acceso a la sección (ADR-0136).
+
+    Con alcance de negocio y un miembro cuyo rol heredaría la sección (`owner` → write,
+    `colaborador` → read), «revocar» guarda una denegación (`none`): así la sección
+    desaparece de verdad del menú, de Ctrl+K y de la API. Si no hay default que tapar
+    (alcance global, sección de plataforma, cuenta sin vínculo), borra la fila como antes.
+    Si la sección es un pack completo (`pack_cobranza`), borra también las filas de sus
+    sub-secciones en ese alcance, para que la denegación del pack prevalezca.
+    """
     is_master = actor.role == "master"
     if section not in _valid_sections():
         return "sección inválida"
     if is_master:
         tenant_id = await resolve_tenant_id(tenant_slug) if tenant_slug else None
+        if tenant_slug and tenant_id is None:
+            return "tenant no encontrado"
     else:
-        if not await target_allowed_for_owner(admin_id, get_current_tenant_id()):
+        if not await target_allowed_for_owner(admin_id, get_current_tenant_id(), actor=actor):
             return "no podés revocar permisos de esa cuenta"
         tenant_id = get_current_tenant_id()
+    alcance = (
+        AdminPermission.tenant_id.is_(None)
+        if tenant_id is None
+        else AdminPermission.tenant_id == tenant_id
+    )
     async with get_session() as session:
-        await session.execute(
-            delete(AdminPermission).where(
-                AdminPermission.admin_id == admin_id,
-                AdminPermission.section == section,
-                AdminPermission.tenant_id.is_(None)
-                if tenant_id is None
-                else AdminPermission.tenant_id == tenant_id,
+        if seccion_padre(section) is None:
+            await session.execute(
+                delete(AdminPermission).where(
+                    AdminPermission.admin_id == admin_id,
+                    AdminPermission.section.like(f"{section}:%"),
+                    alcance,
+                )
             )
+        role = None
+        if tenant_id is not None:
+            role = (
+                await session.execute(
+                    select(TenantUser.role).where(
+                        TenantUser.admin_id == admin_id, TenantUser.tenant_id == tenant_id
+                    )
+                )
+            ).scalar_one_or_none()
+        hereda = (
+            tenant_id is not None
+            and role in ("owner", "colaborador")
+            and section not in GLOBAL_ONLY_SECTIONS
+            and section not in OWNER_ONLY_SECTIONS
         )
+        row = (
+            await session.execute(
+                select(AdminPermission).where(
+                    AdminPermission.admin_id == admin_id,
+                    AdminPermission.section == section,
+                    alcance,
+                )
+            )
+        ).scalar_one_or_none()
+        if not hereda:
+            if row is not None:
+                await session.delete(row)
+        elif row is None:
+            session.add(
+                AdminPermission(
+                    admin_id=admin_id, section=section, access=ACCESS_NONE, tenant_id=tenant_id
+                )
+            )
+        else:
+            row.access = ACCESS_NONE
     return None
 
 
@@ -316,19 +403,100 @@ async def link_tenant(
     return None
 
 
+async def unlink_tenant(*, actor: Admin, admin_id: uuid.UUID, tenant_slug: str) -> str | None:
+    """Desvincula una cuenta de un negocio (ADR-0136): borra su `tenant_user` y sus permisos
+    de ese negocio, y revoca sus invitaciones pendientes a ese negocio (si no, aceptarlas
+    deshacería el unlink). Master: cualquier vínculo. Owner o tester: solo del negocio activo
+    y solo a un `colaborador` que no sea cuenta de plataforma, ni tenga permisos globales
+    (esos los da y los quita el master), ni sea uno mismo (no exige exclusividad: sacar de
+    MI negocio a una cuenta compartida no toca a los demás). Nadie deja un negocio sin
+    propietario (las filas de owner se bloquean para que dos desvinculaciones simultáneas
+    no lo vacíen). El perfil de gestor de pack-cobranza, si existía, queda sin vínculo y
+    la app de campo deja de aceptarlo en el siguiente pedido."""
+    is_master = actor.role == "master"
+    if actor.id == admin_id:
+        return "no podés desvincularte a vos mismo"
+    tenant_id = await resolve_tenant_id(tenant_slug) if tenant_slug else None
+    if tenant_id is None:
+        return "tenant no encontrado"
+    if not is_master and tenant_id != get_current_tenant_id():
+        return "solo podés desvincular cuentas de tu negocio activo"
+    async with get_session() as session:
+        target = await session.get(Admin, admin_id)
+        if target is None:
+            return "admin no encontrado"
+        link = (
+            await session.execute(
+                select(TenantUser).where(
+                    TenantUser.admin_id == admin_id, TenantUser.tenant_id == tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+        if link is None:
+            return "la cuenta no está vinculada a ese negocio"
+        if not is_master:
+            if target.role in ROLES_DE_PLATAFORMA or link.role != "colaborador":
+                return "no podés desvincular esa cuenta"
+            permisos_globales = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(AdminPermission)
+                    .where(
+                        AdminPermission.admin_id == admin_id,
+                        AdminPermission.tenant_id.is_(None),
+                    )
+                )
+            ).scalar_one()
+            if permisos_globales:
+                return "esa cuenta tiene permisos globales: la gestiona el master"
+        if link.role == "owner":
+            owners = (
+                await session.execute(
+                    select(TenantUser.admin_id)
+                    .where(TenantUser.tenant_id == tenant_id, TenantUser.role == "owner")
+                    .with_for_update()
+                )
+            ).scalars().all()
+            if not [o for o in owners if o != admin_id]:
+                return "el negocio quedaría sin propietario: vinculá otro antes"
+        await session.delete(link)
+        await session.execute(
+            update(TenantInvitation)
+            .where(
+                TenantInvitation.admin_id == admin_id,
+                TenantInvitation.tenant_id == tenant_id,
+                TenantInvitation.estado == "pendiente",
+            )
+            .values(estado="revocada", token_nonce=None, responded_at=func.now())
+        )
+        await session.execute(
+            delete(AdminPermission).where(
+                AdminPermission.admin_id == admin_id, AdminPermission.tenant_id == tenant_id
+            )
+        )
+    return None
+
+
 async def toggle_active(
     *, actor: Admin, admin_id: uuid.UUID, current_tenant_id: uuid.UUID | None = None
 ) -> str | None:
     is_master = actor.role == "master"
     if actor.id == admin_id:
         return "no podés desactivar tu propio usuario"
-    if not is_master and not await target_allowed_for_owner(admin_id, current_tenant_id):
+    if not is_master and not await target_allowed_for_owner(
+        admin_id, current_tenant_id, actor=actor
+    ):
         return "no podés modificar esa cuenta"
     async with get_session() as session:
         admin = await session.get(Admin, admin_id)
         if admin is None:
             return "admin no encontrado"
         admin.active = not admin.active
+        if not admin.active:
+            # Desactivar invalida las sesiones en la misma transacción: el siguiente request
+            # responde 401 y, si el master la reactiva, la cuenta vuelve a entrar por el login
+            # (sin resucitar tokens viejos).
+            await revocar_sesiones(session, admin_id)
     return None
 
 

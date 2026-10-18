@@ -108,7 +108,7 @@ Un tenant nace `active` y puede transitar a `suspended` y a `eliminado`:
 | Estado | Efecto | Cómo |
 |---|---|---|
 | `active` | Procesa mensajes normalmente | alta (`tenant create`) o reactivación |
-| `suspended` | Deja de procesar mensajes (webhook y consumer lo rechazan), **conserva sus datos** y sigue visible en el panel | `tenant deactivate` (CLI) o botón en `/admin/tenants` |
+| `suspended` | Deja de procesar mensajes (webhook y consumer lo rechazan), **conserva sus datos** y sigue visible para el master en Plataforma. Su dueño y sus colaboradores no inician sesión ni usan la que tenían (403 `tenant_suspended` en la API, el panel y la app de campo, ADR-0136); con otro negocio activo, solo pierden ese | `tenant deactivate` (CLI) o botón en `/admin/tenants` |
 | eliminado | Borrado físico **irreversible** de todo su dato (core + packs + fila `tenants`; después, su estado Redis) | solo desde `suspended`: `tenant purge` o `/admin/tenants` (modal) |
 
 **Suspensión** (`tenant deactivate`): reversible (`tenant activate`). Útil para

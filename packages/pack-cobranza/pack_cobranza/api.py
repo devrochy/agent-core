@@ -29,7 +29,7 @@ from core.admin.auth import verify_password
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
-from pack_cobranza.auth import issue_token, pack_secret, token_tenant
+from pack_cobranza.auth import acceso_de_campo, issue_token, pack_secret
 from pack_cobranza.evidencias import EvidenciaError, guardar_evidencia
 from pack_cobranza.models import (
     Abono,
@@ -52,9 +52,9 @@ router = APIRouter(prefix="/api/pack/pack_cobranza", tags=[PLUGIN_ID])
 
 
 async def _auth(authorization: str | None) -> tuple[uuid.UUID, dict[str, Any]] | None:
-    if not authorization or not authorization.lower().startswith("bearer "):
-        return None
-    return await token_tenant(authorization.split(" ", 1)[1].strip())
+    """Mismo validador que `api_gestor` (ADR-0136): sin refresh, negocio activo y, si el token
+    es de una cuenta, cuenta habilitada y vinculada al negocio."""
+    return await acceso_de_campo(authorization)
 
 
 @router.post("/auth/dispositivo")
