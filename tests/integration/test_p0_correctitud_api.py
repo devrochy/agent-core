@@ -287,6 +287,67 @@ async def test_eliminar_plantilla_de_ejemplo_responde_409_claro(app_client, monk
             assert (await session.get(MessageTemplate, template_id)).status == "APPROVED"
 
 
+async def test_otro_negocio_no_alcanza_plantillas_ni_conexiones_ajenas(app_client, monkeypatch) -> None:
+    """Endpoints nuevos o tocados con ids de otro tenant: 404, sin llamar a Meta ni tocar la fila."""
+    from sqlalchemy import select
+
+    import core.gateway.meta_template_sync as sync_mod
+    import core.gateway.meta_templates as templates_mod
+    from core.config import get_settings
+    from core.db.models import MessageTemplate, WabaAccount
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "meta_app_id", "app-embedded-signup")
+    monkeypatch.setattr(settings, "meta_app_secret", "s3cr3t-de-la-app")
+    tid_a = await _tenant("p0-xa")
+    conn_a, waba_a = await _cuenta_meta(tid_a, origin="embedded_signup")
+    tid_b = await _tenant("p0-xb")
+    conn_b, _ = await _cuenta_meta(tid_b, origin="embedded_signup")
+    headers_b = await api_headers(app_client, tid_b)
+    async with tenant_scope(tid_a):
+        async with get_session() as session:
+            waba = (await session.execute(select(WabaAccount).where(WabaAccount.waba_id == waba_a))).scalar_one()
+            row = MessageTemplate(
+                tenant_id=tid_a, waba_account_id=waba.id, meta_template_id=uniq("tpl"), name="pedido_a",
+                language="es", status="APPROVED", category="UTILITY",
+            )
+            session.add(row)
+            await session.flush()
+            template_a = row.id
+
+    llamadas: list[str] = []
+
+    async def _graph(path, **kwargs):
+        llamadas.append(path)
+        raise AssertionError(f"no debe llamar a Meta: {path}")
+
+    monkeypatch.setattr(templates_mod, "graph_fetch", _graph)
+    monkeypatch.setattr(sync_mod, "graph_fetch", _graph)
+
+    # Plantilla de A por la conexión de B.
+    r = await app_client.post(
+        f"/api/v1/admin/meta/connections/{conn_b}/templates/{template_a}/delete", headers=headers_b
+    )
+    assert r.status_code == 404, r.text
+    # Conexión de A con la sesión de B: sync, delete y primary.
+    r = await app_client.post(f"/api/v1/admin/meta/connections/{conn_a}/templates/sync", headers=headers_b)
+    assert r.status_code in (400, 404), r.text
+    r = await app_client.post(
+        f"/api/v1/admin/meta/connections/{conn_a}/templates/{template_a}/delete", headers=headers_b
+    )
+    assert r.status_code in (400, 404), r.text
+    r = await app_client.post(
+        f"/api/v1/admin/meta/connections/{conn_a}/action", headers=headers_b, json={"action": "primary"}
+    )
+    assert r.status_code == 404, r.text
+    assert llamadas == []
+    async with tenant_scope(tid_a):
+        async with get_session() as session:
+            assert (await session.get(MessageTemplate, template_a)).status == "APPROVED"
+
+
 # ------------------------------------------------------------------ 4. Meta
 
 

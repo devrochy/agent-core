@@ -132,9 +132,10 @@ class ProductSave(BaseModel):
     description: str = ""
     category_id: uuid.UUID | None = None
     sku: str = ""
-    # Precio, stock y días de prueba nunca negativos (422 con el campo marcado).
-    price: float = Field(default=0, ge=0)
-    stock: int = Field(default=0, ge=0)
+    # Precio, stock y días de prueba nunca negativos (422 con el campo marcado). Topes: lo que
+    # cabe en la columna (`Numeric(12, 2)`, `Integer`) para no terminar en un 500 de la base.
+    price: float = Field(default=0, ge=0, le=9_999_999_999, allow_inf_nan=False)
+    stock: int = Field(default=0, ge=0, le=1_000_000_000)
     # HU-SUB-09: plan recurrente. None = no cambia; "" = no es recurrente.
     billing_period: Literal["mensual", "trimestral", "anual", ""] | None = None
     trial_days: int | None = Field(default=None, ge=0, le=365)
@@ -326,7 +327,7 @@ class CategorySave(BaseModel):
     category_id: uuid.UUID | None = None
     name: str
     parent_id: uuid.UUID | None = None
-    sort_order: int = Field(default=0, ge=0)
+    sort_order: int = Field(default=0, ge=0, le=100_000)
 
 
 @router.get("/categories", response_model=list[CategoryOut])

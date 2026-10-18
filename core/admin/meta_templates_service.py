@@ -155,8 +155,21 @@ async def sync_templates_now(tenant_id: uuid.UUID, connection_id: str) -> Templa
     if connection is None or waba is None or creds is None:
         return TemplateError("not_ready", "No hay conexión/WABA lista todavía")
     redis = get_redis()
-    if not await redis.set(_manual_sync_key(tenant_id, waba.waba_id), "1", ex=MANUAL_SYNC_RATE_LIMIT_S, nx=True):
-        return TemplateError("rate_limited", MANUAL_SYNC_RATE_LIMITED)
+    key = _manual_sync_key(tenant_id, waba.waba_id)
+    try:
+        if not await redis.set(key, "1", ex=MANUAL_SYNC_RATE_LIMIT_S, nx=True):
+            return TemplateError("rate_limited", MANUAL_SYNC_RATE_LIMITED)
+    except Exception:
+        # Redis caído: el límite es de cortesía (solo afecta al propio tenant), así que se
+        # sigue sin él (fail-open) en vez de responder 500.
+        log.warning("templates_sync_manual_rate_limit_sin_redis", connection_id=str(connection.id))
+
+    async def _liberar_minuto() -> None:
+        # Un sync fallido no debe consumir el minuto: el usuario puede reintentar ya.
+        try:
+            await redis.delete(key)
+        except Exception:
+            log.warning("templates_sync_manual_rate_limit_sin_redis", connection_id=str(connection.id))
 
     try:
         await sync_templates(
@@ -168,12 +181,17 @@ async def sync_templates_now(tenant_id: uuid.UUID, connection_id: str) -> Templa
             tenant_id,
         )
     except GraphError as exc:
+        await _liberar_minuto()
         return TemplateError("sync_failed", exc.user_text[:300])
     except Exception:
         log.exception("templates_sync_manual_fallo", connection_id=str(connection.id))
+        await _liberar_minuto()
         return TemplateError("sync_failed", "No se pudo sincronizar con Meta. Intenta de nuevo en un momento.")
     # El cron y el sync automático del listado comparten este candado: ya está hecho esta hora.
-    await acquire_sync_lock(tenant_id, waba.waba_id)
+    try:
+        await acquire_sync_lock(tenant_id, waba.waba_id)
+    except Exception:
+        log.warning("templates_sync_manual_candado_sin_redis", connection_id=str(connection.id))
     return None
 
 
@@ -199,7 +217,9 @@ async def delete_template(
 
     async with get_session() as session:
         row = await get_owned(session, MessageTemplate, tid_template, tenant_id)
-    if row is None:
+    # La plantilla tiene que ser de la WABA de esta conexión: si no, el DELETE por nombre iría
+    # a otra WABA del mismo negocio.
+    if row is None or row.waba_account_id != waba.id:
         return TemplateError("not_found", "Plantilla no encontrada")
 
     try:
@@ -211,6 +231,7 @@ async def delete_template(
             creds.graph_api_version,
             connection.id,
             tenant_id,
+            waba_account_id=waba.id,
         )
     except GraphError as exc:
         if exc.code == _GRAPH_INVALID_PARAMETER:

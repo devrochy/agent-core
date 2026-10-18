@@ -177,6 +177,10 @@ class _FakeRedis:
         self.keys[key] = value
         return True
 
+    async def delete(self, key):
+        self.keys.pop(key, None)
+        return 1
+
 
 def _conexion(tenant_id: uuid.UUID):
     connection = SimpleNamespace(id=uuid.uuid4(), tenant_id=tenant_id)
@@ -231,7 +235,7 @@ async def test_eliminar_plantilla_de_ejemplo_de_meta_explica_y_no_marca_eliminad
 
     tenant_id = uuid.uuid4()
     connection, waba, creds = _conexion(tenant_id)
-    row = SimpleNamespace(id=uuid.uuid4(), name="hello_world", status="APPROVED")
+    row = SimpleNamespace(id=uuid.uuid4(), name="hello_world", status="APPROVED", waba_account_id=waba.id)
 
     async def _resolve(cid, tid):
         return connection, waba, creds
@@ -267,6 +271,11 @@ async def test_eliminar_plantilla_de_ejemplo_de_meta_explica_y_no_marca_eliminad
     error = await svc.delete_template(tenant_id, str(connection.id), str(row.id))
     assert error is not None and error.code == "delete_failed"
     assert "socket" not in error.message
+
+    # Una plantilla del mismo negocio pero de otra WABA: 404, sin llamar a Meta.
+    row.waba_account_id = uuid.uuid4()
+    error = await svc.delete_template(tenant_id, str(connection.id), str(row.id))
+    assert error is not None and error.code == "not_found"
 
 
 def test_nombres_de_plantillas_de_ejemplo() -> None:
@@ -318,3 +327,126 @@ def test_alta_byok_expone_reused() -> None:
     out = WizardByokOut(connectionId="c", environment="sandbox", status="connected", phoneNumberId="1")
     assert out.reused is False
     assert WizardByokOut.model_fields["reused"].description is None  # documentado en el comentario del modelo
+
+
+# ------------------------------------------------------------------ 5. revisión de seguridad
+
+
+def test_topes_superiores_y_sin_inf_nan() -> None:
+    """Montos y conteos con tope (lo que cabe en la columna) y sin `inf`/`nan`."""
+    from pack_cobranza.admin_api import RulesUpdate
+    from pack_commerce.admin_api import CategorySave, ProductSave
+    from pack_commerce.config import CRMConfig
+    from pack_subscriptions.admin_api import CrearSuscripcionBody
+
+    assert set(_errores(ProductSave, name="x", price=1e11, stock=10**10)) == {"price", "stock"}
+    assert "price" in _errores(ProductSave, name="x", price=float("inf"))
+    assert "sort_order" in _errores(CategorySave, name="x", sort_order=10**9)
+    assert set(
+        _errores(
+            CRMConfig,
+            customer_frecuente_min_pedidos=10**6,
+            customer_inactivo_dias_sin_comprar=10**6,
+            monto_alto_threshold=float("nan"),
+            pago_en_linea_monto_minimo=1e13,
+        )
+    ) == {
+        "customer_frecuente_min_pedidos",
+        "customer_inactivo_dias_sin_comprar",
+        "monto_alto_threshold",
+        "pago_en_linea_monto_minimo",
+    }
+    assert "precio" in _errores(CrearSuscripcionBody, customer_id=uuid.uuid4(), nombre="P", precio=1e13)
+    assert "umbral_saldo_autonomo" in _errores(RulesUpdate, umbral_saldo_autonomo=float("inf"))
+    assert ProductSave(name="x", price=9_999_999_999, stock=1_000_000_000).stock == 1_000_000_000
+
+
+def test_checkout_fields_desconocidos_no_reflejan_el_valor() -> None:
+    fields = _errores(_crm(), checkout_fields={"domicilio": ["valor-secreto-xyz"]})
+    assert "valor-secreto-xyz" not in str(fields)
+    assert "full_name" in fields["checkout_fields"]
+
+
+def _crm():
+    from pack_commerce.config import CRMConfig
+
+    return CRMConfig
+
+
+@pytest.mark.asyncio
+async def test_save_config_invalida_no_lleva_el_valor_en_el_mensaje() -> None:
+    from pack_payments.config import PaymentsConfig
+
+    from core.plugin_manager import PluginConfigError, PluginManager
+
+    manager = PluginManager()
+    manager._modules["payments"] = SimpleNamespace(config_schema=PaymentsConfig)  # type: ignore[assignment]
+    with pytest.raises(PluginConfigError) as exc:
+        await manager.save_config(
+            "payments",
+            {"public_key": "p", "private_key": "priv-secreto-123", "events_secret": "e", "link_expira_horas": -9},
+        )
+    assert "priv-secreto-123" not in str(exc.value)
+    assert "-9" not in str(exc.value)
+    assert "link_expira_horas" in str(exc.value)
+    assert exc.value.fields == {"link_expira_horas": "Debe ser mayor o igual que 1."}
+
+
+def _preparar_sync(monkeypatch, redis, sync):
+    import core.admin.meta_templates_service as svc
+    import core.gateway.meta_template_sync as sync_mod
+
+    tenant_id = uuid.uuid4()
+    connection, waba, creds = _conexion(tenant_id)
+
+    async def _resolve(cid, tid):
+        return connection, waba, creds
+
+    monkeypatch.setattr(svc, "resolve_waba_and_credentials", _resolve)
+    monkeypatch.setattr(sync_mod, "sync_templates", sync)
+    monkeypatch.setattr(sync_mod, "get_redis", lambda: redis)
+    monkeypatch.setattr("core.memory.working.get_redis", lambda: redis)
+    return svc, tenant_id, connection
+
+
+@pytest.mark.asyncio
+async def test_sync_manual_fallido_no_consume_el_minuto(monkeypatch) -> None:
+    from core.gateway.meta_errors import GraphError
+
+    redis = _FakeRedis()
+    llamadas: list[int] = []
+
+    async def _sync(*args):
+        llamadas.append(1)
+        if len(llamadas) == 1:
+            raise GraphError("Error de Meta: caído", category="TRANSIENT", code=2)
+        return []
+
+    svc, tenant_id, connection = _preparar_sync(monkeypatch, redis, _sync)
+    error = await svc.sync_templates_now(tenant_id, str(connection.id))
+    assert error is not None and error.code == "sync_failed"
+    assert not any(k.startswith("tpl_sync_manual:") for k in redis.keys)
+    # Reintento inmediato: no responde «espera un minuto».
+    assert await svc.sync_templates_now(tenant_id, str(connection.id)) is None
+    assert len(llamadas) == 2
+
+
+class _RedisCaido:
+    async def set(self, *args, **kwargs):
+        raise ConnectionError("redis caído")
+
+    async def delete(self, *args, **kwargs):
+        raise ConnectionError("redis caído")
+
+
+@pytest.mark.asyncio
+async def test_sync_manual_con_redis_caido_no_da_500(monkeypatch) -> None:
+    llamadas: list[int] = []
+
+    async def _sync(*args):
+        llamadas.append(1)
+        return []
+
+    svc, tenant_id, connection = _preparar_sync(monkeypatch, _RedisCaido(), _sync)
+    assert await svc.sync_templates_now(tenant_id, str(connection.id)) is None
+    assert llamadas == [1]

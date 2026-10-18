@@ -144,7 +144,11 @@ class PluginManager:
                 from core.shared.validacion import campos_de
 
                 fields = campos_de(exc.errors())
-                raise PluginConfigError(plugin_id, f"Configuración inválida: {exc}", fields) from exc
+                # Mensaje fijo con solo los nombres de campo: `str(exc)` lleva `input_value`
+                # (podría ser un secreto del formulario) y terminaría en la respuesta.
+                raise PluginConfigError(
+                    plugin_id, f"Configuración inválida: revisa {', '.join(fields)}", fields
+                ) from exc
 
         encrypted = get_secret_box().encrypt_json(raw_values)
         tenant_id = get_current_tenant_id()

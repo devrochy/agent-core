@@ -198,9 +198,9 @@ class RulesUpdate(BaseModel):
     # Rangos explícitos: un negativo responde 422 con el campo marcado (antes se recortaba a 0
     # y el panel decía «guardado»). P0 de pruebas 2026-10-17.
     max_dias_prorroga: int = Field(default=15, ge=0, le=365)
-    min_abono_pct: float = Field(default=10.0, ge=0, le=100)
+    min_abono_pct: float = Field(default=10.0, ge=0, le=100, allow_inf_nan=False)
     max_reprogramaciones: int = Field(default=2, ge=0, le=100)
-    umbral_saldo_autonomo: float = Field(default=0.0, ge=0)
+    umbral_saldo_autonomo: float = Field(default=0.0, ge=0, le=999_999_999_999, allow_inf_nan=False)
     alcance_promesa: AlcancePromesa | None = Field(
         default=None,
         description="Alcances de la promesa de pago (ambos, vencido o saldo_total). Si no se envía, se conserva el actual.",
