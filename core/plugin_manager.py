@@ -140,10 +140,10 @@ class PluginManager:
             try:
                 module.config_schema.model_validate(raw_values)
             except ValidationError as exc:
-                # Errores por campo (HU-FWK-08): `{campo: mensaje}` para el formulario.
-                fields = {
-                    ".".join(str(p) for p in err["loc"]): err["msg"] for err in exc.errors()
-                }
+                # Errores por campo (HU-FWK-08): `{campo: mensaje}` en español para el formulario.
+                from core.shared.validacion import campos_de
+
+                fields = campos_de(exc.errors())
                 raise PluginConfigError(plugin_id, f"Configuración inválida: {exc}", fields) from exc
 
         encrypted = get_secret_box().encrypt_json(raw_values)
@@ -186,7 +186,18 @@ class PluginManager:
                 raise PluginConfigError(plugin_id, "El plugin requiere configuración previa")
             return None
         values = get_secret_box().decrypt_json(stored.config_encrypted)
-        return module.config_schema.model_validate(values)
+        try:
+            return module.config_schema.model_validate(values)
+        except ValidationError as exc:
+            # Una config guardada antes de endurecer el schema (p. ej. días negativos) no puede
+            # tumbar el GET del formulario ni las tools con un `ValidationError` crudo: se
+            # reporta como config inválida, con los campos, para que el negocio la corrija.
+            from core.shared.validacion import campos_de
+
+            fields = campos_de(exc.errors())
+            raise PluginConfigError(
+                plugin_id, f"La configuración guardada ya no es válida: revisa {', '.join(fields)}", fields
+            ) from exc
 
     # ------------------------------------------------------------ activación
     async def activate(self, plugin_id: str, *, register_only: bool = False) -> None:

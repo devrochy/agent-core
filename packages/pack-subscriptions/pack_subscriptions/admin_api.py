@@ -26,10 +26,10 @@ class CrearSuscripcionBody(BaseModel):
     customer_id: uuid.UUID = Field(..., description="Customer del core (pivote multi-pack).")
     variant_id: uuid.UUID | None = Field(default=None, description="Variante de commerce (si aplica).")
     nombre: str = Field(..., description="Nombre del plan.")
-    precio: float = Field(default=0, description="Valor del período.")
+    precio: float = Field(default=0, ge=0, description="Valor del período.")
     moneda: str = Field(default="COP")
     periodicidad: str = Field(default="mensual")
-    trial_dias: int = Field(default=0, description="Días de prueba (0 = sin prueba).")
+    trial_dias: int = Field(default=0, ge=0, le=365, description="Días de prueba (0 = sin prueba).")
 
 
 class SuscripcionOut(BaseModel):

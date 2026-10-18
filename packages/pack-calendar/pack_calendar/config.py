@@ -7,6 +7,8 @@ Los tokens de acceso/refresh NO van aquí: viven en la conexión del tenant
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from pydantic import Field, SecretStr, model_validator
 
 from core.mcp.types import BasePluginConfig
@@ -78,9 +80,12 @@ class CalendarConfig(BasePluginConfig):
         default="primary", description="ID del calendario (primary = calendario principal)"
     )
     timezone: str = Field(default="America/Bogota", description="Zona horaria de las citas")
-    event_duration_minutes: int = Field(default=60, description="Duración por defecto de una cita")
-    slot_minutes: int = Field(default=60, description="Tamaño del bloque al proponer horarios")
-    buffer_minutes: int = Field(default=0, description="Margen entre citas")
+    # Minutos: la duración y el bloque son de al menos 1; el margen puede ser 0 (422 si no).
+    event_duration_minutes: int = Field(
+        default=60, ge=1, le=1440, description="Duración por defecto de una cita"
+    )
+    slot_minutes: int = Field(default=60, ge=1, le=1440, description="Tamaño del bloque al proponer horarios")
+    buffer_minutes: int = Field(default=0, ge=0, le=1440, description="Margen entre citas")
     business_hours: str = Field(
         default=DEFAULT_BUSINESS_HOURS,
         description=(
@@ -163,7 +168,7 @@ class CalendarConfig(BasePluginConfig):
         json_schema_extra={"format": "textarea"},
         description="Confirmación al cliente. Placeholders: {titulo}, {fecha}, {hora}, {zona}, {enlace}",
     )
-    recordatorios_horas: list[int] = Field(
+    recordatorios_horas: list[Annotated[int, Field(ge=0, le=720)]] = Field(
         default_factory=lambda: [24, 1],
         description="Horas antes de la cita en que se le recuerda al cliente (cada una se envía una vez).",
     )

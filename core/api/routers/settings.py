@@ -17,7 +17,7 @@ from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
 from core.admin.settings_service import (
@@ -98,19 +98,24 @@ class IdentityUpdate(BaseModel):
     currency: str = "COP"
     # `None` = no cambiar: un cliente que todavía no conoce el campo no lo pisa.
     timezone: str | None = None
-    guardrail_max_retries: int = 1
+    # Rangos explícitos (P0 de pruebas 2026-10-17): un valor fuera de rango responde 422 con
+    # el campo marcado, en vez de recortarse en silencio y "guardar con éxito". Son los mismos
+    # rangos que aplica `save_identity`.
+    guardrail_max_retries: int = Field(default=1, ge=0, le=5)
     guardrail_fail_action: GuardrailFailAction | None = None
     disabled_guardrails: list[str] = []
-    difficulty_long_message_threshold: int = LONG_MESSAGE_THRESHOLD
-    difficulty_turnos_sin_resolver_threshold: int = TURNOS_SIN_RESOLVER_THRESHOLD
-    difficulty_score_threshold: int = DIFFICULTY_SCORE_THRESHOLD
+    difficulty_long_message_threshold: int = Field(default=LONG_MESSAGE_THRESHOLD, ge=50, le=5000)
+    difficulty_turnos_sin_resolver_threshold: int = Field(
+        default=TURNOS_SIN_RESOLVER_THRESHOLD, ge=1, le=20
+    )
+    difficulty_score_threshold: int = Field(default=DIFFICULTY_SCORE_THRESHOLD, ge=1, le=10)
     escalation_keywords: list[str] = []
     out_of_hours_message: str = ""
-    auto_escalate_after_turns: int = 0
+    auto_escalate_after_turns: int = Field(default=0, ge=0, le=1000)
     persona_tone: str = ""
-    persona_warmth: int = 3
+    persona_warmth: int = Field(default=3, ge=0, le=5)
     persona_emojis: str = "sparse"
-    persona_max_length: int = 500
+    persona_max_length: int = Field(default=500, ge=0, le=10000)
     persona_forbidden: list[str] = []
     # `None` = no cambiar: la pausa tiene su propio endpoint (`PUT .../bot-paused`) y un
     # formulario abierto desde antes no debe reactivar ni pausar el asistente al guardar.
@@ -148,10 +153,28 @@ class BrainSettings(BaseModel):
     policy_budget: float = 0.5
 
 
+class BrainUpdate(BrainSettings):
+    """Entrada de `PUT /brain`: mismos rangos que recorta `save_brain` (temperatura 0–2,
+    1–50 llamadas a tools por turno, presupuesto ≥ 0); fuera de rango responde 422."""
+
+    model_temperature: float = Field(default=0.3, ge=0, le=2)
+    policy_max_tool_calls: int = Field(default=10, ge=1, le=50)
+    policy_budget: float = Field(default=0.5, ge=0)
+
+
 class MemorySettings(BaseModel):
     short_term_turns: int
     rag_top_k: int
     rag_min_score: float
+
+
+class MemoryUpdate(MemorySettings):
+    """Entrada de `PUT /memory`: turnos de contexto 1–200, top-k 0–20 (0 = sin RAG) y
+    umbral 0–1 (los rangos de `save_memory`); fuera de rango responde 422."""
+
+    short_term_turns: int = Field(ge=1, le=200)
+    rag_top_k: int = Field(ge=0, le=20)
+    rag_min_score: float = Field(ge=0, le=1)
 
 
 class SkillBinding(BaseModel):
@@ -439,7 +462,7 @@ async def save_bot_paused(
 
 @router.put("/brain", response_model=BrainSettings)
 async def save_brain(
-    payload: BrainSettings,
+    payload: BrainUpdate,
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> BrainSettings:
     spec = await load_active_spec()
@@ -523,7 +546,7 @@ async def save_web_chat_settings(
 
 @router.put("/memory", response_model=MemorySettings)
 async def save_memory_settings(
-    payload: MemorySettings,
+    payload: MemoryUpdate,
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> MemorySettings:
     """Memoria del agente: turnos de contexto y recall RAG."""
