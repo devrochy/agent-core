@@ -14,7 +14,9 @@
 `core.agents.data_por_agente`). Filtros comunes: `connection_id`, `desde`, `hasta` (por defecto
 30 días, máximo 366).
 
-Permisos (ADR-0136): sección `agents`. Conversaciones y clientes exigen además `conversations`
+Permisos (ADR-0136): sección `agents`. El costo en USD (`cost_usd`) solo sale con `costs`, como en la
+consola de conexiones y el editor; sin ese permiso va en null y los turnos y tokens se ven igual.
+Conversaciones y clientes exigen además `conversations`
 (nombres de clientes); un colaborador sin ella recibe 403 y las tareas le llegan sin
 `conversation_id`. Los registros se filtran por el permiso del pack dueño de cada uno. Un agente
 de otro negocio es 404 sin eco del id. Este router se incluye ANTES del de `agents` para que
@@ -54,7 +56,8 @@ class AgentConnection(BaseModel):
 class Activity(BaseModel):
     turns: int
     conversations: int
-    cost_usd: float
+    # En USD: solo con la sección `costs` (como la consola y el editor); si no, null.
+    cost_usd: float | None
     last_activity_at: datetime | None
 
 
@@ -87,7 +90,8 @@ class AgentConversation(BaseModel):
     connection_label: str | None
     agent_version: int | None
     turns: int
-    cost_usd: float
+    # En USD: solo con la sección `costs` (como la consola y el editor); si no, null.
+    cost_usd: float | None
     last_turn_at: datetime
 
 
@@ -133,7 +137,8 @@ class UsageTotals(BaseModel):
     turns: int
     input_tokens: int
     output_tokens: int
-    cost_usd: float
+    # En USD: solo con la sección `costs` (como la consola y el editor); si no, null.
+    cost_usd: float | None
 
 
 class UsageByConnection(UsageTotals):
@@ -227,7 +232,11 @@ def _ref(ref: str) -> str:
 # ------------------------------------------------------------------ rutas
 @router.get("/overview", response_model=AgentsOverview)
 async def agents_overview(principal: Annotated[Principal, Depends(require("agents"))]) -> AgentsOverview:
-    return AgentsOverview.model_validate(await svc.resumen(_tenant(principal)))
+    datos = await svc.resumen(_tenant(principal))
+    if not await _puede(principal, "costs"):
+        for fila in [*datos["items"], datos["sin_atribuir"]]:
+            fila["cost_usd"] = None
+    return AgentsOverview.model_validate(datos)
 
 
 @router.get("/{ref}/conversations", response_model=Page[AgentConversation])
@@ -240,7 +249,12 @@ async def agent_conversations(
     alcance = await _alcance(principal, _ref(ref))
     await _exigir_conversaciones(principal)
     pagina = await svc.conversaciones(alcance, filtros, offset=params.offset, limit=params.page_size)
-    return build_page([AgentConversation(**i) for i in pagina.items], pagina.total, params)
+    ver_costos = await _puede(principal, "costs")
+    return build_page(
+        [AgentConversation(**{**i, "cost_usd": i["cost_usd"] if ver_costos else None}) for i in pagina.items],
+        pagina.total,
+        params,
+    )
 
 
 @router.get("/{ref}/customers", response_model=Page[AgentCustomer])
@@ -310,4 +324,8 @@ async def agent_usage(
     filtros: Annotated[svc.Filtros, Depends(_filtros)],
 ) -> AgentUsage:
     alcance = await _alcance(principal, _ref(ref))
-    return AgentUsage.model_validate(await svc.consumo(alcance, filtros))
+    datos = await svc.consumo(alcance, filtros)
+    if not await _puede(principal, "costs"):
+        for fila in [datos["total"], *datos["by_connection"], *datos["by_day"]]:
+            fila["cost_usd"] = None
+    return AgentUsage.model_validate(datos)

@@ -303,7 +303,22 @@ async def test_permisos_de_colaborador(app_client) -> None:
     assert (await app_client.get(f"{base}/records", headers=sin_conv)).json()["total"] == 0  # sin el pack
     assert (await app_client.get(f"{base}/usage", headers=sin_conv)).status_code == 200
 
+    # El costo en USD solo con `costs` (como la consola y el editor); turnos y tokens siempre.
+    sin_costos = await api_headers(app_client, tid, email=await _colaborador(tid, ("costs",)), password=PASSWORD)
+    uso = (await app_client.get(f"{base}/usage", headers=sin_costos)).json()
+    assert uso["total"]["cost_usd"] is None and uso["total"]["turns"] == 2
+    assert all(f["cost_usd"] is None for f in uso["by_connection"] + uso["by_day"])
+    overview = (await app_client.get(f"{_BASE}/overview", headers=sin_costos)).json()
+    assert all(i["cost_usd"] is None for i in overview["items"]) and overview["sin_atribuir"]["cost_usd"] is None
+    assert next(i for i in overview["items"] if i["key"] == "ventas")["turns"] == 2
+    convs = (await app_client.get(f"{base}/conversations", headers=sin_costos)).json()["items"]
+    assert convs and all(c["cost_usd"] is None for c in convs)
+
     lector = await api_headers(app_client, tid, email=await _colaborador(tid, ()), password=PASSWORD)
+    uso = (await app_client.get(f"{base}/usage", headers=lector)).json()
+    assert uso["total"]["cost_usd"] > 0
+    overview = (await app_client.get(f"{_BASE}/overview", headers=lector)).json()
+    assert next(i for i in overview["items"] if i["key"] == "ventas")["cost_usd"] > 0
     assert (await app_client.get(f"{base}/records", headers=lector)).json()["total"] == 1
     assert (await app_client.get(f"{base}/conversations", headers=lector)).status_code == 200
 

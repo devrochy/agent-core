@@ -33102,7 +33102,14 @@
             "title": "Conversations"
           },
           "cost_usd": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Cost Usd"
           },
           "last_activity_at": {
@@ -33242,7 +33249,14 @@
             "title": "Turns"
           },
           "cost_usd": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Cost Usd"
           },
           "last_turn_at": {
@@ -33332,7 +33346,14 @@
             "title": "Conversations"
           },
           "cost_usd": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Cost Usd"
           },
           "last_activity_at": {
@@ -33917,7 +33938,14 @@
             "title": "Output Tokens"
           },
           "cost_usd": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Cost Usd"
           },
           "connection_id": {
@@ -33970,7 +33998,14 @@
             "title": "Output Tokens"
           },
           "cost_usd": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Cost Usd"
           },
           "day": {
@@ -34024,7 +34059,14 @@
             "title": "Output Tokens"
           },
           "cost_usd": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Cost Usd"
           }
         },

@@ -8,6 +8,6 @@
   en la tool qué crea (`MCPTool.crea_registro`) y cómo reconocer un registro nuevo.
 - El General absorbe lo no atribuido (turnos legacy o de antes de v3): un negocio sin agentes ve un General con lo que haya.
 - Sección de permisos nueva `agents` («Agentes»). Conversaciones y clientes exigen además `conversations`; los registros
-  se filtran por el permiso del pack.
+  se filtran por el permiso del pack. El costo en USD solo sale con la sección `costs` (sin ella va en null).
 - Índice `ix_conversation_tasks_owner` (CONCURRENTLY) para las tareas por dueño.
 - Pendiente: `/admin/plan` con `agentes` y `colaboradores` (depende de HU-BILL-05) y pass^k por agente (HU-AOS-21).

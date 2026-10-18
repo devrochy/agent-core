@@ -53,7 +53,9 @@ cada registro**, que vive en tablas de packs, y una API para leer todo por agent
    solo ve lo no atribuido. Así un negocio legacy ve «General con lo que haya» sin un UUID centinela en la API.
    *Revisable.*
 7. **Permisos (ADR-0136).** Sección nueva `agents` («Agentes»): owner `write`, colaborador `read` por defecto
-   (ADR-0047 §3, así que los colaboradores existentes la ven, incluido el costo), denegable por negocio.
+   (ADR-0047 §3, así que los colaboradores existentes la ven), denegable por negocio. El **costo en USD**
+   (`cost_usd` de `/overview`, `/conversations` y `/usage`) solo sale con la sección `costs`, como en la
+   consola de conexiones (HU-AOS-23) y el editor (HU-AOS-24); sin ella va en null y turnos y tokens se ven igual.
    Conversaciones y clientes exigen además `conversations` (403); sin ella, tareas y registros llegan sin
    `conversation_id`. Los registros se filtran por el permiso del pack dueño de cada fila (`core` siempre). El
    editor de agentes (`core/api/routers/agents.py`) sigue en `settings`: lo reorganiza HU-AOS-24. *Revisable.*
