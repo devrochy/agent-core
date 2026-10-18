@@ -81,7 +81,7 @@ camino real del pack (capacidad y transacciones) sin red: los links son
 | `{"evento": "payment.confirmed", "datos": {...}}` | Emite el evento en el bus, como la pasarela. |
 | `{"reloj": "+30d"}` | Adelanta el reloj del journey (`d`, `h`, `m`). |
 | `{"job": "pack.nombre"}` | Corre `<pack>.jobs._<nombre>(now)` con el reloj del journey. |
-| `{"verifica": {"tabla": ..., "donde": {...}, "espera": {...}}}` | Consulta filas del negocio (RLS + `tenant_id`). `donde` filtra por igualdad (`campo->>clave` en JSONB); `espera` compara la primera fila (`$no_nulo`, `$en`, `$contiene`); `filas` exige cantidad; `guardar_como` deja la fila para `{nombre.campo}`. |
+| `{"verifica": {"tabla": ..., "donde": {...}, "espera": {...}}}` | Consulta filas del negocio (RLS + `tenant_id`). `donde` filtra por igualdad (`campo->>clave` en JSONB); `espera` compara la primera fila (operadores como objeto: `{"$no_nulo": true}`, `{"$en": [...]}`, `{"$contiene": ...}`); `orden` (por defecto `created_at desc`; una tabla sin esa columna necesita, p. ej., `"orden": "id"`); `filas` exige cantidad; `guardar_como` deja la fila para `{nombre.campo}`. |
 | `{"outbox": "despachar", "rondas": 5}` | Entrega los eventos pendientes del outbox **del negocio del journey** (RLS y `tenant_id`), como el despachador del worker, hasta `rondas` vueltas: un evento puede generar otro (`payment.confirmed` → activación → `subscription.activated` → alta). Falla si un evento quedó con error. |
 | `{"accion": "activar_suscripcion", "datos": {"plan": {...}}}` | Activa una suscripción del cliente con el proveedor del negocio (contrato del core), sin conversación. |
 | `{"simulado": {"objetivo": ..., "datos": {...}, "estilo": ..., "max_turnos": 8}, "espera_fin": [...]}` | Un cliente simulado (LLM, prompt en `evals/simulador/cliente.md`) conversa con el loop hasta cumplir su objetivo (`objetivo`), rendirse (`se_rindio`), pasar a un humano (`relevo`) o llegar al tope (`tope`). `espera_fin` lista los finales aceptados. La semilla (`semilla` del journey + número de intento) elige una variante de comportamiento. |
@@ -110,7 +110,9 @@ Con `--k N` cada journey corre N veces, con un cliente nuevo y otra semilla por 
 
 Cada `verifica` deja sus aserciones con esperado y real en `eval_results.state_assertions`, y el
 paso `simulado` deja su traza en `eval_results.simulator`. Un journey con cliente simulado se
-valida por el **estado final** en la base, no por el texto exacto de las respuestas.
+valida por el **estado final** en la base, no por el texto exacto de las respuestas. Si termina en «relevo», el motivo (`guardrail=…` o
+`verificador=…`) va en el detalle del intento. Con `--reporte`, `runtime` trae lo pedido y las banderas
+efectivas del negocio de la corrida.
 
 `evals/runner.py` (golden) también acepta `--k`, `--umbral` y `--reporte`.
 

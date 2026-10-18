@@ -28,7 +28,9 @@
         "filas": 1,
         "espera": {
           "status": "scheduled",
-          "start_at": "$no_nulo"
+          "start_at": {
+            "$no_nulo": true
+          }
         }
       }
     }
