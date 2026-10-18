@@ -500,3 +500,22 @@ async def test_app_de_campo_corta_al_desvincular_y_al_suspender(app_client) -> N
     r = await app_client.post(f"{campo}/auth/refresh", json={"refreshToken": t_ow["refreshToken"]})
     assert r.status_code == 200, r.text
     assert r.json()["accessToken"]
+
+
+async def test_app_de_campo_acepta_cuenta_con_permiso_global(app_client) -> None:
+    """Re-revisión: una cuenta sin `tenant_user` pero con permiso global entra a la app de campo
+    como `master` (rama `global` de `admin_tenants`) y sus tokens siguen sirviendo."""
+    from core.db.models import AdminPermission
+    from core.db.session import get_session
+
+    s = uniq("glob")
+    await _negocio(s, f"owner-{s}@p0.test")
+    glob = f"glob-{s}@p0.test"
+    gid = await _admin(glob)
+    async with get_session() as session:
+        session.add(AdminPermission(admin_id=gid, section="costs", access="read", tenant_id=None))
+    campo = "/api/pack/pack_cobranza"
+    r = await app_client.post(f"{campo}/auth/login", json={"usuario": glob, "password": PW, "tenant": f"p0-{s}"})
+    assert r.status_code == 200, r.text
+    h = {"Authorization": f"Bearer {r.json()['accessToken']}"}
+    assert (await app_client.get(f"{campo}/gestor/mis-carteras", headers=h)).status_code == 200

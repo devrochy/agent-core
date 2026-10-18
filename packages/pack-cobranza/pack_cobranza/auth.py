@@ -18,7 +18,7 @@ from typing import Any
 from sqlalchemy import select
 
 from core.admin.roles import actua_como_master, cuenta_habilitada
-from core.db.models import Admin, TenantUser
+from core.db.models import Admin, AdminPermission, TenantUser
 from core.db.session import get_session
 from core.tenants import is_tenant_active
 
@@ -126,7 +126,9 @@ async def token_tenant(token: str) -> tuple[uuid.UUID, dict[str, Any]] | None:
 
 
 async def _vinculado(session: Any, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> bool:
-    """¿La cuenta sigue en el negocio (`tenant_user`)? Tabla de sistema, sin RLS."""
+    """¿La cuenta sigue teniendo el negocio? Por `tenant_user` o, como la rama `global` de
+    `admin_tenants()` (0035/0088), por un permiso global (`admin_permissions.tenant_id` null),
+    que el login de campo trata como `master`. Tablas de sistema, sin RLS."""
     row = (
         await session.execute(
             select(TenantUser.id).where(
@@ -134,7 +136,16 @@ async def _vinculado(session: Any, tenant_id: uuid.UUID, admin_id: uuid.UUID) ->
             )
         )
     ).scalar_one_or_none()
-    return row is not None
+    if row is not None:
+        return True
+    global_ = (
+        await session.execute(
+            select(AdminPermission.id)
+            .where(AdminPermission.admin_id == admin_id, AdminPermission.tenant_id.is_(None))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return global_ is not None
 
 
 async def acceso_de_campo(authorization: str | None) -> tuple[uuid.UUID, dict[str, Any]] | None:
