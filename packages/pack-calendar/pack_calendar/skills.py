@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
-from core.mcp.types import BaseSkill, MCPTool, ScopedHttp, ToolContext
+from core.mcp.types import BaseSkill, MCPTool, RegistroCreado, ScopedHttp, ToolContext
 from core.shared.exceptions import PluginError
 from core.shared.tenant import get_current_tenant_id
 from pack_calendar import google_api
@@ -399,6 +399,10 @@ class CalendarSkill(BaseSkill):
                     "required": ["title", "start_datetime"],
                 },
                 handler=self.create_event,
+                # HU-AOS-47: procedencia de la cita (id local o el del evento de Google).
+                crea_registro=RegistroCreado(
+                    kind="cita", id_key="event_id", es_nuevo=lambda r: r.get("status") == "created"
+                ),
                 connection_predicate=self._connections_ok,
             ),
             MCPTool(

@@ -22,6 +22,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 
+from core.agents import procedencia
 from core.agents.flow import confirmed_actions_v2, render_flow, resolve_flow
 from core.agents.responses import load_response
 from core.agents.spec import enabled_packs, load_active_spec
@@ -1099,6 +1100,9 @@ async def _execute_tool_safely(
             "error": "La herramienta no está disponible en este momento. "
             "Discúlpate y ofrece escalar a un asesor humano si es necesario."
         }
+    # HU-AOS-47: procedencia del registro que creó la acción (solo tools registradas que la
+    # declaran, solo con release v3; best-effort). Antes de `tras_accion`, que transforma `result`.
+    await procedencia.registrar(mcp_host.get_tool(tool_call.name), result, conversation.id)
     await record_audit(
         actor=f"tool:{tool_call.name}",
         action="execute",

@@ -21,6 +21,9 @@
     "core/agents/secretos.py",
     "core/agents/versiones.py",
     "core/api/routers/agents.py",
+    "core/api/routers/agent_data.py",
+    "core/agents/data_por_agente.py",
+    "core/agents/procedencia.py",
     "core/api/routers/declarative_tools.py",
     "core/api/routers/connection_releases.py"
   ],

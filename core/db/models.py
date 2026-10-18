@@ -1963,6 +1963,29 @@ class AgentInstanceRecord(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class AgentRecordOrigin(Base):
+    """Procedencia de un registro que creó una acción del agente (HU-AOS-47, ADR-0140, 0095).
+
+    Append-only (`prevent_mutation()`). El registro vive en la tabla de su pack; aquí solo su
+    referencia, la referencia pública opcional (`label`) y quién lo creó."""
+
+    __tablename__ = "agent_record_origins"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    pack_id: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    record_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    label: Mapped[str | None] = mapped_column(Text)
+    tool: Mapped[str] = mapped_column(Text, nullable=False)
+    agent_instance_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    agent_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    turn_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=turn_id_de_fila)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class PackInstallationRecord(Base):
     """Habilidad instalada con scope (ADR-0118 §2). En esta HU solo se usa la instalación
     `core` de scope negocio, que guarda los secretos de las `declarativeTools` (ADR-0118 §5):

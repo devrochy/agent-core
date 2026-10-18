@@ -302,6 +302,27 @@ def plugin_http(allowed_domains: Iterable[str] | None) -> ScopedHttp:
     return ScopedHttp(list(allowed_domains or ()), methods=PLUGIN_HTTP_METHODS)
 
 
+@dataclass(frozen=True)
+class RegistroCreado:
+    """Lo que una tool crea en el negocio (HU-AOS-47, ADR-0140): el core guarda su procedencia
+    (qué agente, conexión y turno lo crearon) en `agent_record_origins` sin conocer las tablas
+    ni el vocabulario del pack.
+
+    - `kind`: tipo de registro (`pedido`, `lead`, `cita`, `promesa`…), texto corto del pack.
+    - `id_key`: clave del resultado con el id del registro.
+    - `label_key`: clave opcional con una referencia PÚBLICA (número de pedido); nunca datos
+      personales del cliente.
+    - `es_nuevo`: el pack decide si el resultado es un registro recién creado (y no uno que ya
+      existía o un duplicado por reintento). El core solo descarta antes lo que trae `error` u
+      `ok: false`.
+    """
+
+    kind: str
+    id_key: str
+    es_nuevo: Callable[[dict[str, Any]], bool]
+    label_key: str | None = None
+
+
 @dataclass
 class MCPTool:
     name: str
@@ -323,6 +344,9 @@ class MCPTool:
     # (memoria, perfil, escalamiento, correo, suscripciones; HU-FWK-01, ADR-0109).
     # Siguen sujetas a `requires_connection_types`/`connection_predicate`.
     always_available: bool = False
+    # HU-AOS-47 (ADR-0140): si la tool crea un registro del negocio, cómo reconocerlo para
+    # guardar su procedencia. No entra al manifiesto de la release (`core/releases/packs.py`).
+    crea_registro: RegistroCreado | None = None
 
 
 @dataclass

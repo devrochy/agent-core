@@ -39,6 +39,8 @@ CORE_SECTIONS: dict[str, str] = {
     "leads": "Leads",
     "conversations": "Conversaciones",
     "escalations": "Escalaciones",
+    # Mi agente y su data (HU-AOS-47, ADR-0140): lectura por agente de lo que hizo.
+    "agents": "Agentes",
     "connections": "Conexiones",
     "plugins": "Plugins",
     "costs": "Costos LLM",
