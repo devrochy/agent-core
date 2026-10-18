@@ -72,3 +72,60 @@ Las habilidades de la plataforma publican versiones inmutables con procedimiento
 `register_pack_version()` (migración 0079) no da `EXECUTE` a `app_runtime`, a diferencia de `upsert_plan()`
 (ADR-0045): la ejecuta el rol dueño (`MIGRATIONS_DATABASE_URL`, que ya solo tiene el contenedor `api`) desde
 el entrypoint, después de migrar (`agent-core db sync-packs`). Detalle en la adenda de HU-AOS-14 de ADR-0117.
+
+## Adenda (2026-10-17, HU-AOS-16 parte 1): habilidades por conexión y procedimientos por agente
+
+Primera parte de la HU. No cambia esquema (sin migración) ni contratos, y con las banderas apagadas
+(`aos_runtime = legacy` o `AOS_CONNECTION_ROUTING` apagada) no cambia lo que ve el modelo: el turno
+solo lee lo nuevo cuando tiene una release en la ranura.
+
+- **Scope de negocio, sin cambio:** sigue siendo `enabled_business_packs(spec activo)` (ADR-0019). No
+  se escriben filas `pack_installations` de scope `tenant`, ni hay siembra, backfill o doble escritura
+  desde `spec.packs`: el punto de corte de §2 (lectores sobre instalaciones, todos los call-sites y el
+  CI contra `spec.packs`) es la parte 2, en un solo PR.
+- **Scope de conexión:** filas `scope = 'connection'` que escribe solo la API nueva
+  (`/api/v1/admin/skills/installations`, sección `plugins`; escritura del master o de un negocio
+  `v3`) y que lee solo el build de la release. Si la conexión tiene instalaciones propias vivas y
+  activas, la release congela SOLO esas (reemplazo entero, sin merge); si no, las del negocio.
+  Precondición: el pack está habilitado en el negocio (409 `pack_not_enabled`), porque la activación
+  del código, la config y las tools siguen colgando de `spec.packs`; el build lo vuelve a exigir
+  (`ErrorDelBuild("instalacion_sin_habilitar")`, fail-closed). Integración no conversacional → 409.
+  La instalación no lleva versión: la fija la release. Instalar o quitar aplica con la próxima release.
+- **`release/2`:** cada componente lleva `is_default` y `procedures` resueltos a versión exacta
+  (`[{id, version}]`; `0.0.0` = abierto). Los rangos (`^`, `~`, exacta) se resuelven en el build
+  contra los `procedure/1` del manifiesto de la versión congelada de cada habilidad (los mismos bytes
+  que `pack_versions`, ya comparado el hash) y su `requires` tiene que estar en el scope; si no,
+  `procedimiento_sin_resolver`. Los dos campos entran al hash: el primer build tras el deploy crea una
+  release nueva por conexión aunque nada más cambie. Una release `release/1` se lee con la regla
+  transitoria de HU-AOS-05 (procedimientos del binario de los packs habilitados), decidida por
+  `schema`, no por los campos presentes.
+- **El General declara, no hereda:** el lector tolerante escribe en `procedures` del General los
+  procedimientos publicados de los packs habilitados con `^M.0` (como ya declara en `tools` todo lo que
+  ofrece el loop). No hay regla por key: una sola regla de oferta para cualquier agente. Con `v3`, el
+  build refresca solo el General y solo si su última versión la produjo el lector tolerante
+  (`legacy_agent_spec_id` no nulo); una versión publicada por el dueño no se pisa.
+- **Runtime:** `cargar_release` lee además los `procedure/1` de `pack_versions` (caché global en
+  proceso por `(pack_id, version)`: son inmutables) y el `content` de las versiones de los agentes.
+  La ranura (`ArtefactosDeRelease`, sigue hoja) lleva las habilidades, los procedimientos de toda la
+  release y, por `instance_id`, los de cada agente. Los agentes son los `AgenteCongelado` de HU-AOS-15
+  (contenido por `agent_version_id`), que con `release/2` traen además `is_default` y sus
+  procedimientos resueltos; el agente en foco es el `foco` que elige `elegir_foco` (HU-AOS-15) y
+  `procedimientos_del_agente()` deriva de él (un solo modelo, sin enganche propio). Con el motor activo, `iniciar_procedimiento` ofrece solo los procedimientos
+  PUBLICADOS que declara el agente en foco (nunca los abiertos `0.0.0`, que solo sirven a la
+  revalidación); las tools pasan si son del core, comandos, de la etapa en foco o declaradas por el
+  agente, y nunca las de un pack fuera de las habilidades de la release (`fuera_del_agente`). Las
+  puertas se calculan sobre todos los procedimientos publicados de la release. Las tools
+  declarativas no las filtra el scope, solo el agente. Con el General por defecto, lo que ve el
+  modelo es lo mismo que sin release (test de loop guionado).
+- **Cambio de release:** `revalidar_tareas` sigue una tarea si la release nueva tiene el mismo
+  procedimiento con el mismo major (`procedimiento_para`); si desaparece o cambia de major, se cancela
+  o se escala como antes.
+- **Límites conocidos de la parte 1:** una conexión con instalaciones propias no puede tener al General
+  del lector tolerante (declara todo lo del negocio: el build falla con `procedimiento_sin_resolver`);
+  se usa con especialistas. Fuera del turno (worker y crons) `registro.definicion` solo ve el binario,
+  así que una release que congele una versión distinta a la del binario no gobierna esos cierres
+  hasta la parte 2 (hoy coinciden). El flujo y los playbooks del pack siguen del binario.
+- **Parte 2:** lectores `enabled_packs` sobre instalaciones en todos los call-sites y CI contra
+  `spec.packs`; instalación de scope negocio; `load_config` por conexión; crons y eventos por
+  instalación; `plugin_configs` → `config_encrypted`; tope del plan por instalaciones; plantillas de
+  agente; candidatas `origin = platform` y `yanked`; flujo y playbooks desde `pack_versions`; panel.

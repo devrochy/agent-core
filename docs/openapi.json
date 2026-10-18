@@ -17080,6 +17080,200 @@
           }
         }
       }
+    },
+    "/api/v1/admin/skills/installations": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · habilidades"
+        ],
+        "summary": "List Installations",
+        "operationId": "list_installations_api_v1_admin_skills_installations_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SkillInstallation"
+                  },
+                  "title": "Response List Installations Api V1 Admin Skills Installations Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "admin · habilidades"
+        ],
+        "summary": "Create Installation",
+        "description": "Instala una habilidad solo para una conexión; 200 si ya estaba. Aplica con la próxima release de la conexión.",
+        "operationId": "create_installation_api_v1_admin_skills_installations_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillInstallationCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillInstallation"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillInstallation"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/skills/installations/{installation_id}": {
+      "delete": {
+        "tags": [
+          "api",
+          "admin · habilidades"
+        ],
+        "summary": "Delete Installation",
+        "description": "Quita la instalación. Aplica con la próxima release de la conexión.",
+        "operationId": "delete_installation_api_v1_admin_skills_installations__installation_id__delete",
+        "parameters": [
+          {
+            "name": "installation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Installation Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -30540,6 +30734,14 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Content"
+          },
+          "procedures": {
+            "items": {
+              "$ref": "#/components/schemas/ResolvedProcedure"
+            },
+            "type": "array",
+            "title": "Procedures",
+            "default": []
           }
         },
         "type": "object",
@@ -31385,6 +31587,127 @@
           "contenido"
         ],
         "title": "QaMisDatos"
+      },
+      "ResolvedProcedure": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "range": {
+            "type": "string",
+            "title": "Range"
+          },
+          "resolved_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Version"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "range",
+          "resolved_version",
+          "problem"
+        ],
+        "title": "ResolvedProcedure"
+      },
+      "SkillInstallation": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "pack_id": {
+            "type": "string",
+            "title": "Pack Id"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "tenant",
+              "connection"
+            ],
+            "title": "Scope"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "installed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Installed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "pack_id",
+          "scope",
+          "connection_id",
+          "status",
+          "installed_at"
+        ],
+        "title": "SkillInstallation"
+      },
+      "SkillInstallationCreate": {
+        "properties": {
+          "pack_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]{1,60}$",
+            "title": "Pack Id"
+          },
+          "scope": {
+            "type": "string",
+            "const": "connection",
+            "title": "Scope",
+            "default": "connection"
+          },
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "pack_id",
+          "connection_id"
+        ],
+        "title": "SkillInstallationCreate"
       },
       "BrainUpdate": {
         "properties": {

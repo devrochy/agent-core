@@ -60,7 +60,7 @@ def test_manifiesto_ordenado_y_hash_sin_built_with() -> None:
     m = _manifiesto()
     assert [c["role"] for c in m["components"]] == ["core", "specialist"]
     assert [s["pack_id"] for s in m["skills"]] == ["pack_a", "pack_b"]
-    assert m["schema"] == "release/1"
+    assert m["schema"] == "release/2"
     # Un deploy (otro git_sha) no cambia el hash; un texto del negocio, sí.
     assert man.hash_de(m) == man.hash_de(_manifiesto(built_with={"git_sha": "otro"}))
     assert man.hash_de(m) != man.hash_de(_manifiesto(overrides={"tono": "Otro texto."}))

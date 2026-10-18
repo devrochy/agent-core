@@ -46,6 +46,7 @@ from core.api.routers import (
     qa,
     search,
     settings,
+    skill_installations,
     sync,
     tenants,
     web_chat,
@@ -68,6 +69,7 @@ api_router.include_router(playground.router)
 api_router.include_router(escalations.router)
 api_router.include_router(leads.router)
 api_router.include_router(plugins.router)
+api_router.include_router(skill_installations.router)
 api_router.include_router(procedures.router)
 api_router.include_router(agents.router)
 api_router.include_router(connections.router)

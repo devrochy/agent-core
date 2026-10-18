@@ -1,6 +1,6 @@
 """Build de una release candidata por conexión (ADR-0117 §2, HU-AOS-14).
 
-`construir(tenant_id, connection_id, ...)` congela en una release inmutable (forma `release/1`,
+`construir(tenant_id, connection_id, ...)` congela en una release inmutable (forma `release/2`,
 `core/releases/manifiesto.py`) lo que la conexión corre:
 
 1. **Versiones de los agentes.** Por cada instancia viva y habilitada de la conexión, una versión
@@ -11,15 +11,25 @@
    negocio, idempotente, y publica la conversión actual si su hash cambió) y congela esa
    versión, no "la última". Así la release 1 sale del v2 activo aunque se haya editado en el
    panel legacy después del backfill o el binario cambie la conversión (adenda de HU-AOS-13 en
-   ADR-0113: "refrescar la versión es decisión del build").
-2. **Habilidades.** Las habilitadas del negocio (`enabled_business_packs` del v2 activo, la única
-   lectura de la habilitación hasta HU-AOS-16): las de la plataforma con su versión exacta,
-   registrada en `pack_versions` con el mismo `manifest_hash` y no retirada; los plugins del
-   negocio solo por nombre.
-3. **Procedimientos.** Cada `ProcedureRef` de las versiones debe resolver: los abiertos
-   (`=0.0.0`) contra los que se derivan del flujo (core y packs del binario + las secciones del
-   negocio congeladas). Un rango necesita la versión de la habilidad que lo provea, y hoy ningún
-   pack trae procedimientos: se rechaza.
+   ADR-0113: "refrescar la versión es decisión del build"). Con `v3` se refresca solo el
+   General y solo si su última versión la produjo el lector tolerante (`legacy_agent_spec_id`
+   no nulo): así un General que todavía no declara los procedimientos publicados (HU-AOS-16)
+   los declara en su siguiente build, y uno que el dueño ya editó no se pisa.
+2. **Habilidades.** Las efectivas en el scope de la conexión (ADR-0118 §2, HU-AOS-16): si la
+   conexión tiene instalaciones propias vivas (`pack_installations`, scope `connection`),
+   SOLO esas, sin merge; si no, las habilitadas del negocio (`enabled_business_packs` del v2
+   activo). Una instalación de conexión de un pack que el negocio no tiene habilitado hace
+   fallar el build (`instalacion_sin_habilitar`: en la parte 1 de la HU la activación del
+   código, la config y las tools siguen colgando de `spec.packs`). Las de la plataforma con su
+   versión exacta, registrada en `pack_versions` con el mismo `manifest_hash` y no retirada; los
+   plugins del negocio solo por nombre.
+3. **Procedimientos.** Cada `ProcedureRef` de las versiones `agentspec/3` resuelve a una
+   versión exacta (`core/releases/procedimientos.py`): los abiertos (`=0.0.0`) contra los que
+   se derivan del flujo (core y packs del binario + las secciones del negocio congeladas) y los
+   rangos contra los procedimientos que publica la versión congelada de cada habilidad efectiva
+   (el manifiesto del binario, cuyo hash ya se comprobó contra `pack_versions`). Lo resuelto
+   queda en `components[].procedures`. Un ref que no resuelve, o cuya habilidad (o una que
+   requiere) no está en el scope, hace fallar el build (fail-closed).
 4. **Textos del negocio.** Overrides de playbooks de la allowlist (`TENANTS_ROOT/<slug>/playbooks`)
    y las secciones crudas de su `flow.json`. Fail-closed: un override que no se puede leer o
    pasa 8 KiB, o un `flow.json` roto, hacen fallar el build (la release es inmutable; el loop
@@ -37,6 +47,7 @@ Corre dentro del `tenant_scope` del negocio (RLS) y además filtra por `tenant_i
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -55,7 +66,6 @@ from core.shared.tenant import get_current_tenant_id
 log = get_logger(__name__)
 
 _PLAYBOOK_SEGURO = re.compile(r"^[a-zA-Z0-9_-]{1,80}$")
-_VERSIONES_ABIERTAS = ("=0.0.0", "0.0.0")
 
 
 class ErrorDelBuild(RuntimeError):
@@ -111,13 +121,38 @@ async def _conexion_conversacional(tenant_id: uuid.UUID, connection_id: uuid.UUI
 
 
 # ------------------------------------------------------------------ 1. agentes
+async def _general_sigue_siendo_del_lector(tenant_id: uuid.UUID) -> bool:
+    """¿La última versión del General la produjo el lector tolerante? (`legacy_agent_spec_id`
+    no nulo.) Si el dueño publicó una versión propia, no se refresca."""
+    from core.agents.instancias import agentes_base
+    from core.agents.tolerante import KEY_GENERAL
+
+    async with get_session() as session:
+        aid = (await agentes_base(session, tenant_id)).get(KEY_GENERAL)
+        if aid is None:
+            return False
+        fila = (
+            await session.execute(
+                text(
+                    "SELECT legacy_agent_spec_id FROM agent_versions WHERE tenant_id = :t AND agent_id = :a "
+                    "ORDER BY version DESC LIMIT 1"
+                ),
+                {"t": tenant_id, "a": aid},
+            )
+        ).first()
+    return fila is not None and fila[0] is not None
+
+
 async def refrescar_desde_v2(
-    tenant_id: uuid.UUID, modules: list[Any]
+    tenant_id: uuid.UUID, modules: list[Any], *, solo_general: bool = False
 ) -> dict[uuid.UUID, uuid.UUID]:
     """`{agent_id: version_id}` del Coordinador y del General que corresponden al AgentSpec v2
     activo con el binario de hoy (ver el docstring del módulo). Publica una versión nueva solo si
     la conversión cambió; nunca escribe en `agent_specs` salvo la siembra del default que hace
-    el backfill (la misma que haría el loop en su primer turno)."""
+    el backfill (la misma que haría el loop en su primer turno).
+
+    `solo_general` (negocios v3, HU-AOS-16): no corre el backfill y publica solo el General; el
+    Coordinador queda en su última versión."""
     from core.agents import versiones
     from core.agents.backfill_agentes import backfill_agentes
     from core.agents.instancias import agentes_base
@@ -130,12 +165,13 @@ async def refrescar_desde_v2(
     )
     from core.kernel.procedures import catalogo_de_acciones
 
-    reporte = await backfill_agentes(dry_run=False, tenant_id=tenant_id, modules=modules)
-    problemas = [p.mensaje for p in (*reporte.bloqueados, *reporte.errores)]
-    if problemas:
-        raise ErrorDelBuild(
-            "backfill_pendiente", "El negocio no pasa el backfill de agentes.", problemas[:5]
-        )
+    if not solo_general:
+        reporte = await backfill_agentes(dry_run=False, tenant_id=tenant_id, modules=modules)
+        problemas = [p.mensaje for p in (*reporte.bloqueados, *reporte.errores)]
+        if problemas:
+            raise ErrorDelBuild(
+                "backfill_pendiente", "El negocio no pasa el backfill de agentes.", problemas[:5]
+            )
     leido = await leer_spec_activo(tenant_id)
     if leido is None:
         raise ErrorDelBuild("sin_spec", "El negocio no tiene AgentSpec activo.")
@@ -150,6 +186,8 @@ async def refrescar_desde_v2(
         KEY_COORDINADOR: conversion.kernel.model_dump(mode="json", by_alias=True),
         KEY_GENERAL: conversion.general.model_dump(mode="json", by_alias=True),
     }
+    if solo_general:
+        contenidos.pop(KEY_COORDINADOR)
     del conversion
     async with get_session() as session:
         ids = await agentes_base(session, tenant_id)
@@ -193,19 +231,25 @@ async def refrescar_desde_v2(
     return salida
 
 
+@dataclass(frozen=True)
+class _Instancia:
+    componente: man.Componente
+    contenido: dict[str, Any]
+
+
 async def _componentes(
     tenant_id: uuid.UUID,
     connection_id: uuid.UUID,
     fijadas: dict[uuid.UUID, uuid.UUID],
     catalogo: Any,
-) -> tuple[list[man.Componente], list[dict[str, Any]]]:
+) -> list[_Instancia]:
     from core.agents.contrato_v3 import revisar_spec
 
     async with get_session() as session:
         instancias = (
             await session.execute(
                 text(
-                    "SELECT ai.id, ai.agent_id, a.key, ai.role FROM agent_instances ai "
+                    "SELECT ai.id, ai.agent_id, a.key, ai.role, ai.is_default FROM agent_instances ai "
                     "JOIN agents a ON a.tenant_id = ai.tenant_id AND a.id = ai.agent_id "
                     "WHERE ai.tenant_id = :t AND ai.connection_id = :c AND ai.deleted_at IS NULL "
                     "AND ai.enabled AND a.deleted_at IS NULL ORDER BY ai.id"
@@ -213,12 +257,11 @@ async def _componentes(
                 {"t": tenant_id, "c": connection_id},
             )
         ).all()
-        if not any(rol == "core" for *_, rol in instancias):
+        if not any(rol == "core" for _i, _a, _k, rol, _d in instancias):
             raise ErrorDelBuild("sin_coordinador", "La conexión no tiene Coordinador.")
-        componentes: list[man.Componente] = []
-        contenidos: list[dict[str, Any]] = []
+        salida: list[_Instancia] = []
         problemas: list[str] = []
-        for iid, aid, key, rol in instancias:
+        for iid, aid, key, rol, por_defecto in instancias:
             version = (
                 await session.execute(
                     text(
@@ -237,30 +280,67 @@ async def _componentes(
             vid, numero, huella, contrato, contenido = version
             for issue in revisar_spec(contenido, catalogo, contrato):
                 problemas.append(f"{key}: {issue.path} ({issue.code})")
-            componentes.append(
-                man.Componente(
-                    instance_id=str(iid),
-                    agent_id=str(aid),
-                    agent_key=key,
-                    role=rol,
-                    agent_version_id=str(vid),
-                    version=int(numero),
-                    content_hash=huella,
-                    contract=contrato,
+            salida.append(
+                _Instancia(
+                    man.Componente(
+                        instance_id=str(iid),
+                        agent_id=str(aid),
+                        agent_key=key,
+                        role=rol,
+                        agent_version_id=str(vid),
+                        version=int(numero),
+                        content_hash=huella,
+                        contract=contrato,
+                        is_default=bool(por_defecto),
+                    ),
+                    contenido,
                 )
             )
-            contenidos.append(contenido)
     if problemas:
         raise ErrorDelBuild(
             "contrato_invalido", "Una versión no pasa el contrato con este binario.", problemas[:10]
         )
-    return componentes, contenidos
+    return salida
 
 
 # ------------------------------------------------------------------ 2. habilidades
+async def _efectivas(tenant_id: uuid.UUID, connection_id: uuid.UUID, del_negocio: set[str]) -> set[str]:
+    """Packs efectivos en el scope de la conexión (ADR-0118 §2): sus instalaciones propias si las
+    tiene (reemplazo entero), si no las del negocio. Fail-closed si una instalación de conexión
+    no está habilitada en el negocio (parte 1 de HU-AOS-16)."""
+    from core.agents.instalaciones import instaladas_en_conexion
+
+    propias = await instaladas_en_conexion(tenant_id, connection_id)
+    if not propias:
+        return set(del_negocio)
+    sin_habilitar = sorted(p for p in propias if p not in del_negocio)
+    if sin_habilitar:
+        raise ErrorDelBuild(
+            "instalacion_sin_habilitar",
+            "Una habilidad instalada en la conexión no está habilitada en el negocio.",
+            [f"{p}: habilítala en el negocio o quita la instalación de la conexión" for p in sin_habilitar],
+        )
+    return set(propias)
+
+
+def _publicados(pack: Any) -> list[Any]:
+    """Los `procedure/1` del manifiesto de la versión del pack (los mismos bytes que registra
+    `pack_versions`, ya comprobado el hash), validados; uno inválido se salta con log."""
+    from core.kernel.procedures import validar
+
+    salida: list[Any] = []
+    for crudo in pack.manifest.get("provides", {}).get("procedures", []):
+        proc, _problemas = validar(crudo)
+        if proc is None:
+            log.warning("release_build_procedimiento_invalido", pack_id=pack.pack_id, version=pack.version)
+            continue
+        salida.append(proc)
+    return salida
+
+
 async def _habilidades(
     tenant_id: uuid.UUID, packs: set[str], modules: list[Any]
-) -> tuple[list[man.Habilidad], list[str]]:
+) -> tuple[list[man.Habilidad], list[str], list[Any]]:
     from core.releases.packs import manifiesto_de_pack
 
     por_id = {str(m.id): m for m in modules}
@@ -276,6 +356,7 @@ async def _habilidades(
         }
         habilidades: list[man.Habilidad] = []
         del_negocio: list[str] = []
+        publicados: list[Any] = []
         problemas: list[str] = []
         for pid in sorted(packs):
             if pid not in duenos:
@@ -315,29 +396,38 @@ async def _habilidades(
                 problemas.append(f"{pid} {pack.version}: versión retirada (yanked)")
             else:
                 habilidades.append(man.Habilidad(pid, pack.version, pack.manifest_hash))
+                publicados.extend(_publicados(pack))
     if problemas:
         raise ErrorDelBuild(
             "habilidad_no_disponible", "Una habilidad no tiene versión utilizable.", problemas
         )
-    return habilidades, del_negocio
+    return habilidades, del_negocio, publicados
 
 
-def _refs_sin_resolver(contenidos: list[dict[str, Any]], derivados: set[str]) -> list[str]:
+def _resolver_componentes(
+    instancias: list[_Instancia], *, derivados: set[str], publicados: list[Any], habilidades: set[str]
+) -> list[man.Componente]:
+    """Los componentes con sus `ProcedureRef` resueltos a versión exacta (fail-closed)."""
+    from core.releases.procedimientos import publicados_por_id, resolver_refs
+
+    por_id = publicados_por_id(publicados)
+    salida: list[man.Componente] = []
     faltan: list[str] = []
-    for contenido in contenidos:
-        refs = contenido.get("procedures")
-        if not isinstance(refs, list):  # el KernelSpec tiene `procedures` de otra forma
+    for inst in instancias:
+        refs = inst.contenido.get("procedures")
+        if inst.componente.contract != "agentspec/3" or not isinstance(refs, list):
+            salida.append(inst.componente)  # el KernelSpec tiene `procedures` de otra forma
             continue
-        for ref in refs:
-            if not isinstance(ref, dict):
-                continue
-            pid, version = ref.get("id"), ref.get("version")
-            if version in _VERSIONES_ABIERTAS:
-                if pid not in derivados:
-                    faltan.append(f"{pid} {version}: el flujo ya no tiene esa sección")
-            else:
-                faltan.append(f"{pid} {version}: ninguna habilidad registrada lo provee")
-    return sorted(set(faltan))
+        resueltos, problemas = resolver_refs(refs, abiertos=derivados, publicados=por_id, habilidades=habilidades)
+        faltan.extend(f"{inst.componente.agent_key}: {p}" for p in problemas)
+        salida.append(
+            dataclasses.replace(inst.componente, procedures=tuple((r.id, r.version) for r in resueltos))
+        )
+    if faltan:
+        raise ErrorDelBuild(
+            "procedimiento_sin_resolver", "Un procedimiento de un agente no resuelve.", sorted(set(faltan))[:10]
+        )
+    return salida
 
 
 # ------------------------------------------------------------------ 4-5. textos y AppSettings
@@ -451,19 +541,27 @@ async def armar_manifiesto(
     if fijadas is None:
         if refrescar is None:
             async with _sesion() as session:
-                refrescar = (await banderas_del_negocio(session, tenant_id)).runtime == "legacy"
-        fijadas = await refrescar_desde_v2(tenant_id, modulos) if refrescar else {}
-    componentes, contenidos = await _componentes(tenant_id, connection_id, fijadas, catalogo)
+                legacy = (await banderas_del_negocio(session, tenant_id)).runtime == "legacy"
+            if legacy:
+                fijadas = await refrescar_desde_v2(tenant_id, modulos)
+            elif await _general_sigue_siendo_del_lector(tenant_id):
+                fijadas = await refrescar_desde_v2(tenant_id, modulos, solo_general=True)
+            else:
+                fijadas = {}
+        else:
+            fijadas = await refrescar_desde_v2(tenant_id, modulos) if refrescar else {}
+    instancias = await _componentes(tenant_id, connection_id, fijadas, catalogo)
 
     leido = await leer_spec_activo(tenant_id)
-    packs = set(enabled_business_packs(leido[1])) if leido else set()
+    del_negocio = set(enabled_business_packs(leido[1])) if leido else set()
     allowlist: set[str] = {p.name for p in leido[1].playbooks} if leido else set()
     del leido
-    for contenido in contenidos:
-        for ref in contenido.get("playbooks") or []:
+    for inst in instancias:
+        for ref in inst.contenido.get("playbooks") or []:
             if isinstance(ref, dict) and isinstance(ref.get("name"), str):
                 allowlist.add(ref["name"])
-    habilidades, del_negocio = await _habilidades(tenant_id, packs, modulos)
+    packs = await _efectivas(tenant_id, connection_id, del_negocio)
+    habilidades, plugins_del_negocio, publicados = await _habilidades(tenant_id, packs, modulos)
 
     slug = await tenant_slug(tenant_id)
     try:
@@ -471,15 +569,16 @@ async def armar_manifiesto(
     except ValueError as exc:
         raise ErrorDelBuild("flujo_invalido", str(exc)) from None
     derivados = set(derivar_procedimientos([h.pack_id for h in habilidades], flujo))
-    faltan = _refs_sin_resolver(contenidos, derivados)
-    if faltan:
-        raise ErrorDelBuild(
-            "procedimiento_sin_resolver", "Un procedimiento de un agente no resuelve.", faltan[:10]
-        )
+    componentes = _resolver_componentes(
+        instancias,
+        derivados=derivados,
+        publicados=publicados,
+        habilidades={h.pack_id for h in habilidades} | set(plugins_del_negocio),
+    )
     return man.armar(
         componentes=componentes,
         habilidades=habilidades,
-        plugins_del_negocio=del_negocio,
+        plugins_del_negocio=plugins_del_negocio,
         overrides=_overrides(slug, allowlist),
         flujo_del_negocio=flujo,
         app_settings=await _app_settings(tenant_id),

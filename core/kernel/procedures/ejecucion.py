@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -446,6 +446,9 @@ class ContextoMotor:
         confirmar_tambien: frozenset[str] = frozenset(),
         abiertas: frozenset[str] = frozenset(),
         sin_gobierno: str | None = None,
+        de_la_release: dict[str, Procedure] | None = None,
+        packs_de_la_release: frozenset[str] | None = None,
+        declaradas_por_el_agente: frozenset[str] | None = None,
     ) -> None:
         self.modo: Modo = modo
         self.tenant_id = tenant_id
@@ -471,6 +474,17 @@ class ContextoMotor:
         # binario o habilidad deshabilitada): queda el flujo v2 de respaldo y SUS puertas no se
         # ocultan (las de los demás procedimientos, sí).
         self._sin_gobierno = sin_gobierno
+        # HU-AOS-16: con release, las puertas se calculan sobre TODOS los procedimientos
+        # publicados de la release (no solo los del agente en foco: un especialista que ligue
+        # una puerta sin declarar el procedimiento no recupera el camino de siempre), y la
+        # oferta y la negación son fail-closed por scope (packs de la release) y por agente
+        # (lo que su versión declara). None = sin release: lo de siempre.
+        self._de_la_release = de_la_release
+        self._packs = packs_de_la_release
+        self._del_agente = declaradas_por_el_agente
+        self._plugin_de = {
+            t.name: getattr(t, "plugin_id", None) for t in (*self._base, *self._candidatas)
+        }
         self._cambio = False
         self._sombra: Any = None
         # HU-AOS-09: args de cada acción que pidió confirmación (por hash: son los que firma el
@@ -518,7 +532,46 @@ class ContextoMotor:
             # Una puerta del core (`sub_aplicar_cambio_plan`) solo se ofrece si es de la etapa.
             puertas = self._todas_las_puertas()
             salida += [t for t in self._base if t.name in self._core and t.name not in nombres and t.name not in puertas]
-        return salida + self.comandos()
+        return self._del_scope_y_del_agente(salida) + self.comandos()
+
+    def _del_scope_y_del_agente(self, tools: list[Any]) -> list[Any]:
+        """Fail-closed por scope y por agente con una release en el turno (HU-AOS-16)."""
+        if self._packs is None and self._del_agente is None:
+            return tools
+        from core.kernel.oferta import ofrecidas_para_el_agente
+
+        return ofrecidas_para_el_agente(
+            tools,
+            packs=self._packs,
+            del_agente=self._del_agente,
+            de_la_etapa=self._foco.stage.actions if self._foco is not None else (),
+            comandos=comandos.NOMBRES,
+        )
+
+    def _fuera_del_agente(self, accion: str, etapa: Iterable[str]) -> bool:
+        """¿La acción está fuera del scope de la release o de lo que el agente declara?"""
+        if self._packs is None and self._del_agente is None:
+            return False
+        from core.kernel.oferta import permitida_para_el_agente
+
+        if accion in self._plugin_de:
+            plugin_id = self._plugin_de[accion]
+        else:
+            # No estaba en lo que armó el loop: su dueño sale del registro; si no existe, se niega.
+            from core.mcp.host import mcp_host
+
+            tool = mcp_host.get_tool(accion)
+            if tool is None and accion not in comandos.NOMBRES:
+                return True
+            plugin_id = tool.plugin_id if tool is not None else CORE_OWNER
+        return not permitida_para_el_agente(
+            accion,
+            plugin_id,
+            packs=self._packs,
+            del_agente=self._del_agente,
+            de_la_etapa=etapa,
+            comandos=comandos.NOMBRES,
+        )
 
     # -- sin foco no hay camino de siempre (adenda 2026-10-12 de ADR-0113)
     def _todas_las_puertas(self) -> frozenset[str]:
@@ -526,11 +579,13 @@ class ContextoMotor:
         candidatos: una tarea en pausa no abre el camino de siempre por otro lado)."""
         if self.modo != "activo":
             return frozenset()
-        return frozenset().union(*(motor.acciones_de_puerta(p) for p in self.procedimientos.values()))
+        fuente = self._de_la_release if self._de_la_release is not None else self.procedimientos
+        return frozenset().union(*(motor.acciones_de_puerta(p) for p in fuente.values()))
 
     def _liberadas(self, procedure_id: str | None) -> frozenset[str]:
         """Las puertas del procedimiento de una tarea sin gobierno (respaldo v2)."""
-        proc = self.procedimientos.get(procedure_id) if procedure_id is not None else None
+        fuente = self._de_la_release if self._de_la_release is not None else self.procedimientos
+        proc = fuente.get(procedure_id) if procedure_id is not None else None
         return motor.acciones_de_puerta(proc) if proc is not None else frozenset()
 
     def _puertas_sin_foco(self) -> frozenset[str]:
@@ -659,6 +714,11 @@ class ContextoMotor:
         try:
             async with _con_lock(self.tenant_id, self.conversation_id) as s:
                 foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
+                etapa = foco.stage.actions if foco is not None else ()
+                if self._fuera_del_agente(accion, etapa):
+                    # Fail-closed por agente y por scope (ADR-0118 §3): no la ofrece y no corre.
+                    log.info("motor_accion_fuera_del_agente", accion=accion)
+                    return Previo(Decision({"error": mensaje("fuera_del_agente", accion=accion)}, "denied", h))
                 if foco is None:
                     return await self._negar_sin_foco(s, accion, h) if puerta else Previo()
                 if accion not in foco.stage.actions:
@@ -1728,6 +1788,20 @@ async def contexto_del_motor(
         "channel": channel, "herramientas_base": herramientas_base, "candidatas": candidatas,
         "permitidos": permitidos,
     }
+    release = release_vigente.vigente()
+    if release is not None and release.procedimientos_por_agente is not None:
+        # HU-AOS-16: con una release `release/2`, los packs permitidos son los de la release
+        # (scope de la conexión) y la oferta es fail-closed por el agente en foco.
+        from core.kernel.oferta import declaradas_por
+
+        packs = frozenset((*release.skills, *release.tenant_plugins))
+        comunes["permitidos"] = frozenset((packs | {CORE_OWNER}) - set(disabled))
+        comunes["de_la_release"] = {
+            pid: p for pid, p in release.procedimientos.items() if p.version != "0.0.0"
+        }
+        comunes["packs_de_la_release"] = packs
+        # Sin agente en foco (release con solo el Coordinador): fail-closed, solo core y comandos.
+        comunes["declaradas_por_el_agente"] = declaradas_por(release_vigente.agente_del_turno()) or frozenset()
     async with get_session() as session:
         banderas = await banderas_del_negocio(session, tenant_id)
         if banderas.procedimientos:
@@ -1741,7 +1815,7 @@ async def contexto_del_motor(
             filas = await state.tareas_abiertas(session, tenant_id=tenant_id, conversation_id=conversation_id)
             tareas = [state.proyeccion_de(f) for f in filas]
             tarjeta = renderizar_tarjeta(tareas, procedimientos=registro.definicion, rotulos_de=rotulos_de)
-            foco = await _foco(session, tenant_id, conversation_id, permitidos)
+            foco = await _foco(session, tenant_id, conversation_id, comunes["permitidos"])
     if banderas.procedimientos:
         # Si el inbound fue un botón, su título no es un sí escrito: el turno no confirma por texto.
         if await _tomar_marca_interactivo(tenant_id, conversation_id):
