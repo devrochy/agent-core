@@ -25,3 +25,11 @@
   cuota de números por plan); `primary` sobre una cuenta de Meta responde 409
   `primary_not_applicable` con la regla (ADR-0069/0115); el alta BYOK con la misma app y
   entorno devuelve `reused: true` porque actualiza la conexión existente en vez de crear otra.
+- **Revisiones de seguridad y multitenant:** topes superiores (lo que cabe en la columna) y sin
+  `inf`/`nan` en precio, stock, orden, mínimos y días de segmentación, montos de escalamiento,
+  precio de suscripción y umbral de cobranza; el error de config de un pack y el de
+  `checkout_fields` ya no repiten el valor recibido; si Redis no responde, «Sincronizar» sigue
+  sin límite en vez de dar 500, y un sync fallido no consume el minuto; eliminar una plantilla
+  exige que sea de la WABA de esa conexión y solo marca eliminadas las filas de esa WABA.
+- **Regla que cambia:** `guardrail_max_retries` fuera de 0–5 responde 422 (antes se recortaba a 5
+  en silencio).
