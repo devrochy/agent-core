@@ -655,6 +655,10 @@ class AdminPermission(Base):
             text("coalesce(tenant_id, '00000000-0000-0000-0000-000000000000'::uuid)"),
             unique=True,
         ),
+        CheckConstraint(
+            "access in ('read', 'write') or (access = 'none' and tenant_id is not null)",
+            name="ck_admin_permissions_access",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

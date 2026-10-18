@@ -14,5 +14,11 @@
   la misma transacción; reactivar no las resucita.
 - **Propietarios pares y desvincular:** un owner solo gestiona colaboradores de su negocio (no a otro owner ni al
   real) y no crea otros propietarios; nuevo `POST /api/v1/admin/collaborators/{id}/unlink` (`{tenant}`) con las
-  mismas guardas, sin dejar un negocio sin propietario. El tester conserva lo que podía con sus cuentas de prueba.
+  mismas guardas, sin dejar un negocio sin propietario, que además revoca las invitaciones pendientes de esa cuenta a
+  ese negocio. El tester sigue la misma regla (gestiona colaboradores; puede crear propietarios de prueba).
+- **App de campo (pack-cobranza):** un único validador de tokens para la API de gestores y la de dispositivo:
+  rechaza el refresh, exige negocio activo y cuenta habilitada y vinculada; `/auth/refresh` recalcula rol y gestor
+  desde la membresía actual; las rutas de invitaciones no aceptan cuentas desactivadas; un token de dispositivo en
+  `/gestor/*` cuenta como `gestor`.
+- **Migración 0090:** `lock_timeout` de 5 s; el downgrade borra las denegaciones (reabre lo revocado).
 - Tests de integración `aislamiento` en `tests/integration/test_p0_seguridad_pruebas.py` y unitarios del resolutor.

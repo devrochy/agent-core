@@ -352,3 +352,151 @@ async def test_owner_invitado_no_toca_al_owner_real_y_unlink_con_guardas(app_cli
     assert (await app_client.post(f"{col}/{iid}/unlink", headers=h_master, json={"tenant": f"p0-{s}"})).status_code == 204
     r = await app_client.post(f"{col}/{rid}/unlink", headers=h_master, json={"tenant": f"p0-{s}"})
     assert r.status_code == 400 and "sin propietario" in r.json()["error"]["message"]
+
+
+async def test_unlink_de_cuenta_compartida_no_toca_el_otro_negocio_y_revoca_invitaciones(app_client) -> None:
+    """Revisión del PR: el owner de A desvincula de A a un colaborador que también está en B; B queda
+    intacto, y la invitación pendiente de A a esa cuenta se revoca (aceptarla desharía el unlink).
+    El owner de A tampoco alcanza B mandando el slug de B en el payload."""
+    from core.db.models import AdminPermission, TenantInvitation, TenantUser
+    from core.db.session import get_session
+
+    s = uniq("comp")
+    owner_a, owner_b = f"a-{s}@p0.test", f"b-{s}@p0.test"
+    ta = await _negocio(f"{s}a", owner_a)
+    tb = await _negocio(f"{s}b", owner_b)
+    compartido = await _admin(f"comp-{s}@p0.test")
+    await _vincular(compartido, ta, "colaborador")
+    await _vincular(compartido, tb, "colaborador")
+    exclusivo_b = await _admin(f"excl-{s}@p0.test")
+    await _vincular(exclusivo_b, tb, "colaborador")
+    async with get_session() as session:
+        session.add(AdminPermission(admin_id=compartido, section="costs", access="read", tenant_id=tb))
+        session.add(TenantInvitation(tenant_id=ta, admin_id=compartido, role="colaborador", estado="pendiente"))
+    h_a = await _headers(app_client, owner_a, ta)
+    col = "/api/v1/admin/collaborators"
+
+    # Owner de A con el slug de B: ni grant/revoke/unlink sobre el exclusivo de B.
+    for ruta, body in (
+        ("grant", {"section": "costs", "access": "write", "tenant": f"p0-{s}b"}),
+        ("revoke", {"section": "costs", "tenant": f"p0-{s}b"}),
+        ("unlink", {"tenant": f"p0-{s}b"}),
+    ):
+        r = await app_client.post(f"{col}/{exclusivo_b}/{ruta}", headers=h_a, json=body)
+        assert r.status_code == 400, (ruta, r.text)
+    async with get_session() as session:
+        filas_b = (
+            await session.execute(select(AdminPermission).where(AdminPermission.admin_id == exclusivo_b))
+        ).scalars().all()
+    assert filas_b == []
+
+    r = await app_client.post(f"{col}/{compartido}/unlink", headers=h_a, json={"tenant": f"p0-{s}a"})
+    assert r.status_code == 204, r.text
+    async with get_session() as session:
+        vinculos = (
+            await session.execute(select(TenantUser.tenant_id).where(TenantUser.admin_id == compartido))
+        ).scalars().all()
+        permisos_b = (
+            await session.execute(
+                select(AdminPermission.section).where(
+                    AdminPermission.admin_id == compartido, AdminPermission.tenant_id == tb
+                )
+            )
+        ).scalars().all()
+        invitacion = (
+            await session.execute(
+                select(TenantInvitation.estado).where(
+                    TenantInvitation.admin_id == compartido, TenantInvitation.tenant_id == ta
+                )
+            )
+        ).scalar_one()
+    assert vinculos == [tb]
+    assert permisos_b == ["costs"]
+    assert invitacion == "revocada"
+
+
+async def test_el_check_de_0090_rechaza_una_denegacion_global() -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    from core.db.models import AdminPermission
+    from core.db.session import get_session
+
+    aid = await _admin(f"chk-{uniq('chk')}@p0.test")
+    with pytest.raises(IntegrityError):
+        async with get_session() as session:
+            session.add(AdminPermission(admin_id=aid, section="costs", access="none", tenant_id=None))
+
+
+async def test_notificaciones_usan_la_misma_jerarquia(app_client) -> None:
+    """`notification_recipients`: denegar el pack saca al owner de la sub-sección; conceder el pack
+    incluye al colaborador; la sub-sección manda sobre el pack."""
+    from core.admin.permissions import notification_recipients
+    from core.db.models import AdminPermission
+    from core.db.session import get_session
+
+    s = uniq("notif")
+    owner = f"owner-{s}@p0.test"
+    tid = await _negocio(s, owner)
+    colab = f"colab-{s}@p0.test"
+    cid = await _admin(colab)
+    await _vincular(cid, tid, "colaborador")
+    oid = await _admin_id(owner)
+    sub = "pack_calendar:notificaciones"
+
+    dest = await notification_recipients(sub, tid)
+    assert owner in dest and colab not in dest
+    async with get_session() as session:
+        session.add(AdminPermission(admin_id=oid, section="pack_calendar", access="none", tenant_id=tid))
+        session.add(AdminPermission(admin_id=cid, section="pack_calendar", access="read", tenant_id=tid))
+    dest = await notification_recipients(sub, tid)
+    assert owner not in dest and colab in dest
+    async with get_session() as session:
+        session.add(AdminPermission(admin_id=oid, section=sub, access="write", tenant_id=tid))
+    assert owner in await notification_recipients(sub, tid)
+
+
+async def test_app_de_campo_corta_al_desvincular_y_al_suspender(app_client) -> None:
+    """Revisión del PR: el access de campo, el refresh y la API de dispositivo (`api.py`) dejan de
+    aceptar a una cuenta desvinculada o de un negocio suspendido; el refresh no copia el rol viejo."""
+    s = uniq("campo")
+    owner = f"owner-{s}@p0.test"
+    tid = await _negocio(s, owner)
+    co = f"co-{s}@p0.test"
+    co_id = await _admin(co)
+    await _vincular(co_id, tid, "owner")
+    campo = "/api/pack/pack_cobranza"
+
+    async def _tokens(email: str) -> dict:
+        r = await app_client.post(f"{campo}/auth/login", json={"usuario": email, "password": PW, "tenant": f"p0-{s}"})
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    t_co = await _tokens(co)
+    assert t_co["rol"] == "propietario"
+    h_co = {"Authorization": f"Bearer {t_co['accessToken']}"}
+    assert (await app_client.get(f"{campo}/gestor/mis-carteras", headers=h_co)).status_code == 200
+    assert (await app_client.get(f"{campo}/mis-carteras", headers=h_co)).status_code == 200
+    # El refresh no sirve como acceso en ninguna de las dos APIs.
+    h_ref = {"Authorization": f"Bearer {t_co['refreshToken']}"}
+    assert (await app_client.get(f"{campo}/gestor/mis-carteras", headers=h_ref)).status_code == 401
+    assert (await app_client.get(f"{campo}/mis-carteras", headers=h_ref)).status_code == 401
+
+    # El master lo desvincula: access, refresh y API de dispositivo fuera.
+    h_master = await _headers_master(app_client)
+    r = await app_client.post(f"/api/v1/admin/collaborators/{co_id}/unlink", headers=h_master, json={"tenant": f"p0-{s}"})
+    assert r.status_code == 204, r.text
+    assert (await app_client.get(f"{campo}/gestor/mis-carteras", headers=h_co)).status_code == 401
+    assert (await app_client.get(f"{campo}/mis-carteras", headers=h_co)).status_code == 401
+    r = await app_client.post(f"{campo}/auth/refresh", json={"refreshToken": t_co["refreshToken"]})
+    assert r.status_code == 401
+
+    # Suspender corta al dueño (access y refresh); reactivar lo devuelve con su rol actual.
+    t_ow = await _tokens(owner)
+    h_ow = {"Authorization": f"Bearer {t_ow['accessToken']}"}
+    await _estado(tid, "suspended")
+    assert (await app_client.get(f"{campo}/gestor/mis-carteras", headers=h_ow)).status_code == 401
+    assert (await app_client.post(f"{campo}/auth/refresh", json={"refreshToken": t_ow["refreshToken"]})).status_code == 401
+    await _estado(tid, "active")
+    r = await app_client.post(f"{campo}/auth/refresh", json={"refreshToken": t_ow["refreshToken"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["accessToken"]

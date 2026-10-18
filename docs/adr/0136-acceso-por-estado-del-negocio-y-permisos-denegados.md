@@ -35,20 +35,26 @@ Tres cuentas distintas reprodujeron en test:
    responde 403 `tenant_suspended` en todo salvo `POST /auth/logout`, que deja de resolver negocio. Con dos
    negocios, solo se corta el suspendido (un `X-Tenant-Id` suspendido da 403 con ese código; sin header se
    elige el primer activo). Master y tester habilitado entran igual: reactivan o purgan desde Plataforma. La
-   app de campo (`api_gestor._auth`) revalida por pedido que el negocio esté activo y que la cuenta siga
-   vinculada (o sea de plataforma).
+   app de campo tiene un único validador de tokens, `pack_cobranza/auth.py::acceso_de_campo`, que usan la API
+   de gestores (`api_gestor._auth`) y la de dispositivo (`api._auth`): por pedido rechaza el refresh, exige el
+   negocio activo y, si el token es de una cuenta, que siga habilitada y vinculada (o sea de plataforma).
+   `/auth/refresh` recalcula rol y gestor desde la membresía actual (no los copia del token viejo), y las
+   rutas de invitaciones ya no aceptan el refresh ni una cuenta desactivada. Un token de dispositivo (sin
+   cuenta) en `/gestor/*` cuenta como `gestor`, nunca como acceso total.
 2. **Nivel `none` (denegado) en `admin_permissions.access`, solo por negocio.** Migración `0090`: CHECK
    `access in ('read','write') or (access = 'none' and tenant_id is not null)`. Nunca global: la rama de
    `admin_tenants()` que muestra todos los negocios a quien tiene un permiso global no debe dispararse por una
    denegación, y los cuatro consumidores que miran «existe fila global» (`admin_tenants`,
    `target_allowed_for_owner`, `invitations_service._invitado_valido`, `qa/datos._sigue_siendo_de_prueba`)
-   siguen correctos. **Resolución** (función pura `resolver_seccion`, compartida por `effective_access`,
-   `permissions_for` y `notification_recipients`): la fila de la sub-sección (`pack_cobranza:reportes`) manda
+   siguen correctos. **Resolución** (función pura `resolver_seccion`, compartida por `effective_access` y
+   `permissions_for`; `notification_recipients` usa su parte explícita, `resolver_explicito`, y sin fila solo
+   copia al `owner`): la fila de la sub-sección (`pack_cobranza:reportes`) manda
    sobre la del pack completo (`pack_cobranza`); dentro de un nivel, `none` deniega aunque exista un grant
    (global o del negocio); si no, el máximo (`write > read`); sin fila en ningún nivel, el default del rol de
    ADR-0047 §3. `collaborators` no se deniega por fila (sigue siendo del `owner`). **Revocar** con alcance de
    negocio a un miembro cuyo rol heredaría la sección guarda `none` (si no hay default que tapar, borra la fila
-   como antes); revocar un pack completo borra además las filas de sus sub-secciones en ese alcance.
+   como antes); revocar un pack completo —o denegarlo con `grant none`— borra además las filas de sus
+   sub-secciones en ese alcance.
    `grant` admite `none` (`admin grant --access none --tenant <slug>` en el CLI). `/admin/me` expone también
    el acceso por pack (`pack_cobranza`, `pack_commerce`, …), no solo las sub-secciones.
 3. **Desactivar y cambiar la contraseña cierran las sesiones** en la misma transacción
@@ -57,13 +63,16 @@ Tres cuentas distintas reprodujeron en test:
 4. **Los propietarios son pares.** Un actor que no es master gestiona solo cuentas con rol `colaborador` de su
    negocio activo (además de las guardas de ADR-0048: no de plataforma, exclusivas del negocio): un
    propietario invitado no toca al propietario real ni al revés; a un propietario lo gestiona el master. Un
-   propietario crea colaboradores, no otros propietarios (ADR-0048 §3). El tester (ADR-0134) conserva lo que
-   ya podía con sus cuentas de prueba, incluidas las de dueño. **`POST /admin/collaborators/{id}/unlink`**
+   propietario crea colaboradores, no otros propietarios (ADR-0048 §3). La regla es la misma para el tester
+   (ADR-0134), que actúa como dueño del negocio activo: gestiona colaboradores, no propietarios (conserva
+   CREAR propietarios de prueba, como dice ADR-0134 §3). **`POST /admin/collaborators/{id}/unlink`**
    (`{tenant}`): el master desvincula cualquier vínculo; owner y tester, solo del negocio activo y solo a un
-   `colaborador` que no sea de plataforma ni uno mismo, sin exigir exclusividad (sacar de MI negocio a una
-   cuenta compartida no toca a los demás). Nadie deja un negocio sin propietario. Borra el `tenant_user` y los
-   `admin_permissions` de ese negocio; el perfil de gestor de pack-cobranza queda sin vínculo y la app de campo
-   deja de aceptarlo en el siguiente pedido (anotado, no se borra: dato del negocio).
+   `colaborador` que no sea de plataforma, ni tenga permisos globales, ni sea uno mismo, sin exigir
+   exclusividad (sacar de MI negocio a una cuenta compartida no toca a los demás). Nadie deja un negocio sin
+   propietario (las filas `owner` se bloquean con `FOR UPDATE`). Borra el `tenant_user` y los
+   `admin_permissions` de ese negocio y revoca sus invitaciones pendientes a él (aceptarlas desharía el
+   unlink); el perfil de gestor de pack-cobranza queda sin vínculo y la app de campo deja de aceptarlo en el
+   siguiente pedido (anotado, no se borra: dato del negocio).
 
 ## Alternativas consideradas
 
@@ -84,7 +93,12 @@ desvincular.
 
 **Negativas / lo que aceptamos pagar:** una consulta más por pedido para los admins no-plataforma
 (`tenants` por ids); las filas `none` aparecen en `GET /admin/collaborators` (`access: "none"`) y el panel debe
-renderizarlas como «denegado»; un propietario no puede sacar al co-propietario que invitó (lo hace el master).
+renderizarlas como «denegado»; un propietario no puede sacar al co-propietario que invitó (lo hace el master);
+el downgrade de `0090` borra las filas `none` (el esquema anterior no las representa) y reabre lo revocado.
+
+**Pendiente (fuera de este ADR):** los JWT de la app de campo no tienen versión: un cambio de contraseña no
+invalida un token de acceso vigente (12 h) ni el refresh (30 días) mientras la cuenta siga activa y vinculada
+(desactivar o desvincular sí corta). Cerrarlo pide una columna de versión de credenciales en `admins`.
 
 **Qué haría que revisáramos esto:** que el dueño prefiera default-deny para colaboradores (alternativa 1), o
 permisos por acción/recurso (ADR-0047, «qué haría que revisáramos esto»).
@@ -95,6 +109,6 @@ permisos por acción/recurso (ADR-0047, «qué haría que revisáramos esto»).
 `core/admin/auth.py` (`NegocioSuspendido`, `revocar_sesiones`); `core/admin/permissions.py` (resolutor);
 `core/admin/collaborators_service.py` (revocar → `none`, pares, `unlink_tenant`); `core/api/deps.py`,
 `core/api/routers/{auth,tenants,collaborators}.py`; `core/main.py`, `core/admin/{views,context}.py`;
-`packages/pack-cobranza/pack_cobranza/api_gestor.py` (`_auth`); `cli/commands/admin.py`; `docs/openapi.json`;
+`packages/pack-cobranza/pack_cobranza/{auth,api,api_gestor}.py` (`acceso_de_campo`, `refresh`); `cli/commands/admin.py`; `docs/openapi.json`;
 `docs/MULTITENANT.md`. Tests: `tests/integration/test_p0_seguridad_pruebas.py` (`aislamiento`),
 `tests/test_permisos_denegado_y_jerarquia.py`, `tests/test_api_auth.py`, `tests/test_qa_roles.py`.

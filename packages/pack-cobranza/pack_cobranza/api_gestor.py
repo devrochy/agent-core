@@ -31,13 +31,12 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from core.admin.auth import hash_password, verify_password
-from core.admin.roles import actua_como_master, cuenta_habilitada
+from core.admin.roles import cuenta_habilitada
 from core.db.models import Admin, Tenant, TenantUser
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
-from core.tenants import is_tenant_active
-from pack_cobranza.auth import issue_token, pack_secret, token_tenant, verify_token
+from pack_cobranza.auth import acceso_de_campo, issue_token, pack_secret, token_tenant, verify_token
 from pack_cobranza.estadisticas import conteos_cartera
 from pack_cobranza.evidencias import EvidenciaError, guardar_archivo, guardar_evidencia
 from pack_cobranza.models import (
@@ -94,36 +93,18 @@ def _usuario_de(admin: Admin) -> str:
 
 
 async def _auth(authorization: str | None) -> tuple[uuid.UUID, dict[str, Any]] | None:
-    """Token de acceso de campo válido Y de una cuenta habilitada.
+    """Token de acceso de campo válido, de una cuenta habilitada, vinculada y de un negocio
+    activo: lo decide `acceso_de_campo` (ADR-0134, ADR-0136), el mismo validador de `api.py`.
 
-    El refresh token (30 días) no sirve como acceso, y la cuenta se revalida en cada pedido:
-    desactivar a un admin, revocar a un tester o apagar `QA_TESTERS_ENABLED` corta la app en
-    el siguiente pedido, no cuando vence el token (ADR-0134). Igual el negocio y la membresía
-    (ADR-0136): un negocio suspendido o una cuenta desvinculada dejan de responder aunque el
-    token siga vigente (el master y el tester habilitado no necesitan vínculo)."""
-    if not authorization or not authorization.lower().startswith("bearer "):
-        return None
-    auth = await token_tenant(authorization.split(" ", 1)[1].strip())
+    Un token de dispositivo (sin `admin_id`, ADR-0057) no trae `rol`: aquí cuenta como
+    `gestor` (solo sus carteras y sus permisos), nunca como acceso total."""
+    auth = await acceso_de_campo(authorization)
     if auth is None:
         return None
     tenant_id, payload = auth
-    if payload.get("typ") == "refresh":
-        return None
-    if not await is_tenant_active(tenant_id):
-        return None
-    admin_id = payload.get("admin_id")
-    if admin_id:
-        try:
-            admin_uuid = uuid.UUID(str(admin_id))
-        except (TypeError, ValueError):
-            return None
-        async with get_session() as session:
-            admin = await session.get(Admin, admin_uuid)
-            if not cuenta_habilitada(admin):
-                return None
-            if not actua_como_master(admin) and await _tenant_link(session, tenant_id, admin_uuid) is None:
-                return None
-    return auth
+    if not payload.get("admin_id"):
+        payload = {**payload, "rol": "gestor"}
+    return tenant_id, payload
 
 
 def _membresia_token(admin_id: uuid.UUID) -> str:
@@ -150,18 +131,30 @@ def _admin_de_membresia(token: str) -> uuid.UUID | None:
 
 
 async def _admin_de_token(authorization: str | None) -> uuid.UUID | None:
-    """Identidad del admin desde un token de campo (pack) o de membresía."""
+    """Identidad del admin desde un token de ACCESO de campo (pack) o de membresía.
+
+    El refresh no sirve aquí, y la cuenta debe seguir habilitada (ADR-0136): una cuenta
+    desactivada no lista ni acepta invitaciones con un token que le quedó en el teléfono."""
     if not authorization or not authorization.lower().startswith("bearer "):
         return None
     token = authorization.split(" ", 1)[1].strip()
     auth = await token_tenant(token)
+    admin_uuid: uuid.UUID | None
     if auth is not None:
+        if auth[1].get("typ") == "refresh":
+            return None
         admin_id = auth[1].get("admin_id")
         try:
-            return uuid.UUID(str(admin_id)) if admin_id else None
+            admin_uuid = uuid.UUID(str(admin_id)) if admin_id else None
         except (TypeError, ValueError):
             return None
-    return _admin_de_membresia(token)
+    else:
+        admin_uuid = _admin_de_membresia(token)
+    if admin_uuid is None:
+        return None
+    async with get_session() as session:
+        admin = await session.get(Admin, admin_uuid)
+    return admin_uuid if cuenta_habilitada(admin) else None
 
 
 async def _admin_por_credenciales(session, usuario: str, password: str) -> Admin | None:
@@ -575,8 +568,15 @@ async def refresh(request: Request) -> JSONResponse:
             admin = (await session.execute(select(Admin).where(Admin.id == uuid.UUID(str(admin_id)), Admin.active.is_(True)))).scalar_one_or_none()
             if admin is None or not cuenta_habilitada(admin):
                 return JSONResponse({"error": "admin inactivo"}, status_code=401)
-            gestor_id = uuid.UUID(str(payload["gestor_id"])) if payload.get("gestor_id") else None
-            tokens = _par_tokens(secret, tenant_id, admin.id, rol=str(payload.get("rol") or "gestor"), gestor_id=gestor_id)
+    # El rol y el gestor se RECALCULAN (ADR-0136), no se copian del token viejo: un negocio
+    # suspendido, una cuenta desvinculada o un owner bajado a colaborador no renuevan con
+    # el acceso que tenían.
+    membresias = await _membresias_de_campo(admin, solo=tenant_id)
+    if not membresias:
+        return JSONResponse({"error": "sin acceso a ese negocio"}, status_code=401)
+    membresia = membresias[0]
+    gestor_id = uuid.UUID(str(membresia["gestorId"])) if membresia.get("gestorId") else None
+    tokens = _par_tokens(secret, tenant_id, admin.id, rol=str(membresia["rol"]), gestor_id=gestor_id)
     return JSONResponse(tokens)
 
 

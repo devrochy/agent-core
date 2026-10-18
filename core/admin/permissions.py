@@ -343,23 +343,30 @@ async def notification_recipients(section: str, tenant_id: uuid.UUID | None) -> 
                 )
             ).all()
         )
+        claves = [section] + ([seccion_padre(section)] if seccion_padre(section) else [])
         explicit = (
             await session.execute(
-                select(AdminPermission.admin_id, AdminPermission.access).where(
-                    AdminPermission.section == section,
+                select(
+                    AdminPermission.admin_id, AdminPermission.section, AdminPermission.access
+                ).where(
+                    AdminPermission.section.in_(claves),
                     AdminPermission.tenant_id.is_(None) | (AdminPermission.tenant_id == tenant_id),
                 )
             )
         ).all()
-    # Una fila `none` (ADR-0136) saca al admin aunque el rol de owner lo incluyera.
-    granted = {admin_id for admin_id, access in explicit if access != ACCESS_NONE}
-    denied = {admin_id for admin_id, access in explicit if access == ACCESS_NONE}
+    # Mismo resolutor explícito que el menú y la API (sub-sección > pack; `none` deniega,
+    # ADR-0136). Sin fila decide el rol, pero aquí solo el `owner` recibe copia: un
+    # colaborador hereda `read` de la sección, no los avisos.
+    por_admin: dict[uuid.UUID, dict[str, list[str]]] = {}
+    for admin_id, sec, access in explicit:
+        por_admin.setdefault(admin_id, {}).setdefault(sec, []).append(access)
     out: list[str] = []
     for admin in admins:
         if admin.role == "master":
             effective = True
         else:
-            effective = admin.id not in denied and (admin.id in granted or roles.get(admin.id) == "owner")
+            hay_fila, acceso = resolver_explicito(por_admin.get(admin.id, {}), section)
+            effective = acceso is not None if hay_fila else roles.get(admin.id) == "owner"
         if effective and admin.email:
             out.append(admin.email)
     return out
