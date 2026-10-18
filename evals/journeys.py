@@ -269,6 +269,61 @@ async def preparar_negocio(
     return tenant_id
 
 
+async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
+    """Runtime por releases (HU-AOS-15) para el negocio de la corrida: una conexión
+    conversacional, su release 1 (`backfill_releases`, desde el AgentSpec v2) y
+    `aos_runtime = 'v3'` sin `aos_procedures`. Exige `AOS_CONNECTION_ROUTING=true` en el entorno.
+    Devuelve la conexión: `nuevo_cliente` liga a ella las conversaciones de la corrida. Sirve para
+    medir pass^k legacy vs v3 con el mismo set (`--runtime v3`)."""
+    from sqlalchemy import text
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from core.config import get_settings
+    from core.db.session import get_session
+    from core.plugin_manager import plugin_manager
+    from core.releases.packs import sync_packs
+    from core.releases.release_uno import backfill_releases
+    from core.shared.tenant import tenant_scope
+
+    settings = get_settings()
+    if not settings.aos_connection_routing:
+        raise SystemExit("--runtime v3 exige AOS_CONNECTION_ROUTING=true (orden de banderas, ADR-0112).")
+    url = settings.migrations_database_url or settings.database_url
+    host = (make_url(url).host or "").lower()
+    if host not in ("localhost", "127.0.0.1", "::1"):
+        raise SystemExit(f"El runtime v3 de los journeys solo se enciende en una base local, no en {host!r}.")
+    conexion = uuid.uuid4()
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            await session.execute(
+                text(
+                    "insert into channel_connections (id, tenant_id, channel, provider, external_id, type_id) "
+                    "values (:id, :t, 'instagram', 'meta', :ext, 'instagram_meta')"
+                ),
+                {"id": conexion, "t": tenant_id, "ext": f"journeys-{conexion.hex[:8]}"},
+            )
+    modulos = plugin_manager.scan()
+    reporte_packs = await sync_packs(modulos)
+    if reporte_packs.fallo:
+        raise SystemExit(f"sync-packs falló: {reporte_packs.errores}")
+    reporte = await backfill_releases(dry_run=False, tenant_id=tenant_id, modules=modulos)
+    if reporte.fallo:
+        raise SystemExit(f"No se pudo construir la release 1 del negocio de la corrida: {reporte.errores}")
+    engine = create_async_engine(url)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("update tenants set aos_runtime = 'v3' where id = :t"), {"t": tenant_id})
+    finally:
+        await engine.dispose()
+    _CONEXION_V3[tenant_id] = conexion
+    return conexion
+
+
+# Conexión del negocio de la corrida con `--runtime v3` (las conversaciones nuevas se ligan a ella).
+_CONEXION_V3: dict[uuid.UUID, uuid.UUID] = {}
+
+
 async def encender_motor_de_procedimientos(tenant_id: uuid.UUID) -> None:
     """Motor de procedimientos (HU-AOS-07) para el negocio de la corrida: `aos_runtime = v3` y
     `aos_procedures`, como lo haría el master. Lo pide un set con `"motor_de_procedimientos": true`
@@ -326,7 +381,9 @@ async def nuevo_cliente(tenant_id: uuid.UUID, nombre: str) -> tuple[uuid.UUID, u
             session.add(cliente)
             await session.flush()
             conversacion = Conversation(
-                tenant_id=tenant_id, customer_id=cliente.id, channel=TEST_CHANNEL, status="open", state={"is_test": True}
+                tenant_id=tenant_id, customer_id=cliente.id, channel=TEST_CHANNEL, status="open", state={"is_test": True},
+                # Con `--runtime v3` la conversación es de la conexión con release (HU-AOS-15).
+                connection_id=_CONEXION_V3.get(tenant_id),
             )
             session.add(conversacion)
             await session.flush()
@@ -831,6 +888,13 @@ async def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--umbral", type=float, default=1.0, help="pass@1 mínimo (0..1) para salir con 0")
     parser.add_argument("--reporte", default="", help="Ruta del reporte JSON (opcional)")
     parser.add_argument("--detalle", action="store_true", help="Imprimir la conversación de cada intento")
+    parser.add_argument(
+        "--runtime",
+        choices=("legacy", "v3"),
+        default="legacy",
+        help="legacy (como siempre) o v3: el negocio de la corrida corre su release 1 (HU-AOS-15; exige "
+        "AOS_CONNECTION_ROUTING=true). Sirve para comparar pass^k entre runtimes.",
+    )
     sys.path.insert(0, str(EVALS_DIR))
     import grabaciones
 
@@ -865,6 +929,11 @@ async def main(argv: list[str] | None = None) -> int:
         pagos = PagoSimulado(monto_minimo=float((negocio.get("pagos_simulados") or {}).get("monto_minimo", 0)))
         CORREOS.instalar()
         tenant_id = await preparar_negocio(negocio, pagos, slug=slug, replica=carpeta is not None)
+        if args.runtime == "v3":
+            if negocio.get("motor_de_procedimientos"):
+                raise SystemExit("--runtime v3 es para sets sin motor: ese set ya enciende v3 + procedimientos.")
+            await encender_runtime_v3(tenant_id)
+            set_id = f"{set_id}@v3"
         return await _correr_set(args, set_id, rutas, k, tenant_id, pagos)
     except cassette.ErrorGrabacion as exc:
         print(f"\n{exc}")

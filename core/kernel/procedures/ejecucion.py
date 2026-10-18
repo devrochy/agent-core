@@ -488,6 +488,11 @@ class ContextoMotor:
     def en_foco(self) -> bool:
         return self.modo == "activo" and self._foco is not None
 
+    @property
+    def foco_task_id(self) -> uuid.UUID | None:
+        """Id de la tarea en foco al empezar el turno (`core_decisions.focus_task_id`, HU-AOS-15)."""
+        return self._foco.fila.id if self.en_foco and self._foco is not None else None
+
     def herramientas(self) -> list[Any]:
         """Acciones a ofrecer: las de siempre sin foco; con foco, las de la etapa más las del core
         que el turno ya ofrecía (las declarativas del negocio no: fail-closed). Activo, además, los
