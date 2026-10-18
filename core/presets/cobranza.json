@@ -1,6 +1,6 @@
 {
   "id": "cobranza",
-  "version": 1,
+  "version": 2,
   "nombre": "Cobranza",
   "descripcion": "Cartera de créditos: saldo, estado de cuenta, negociación y promesas de pago.",
   "sinonimos": [
@@ -37,5 +37,8 @@
     "cargar_cartera",
     "invitar_gestores"
   ],
-  "golden_set": "cobranza-base"
+  "golden_set": "cobranza-base",
+  "agentes": [
+    "cobranza"
+  ]
 }

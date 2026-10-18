@@ -38,6 +38,8 @@ class PresetResult:
     pendientes: list[dict[str, str]] = field(default_factory=list)
     spec_version: str | None = None
     pasos: list[str] = field(default_factory=list)
+    # Presets v2 (ADR-0139): lo que hizo `aplicar_agentes` (None si no corrió).
+    agentes: dict[str, Any] | None = None
 
 
 # ------------------------------------------------------------------ plan
@@ -159,12 +161,17 @@ async def _registrar(tenant_id: uuid.UUID, resultado: PresetResult) -> None:
         tenant = await session.get(Tenant, tenant_id, with_for_update=True)
         if tenant is not None:
             settings = dict(tenant.settings or {})
+            previo = settings.get("preset")
+            anterior: dict[str, Any] = previo if isinstance(previo, dict) else {}
             settings["preset"] = {
                 "id": resultado.preset,
                 "version": resultado.version,
                 "aplicado_en": datetime.now(UTC).isoformat(),
                 "pendientes": resultado.pendientes,
             }
+            # Lo último que hizo el paso de agentes (presets v2, ADR-0139) se conserva.
+            if "agentes" in anterior:
+                settings["preset"]["agentes"] = anterior["agentes"]
             tenant.settings = settings
     await record_audit(
         actor="preset",
@@ -176,6 +183,35 @@ async def _registrar(tenant_id: uuid.UUID, resultado: PresetResult) -> None:
             "pendientes": resultado.pendientes,
         },
     )
+
+
+async def _agentes_v2(tenant_id: uuid.UUID, manifest: PresetManifest, resultado: PresetResult) -> None:
+    """Presets v2 (ADR-0139, HU-AOS-46): los agentes especialistas y las reglas del Coordinador,
+    solo en un negocio del Agent OS (`AOS_CONNECTION_ROUTING` + `aos_runtime = 'v3'`). Con la
+    bandera global apagada no hace ni una lectura. Un error se registra y el preset sigue
+    aplicado (ADR-0110 §3: el alta no falla); se reintenta con `agent-core db presets-v2`."""
+    from core.orchestrator.ruta_de_conversacion import ruteo_por_conexion
+
+    if not manifest.es_v2 or not ruteo_por_conexion():
+        return
+    from core.presets.agentes import aplicar_agentes
+
+    try:
+        reporte = await aplicar_agentes(tenant_id, manifest)
+    except Exception as exc:
+        log.error(
+            "preset_agentes_fallo", tenant_id=str(tenant_id), preset=manifest.id,
+            error_type=type(exc).__name__, exc_info=True,
+        )
+        resultado.pasos.append("agentes del preset: falló (reintenta con `agent-core db presets-v2`)")
+        return
+    if reporte.omitido:
+        return
+    resultado.agentes = reporte.resumen()
+    for agente in reporte.agentes:
+        resultado.pasos.append(f"agente {agente.key}: {agente.estado}")
+    if reporte.releases:
+        resultado.pasos.append("releases candidatas (sin activar): " + ", ".join(sorted(reporte.releases.values())))
 
 
 # ------------------------------------------------------------------ entrada
@@ -227,6 +263,7 @@ async def apply_preset(tenant_id: uuid.UUID, preset_id: str, *, sembrar_ejemplos
                 resultado.pasos.extend(await modules[pack_id].seed_data(tenant_id, fragmento.seed))
 
         await _registrar(tenant_id, resultado)
+        await _agentes_v2(tenant_id, manifest, resultado)
 
     resultado.pasos.insert(0, f"preset {manifest.id} v{manifest.version} aplicado")
     log.info(

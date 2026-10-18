@@ -57,7 +57,7 @@ async def test_alta_con_preset_restaurante() -> None:
     # pack_payments exige claves de Wompi: queda pendiente y el alta no falla.
     assert "pack_payments" not in spec.packs
     assert [p["pack"] for p in preset["pendientes"]] == ["pack_payments"]
-    assert preset["id"] == "restaurante" and preset["version"] == 1
+    assert preset["id"] == "restaurante" and preset["version"] == 2
     # Catálogo de ejemplo desde `seed_data` del pack y config del fragmento.
     assert {"MENU-PLATO-DIA", "MENU-LIMONADA"} <= skus and productos == 2
     assert config.order_prefix == "PED"

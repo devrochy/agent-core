@@ -129,3 +129,10 @@ solo lee lo nuevo cuando tiene una release en la ranura.
   `spec.packs`; instalación de scope negocio; `load_config` por conexión; crons y eventos por
   instalación; `plugin_configs` → `config_encrypted`; tope del plan por instalaciones; plantillas de
   agente; candidatas `origin = platform` y `yanked`; flujo y playbooks desde `pack_versions`; panel.
+
+
+## Adenda (2026-10-18, HU-AOS-46): plantillas de agente en el core por ahora
+
+Enmienda §1: las plantillas de agente no entran todavía en `pack_versions` (`agent_templates` sigue vacío y ningún
+hash de pack cambia). Viven como configuración del core en `core/presets/plantillas/` y solo se usan al crear el
+agente; moverlas a los packs queda para la parte 2 de HU-AOS-16. Detalle en ADR-0139.

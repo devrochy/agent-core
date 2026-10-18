@@ -1,6 +1,6 @@
 {
   "id": "restaurante",
-  "version": 1,
+  "version": 2,
   "nombre": "Restaurante",
   "descripcion": "Restaurante o domicilios: menú, pedido para domicilio o para recoger y pago en línea.",
   "sinonimos": [
@@ -43,5 +43,8 @@
     "cargar_menu",
     "configurar_pagos"
   ],
-  "golden_set": "restaurante-base"
+  "golden_set": "restaurante-base",
+  "agentes": [
+    "ventas"
+  ]
 }

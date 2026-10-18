@@ -262,3 +262,65 @@ def backfill_agentes(
         console.print(f"[red]Error:[/red] negocio {problema.tenant_id}: {problema.mensaje}")
     if reporte.fallo:
         raise typer.Exit(1)
+
+
+@app.command("presets-v2")
+def presets_v2(
+    tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
+    todos: bool = typer.Option(False, "--todos", help="Todos los negocios vivos con aos_runtime = v3."),
+    preset: str | None = typer.Option(
+        None, "--preset", help="Preset a usar en vez del registrado en el negocio (solo con --tenant)."
+    ),
+    aplicar: bool = typer.Option(False, "--aplicar", help="Escribe. Sin esto es dry-run: reporta lo que haría."),
+) -> None:
+    """Agent OS (HU-AOS-46, ADR-0139): presets v2 para negocios existentes. Crea los agentes
+    especialistas del preset (Ventas, Agenda, Cobranza, Suscripciones) que falten, con su
+    instancia en cada conexión (nunca por defecto), agrega las reglas del Coordinador y construye
+    la release candidata de cada conexión que cambió, SIN activarla. Idempotente: no duplica
+    agentes, no pisa lo que el dueño cambió y no devuelve instancias quitadas. Solo actúa con
+    `AOS_CONNECTION_ROUTING` encendida y `aos_runtime = 'v3'`. Dry-run por defecto."""
+    import asyncio
+
+    from rich.table import Table
+
+    from cli.tenant_ref import resolve_tenant
+    from core.plugin_manager import plugin_manager
+    from core.presets import PresetError
+    from core.presets.agentes import ReportePresetV2, backfill_presets_v2
+
+    if bool(tenant) == todos:
+        raise typer.BadParameter("Indica --tenant <slug> o --todos (uno de los dos).")
+    if preset and todos:
+        raise typer.BadParameter("--preset solo con --tenant.")
+
+    async def _run() -> list[ReportePresetV2]:
+        ids = [await resolve_tenant(tenant)] if tenant else None
+        return await backfill_presets_v2(
+            tenant_ids=ids, preset_id=preset, aplicar=aplicar, modules=plugin_manager.scan()
+        )
+
+    try:
+        reportes = asyncio.run(_run())
+    except PresetError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from None
+    tabla = Table(title="Presets v2" + ("" if aplicar else " (dry-run: no se escribió nada)"))
+    for columna in ("Negocio", "Preset", "Omitido", "Agentes", "Reglas nuevas", "Releases candidatas"):
+        tabla.add_column(columna)
+    for r in reportes:
+        tabla.add_row(
+            str(r.tenant_id),
+            f"{r.preset} v{r.version}" if r.preset else "-",
+            r.omitido or "",
+            ", ".join(f"{a.key}={a.estado}" for a in r.agentes),
+            ", ".join(r.reglas_nuevas),
+            ", ".join(f"{c[:8]}…→{n}" for c, n in sorted(r.releases.items())),
+        )
+    console.print(tabla)
+    for r in reportes:
+        for aviso in [*r.avisos, *(f"{a.key}: {x}" for a in r.agentes for x in a.avisos)]:
+            console.print(f"[yellow]Aviso:[/yellow] {r.tenant_id}: {aviso}")
+        for error in r.errores:
+            console.print(f"[red]Error:[/red] {r.tenant_id}: {error}")
+    if any(r.fallo for r in reportes):
+        raise typer.Exit(1)
