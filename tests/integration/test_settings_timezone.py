@@ -24,6 +24,11 @@ pytestmark = [
 
 
 async def _cookie_for_new_tenant(app_client, prefix: str) -> str:
+    cookie, _ = await _cookie_and_tenant(app_client, prefix)
+    return cookie
+
+
+async def _cookie_and_tenant(app_client, prefix: str):
     from core.alta_negocio import onboard_tenant
 
     slug = f"{prefix}-{os.urandom(3).hex()}"
@@ -38,7 +43,7 @@ async def _cookie_for_new_tenant(app_client, prefix: str) -> str:
         "/admin/switch-tenant", headers={"Cookie": session}, data={"tenant_id": str(tid)}
     )
     tenant_cookie = next(c.split(";")[0] for c in r2.headers.get_list("set-cookie") if "ac_tenant" in c)
-    return f"{session}; {tenant_cookie}"
+    return f"{session}; {tenant_cookie}", tid
 
 
 async def _identity(app_client, cookie: str) -> dict:
@@ -125,3 +130,42 @@ async def test_horario_de_atencion_usa_la_zona_del_negocio(app_client) -> None:
     resp = await _put(app_client, cookie, payload)
     assert resp.status_code == 200, resp.text
     assert resp.json()["business_tz"] == "America/Lima"
+
+
+async def test_horario_lunes_ida_y_vuelta_lo_aplica_el_lunes(app_client) -> None:
+    """«Lunes 08:00–18:00» como lo manda el panel (day=0) se guarda así y el runtime lo
+    aplica el lunes, no el martes ni el domingo (ADR-0051: 0=lunes … 6=domingo)."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from core.db.models import AppSettings
+    from core.db.session import get_session
+    from core.orchestrator.escalation import within_business_hours
+    from core.shared.tenant import tenant_scope
+
+    cookie, tid = await _cookie_and_tenant(app_client, "tzlunes")
+    current = await _identity(app_client, cookie)
+    payload = dict(
+        current,
+        business_tz="America/Bogota",
+        business_ranges=[{"day": 0, "from": "08:00", "to": "18:00"}],
+    )
+    resp = await _put(app_client, cookie, payload)
+    assert resp.status_code == 200, resp.text
+    assert (await _identity(app_client, cookie))["business_ranges"] == [
+        {"day": 0, "from": "08:00", "to": "18:00"}
+    ]
+
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            cfg = (
+                await s.execute(
+                    select(AppSettings.escalation_config).where(AppSettings.tenant_id == tid)
+                )
+            ).scalar_one()
+    business_hours = cfg["business_hours"]
+    # 10:00 en Bogotá (UTC-5): lunes 2026-10-19, martes 2026-10-20 y domingo 2026-10-18.
+    assert within_business_hours(business_hours, datetime(2026, 10, 19, 15, 0, tzinfo=UTC)) is True
+    assert within_business_hours(business_hours, datetime(2026, 10, 20, 15, 0, tzinfo=UTC)) is False
+    assert within_business_hours(business_hours, datetime(2026, 10, 18, 15, 0, tzinfo=UTC)) is False

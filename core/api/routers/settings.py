@@ -57,6 +57,14 @@ GuardrailFailAction = Literal["escalate", "neutral"]
 
 
 # ------------------------------------------------------------------ modelos
+# Franjas del horario de atención (ADR-0051): `day` es 0=lunes … 6=domingo, el mismo
+# índice que `datetime.weekday()` en `within_business_hours`.
+_BUSINESS_RANGES_DESC = (
+    "Franjas del horario de atención: [{day, from, to}]. `day` va de 0=lunes a 6=domingo "
+    "(criterio de `datetime.weekday()`); `from`/`to` en HH:MM, hora local de `business_tz`."
+)
+
+
 class IdentitySettings(BaseModel):
     assistant_name: str
     business_description: str
@@ -89,7 +97,7 @@ class IdentitySettings(BaseModel):
     persona_forbidden: list[str]
     bot_paused: bool
     business_tz: str
-    business_ranges: list[dict[str, Any]]
+    business_ranges: list[dict[str, Any]] = Field(description=_BUSINESS_RANGES_DESC)
 
 
 class IdentityUpdate(BaseModel):
@@ -125,7 +133,7 @@ class IdentityUpdate(BaseModel):
     # formulario abierto desde antes no debe reactivar ni pausar el asistente al guardar.
     bot_paused: bool | None = None
     business_tz: str = ""
-    business_ranges: list[dict[str, Any]] = []
+    business_ranges: list[dict[str, Any]] = Field(default=[], description=_BUSINESS_RANGES_DESC)
 
     @field_validator("timezone")
     @classmethod
