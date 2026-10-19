@@ -43,6 +43,7 @@ from core.agents import versiones
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.pagination import Page, PageParams, build_page, page_params
+from core.api.plan_limits import plan_limit_error, plan_limit_responses
 from core.api.routers.agents import (
     AgentDraft,
     AgentSummary,
@@ -55,6 +56,7 @@ from core.api.routers.agents import (
     _tenant,
     _version,
 )
+from core.billing.enforcement import QuotaExceeded
 
 router = APIRouter(prefix="/admin", tags=["admin · editor de agentes"])
 
@@ -281,7 +283,7 @@ async def list_publish_targets(
     return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
 
 
-@router.post("/agents/{agent_id}/publish", response_model=EditorPublishOut)
+@router.post("/agents/{agent_id}/publish", response_model=EditorPublishOut, responses=plan_limit_responses("agentes"))
 async def publish_to_connections(
     agent_id: uuid.UUID,
     payload: EditorPublishIn,
@@ -309,6 +311,9 @@ async def publish_to_connections(
         raise _contrato_422(exc.issues) from None
     except versiones.Conflicto as exc:
         raise ApiError(409, "conflict", str(exc)) from None
+    except QuotaExceeded as exc:
+        # Agente nuevo con el plan al tope de agentes publicados (D-35, ADR-0142): no se publicó.
+        raise plan_limit_error(exc) from None
     return EditorPublishOut(
         version=_version(resultado.version),
         created=resultado.created,

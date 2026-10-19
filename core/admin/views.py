@@ -883,15 +883,23 @@ async def collaborators_create(
     me = await current_admin(request)
     if not await _require_collaborators(request, write=True):
         return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
-    resultado = await create_collaborator(
-        actor=me,
-        email=email,
-        password=password,
-        role=role,
-        username=username,
-        tenant_slug=tenant,
-        pack_roles=pack_roles,
-    )
+    try:
+        resultado = await create_collaborator(
+            actor=me,
+            email=email,
+            password=password,
+            role=role,
+            username=username,
+            tenant_slug=tenant,
+            pack_roles=pack_roles,
+        )
+    except QuotaExceeded as exc:
+        # Tope de colaboradores del plan (ADR-0142): mismo mensaje que el 409 de la API.
+        from urllib.parse import quote
+
+        from core.api.plan_limits import plan_limit_message
+
+        return _collab_redirect(quote(plan_limit_message(exc)), "danger")
     if isinstance(resultado, str):
         return _collab_redirect(resultado, "danger")
     _audit("create_collaborator", me.email if me else "?", email, role=role, tenant=tenant or "*")

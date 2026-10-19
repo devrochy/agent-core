@@ -44,6 +44,16 @@ class AltaResultado:
 
 
 # ------------------------------------------------------------------ helpers
+def scope_del_negocio(tenant_id: uuid.UUID | None) -> Any:
+    """`tenant_scope` del negocio (para que la suscripción se lea con su RLS al medir el tope)
+    o un contexto vacío si el alta no es para un negocio (una cuenta global del master)."""
+    from contextlib import nullcontext
+
+    from core.shared.tenant import tenant_scope
+
+    return tenant_scope(tenant_id) if tenant_id is not None else nullcontext()
+
+
 async def resolve_tenant_id(slug: str) -> uuid.UUID | None:
     async with get_session() as session:
         return (
@@ -194,7 +204,13 @@ async def create_collaborator(
             return error
         return AltaResultado(estado="invitado")
 
-    async with get_session() as session:
+    async with scope_del_negocio(tenant_id), get_session() as session:
+        if tenant_id is not None and tenant_role == "colaborador":
+            # Tope de colaboradores del plan (D-35, ADR-0142): `QuotaExceeded` antes de crear
+            # la cuenta; el caller lo traduce (409 `plan_limit_colaboradores`).
+            from core.billing.enforcement import enforce_growth
+
+            await enforce_growth(tenant_id, "colaboradores", session=session)
         new_admin = Admin(
             email=email,
             username=username.strip() or None,

@@ -574,6 +574,7 @@ async def publicar_en_conexiones(
     release candidata sin activarla. `ErrorDelEditor` (409/422) o `versiones.ErroresDeContrato`
     (422 por campo) antes de escribir nada."""
     from core.agents import instancias, versiones
+    from core.billing.enforcement import QuotaExceeded
     from core.releases import build
 
     _exigir_scope(tenant_id)
@@ -606,6 +607,16 @@ async def publicar_en_conexiones(
     if issues:
         issues += [Issue("conexion", k, v) for k, v in campos.items()]
         raise versiones.ErroresDeContrato(issues)
+    nuevas = [cid for cid in connection_ids if not disponibles[cid].installed]
+    if nuevas and not await instancias.agente_cuenta_en_el_plan(tenant_id, agent_id):
+        # Tope de agentes publicados (D-35, ADR-0142): se avisa ANTES de publicar la versión,
+        # para no dejar una versión nueva sin conexión. `agregar_instancia` lo vuelve a medir
+        # con el lock (una carrera da `plan_limit_agentes` en esa conexión).
+        from core.billing.enforcement import quota_decision
+
+        decision = await quota_decision(tenant_id, "agentes")
+        if not decision.allowed and decision.limit is not None:
+            raise QuotaExceeded("agentes", decision.used, decision.limit)
 
     version, creada = await versiones.publicar(
         tenant_id,
@@ -634,6 +645,10 @@ async def publicar_en_conexiones(
                     resultado.error = exc.code
                     continue
                 resultado.instance = "existing"
+            except QuotaExceeded:
+                # El plan llegó al tope entre el pre-chequeo y la escritura (otra publicación).
+                resultado.instance = resultado.error = "plan_limit_agentes"
+                continue
             except (instancias.ConexionNoEncontrada, instancias.ConexionNoConversacional, instancias.AgenteNoInstanciable):
                 # La conexión (o el agente) cambió entre la validación y la escritura: se sigue
                 # con las demás y el reintento lo resuelve.

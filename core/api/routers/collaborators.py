@@ -28,6 +28,8 @@ from core.admin.collaborators_service import (
 )
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
+from core.api.plan_limits import plan_limit_error, plan_limit_responses
+from core.billing.enforcement import QuotaExceeded
 from core.db.models import Admin, AdminPermission, Tenant, TenantUser
 from core.db.session import get_session
 
@@ -193,20 +195,26 @@ def _fail(error: str | None) -> None:
         raise ApiError.bad_request(error, "collaborator_error")
 
 
-@router.post("", status_code=200)
+@router.post("", status_code=200, responses=plan_limit_responses("colaboradores"))
 async def create_collaborator_endpoint(
     payload: CollaboratorCreate,
     principal: Annotated[Principal, Depends(require("collaborators", write=True))],
 ) -> JSONResponse:
-    resultado = await create_collaborator(
-        actor=principal.admin,
-        email=payload.email,
-        password=payload.password,
-        role=payload.role,
-        username=payload.username,
-        tenant_slug=payload.tenant,
-        pack_roles=payload.pack_roles,
-    )
+    """Alta de una cuenta nueva o invitación de una existente (ADR-0081). Al tope de
+    colaboradores del plan, 409 `plan_limit_colaboradores` y no se crea ni se invita a nadie
+    (D-35, ADR-0142)."""
+    try:
+        resultado = await create_collaborator(
+            actor=principal.admin,
+            email=payload.email,
+            password=payload.password,
+            role=payload.role,
+            username=payload.username,
+            tenant_slug=payload.tenant,
+            pack_roles=payload.pack_roles,
+        )
+    except QuotaExceeded as exc:
+        raise plan_limit_error(exc) from None
     if isinstance(resultado, str):
         raise ApiError.bad_request(resultado, "collaborator_error")
     audit(

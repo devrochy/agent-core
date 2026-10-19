@@ -114,6 +114,42 @@ async def enforce_metric(tenant_id: uuid.UUID, key: str, *, session=None) -> Non
         raise QuotaExceeded(key, decision.used, decision.limit)
 
 
+# Métricas estructurales de D-35 (ADR-0142): se cuentan en vivo y solo bloquean CRECER. Un
+# negocio que ya está por encima del tope (plan bajado, catálogo nuevo) sigue operando igual;
+# lo único que se rechaza es la siguiente unidad.
+GROWTH_METRICS = ("agentes", "colaboradores")
+
+
+async def lock_growth(tenant_id: uuid.UUID, key: str, *, session) -> None:
+    """Serializa las altas de una métrica estructural del negocio hasta el fin de la transacción
+    de `session` (reentrante). El caller que decide ANTES si la unidad es nueva (p. ej. si el
+    agente ya cuenta) lo toma primero, para que esa lectura también quede serializada."""
+    from sqlalchemy import text
+
+    if key not in GROWTH_METRICS:
+        raise ValueError(f"{key} no es una métrica estructural")
+    await session.execute(
+        text("select pg_advisory_xact_lock(hashtext(:m), hashtext(:t))"), {"m": f"billing:{key}", "t": str(tenant_id)}
+    )
+
+
+async def enforce_growth(tenant_id: uuid.UUID, key: str, *, session) -> None:
+    """Rechaza (`QuotaExceeded`) una unidad NUEVA de una métrica estructural si el plan está al
+    tope. Serializa por negocio y métrica con `pg_advisory_xact_lock` (dos altas concurrentes no
+    pasan las dos con un cupo), así que `session` es obligatoria: la del caller, abierta dentro
+    del `tenant_scope` del negocio, y el conteo corre en ella después del lock. El lock dura lo
+    que la transacción del caller, que es la que inserta la unidad."""
+
+    await lock_growth(tenant_id, key, session=session)
+    decision = await quota_decision(tenant_id, key, session=session)
+    if not decision.allowed and decision.limit is not None:
+        log.info(
+            "plan_limit_reached", tenant_id=str(tenant_id), metric=key,
+            used=decision.used, limit=decision.limit,
+        )
+        raise QuotaExceeded(key, decision.used, decision.limit)
+
+
 async def can_activate_plugin(tenant_id: uuid.UUID) -> bool:
     return await check_metric(tenant_id, "plugins")
 

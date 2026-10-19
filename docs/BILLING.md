@@ -26,12 +26,27 @@ se mide el consumo, qué pasa al llegar al límite y cómo paga un tenant.
 Precios en COP/mes. Wompi exige un mínimo de **150.000 COP por link de pago**: los
 planes pagos se fijan por encima. `null` = ilimitado.
 
-| Plan | Precio/mes | Clientes | Conversaciones | Audio | OCR | Plugins | Mensajes | Costo LLM (USD) |
-|---|---|---|---|---|---|---|---|---|
-| `free` | 0 (30 días) | 100 | 500 | 50 | 20 | 1 | 2.000 | 5 |
-| `basic` | 200.000 | 500 | 3.000 | 300 | 150 | 3 | 15.000 | 50 |
-| `premium` | 600.000 | 2.000 | 15.000 | 1.500 | 800 | 8 | 80.000 | 200 |
-| `empresarial` | 1.800.000 | ∞ | ∞ | ∞ | ∞ | todos | ∞ | ∞ |
+**Planes v2 por agentes (D-35, HU-BILL-05, ADR-0142).** Las dimensiones que se venden y sus
+cifras salen de `modelo-de-precios.md §5` (docs). Las de agentes son propuesta del modelo de
+precios, pendiente de validar con el dueño:
+
+| Plan | Precio/mes | Agentes publicados | Colaboradores | Crédito mensual (1 = COP 10) |
+|---|---|---|---|---|
+| `free` | 0 (30 días) | 1 | 2 | 2.500 |
+| `basic` | 200.000 | 2 | 5 | 20.000 |
+| `premium` | 600.000 | 5 | 15 | 75.000 |
+| `empresarial` | 1.800.000 | ∞ | 50 | 240.000 |
+
+«Habilidades activas» (`plugins`) y «Asistentes por negocio» ya no son topes. El crédito
+mensual es informativo (`/admin/plan` → `credit`, con `used = null`) hasta que exista su
+ledger y su enforcement (HU-BILL-04/06). Mientras tanto siguen vigentes los topes de volumen:
+
+| Plan | Clientes | Conversaciones | Audio | OCR | Mensajes | Costo LLM (USD) |
+|---|---|---|---|---|---|---|
+| `free` | 100 | 500 | 50 | 20 | 2.000 | 5 |
+| `basic` | 500 | 3.000 | 300 | 150 | 15.000 | 50 |
+| `premium` | 2.000 | 15.000 | 1.500 | 800 | 80.000 | 200 |
+| `empresarial` | ∞ | ∞ | ∞ | ∞ | ∞ | ∞ |
 
 El plan `free` es el estado inicial de todo tenant nuevo y **también** el trial: 30 días.
 No se paga; al vencer `trial_ends_at` el tenant deja de operar hasta que se suscriba.
@@ -51,7 +66,9 @@ paralelo, ADR-0045). El registro vive en `core/billing/metrics.py`.
 | `conversaciones` | conversaciones iniciadas | `conversations.started_at` | período |
 | `conversaciones_audio` | audios entrantes procesados | `messages` inbound con `media_type like 'audio/%'` | período |
 | `conversaciones_ocr` | imágenes entrantes procesadas | `messages` inbound con `media_type like 'image/%'` | período |
-| `plugins` | packs **de negocio** habilitados (sin el core) | `AgentSpec.packs` | lifetime |
+| `plugins` | packs **de negocio** habilitados (sin el core); ya no es tope de ningún plan | `AgentSpec.packs` | lifetime |
+| `agentes` | especialistas activos con al menos una instancia viva en una conexión viva (el General cuenta, el Coordinador no) | `agents` + `agent_instances` + `channel_connections` | lifetime |
+| `colaboradores` | vínculos con rol `colaborador` (sin propietarios ni cuentas de plataforma; las desactivadas cuentan) + invitaciones a colaborador pendientes y vigentes | `tenant_user` + `tenant_invitations` | lifetime |
 | `mensajes` | mensajes salientes enviados | `messages` outbound | período |
 | `costo_llm_usd` | gasto LLM del período | `SUM(usage_ledger.cost_usd)` (ADR-0008) | período |
 
@@ -87,8 +104,15 @@ pago.
 | `conversaciones` | apertura de una `Conversation` nueva (`consumer.py`) |
 | `conversaciones_audio` | procesamiento de audio (`webhooks.py::_try_process_media`) |
 | `conversaciones_ocr` | procesamiento de imagen (`webhooks.py::_try_process_media`) |
-| `plugins` | activación de un pack (`plugin_manager.activate`) |
+| `plugins` | activación de un pack (`plugin_manager.activate`), solo si el plan define el tope (hoy ninguno) |
+| `agentes` | primera instancia viva de un agente (`instancias.agregar_instancia`): API de conexión-agentes, publicar del editor (pre-chequeo antes de publicar la versión) y presets v2 → 409 `plan_limit_agentes` |
+| `colaboradores` | alta o invitación de un colaborador (`create_collaborator`, `crear_invitacion`, gestores de `pack_cobranza`) → 409 `plan_limit_colaboradores` |
 | `mensajes` / `costo_llm_usd` | envío / cabecera del turno |
+
+`agentes` y `colaboradores` **solo bloquean crecer** (ADR-0142): un negocio que ya está por
+encima del tope (plan bajado, catálogo nuevo) sigue operando con lo que tiene; solo se rechaza
+la unidad siguiente. Se serializan por negocio con `pg_advisory_xact_lock`. El 409 trae
+`error.details = {metric, used, limit}`.
 
 Las conversaciones **ya abiertas** siguen respondiendo: el corte es a la creación de
 nuevas unidades, no un apagado a mitad de una charla. El panel avisa desde el 80% y

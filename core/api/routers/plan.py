@@ -1,6 +1,7 @@
 """Plan y consumo (lectura): `GET /api/v1/admin/plan`.
 
-Plan activo, consumo por métrica, historial de pagos y catálogo de planes.
+Plan activo, consumo por métrica, historial de pagos y catálogo de planes. Desde HU-BILL-05
+(D-35, ADR-0142) el consumo trae `agentes` y `colaboradores`, y `credit` el crédito mensual.
 Mismos datos que la vista SSR `/admin/plan` (ADR-0045).
 
 Desde HU-SH-04 (ADR-0123) es también el **canal panel** del cobro de la plataforma: muestra el
@@ -40,6 +41,18 @@ class PlanInfo(BaseModel):
     current: bool
     limits: dict[str, int | None]
     features: dict[str, Any]
+    # Crédito mensual de uso del plan (D-35; 1 crédito = COP 10).
+    monthly_credits: int | None = None
+
+
+class CreditUsage(BaseModel):
+    """Crédito mensual del plan (D-35, ADR-0142). `used`/`percent` son `null` mientras el core no
+    mide el consumo en créditos (ledger multiconcepto, HU-BILL-04/06): el panel muestra el tope
+    y la barra vacía con «medición pendiente»."""
+
+    limit: int
+    used: int | None = None
+    percent: float | None = None
 
 
 class PlanOverview(BaseModel):
@@ -83,6 +96,8 @@ class PlanResponse(BaseModel):
     payments: list[Payment]
     plans: list[PlanInfo]
     cobro: Cobro | None = None
+    # Crédito mensual del plan actual (null sin plan o si el plan no define crédito).
+    credit: CreditUsage | None = None
     # El negocio lo creó el asistente de SolversHub: su plan se cambia por el asistente.
     plan_por_el_asistente: bool = False
 
@@ -91,6 +106,7 @@ class PlanResponse(BaseModel):
 async def get_plan(
     principal: Annotated[Principal, Depends(require("plan"))],
 ) -> PlanResponse:
+    from core.billing.plans import get_plan as plan_del_catalogo
     from core.billing.plans import public_plans
 
     tenant_id = principal.tenant_id
@@ -100,6 +116,12 @@ async def get_plan(
     cobro, por_el_asistente = await cobro_del_periodo(tenant_id) if tenant_id else (None, False)
 
     current_plan_id = overview.plan_id if overview else None
+    plan_actual = plan_del_catalogo(current_plan_id) if current_plan_id else None
+    credito = (
+        CreditUsage(limit=plan_actual.monthly_credits)
+        if plan_actual is not None and plan_actual.monthly_credits is not None
+        else None
+    )
     return PlanResponse(
         overview=(
             PlanOverview(
@@ -124,10 +146,12 @@ async def get_plan(
                 current=plan.id == current_plan_id,
                 limits=plan.limits,
                 features=plan.features,
+                monthly_credits=plan.monthly_credits,
             )
             for plan in public_plans()
         ],
         cobro=Cobro(**cobro) if cobro else None,
+        credit=credito,
         plan_por_el_asistente=por_el_asistente,
     )
 

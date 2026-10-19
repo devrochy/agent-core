@@ -23,8 +23,11 @@ from core.admin.invitations_service import (
     rechazar_invitacion,
     revocar_invitacion,
 )
+from core.admin.roles import es_tester
 from core.api.deps import Principal, get_principal, require
 from core.api.errors import ApiError
+from core.api.plan_limits import plan_limit_error, plan_limit_responses
+from core.billing.enforcement import QuotaExceeded
 from core.db.models import Admin
 from core.db.session import get_session
 
@@ -94,23 +97,30 @@ async def list_pending(
     return PendingResponse(items=items, total=len(items))
 
 
-@router.post("", status_code=204)
+@router.post("", status_code=204, responses=plan_limit_responses("colaboradores"))
 async def create_invitation(
     payload: InvitationCreate,
     principal: Annotated[Principal, Depends(require("collaborators", write=True))],
 ) -> Response:
+    """Al tope de colaboradores del plan, 409 `plan_limit_colaboradores` (ADR-0142)."""
+    if payload.role == "owner" and principal.admin.role != "master" and not es_tester(principal.admin):
+        # ADR-0048 §3 y ADR-0136, como `create_collaborator`: un propietario invita
+        # colaboradores; a otro propietario lo vincula el master. Sin esto, invitar «owners»
+        # saltaba además el tope de colaboradores del plan (ADR-0142).
+        raise ApiError.forbidden("Un propietario solo invita colaboradores; a otro propietario lo vincula el master.")
     tenant_id = await _resolver_tenant(principal, payload)
     admin_id = await _resolver_invitado(payload)
-    _fail(
-        await crear_invitacion(
+    try:
+        error = await crear_invitacion(
             tenant_id=tenant_id,
             admin_id=admin_id,
             invited_by=principal.admin.id,
             role=payload.role,
             pack_roles=payload.pack_roles,
-        ),
-        "invitation_error",
-    )
+        )
+    except QuotaExceeded as exc:
+        raise plan_limit_error(exc) from None
+    _fail(error, "invitation_error")
     return Response(status_code=204)
 
 

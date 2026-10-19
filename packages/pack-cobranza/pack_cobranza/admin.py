@@ -293,7 +293,7 @@ async def _save(entity: str, record_id: str | None, values: dict[str, Any]) -> N
                 # perfil del pack (ADR-0066): aparece en Colaboradores y en Gestores.
                 correo = str(values.get("correo") or "").strip().lower()
                 password = str(values.get("password") or "")
-                if not correo or not password:
+                if not correo or not password or tid is None:
                     return
                 existente = (await session.execute(select(Admin).where(Admin.email == correo))).scalar_one_or_none()
                 if existente is not None:
@@ -308,6 +308,10 @@ async def _save(entity: str, record_id: str | None, values: dict[str, Any]) -> N
                         )
                     ).scalar_one_or_none()
                     if pendiente is None:
+                        # Tope de colaboradores del plan (ADR-0142): la invitación ocupa cupo.
+                        from core.billing.enforcement import enforce_growth
+
+                        await enforce_growth(tid, "colaboradores", session=session)
                         session.add(
                             TenantInvitation(
                                 tenant_id=tid,
@@ -318,6 +322,9 @@ async def _save(entity: str, record_id: str | None, values: dict[str, Any]) -> N
                             )
                         )
                     return
+                from core.billing.enforcement import enforce_growth
+
+                await enforce_growth(tid, "colaboradores", session=session)
                 admin = Admin(email=correo, password_hash=hash_password(password), role="colaborador")
                 session.add(admin)
                 await session.flush()
@@ -1075,7 +1082,18 @@ async def entity_save(request: Request, entity: str) -> RedirectResponse:
     form_data = {str(k): str(v) for k, v in form.items()}
     record_id = form.get("record_id") or None
     values = parse_json_schema_form(_SCHEMAS[entity], form_data)
-    await _save(entity, str(record_id) if record_id else None, values)
+    from core.billing.enforcement import QuotaExceeded
+
+    try:
+        await _save(entity, str(record_id) if record_id else None, values)
+    except QuotaExceeded as exc:
+        from urllib.parse import quote
+
+        from core.api.plan_limits import plan_limit_message
+
+        return RedirectResponse(
+            f"/cobranza/{entity}?flash={quote(plan_limit_message(exc))}&flash_type=danger", status_code=303
+        )
     return RedirectResponse(f"/cobranza/{entity}?flash=Guardado&flash_type=success", status_code=303)
 
 
