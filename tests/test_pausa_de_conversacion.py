@@ -113,10 +113,10 @@ async def test_el_aviso_de_una_conexion_propia_es_generico(monkeypatch) -> None:
         (True, None, "whatsapp_meta", False),
         (False, None, "whatsapp_meta", True),  # manual
         (False, None, "whatsapp_waweb", True),
-        (False, None, "webchat", False),  # se pausa en Configuración → Chat web
+        (False, None, "webchat", True),  # el mismo interruptor que Configuración → Chat web
     ],
 )
-def test_la_consola_ofrece_pausar_manuales_y_waweb(tiene_cuenta, meta_status, type_id, esperado) -> None:
+def test_la_consola_ofrece_pausar_manuales_waweb_y_chat_web(tiene_cuenta, meta_status, type_id, esperado) -> None:
     from core.gateway.consola_conexiones import pausable
 
     assert pausable(tiene_cuenta=tiene_cuenta, meta_status=meta_status, type_id=type_id) is esperado

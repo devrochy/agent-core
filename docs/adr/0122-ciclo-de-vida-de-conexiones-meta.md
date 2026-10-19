@@ -218,3 +218,33 @@ no había cuenta y no había pausa. El consumer resuelve la conexión por `exter
 - Revisado por `auditor-multitenant` y `security-reviewer`: sin hallazgos bloqueantes ni altos. Ningún cliente
   (APK, panel) consume todavía `core.connection_paused`, así que sumar `scope` no rompe nada.
 - Tests: `tests/integration/test_pausa_conexion_propia.py` y `tests/test_pausa_de_conversacion.py`.
+
+## Adenda 2026-10-19 (b): el chat web también se pausa desde la consola
+
+Reemplaza la última frase del punto 6 de la adenda anterior («El chat web se sigue pausando en Configuración → Chat
+web»). En test, el dueño pausó el WhatsApp por QR, escribió por el chat web y le respondió: la consola no dejaba
+pausar el chat web y no decía que la pausa es solo de ese canal.
+
+1. **Mismo endpoint, mismo alcance.** La fila `webchat` de la consola sale con `pause_scope = "connection"` y
+   `pausable = true`. `POST /admin/connections/{id}/action` acepta `activate` / `deactivate` sobre ella y lo audita
+   como las demás (`connection.resumed` / `connection.paused`). `primary` y `delete` siguen dando 404: la clave, los
+   dominios y el alta del widget siguen en Configuración → Chat web. `webchat_settings` deja de emitirse y queda en
+   el enum de la API para no romper los clientes generados.
+2. **Un solo estado.** La pausa escribe el mismo interruptor que Configuración (`chat_web_conexion.establecer_habilitado`):
+   `app_settings.web_chat_config.enabled` (fuente de verdad hasta el *contract*, ADR-0115) y `channel_connections.active`
+   (lo que leen `webchat_resolve` y la guarda de §2) en una transacción. Primero toma `SELECT … FOR UPDATE` sobre
+   `app_settings` (también `guardar_widget`, en el mismo orden) y después relee la conexión, para que un guardado
+   concurrente no pise la pausa ni deje un estado previo viejo. El GET de Configuración sigue
+   leyendo `app_settings`. Si `app_settings` no tiene el widget de esa conexión (otra clave o vacío), falla cerrado
+   con 409 y no repara nada en silencio: lo corrige `backfill-conexiones`.
+3. **Auditoría en los dos caminos.** Activar o desactivar desde Configuración (`PUT /settings/web-chat`) deja el mismo
+   `connection.paused` / `connection.resumed` cuando el interruptor cambia (estado previo y nuevo leídos bajo el mismo
+   candado); crear el widget no cuenta como reanudar. La auditoría va después del cambio, en su propia transacción,
+   igual que en las demás conexiones.
+4. **Permisos.** La consola exige `connections` en escritura; Configuración, `settings` en escritura. Un colaborador
+   con uno y sin el otro pausa el chat web por un solo camino. Es la misma asimetría que ya tienen las conexiones
+   manuales (se pausan solo desde la consola) y se acepta.
+5. **Antes de desplegar**, comparar por negocio `app_settings.web_chat_config->>'enabled'` con el `active` de su
+   conexión `webchat` viva; si alguno difiere, `backfill-conexiones` del negocio.
+
+Tests: `tests/integration/test_pausa_chat_web_consola.py`.

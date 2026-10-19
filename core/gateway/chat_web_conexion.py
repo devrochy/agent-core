@@ -43,6 +43,11 @@ ETIQUETA = "Chat web"
 
 Resultado = Literal["creada", "sincronizada", "ya_estaba", "sin_widget"]
 
+class WidgetDesincronizado(Exception):
+    """La conexión `webchat` no coincide con `app_settings.web_chat_config` (otra clave o sin
+    widget): no se pausa ni se repara en silencio; lo arregla `backfill-conexiones`."""
+
+
 def nueva_clave() -> str:
     """Clave pública del widget: 24 bytes aleatorios en base64url (192 bits)."""
     return secrets.token_urlsafe(24)
@@ -104,6 +109,8 @@ async def conexion_del_negocio(session: Any, tenant_id: uuid.UUID) -> ChannelCon
             )
             .order_by(ChannelConnection.created_at)
             .limit(1)
+            # Releída de la base: tras esperar un candado, el objeto del identity map puede estar viejo.
+            .execution_options(populate_existing=True)
         )
     ).scalars().first()
 
@@ -232,11 +239,8 @@ async def guardar_widget(
     from core.agents.instancias import instancias_de_conexion_nueva
     from core.db.models import AppSettings
 
-    app_settings = (
-        await session.execute(
-            select(AppSettings).where(AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None))
-        )
-    ).scalar_one_or_none()
+    # El mismo candado que la pausa de la consola (`establecer_habilitado`).
+    app_settings = await _app_settings_bloqueado(session, tenant_id)
     if app_settings is None:
         app_settings = AppSettings(tenant_id=tenant_id)
         session.add(app_settings)
@@ -255,13 +259,73 @@ async def guardar_widget(
     return config, resultado, conexion
 
 
+async def _app_settings_bloqueado(session: Any, tenant_id: uuid.UUID) -> Any:
+    """`app_settings` vivo del negocio con `FOR UPDATE` (read-modify-write de `web_chat_config`)."""
+    from core.db.models import AppSettings
+
+    return (
+        await session.execute(
+            select(AppSettings)
+            .where(AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None))
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+
+
+async def estado_bajo_candado(session: Any, tenant_id: uuid.UUID) -> tuple[uuid.UUID, bool] | None:
+    """`(id, active)` de la conexión `webchat` viva, leído con el candado de `app_settings` tomado:
+    el estado previo de un guardado de Configuración, para auditar solo si cambia."""
+    await _app_settings_bloqueado(session, tenant_id)
+    conexion = await conexion_del_negocio(session, tenant_id)
+    return None if conexion is None else (conexion.id, bool(conexion.active))
+
+
+async def establecer_habilitado(
+    session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID, *, enabled: bool
+) -> bool | None:
+    """Pausa o reanuda el chat web desde la consola de conexiones (HU-AOS-23): el mismo
+    interruptor que Configuración → Chat web. Escribe `app_settings.web_chat_config.enabled` (la
+    fuente de verdad hasta el *contract*) y, en la misma sesión, `channel_connections.active` vía
+    `sincronizar`; no toca la clave, los dominios ni el secreto.
+
+    Devuelve el estado previo o None si `connection_id` no es la conexión `webchat` viva del
+    negocio. Si `app_settings` no tiene el widget de esa conexión (dato roto: todo camino lo
+    escribe antes), falla cerrado con `WidgetDesincronizado` en vez de repararlo en silencio."""
+    # Primero el candado de `app_settings` (el mismo orden que `guardar_widget`) y después la
+    # conexión, releída: un guardado de Configuración que confirmó mientras esperábamos no deja un
+    # estado previo obsoleto ni una sincronización a medias.
+    app_settings = await _app_settings_bloqueado(session, tenant_id)
+    actual = await conexion_del_negocio(session, tenant_id)
+    if actual is None or actual.id != connection_id:
+        return None
+    previo = bool(actual.active)
+    config = dict((app_settings.web_chat_config if app_settings is not None else None) or {})
+    if app_settings is None or config.get("key") != actual.external_id:
+        log.warning("conexion_webchat_desincronizada", tenant_id=str(tenant_id), connection_id=str(connection_id))
+        raise WidgetDesincronizado(str(connection_id))
+    config["enabled"] = bool(enabled)
+    app_settings.web_chat_config = config
+    await sincronizar(session, tenant_id, desde_app_settings(config))
+    log.info(
+        "conexion_webchat_habilitado",
+        tenant_id=str(tenant_id),
+        connection_id=str(connection_id),
+        enabled=bool(enabled),
+    )
+    return previo
+
+
 __all__ = [
     "CANAL",
     "PROVEEDOR",
     "ConfigWidget",
+    "WidgetDesincronizado",
     "conexion_del_negocio",
     "config_de_conexion",
     "desde_app_settings",
+    "establecer_habilitado",
+    "estado_bajo_candado",
     "guardar_widget",
     "leer",
     "nueva_clave",

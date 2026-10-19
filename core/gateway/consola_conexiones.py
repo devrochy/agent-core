@@ -25,7 +25,6 @@ from sqlalchemy import bindparam, text
 
 from core.db.models import utcnow
 from core.db.session import get_session
-from core.gateway.connection_types import WEBCHAT
 from core.kernel.banderas import banderas_del_negocio
 from core.shared.tenant import get_current_tenant_id
 
@@ -34,10 +33,14 @@ MAX_SIN_CONEXION = 50
 
 # Pausa que aplica a cada fila (lo que el panel ofrece y a qué endpoint va).
 PAUSA_CUENTA_META = "meta_account"  # ADR-0122: alcanza a todos los números de la cuenta
-# Manual o WhatsApp Web: `active = false` (`/admin/connections/{id}/action`). Corta la entrada y
-# la salida igual que la cuenta de Meta (adenda 2026-10-19 de ADR-0122, ADR-0115 §2).
+# Manual, WhatsApp Web o chat web: `active = false` (`/admin/connections/{id}/action`). Corta la
+# entrada y la salida igual que la cuenta de Meta (adendas 2026-10-19 de ADR-0122, ADR-0115 §2).
+# En el chat web es el mismo interruptor que Configuración → Chat web
+# (`chat_web_conexion.establecer_habilitado`).
 PAUSA_CONEXION = "connection"
-PAUSA_CHAT_WEB = "webchat_settings"  # Configuración → Chat web (`settings`)
+# Ya no se emite (el chat web se pausa con `connection`); queda en el enum de la API para no romper
+# a los clientes generados.
+PAUSA_CHAT_WEB = "webchat_settings"
 
 
 @dataclass(frozen=True)
@@ -85,8 +88,8 @@ class ConexionFila:
     meta_status: str | None
     health: str
     pause_scope: str
-    # La consola ofrece la pausa que detiene de verdad: la de la cuenta de Meta y la de una conexión
-    # manual o de WhatsApp Web. El chat web se pausa desde Configuración → Chat web.
+    # La consola ofrece la pausa que detiene de verdad: la de la cuenta de Meta, la de una conexión
+    # manual o de WhatsApp Web y la del chat web (mismo estado que Configuración → Chat web).
     pausable: bool
     agents: list[AgenteFila] = field(default_factory=list)
     active_release: ReleaseFila | None = None
@@ -134,16 +137,13 @@ def salud(*, active: bool, meta_status: str | None, tiene_cuenta: bool) -> str:
 
 
 def alcance_de_pausa(*, tiene_cuenta: bool, type_id: str | None) -> str:
-    if tiene_cuenta:
-        return PAUSA_CUENTA_META
-    if type_id == WEBCHAT:
-        return PAUSA_CHAT_WEB
-    return PAUSA_CONEXION
+    del type_id  # el chat web también es una conexión (pausa propia, sincronizada con Configuración)
+    return PAUSA_CUENTA_META if tiene_cuenta else PAUSA_CONEXION
 
 
 def pausable(*, tiene_cuenta: bool, meta_status: str | None, type_id: str | None) -> bool:
-    """¿La consola ofrece Pausar/Reanudar? La cuenta de Meta (si la fila tiene estado) y las
-    conexiones sin cuenta salvo el chat web (su interruptor está en Configuración → Chat web)."""
+    """¿La consola ofrece Pausar/Reanudar? La cuenta de Meta (si la fila tiene estado) y toda
+    conexión sin cuenta: manual, WhatsApp Web y chat web (este, sincronizado con Configuración)."""
     if tiene_cuenta:
         return meta_status is not None
     return alcance_de_pausa(tiene_cuenta=False, type_id=type_id) == PAUSA_CONEXION
