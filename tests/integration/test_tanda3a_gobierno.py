@@ -113,6 +113,14 @@ def test_within_business_hours() -> None:
     assert within_business_hours(bh, monday_10) is True
     monday_20 = datetime(2026, 9, 28, 3, 0, tzinfo=ZoneInfo("UTC"))  # 22:00 Bogotá domingo -> no
     assert within_business_hours(bh, monday_20) is False
+    # El índice es 0=lunes … 6=domingo (`weekday()`): day=0 no abre el martes ni el domingo.
+    tuesday_10 = datetime(2026, 9, 29, 15, 0, tzinfo=ZoneInfo("UTC"))
+    sunday_10 = datetime(2026, 9, 27, 15, 0, tzinfo=ZoneInfo("UTC"))
+    assert within_business_hours(bh, tuesday_10) is False
+    assert within_business_hours(bh, sunday_10) is False
+    bh_domingo = {"tz": "America/Bogota", "ranges": [{"day": 6, "from": "08:00", "to": "18:00"}]}
+    assert within_business_hours(bh_domingo, sunday_10) is True
+    assert within_business_hours(bh_domingo, monday_10) is False
 
     # Padding: "8:00" se normaliza (hallazgo de auditoría).
     bh_nopad = {"tz": "America/Bogota", "ranges": [{"day": 0, "from": "8:00", "to": "18:00"}]}

@@ -22435,7 +22435,8 @@
               "type": "object"
             },
             "type": "array",
-            "title": "Business Ranges"
+            "title": "Business Ranges",
+            "description": "Franjas del horario de atención: [{day, from, to}]. `day` va de 0=lunes a 6=domingo (criterio de `datetime.weekday()`); `from`/`to` en HH:MM, hora local de `business_tz`."
           }
         },
         "type": "object",
@@ -22639,6 +22640,7 @@
             },
             "type": "array",
             "title": "Business Ranges",
+            "description": "Franjas del horario de atención: [{day, from, to}]. `day` va de 0=lunes a 6=domingo (criterio de `datetime.weekday()`); `from`/`to` en HH:MM, hora local de `business_tz`.",
             "default": []
           }
         },
