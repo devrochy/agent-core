@@ -5,7 +5,8 @@ orden y las mismas respuestas de antes. Cada una deja su decisión en `core_deci
 resultado en `turn_outcomes`, sin llamar al LLM:
 
 - palabra de escalamiento → `escalated/escalation_keyword`, escala y responde el texto fijo;
-- fuera de horario → `blocked/out_of_hours`, `replied` con el mensaje configurado o `silent`;
+- fuera de horario → `blocked/out_of_hours`, `replied` con el mensaje configurado o, sin mensaje,
+  con el aviso por defecto una vez por ventana (adenda 2026-10-18 de ADR-0051) y `silent` después;
 - conversación escalada (y por eso pausada) → `escalated_conversation`, no `kill_switch`;
 - conexión pausada y negocio pausado a la vez → gana la conexión (va primero) y avisa;
 - turno diferido con la conexión pausada → `connection_paused` sin avisar otra vez.
@@ -201,15 +202,39 @@ async def test_fuera_de_horario_responde_el_mensaje_configurado_sin_llm(monkeypa
     assert await _escalaciones(tid, conv) == []
 
 
-async def test_fuera_de_horario_sin_mensaje_no_responde(monkeypatch) -> None:
-    tid = await _negocio(escalation_config={"business_hours": SIEMPRE_CERRADO})
+async def test_fuera_de_horario_sin_mensaje_avisa_una_vez_sin_llm(monkeypatch) -> None:
+    tid = await _negocio(assistant_name="Lupe", escalation_config={"business_hours": SIEMPRE_CERRADO})
     _inmediato(monkeypatch)
     _sin_llm(monkeypatch)
+    cliente = uniq("wa-hor0")
 
-    conv = await _entrar(tid, uniq("wa-hor0"), "hola")
+    conv = await _entrar(tid, cliente, "hola")
+    assert await _entrar(tid, cliente, "¿hay alguien?") == conv
 
-    assert await _turnos(tid, conv) == [("blocked", "out_of_hours", "silent")]
-    assert await _salientes(tid, conv) == []
+    assert await _turnos(tid, conv) == [
+        ("blocked", "out_of_hours", "replied"),
+        ("blocked", "out_of_hours", "silent"),
+    ], "el segundo mensaje de la ventana no repite el aviso"
+    assert await _salientes(tid, conv) == [
+        "¡Hola! Soy Lupe. Ahora estamos fuera de nuestro horario de atención. "
+        "Te respondemos apenas volvamos."
+    ]
+    assert await _escalaciones(tid, conv) == []
+
+
+async def test_fuera_de_horario_con_mensaje_responde_cada_vez(monkeypatch) -> None:
+    tid = await _negocio(
+        escalation_config={"business_hours": SIEMPRE_CERRADO, "out_of_hours_message": "Cerrado"}
+    )
+    _inmediato(monkeypatch)
+    _sin_llm(monkeypatch)
+    cliente = uniq("wa-hor2")
+
+    conv = await _entrar(tid, cliente, "hola")
+    await _entrar(tid, cliente, "hola otra vez")
+
+    assert await _turnos(tid, conv) == [("blocked", "out_of_hours", "replied")] * 2
+    assert await _salientes(tid, conv) == ["Cerrado", "Cerrado"], "el camino configurado no cambia"
 
 
 async def test_fuera_de_horario_con_envio_fallido_escala(monkeypatch) -> None:

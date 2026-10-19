@@ -98,3 +98,43 @@ Sin hallazgos críticos/altos; se corrigieron los medios y bajos:
 - **Envío fuera de horario**: si el mensaje de cierre no se entrega, se escala
   (mismo criterio que el camino inmediato).
 - **Clamp** de `auto_escalate_after_turns` a ≤20 en backend.
+
+## Adenda 2026-10-18: fuera de horario sin mensaje ya no es silencio
+
+**Contexto.** Con `escalation_config.business_hours` configurado y `out_of_hours_message`
+vacío, el turno quedaba `blocked/out_of_hours` con `status="silent"` y el cliente no recibía
+nada. En test, un mensaje del chat web a las 22:31 a un negocio con horario solo los lunes se
+quedó sin respuesta.
+
+**Decisión.**
+- Fuera de horario y sin mensaje propio, el cliente recibe un **aviso por defecto**, sin LLM:
+  «¡Hola! Ahora estamos fuera de nuestro horario de atención. Te respondemos apenas volvamos.»
+  Si el negocio puso un nombre de asistente (distinto del por defecto «Asistente»), se presenta:
+  «¡Hola! Soy {assistant_name}. …».
+- El texto vive en el playbook del kernel `core/playbooks/kernel/fuera_de_horario.md`
+  (`load_core_playbook`, ADR-0114 §2), con secciones `es`, `en` y `pt`. No va en
+  `respuestas.md` porque ese playbook entra al system prompt y cambiarlo rompería el replay.
+  Viaja con el binario, no con la release del agente (ADR-0117), y ningún negocio lo
+  reemplaza: el texto propio del negocio sigue siendo `out_of_hours_message`.
+- El idioma sale de `AppSettings.language` por prefijo (`es-CO` → `es`). Lo desconocido cae a
+  `es`, igual que en el prompt.
+- **Antirrebote solo en el aviso por defecto:** una vez por conversación cada 12 h, con una
+  llave de Redis `fuera_de_horario:aviso:<tenant>:<conversación>` (`SET NX EX`). Los mensajes
+  siguientes de la ventana quedan `blocked/out_of_hours` con `status="silent"`.
+  - Si Redis no responde, se avisa igual: el defecto era el silencio.
+  - La llave se toma antes de `bloquear`. Si `bloquear` falla, se suelta (mejor esfuerzo)
+    para que el reintento vuelva a avisar.
+  - Si el envío falla, se escala con `send_failed`, igual que con el mensaje configurado.
+- **Con `out_of_hours_message` configurado nada cambia:** responde a cada mensaje, sin
+  antirrebote, como antes.
+- La API de Configuración expone el aviso resuelto, como campo de solo lectura
+  `identity.out_of_hours_default_message`. Así el panel muestra qué recibe el cliente.
+- Dentro de horario, o sin `business_hours`, no cambia nada. WhatsApp sigue la entrega de
+  siempre: el aviso responde a un inbound recién llegado, así que la ventana de 24 h está abierta.
+
+**Revisable.**
+- La asimetría del antirrebote entre los dos caminos. El arquitecto propuso unificarla: o sin
+  antirrebote en ninguno, o con antirrebote en ambos. Se mantuvo porque el dueño pidió que el
+  camino configurado no cambie. Unificarla es una línea en `ingress.py`.
+- No hay interruptor para volver al silencio (`out_of_hours_silent`). Un flag sin UI sería
+  estado invisible. Si algún negocio necesita el silencio, se agrega con su campo en el panel.
