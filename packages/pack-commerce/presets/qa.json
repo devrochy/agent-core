@@ -10,6 +10,9 @@
       ],
       [
         "Accesorios"
+      ],
+      [
+        "Planes"
       ]
     ],
     "products": [
@@ -81,6 +84,24 @@
             "price": 12000,
             "stock": 0,
             "attributes": {}
+          }
+        ]
+      },
+      {
+        "name": "Plan Asesoría mensual",
+        "description": "Plan de prueba: una asesoría de café al mes. Cuesta lo mismo que el mínimo de un link de Wompi sandbox.",
+        "category_path": [
+          "Planes"
+        ],
+        "variants": [
+          {
+            "sku": "QA-PLAN-MENSUAL",
+            "price": 150000,
+            "stock": 0,
+            "attributes": {
+              "periodicidad": "mensual",
+              "trial_dias": 0
+            }
           }
         ]
       }

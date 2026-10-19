@@ -83,7 +83,7 @@ async def test_preparar_mis_datos_crea_negocio_cuentas_y_datos(app_client, tenan
 
     async with tenant_scope(tid):
         async with get_session() as session:
-            assert (await session.execute(select(func.count()).select_from(Product).where(Product.tenant_id == tid))).scalar_one() == 4
+            assert (await session.execute(select(func.count()).select_from(Product).where(Product.tenant_id == tid))).scalar_one() == 5  # 4 productos y el plan
             assert (await session.execute(select(func.count()).select_from(AppointmentType).where(AppointmentType.tenant_id == tid))).scalar_one() == 2
             assert (await session.execute(select(func.count()).select_from(Appointment).where(Appointment.tenant_id == tid))).scalar_one() == 2
             cartera = (await session.execute(select(Cartera).where(Cartera.tenant_id == tid))).scalar_one()
@@ -110,9 +110,12 @@ async def test_preparar_mis_datos_crea_negocio_cuentas_y_datos(app_client, tenan
     assert r.status_code == 200, r.text
     assert r.json().get("accessToken"), r.json()
 
-    # Idempotente: un segundo «Preparar» no crea otro negocio.
+    # Idempotente: un segundo «Preparar» no crea otro negocio ni cambia las contraseñas; solo
+    # pone al día el Agent OS (HU-QA-09; aquí apagado, así que queda con el motivo).
     r = await app_client.post("/api/v1/admin/qa/datos", headers=headers)
-    assert r.status_code == 409
+    assert r.status_code == 200, r.text
+    assert r.json()["negocio"]["id"] == datos["negocio"]["id"] and r.json()["contrasenas"] is None
+    assert r.json()["agent_os"]["estado"] == "error"
 
     # Contraseñas nuevas: la vieja deja de servir y la nueva entra.
     r = await app_client.post("/api/v1/admin/qa/datos/contrasenas", headers=headers)

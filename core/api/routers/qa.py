@@ -577,9 +577,33 @@ class QaDatosNegocio(BaseModel):
     nombre: str | None = None
 
 
+class QaDatosChatWeb(BaseModel):
+    clave: str = Field(description="Clave pública del widget (`/w/<clave>`).")
+    enlace: str | None = Field(default=None, description="`LANDING_BASE_URL/w/<clave>`, para conversar como cliente.")
+    activo: bool
+
+
+class QaDatosAgente(BaseModel):
+    key: str
+    nombre: str
+    rol: str = Field(description="Coordinador, Especialista o Backoffice.")
+    por_defecto: bool
+
+
+class QaDatosAgentOS(BaseModel):
+    """Agent OS del negocio de prueba (HU-QA-09): v3 con procedimientos, agentes del preset v2
+    en el chat web y enrutamiento activo."""
+
+    estado: Literal["listo", "pendiente", "error"]
+    motivo: str | None = Field(default=None, description="Por qué no quedó listo; se reintenta con «Preparar mis datos».")
+    chat_web: QaDatosChatWeb | None = None
+    agentes: list[QaDatosAgente] = Field(default_factory=list, description="Agentes con instancia en el chat web.")
+
+
 class QaDatos(BaseModel):
     estado: Literal["creando", "listo", "error", "purgado"]
     error: str | None = None
+    agent_os: QaDatosAgentOS | None = Field(default=None, description="Solo con los datos listos y el negocio vivo.")
     negocio: QaDatosNegocio
     cuentas: list[QaDatosCuenta]
     contenido: list[QaDatosContenido]
@@ -612,11 +636,18 @@ async def get_mis_datos(principal: Annotated[Principal, Depends(_leer)]) -> dict
     return await datos.mis_datos(principal.admin)
 
 
-@router.post("/datos", response_model=QaDatos, status_code=201)
+@router.post(
+    "/datos",
+    response_model=QaDatos,
+    status_code=201,
+    responses={200: {"model": QaDatos, "description": "Ya estaba preparado: solo se puso al día el Agent OS."}},
+)
 async def preparar_mis_datos(
     response: Response, principal: Annotated[Principal, Depends(_escribir)]
 ) -> dict[str, Any]:
-    """Prepara el negocio de prueba del tester con sus datos y cuentas. 409 si ya existe."""
+    """Prepara el negocio de prueba del tester con sus datos y cuentas (201, con las contraseñas)
+    y lo deja listo para el Agent OS. Si ya está preparado, solo pone al día el Agent OS: 200 sin
+    contraseñas (HU-QA-09). 409 si hay otra preparación en curso."""
     from core.qa import datos
 
     _solo_plataforma(principal)
@@ -624,6 +655,8 @@ async def preparar_mis_datos(
         salida = await datos.preparar(principal.admin)
     except service.QaError as exc:
         raise _error(exc) from exc
+    if salida.get("contrasenas") is None:
+        response.status_code = 200
     response.headers["Cache-Control"] = "no-store"
     return salida
 

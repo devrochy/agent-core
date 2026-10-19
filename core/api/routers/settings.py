@@ -502,38 +502,20 @@ async def save_web_chat_settings(
     tiene (HU-AOS-11 parte 2)."""
     from sqlalchemy.exc import IntegrityError
 
-    from core.agents.instancias import instancias_de_conexion_nueva
     from core.gateway import chat_web_conexion
 
+    if principal.tenant_id is None:
+        raise ApiError.bad_request("Selecciona un negocio.", code="no_tenant")
     try:
         async with get_session() as session:
-            app_settings = (
-                await session.execute(
-                    select(AppSettings).where(
-                        AppSettings.tenant_id == principal.tenant_id,
-                        AppSettings.deleted_at.is_(None),
-                    )
-                )
-            ).scalar_one_or_none()
-            if app_settings is None:
-                app_settings = AppSettings(tenant_id=principal.tenant_id)
-                session.add(app_settings)
-
-            config = dict(app_settings.web_chat_config or {})
-            if not config.get("key") or payload.rotate_key:
-                # La genera el servidor (nunca el panel): aleatoria, 192 bits (ADR-0115 §4).
-                config["key"] = chat_web_conexion.nueva_clave()
-            config["enabled"] = bool(payload.enabled)
-            config["allowed_origins"] = _normalize_origins(payload.allowed_origins)
-            if payload.turnstile_secret is not None:
-                config["turnstile_secret"] = payload.turnstile_secret.strip()
-            app_settings.web_chat_config = config
-
-            resultado, conexion = await chat_web_conexion.sincronizar(
-                session, principal.tenant_id, chat_web_conexion.desde_app_settings(config)
+            await chat_web_conexion.guardar_widget(
+                session,
+                principal.tenant_id,
+                enabled=bool(payload.enabled),
+                allowed_origins=_normalize_origins(payload.allowed_origins),
+                rotar_clave=bool(payload.rotate_key),
+                turnstile_secret=payload.turnstile_secret,
             )
-            if resultado == "creada" and conexion is not None:
-                await instancias_de_conexion_nueva(session, principal.tenant_id, conexion)
     except IntegrityError:
         # Sin el detalle de la BD: un choque de la clave (índice global `uq_cc_webchat_key`)
         # no debe delatar que otro negocio la usa. Con 192 bits aleatorios no pasa en la práctica.
