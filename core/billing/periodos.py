@@ -97,6 +97,25 @@ def periodo_a_cobrar(
     return periodo_de(slug, now, now.day, desde_cero=True)
 
 
+def ventana_mensual(period_start: datetime, dia_ancla: int | None, now: datetime) -> tuple[datetime, datetime]:
+    """El mes de consumo que contiene `now`, alineado con el ciclo de la suscripción (ADR-0144).
+
+    Arranca en `period_start` y avanza mes a mes por calendario (mismo día ancla que el cobro)
+    hasta el tramo que contiene `now`. Cubre una renovación anticipada (`period_end` se alarga
+    y `period_start` no se mueve), un cron atrasado y un período vencido: el crédito se reinicia
+    cada mes aunque `period_start` no se haya movido. Con `now` antes de `period_start` devuelve
+    el primer tramo."""
+    ancla = dia_ancla or period_start.day
+    inicio = period_start
+    fin = sumar_periodo(inicio, PERIODICIDAD, ancla)
+    # Tope defensivo (100 años): un `period_start` corrupto no deja el panel en un bucle.
+    for _ in range(1200):
+        if fin > now:
+            break
+        inicio, fin = fin, sumar_periodo(fin, PERIODICIDAD, ancla)
+    return inicio, fin
+
+
 __all__ = [
     "ESTADOS_CON_PERIODO_PAGO",
     "PERIODICIDAD",
@@ -106,4 +125,5 @@ __all__ = [
     "periodo_de",
     "referencia_del_periodo",
     "tiene_periodo_pago",
+    "ventana_mensual",
 ]

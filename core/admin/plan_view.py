@@ -9,6 +9,7 @@ vacías en vez de tumbar el panel.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -45,6 +46,37 @@ async def billing_usage(
     except Exception as exc:
         log.warning("billing_usage_failed", tenant_id=str(tenant_id), error=type(exc).__name__)
         return []
+
+
+async def credito_del_mes(
+    tenant_id: uuid.UUID, overview: SubscriptionOverview | None, *, now: datetime | None = None
+) -> dict[str, Any] | None:
+    """Crédito consumido en el mes del ciclo (HU-BILL-04/06, ADR-0144), o None si no se pudo
+    medir (sin suscripción, schema sin migrar o fallo): el panel muestra «medición pendiente» en
+    vez de una barra falsa. Ventana: `periodos.ventana_mensual` desde `period_start`."""
+    from core.billing.creditos import creditos_enteros, medir_creditos
+    from core.billing.periodos import ventana_mensual
+
+    if overview is None or overview.period_start is None:
+        return None
+    inicio, fin = ventana_mensual(overview.period_start, overview.dia_ancla, now or datetime.now(UTC))
+    try:
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                consumo = await medir_creditos(session, tenant_id, desde=inicio, hasta=fin, por_agente=True)
+    except Exception as exc:
+        log.warning("billing_credit_failed", tenant_id=str(tenant_id), error=type(exc).__name__)
+        return None
+    return {
+        "used": float(consumo.total),
+        "used_rounded": creditos_enteros(consumo.total),
+        "period_start": inicio,
+        "period_end": fin,
+        "by_concept": {k: float(v) for k, v in consumo.por_concepto.items()},
+        "by_agent": [
+            {"agent_id": a.agent_id, "name": a.name, "used": float(a.used)} for a in consumo.por_agente
+        ],
+    }
 
 
 async def billing_payments(tenant_id: uuid.UUID, limit: int = 20) -> list[dict[str, Any]]:

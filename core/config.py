@@ -287,6 +287,12 @@ class Settings(BaseSettings):
     # Pedidos de alta de la misma persona (cliente, teléfono o documento) en 24 h a partir de
     # los cuales el alta va a revisión humana («muchos intentos»). Va en el worker.
     alta_intentos_revision: int = Field(default=3, ge=2, le=100, alias="ALTA_INTENTOS_REVISION")
+    # Crédito mensual (HU-BILL-04/06, ADR-0144): COP por USD con que se convierten los costos de
+    # proveedor a créditos AL ESCRIBIR el ledger. Cada fila guarda la tasa que usó
+    # (`usage_ledger.trm_cop`), así que cambiarla no reescribe el consumo ya medido.
+    # 4000 es el supuesto de `modelo-de-precios.md` (calc_precios.py): PENDIENTE DEL DUEÑO fijar
+    # la TRM oficial (HU-BILL-01). Rango acotado: un valor absurdo en un env no factura a todos.
+    billing_trm_cop: float = Field(default=4000.0, ge=2000, le=8000, alias="BILLING_TRM_COP")
 
     # --- Observabilidad ---
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")

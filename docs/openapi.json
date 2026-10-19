@@ -35289,6 +35289,43 @@
         ],
         "title": "QaDatosChatWeb"
       },
+      "CreditByAgent": {
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "used": {
+            "type": "number",
+            "title": "Used"
+          }
+        },
+        "type": "object",
+        "required": [
+          "used"
+        ],
+        "title": "CreditByAgent",
+        "description": "Créditos del mes de un agente. `agent_id`/`name` null: consumo sin agente (turnos de antes\ndel runtime v3 y fees de notas de voz, imágenes y plantillas)."
+      },
       "CreditUsage": {
         "properties": {
           "limit": {
@@ -35298,7 +35335,7 @@
           "used": {
             "anyOf": [
               {
-                "type": "integer"
+                "type": "number"
               },
               {
                 "type": "null"
@@ -35316,6 +35353,63 @@
               }
             ],
             "title": "Percent"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "by_concept": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "By Concept"
+          },
+          "by_agent": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/CreditByAgent"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "By Agent"
+          },
+          "by_agent_truncated": {
+            "type": "boolean",
+            "title": "By Agent Truncated",
+            "default": false
           }
         },
         "type": "object",
@@ -35323,7 +35417,7 @@
           "limit"
         ],
         "title": "CreditUsage",
-        "description": "Crédito mensual del plan (D-35, ADR-0142). `used`/`percent` son `null` mientras el core no\nmide el consumo en créditos (ledger multiconcepto, HU-BILL-04/06): el panel muestra el tope\ny la barra vacía con «medición pendiente»."
+        "description": "Crédito mensual del plan (D-35, ADR-0142; medición ADR-0144). `used` en créditos con\ndécimas (1 crédito = COP 10), `percent` sin tope de 100 (puede pasarse: hoy solo se avisa).\n`used`/`percent` son `null` si no se pudo medir: el panel muestra «medición pendiente».\nEl mes de consumo es `[period_start, period_end)`, alineado con el ciclo de la suscripción."
       }
     }
   }

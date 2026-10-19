@@ -11,6 +11,7 @@ período que toca pagar (`cobro`) con su referencia, si ya lo pagó el asistente
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -21,6 +22,7 @@ from core.admin.plan_view import (
     billing_payments,
     billing_usage,
     cobro_del_periodo,
+    credito_del_mes,
     subscription_overview_or_none,
 )
 from core.api.deps import Principal, require
@@ -45,14 +47,35 @@ class PlanInfo(BaseModel):
     monthly_credits: int | None = None
 
 
+class CreditByAgent(BaseModel):
+    """Créditos del mes de un agente. `agent_id`/`name` null: consumo sin agente (turnos de antes
+    del runtime v3 y fees de notas de voz, imágenes y plantillas)."""
+
+    agent_id: uuid.UUID | None = None
+    name: str | None = None
+    used: float
+
+
 class CreditUsage(BaseModel):
-    """Crédito mensual del plan (D-35, ADR-0142). `used`/`percent` son `null` mientras el core no
-    mide el consumo en créditos (ledger multiconcepto, HU-BILL-04/06): el panel muestra el tope
-    y la barra vacía con «medición pendiente»."""
+    """Crédito mensual del plan (D-35, ADR-0142; medición ADR-0144). `used` en créditos con
+    décimas (1 crédito = COP 10), `percent` sin tope de 100 (puede pasarse: hoy solo se avisa).
+    `used`/`percent` son `null` si no se pudo medir: el panel muestra «medición pendiente».
+    El mes de consumo es `[period_start, period_end)`, alineado con el ciclo de la suscripción."""
 
     limit: int
-    used: int | None = None
+    used: float | None = None
     percent: float | None = None
+    period_start: datetime | None = None
+    period_end: datetime | None = None
+    # Desglose por concepto: llm_turn | stt | vision | template_sent.
+    by_concept: dict[str, float] | None = None
+    # Por agente (no por instancia), mayor consumo primero y el renglón sin agente al final.
+    # Como mucho `MAX_AGENTES_EN_CREDITO` agentes con nombre; `by_agent_truncated` avisa si hay más.
+    by_agent: list[CreditByAgent] | None = None
+    by_agent_truncated: bool = False
+
+
+MAX_AGENTES_EN_CREDITO = 50
 
 
 class PlanOverview(BaseModel):
@@ -117,11 +140,26 @@ async def get_plan(
 
     current_plan_id = overview.plan_id if overview else None
     plan_actual = plan_del_catalogo(current_plan_id) if current_plan_id else None
-    credito = (
-        CreditUsage(limit=plan_actual.monthly_credits)
-        if plan_actual is not None and plan_actual.monthly_credits is not None
-        else None
-    )
+    credito = None
+    if plan_actual is not None and plan_actual.monthly_credits is not None:
+        limite = plan_actual.monthly_credits
+        medido = await credito_del_mes(tenant_id, overview) if tenant_id else None
+        if medido is None:
+            credito = CreditUsage(limit=limite)
+        else:
+            con_nombre = [a for a in medido["by_agent"] if a["agent_id"] is not None]
+            sin_agente = [a for a in medido["by_agent"] if a["agent_id"] is None]
+            agentes = con_nombre[:MAX_AGENTES_EN_CREDITO] + sin_agente
+            credito = CreditUsage(
+                limit=limite,
+                used=round(medido["used"], 1),
+                percent=(100.0 if limite <= 0 else round(medido["used"] * 100.0 / limite, 1)),
+                period_start=medido["period_start"],
+                period_end=medido["period_end"],
+                by_concept={k: round(v, 1) for k, v in medido["by_concept"].items()},
+                by_agent=[CreditByAgent(**a) for a in agentes],
+                by_agent_truncated=len(con_nombre) > MAX_AGENTES_EN_CREDITO,
+            )
     return PlanResponse(
         overview=(
             PlanOverview(

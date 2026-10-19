@@ -1005,6 +1005,14 @@ class UsageLedger(Base):
     agent_instance_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     agent_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     release_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # Tipo de fila (migración 0070, ADR-0116/0117): `turn` | `agent_run` | … | `eval`.
+    kind: Mapped[str] = mapped_column(Text, default="turn")
+    # Crédito mensual (migración 0096, ADR-0144): créditos del turno calculados AL ESCRIBIR con
+    # el tarifario y la TRM vigentes, que se guardan con la fila. NULL en filas anteriores.
+    credits: Mapped[Decimal | None] = mapped_column(Numeric(12, 1))
+    key_mode: Mapped[str | None] = mapped_column(Text)  # platform | byok
+    tarifario_version: Mapped[str | None] = mapped_column(Text)
+    trm_cop: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
