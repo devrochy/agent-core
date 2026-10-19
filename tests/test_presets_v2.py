@@ -173,3 +173,51 @@ def test_agregar_reglas_respeta_el_tope() -> None:
     ]
     nuevo, agregadas, avisos = agregar_reglas(kernel, [load_plantilla("ventas")])
     assert agregadas == [] and len(avisos) == 1 and len(nuevo["routing"]["rules"]) == 50
+
+
+# ---------------------------------------------------------------- HU-AOS-22: rutas del preset suscripciones
+def _primera_regla(texto: str) -> str | None:
+    """Destino de la primera regla del preset `suscripciones` que cumple (orden del Coordinador)."""
+    from agentcore_contracts import KernelSpec
+
+    from core.kernel.router import Entrada, cumple
+
+    kernel, _agregadas, _avisos = agregar_reglas(
+        KernelSpec().model_dump(mode="json", by_alias=True), plantillas_del_preset(load_preset("suscripciones"))
+    )
+    reglas = KernelSpec.model_validate(kernel).routing.rules
+    return next((r.agent for r in reglas if cumple(r, Entrada(texto=texto))), None)
+
+
+def test_suscripciones_trae_la_regla_de_mi_plan_con_id_nuevo() -> None:
+    # Las reglas de una plantilla evolucionan con ids nuevos (adenda HU-AOS-22 de ADR-0139): a un
+    # negocio que ya tiene `preset_suscripciones_palabras` le llega la nueva al reaplicar.
+    ids = [r.id for r in load_plantilla("suscripciones").reglas]
+    assert ids == ["preset_suscripciones_palabras", "preset_suscripciones_mi_plan"]
+    from agentcore_contracts import KernelSpec
+
+    kernel = KernelSpec().model_dump(mode="json", by_alias=True)
+    kernel["routing"]["rules"] = [
+        {"id": "preset_suscripciones_palabras", "when": {"keywordAny": ["mi suscripción"]}, "agent": "suscripciones"},
+    ]
+    nuevo, agregadas, _ = agregar_reglas(kernel, [load_plantilla("suscripciones")])
+    assert agregadas == ["preset_suscripciones_mi_plan"]
+    assert [r["id"] for r in nuevo["routing"]["rules"]][-1] == "preset_suscripciones_mi_plan"
+
+
+@pytest.mark.parametrize(
+    ("texto", "destino"),
+    [
+        ("quiero agendar una demo", "agenda"),
+        ("cambiar mi plan", "suscripciones"),
+        ("hola, necesito cambiar mi plan al premium porque crecimos", "suscripciones"),
+        ("¿cuál es mi plan actual?", "suscripciones"),
+        # «precio» es de Ventas y su regla va antes: decisión revisable, queda explícita.
+        ("cuál es el precio para cambiar mi plan", "ventas"),
+        # Sin palabra de regla: lo decide el disparador (contratar_plan → Ventas) o el General.
+        ("quiero contratar Premium", None),
+        ("hola, buenas tardes", None),
+    ],
+)
+def test_reglas_del_preset_suscripciones_en_orden(texto: str, destino: str | None) -> None:
+    assert _primera_regla(texto) == destino

@@ -6,6 +6,7 @@
   "procedimientos": ["pack_subscriptions.cambiar_plan"],
   "playbooks": ["suscripciones", "planes"],
   "reglas": [
-    {"id": "preset_suscripciones_palabras", "when": {"keywordAny": ["mi suscripción", "cambiar de plan", "renovar", "cancelar la suscripción"]}}
+    {"id": "preset_suscripciones_palabras", "when": {"keywordAny": ["mi suscripción", "cambiar de plan", "renovar", "cancelar la suscripción"]}},
+    {"id": "preset_suscripciones_mi_plan", "when": {"keywordAny": ["cambiar mi plan", "mi plan actual", "subir mi plan", "bajar mi plan", "cancelar mi plan", "pausar mi plan"]}}
   ]
 }

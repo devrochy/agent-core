@@ -78,3 +78,6 @@
 {"catalogo": "tienda", "texto": "quiero encargar un pastel para el sábado", "esperado": "pack_commerce.tomar_pedido"}
 {"catalogo": "tienda", "texto": "¿me mandan dos cafés?", "esperado": "pack_commerce.tomar_pedido"}
 {"catalogo": "tienda", "texto": "¿qué productos tienen?", "esperado": null}
+{"catalogo": "planes", "texto": "quiero contratar Premium", "esperado": "pack_commerce.contratar_plan"}
+{"catalogo": "planes", "texto": "cambiar mi plan", "esperado": "pack_subscriptions.cambiar_plan"}
+{"catalogo": "planes", "texto": "cuánto cuesta el plan basic", "esperado": null}
