@@ -66,8 +66,8 @@ def test_accion_de_habilidad_con_y_sin_resolutor() -> None:
     ("reason", "codigo"),
     [("tool:queja", "queja"), ("tool:queja_extra", "otro"), ("tool:solicitudXcliente", "otro")],
 )
-def test_motivo_de_tool_y_condicion_no_confunden_comodines(reason: str, codigo: str) -> None:
-    """`_` es comodín de LIKE: `tool:solicitudXcliente` no debe contar como `solicitud_cliente`."""
+def test_tool_solo_reconoce_codigos_exactos(reason: str, codigo: str) -> None:
+    """`tool:<x>` cuenta como código solo si `x` está tal cual en el catálogo."""
     assert m.codigo(reason) == codigo
 
 
