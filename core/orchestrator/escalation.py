@@ -7,6 +7,9 @@ Reglas (los plugins pueden disparar más vía MCPHost.trigger_escalation):
 - plugin:<razon>: disparada por un plugin (`MCPHost.trigger_escalation`), o por una tool
   cuyo resultado trae `"escalate": True` (o un `BusinessError(escalate=True)`): el loop
   escala con `plugin:<tool>` y cierra el turno con la respuesta de escalamiento.
+- tool:<código>: el modelo llamó `escalate_to_human` con un motivo del catálogo cerrado.
+
+El código y la etiqueta legibles de cada motivo están en `motivos_escalacion.py` (HU-UX-17).
 
 Al escalar SIEMPRE se pausa el bot para esa conversación
 (lección de la Fase 18 de agent-sale: el bot seguía respondiendo tras escalar).

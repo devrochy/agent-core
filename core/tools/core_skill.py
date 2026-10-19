@@ -27,6 +27,7 @@ from core.memory import entity as entity_memory
 from core.memory import vector as vector_memory
 from core.memory.facts import HechoInvalido, NamespaceNoConcedido
 from core.orchestrator.escalation import escalate
+from core.orchestrator.motivos_escalacion import MOTIVOS_TOOL, motivo_de_tool
 
 
 async def conversation_spent(conversation_id: uuid.UUID) -> float:
@@ -49,9 +50,14 @@ class CoreSkill(BaseSkill):
 
     # ------------------------------------------------------------ handlers
     async def _escalate_to_human(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-        reason = str(args.get("reason", "manual"))[:80]
-        summary = str(args.get("summary", ""))[:500]
-        await escalate(ctx.conversation_id, reason=f"tool:{reason}", summary=summary)
+        # Código cerrado (HU-UX-17): un `reason` fuera del catálogo queda como `otro` y su texto
+        # pasa al detalle, que se guarda junto al resumen (no hay columna aparte).
+        codigo, detalle = motivo_de_tool(str(args.get("reason") or ""))
+        detalle = str(args.get("detalle") or "").strip() or detalle
+        summary = str(args.get("summary", "")).strip()[:500]
+        if detalle:
+            summary = "\n\n".join(p for p in (summary, f"Detalle del motivo: {detalle[:200]}") if p)
+        await escalate(ctx.conversation_id, reason=f"tool:{codigo}", summary=summary)
         return {"status": "escalated", "bot_paused": True}
 
     async def _get_customer_profile(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -173,7 +179,15 @@ class CoreSkill(BaseSkill):
                 parameters={
                     "type": "object",
                     "properties": {
-                        "reason": {"type": "string", "description": "Motivo de la escalación"},
+                        "reason": {
+                            "type": "string",
+                            "enum": list(MOTIVOS_TOOL),
+                            "description": "Motivo de la escalación",
+                        },
+                        "detalle": {
+                            "type": "string",
+                            "description": "Detalle del motivo, sobre todo si es 'otro'",
+                        },
                         "summary": {"type": "string", "description": "Resumen para el asesor"},
                     },
                     "required": ["reason"],
