@@ -38,6 +38,7 @@ from core.api.errors import ApiError
 from core.config import get_settings
 from core.db.models import AppSettings, AuditLog
 from core.db.session import get_session
+from core.kernel.fuera_de_horario import texto_por_defecto
 from core.llm.difficulty_router import (
     DIFFICULTY_SCORE_THRESHOLD,
     LONG_MESSAGE_THRESHOLD,
@@ -77,6 +78,9 @@ class IdentitySettings(BaseModel):
     difficulty_score_threshold: int
     escalation_keywords: list[str]
     out_of_hours_message: str
+    # Solo lectura (adenda 2026-10-18 de ADR-0051): lo que recibe el cliente fuera de horario
+    # si `out_of_hours_message` está vacío, en el idioma y con el nombre guardados del negocio.
+    out_of_hours_default_message: str
     auto_escalate_after_turns: int
     persona_tone: str
     persona_warmth: int
@@ -301,6 +305,10 @@ def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) 
         ),
         escalation_keywords=list(escalation.get("keywords", []) or []),
         out_of_hours_message=escalation.get("out_of_hours_message", "") or "",
+        out_of_hours_default_message=texto_por_defecto(
+            app_settings.language if app_settings else None,
+            app_settings.assistant_name if app_settings else None,
+        ),
         auto_escalate_after_turns=int(escalation.get("auto_escalate_after_turns", 0) or 0),
         persona_tone=persona.get("tone", "") or "",
         persona_warmth=int(persona.get("warmth", 3) or 3),

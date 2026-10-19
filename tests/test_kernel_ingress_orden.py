@@ -143,3 +143,72 @@ async def test_la_conexion_pausada_va_primero_y_avisa_solo_si_se_pide(monkeypatc
 
     assert await ingress.conexion_pausada(conv, avisar_duenos=False) is True
     assert avisos == ["Pausada"], "al disparar el debounce no se avisa otra vez"
+
+
+# ------------------------------------------------ fuera de horario sin mensaje (adenda ADR-0051)
+@pytest.fixture
+def avisos_tomados(monkeypatch) -> list[str]:
+    """Antirrebote en memoria: el primer aviso de cada conversación pasa, el resto no."""
+    tomadas: list[str] = []
+
+    async def _primer(_tid, cid):
+        if str(cid) in tomadas:
+            return False
+        tomadas.append(str(cid))
+        return True
+
+    async def _soltar(_tid, cid):
+        tomadas.remove(str(cid))
+
+    monkeypatch.setattr(ingress, "primer_aviso", _primer)
+    monkeypatch.setattr(ingress, "soltar_aviso", _soltar)
+    return tomadas
+
+
+async def test_fuera_de_horario_sin_mensaje_responde_el_aviso_por_defecto_una_vez(
+    efectos, avisos_tomados
+) -> None:
+    ajustes = _ajustes(escalation_config={"business_hours": CERRADO}, language="es-CO")
+    conv = _conv()
+    assert await ingress.politicas_de_entrada(conv, _cliente(), ajustes, "hola") is True
+    assert await ingress.politicas_de_entrada(conv, _cliente(), ajustes, "¿hay alguien?") is True
+    assert efectos == [
+        ("bloquear", ("out_of_hours", "replied")),
+        (
+            "enviar",
+            "¡Hola! Soy Lupe. Ahora estamos fuera de nuestro horario de atención. "
+            "Te respondemos apenas volvamos.",
+        ),
+        ("bloquear", ("out_of_hours", "silent")),
+    ], "el segundo mensaje de la ventana no repite el aviso"
+
+
+async def test_fuera_de_horario_con_mensaje_responde_siempre_sin_antirrebote(
+    efectos, avisos_tomados
+) -> None:
+    ajustes = _ajustes(escalation_config={"business_hours": CERRADO, "out_of_hours_message": "Cerrado"})
+    conv = _conv()
+    for _ in range(2):
+        assert await ingress.politicas_de_entrada(conv, _cliente(), ajustes, "hola") is True
+    assert efectos == [("bloquear", ("out_of_hours", "replied")), ("enviar", "Cerrado")] * 2
+    assert avisos_tomados == [], "el camino configurado no toca la llave"
+
+
+async def test_dentro_de_horario_no_avisa(efectos, avisos_tomados) -> None:
+    abierto = {"tz": "UTC", "ranges": [{"day": d, "from": "00:00", "to": "23:59"} for d in range(7)]}
+    ajustes = _ajustes(escalation_config={"business_hours": abierto})
+    assert await ingress.politicas_de_entrada(_conv(), _cliente(), ajustes, "hola") is False
+    assert efectos == [] and avisos_tomados == []
+
+
+async def test_si_falla_el_bloqueo_suelta_la_llave_para_el_reintento(
+    monkeypatch, efectos, avisos_tomados
+) -> None:
+    async def _falla(_conv, _motivo, *, status=None):
+        raise RuntimeError("bd caída")
+
+    monkeypatch.setattr(ingress, "bloquear", _falla)
+    ajustes = _ajustes(escalation_config={"business_hours": CERRADO})
+    with pytest.raises(RuntimeError):
+        await ingress.politicas_de_entrada(_conv(), _cliente(), ajustes, "hola")
+    assert avisos_tomados == []

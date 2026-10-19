@@ -90,6 +90,10 @@ class TenantUser(Base):
 
 
 # ---------------------------------------------------------------- settings
+# Nombre del asistente cuando el negocio no puso uno (lo usa también el aviso fuera de horario).
+DEFAULT_ASSISTANT_NAME = "Asistente"
+
+
 class AppSettings(Base):
     """Configuración del asistente POR TENANT (una fila por tenant).
 
@@ -103,7 +107,7 @@ class AppSettings(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    assistant_name: Mapped[str] = mapped_column(Text, default="Asistente")
+    assistant_name: Mapped[str] = mapped_column(Text, default=DEFAULT_ASSISTANT_NAME)
     business_description: Mapped[str] = mapped_column(Text, default="")
     language: Mapped[str] = mapped_column(Text, default="es")
     # Moneda del negocio para mostrar montos (comercio, cobranza, plan). Los

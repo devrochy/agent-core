@@ -22390,6 +22390,10 @@
             "type": "string",
             "title": "Out Of Hours Message"
           },
+          "out_of_hours_default_message": {
+            "type": "string",
+            "title": "Out Of Hours Default Message"
+          },
           "auto_escalate_after_turns": {
             "type": "integer",
             "title": "Auto Escalate After Turns"
@@ -22449,6 +22453,7 @@
           "difficulty_score_threshold",
           "escalation_keywords",
           "out_of_hours_message",
+          "out_of_hours_default_message",
           "auto_escalate_after_turns",
           "persona_tone",
           "persona_warmth",

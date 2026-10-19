@@ -26,6 +26,7 @@ from typing import Any
 
 from core.agents.responses import load_response
 from core.kernel.decisions import bloquear, marcar_escalado
+from core.kernel.fuera_de_horario import primer_aviso, soltar_aviso, texto_por_defecto
 from core.orchestrator.escalation import (
     ESCALATION_REPLY,
     matches_escalation_keywords,
@@ -186,29 +187,45 @@ async def politicas_de_entrada(
     business_hours = escalation_cfg.get("business_hours")
     if business_hours and not within_business_hours(business_hours):
         out_msg = str(escalation_cfg.get("out_of_hours_message") or "").strip()
-        await bloquear(conversation, "out_of_hours", status="replied" if out_msg else "silent")
         if out_msg:
+            await bloquear(conversation, "out_of_hours", status="replied")
             texto = out_msg
             for key, value in (
                 ("{assistant_name}", app_settings.assistant_name if app_settings else ""),
                 ("{business_description}", app_settings.business_description if app_settings else ""),
             ):
                 texto = texto.replace(key, value or "")
+        else:
+            # Sin mensaje propio (adenda 2026-10-18): aviso por defecto del playbook del kernel,
+            # una vez por conversación y ventana; los mensajes que siguen quedan en silencio.
+            if not await primer_aviso(conversation.tenant_id, conversation.id):
+                await bloquear(conversation, "out_of_hours", status="silent")
+                return True
             try:
-                delivered = await send_to_conversation(conversation.id, texto)
-            except Exception as exc:
-                log.warning(
-                    "out_of_hours_send_failed",
-                    conversation_id=str(conversation.id),
-                    error=type(exc).__name__,
+                await bloquear(conversation, "out_of_hours", status="replied")
+                texto = texto_por_defecto(
+                    app_settings.language if app_settings else None,
+                    app_settings.assistant_name if app_settings else None,
                 )
-                delivered = False
-            if not delivered:
-                # Mismo criterio que el camino inmediato: si el envío falla (devuelve False
-                # o lanza), se escala para que una persona retome (el inbound ya está
-                # guardado: el reintento del consumer no rehace el turno).
-                await escalate(conversation.id, reason="send_failed", summary=texto[:200])
-                marcar_escalado()
+            except Exception:
+                # El reintento del consumer no debe encontrar la llave tomada y callar.
+                await soltar_aviso(conversation.tenant_id, conversation.id)
+                raise
+        try:
+            delivered = await send_to_conversation(conversation.id, texto)
+        except Exception as exc:
+            log.warning(
+                "out_of_hours_send_failed",
+                conversation_id=str(conversation.id),
+                error=type(exc).__name__,
+            )
+            delivered = False
+        if not delivered:
+            # Mismo criterio que el camino inmediato: si el envío falla (devuelve False
+            # o lanza), se escala para que una persona retome (el inbound ya está
+            # guardado: el reintento del consumer no rehace el turno).
+            await escalate(conversation.id, reason="send_failed", summary=texto[:200])
+            marcar_escalado()
         return True
     return False
 
