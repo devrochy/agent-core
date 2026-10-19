@@ -99,6 +99,8 @@ La conexión es `channel_connections`, y hay una conversación abierta por (cone
   `credentials_encrypted`. No es una conexión manual (`connections.ES_MANUAL` la excluye y
   `administrada_aparte` da 404 en la API y el panel de conexiones): no se lista, no cuenta para la
   primacía ni para el gating de ADR-0072, y `save_connection` la rechaza.
+  *Nota 2026-10-19:* la consola sí la pausa y la reanuda por `POST /admin/connections/{id}/action`
+  (solo `activate` / `deactivate`, con el mismo interruptor que Configuración); ver ADR-0122, adenda 2026-10-19 (b).
 - **Resolvedor `webchat_resolve`** (migración 0086, `SECURITY DEFINER`, `search_path` fijo, `EXECUTE`
   solo para `app_runtime`): igualdad sobre el predicado de `uq_cc_webchat_key`, sin `LIMIT`, solo
   conexiones vivas. Devuelve solo lo no secreto (negocio, conexión, habilitada, dominios y si hay

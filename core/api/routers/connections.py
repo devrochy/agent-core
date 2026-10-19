@@ -22,7 +22,7 @@ from core.api.errors import ApiError
 from core.api.forms import coerce_schema_values, redact_secrets
 from core.db.models import AuditLog, PhoneNumber, utcnow
 from core.db.session import get_owned, get_session
-from core.gateway.connection_types import setup_url
+from core.gateway.connection_types import WEBCHAT, setup_url
 from core.gateway.connections import administrada_aparte, list_connections
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_slug
@@ -184,8 +184,9 @@ class ConsoleConnection(BaseModel):
     health: Literal["ok", "degraded", "error", "paused", "pending"]
     pause_scope: Literal["meta_account", "connection", "webchat_settings"]
     pausable: bool = Field(description=(
-            "La consola ofrece pausar: la cuenta de Meta y las conexiones manuales o de WhatsApp Web "
-            "(ADR-0122 y su adenda 2026-10-19). El chat web se pausa en Configuración → Chat web."
+            "La consola ofrece pausar: la cuenta de Meta, las conexiones manuales o de WhatsApp Web "
+            "(ADR-0122 y su adenda 2026-10-19) y el chat web (alcance `connection`: el mismo estado que "
+            "Configuración → Chat web). `webchat_settings` ya no se emite."
         ))
     coordinator: ConsoleAgent | None
     agents: list[ConsoleAgent] = Field(description="Especialistas y back-office, sin el Coordinador.")
@@ -504,8 +505,17 @@ async def connection_action(
 
     async with get_session() as session:
         existing = await get_owned(session, ChannelConnection, connection_id, principal.tenant_id)
+    if (
+        existing is not None
+        and existing.type_id == WEBCHAT
+        and existing.meta_connection_id is None
+        and payload.action in ("activate", "deactivate")
+    ):
+        await _pausar_chat_web(principal, connection_id, enabled=payload.action == "activate")
+        return Response(status_code=204)
     # La conexión canónica de un número de Meta no es manual (ADR-0115): sus acciones son las
-    # de su cuenta (`/admin/meta/connections`).
+    # de su cuenta (`/admin/meta/connections`). El chat web solo se pausa o reanuda aquí: su
+    # clave y sus dominios están en Configuración → Chat web.
     if existing is None or administrada_aparte(existing):
         raise ApiError.not_found("Conexión no encontrada.")
 
@@ -521,6 +531,28 @@ async def connection_action(
         await delete_connection(connection_id)
     await audit_connection_action(principal, _ACCION_AUDITADA[payload.action], str(connection_id))
     return Response(status_code=204)
+
+
+async def _pausar_chat_web(principal: Principal, connection_id: uuid.UUID, *, enabled: bool) -> None:
+    """El chat web desde la consola (HU-AOS-23): el mismo interruptor que Configuración → Chat web
+    (`app_settings.web_chat_config.enabled` y `channel_connections.active` en una transacción) y
+    la misma auditoría que las demás conexiones (también si ya estaba así, como ellas)."""
+    from core.gateway import chat_web_conexion
+
+    if principal.tenant_id is None:
+        raise ApiError.not_found("Conexión no encontrada.")
+    try:
+        async with get_session() as session:
+            previo = await chat_web_conexion.establecer_habilitado(
+                session, principal.tenant_id, connection_id, enabled=enabled
+            )
+    except chat_web_conexion.WidgetDesincronizado:
+        raise ApiError(
+            409, "conflict", "No se pudo cambiar el chat web: revisa Configuración → Chat web y vuelve a intentarlo."
+        ) from None
+    if previo is None:
+        raise ApiError.not_found("Conexión no encontrada.")
+    await audit_connection_action(principal, _ACCION_AUDITADA["activate" if enabled else "deactivate"], str(connection_id))
 
 
 _ACCION_AUDITADA = {

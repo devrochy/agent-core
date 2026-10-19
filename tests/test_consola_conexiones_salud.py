@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from core.gateway.consola_conexiones import (
-    PAUSA_CHAT_WEB,
     PAUSA_CONEXION,
     PAUSA_CUENTA_META,
     alcance_de_pausa,
@@ -38,6 +37,7 @@ def test_sin_cuenta_manda_active() -> None:
 
 def test_alcance_de_la_pausa() -> None:
     assert alcance_de_pausa(tiene_cuenta=True, type_id="whatsapp_meta") == PAUSA_CUENTA_META
-    assert alcance_de_pausa(tiene_cuenta=False, type_id="webchat") == PAUSA_CHAT_WEB
+    # El chat web también es una conexión: su pausa es `active`, sincronizada con Configuración.
+    assert alcance_de_pausa(tiene_cuenta=False, type_id="webchat") == PAUSA_CONEXION
     assert alcance_de_pausa(tiene_cuenta=False, type_id="whatsapp_meta") == PAUSA_CONEXION
     assert alcance_de_pausa(tiene_cuenta=False, type_id=None) == PAUSA_CONEXION

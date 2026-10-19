@@ -524,6 +524,8 @@ async def save_web_chat_settings(
         raise ApiError.bad_request("Selecciona un negocio.", code="no_tenant")
     try:
         async with get_session() as session:
+            # Estado previo y nuevo dentro de la misma transacción, bajo el candado de `app_settings`.
+            antes = await chat_web_conexion.estado_bajo_candado(session, principal.tenant_id)
             await chat_web_conexion.guardar_widget(
                 session,
                 principal.tenant_id,
@@ -532,12 +534,20 @@ async def save_web_chat_settings(
                 rotar_clave=bool(payload.rotate_key),
                 turnstile_secret=payload.turnstile_secret,
             )
+            despues = await chat_web_conexion.estado_bajo_candado(session, principal.tenant_id)
     except IntegrityError:
         # Sin el detalle de la BD: un choque de la clave (índice global `uq_cc_webchat_key`)
         # no debe delatar que otro negocio la usa. Con 192 bits aleatorios no pasa en la práctica.
         log.warning("web_chat_guardado_conflicto", tenant_id=str(principal.tenant_id))
         raise ApiError(409, "conflict", "No se pudo guardar el chat web: vuelve a intentarlo.") from None
 
+    if antes is not None and despues is not None and antes[1] != despues[1]:
+        # Pausar o reanudar desde aquí deja el mismo rastro que desde la consola (HU-AOS-23).
+        from core.api.routers.connections import audit_connection_action
+
+        await audit_connection_action(
+            principal, "connection.resumed" if despues[1] else "connection.paused", str(despues[0])
+        )
     refreshed = await _load_app_settings(principal.tenant_id)
     return _web_chat_out(refreshed)
 
