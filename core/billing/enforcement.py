@@ -173,6 +173,8 @@ class SubscriptionOverview:
     period_end: datetime | None
     days_left: int | None
     limits: dict[str, int | None]
+    # Día ancla del calendario de cobro (ADR-0123): el mes de consumo del crédito lo usa (ADR-0144).
+    dia_ancla: int | None = None
 
 
 async def subscription_overview(tenant_id: uuid.UUID) -> SubscriptionOverview:
@@ -198,4 +200,5 @@ async def subscription_overview(tenant_id: uuid.UUID) -> SubscriptionOverview:
         period_end=sub.period_end,
         days_left=days_left,
         limits=dict(plan.limits) if plan else {},
+        dia_ancla=sub.dia_ancla,
     )

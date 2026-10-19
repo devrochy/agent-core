@@ -149,6 +149,9 @@ class _TurnUsage:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     escalated: bool = False
     politica: Any = None  # `UsoDePolitica` del turno (HU-AOS-09), solo con el motor activo
+    # Llave del turno para el crédito (ADR-0144): `byok` solo cobra el fee. Default seguro.
+    key_mode: str = "platform"
+    llamadas: int = 0  # llamadas al LLM del turno: sin ninguna no hay fee de turno de IA
 
     def add(self, provider, response) -> None:  # type: ignore[no-untyped-def]
         self.input_tokens += response.usage.input_tokens
@@ -158,6 +161,36 @@ class _TurnUsage:
         self.latency_ms += response.latency_ms
         self.cost_usd += _response_cost(provider, response)
         self.model = response.model or self.model
+        self.llamadas += 1
+
+
+def _creditos_del_turno(usage: _TurnUsage) -> dict[str, Any]:
+    """Créditos del turno al escribir el ledger (HU-BILL-04/06, ADR-0144).
+
+    Sin llamadas al LLM (p. ej. `budget_exhausted` antes de la primera) no hay evento que cobrar:
+    0 créditos. Si el cálculo falla, las columnas quedan en NULL y la fila se escribe igual: la
+    fila (con su `cost_usd`) es la fuente de la facturación y nunca se pierde por esto."""
+    try:
+        from decimal import Decimal
+
+        from core.billing.tarifario import TARIFARIO_VIGENTE, creditos_por_evento, trm_vigente
+
+        trm = trm_vigente()
+        key_mode = "byok" if usage.key_mode == "byok" else "platform"
+        creditos = (
+            creditos_por_evento(round(usage.cost_usd, 6), "llm_turn", key_mode, trm)
+            if usage.llamadas > 0
+            else Decimal("0.0")
+        )
+        return {
+            "credits": creditos,
+            "key_mode": key_mode,
+            "tarifario_version": TARIFARIO_VIGENTE.version,
+            "trm_cop": trm,
+        }
+    except Exception:
+        log.warning("usage_ledger_credits_failed")
+        return {}
 
 
 async def _write_usage_ledger(
@@ -172,31 +205,41 @@ async def _write_usage_ledger(
         # Release y agente del turno (HU-AOS-15): NULL con `aos_runtime = legacy`.
         release = release_vigente.vigente()
         agente = release.foco if release is not None else None
-        async with get_session() as session:
-            session.add(
-                UsageLedger(
-                    tenant_id=get_current_tenant_id(),
-                    conversation_id=conversation_id,
-                    agent_spec_version=spec.version,
-                    connection_id=release.connection_id if release is not None else None,
-                    release_id=release.release_id if release is not None else None,
-                    agent_instance_id=agente.instance_id if agente is not None else None,
-                    agent_version_id=agente.version_id if agente is not None else None,
-                    model=usage.model or spec.model.primary,
-                    input_tokens=usage.input_tokens,
-                    output_tokens=usage.output_tokens,
-                    cached_tokens=usage.cached_tokens,
-                    latency_ms=usage.latency_ms,
-                    cost_usd=round(usage.cost_usd, 6),
-                    tool_calls=usage.tool_calls or None,
-                    result={
-                        "escalated": usage.escalated,
-                        # Política de modelo por riesgo (HU-AOS-09): solo si hizo algo.
-                        **({"politica_modelo": usage.politica.como_dict()}
-                           if usage.politica is not None and not usage.politica.vacio() else {}),
-                    },
-                )
-            )
+        fila = dict(
+            tenant_id=get_current_tenant_id(),
+            conversation_id=conversation_id,
+            agent_spec_version=spec.version,
+            connection_id=release.connection_id if release is not None else None,
+            release_id=release.release_id if release is not None else None,
+            agent_instance_id=agente.instance_id if agente is not None else None,
+            agent_version_id=agente.version_id if agente is not None else None,
+            model=usage.model or spec.model.primary,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cached_tokens=usage.cached_tokens,
+            latency_ms=usage.latency_ms,
+            cost_usd=round(usage.cost_usd, 6),
+            tool_calls=usage.tool_calls or None,
+            result={
+                "escalated": usage.escalated,
+                # Política de modelo por riesgo (HU-AOS-09): solo si hizo algo.
+                **({"politica_modelo": usage.politica.como_dict()}
+                   if usage.politica is not None and not usage.politica.vacio() else {}),
+            },
+        )
+        creditos = _creditos_del_turno(usage)
+        try:
+            async with get_session() as session:
+                session.add(UsageLedger(**fila, **creditos))
+        except Exception as exc:
+            if not creditos:
+                raise
+            # La fila (con su `cost_usd`) es la fuente de la facturación: si falla con los créditos
+            # (migración 0096 sin aplicar, valor fuera de rango), se reintenta una vez sin ellos.
+            # Sin traza: el error de la base trae los parámetros de la fila.
+            log.warning("usage_ledger_credits_write_failed", error=type(exc).__name__)
+            async with get_session() as session:
+                session.add(UsageLedger(**fila))
     except Exception:
         log.warning("usage_ledger_write_failed")
     finally:
@@ -455,6 +498,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     budget = spec.policies.budgetUsdPerConversation
     usage = _TurnUsage()
     usage.politica = politica.uso if politica is not None else None
+    usage.key_mode = "byok" if _usa_llave_propia(app_settings) else "platform"
 
     # Span del turno (OTel): atributos para el panel/trazas.
     tracer = get_tracer()
@@ -1466,9 +1510,15 @@ def _resolved_provider(  # type: ignore[no-untyped-def]
     api_key = None
     if app_settings and app_settings.llm_provider:
         provider_key = app_settings.llm_provider
-        if app_settings.llm_api_key_encrypted:
-            api_key = get_secret_box().decrypt(app_settings.llm_api_key_encrypted)
+        if _usa_llave_propia(app_settings):
+            api_key = get_secret_box().decrypt(app_settings.llm_api_key_encrypted or "")
     return resolve_provider(provider_key=provider_key, api_key=api_key, model=model, thinking=thinking)
+
+
+def _usa_llave_propia(app_settings: AppSettings | None) -> bool:
+    """BYOK: el negocio configuró proveedor y llave en el panel. Misma condición con la que
+    `_resolved_provider` usa su llave y con la que el crédito cobra solo el fee (ADR-0144)."""
+    return bool(app_settings and app_settings.llm_provider and app_settings.llm_api_key_encrypted)
 
 
 def _politica_del_turno(motor: ContextoMotor | None, app_settings: AppSettings | None, spec, routing):  # type: ignore[no-untyped-def]
@@ -1518,6 +1568,6 @@ def _resolved_provider_fallback(app_settings: AppSettings | None, model: str):  
     api_key = None
     if app_settings and app_settings.llm_provider:
         provider_key = app_settings.llm_provider
-        if app_settings.llm_api_key_encrypted:
-            api_key = get_secret_box().decrypt(app_settings.llm_api_key_encrypted)
+        if _usa_llave_propia(app_settings):
+            api_key = get_secret_box().decrypt(app_settings.llm_api_key_encrypted or "")
     return resolve_provider(provider_key=provider_key, api_key=api_key, model=model)

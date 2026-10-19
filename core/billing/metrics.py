@@ -106,6 +106,16 @@ METRICS: tuple[Metric, ...] = (
         description="Mensajes salientes enviados en el período.",
     ),
     Metric(
+        key="creditos",
+        label="Crédito mensual",
+        unit="créditos",
+        scope="period",
+        description=(
+            "Créditos consumidos en el mes del ciclo (1 crédito = COP 10, ADR-0144): IA del "
+            "usage_ledger más el fee de notas de voz, imágenes y plantillas."
+        ),
+    ),
+    Metric(
         key="costo_llm_usd",
         label="Costo LLM",
         unit="USD",
@@ -213,6 +223,12 @@ async def _count_metric_in_session(session, tenant_id: uuid.UUID, key: str, peri
         return int((await session.execute(query)).scalar() or 0)
     if key == "costo_llm_usd":
         return await _count_cost(session, tenant_id, period_start)
+    if key == "creditos":
+        # El llamador pasa el inicio del MES de consumo (`periodos.ventana_mensual`), no el
+        # `period_start` crudo de la suscripción (ADR-0144). Décimas de crédito: float.
+        from core.billing.creditos import medir_creditos
+
+        return float((await medir_creditos(session, tenant_id, desde=period_start)).total)
     if key == "agentes":
         return await _count_agents(session, tenant_id)
     if key == "colaboradores":
