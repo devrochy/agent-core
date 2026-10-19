@@ -34,8 +34,8 @@ MAX_SIN_CONEXION = 50
 
 # Pausa que aplica a cada fila (lo que el panel ofrece y a qué endpoint va).
 PAUSA_CUENTA_META = "meta_account"  # ADR-0122: alcanza a todos los números de la cuenta
-# Manual: `active = false`. Hoy no corta la entrada ni la salida de una manual (la guarda de
-# ADR-0115 §2 solo mira la cuenta de Meta), así que la consola no la ofrece: queda pendiente.
+# Manual o WhatsApp Web: `active = false` (`/admin/connections/{id}/action`). Corta la entrada y
+# la salida igual que la cuenta de Meta (adenda 2026-10-19 de ADR-0122, ADR-0115 §2).
 PAUSA_CONEXION = "connection"
 PAUSA_CHAT_WEB = "webchat_settings"  # Configuración → Chat web (`settings`)
 
@@ -85,7 +85,8 @@ class ConexionFila:
     meta_status: str | None
     health: str
     pause_scope: str
-    # La consola solo ofrece la pausa que hoy detiene de verdad: la de la cuenta de Meta.
+    # La consola ofrece la pausa que detiene de verdad: la de la cuenta de Meta y la de una conexión
+    # manual o de WhatsApp Web. El chat web se pausa desde Configuración → Chat web.
     pausable: bool
     agents: list[AgenteFila] = field(default_factory=list)
     active_release: ReleaseFila | None = None
@@ -138,6 +139,14 @@ def alcance_de_pausa(*, tiene_cuenta: bool, type_id: str | None) -> str:
     if type_id == WEBCHAT:
         return PAUSA_CHAT_WEB
     return PAUSA_CONEXION
+
+
+def pausable(*, tiene_cuenta: bool, meta_status: str | None, type_id: str | None) -> bool:
+    """¿La consola ofrece Pausar/Reanudar? La cuenta de Meta (si la fila tiene estado) y las
+    conexiones sin cuenta salvo el chat web (su interruptor está en Configuración → Chat web)."""
+    if tiene_cuenta:
+        return meta_status is not None
+    return alcance_de_pausa(tiene_cuenta=False, type_id=type_id) == PAUSA_CONEXION
 
 
 def _exigir_scope(tenant_id: uuid.UUID) -> None:
@@ -201,7 +210,7 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
                 meta_status=f[10],
                 health=salud(active=bool(f[6]), meta_status=f[10], tiene_cuenta=tiene_cuenta),
                 pause_scope=alcance_de_pausa(tiene_cuenta=tiene_cuenta, type_id=f[2]),
-                pausable=tiene_cuenta and f[10] is not None,
+                pausable=pausable(tiene_cuenta=tiene_cuenta, meta_status=f[10], type_id=f[2]),
                 agents=[_con_version(a, activa) for a in agentes.get(cid, [])],
                 active_release=releases.get(activa) if activa is not None else None,
                 canary_release=releases.get(f[12]) if f[12] is not None else None,
