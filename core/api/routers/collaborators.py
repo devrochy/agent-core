@@ -323,14 +323,18 @@ async def unlink_collaborator_tenant(
     return Response(status_code=204)
 
 
-@router.post("/{admin_id}/toggle", status_code=204)
+@router.post("/{admin_id}/toggle", status_code=204, responses=plan_limit_responses("colaboradores"))
 async def toggle_collaborator_active(
     admin_id: uuid.UUID,
     principal: Annotated[Principal, Depends(require("collaborators", write=True))],
 ) -> Response:
-    error = await toggle_active(
-        actor=principal.admin, admin_id=admin_id, current_tenant_id=principal.tenant_id
-    )
+    try:
+        error = await toggle_active(
+            actor=principal.admin, admin_id=admin_id, current_tenant_id=principal.tenant_id
+        )
+    except QuotaExceeded as exc:
+        # Reactivar una cuenta con el negocio al tope de colaboradores (ADR-0142).
+        raise plan_limit_error(exc) from None
     _fail(error)
     audit("toggle", principal.admin.email, str(admin_id))
     return Response(status_code=204)

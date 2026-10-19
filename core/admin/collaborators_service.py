@@ -507,6 +507,32 @@ async def toggle_active(
         admin = await session.get(Admin, admin_id)
         if admin is None:
             return "admin no encontrado"
+        reactivar = not admin.active
+        negocios = (
+            list(
+                (
+                    await session.execute(
+                        select(TenantUser.tenant_id).where(
+                            TenantUser.admin_id == admin_id, TenantUser.role == "colaborador"
+                        )
+                    )
+                ).scalars()
+            )
+            if reactivar and admin.role not in ROLES_DE_PLATAFORMA
+            else []
+        )
+    for tenant_id in negocios:
+        # Reactivar vuelve a ocupar cupo en cada negocio donde la cuenta es colaboradora (una
+        # desactivada no cuenta, ADR-0142): por encima del tope, `QuotaExceeded` y la cuenta
+        # sigue desactivada. Conservador: también para el master (subir el plan es la salida).
+        async with scope_del_negocio(tenant_id), get_session() as medida:
+            from core.billing.enforcement import enforce_growth
+
+            await enforce_growth(tenant_id, "colaboradores", session=medida)
+    async with get_session() as session:
+        admin = await session.get(Admin, admin_id)
+        if admin is None:
+            return "admin no encontrado"
         admin.active = not admin.active
         if not admin.active:
             # Desactivar invalida las sesiones en la misma transacción: el siguiente request

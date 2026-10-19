@@ -27,8 +27,7 @@ Precios en COP/mes. Wompi exige un mínimo de **150.000 COP por link de pago**: 
 planes pagos se fijan por encima. `null` = ilimitado.
 
 **Planes v2 por agentes (D-35, HU-BILL-05, ADR-0142).** Las dimensiones que se venden y sus
-cifras salen de `modelo-de-precios.md §5` (docs). Las de agentes son propuesta del modelo de
-precios, pendiente de validar con el dueño:
+cifras salen de `modelo-de-precios.md §5` (docs) y las aprobó el dueño el 2026-10-19:
 
 | Plan | Precio/mes | Agentes publicados | Colaboradores | Crédito mensual (1 = COP 10) |
 |---|---|---|---|---|
@@ -68,7 +67,7 @@ paralelo, ADR-0045). El registro vive en `core/billing/metrics.py`.
 | `conversaciones_ocr` | imágenes entrantes procesadas | `messages` inbound con `media_type like 'image/%'` | período |
 | `plugins` | packs **de negocio** habilitados (sin el core); ya no es tope de ningún plan | `AgentSpec.packs` | lifetime |
 | `agentes` | especialistas activos con al menos una instancia viva en una conexión viva (el General cuenta, el Coordinador no) | `agents` + `agent_instances` + `channel_connections` | lifetime |
-| `colaboradores` | vínculos con rol `colaborador` (sin propietarios ni cuentas de plataforma; las desactivadas cuentan) + invitaciones a colaborador pendientes y vigentes | `tenant_user` + `tenant_invitations` | lifetime |
+| `colaboradores` | vínculos con rol `colaborador` **activos** (sin propietarios ni cuentas de plataforma; desactivar libera cupo y reactivar vuelve a medir el tope) + invitaciones a colaborador pendientes y vigentes | `tenant_user` + `tenant_invitations` | lifetime |
 | `mensajes` | mensajes salientes enviados | `messages` outbound | período |
 | `costo_llm_usd` | gasto LLM del período | `SUM(usage_ledger.cost_usd)` (ADR-0008) | período |
 
@@ -106,7 +105,7 @@ pago.
 | `conversaciones_ocr` | procesamiento de imagen (`webhooks.py::_try_process_media`) |
 | `plugins` | activación de un pack (`plugin_manager.activate`), solo si el plan define el tope (hoy ninguno) |
 | `agentes` | primera instancia viva de un agente (`instancias.agregar_instancia`): API de conexión-agentes, publicar del editor (pre-chequeo antes de publicar la versión) y presets v2 → 409 `plan_limit_agentes` |
-| `colaboradores` | alta o invitación de un colaborador (`create_collaborator`, `crear_invitacion`, gestores de `pack_cobranza`) → 409 `plan_limit_colaboradores` |
+| `colaboradores` | alta o invitación de un colaborador (`create_collaborator`, `crear_invitacion`, gestores de `pack_cobranza`) y reactivación de una cuenta desactivada (`toggle_active`) → 409 `plan_limit_colaboradores` |
 | `mensajes` / `costo_llm_usd` | envío / cabecera del turno |
 
 `agentes` y `colaboradores` **solo bloquean crecer** (ADR-0142): un negocio que ya está por

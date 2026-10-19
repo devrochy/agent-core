@@ -3,8 +3,10 @@
 - Dos métricas nuevas en `core/billing/metrics.py`, siguiendo D-35:
   - `agentes`: especialistas activos con al menos una instancia viva en una conexión. El General cuenta y el
     Coordinador no.
-  - `colaboradores`: vínculos con rol colaborador más las invitaciones pendientes.
-- Catálogo (`core/billing/plans.py`) con las cifras de `modelo-de-precios.md §5`:
+  - `colaboradores`: cuentas activas con rol colaborador más las invitaciones pendientes. Desactivar una
+    cuenta libera cupo; reactivarla con el negocio al tope da 409.
+- Catálogo (`core/billing/plans.py`) con las cifras de `modelo-de-precios.md §5`, aprobadas por el dueño el
+  2026-10-19:
 
   | Plan | Agentes | Colaboradores | Crédito mensual |
   |---|---|---|---|
@@ -23,6 +25,7 @@
 - Al tope, la API responde 409 `plan_limit_colaboradores` en estas entradas:
   - `POST /admin/collaborators`;
   - `POST /admin/invitations`;
+  - `POST /admin/collaborators/{id}/toggle` al reactivar una cuenta;
   - el alta de gestores de `pack_cobranza`;
   - en el panel clásico, el mismo mensaje aparece como aviso.
 - El bloqueo solo frena el crecimiento: un negocio que ya supera el tope sigue operando con lo que tiene.

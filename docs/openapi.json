@@ -6576,6 +6576,9 @@
           "204": {
             "description": "Successful Response"
           },
+          "409": {
+            "description": "Tope del plan: `error.code = plan_limit_colaboradores`, `error.details = {metric, used, limit}`; no se escribió nada."
+          },
           "422": {
             "description": "Validation Error",
             "content": {

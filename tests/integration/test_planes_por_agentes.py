@@ -379,3 +379,37 @@ async def test_aislamiento_entre_negocios_y_plan_en_la_api(app_client) -> None:
     catalogo = {p["id"]: p for p in cuerpo["plans"]}
     assert catalogo["premium"]["monthly_credits"] == 75000
     assert catalogo["empresarial"]["limits"]["agentes"] is None
+
+
+async def test_desactivar_libera_cupo_y_reactivar_al_tope_da_409(app_client) -> None:
+    """Decisión del dueño (2026-10-19): una cuenta desactivada no cuenta. Reactivarla vuelve a
+    medir el tope: por encima, 409 y la cuenta sigue desactivada (conservador)."""
+    from core.billing.metrics import count_metric
+
+    tid, _cid = await _negocio("free")  # tope 2
+    h = await _dueno(app_client, tid)
+    correos = [f"{uniq(f'act{i}')}@example.test" for i in range(3)]
+    for correo in correos[:2]:
+        r = await app_client.post("/api/v1/admin/collaborators", headers=h, json={"email": correo, "password": PASSWORD})
+        assert r.status_code == 200, r.text
+    assert await count_metric(tid, "colaboradores") == 2
+    (primero,) = await _sql(None, "select id from admins where email = :e", e=correos[0])
+    primero_id = primero[0]
+
+    # Desactivar libera cupo: entra un tercero.
+    r = await app_client.post(f"/api/v1/admin/collaborators/{primero_id}/toggle", headers=h)
+    assert r.status_code == 204, r.text
+    assert await count_metric(tid, "colaboradores") == 1
+    r = await app_client.post("/api/v1/admin/collaborators", headers=h, json={"email": correos[2], "password": PASSWORD})
+    assert r.status_code == 200, r.text
+
+    # Reactivar con el negocio al tope: 409 y la cuenta sigue desactivada.
+    r = await app_client.post(f"/api/v1/admin/collaborators/{primero_id}/toggle", headers=h)
+    assert _limite(r) == (409, "plan_limit_colaboradores", {"metric": "colaboradores", "used": 2, "limit": 2}), r.text
+    assert (await _sql(None, "select active from admins where id = :a", a=primero_id))[0][0] is False
+
+    # Con cupo (plan mayor), reactivar sí entra.
+    await _plan(tid, "basic")
+    r = await app_client.post(f"/api/v1/admin/collaborators/{primero_id}/toggle", headers=h)
+    assert r.status_code == 204, r.text
+    assert await count_metric(tid, "colaboradores") == 3

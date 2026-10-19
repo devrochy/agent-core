@@ -1,6 +1,7 @@
 # ADR-0142 — Planes por agentes: métricas `agentes` y `colaboradores`, crédito mensual y punto de enforcement
 
-- **Estado:** propuesto (HU-BILL-05, 2026-10-19). Las decisiones revisables por el dueño están marcadas abajo.
+- **Estado:** propuesto (HU-BILL-05, 2026-10-19). Cifras aprobadas por el dueño el 2026-10-19; las demás
+  decisiones revisables están marcadas abajo.
 - **Fecha:** 2026-10-19
 - **Contexto:** D-35 («SolversHub vende agentes»), `modelo-de-precios.md §5` (docs), HU-BILL-05 y HU-AOS-37
   (achicada). **Usa:** ADR-0045 (planes, cuotas y enforcement), ADR-0112 §1 (instancias por conexión),
@@ -38,8 +39,12 @@ crédito, que todavía no tiene ledger (HU-BILL-04/06).
      tester).
    - Las invitaciones a colaborador pendientes y vigentes. Si no contaran, se podrían mandar N invitaciones
      estando a uno del tope.
-   - Una cuenta desactivada sigue contando: desactivarla no libera cupo, desvincularla sí. Si no, desactivar y
-     reactivar sería un atajo para pasar el tope.
+   - Solo cuentan las cuentas **activas**: desactivar una cuenta libera su cupo (decisión del dueño,
+     2026-10-19). Para que desactivar y reactivar no sea un atajo, **reactivar vuelve a medir el tope** en cada
+     negocio donde la cuenta es colaboradora: por encima, 409 `plan_limit_colaboradores` y la cuenta sigue
+     desactivada (lo conservador; también para el master, cuya salida es subir el plan). La medida y el cambio
+     de estado van en transacciones separadas: dos reactivaciones simultáneas al borde pueden pasar las dos;
+     solo deja al negocio por encima del tope, no lo rompe.
    - *Revisable:* §5 dice «excluye al propietario», en singular. Aquí no cuenta **ningún** propietario, porque
      desde ADR-0136 los propietarios son pares entre sí y solo el master vincula a uno extra.
 3. **Enforcement: solo se bloquea crecer.** `enforcement.enforce_growth(tenant, métrica, session=...)` toma
@@ -108,9 +113,10 @@ crédito, que todavía no tiene ledger (HU-BILL-04/06).
   versionado por suscripción, y cumplirlo exige guardar una copia del plan en cada suscripción, que es trabajo
   de otra HU. Para que el cambio sea inmediato sin romper nada, solo se bloquea crecer.
   *Pendiente del dueño:* aceptar esta transición o pedir la copia del plan por suscripción.
-- **Las cifras de agentes (1/2/5/∞) siguen siendo una propuesta.** Así figuran en §5 y aquí se aplican como
-  bloqueo duro. *Pendiente del dueño:* validarlas.
-- **Free queda con «1 agente cualquiera».** Para el código, el tope de Free es 1 agente, sea o no el General.
+- **Cifras aprobadas por el dueño el 2026-10-19:** agentes 1/2/5/ilimitado, colaboradores 2/5/15/50 y crédito
+  2.500/20.000/75.000/240.000. *Pendiente en docs:* quitar la marca de «propuesta» de §5.
+- **Free queda con «1 agente cualquiera»** (aprobado por el dueño el 2026-10-19): el tope de Free es 1 agente,
+  sea o no el General.
 - **Las habilidades dejan de tener tope.** Ya no hay 409 `plan_limit_plugins`, y
   `core/presets/apply.py`, que validaba `limits["plugins"]`, deja de rechazar presets con muchos packs. Queda
   como deuda el código de cuota de habilidades, que ya no se dispara: `can_activate_plugin`, los caminos de

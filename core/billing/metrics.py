@@ -89,7 +89,7 @@ METRICS: tuple[Metric, ...] = (
         label="Colaboradores",
         unit="colaboradores",
         scope="lifetime",
-        description="Cuentas con acceso al negocio sin el propietario, más invitaciones pendientes.",
+        description="Cuentas activas con acceso al negocio sin el propietario, más invitaciones pendientes.",
     ),
     Metric(
         key="plugins",
@@ -257,10 +257,11 @@ _ROLES_DE_PLATAFORMA = ("master", "tester")
 
 
 async def _count_collaborators(session, tenant_id: uuid.UUID) -> int:
-    """Colaboradores (D-35, ADR-0142): cuentas vinculadas al negocio con rol `colaborador`
-    (los propietarios no cuentan) más las invitaciones pendientes y vigentes a colaborador, para
-    que no se puedan mandar N invitaciones estando a uno del tope. Una cuenta desactivada sigue
-    contando: desactivar no libera cupo, desvincular sí."""
+    """Colaboradores (D-35, ADR-0142): cuentas **activas** vinculadas al negocio con rol
+    `colaborador` (los propietarios no cuentan) más las invitaciones pendientes y vigentes a
+    colaborador, para que no se puedan mandar N invitaciones estando a uno del tope. Desactivar
+    una cuenta libera su cupo (decisión del dueño, 2026-10-19); reactivarla vuelve a medir el tope
+    (`collaborators_service.toggle_active`)."""
     from sqlalchemy import or_
 
     vinculados = (
@@ -271,6 +272,7 @@ async def _count_collaborators(session, tenant_id: uuid.UUID) -> int:
                 TenantUser.tenant_id == tenant_id,
                 TenantUser.role == "colaborador",
                 Admin.role.not_in(_ROLES_DE_PLATAFORMA),
+                Admin.active.is_(True),
             )
         )
     ).scalar() or 0
