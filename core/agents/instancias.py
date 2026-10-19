@@ -541,6 +541,35 @@ async def _desmarcar_defecto(session: Any, tenant_id: uuid.UUID, connection_id: 
     )
 
 
+async def _ya_cuenta_en_el_plan(session: Any, tenant_id: uuid.UUID, agent_id: uuid.UUID) -> bool:
+    """¿El agente ya tiene una instancia viva en una conexión viva? Mismo criterio que la
+    métrica `agentes` (`core.billing.metrics._count_agents`)."""
+    return (
+        await session.execute(
+            select(AgentInstanceRecord.id)
+            .join(
+                ChannelConnection,
+                (ChannelConnection.id == AgentInstanceRecord.connection_id)
+                & (ChannelConnection.tenant_id == AgentInstanceRecord.tenant_id),
+            )
+            .where(
+                AgentInstanceRecord.tenant_id == tenant_id,
+                AgentInstanceRecord.agent_id == agent_id,
+                AgentInstanceRecord.deleted_at.is_(None),
+                ChannelConnection.deleted_at.is_(None),
+            )
+            .limit(1)
+        )
+    ).first() is not None
+
+
+async def agente_cuenta_en_el_plan(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> bool:
+    """Lectura para los pre-chequeos (editor): ¿el agente ya ocupa un cupo de `agentes`?"""
+    _exigir_scope(tenant_id)
+    async with get_session() as session:
+        return await _ya_cuenta_en_el_plan(session, tenant_id, agent_id)
+
+
 async def agregar_instancia(
     tenant_id: uuid.UUID,
     connection_id: uuid.UUID,
@@ -557,7 +586,9 @@ async def agregar_instancia(
       publicada (si no, el build de la release no tendría qué fijar).
     - La conexión ya tiene su Coordinador (lo pone el sistema: backfill o alta).
     - `is_default`: pasa a ser el agente por defecto (el anterior deja de serlo) y tiene que
-      estar habilitado."""
+      estar habilitado.
+    - Si es la primera instancia del agente, aplica el tope de agentes publicados del plan:
+      `core.billing.enforcement.QuotaExceeded` (D-35, ADR-0142)."""
     _exigir_scope(tenant_id)
     if is_default and not enabled:
         raise ConflictoInstancia("default_disabled", "El agente por defecto tiene que estar habilitado.")
@@ -604,6 +635,16 @@ async def agregar_instancia(
                 raise ConflictoInstancia(
                     "limit_reached", f"La conexión ya tiene {MAX_INSTANCIAS_POR_CONEXION} agentes: quita alguno antes."
                 )
+            # Tope de agentes publicados del plan (D-35, ADR-0142): la primera instancia de un
+            # agente lo vuelve unidad facturable. `QuotaExceeded` sin escribir nada; cada entrada
+            # lo traduce (409 `plan_limit_agentes`). Un agente que ya está en otra conexión no
+            # crece la cuenta y no se mide. El lock va antes de esa lectura: dos altas del mismo
+            # agente nuevo en dos conexiones no se cuentan dos veces.
+            from core.billing.enforcement import enforce_growth, lock_growth
+
+            await lock_growth(tenant_id, "agentes", session=session)
+            if not await _ya_cuenta_en_el_plan(session, tenant_id, agent_id):
+                await enforce_growth(tenant_id, "agentes", session=session)
             if is_default:
                 await _desmarcar_defecto(session, tenant_id, connection_id)
             nueva = AgentInstanceRecord(

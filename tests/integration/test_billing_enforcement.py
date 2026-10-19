@@ -165,8 +165,19 @@ async def _set_packs(tenant_id, packs: list[str]) -> None:
             await session.commit()
 
 
-async def test_cuota_plugins_cuenta_packs_de_negocio_no_el_core():
-    """Con `free` (límite 1): el primer pack de negocio entra; el segundo se bloquea.
+def _plan_con_tope_de_habilidades(monkeypatch) -> None:
+    """`free` con el tope de habilidades de antes de ADR-0142 (`plugins: 1`), solo en el test."""
+    from dataclasses import replace
+
+    from core.billing import plans
+
+    free = plans.PLANS_BY_ID["free"]
+    monkeypatch.setitem(plans.PLANS_BY_ID, "free", replace(free, limits={**free.limits, "plugins": 1}))
+
+
+async def test_cuota_plugins_cuenta_packs_de_negocio_no_el_core(monkeypatch):
+    """Con un plan con `plugins: 1` (desde ADR-0142 ningún plan del catálogo lo define: el
+    mecanismo se prueba con un plan de prueba): el primer pack de negocio entra; el segundo se bloquea.
 
     El gate se evalúa ANTES de agregar (`_enable_pack_for_tenant`), así que
     `used=0` con límite 1 permite el primero, y `used=1` bloquea el segundo.
@@ -175,6 +186,7 @@ async def test_cuota_plugins_cuenta_packs_de_negocio_no_el_core():
     """
     from core.billing.enforcement import quota_decision
 
+    _plan_con_tope_de_habilidades(monkeypatch)
     tid = await _onboard(_uniq("enf-pkg"))
 
     # Sin packs de negocio: hay cupo para habilitar el primero.

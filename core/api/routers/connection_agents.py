@@ -40,6 +40,8 @@ from core.agents import instancias as svc
 from core.agents.versiones import escritura_habilitada
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
+from core.api.plan_limits import plan_limit_error, plan_limit_responses
+from core.billing.enforcement import QuotaExceeded
 
 router = APIRouter(prefix="/admin/connections", tags=["admin · conexiones"])
 
@@ -154,6 +156,7 @@ async def list_connection_agents(
     response_model=ConnectionAgentInstance,
     status_code=status.HTTP_201_CREATED,
     description="Agrega un especialista a la conexión." + _APLICA,
+    responses=plan_limit_responses("agentes"),
 )
 async def add_connection_agent(
     connection_id: uuid.UUID,
@@ -174,6 +177,9 @@ async def add_connection_agent(
         return _vista(await svc.obtener_instancia(tid, connection_id, nueva))
     except _ERRORES as exc:
         raise _error(exc) from None
+    except QuotaExceeded as exc:
+        # Primera instancia de un agente con el plan al tope (D-35, ADR-0142).
+        raise plan_limit_error(exc) from None
 
 
 @router.patch(

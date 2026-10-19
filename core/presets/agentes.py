@@ -357,6 +357,7 @@ async def _instalar_plantilla(
     tocadas: set[uuid.UUID],
 ) -> ResultadoAgente:
     from core.agents import instancias, versiones
+    from core.billing.enforcement import QuotaExceeded
 
     faltan = sorted(set(plantilla.habilidades) - habilitados)
     if faltan:
@@ -453,6 +454,11 @@ async def _instalar_plantilla(
             await instancias.agregar_instancia(tenant_id, cid, agent_id, is_default=False, enabled=True)
         except instancias.ConflictoInstancia as exc:
             resultado.instancias[str(cid)] = exc.code
+            continue
+        except QuotaExceeded:
+            # Tope de agentes publicados del plan (D-35, ADR-0142): el agente no entra en esta
+            # conexión; si no entró en ninguna, se archiva abajo como cualquier conflicto.
+            resultado.instancias[str(cid)] = "plan_limit_agentes"
             continue
         resultado.instancias[str(cid)] = "creada"
         tocadas.add(cid)

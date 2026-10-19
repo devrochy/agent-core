@@ -24,6 +24,8 @@ from sqlalchemy import func, or_, select
 from core.admin.auth import hash_password
 from core.api.deps import Principal, get_principal, require
 from core.api.errors import ApiError
+from core.api.plan_limits import plan_limit_error, plan_limit_responses
+from core.billing.enforcement import QuotaExceeded, enforce_growth
 from core.db.models import Admin, Conversation, Escalation, TenantUser
 from core.db.session import get_owned, get_session
 from pack_cobranza.permisos import GESTOR_PERMISOS
@@ -1738,7 +1740,7 @@ def _collector_values(payload: CollectorIn) -> dict[str, str]:
     }
 
 
-@router.post("/collectors", status_code=201)
+@router.post("/collectors", status_code=201, responses=plan_limit_responses("colaboradores"))
 async def create_collector(
     payload: CollectorIn,
     principal: Annotated[Principal, Depends(require("pack_cobranza:gestores", write=True))],
@@ -1766,17 +1768,25 @@ async def create_collector(
             if es_tester(principal.admin):
                 # Invitar una cuenta existente a un negocio es gestionar cuentas (ADR-0134).
                 raise ApiError(409, "conflict", "Ese correo ya tiene una cuenta. Un tester solo crea gestores con una cuenta nueva.")
-            error = await crear_invitacion(
-                tenant_id=tid,
-                admin_id=existente.id,
-                invited_by=principal.admin.id,
-                role="colaborador",
-                pack_roles=["pack_cobranza:gestor"],
-            )
+            try:
+                error = await crear_invitacion(
+                    tenant_id=tid,
+                    admin_id=existente.id,
+                    invited_by=principal.admin.id,
+                    role="colaborador",
+                    pack_roles=["pack_cobranza:gestor"],
+                )
+            except QuotaExceeded as exc:
+                raise plan_limit_error(exc) from None
             if error is not None:
                 raise ApiError.bad_request(error, "invitation_error")
             return {"resultado": "invitado"}
         values = _collector_values(payload)
+        try:
+            # Tope de colaboradores del plan (D-35, ADR-0142): un gestor es un colaborador.
+            await enforce_growth(tid, "colaboradores", session=session)
+        except QuotaExceeded as exc:
+            raise plan_limit_error(exc) from None
         admin = Admin(email=correo, password_hash=hash_password(password), role="colaborador")
         session.add(admin)
         await session.flush()

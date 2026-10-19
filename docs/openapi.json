@@ -2924,6 +2924,9 @@
               }
             }
           },
+          "409": {
+            "description": "Tope del plan: `error.code = plan_limit_agentes`, `error.details = {metric, used, limit}`; no se escribió nada."
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -6226,6 +6229,7 @@
           "admin · colaboradores"
         ],
         "summary": "Create Collaborator Endpoint",
+        "description": "Alta de una cuenta nueva o invitación de una existente (ADR-0081). Al tope de\ncolaboradores del plan, 409 `plan_limit_colaboradores` y no se crea ni se invita a nadie\n(D-35, ADR-0142).",
         "operationId": "create_collaborator_endpoint_api_v1_admin_collaborators_post",
         "parameters": [
           {
@@ -6263,6 +6267,9 @@
                 "schema": {}
               }
             }
+          },
+          "409": {
+            "description": "Tope del plan: `error.code = plan_limit_colaboradores`, `error.details = {metric, used, limit}`; no se escribió nada."
           },
           "422": {
             "description": "Validation Error",
@@ -6569,6 +6576,9 @@
           "204": {
             "description": "Successful Response"
           },
+          "409": {
+            "description": "Tope del plan: `error.code = plan_limit_colaboradores`, `error.details = {metric, used, limit}`; no se escribió nada."
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -6639,6 +6649,7 @@
           "admin · invitaciones"
         ],
         "summary": "Create Invitation",
+        "description": "Al tope de colaboradores del plan, 409 `plan_limit_colaboradores` (ADR-0142).",
         "operationId": "create_invitation_api_v1_admin_invitations_post",
         "parameters": [
           {
@@ -6671,6 +6682,9 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "409": {
+            "description": "Tope del plan: `error.code = plan_limit_colaboradores`, `error.details = {metric, used, limit}`; no se escribió nada."
           },
           "422": {
             "description": "Validation Error",
@@ -10967,6 +10981,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Tope del plan: `error.code = plan_limit_colaboradores`, `error.details = {metric, used, limit}`; no se escribió nada."
           },
           "422": {
             "description": "Validation Error",
@@ -18555,6 +18572,9 @@
               }
             }
           },
+          "409": {
+            "description": "Tope del plan: `error.code = plan_limit_agentes`, `error.details = {metric, used, limit}`; no se escribió nada."
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -25077,6 +25097,17 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Features"
+          },
+          "monthly_credits": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monthly Credits"
           }
         },
         "type": "object",
@@ -25180,6 +25211,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/Cobro"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "credit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreditUsage"
               },
               {
                 "type": "null"
@@ -35247,6 +35288,42 @@
           "activo"
         ],
         "title": "QaDatosChatWeb"
+      },
+      "CreditUsage": {
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "used": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used"
+          },
+          "percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "limit"
+        ],
+        "title": "CreditUsage",
+        "description": "Crédito mensual del plan (D-35, ADR-0142). `used`/`percent` son `null` mientras el core no\nmide el consumo en créditos (ledger multiconcepto, HU-BILL-04/06): el panel muestra el tope\ny la barra vacía con «medición pendiente»."
       }
     }
   }

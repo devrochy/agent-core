@@ -137,7 +137,15 @@ async def test_config_guardada_fuera_de_rango_no_tumba_el_get(app_client) -> Non
 # ------------------------------------------------------------------ 2. tope del plan
 
 
-async def test_habilitar_al_tope_del_plan_responde_409_y_queda_deshabilitada(app_client) -> None:
+async def test_habilitar_al_tope_del_plan_responde_409_y_queda_deshabilitada(app_client, monkeypatch) -> None:
+    from dataclasses import replace
+
+    from core.billing import plans
+
+    # Desde ADR-0142 ningún plan del catálogo limita las habilidades; el contrato del 409 se
+    # sigue probando con un `free` de prueba que trae `plugins: 1`.
+    free = plans.PLANS_BY_ID["free"]
+    monkeypatch.setitem(plans.PLANS_BY_ID, "free", replace(free, limits={**free.limits, "plugins": 1}))
     tid = await _tenant("p0-tope", packs=["pack_commerce"])
     await _plan(tid, "free")  # `plugins: 1`, y commerce ya ocupa el cupo
     headers = await api_headers(app_client, tid)

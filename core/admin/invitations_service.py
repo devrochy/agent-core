@@ -26,7 +26,7 @@ from typing import Any
 
 from sqlalchemy import func, or_, select, update
 
-from core.admin.collaborators_service import apply_pack_roles, ensure_tenant_link
+from core.admin.collaborators_service import apply_pack_roles, ensure_tenant_link, scope_del_negocio
 from core.admin.roles import actua_como_master
 from core.db.models import Admin, AdminPermission, Tenant, TenantInvitation, TenantUser
 from core.db.session import get_session
@@ -95,7 +95,7 @@ async def crear_invitacion(
     if error is not None:
         return error
 
-    async with get_session() as session:
+    async with scope_del_negocio(tenant_id), get_session() as session:
         link = (
             await session.execute(
                 select(TenantUser).where(
@@ -114,6 +114,14 @@ async def crear_invitacion(
                 )
             )
         ).scalar_one_or_none()
+        if role == "colaborador" and (pendiente is None or pendiente.role != "colaborador"):
+            # Tope de colaboradores del plan (D-35, ADR-0142): una invitación pendiente a
+            # colaborador ya ocupa cupo. `QuotaExceeded` sin escribir nada; el caller lo
+            # traduce (409 `plan_limit_colaboradores`). Refrescar una pendiente que ya era de
+            # colaborador no crece: no se mide.
+            from core.billing.enforcement import enforce_growth
+
+            await enforce_growth(tenant_id, "colaboradores", session=session)
         if pendiente is not None:
             pendiente.role = role
             pendiente.pack_roles = list(pack_roles or [])

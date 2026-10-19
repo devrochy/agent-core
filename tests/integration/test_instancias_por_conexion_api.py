@@ -48,6 +48,9 @@ async def _con_agentes() -> tuple[uuid.UUID, uuid.UUID, str, uuid.UUID]:
     cuenta, _app, phone = await _byok_de_prueba(tid)
     await backfill_conexiones(dry_run=False, tenant_id=tid)
     assert not (await backfill_agentes(dry_run=False, tenant_id=tid, modules=_modules())).fallo
+    # Premium (5 agentes publicados, ADR-0142): estos tests suman especialistas; el tope del plan
+    # se prueba en `test_planes_por_agentes.py`.
+    await _sql(tid, "update tenant_subscriptions set plan_id = 'premium' where tenant_id = :t", t=tid)
     return tid, cuenta, phone, await _canonica(tid, phone)
 
 
