@@ -2279,6 +2279,42 @@
         "operationId": "list_escalations_api_v1_admin_escalations_get",
         "parameters": [
           {
+            "name": "reason_code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "solicitud_cliente",
+                    "queja",
+                    "fuera_de_alcance",
+                    "intentos_fallidos",
+                    "monto_alto",
+                    "palabra_clave",
+                    "accion_habilidad",
+                    "regla_negocio",
+                    "verificacion",
+                    "frase_prohibida",
+                    "falla_ia",
+                    "rechazo_ia",
+                    "envio_fallido",
+                    "sin_resolver",
+                    "limite_iteraciones",
+                    "otro"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtra por código de motivo",
+              "title": "Reason Code"
+            },
+            "description": "Filtra por código de motivo"
+          },
+          {
             "name": "page",
             "in": "query",
             "required": false,
@@ -21712,7 +21748,36 @@
           },
           "reason": {
             "type": "string",
-            "title": "Reason"
+            "title": "Reason",
+            "description": "Motivo tal como se guardó (crudo)"
+          },
+          "reason_code": {
+            "type": "string",
+            "enum": [
+              "solicitud_cliente",
+              "queja",
+              "fuera_de_alcance",
+              "intentos_fallidos",
+              "monto_alto",
+              "palabra_clave",
+              "accion_habilidad",
+              "regla_negocio",
+              "verificacion",
+              "frase_prohibida",
+              "falla_ia",
+              "rechazo_ia",
+              "envio_fallido",
+              "sin_resolver",
+              "limite_iteraciones",
+              "otro"
+            ],
+            "title": "Reason Code",
+            "description": "Código cerrado del motivo (HU-UX-17)"
+          },
+          "reason_label": {
+            "type": "string",
+            "title": "Reason Label",
+            "description": "Motivo legible en español"
           },
           "summary": {
             "type": "string",
@@ -21734,6 +21799,8 @@
           "customer_name",
           "external_id",
           "reason",
+          "reason_code",
+          "reason_label",
           "summary",
           "status",
           "created_at"

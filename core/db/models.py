@@ -897,7 +897,7 @@ class Escalation(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("conversations.id"))
-    reason: Mapped[str] = mapped_column(Text)   # keyword | guardrail | plugin | llm_refusal | manual
+    reason: Mapped[str] = mapped_column(Text)   # crudo; código legible en core/orchestrator/motivos_escalacion.py
     summary: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(Text, default="pendiente")  # pendiente | asignada | resuelta
     assigned_admin_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id"))
