@@ -365,6 +365,14 @@ async def _sembrar(tenant_id: uuid.UUID, gestor_email: str) -> list[str]:
     return pasos
 
 
+async def _sembrar_comercio(tenant_id: uuid.UUID) -> None:
+    from core.plugin_manager import plugin_manager
+
+    module = plugin_manager.get("pack_commerce")
+    if module is not None:
+        await module.seed_data(tenant_id, _fragmento("pack_commerce"))
+
+
 async def _actualizar_agent_os(admin: Admin) -> dict[str, Any] | None:
     """Volver a pulsar «Preparar mis datos» con los datos ya listos (y el negocio vivo) solo pone
     al día el Agent OS del negocio de prueba (HU-QA-09): no toca la corrida, las cuentas ni las
@@ -380,6 +388,9 @@ async def _actualizar_agent_os(admin: Admin) -> dict[str, Any] | None:
         ds_id, tenant_id, slug = ds.id, ds.tenant_id, ds.slug
     if slug != slug_de(admin.id):
         raise QaError("conflicto", "El negocio de prueba no corresponde a tu cuenta.")
+    # El catálogo de Comercio es idempotente por SKU: así los negocios de prueba anteriores
+    # reciben lo que se sumó al fragmento (el plan de `contratar_plan`). No toca stock ni borra.
+    await _sembrar_comercio(tenant_id)
     motivo = await datos_aos.preparar(tenant_id, slug)
     async with get_session() as session:
         ds = (

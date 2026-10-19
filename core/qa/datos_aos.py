@@ -9,9 +9,9 @@ las MISMAS funciones de la operación (sin duplicar su lógica):
 2. **Backfills** de conexiones, agentes y releases (`agent-core db backfill-*`).
 3. **`migrar_a_v3(construir=True)`**, como `agent-core db migrar-a-v3 --tenant … --construir`.
 4. **Agentes del preset v2** (`aplicar_agentes`) con un manifiesto en memoria: las plantillas
-   `AGENTES` (Ventas, Agenda y Cobranza, las habilidades del negocio de prueba). Ningún preset de
-   archivo cubre Comercio + Agenda + Cobranza, y uno nuevo en `core/presets/` aparecería en el
-   alta de clientes reales.
+   `AGENTES` (Ventas y Agenda, con las keys de sus plantillas). Ningún preset de archivo encaja con
+   el negocio de prueba, y uno nuevo en `core/presets/` aparecería en el alta de clientes reales.
+   Nunca toca agentes que ya existan (los que creó el tester en el editor, p. ej. Cobranza).
 5. **Release activa** en cada conexión conversacional (`construir` + `promover`, que pasa el
    gate): el tester es el dueño de su negocio de prueba y pulsar el botón es su decisión.
 6. **`aos_procedures = true` y `aos_routing = 'active'`** en un solo UPDATE con el rol dueño,
@@ -42,9 +42,10 @@ from core.shared.tenant import tenant_scope
 log = get_logger(__name__)
 
 ACTOR = "system:qa-datos"
-# Plantillas de `core/presets/plantillas/` que se instalan: las de las habilidades del negocio
-# de prueba (`datos.PACKS`). Es un fixture de QA, como los fragmentos `qa.json`.
-AGENTES = ("ventas", "agenda", "cobranza")
+# Plantillas de `core/presets/plantillas/` que se instalan. Es un fixture de QA, como los
+# fragmentos `qa.json`. Cobranza NO: el catálogo de pruebas la crea desde el editor de agentes
+# (con la key de la plantilla ya ocupada, el editor respondería 409 `key_taken`).
+AGENTES = ("ventas", "agenda")
 NOMBRE_ROL = {"core": "Coordinador", "specialist": "Especialista", "backoffice": "Backoffice"}
 
 
@@ -58,7 +59,8 @@ def _motivo(exc: Exception) -> str:
     if isinstance(exc, DBAPIError):
         # Sin los parámetros SQL.
         return f"error de base de datos ({type(exc.orig).__name__})"
-    return f"{type(exc).__name__}: {str(exc)[:300]}"
+    # Sin el texto de la excepción: puede llevar rutas o datos de conexión; el detalle va al log.
+    return f"error inesperado ({type(exc).__name__}); vuelve a intentarlo"
 
 
 def origen_de_la_landing() -> str | None:
@@ -244,6 +246,9 @@ async def preparar(tenant_id: uuid.UUID, slug: str) -> str | None:
             modulos = list(plugin_manager.list_modules())
             await _chat_web(tenant_id)
             await _backfills(tenant_id, modulos)
+            # Otra vez justo antes de escribir `aos_runtime` con el rol dueño (migrar_a_v3 filtra
+            # solo por id): el slug no cambió durante la corrida.
+            await _negocio_del_tester(tenant_id, slug)
             await _a_v3(tenant_id, modulos)
             await _preset(tenant_id, modulos)
             await _activar_releases(tenant_id, modulos)

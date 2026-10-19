@@ -3,7 +3,7 @@
 Con `QA_TESTERS_ENABLED` y `AOS_CONNECTION_ROUTING` (monkeypatch), sin LLM real:
 
 - **Negocio nuevo:** chat web activo con clave y origen de la landing, `aos_runtime = v3`,
-  `aos_procedures`, `aos_routing = active`, General + Ventas + Agenda + Cobranza en el chat web
+  `aos_procedures`, `aos_routing = active`, General + Ventas + Agenda en el chat web (Cobranza la crea el tester en el editor y no se toca)
   con las reglas `preset_*` del Coordinador y la release activa; la respuesta trae la clave, el
   enlace y los agentes. Volver a pulsar responde 200 sin contraseñas y no duplica nada.
 - **Negocio legacy existente** (preparado con el Agent OS apagado, como los `qa-` de test):
@@ -106,7 +106,7 @@ async def _foto(tid: uuid.UUID) -> dict[str, Any]:
         "versiones": "select count(*) from agent_versions where tenant_id = :t",
         "instancias": "select count(*) from agent_instances where tenant_id = :t and deleted_at is null",
         "releases": "select count(*) from connection_releases where tenant_id = :t",
-        "productos": "select count(*) from commerce_products where tenant_id = :t",
+        "productos": "select count(*) from pack_commerce_products where tenant_id = :t",
     }
     foto: dict[str, Any] = {}
     for clave, sql in consultas.items():
@@ -139,7 +139,8 @@ def _verificar_listo(datos: dict[str, Any]) -> None:
     chat = aos["chat_web"]
     assert chat["activo"] and chat["clave"] and chat["enlace"] == f"{LANDING}/w/{chat['clave']}"
     keys = {a["key"] for a in aos["agentes"]}
-    assert {"general", "ventas", "agenda", "cobranza"} <= keys, keys
+    assert {"coordinador", "general", "ventas", "agenda"} <= keys, keys
+    assert "cobranza" not in keys  # la crea el tester desde el editor
     assert [a["key"] for a in aos["agentes"] if a["por_defecto"]] == ["general"]
     # La pestaña Datos del panel lo muestra en `contenido`, sin cambios en el panel.
     seccion = next(c for c in datos["contenido"] if c["habilidad"] == "Agent OS")
@@ -155,7 +156,15 @@ async def _verificar_negocio(tid: uuid.UUID, clave: str) -> None:
         t=tid, k=clave,
     )
     assert activa and LANDING in origenes
-    assert {"preset_agenda_palabras", "preset_ventas_palabras", "preset_cobranza_palabras"} <= set(await _reglas(tid))
+    assert {"preset_agenda_palabras", "preset_ventas_palabras"} <= set(await _reglas(tid))
+    # El plan de `contratar_plan`: al menos 150.000 COP (mínimo de un link de Wompi sandbox).
+    ((precio,),) = await _sql(
+        tid,
+        "select v.price from pack_commerce_product_variants v where v.tenant_id = :t and v.sku = 'QA-PLAN-MENSUAL' "
+        "and v.billing_period = 'mensual' and v.active",
+        t=tid,
+    )
+    assert precio >= 150000
     # Todas las conexiones conversacionales con release activa al día (sin candidatas pendientes).
     filas = await _sql(
         tid,
@@ -188,6 +197,12 @@ async def test_negocio_nuevo_queda_listo_para_el_agent_os(app_client: Any, tenan
     assert r.status_code == 200
     _verificar_listo(r.json()["datos"])
 
+    # El tester crea Cobranza desde el editor (key de la plantilla): volver a pulsar no la toca.
+    from core.agents import versiones
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        cobranza = await versiones.crear_agente(tid, key="cobranza", kind="specialist", name="Cobranza del tester")
     # Volver a pulsar: 200, sin contraseñas, misma clave y nada duplicado.
     antes = await _foto(tid)
     r = await app_client.post("/api/v1/admin/qa/datos", headers=headers)
@@ -196,6 +211,10 @@ async def test_negocio_nuevo_queda_listo_para_el_agent_os(app_client: Any, tenan
     _verificar_listo(r.json())
     assert r.json()["agent_os"]["chat_web"]["clave"] == clave
     assert await _foto(tid) == antes
+    assert await _sql(tid, "select name, status, deleted_at from agents where id = :a", a=cobranza.id) == [
+        ("Cobranza del tester", "active", None)
+    ]
+    assert (await _sql(tid, "select count(*) from agent_instances where agent_id = :a", a=cobranza.id))[0][0] == 0
 
 
 # ---------------------------------------------------------------- negocio legacy existente
@@ -236,7 +255,7 @@ async def test_un_fallo_a_medias_se_reintenta_sin_perder_las_reglas(app_client: 
     headers = await _tester(app_client, t1)
 
     async def _falla(*_a: Any, **_k: Any) -> None:
-        raise RuntimeError("promoción caída")
+        raise datos_aos.FalloAgentOS("promoción caída")
 
     original = datos_aos._activar_releases
     entorno.setattr(datos_aos, "_activar_releases", _falla)

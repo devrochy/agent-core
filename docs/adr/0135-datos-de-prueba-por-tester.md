@@ -61,21 +61,27 @@
    clave si existe, lo habilita y agrega a `allowed_origins` el origen de `LANDING_BASE_URL`, que sirve `/w/<clave>`.
    Las demás conexiones no se tocan.
 2. **Backfills** de conexiones, agentes y releases y **`migrar_a_v3(construir=True)`**, como la CLI.
-3. **Agentes del preset v2** (`aplicar_agentes`) con un manifiesto en memoria: las plantillas `ventas`, `agenda` y
-   `cobranza` (constante `AGENTES`, las habilidades del negocio de prueba). Ningún preset de archivo cubre
-   Comercio + Agenda + Cobranza, y uno en `core/presets/` aparecería en el alta de clientes reales. No escribe
-   `settings.preset.id`: `presets-v2 --todos` lo omite.
+3. **Agentes del preset v2** (`aplicar_agentes`) con un manifiesto en memoria: las plantillas `ventas` y `agenda`
+   (constante `AGENTES`, con las keys de sus plantillas). Cobranza no: el catálogo de pruebas la crea desde el
+   editor de agentes, y con la key ocupada el editor respondería 409. Ningún preset de archivo encaja con el negocio
+   de prueba, y uno en `core/presets/` aparecería en el alta de clientes reales. No escribe `settings.preset.id`:
+   `presets-v2 --todos` lo omite. Nunca toca agentes que ya existan.
 4. **Release activa** en cada conexión conversacional (`construir` + `promover`, que pasa el gate).
 5. **`aos_procedures = true` y `aos_routing = 'active'`** en un solo UPDATE con el rol dueño
    (`MIGRATIONS_DATABASE_URL`, que tiene el contenedor de la API), con la defensa en la misma consulta: id, slug
    `qa-` del tester, vivo y en `v3`.
-6. **Volver a pulsar** con los datos listos solo pone al día el Agent OS: 200, sin contraseñas, sin tocar la
-   corrida ni las cuentas. Es idempotente, también para los negocios `qa-` creados antes en legacy.
+6. **Volver a pulsar** con los datos listos solo pone al día el Agent OS (y vuelve a sembrar el catálogo de
+   Comercio, idempotente por SKU, para que los negocios anteriores reciban el plan de prueba): 200, sin
+   contraseñas, sin tocar la corrida ni las cuentas. Es idempotente, también para los negocios `qa-` creados antes en legacy.
 7. **Si un paso falla**, el motivo queda en `qa_tester_datasets.error` (con estado `listo`: las cuentas y los
    datos sirven igual) y la respuesta lo muestra en `agent_os.motivo`. El negocio queda como esté: antes de
    `migrar_a_v3` sigue en legacy; después ya es un v3 funcional con el General y el reintento completa. **No se
    vuelve a legacy**: reconstruir en legacy refrescaría el Coordinador desde el v2 y perdería las reglas `preset_*`,
    que la lápida de ADR-0139 ya no repone.
+
+El fragmento `pack-commerce/presets/qa.json` suma el plan `QA-PLAN-MENSUAL` (mensual, 150.000 COP, el mínimo de un
+link de Wompi sandbox) para `contratar_plan`. El cobro en línea NO se configura: el negocio de prueba no tiene
+`pack_payments` y copiar las claves de otro negocio o de la plataforma sería mover secretos entre negocios.
 
 **Excepciones acotadas** al negocio `qa-` del propio tester y a `QA_TESTERS_ENABLED` (más
 `AOS_CONNECTION_ROUTING`):
