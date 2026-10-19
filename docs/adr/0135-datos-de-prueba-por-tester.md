@@ -51,3 +51,41 @@
   `tests/integration/test_qa_datos.py`.
 - La app de campo emite tokens propios de 12 horas: pedir contraseñas nuevas no los corta, pero `_auth`
   revalida la cuenta en cada pedido (ADR-0134).
+
+## Adenda (2026-10-18): el negocio de prueba listo para el Agent OS (HU-QA-09)
+
+«Preparar mis datos» deja además el negocio `qa-<hex>` del tester listo para probar el Agent OS
+(`core/qa/datos_aos.py`), con las mismas funciones de la operación y sin duplicar su lógica:
+
+1. **Chat web activo** (`chat_web_conexion.guardar_widget`, extraída de `PUT /settings/web-chat`): reutiliza la
+   clave si existe, lo habilita y agrega a `allowed_origins` el origen de `LANDING_BASE_URL`, que sirve `/w/<clave>`.
+   Las demás conexiones no se tocan.
+2. **Backfills** de conexiones, agentes y releases y **`migrar_a_v3(construir=True)`**, como la CLI.
+3. **Agentes del preset v2** (`aplicar_agentes`) con un manifiesto en memoria: las plantillas `ventas`, `agenda` y
+   `cobranza` (constante `AGENTES`, las habilidades del negocio de prueba). Ningún preset de archivo cubre
+   Comercio + Agenda + Cobranza, y uno en `core/presets/` aparecería en el alta de clientes reales. No escribe
+   `settings.preset.id`: `presets-v2 --todos` lo omite.
+4. **Release activa** en cada conexión conversacional (`construir` + `promover`, que pasa el gate).
+5. **`aos_procedures = true` y `aos_routing = 'active'`** en un solo UPDATE con el rol dueño
+   (`MIGRATIONS_DATABASE_URL`, que tiene el contenedor de la API), con la defensa en la misma consulta: id, slug
+   `qa-` del tester, vivo y en `v3`.
+6. **Volver a pulsar** con los datos listos solo pone al día el Agent OS: 200, sin contraseñas, sin tocar la
+   corrida ni las cuentas. Es idempotente, también para los negocios `qa-` creados antes en legacy.
+7. **Si un paso falla**, el motivo queda en `qa_tester_datasets.error` (con estado `listo`: las cuentas y los
+   datos sirven igual) y la respuesta lo muestra en `agent_os.motivo`. El negocio queda como esté: antes de
+   `migrar_a_v3` sigue en legacy; después ya es un v3 funcional con el General y el reintento completa. **No se
+   vuelve a legacy**: reconstruir en legacy refrescaría el Coordinador desde el v2 y perdería las reglas `preset_*`,
+   que la lápida de ADR-0139 ya no repone.
+
+**Excepciones acotadas** al negocio `qa-` del propio tester y a `QA_TESTERS_ENABLED` (más
+`AOS_CONNECTION_ROUTING`):
+
+- El tester escribe banderas `aos_*` con el rol dueño, en lugar del master (ADR-0112).
+- La release se promueve sola (ADR-0117 y ADR-0139 §5): el tester es el dueño de su negocio de prueba y pulsar el
+  botón es su decisión.
+- Se saltan el pass^4 y la semana en sombra (runbooks de ADR-0117 y ADR-0138).
+
+**Deuda:** un setter SECURITY DEFINER de banderas (previsto en la adenda HU-AOS-15 de ADR-0117) reemplazaría el
+uso del rol dueño desde la API. La respuesta (`agent_os`: estado, motivo, chat web con clave y enlace, agentes)
+también va como una entrada «Agent OS» en `contenido`, que la pestaña Datos del panel ya muestra; el botón
+«Preparar» en estado `listo` es un cambio pendiente del panel.

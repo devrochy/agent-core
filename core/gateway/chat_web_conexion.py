@@ -215,6 +215,46 @@ async def sincronizar(
     return "sincronizada", actual.id
 
 
+async def guardar_widget(
+    session: Any,
+    tenant_id: uuid.UUID,
+    *,
+    enabled: bool,
+    allowed_origins: list[str],
+    rotar_clave: bool = False,
+    turnstile_secret: str | None = None,
+) -> tuple[dict[str, Any], Resultado, uuid.UUID | None]:
+    """Guarda el widget en `app_settings.web_chat_config` y, en la misma sesión, en la conexión
+    `webchat` (doble escritura hasta el *contract*). La clave la genera el servidor si no hay o si
+    se pide rotarla. Si la conexión es nueva, le pone las instancias de agentes cuando el negocio
+    ya las tiene (HU-AOS-11 parte 2). La usan `PUT /settings/web-chat` y el centro de pruebas
+    (HU-QA-09); permisos y validación de entrada quedan en el llamador."""
+    from core.agents.instancias import instancias_de_conexion_nueva
+    from core.db.models import AppSettings
+
+    app_settings = (
+        await session.execute(
+            select(AppSettings).where(AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None))
+        )
+    ).scalar_one_or_none()
+    if app_settings is None:
+        app_settings = AppSettings(tenant_id=tenant_id)
+        session.add(app_settings)
+    config = dict(app_settings.web_chat_config or {})
+    if not config.get("key") or rotar_clave:
+        # La genera el servidor (nunca el panel): aleatoria, 192 bits (ADR-0115 §4).
+        config["key"] = nueva_clave()
+    config["enabled"] = bool(enabled)
+    config["allowed_origins"] = list(allowed_origins)
+    if turnstile_secret is not None:
+        config["turnstile_secret"] = turnstile_secret.strip()
+    app_settings.web_chat_config = config
+    resultado, conexion = await sincronizar(session, tenant_id, desde_app_settings(config))
+    if resultado == "creada" and conexion is not None:
+        await instancias_de_conexion_nueva(session, tenant_id, conexion)
+    return config, resultado, conexion
+
+
 __all__ = [
     "CANAL",
     "PROVEEDOR",
@@ -222,6 +262,7 @@ __all__ = [
     "conexion_del_negocio",
     "config_de_conexion",
     "desde_app_settings",
+    "guardar_widget",
     "leer",
     "nueva_clave",
     "secreto_turnstile",

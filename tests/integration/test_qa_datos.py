@@ -110,9 +110,12 @@ async def test_preparar_mis_datos_crea_negocio_cuentas_y_datos(app_client, tenan
     assert r.status_code == 200, r.text
     assert r.json().get("accessToken"), r.json()
 
-    # Idempotente: un segundo «Preparar» no crea otro negocio.
+    # Idempotente: un segundo «Preparar» no crea otro negocio ni cambia las contraseñas; solo
+    # pone al día el Agent OS (HU-QA-09; aquí apagado, así que queda con el motivo).
     r = await app_client.post("/api/v1/admin/qa/datos", headers=headers)
-    assert r.status_code == 409
+    assert r.status_code == 200, r.text
+    assert r.json()["negocio"]["id"] == datos["negocio"]["id"] and r.json()["contrasenas"] is None
+    assert r.json()["agent_os"]["estado"] == "error"
 
     # Contraseñas nuevas: la vieja deja de servir y la nueva entra.
     r = await app_client.post("/api/v1/admin/qa/datos/contrasenas", headers=headers)

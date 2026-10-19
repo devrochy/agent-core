@@ -171,16 +171,25 @@ async def _a_dict(session, ds: QaTesterDataset) -> dict[str, Any]:  # type: igno
                 "creada": getattr(ds, c["columna"]) is not None,
             }
         )
+    from core.qa import datos_aos
+
+    salida_contenido = contenido()
+    agent_os = None
+    if tenant is not None and estado == "listo":
+        # En «listo», `error` guarda el motivo del último paso del Agent OS (HU-QA-09).
+        agent_os = await datos_aos.resumen(ds.tenant_id, ds.error)
+        salida_contenido.append(datos_aos.como_contenido(agent_os))
     return {
         "estado": estado,
         "error": ds.error if estado == "error" else None,
+        "agent_os": agent_os,
         "negocio": {
             "id": str(ds.tenant_id),
             "slug": ds.slug,
             "nombre": tenant.name if tenant else None,
         },
         "cuentas": cuentas,
-        "contenido": contenido(),
+        "contenido": salida_contenido,
         "creado_en": ds.creado_en.isoformat() if ds.creado_en else None,
         "actualizado_en": ds.actualizado_en.isoformat() if ds.actualizado_en else None,
     }
@@ -356,13 +365,50 @@ async def _sembrar(tenant_id: uuid.UUID, gestor_email: str) -> list[str]:
     return pasos
 
 
+async def _actualizar_agent_os(admin: Admin) -> dict[str, Any] | None:
+    """Volver a pulsar «Preparar mis datos» con los datos ya listos (y el negocio vivo) solo pone
+    al día el Agent OS del negocio de prueba (HU-QA-09): no toca la corrida, las cuentas ni las
+    contraseñas. Devuelve None si no aplica (no hay datos listos): sigue la preparación completa."""
+    from core.qa import datos_aos
+
+    async with get_session() as session:
+        ds = (
+            await session.execute(select(QaTesterDataset).where(QaTesterDataset.admin_id == admin.id))
+        ).scalar_one_or_none()
+        if ds is None or ds.estado != "listo" or await _tenant_vivo(session, ds.tenant_id) is None:
+            return None
+        ds_id, tenant_id, slug = ds.id, ds.tenant_id, ds.slug
+    if slug != slug_de(admin.id):
+        raise QaError("conflicto", "El negocio de prueba no corresponde a tu cuenta.")
+    motivo = await datos_aos.preparar(tenant_id, slug)
+    async with get_session() as session:
+        ds = (
+            await session.execute(
+                select(QaTesterDataset).where(QaTesterDataset.id == ds_id).with_for_update()
+            )
+        ).scalar_one()
+        if ds.estado == "listo":
+            ds.error = motivo
+            ds.actualizado_en = datetime.now(UTC)
+        await session.flush()
+        salida = await _a_dict(session, ds)
+    log.info("qa_datos_agent_os_actualizado", admin_id=str(admin.id), slug=slug, listo=motivo is None)
+    salida["contrasenas"] = None
+    return salida
+
+
 async def preparar(admin: Admin) -> dict[str, Any]:
-    """Crea el negocio de prueba del tester con sus datos y cuentas. Devuelve las
-    contraseñas en claro **una sola vez**."""
+    """Crea el negocio de prueba del tester con sus datos y cuentas y lo deja listo para el
+    Agent OS (HU-QA-09). Devuelve las contraseñas en claro **una sola vez**. Con los datos ya
+    listos, solo pone al día el Agent OS (`contrasenas` = None)."""
     from core.admin.collaborators_service import apply_pack_roles
     from core.alta_negocio import onboard_tenant
+    from core.qa import datos_aos
 
     _exigir_habilitado()
+    listo = await _actualizar_agent_os(admin)
+    if listo is not None:
+        return listo
     ds = await _reclamar(admin)
     try:
         nombre = f"QA · {admin.username or _corto(admin.id)}"
@@ -395,6 +441,8 @@ async def preparar(admin: Admin) -> dict[str, Any]:
         await _vincular(ds.tenant_id, ids["colaborador"], "colaborador")
         await _permisos_colaborador(ds.tenant_id, ids["colaborador"])
         pasos = await _sembrar(ds.tenant_id, correo_de("gestor", admin.id))
+        # Agent OS (HU-QA-09): nunca lanza salvo 409 por otra corrida; devuelve el motivo.
+        motivo_aos = await datos_aos.preparar(ds.tenant_id, ds.slug)
     except Exception as exc:
         mensaje = exc.mensaje if isinstance(exc, QaError) else "Falló la preparación; vuelve a intentarlo."
         async with get_session() as session:
@@ -430,7 +478,7 @@ async def preparar(admin: Admin) -> dict[str, Any]:
             # Otra corrida retomó la preparación (esta pasó el plazo): manda la otra.
             raise QaError("conflicto", "Otra preparación de tus datos tomó el relevo. Recarga la página.")
         fila.estado = "listo"
-        fila.error = None
+        fila.error = motivo_aos
         fila.actualizado_en = datetime.now(UTC)
         await session.flush()
         salida = await _a_dict(session, fila)

@@ -16660,7 +16660,7 @@
           "admin · centro de pruebas"
         ],
         "summary": "Preparar Mis Datos",
-        "description": "Prepara el negocio de prueba del tester con sus datos y cuentas. 409 si ya existe.",
+        "description": "Prepara el negocio de prueba del tester con sus datos y cuentas (201, con las contraseñas)\ny lo deja listo para el Agent OS. Si ya está preparado, solo pone al día el Agent OS: 200 sin\ncontraseñas (HU-QA-09). 409 si hay otra preparación en curso.",
         "operationId": "preparar_mis_datos_api_v1_admin_qa_datos_post",
         "parameters": [
           {
@@ -16683,6 +16683,16 @@
         "responses": {
           "201": {
             "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaDatos"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Ya estaba preparado: solo se puso al día el Agent OS.",
             "content": {
               "application/json": {
                 "schema": {
@@ -32685,6 +32695,17 @@
             ],
             "title": "Error"
           },
+          "agent_os": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QaDatosAgentOS"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Solo con los datos listos y el negocio vivo."
+          },
           "negocio": {
             "$ref": "#/components/schemas/QaDatosNegocio"
           },
@@ -35110,6 +35131,115 @@
           "phrases"
         ],
         "title": "Superpower"
+      },
+      "QaDatosAgentOS": {
+        "properties": {
+          "estado": {
+            "type": "string",
+            "enum": [
+              "listo",
+              "pendiente",
+              "error"
+            ],
+            "title": "Estado"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo",
+            "description": "Por qué no quedó listo; se reintenta con «Preparar mis datos»."
+          },
+          "chat_web": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QaDatosChatWeb"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "agentes": {
+            "items": {
+              "$ref": "#/components/schemas/QaDatosAgente"
+            },
+            "type": "array",
+            "title": "Agentes",
+            "description": "Agentes con instancia en el chat web."
+          }
+        },
+        "type": "object",
+        "required": [
+          "estado"
+        ],
+        "title": "QaDatosAgentOS",
+        "description": "Agent OS del negocio de prueba (HU-QA-09): v3 con procedimientos, agentes del preset v2\nen el chat web y enrutamiento activo."
+      },
+      "QaDatosAgente": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "rol": {
+            "type": "string",
+            "title": "Rol",
+            "description": "Coordinador, Especialista o Backoffice."
+          },
+          "por_defecto": {
+            "type": "boolean",
+            "title": "Por Defecto"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "nombre",
+          "rol",
+          "por_defecto"
+        ],
+        "title": "QaDatosAgente"
+      },
+      "QaDatosChatWeb": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave",
+            "description": "Clave pública del widget (`/w/<clave>`)."
+          },
+          "enlace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enlace",
+            "description": "`LANDING_BASE_URL/w/<clave>`, para conversar como cliente."
+          },
+          "activo": {
+            "type": "boolean",
+            "title": "Activo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave",
+          "activo"
+        ],
+        "title": "QaDatosChatWeb"
       }
     }
   }
