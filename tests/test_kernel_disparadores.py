@@ -71,6 +71,11 @@ def test_el_golden_tiene_al_menos_60_casos_y_procedimientos_que_existen() -> Non
 # trae, "el plan empresarial", y "cómo pago el plan anual"). La meta de R3 es recall ≥ 0,85 por
 # procedimiento; el piso de este test es 0,80 para no ajustar el golden al léxico. Se sube con más
 # ejemplos en el pack o en `procedures[].overrides.examples` del agente (ADR-0138).
+# HU-AOS-22 (2026-10-19) suma las tres frases del dogfooding de solvershub: contratar_plan queda en
+# 12/14 (0,86) y cambiar_plan en 11/11. «cuánto cuesta el plan basic» no tiene procedimiento aquí,
+# pero con el catálogo real de solvershub (con tomar_pedido y sin promesa_de_pago) el IDF cambia y
+# va a cambiar_plan: se corrige con ejemplos propios de Ventas desde el editor (runbook de
+# solvershub-comercial) y lo cubre `test_dogfooding_solvershub_ventas_agenda_y_suscripciones`.
 PISO_RECALL = 0.80
 
 

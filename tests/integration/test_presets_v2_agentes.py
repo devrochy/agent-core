@@ -190,6 +190,7 @@ async def test_instala_agentes_reglas_y_release_candidata_sin_activarla() -> Non
         ("preset_ventas_palabras", "ventas"),
         ("preset_agenda_palabras", "agenda"),
         ("preset_suscripciones_palabras", "suscripciones"),
+        ("preset_suscripciones_mi_plan", "suscripciones"),  # HU-AOS-22
     }
 
     # Release candidata con los cinco componentes, sin activar.
@@ -313,7 +314,7 @@ async def test_dry_run_no_escribe_y_reporta() -> None:
     assert {a.key: a.estado for a in reporte.agentes} == {
         "ventas": "creado", "agenda": "creado", "suscripciones": "creado",
     }
-    assert reporte.releases == {str(cid): "se construiría"} and len(reporte.reglas_nuevas) == 3
+    assert reporte.releases == {str(cid): "se construiría"} and len(reporte.reglas_nuevas) == 4
     assert await _foto(tid) == antes
 
 
@@ -437,7 +438,9 @@ async def test_reglas_solo_de_agentes_en_todas_las_conexiones() -> None:
     reporte = await _aplicar(tid)
     agenda = next(a for a in reporte.agentes if a.key == "agenda")
     assert agenda.instancias == {str(cid): "creada", str(otra): "sin_habilidades_en_la_conexion"}
-    assert set(reporte.reglas_nuevas) == {"preset_ventas_palabras", "preset_suscripciones_palabras"}
+    assert set(reporte.reglas_nuevas) == {
+        "preset_ventas_palabras", "preset_suscripciones_palabras", "preset_suscripciones_mi_plan",
+    }
     assert reporte.releases[str(cid)].isdigit()
     # Límite conocido de HU-AOS-16: el General de la conexión con instalaciones propias declara
     # todo lo del negocio y su build falla; se reporta por conexión sin tumbar la otra.

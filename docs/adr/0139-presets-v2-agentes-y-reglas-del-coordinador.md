@@ -198,3 +198,28 @@ El dueño también crea especialistas desde las plantillas en el panel (`core/ag
   (30 días); sin historial no se estima.
 - **Pendiente:** el límite de agentes del plan Free. No hay métrica de agentes en `core.billing.metrics` y no se
   inventa aquí.
+
+## Adenda (2026-10-19): cómo evolucionan las reglas de una plantilla y qué frases son del negocio (HU-AOS-22)
+
+El dogfooding de `solvershub` (preset `suscripciones`) mostró dos rutas malas con el ruteo encendido: «necesito
+cambiar mi plan al premium» no tocaba ninguna regla y el disparador quedaba sin margen (al General), y «cuánto
+cuesta el plan basic» se iba a Suscripciones por el ejemplo «cuánto me cuesta subir de plan» de `cambiar_plan`.
+Lo que se decidió (revisado por el arquitecto antes de codificar):
+
+- **Las reglas de una plantilla evolucionan con ids nuevos, nunca editando uno existente.** `agregar_reglas` se
+  salta los ids presentes y los de la lápida, así que un `keywordAny` editado no les llegaría a los negocios que
+  ya aplicaron el preset. `suscripciones` suma `preset_suscripciones_mi_plan` («cambiar mi plan», «mi plan
+  actual», «subir/bajar/cancelar/pausar mi plan»), que al reaplicar `presets-v2` queda al final de la lista.
+  Consecuencia aceptada (revisable): la regla de Ventas («precio») va antes, así que «cuál es el precio para
+  cambiar mi plan» la atiende Ventas; queda en un test.
+- **Las frases de un plan concreto o de un negocio van por el editor**, como `procedures[].overrides.examples`
+  del especialista (adenda HU-AOS-24), no en el pack ni en un artefacto en `TENANTS_ROOT` que el core lea: ese
+  sería un canal de configuración paralelo, sin validaciones del editor ni auditoría, que además se separa de
+  la versión del agente con el tiempo. Se descartó también subir ejemplos de precio a `contratar_plan`: el
+  golden de ruteo trata «¿cuánto cuesta el plan premium?» como pregunta sin procedimiento (la atiende el
+  agente por defecto) y la precisión de `contratar_plan` caía a 0,87.
+- `cambiar_plan` sigue siendo de Suscripciones (`pack_subscriptions`) y el General sigue por defecto (saludos y
+  respaldo); Ventas no lo declara.
+- **Pendiente (pack):** el ejemplo «cuánto me cuesta subir de plan» de `cambiar_plan` atrae preguntas de precio
+  de prospectos en un catálogo sin `promesa_de_pago` (cambia el IDF). Revisarlo con el golden de ruteo cuando se
+  toque `pack_subscriptions`.

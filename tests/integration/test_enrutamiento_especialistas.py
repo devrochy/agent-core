@@ -451,15 +451,13 @@ async def test_el_ruteo_exige_v3_y_volver_a_legacy_lo_apaga(_ruteo: None) -> Non
 
 
 # ---------------------------------------------------------------- punta a punta con los presets v2 (HU-AOS-46)
-async def test_preset_suscripciones_v2_con_ruteo_activo_de_punta_a_punta(_ruteo: None, monkeypatch: Any) -> None:
-    """`agent-core db presets-v2 --aplicar` (su función) crea Ventas, Agenda y Suscripciones con las
-    reglas `preset_*` del Coordinador; el build de la release no falla con `ruteo_invalido`; el
-    General (por defecto) también declara los procedimientos de los especialistas y aun así una
-    demo la atiende Agenda, por la regla o por el disparador."""
+async def _negocio_con_preset_suscripciones() -> tuple[uuid.UUID, uuid.UUID, Any, uuid.UUID, dict[str, Any]]:
+    """Negocio v3 con commerce, calendar y subscriptions, una conexión y `presets-v2 --aplicar`
+    (su función) del preset `suscripciones`. Devuelve (tid, conexión, reporte, id y manifiesto de
+    la release candidata, sin promover)."""
     from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.presets.agentes import backfill_presets_v2
-    from core.releases.promocion import promover
     from core.releases.release_uno import backfill_releases
     from core.shared.tenant import tenant_scope
 
@@ -485,13 +483,43 @@ async def test_preset_suscripciones_v2_con_ruteo_activo_de_punta_a_punta(_ruteo:
 
     (reporte,) = await backfill_presets_v2(tenant_ids=[tid], preset_id="suscripciones", aplicar=True, modules=_modules())
     assert not reporte.fallo, reporte.errores
-    assert {a.key for a in reporte.agentes} >= {"ventas", "agenda", "suscripciones"}
-    assert set(reporte.reglas_nuevas) == {"preset_ventas_palabras", "preset_agenda_palabras", "preset_suscripciones_palabras"}
     numero = reporte.releases[str(cid)]
     assert numero.isdigit(), numero  # el build no falló (p. ej. con `ruteo_invalido`)
     ((candidata, manifest),) = await _sql(
         tid, "select id, manifest from connection_releases where connection_id = :c and number = :n", c=cid, n=int(numero)
     )
+    return tid, cid, reporte, candidata, manifest
+
+
+async def _instancias(tid: uuid.UUID, cid: uuid.UUID) -> dict[str, uuid.UUID]:
+    filas = await _sql(
+        tid,
+        "select a.key, i.id from agent_instances i join agents a on a.tenant_id = i.tenant_id and a.id = i.agent_id "
+        "where i.connection_id = :c and i.deleted_at is null",
+        c=cid,
+    )
+    return {k: i for k, i in filas}
+
+
+REGLAS_SUSCRIPCIONES = {
+    "preset_ventas_palabras",
+    "preset_agenda_palabras",
+    "preset_suscripciones_palabras",
+    "preset_suscripciones_mi_plan",
+}
+
+
+async def test_preset_suscripciones_v2_con_ruteo_activo_de_punta_a_punta(_ruteo: None, monkeypatch: Any) -> None:
+    """`agent-core db presets-v2 --aplicar` (su función) crea Ventas, Agenda y Suscripciones con las
+    reglas `preset_*` del Coordinador; el build de la release no falla con `ruteo_invalido`; el
+    General (por defecto) también declara los procedimientos de los especialistas y aun así una
+    demo la atiende Agenda, por la regla o por el disparador."""
+    from core.releases.promocion import promover
+    from core.shared.tenant import tenant_scope
+
+    tid, cid, reporte, candidata, manifest = await _negocio_con_preset_suscripciones()
+    assert {a.key for a in reporte.agentes} >= {"ventas", "agenda", "suscripciones"}
+    assert set(reporte.reglas_nuevas) == REGLAS_SUSCRIPCIONES
     async with tenant_scope(tid):
         await promover(tid, cid, candidata, actor="test")
     componentes = {c["agent_key"]: c for c in manifest["components"]}
@@ -499,13 +527,7 @@ async def test_preset_suscripciones_v2_con_ruteo_activo_de_punta_a_punta(_ruteo:
     assert CITA in declarados["agenda"] and CITA in declarados["general"]  # la ambigüedad existe
     assert componentes["general"]["is_default"] and not componentes["agenda"]["is_default"]
     await _modo(tid, "active")
-    filas = await _sql(
-        tid,
-        "select a.key, i.id from agent_instances i join agents a on a.tenant_id = i.tenant_id and a.id = i.agent_id "
-        "where i.connection_id = :c and i.deleted_at is null",
-        c=cid,
-    )
-    inst = {k: i for k, i in filas}
+    inst = await _instancias(tid, cid)
 
     # Por la regla del preset (palabra «agendar»).
     conv = await _conversacion(tid, cid)
@@ -527,3 +549,83 @@ async def test_preset_suscripciones_v2_con_ruteo_activo_de_punta_a_punta(_ruteo:
     await _turno(tid, tercera, monkeypatch, ["Hola."], texto="hola, buenas tardes")
     d = await _decision(tid, tercera)
     assert d["route_source"] == "default" and d["active_instance_id"] == str(inst["general"])
+
+
+# ---------------------------------------------------------------- dogfooding de solvershub (HU-AOS-22)
+# Frases propias de Ventas que solvershub publica desde el editor (runbook de solvershub-comercial,
+# `runbooks/agent-os-especialistas-solvershub.md`): nombres de sus planes y preguntas de precio.
+EJEMPLOS_VENTAS_SOLVERSHUB = [
+    "cuánto cuesta el plan basic",
+    "quiero contratar premium",
+    "qué precio tiene el plan empresarial",
+    "quiero empezar con el plan free",
+    "me interesa el plan premium",
+]
+
+
+async def _ejemplos_de_ventas(tid: uuid.UUID, ejemplos: list[str]) -> None:
+    """Versión nueva de Ventas con `overrides.examples` en `contratar_plan` (lo que hace el editor)."""
+    from core.agents import versiones
+    from core.kernel.procedures import catalogo_de_acciones
+    from core.shared.tenant import tenant_scope
+
+    ((aid, contenido),) = await _sql(
+        tid,
+        "select a.id, v.content from agents a join agent_versions v on v.tenant_id = a.tenant_id and v.agent_id = a.id "
+        "where a.key = 'ventas' order by v.version desc limit 1",
+    )
+    nuevo = dict(contenido)
+    nuevo["procedures"] = [
+        {**p, "overrides": {"examples": ejemplos}} if p["id"] == PLAN else p for p in nuevo["procedures"]
+    ]
+    async with tenant_scope(tid):
+        await versiones.publicar(tid, aid, catalogo=catalogo_de_acciones(_modules()), contenido=nuevo)
+
+
+async def _ruta(tid: uuid.UUID, cid: uuid.UUID, monkeypatch: Any, texto: str) -> dict[str, Any]:
+    conv = await _conversacion(tid, cid)
+    await _turno(tid, conv, monkeypatch, ["Claro."], texto=texto)
+    return await _decision(tid, conv)
+
+
+async def test_dogfooding_solvershub_ventas_agenda_y_suscripciones(_ruteo: None, monkeypatch: Any) -> None:
+    """HU-AOS-22: el negocio con el preset `suscripciones` v2 y las frases propias de Ventas.
+    En sombra atiende el General y se registra la ruta; en activo «quiero agendar una demo» va a
+    Agenda, «quiero contratar Premium» a Ventas, «cambiar mi plan» a Suscripciones y un saludo
+    al General. «cuánto cuesta el plan basic» se iba a Suscripciones (disparador de
+    cambiar_plan) hasta publicar las frases de Ventas."""
+    from core.releases.promocion import promover
+    from core.shared.tenant import tenant_scope
+
+    tid, cid, reporte, candidata, _manifest = await _negocio_con_preset_suscripciones()
+    assert set(reporte.reglas_nuevas) == REGLAS_SUSCRIPCIONES
+    async with tenant_scope(tid):
+        await promover(tid, cid, candidata, actor="test")
+    inst = await _instancias(tid, cid)
+    assert {"general", "ventas", "agenda", "suscripciones"} <= set(inst)
+
+    # Sombra: decide y registra, pero atiende el General (el de siempre).
+    await _modo(tid, "shadow")
+    d = await _ruta(tid, cid, monkeypatch, DEMO)
+    assert d["route_source"] == "default" and d["active_instance_id"] == str(inst["general"])
+    assert d["shadow_route"]["agent_key"] == "agenda" and d["shadow_route"]["rule_id"] == "preset_agenda_palabras"
+
+    # Activo, sin las frases de Ventas: la pregunta de precio cae en Suscripciones por el disparador.
+    await _modo(tid, "active")
+    d = await _ruta(tid, cid, monkeypatch, "cuánto cuesta el plan basic")
+    assert d["route_source"] == "trigger" and d["active_instance_id"] == str(inst["suscripciones"])
+
+    # Con las frases de Ventas publicadas y su release promovida.
+    await _ejemplos_de_ventas(tid, EJEMPLOS_VENTAS_SOLVERSHUB)
+    await _publicar_release(tid, cid)
+    esperados = [
+        (DEMO, "agenda", "rule", "preset_agenda_palabras"),
+        ("quiero contratar Premium", "ventas", "trigger", None),
+        ("cambiar mi plan", "suscripciones", "rule", "preset_suscripciones_mi_plan"),
+        ("cuánto cuesta el plan basic", "ventas", "trigger", None),
+        ("hola, buenas tardes", "general", "default", None),
+    ]
+    for texto, agente, fuente, regla in esperados:
+        d = await _ruta(tid, cid, monkeypatch, texto)
+        assert (d["route_source"], d["rule_id"]) == (fuente, regla), texto
+        assert d["active_instance_id"] == str(inst[agente]), texto
