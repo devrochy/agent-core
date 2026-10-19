@@ -154,3 +154,67 @@ resuscribir). `get_owned` no cambia: se usa con modelos sin `deleted_at`. Las co
 - Tests: `tests/integration/test_conexion_ciclo_de_vida.py` (los cinco escenarios, revivir y reclamo por otro
   negocio). Además, se actualizaron los tests que exigían el comportamiento viejo (borrado físico, 401 de una BYOK
   pausada, Activar sin diagnóstico).
+
+## Adenda 2026-10-19: la pausa también vale para las conexiones sin cuenta de Meta
+
+**Contexto.** HU-AOS-23 (agent-core #472) encontró que pausar una conexión manual o de WhatsApp Web
+(`channel_connections.active = false`) no la detenía: entraba el mensaje, corría la IA y salía la respuesta. ADR-0115
+§2 ya decía que el ciclo de vida de una conexión sin cuenta (manual, `waweb`, correo, chat web) es su `active` /
+`deleted_at`, pero la guarda de §2 solo miraba la cuenta de Meta (`cuenta_meta_de_conversacion`): para esas filas
+no había cuenta y no había pausa. El consumer resuelve la conexión por `external_id` sin mirar `active`, y
+`resolve_credentials` usaba las credenciales de la manual aunque estuviera desactivada.
+
+**Decisión.**
+
+1. **Guarda única ampliada** (`meta_connection_state.pausa_de_conversacion`, y `motivo_pausa_de_conversacion` que
+   deriva de ella). Si la conversación tiene `connection_id` y esa fila no tiene cuenta de Meta, está pausada si
+   `deleted_at` no es nulo («La conexión fue eliminada») o `active` es falso («La conexión está pausada»). Se
+   evalúa antes de la salida por `channel == "web"`: el chat web también es una conexión, y su `active` es el
+   «habilitado» del widget (el endpoint público ya responde `disabled`). La fila canónica de un número de Meta no
+   tiene estado propio: su `active` no cuenta y manda la cuenta, como antes. Una fila ilegible (otro negocio) no
+   pausa, como antes. Lee la fila una vez, con `tenant_id` explícito además de RLS.
+2. **Entrada.** Igual que la pausa de Meta: el inbound **se guarda** (el dueño lo ve al reanudar y el historial
+   queda completo), no corre la IA ni el horario ni las keywords, y queda `blocked_by = connection_paused` en
+   `core_decisions`. El debounce revisa lo mismo antes del LLM. El push a los dueños, una vez al día por conexión,
+   dice «Conexión pausada» (el tipo manual no es necesariamente WhatsApp; la cuenta de Meta sigue con «WhatsApp
+   desactivado»), y el payload `core.connection_paused` suma `scope: "meta_account" | "connection"` para
+   distinguir a qué id apunta `connectionId`.
+3. **Salida.** Todos los caminos ya pasaban por la guarda, así que quedan cubiertos sin tocarlos: `send_to_conversation`
+   (respuestas del turno y en vuelo por `kernel/egress`, crons de pack-commerce y pack-calendar, escalamiento y
+   fuera de horario), `send_template_to_conversation`, `send_interactive_to_conversation`, la tarea `outbound_send`
+   (lo encolado antes de pausar falla sin escalar), los avisos por evento (cobranza, suscripciones) y las respuestas
+   del operador (409 `connection_paused`). El correo ya salía solo por una conexión activa
+   (`get_active_connection`). `resolve_credentials` sigue sin mirar `active`/`deleted_at` de las filas sin cuenta:
+   la defensa es la guarda, que corre antes en los cuatro llamadores.
+4. **Sin filtrar `active` en el consumer.** Si el consumer ignorara la conexión pausada, la conversación quedaría
+   sin ruta y `resolve_credentials` caería a la primaria o al `.env`: la respuesta saldría desde otro número, justo
+   lo que prohíbe §3.
+5. **Sin bandera.** Corrige una guarda que ya corre sin bandera en `politicas_de_entrada`; con todas las conexiones
+   activas el resultado es idéntico. Revisado por el agente `arquitecto` («procede con cambios»): un interruptor
+   global apagaría la pausa de todos los negocios para rescatar a uno. La vuelta atrás es revertir el cambio.
+6. **Consola** (`/conexiones`): `pausable` también para las conexiones manuales y de WhatsApp Web
+   (`pause_scope = "connection"`, endpoint `POST /admin/connections/{id}/action`, auditado como
+   `connection.paused` / `connection.resumed`). El chat web se sigue pausando en Configuración → Chat web.
+
+**Consecuencias.**
+
+- **`choque_manual`.** Un negocio que pasó de una conexión manual a Embedded Signup con el mismo número y
+  **desactivó** (sin eliminar) la manual vieja: esa fila gana la resolución (`conexion_canonica.py`) y ahora la
+  conversación queda en silencio, con el push «Conexión pausada». Antes respondía. Es el comportamiento esperado
+  (la fila está pausada), pero hay que detectarlo antes de desplegar: `backfill_conexiones(dry_run=True)` informa los
+  choques por negocio, y la consulta del PR lista las conexiones sin cuenta `active = false AND deleted_at IS NULL`
+  con entradas en los últimos 30 días. Corrección operativa: eliminar la manual obsoleta y correr
+  `backfill-conexiones` del negocio. Seguimiento: que `asegurar_conexion_del_numero` religue una manual inactiva del
+  mismo número en vez de devolver `choque_manual`.
+- **Residual de WhatsApp Web.** El outbox `waweb:outbox:<tenant>` es por negocio, no por conexión: un job que el
+  conector ya tomó y espera su delay anti-baneo (segundos) puede salir aunque la pausa llegue en ese intervalo. No
+  se cubre.
+- **Conversaciones viejas sin `connection_id`** (de antes de la conexión canónica, en un canal manual o `waweb`): la
+  guarda solo ve el puente `meta_connection_id`, que ahí es nulo, así que un envío proactivo no queda cubierto hasta
+  que entre el siguiente mensaje (el consumer les pone la conexión). Ya pasaba antes. Antes de desplegar, contar las
+  conversaciones abiertas con `connection_id IS NULL` y canal distinto de `web`, y correr el backfill si hay.
+- Si la pausa llega a mitad de un turno, `kernel/egress` ve el envío fallido y escala con `send_failed`, como ya
+  pasaba con la cuenta de Meta.
+- Revisado por `auditor-multitenant` y `security-reviewer`: sin hallazgos bloqueantes ni altos. Ningún cliente
+  (APK, panel) consume todavía `core.connection_paused`, así que sumar `scope` no rompe nada.
+- Tests: `tests/integration/test_pausa_conexion_propia.py` y `tests/test_pausa_de_conversacion.py`.

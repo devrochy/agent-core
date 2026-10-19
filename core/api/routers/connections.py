@@ -183,7 +183,10 @@ class ConsoleConnection(BaseModel):
     meta_connection_id: uuid.UUID | None
     health: Literal["ok", "degraded", "error", "paused", "pending"]
     pause_scope: Literal["meta_account", "connection", "webchat_settings"]
-    pausable: bool = Field(description="La consola ofrece pausar: hoy solo la cuenta de Meta (ADR-0122).")
+    pausable: bool = Field(description=(
+            "La consola ofrece pausar: la cuenta de Meta y las conexiones manuales o de WhatsApp Web "
+            "(ADR-0122 y su adenda 2026-10-19). El chat web se pausa en Configuración → Chat web."
+        ))
     coordinator: ConsoleAgent | None
     agents: list[ConsoleAgent] = Field(description="Especialistas y back-office, sin el Coordinador.")
     active_release: ConsoleRelease | None

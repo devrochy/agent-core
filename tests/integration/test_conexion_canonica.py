@@ -330,7 +330,7 @@ async def test_lo_que_entra_por_la_conexion_pausada_se_guarda_sin_ia_y_avisa_con
                 "media": "[]", "media_context": "",
             }
         )
-    assert avisos == [{"type": "core.connection_paused", "connectionId": str(cuenta)}]
+    assert avisos == [{"type": "core.connection_paused", "connectionId": str(cuenta), "scope": "meta_account"}]
 
 
 # ---------------------------------------------------------------- credenciales por el número

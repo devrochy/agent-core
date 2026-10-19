@@ -5,7 +5,7 @@ textos que antes de mudarlas. Cada bloqueo deja su decisión en `core_decisions`
 (`core.kernel.decisions`).
 
 - **Al entrar el mensaje** (`politicas_de_entrada`, la llama el consumer después de guardar el
-  inbound): conexión de Meta pausada o eliminada (ADR-0122), kill-switch en tres niveles o
+  inbound): conexión pausada o eliminada (ADR-0122 y su adenda), kill-switch en tres niveles o
   conversación escalada, palabras de escalamiento y horario de atención (ADR-0051).
 - **Al disparar un turno diferido** (`conexion_pausada`, la llama el debounce): la conexión se
   pausó después de agendar el turno.
@@ -100,23 +100,28 @@ async def politicas_del_turno(conversation: Any, spec: Any) -> Bloqueo | None:
 async def conexion_pausada(
     conversation: Any, *, avisar_duenos: bool = True, evento: str = "inbound_conexion_pausada"
 ) -> bool:
-    """Conexión de Meta pausada o eliminada (ADR-0122): el mensaje ya quedó guardado y no corre
-    la IA. `avisar_duenos` manda el push a los dueños (una vez al día por conexión); al
-    disparar un turno diferido no se avisa otra vez. `evento` es el nombre del log."""
+    """Conexión pausada o eliminada (ADR-0122 y su adenda 2026-10-19): la cuenta de Meta o la
+    propia conexión sin cuenta (manual, WhatsApp Web, correo, chat web). El mensaje ya quedó
+    guardado y no corre la IA. `avisar_duenos` manda el push a los dueños (una vez al día por
+    conexión); al disparar un turno diferido no se avisa otra vez. `evento` es el nombre del log."""
     # Imports en la llamada: los tests parchean `core.gateway.meta_connection_state`.
     from core.gateway.meta_connection_state import (
         avisar_mensaje_en_conexion_pausada,
-        cuenta_meta_de_conversacion,
-        motivo_pausa_de,
+        pausa_de_conversacion,
     )
 
-    cuenta = await cuenta_meta_de_conversacion(conversation)
-    if cuenta is None or (motivo := await motivo_pausa_de(cuenta)) is None:
+    pausa = await pausa_de_conversacion(conversation)
+    if pausa is None:
         return False
-    log.info(evento, conversation_id=str(conversation.id), motivo=motivo)
+    log.info(evento, conversation_id=str(conversation.id), motivo=pausa.motivo, alcance=pausa.alcance)
     await bloquear(conversation, "connection_paused", status="silent")
     if avisar_duenos:
-        await avisar_mensaje_en_conexion_pausada(conversation.tenant_id, cuenta, motivo)
+        if pausa.alcance == "meta_account":
+            await avisar_mensaje_en_conexion_pausada(conversation.tenant_id, pausa.id, pausa.motivo)
+        else:
+            await avisar_mensaje_en_conexion_pausada(
+                conversation.tenant_id, pausa.id, pausa.motivo, alcance=pausa.alcance
+            )
     return True
 
 
