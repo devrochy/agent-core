@@ -1010,6 +1010,20 @@ async def _ejecutar_comando(conversation: Conversation, motor: ContextoMotor, to
     return resultado
 
 
+def resultado_auditable(herramienta: Any, nombre: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Lo que `audit_log` guarda del resultado de una tool: el resultado completo, o su
+    `resumen_de_auditoria` si la tool lo define (ADR-0145 §4: solo ids y puntajes de los fragmentos
+    de documentos, que se pueden borrar). Fail-closed: si el resumen falla, no se guarda nada."""
+    resumen = getattr(herramienta, "resumen_de_auditoria", None)
+    if resumen is None:
+        return result
+    try:
+        return resumen(result)
+    except Exception:
+        log.warning("tool_audit_summary_failed", tool=nombre)
+        return {"resumen_fallido": True}
+
+
 async def _execute_tool_safely(
     conversation: Conversation,
     customer: Customer,
@@ -1024,6 +1038,8 @@ async def _execute_tool_safely(
     from core.plugin_manager import plugin_manager
 
     declarative = {t.name: t for t in tools_for_spec(spec)} if spec is not None else {}
+    agente = release_vigente.agente_del_turno()
+    conocimiento = agente.content.get("knowledge") if agente is not None else None
     context = new_tool_context(
         conversation_id=conversation.id,
         customer_id=customer.id,
@@ -1032,6 +1048,10 @@ async def _execute_tool_safely(
         http=_http_for_tool(tool_call.name, declarative),
         # `memory.writeNamespaces` del agente en foco (ADR-0114 §3, HU-AOS-15); None en legacy.
         write_namespaces=release_vigente.write_namespaces_del_turno(),
+        # Identidad del agente en foco y su `knowledge` congelado (ADR-0145 §5); None en legacy.
+        agent_id=agente.agent_id if agente is not None else None,
+        agent_version_id=agente.version_id if agente is not None else None,
+        knowledge=conocimiento if isinstance(conocimiento, dict) else None,
     )
 
     # Enablement + consentimiento de la tool por tenant (ADR-0019). Aunque las
@@ -1152,7 +1172,9 @@ async def _execute_tool_safely(
         }
     # HU-AOS-47: procedencia del registro que creó la acción (solo tools registradas que la
     # declaran, solo con release v3; best-effort). Antes de `tras_accion`, que transforma `result`.
-    await procedencia.registrar(mcp_host.get_tool(tool_call.name), result, conversation.id)
+    herramienta = mcp_host.get_tool(tool_call.name)
+    await procedencia.registrar(herramienta, result, conversation.id)
+    auditado = resultado_auditable(herramienta, tool_call.name, result)
     await record_audit(
         actor=f"tool:{tool_call.name}",
         action="execute",
@@ -1163,7 +1185,9 @@ async def _execute_tool_safely(
         # Se incluye `_tool_name` para que `_historical_tool_results` pueda
         # reconstruir qué tools se llamaron en turnos anteriores (lo usa el
         # guardrail declarativo `required_tool`, ADR-0051).
-        output_data={**result, TOOL_NAME_KEY: tool_call.name},
+        # Con `resumen_de_auditoria`, solo ids y puntajes (ADR-0145 §4: borrar un documento
+        # borra su texto; la auditoría no lo conserva).
+        output_data={**auditado, TOOL_NAME_KEY: tool_call.name},
     )
     if motor is not None:
         result = await motor.tras_accion(tool_call.name, argumentos, result, previo)

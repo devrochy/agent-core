@@ -39,7 +39,8 @@ def test_spec_sin_knowledge_sigue_validando() -> None:
 
 def test_knowledge_por_defecto() -> None:
     spec = AgentSpecV3.model_validate({"model": MODELO, "knowledge": {}})
-    assert spec.knowledge == KnowledgeConfigV3(mode="hibrida", topK=4, minScore=0.35)
+    # `minScore` None: el pack usa el umbral calibrado de cada modo (ADR-0145, parte 3).
+    assert spec.knowledge == KnowledgeConfigV3(mode="hibrida", topK=4, minScore=None)
 
 
 @pytest.mark.parametrize(

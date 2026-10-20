@@ -202,13 +202,18 @@ class MiSkill(BaseSkill):
 
     async def mi_tool(self, arguments: dict, context: ToolContext) -> dict:
         # context: conversation_id, customer_id, idempotency_key, channel, http,
-        # write_namespaces (writeNamespaces del agente v3; None en el runtime legacy)
+        # write_namespaces (writeNamespaces del agente v3; None en el runtime legacy),
+        # agent_id, agent_version_id y knowledge (agente v3 en foco y su bloque `knowledge`
+        # congelado, ADR-0145; None en legacy o sin release)
         # ¡Inyectados por el core! El LLM NUNCA los ve ni los controla.
         return {"status": "ok"}
 ```
 
 Reglas de las tools:
 - El handler es una **corrutina** que devuelve un dict JSON-serializable.
+- **Auditoría:** el resultado completo va a `audit_log`. Si devuelve contenido que el negocio puede
+  borrar (p. ej. fragmentos de documentos), define `MCPTool.resumen_de_auditoria` para guardar solo
+  ids y puntajes (ADR-0145 §4). El LLM sigue recibiendo el resultado completo.
 - **Idempotencia obligatoria en escrituras**: usa `context.idempotency_key` con un
   UNIQUE en tu tabla (ver `crear_lead` en pack_commerce).
 - **Memoria del cliente**: el perfil (`customers.attributes`) es proyección de

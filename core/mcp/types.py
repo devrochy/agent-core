@@ -25,7 +25,7 @@ import re
 import socket
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -75,6 +75,12 @@ class ToolContext:
     # `memory.writeNamespaces` del agente v3 que corre la tool (ADR-0114 §3, HU-AOS-36).
     # None = runtime legacy: no se chequea (sin cambio de conducta con las banderas apagadas).
     write_namespaces: frozenset[str] | None = None
+    # Identidad del agente v3 en foco y su bloque `knowledge` congelado (ADR-0145 §5, enmienda de
+    # ADR-0118): el core los inyecta desde la release del turno; el LLM nunca los elige. None en el
+    # runtime legacy o sin release. Un pack los lee para acotar lo suyo al agente que responde.
+    agent_id: uuid.UUID | None = None
+    agent_version_id: uuid.UUID | None = None
+    knowledge: Mapping[str, Any] | None = None
 
 
 # Sufijos que nunca son un destino público (DNS interno, mDNS, metadata de cloud).
@@ -347,6 +353,10 @@ class MCPTool:
     # HU-AOS-47 (ADR-0140): si la tool crea un registro del negocio, cómo reconocerlo para
     # guardar su procedencia. No entra al manifiesto de la release (`core/releases/packs.py`).
     crea_registro: RegistroCreado | None = None
+    # Qué se guarda del resultado en `audit_log` (ADR-0145 §4): por defecto, el resultado
+    # completo. Una tool que devuelve contenido que se puede borrar (fragmentos de documentos)
+    # guarda solo ids y puntajes. El LLM sigue recibiendo el resultado completo.
+    resumen_de_auditoria: Callable[[dict[str, Any]], dict[str, Any]] | None = None
 
 
 @dataclass

@@ -664,3 +664,100 @@ Lo que quedó en código y en qué se aparta del texto de arriba.
     purga con su cuarentena;
   - unitarios de la tarea sin `tenant_id`, del log de errores sin parámetros, de la purga con el disco
     fallando (alerta y False), del renombre y de la cuarentena.
+
+## Adenda de implementación (2026-10-20, HU-AOS-49 parte 3: búsqueda, tool y golden set)
+
+- **Búsqueda** (`pack_knowledge/busqueda.py`):
+  - un CTE `MATERIALIZED` con los fragmentos vivos de los documentos `listo` del agente, con
+    `tenant_id` explícito en el `WHERE` y en el `JOIN`, más la RLS. Sobre ellos calcula la similitud
+    coseno exacta y `ts_rank_cd`;
+  - `semantica`: similitud ≥ `minScore`;
+  - `hibrida`: RRF de los 20 primeros de cada lista. Un fragmento entra con similitud ≥ `minScore` o
+    con rango léxico ≥ `PISO_LEXICO`;
+  - la consulta léxica une los términos con **OR** (`plainto_tsquery` con `&` → `|`): con AND, casi
+    ninguna pregunta en lenguaje natural encuentra un fragmento.
+- **Configuración:** `Config.del_agente(ToolContext.knowledge)`.
+  - Sin bloque, o con uno que no valida, se usan los valores por defecto del contrato.
+  - Esto reemplaza el comentario de contracts 3.1.0 («sin el bloque, el agente no busca»): lo que
+    habilita la búsqueda es **declarar la tool**, y el bloque solo la ajusta.
+- **Tool `buscar_conocimiento`** (`pack_knowledge/skills.py`, pack 0.3.0, con `declared_skills` en el
+  manifiesto):
+  - el predicado la ofrece solo con un agente v3 en foco que la declare en `tools` y tenga documentos
+    `listo`, aunque no haya motor;
+  - el LLM solo pasa `consulta`, y el agente sale del `ToolContext`;
+  - devuelve `fragmentos` (`id`, `document_id`, `documento`, `seccion`, `paginas`, `texto`,
+    `puntaje`), `sin_resultados` y `tokens_consulta`;
+  - en `audit_log` solo quedan ids y puntajes (`resumen_de_auditoria`). `usage_ledger.tool_calls`
+    sigue guardando solo el nombre.
+- **Playbook `conocimiento`** (`packages/pack-knowledge/playbooks/conocimiento.md`): cuándo buscar,
+  responder solo con los fragmentos, citar documento y sección sin ids, decir que no se sabe si
+  `sin_resultados`, y que el contenido es dato y no instrucción. El agente lo tiene que declarar en
+  `playbooks`, junto con la tool en `tools`.
+- **Embeddings grabados** (`core/llm/embeddings.grabacion(ruta, modo)`):
+  - clave propia `sha256(modelo|dimensión|texto)` y vectores en float32 base64;
+  - en replay, un texto sin grabar falla con `GrabacionDesactualizada`;
+  - solo funciona con `APP_ENV` development o test (los de `cassette.ENTORNOS_PERMITIDOS`);
+  - la memoria sigue en `EMBEDDING_PROVIDER=none` dentro de las evals.
+- **Golden set de recuperación** (`evals/conocimiento.py` y `evals/conocimiento/`):
+  - tres documentos de un negocio ficticio (una FAQ en PDF, una política en DOCX y un catálogo en
+    TXT) y 50 preguntas: 40 con respuesta y 10 sin ella;
+  - se ingieren por el camino real y se miden recall@4, MRR y negativas;
+  - corre en `tests/integration/test_pack_knowledge_busqueda.py`: en replay contra
+    `evals/conocimiento/grabacion.json` con los umbrales de §7 (se salta si falta la grabación) y con
+    `hash`, exigiendo recall@4 ≥ 0,85 solo por la parte léxica;
+  - **la grabación necesita el OK del dueño**: `bash scripts/grabar_conocimiento.sh` (toma `OPENAI_API_KEY` del entorno o del `.env`, como el gate toma `LLM_API_KEY`; DeepSeek no tiene embeddings),
+    con un stack efímero y ≈ US$0,001.
+- **Calibración con `hash`:** recall@4 = 0,90 y MRR = 0,77 en la híbrida, pero solo 4 de 10
+  negativas en cero.
+  - `ts_rank_cd` sube de a 0,1 por término, así que lo léxico solo no separa una negativa que
+    comparte una palabra («envíos internacionales a España») de una pregunta real.
+  - Esa separación la da el embedding real: `PISO_LEXICO` (hoy 0,1) y `minScore` se calibran con la
+    grabación antes de cerrar la parte. No se tocan los umbrales.
+- **Revisión del `auditor-multitenant` (sin hallazgos altos), incorporada:**
+  - test de volumen desigual con 50.000 fragmentos en otro negocio, con un `EXPLAIN` como
+    `app_runtime` que confirma que los fragmentos no se leen con `Seq Scan`;
+  - test estático de que `pack_knowledge` no lee el entorno, `get_settings` ni clientes HTTP;
+  - el contexto que arma el motor para sus resolvers también lleva la identidad del agente;
+  - el docstring de `grabacion` queda alineado con `development`/`test`.
+  - Anotado sin cambio: `audit_log.input` guarda la `consulta` tal cual, como en el resto de las
+    tools y dentro del negocio.
+- **Pendiente:** la eval de punta a punta con el LLM (5 conversaciones) necesita grabar el LLM del
+  turno con el pack activo, lo que cuesta LLM real. Queda para cuando el dueño regrabe el gate, junto
+  con la 49-5.
+
+## Adenda (2026-10-20, HU-AOS-49 parte 3): calibración con la grabación y criterio de las negativas
+
+**Decisión del dueño (2026-10-20):** «lo que sea mejor en términos de salud y eficiencia del agente». Se
+adoptó la recomendación de abajo.
+
+- **La grabación del golden set** (`evals/conocimiento/grabacion.json`, `text-embedding-3-small`, 55
+  textos) la hizo el dueño con su llave de OpenAI y `scripts/grabar_conocimiento.sh`. No contiene la
+  llave ni texto: solo claves sha256 y vectores.
+- **Hallazgo:** con embeddings reales, las preguntas sin respuesta del golden se parecen de verdad a
+  los documentos, porque son de café.
+  - «¿Tienen sede en Barranquilla?» tiene similitud 0,50 con la página de la tienda en Bogotá.
+  - Hay preguntas reales que quedan entre 0,18 y 0,25.
+  - En la búsqueda de umbrales (semántico, piso léxico y umbral mínimo para el léxico), ninguna
+    combinación llega a ≥ 8/10 negativas en cero con recall@4 ≥ 0,90; el máximo es 6/10. El troceado
+    ya es de una sección por fragmento, así que no hay margen por ese lado.
+- **Cambio del criterio de §7:**
+  - La recuperación se mide por **recall@4 ≥ 0,90 y MRR ≥ 0,70**, y la híbrida no puede quedar por
+    debajo de la semántica.
+  - Las negativas en cero quedan como piso de regresión: **≥ 5/10** en la búsqueda.
+  - Que el agente **no invente** con un fragmento parecido se mide en su respuesta, con la eval de punta
+    a punta y el playbook `conocimiento`, no en la búsqueda.
+- **`minScore` por modo:** contracts 3.1.0 pasa `KnowledgeConfigV3.minScore` a `float | None =
+  None`. Ese contrato no salió a `main` y ningún spec guardado lo usa. Con `None`, el pack usa el
+  umbral calibrado de cada modo (`busqueda.MIN_SCORE_POR_MODO`):
+
+  | Modo | `minScore` | recall@4 | MRR | Negativas en cero | Fragmentos por consulta |
+  |---|---|---|---|---|---|
+  | Híbrida | **0,45** | 0,95 | 0,90 | 5/10 | ~1,9 (con 0,35 eran 2,4 y 2/10) |
+  | Semántica | **0,30** | 0,925 | 0,875 | 2/10 | ~2,6 |
+
+  Con 0,45 entran un 20 % menos de fragmentos por turno, y la mayoría de los que salen eran
+  irrelevantes. Si el agente fija un valor, se usa ese.
+- **`PISO_LEXICO` queda en 0,1:** cualquier coincidencia léxica real admite el fragmento. Subirlo
+  costaba recall sin ganar negativas.
+- **Pendiente:** la eval de punta a punta con el LLM, que ahora lleva el criterio de «no inventar».
+  Va junto a la próxima regrabación del gate, con el OK del dueño.

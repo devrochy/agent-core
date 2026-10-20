@@ -10,6 +10,8 @@ aparte, la memoria. Un pack no puede importar de otro, así que vive acá.
     semántica no significa nada, pero la búsqueda híbrida sigue encontrando por la parte léxica.
   - `openai`: `text-embedding-3-small` (1536 dimensiones), solo con `APP_ENV=production`. Fuera
     de producción se usa `hash` con un aviso: nada de llamadas reales en develop.
+  - `grabado` (solo evals y fuera de producción, `grabacion(ruta, modo)`): los vectores de `text-embedding-3-small`
+    guardados en un archivo; en replay un texto sin grabar falla y nunca sale a la red.
 - **Ledger:** cada lote de **ingesta** escribe una fila `usage_ledger` con `kind='embedding'`,
   el tenant del `tenant_scope` vigente (nunca de un argumento), `cost_usd` real y `credits = 0`
   (el dueño decidió absorber los embeddings, ADR-0145 §3). Las consultas no escriben fila: su
@@ -19,14 +21,20 @@ aparte, la memoria. Un pack no puede importar de otro, así que vive acá.
 
 from __future__ import annotations
 
+import base64
+import contextvars
 import hashlib
+import json
 import math
 import re
+import struct
 import unicodedata
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 from typing import Literal, Protocol
 
 import httpx
@@ -146,7 +154,90 @@ class _OpenAI:
         return vectores, tokens
 
 
+# ------------------------------------------------------------------ grabado (evals)
+class _Grabado:
+    """Embeddings de `text-embedding-3-small` guardados en un archivo (evals, ADR-0145 §3).
+
+    Clave propia, `sha256(modelo|dimensión|texto)`: sin el normalizador de `core/llm/cassette.py`,
+    que reemplaza datos por marcadores y haría coincidir textos distintos. Los vectores van en
+    float32 base64 (exactos y ~4 veces más chicos que en JSON).
+
+    - `replay`: un texto sin grabar falla (`GrabacionDesactualizada`) y nunca sale a la red.
+    - `record`: los textos que faltan se piden a OpenAI con la llave que pasa el runner (la
+      grabación es una llamada real: la hace el dueño o se hace con su OK) y se guardan al salir.
+    """
+
+    modelo = MODELO_OPENAI
+
+    def __init__(self, ruta: Path, modo: Literal["record", "replay"], api_key: str | None) -> None:
+        self.ruta = ruta
+        self.modo = modo
+        self._api_key = api_key
+        self._datos: dict[str, dict[str, object]] = (
+            json.loads(ruta.read_text(encoding="utf-8")) if ruta.is_file() else {}
+        )
+        self.cambiado = False
+
+    @staticmethod
+    def clave(texto: str) -> str:
+        return hashlib.sha256(f"{MODELO_OPENAI}|{DIMENSION}|{texto}".encode()).hexdigest()
+
+    async def embeber(self, textos: Sequence[str]) -> tuple[list[list[float]], int]:
+        faltan = [t for t in dict.fromkeys(textos) if self.clave(t) not in self._datos]
+        if faltan:
+            if self.modo != "record" or not self._api_key:
+                from core.llm.cassette import GrabacionDesactualizada
+
+                raise GrabacionDesactualizada(
+                    f"{len(faltan)} texto(s) sin grabar en {self.ruta.name}: regrabar con el OK del dueño"
+                )
+            vectores, _ = await _OpenAI(self._api_key).embeber(faltan)
+            for texto, vector in zip(faltan, vectores, strict=True):
+                self._datos[self.clave(texto)] = {
+                    "v": base64.b64encode(struct.pack(f"<{DIMENSION}f", *vector)).decode("ascii"),
+                    "t": _tokens_estimados(texto),
+                }
+            self.cambiado = True
+        salida: list[list[float]] = []
+        tokens = 0
+        for texto in textos:
+            fila = self._datos[self.clave(texto)]
+            salida.append(list(struct.unpack(f"<{DIMENSION}f", base64.b64decode(str(fila["v"])))))
+            tokens += int(fila.get("t") or 0)  # type: ignore[call-overload]
+        return salida, tokens
+
+    def guardar(self) -> None:
+        if self.cambiado:
+            self.ruta.parent.mkdir(parents=True, exist_ok=True)
+            self.ruta.write_text(json.dumps(self._datos, sort_keys=True, indent=0) + "\n", encoding="utf-8")
+
+
+_forzado: contextvars.ContextVar[_Grabado | None] = contextvars.ContextVar("knowledge_embeddings_grabado", default=None)
+
+
+@contextmanager
+def grabacion(ruta: Path, modo: Literal["record", "replay"], *, api_key: str | None = None) -> Iterator[_Grabado]:
+    """Usa la grabación `ruta` para los embeddings del conocimiento mientras dure el bloque. Solo
+    los runners de evals, y solo con `APP_ENV` development o test (`cassette.ENTORNOS_PERMITIDOS`)."""
+    from core.llm.cassette import ENTORNOS_PERMITIDOS, GrabacionProhibida
+
+    entorno = (get_settings().app_env or "").lower()
+    if entorno not in ENTORNOS_PERMITIDOS:
+        raise GrabacionProhibida(f"grabación de embeddings no permitida con APP_ENV={entorno!r}")
+    grabado = _Grabado(ruta, modo, api_key)
+    token = _forzado.set(grabado)
+    try:
+        yield grabado
+    finally:
+        _forzado.reset(token)
+        if modo == "record":
+            grabado.guardar()
+
+
 def _proveedor() -> _Proveedor:
+    forzado = _forzado.get()
+    if forzado is not None:
+        return forzado
     settings = get_settings()
     if settings.knowledge_embedding_provider == "openai":
         if settings.app_env != "production":
@@ -237,5 +328,6 @@ __all__ = [
     "EmbeddingsError",
     "costo_usd",
     "embeber_conocimiento",
+    "grabacion",
     "vector_hash",
 ]

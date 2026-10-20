@@ -442,6 +442,8 @@ def _contexto_de_herramienta(conversation_id: uuid.UUID, customer_id: uuid.UUID,
     from core.mcp.host import new_tool_context
     from core.shared import release_vigente
 
+    agente = release_vigente.agente_del_turno()
+    conocimiento = agente.content.get("knowledge") if agente is not None else None
     return new_tool_context(
         conversation_id=conversation_id,
         customer_id=customer_id,
@@ -449,6 +451,10 @@ def _contexto_de_herramienta(conversation_id: uuid.UUID, customer_id: uuid.UUID,
         channel=channel,
         # Mismo permiso de memoria que el loop (ADR-0114 §3, HU-AOS-15); None en legacy.
         write_namespaces=release_vigente.write_namespaces_del_turno(),
+        # Misma identidad del agente en foco que el loop (ADR-0145 §5); None en legacy.
+        agent_id=agente.agent_id if agente is not None else None,
+        agent_version_id=agente.version_id if agente is not None else None,
+        knowledge=conocimiento if isinstance(conocimiento, dict) else None,
     )
 
 
