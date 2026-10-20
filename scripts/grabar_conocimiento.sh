@@ -51,10 +51,39 @@ export TENANTS_ROOT="$TENANTS"
 export LLM_API_KEY=""
 
 PY="${PYTHON:-python}"
-export PYTHONPATH="${RAIZ}${PYTHONPATH:+:$PYTHONPATH}"
+# El código de ESTE checkout primero (core, contratos y packs), aunque el venv sea de otro checkout.
+# Los packs que ese venv no tiene instalados (p. ej. pack_knowledge) se registran con un dist-info
+# temporal, para que `plugin_manager.scan()` los encuentre y corra sus migraciones.
+METADATOS="$(mktemp -d)"
+trap 'limpiar; rm -rf "$METADATOS"' EXIT
+PAQUETES="$(ls -d "$RAIZ"/packages/*/ | tr '\n' ':')"
+export PYTHONPATH="${RAIZ}:${PAQUETES}${METADATOS}${PYTHONPATH:+:$PYTHONPATH}"
+"$PY" - "$RAIZ" "$METADATOS" <<'PYEOF'
+import importlib.metadata as md
+import pathlib
+import sys
+import tomllib
+
+raiz, destino = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+for pyproject in sorted(raiz.glob("packages/pack-*/pyproject.toml")):
+    proyecto = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]
+    try:
+        md.distribution(proyecto["name"])
+        continue
+    except md.PackageNotFoundError:
+        pass
+    puntos = proyecto.get("entry-points", {}).get("agent_core.plugins", {})
+    info = destino / f"{proyecto['name'].replace('-', '_')}-{proyecto['version']}.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {proyecto['name']}\nVersion: {proyecto['version']}\n")
+    (info / "entry_points.txt").write_text("[agent_core.plugins]\n" + "".join(f"{k} = {v}\n" for k, v in puntos.items()))
+    (info / "RECORD").write_text("")
+PYEOF
 # `get_settings()` lee el `.env` del directorio actual: el de ENV_DIR si se indica.
 cd "${ENV_DIR:-$RAIZ}"
-"$PY" -m cli.main db migrate >/dev/null
-"$PY" "$RAIZ/scripts/init_db.py" >/dev/null
+echo "Migrando la base efímera…"
+"$PY" -m cli.main db migrate >"$METADATOS/migrar.log" 2>&1 || { cat "$METADATOS/migrar.log"; exit 1; }
+"$PY" "$RAIZ/scripts/init_db.py" >"$METADATOS/init.log" 2>&1 || { cat "$METADATOS/init.log"; exit 1; }
+echo "Grabando los embeddings del golden set…"
 "$PY" "$RAIZ/evals/conocimiento.py" --grabar
 echo "Grabación lista: $RAIZ/evals/conocimiento/grabacion.json (commitearla)."
