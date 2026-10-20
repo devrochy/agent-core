@@ -12,7 +12,7 @@
   "escena": "25-escalamiento-monto-alto",
   "formato": 1,
   "herramientas": {
-    "7fec2c1c210d3258": [
+    "a935001d09573054": [
       {
         "description": "Devuelve el perfil estructurado del cliente (nombre, contacto y atributos guardados). Úsala antes de personalizar. Es de solo lectura.",
         "name": "get_customer_profile",
@@ -420,8 +420,20 @@
         "name": "escalate_to_human",
         "parameters": {
           "properties": {
+            "detalle": {
+              "description": "Detalle del motivo, sobre todo si es 'otro'",
+              "type": "string"
+            },
             "reason": {
               "description": "Motivo de la escalación",
+              "enum": [
+                "solicitud_cliente",
+                "queja",
+                "fuera_de_alcance",
+                "intentos_fallidos",
+                "monto_alto",
+                "otro"
+              ],
               "type": "string"
             },
             "summary": {
@@ -505,9 +517,9 @@
   },
   "llamadas": [
     {
-      "clave": "0bd575de7ca6d86c7a26b7902979ce9d2362a35ca22ccb2fffcf420f5cf39b52",
+      "clave": "b177a3cba4359cac7c315f48fbd70f7add0c885cdabe65b00847555b5374b449",
       "pedido": {
-        "herramientas": "7fec2c1c210d3258",
+        "herramientas": "a935001d09573054",
         "max_tokens": 4096,
         "mensajes": [
           {
@@ -532,21 +544,21 @@
       },
       "respuestas": [
         {
-          "content": "¡Hola! Con gusto te ayudo 😊\n\nAntes de armar el pedido, necesito revisar el catálogo real y los precios. Aunque me digas que el total supera los dos millones, igual tengo que validarlo con la herramienta, así que déjame consultar.\n\nUna cosa importante: si el total efectivamente supera el umbral de aprobación, ese pedido necesita el visto bueno de un asesor humano, así que lo más probable es que tenga que pasarte con una persona.\n\n¿Me confirmás tu nombre para ir registrándote? Mientras, reviso el inventario.",
+          "content": "¡Hola! Con gusto te ayudo con esa compra.\n\nPara armarte la cotización con precios reales, primero déjame consultar el catálogo y, si me cuentas, ¿qué productos y cantidades exactas quieres incluir? El catálogo completo puede ser bastante, así que necesito el detalle.",
           "model": "deepseek-flash",
           "stop_reason": "tool_use",
           "tool_calls": [
             {
               "arguments": {},
-              "id": "call_00_gU4DeWmP4ziTwX7gtuXt6723",
+              "id": "call_00_Kl9xx8A4jKDvu0SymdK25356",
               "name": "consultar_inventario"
             }
           ],
           "usage": {
             "cache_read_tokens": 7168,
             "cache_write_tokens": 0,
-            "input_tokens": 7330,
-            "output_tokens": 161
+            "input_tokens": 7396,
+            "output_tokens": 97
           }
         }
       ],
