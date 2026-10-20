@@ -164,7 +164,7 @@ async def _primer_turno(session, tenant_id: uuid.UUID) -> datetime | None:  # ty
         await session.execute(
             select(UsageLedger.created_at)
             # Subir un documento (fila `embedding`, ADR-0145 §3) no es responder un turno.
-            .where(UsageLedger.tenant_id == tenant_id, UsageLedger.kind != "embedding")
+            .where(UsageLedger.tenant_id == tenant_id, UsageLedger.kind.not_in(("embedding", "generacion")))
             .order_by(UsageLedger.created_at)
             .limit(1)
         )

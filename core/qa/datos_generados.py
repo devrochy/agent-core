@@ -269,10 +269,12 @@ def _entrada(negocio: Negocio, agente: Agente, forma: FormaDeDatos) -> str:
 async def _registrar_consumo(tenant_id: uuid.UUID, proveedor: Any, respuesta: Any, agente: Agente) -> None:
     from core.billing.tarifario import TARIFARIO_VIGENTE, creditos_por_evento, trm_vigente
 
-    uso = respuesta.usage
-    costo = Decimal(str(proveedor.estimate_cost_usd(uso.input_tokens, uso.output_tokens)))
-    trm = trm_vigente()
+    # Medir nunca rompe la generación: un proveedor sin tarifas (el fake de DEMO_MODE) cuenta 0.
     try:
+        uso = respuesta.usage
+        estimar = getattr(proveedor, "estimate_cost_usd", None)
+        costo = Decimal(str(estimar(uso.input_tokens, uso.output_tokens))) if estimar else Decimal("0")
+        trm = trm_vigente()
         async with get_session() as session:
             session.add(
                 UsageLedger(

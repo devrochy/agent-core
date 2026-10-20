@@ -169,6 +169,9 @@ async def test_generar_regenerar_y_borrar_catalogo(app_client, monkeypatch, qa_o
         tid, "select credits, key_mode from usage_ledger where tenant_id = :t and kind = 'generacion'", t=tid
     )
     assert len(ledger) == 1 and ledger[0][1] == "platform" and ledger[0][0] is not None
+    # La generación no es un turno: no suma actividad al General (ADR-0146).
+    overview = (await app_client.get(f"{_BASE}/overview", headers=h)).json()
+    assert all(a["turns"] == 0 for a in overview["items"]), overview
 
     r = await app_client.post(f"{_BASE}/{ventas}/datos-de-prueba", headers=h)
     assert r.status_code == 201, r.text
