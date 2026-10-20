@@ -195,6 +195,7 @@ Columnas A/W/B: la variable va en la API, el worker o el beat. Fuente de verdad 
 | `LLM_API_KEY` | ✓ | ✓ | ✓ | proveedor: llave **propia de producción**, con tope de gasto; nunca la de test |
 | `OPENAI_API_KEY` | ✓ | ✓ | ✓ | proveedor: llave de producción (respaldo `gpt-4o-mini` y embeddings `openai`) |
 | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, `MEMORY_RETENTION_DAYS` | ✓ | ✓ | ✓ | heredada: la dimensión tiene que coincidir con los vectores migrados |
+| `KNOWLEDGE_EMBEDDING_PROVIDER` | ✓ | ✓ | ✓ | fijo: `openai` en producción (usa `OPENAI_API_KEY`, `text-embedding-3-small`); sin definir en test, que queda en `hash` (sin red ni costo). Fuera de `APP_ENV=production` siempre es `hash` (ADR-0145 §3) |
 | `WHATSAPP_VERIFY_TOKEN` | ✓ | ✓ | ✓ | heredada: es el que Meta tiene registrado |
 | `WHATSAPP_APP_SECRET` | ✓ | ✓ | ✓ | heredada: firma del webhook (fail-closed, HU-ARCH-05) |
 | `WEBHOOK_ALLOW_UNSIGNED` | ✓ | ✓ | ✓ | fijo: `false` (`core/config.py:128-131`) |

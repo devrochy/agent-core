@@ -47,7 +47,8 @@ def codes(issues: list[Any]) -> list[str]:
 
 # ------------------------------------------------------------------ paquete
 def test_major_3_y_sin_espejo_ts() -> None:
-    assert __version__ == "3.0.0"
+    # 3.1.0: `knowledge` opcional (ADR-0145, adenda de ADR-0113 del 2026-10-20).
+    assert __version__ == "3.1.0"
     assert not (REPO / "packages" / "contracts" / "src").exists()
     assert not (REPO / "packages" / "contracts" / "package.json").exists()
     # `AgentSpec` sigue siendo el v2: lo leen el loop legacy, los presets y el alta.

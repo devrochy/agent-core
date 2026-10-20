@@ -145,6 +145,11 @@ class Settings(BaseSettings):
     embedding_model: str = Field(default="all-MiniLM-L6-v2", alias="EMBEDDING_MODEL")
     embedding_dimensions: int = Field(default=384, alias="EMBEDDING_DIMENSIONS")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    # Embeddings del pack de conocimiento (ADR-0145 §3), aparte de los de la memoria: `hash` es
+    # determinista y sin red (develop, CI y test); `openai` solo con `APP_ENV=production`.
+    knowledge_embedding_provider: Literal["hash", "openai"] = Field(
+        default="hash", alias="KNOWLEDGE_EMBEDDING_PROVIDER"
+    )
     # Retención de la memoria semántica en días (ADR-0053). 0 = sin purga automática.
     memory_retention_days: int = Field(default=0, alias="MEMORY_RETENTION_DAYS")
 

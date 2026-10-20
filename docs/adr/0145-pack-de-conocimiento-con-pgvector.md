@@ -527,3 +527,70 @@ Dependencias:
   - `design.md` de SPEC-31 pasa a `pack_knowledge_*`;
   - el inventario se corrige: `rag_top_k` es por agente y de la memoria, no un ajuste global;
   - las variables de producción van al catálogo de pruebas.
+
+## Adenda de implementación (2026-10-20, HU-AOS-49 parte 1: modelo y embeddings)
+
+Lo que quedó en código y en qué se aparta del texto de arriba.
+
+- **Pack `pack-knowledge` 0.1.0**, con `plugin_id = "pack_knowledge"` (la convención de los ids de los
+  packs, no `knowledge`).
+  - Todavía no registra tools ni rutas, así que instalado no cambia lo que hace ningún agente.
+  - Aparece en el catálogo de habilidades como «Conocimiento», con la guía «en preparación».
+  - Su versión está en `packages/pack-versions.lock.json`.
+- **Migraciones del pack:**
+  - una sola, `pack_knowledge_0001`: tablas, FK compuesta, checks, índices btree que empiezan por
+    `tenant_id`, GIN parcial sobre `tsv`, RLS habilitada y forzada con la policy, `unaccent` y
+    `public.es_unaccent`, y la exigencia de pgvector ≥ 0.8;
+  - FORCE va en la misma migración (lo exige el hook `migraciones-rls`), no en una 0002 aparte como en
+    los packs viejos.
+  - No hay índice HNSW (§1).
+  - Probadas sobre la imagen del CI (`solvershub-postgres:pg17-postgis`, pgvector 0.8.7).
+- **Imagen:** `docker/postgres/Dockerfile` queda fijo en `pgvector/pgvector:0.8.7-pg17`. El compose local
+  pasa a etiquetar la imagen `pg17-pgvector-postgis`.
+- **Servicio `core/llm/embeddings.py`:**
+  - `embeber_conocimiento(textos, proposito, document_id)` con los proveedores `hash` (por defecto) y
+    `openai`.
+  - `openai` solo funciona con `APP_ENV=production`. Fuera de producción se usa `hash` con un aviso.
+  - El entorno de test no necesita variable: el valor por defecto es `hash`, como decidió el dueño. En
+    producción va `KNOWLEDGE_EMBEDDING_PROVIDER=openai`.
+  - El proveedor `grabado` de las evals llega con la parte 3.
+- **Precio:** va en `PRECIOS_EMBEDDINGS` (US$0,02 por millón de tokens), **no en `PRICING`**. El editor
+  arma el catálogo de modelos de un agente desde `PRICING`, y un modelo de embeddings no es elegible.
+- **Fila del ledger de la ingesta:**
+  - `kind='embedding'`, con `credits = 0` y `key_mode = platform`;
+  - además `tarifario_version` y `trm_cop`, porque `ck_usage_credits_completos` (ADR-0144) los exige
+    cuando hay `credits`;
+  - `turn_id` y `conversation_id` van en NULL;
+  - `result = {proposito, document_id}`, sin texto.
+- **Lectores del ledger:**
+  - filtran **`kind != 'embedding'`**, no `kind = 'turn'`, para no cambiar lo que hoy cuentan las filas
+    `eval` o `agent_run`;
+  - son `costs.py` y `views.py` (total de turnos y costo por conversación), `data_por_agente.py`
+    (actividad y consumo por agente) y `primeros_pasos/calculo.py` (primer turno);
+  - las sumas de costo del negocio (`costo_llm_usd`, el tablero) **sí** incluyen los embeddings, porque
+    son gasto de LLM.
+- **Topes:**
+  - `PACK_LIMIT_KEYS = {documentos, conocimiento_mb}` en `core/billing/plans.py`, con los valores de
+    §2. No son métricas del registro, así que no salen en las barras de consumo de `/admin/plan`. Sí
+    salen en la comparación de planes (`plans[].limits`).
+  - El core suma `enforcement.enforce_pack_growth(tenant, key, contar, incremento, session)`: toma el
+    advisory lock antes de contar y responde 409 `plan_limit_<clave>`.
+  - El pack cuenta lo suyo en `pack_knowledge/limites.py` (`exigir_cupo`). La subida de la parte 2 lo
+    usa.
+- **Contrato:** `agentcore-contracts` 3.1.0, con la adenda de ADR-0113 del 2026-10-20.
+  - **No se poda** `knowledge` cuando la habilidad no está en la release: el bloque es inerte sin la tool
+    declarada.
+  - El texto de §4 («el lector tolerante y el editor podan») queda así reemplazado. Podarlo borraría la
+    configuración de un agente al desinstalar y reinstalar la habilidad.
+- **Revisión del `auditor-multitenant` (sin hallazgos altos), incorporada:**
+  - `app_runtime` tiene solo `SELECT`, `INSERT` y `UPDATE` en las dos tablas: `revoke all` más
+    `grant` explícito, sin `DELETE` (invariante 8);
+  - `enforce_pack_growth` rechaza un `tenant_id` distinto del `tenant_scope` vigente;
+  - `exigir_cupo` toma el tenant del scope;
+  - hay tests del `WITH CHECK` con scope activo (insertar y mover a otro negocio) y de los permisos.
+- **Tests:**
+  - unitarios: `tests/test_embeddings_conocimiento.py` y `tests/test_pack_knowledge_limites_y_contrato.py`;
+  - de integración, con la marca `aislamiento`: `tests/integration/test_pack_knowledge_aislamiento.py`.
+    Cubre RLS forzada y la policy, que otro negocio o una sesión sin negocio vean 0 filas, la FK
+    compuesta, los índices por `tenant_id`, `tsv` sin tildes, el orden por coseno y la fila del ledger
+    con el tenant del scope.
