@@ -6,7 +6,7 @@ las MISMAS funciones de la operación (sin duplicar su lógica):
 1. **Chat web activo** con su clave (`chat_web_conexion.guardar_widget`, igual que
    Configuración → Chat web): reutiliza la clave si ya existe y agrega el origen de
    `LANDING_BASE_URL`, que sirve `/w/<clave>`. Las demás conexiones no se tocan.
-2. **Backfills** de conexiones, agentes y releases (`agent-core db backfill-*`).
+2. **Backfills** de conexiones, agentes y releases (`migracion_v3.ejecutar_backfills`).
 3. **`migrar_a_v3(construir=True)`**, como `agent-core db migrar-a-v3 --tenant … --construir`.
 4. **Agentes del preset v2** (`aplicar_agentes`) con un manifiesto en memoria: las plantillas
    `AGENTES` (Ventas y Agenda, con las keys de sus plantillas). Ningún preset de archivo encaja con
@@ -14,8 +14,8 @@ las MISMAS funciones de la operación (sin duplicar su lógica):
    Nunca toca agentes que ya existan (los que creó el tester en el editor, p. ej. Cobranza).
 5. **Release activa** en cada conexión conversacional (`construir` + `promover`, que pasa el
    gate): el tester es el dueño de su negocio de prueba y pulsar el botón es su decisión.
-6. **`aos_procedures = true` y `aos_routing = 'active'`** en un solo UPDATE con el rol dueño,
-   acotado en la misma consulta al slug `qa-` del tester.
+6. **`aos_procedures = true` y `aos_routing = 'active'`** con `aos_fijar_banderas` y el rol
+   dueño, en la misma transacción que comprueba el slug `qa-` del tester.
 
 Solo con `QA_TESTERS_ENABLED` y `AOS_CONNECTION_ROUTING`, y solo en el negocio de la fila del
 tester. Idempotente: cada paso lo es. Si un paso falla, se guarda el motivo
@@ -132,18 +132,11 @@ async def _chat_web(tenant_id: uuid.UUID) -> None:
 
 
 async def _backfills(tenant_id: uuid.UUID, modulos: list[Any]) -> None:
-    from core.agents.backfill_agentes import backfill_agentes
-    from core.gateway.conexion_canonica_backfill import backfill_conexiones
-    from core.releases.release_uno import backfill_releases
+    from core.releases.migracion_v3 import ejecutar_backfills
 
-    await backfill_conexiones(dry_run=False, tenant_id=tenant_id)
-    agentes = await backfill_agentes(dry_run=False, tenant_id=tenant_id, modules=modulos)
-    if agentes.fallo:
-        problema = (*agentes.bloqueados, *agentes.errores)[0]
-        raise FalloAgentOS(f"backfill de agentes: {problema.mensaje[:300]}")
-    releases = await backfill_releases(dry_run=False, tenant_id=tenant_id, modules=modulos)
-    if releases.fallo:
-        raise FalloAgentOS(f"backfill de releases: {releases.errores[0].mensaje[:300]}")
+    motivo = await ejecutar_backfills(tenant_id, modulos)
+    if motivo:
+        raise FalloAgentOS(motivo)
 
 
 async def _a_v3(tenant_id: uuid.UUID, modulos: list[Any]) -> None:
@@ -197,9 +190,12 @@ async def _activar_releases(tenant_id: uuid.UUID, modulos: list[Any]) -> None:
 
 
 async def _banderas(tenant_id: uuid.UUID, slug: str) -> None:
-    """`aos_procedures` y `aos_routing = 'active'` con el rol dueño (`tenants` no la escribe
-    `app_runtime`, ADR-0112). La consulta misma exige el slug `qa-` del tester y `v3`."""
+    """`aos_procedures` y `aos_routing = 'active'` con el rol dueño (`aos_fijar_banderas` sin
+    admin solo acepta esa sesión, migración 0097). En la misma transacción se bloquea la fila y se
+    exige el slug `qa-` del tester y `v3`."""
     from sqlalchemy.ext.asyncio import create_async_engine
+
+    from core.kernel.banderas import BanderasAOS, BanderasRechazadas, fijar_banderas
 
     url = get_settings().migrations_database_url
     if not url:
@@ -207,15 +203,23 @@ async def _banderas(tenant_id: uuid.UUID, slug: str) -> None:
     engine = create_async_engine(url)
     try:
         async with engine.begin() as conn:
-            resultado = await conn.execute(
-                text(
-                    "UPDATE tenants SET aos_procedures = true, aos_routing = 'active' WHERE id = :t AND slug = :s "
-                    "AND slug LIKE 'qa-%' AND deleted_at IS NULL AND aos_runtime = 'v3'"
-                ),
-                {"t": tenant_id, "s": slug},
-            )
-            if int(getattr(resultado, "rowcount", 0) or 0) != 1:
+            fila = (
+                await conn.execute(
+                    text(
+                        "SELECT 1 FROM tenants WHERE id = :t AND slug = :s AND slug LIKE 'qa-%' "
+                        "AND deleted_at IS NULL AND aos_runtime = 'v3' FOR UPDATE"
+                    ),
+                    {"t": tenant_id, "s": slug},
+                )
+            ).first()
+            if fila is None:
                 raise FalloAgentOS("no se pudieron encender los procedimientos y el enrutamiento")
+            try:
+                await fijar_banderas(
+                    conn, tenant_id, BanderasAOS(runtime="v3", procedimientos=True, ruteo="active"), actor=ACTOR
+                )
+            except BanderasRechazadas as exc:
+                raise FalloAgentOS(f"no se pudieron encender los procedimientos y el enrutamiento: {exc}") from None
     finally:
         await engine.dispose()
 
@@ -234,11 +238,10 @@ async def preparar(tenant_id: uuid.UUID, slug: str) -> str | None:
     if not get_settings().aos_connection_routing:
         return "AOS_CONNECTION_ROUTING está apagada en este entorno: el negocio sigue en el motor anterior."
     async with get_session() as candado:
-        tomado = (
-            await candado.execute(
-                text("SELECT pg_try_advisory_xact_lock(hashtextextended('qa_aos:' || :t, 0))"), {"t": str(tenant_id)}
-            )
-        ).scalar_one()
+        from core.kernel.banderas import CANDADO_SQL
+
+        # El mismo candado que el panel del master (HU-AOS-15): no se intercalan backfills ni builds.
+        tomado = (await candado.execute(text(CANDADO_SQL), {"t": str(tenant_id)})).scalar_one()
         if not tomado:
             raise QaError("conflicto", "Tu negocio de prueba se está preparando para el Agent OS. Espera un momento.")
         try:

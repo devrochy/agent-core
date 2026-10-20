@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, uniq
+from _api_helpers import api_headers, banderas_como_dueno, uniq
 from sqlalchemy import text
 
 pytestmark = [
@@ -55,9 +55,9 @@ async def _negocio(aos_runtime: str = "legacy") -> uuid.UUID:
             text("insert into tenants (id, name, slug) values (:id, :n, :s)"),
             {"id": tid, "n": "AOS-12 API", "s": uniq("aos12-api")},
         )
-        if aos_runtime == "v3":
-            # `v3` exige AOS_CONNECTION_ROUTING (ADR-0112); el CHECK de BD solo mira el orden.
-            await session.execute(text("update tenants set aos_runtime = 'v3' where id = :id"), {"id": tid})
+    if aos_runtime == "v3":
+        # `v3` exige AOS_CONNECTION_ROUTING (ADR-0112); el CHECK de BD solo mira el orden.
+        await banderas_como_dueno(tid, aos_runtime="v3")
     return tid
 
 

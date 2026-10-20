@@ -19,7 +19,7 @@ import uuid
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, uniq
+from _api_helpers import api_headers, banderas_como_dueno, uniq
 from sqlalchemy import text
 
 pytestmark = [
@@ -174,7 +174,7 @@ async def test_api_instalaciones_por_conexion(app_client) -> None:
     dueno = await api_headers(app_client, tid, email=await _dueno(tid), password=PASSWORD)
     assert [i["id"] for i in (await app_client.get(BASE, headers=dueno)).json()] == [instalada["id"]]
     assert (await app_client.delete(f"{BASE}/{instalada['id']}", headers=dueno)).status_code == 403
-    await _sql(None, "update tenants set aos_runtime = 'v3' where id = :t", t=tid)
+    await banderas_como_dueno(tid, aos_runtime="v3")
     assert (await app_client.delete(f"{BASE}/{instalada['id']}", headers=dueno)).status_code == 204
     assert (await app_client.delete(f"{BASE}/{instalada['id']}", headers=dueno)).status_code == 404
     assert (await app_client.get(BASE, headers=dueno)).json() == []
@@ -194,7 +194,7 @@ async def test_el_build_congela_solo_las_de_la_conexion_y_falla_cerrado(app_clie
     from core.shared.tenant import tenant_scope
 
     tid, cid = await _negocio(["pack_commerce", "pack_calendar"])
-    await _sql(None, "update tenants set aos_runtime = 'v3' where id = :t", t=tid)
+    await banderas_como_dueno(tid, aos_runtime="v3")
     master = await api_headers(app_client, tid)
     ((uno,),) = await _sql(tid, "select active_release_id from channel_connections where id = :c", c=cid)
     assert await _skills(tid, uno) == ["pack_calendar", "pack_commerce"]  # sin instalaciones: las del negocio

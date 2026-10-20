@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field
@@ -297,3 +297,145 @@ async def run_platform_meta_app(
     except readiness.EnqueueFailed as exc:
         raise ApiError(503, "enqueue_failed", str(exc)) from exc
     return await _platform_meta_app(principal)
+
+
+# ------------------------------------------------- Agent OS por negocio (HU-AOS-15)
+class AgentOSBanderas(BaseModel):
+    """Estado de las banderas del Agent OS de un negocio (ADR-0112, ADR-0138)."""
+
+    runtime: Literal["legacy", "v3"]
+    procedures: bool
+    routing: Literal["off", "shadow", "active"]
+
+
+class AgentOSCambio(BaseModel):
+    actor: str
+    fecha: datetime
+
+
+class AgentOSEstado(AgentOSBanderas):
+    # `AOS_CONNECTION_ROUTING` del entorno: v3 la exige (se cambia con un despliegue).
+    aos_connection_routing: bool
+    ultimo_cambio: AgentOSCambio | None = None
+
+
+class AgentOSObjetivo(AgentOSBanderas):
+    # Construir y promover una release nueva si la activa está desactualizada: cambia la release
+    # activa del negocio, por eso es opt-in explícito del master.
+    construir: bool = False
+
+
+class AgentOSResultado(BaseModel):
+    # sin_cambios | listo | por_preparar | bloqueado | aplicado
+    accion: str
+    antes: AgentOSBanderas
+    despues: AgentOSBanderas
+    aos_connection_routing: bool
+    pasos: list[str]
+    bloqueos: list[str]
+    avisos: list[str]
+
+
+def _require_master_agent_os(principal: Principal) -> None:
+    # Solo el master, también en test (decisión del dueño, 2026-10-20; excepción a ADR-0134 §2 como
+    # la purga): ni el tester ni un colaborador.
+    if not es_master(principal.admin):
+        raise ApiError.forbidden("Solo el admin master cambia el Agent OS de un negocio.")
+
+
+def _banderas_out(b: Any) -> AgentOSBanderas:
+    return AgentOSBanderas(runtime=b.runtime, procedures=b.procedimientos, routing=b.ruteo)
+
+
+def _resultado_out(r: Any) -> AgentOSResultado:
+    return AgentOSResultado(
+        accion=r.accion,
+        antes=_banderas_out(r.antes),
+        despues=_banderas_out(r.despues),
+        aos_connection_routing=r.aos_connection_routing,
+        pasos=r.pasos,
+        bloqueos=r.bloqueos,
+        avisos=r.avisos,
+    )
+
+
+@router.get("/tenants/{tenant_id}/agent-os", response_model=AgentOSEstado)
+async def get_agent_os(
+    tenant_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> AgentOSEstado:
+    """Banderas del Agent OS del negocio, la global del entorno y el último cambio (quién y cuándo)."""
+    _require_master_agent_os(principal)
+    from core.admin import agent_os
+    from core.config import get_settings
+
+    banderas = await agent_os.estado(tenant_id)
+    if banderas is None:
+        raise ApiError.not_found("Negocio no encontrado.")
+    cambio = await agent_os.ultimo_cambio(tenant_id)
+    return AgentOSEstado(
+        **_banderas_out(banderas).model_dump(),
+        aos_connection_routing=bool(get_settings().aos_connection_routing),
+        ultimo_cambio=AgentOSCambio(actor=cambio["actor"], fecha=cambio["fecha"]) if cambio else None,
+    )
+
+
+async def _agent_os(tenant_id: uuid.UUID, payload: AgentOSObjetivo, principal: Principal, *, aplicar: bool) -> AgentOSResultado:
+    _require_master_agent_os(principal)
+    from core.admin import agent_os
+    from core.kernel.banderas import BanderasAOS
+
+    objetivo = BanderasAOS(runtime=payload.runtime, procedimientos=payload.procedures, ruteo=payload.routing)
+    try:
+        if aplicar:
+            resultado = await agent_os.aplicar(
+                tenant_id,
+                objetivo,
+                construir=payload.construir,
+                admin_id=principal.admin.id,
+                actor=f"admin:{principal.admin.email}",
+            )
+        else:
+            resultado = await agent_os.simular(tenant_id, objetivo, construir=payload.construir, admin_id=principal.admin.id)
+    except agent_os.ObjetivoInvalido as exc:
+        raise ApiError(422, "agent_os_orden", str(exc)) from None
+    except agent_os.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    except agent_os.CambioEnCurso as exc:
+        raise ApiError(409, "agent_os_en_curso", str(exc)) from None
+    except agent_os.BanderasRechazadas as exc:
+        if exc.codigo == "permiso":
+            raise ApiError.forbidden(str(exc)) from None
+        raise ApiError(409, f"agent_os_{exc.codigo}", str(exc)) from None
+    salida = _resultado_out(resultado)
+    if aplicar and resultado.accion == "bloqueado":
+        # Fail-closed: nada se escribió en las banderas. El panel muestra los bloqueos.
+        raise ApiError(
+            409, "agent_os_bloqueado", "El negocio no está listo para ese cambio.", details=salida.model_dump()
+        )
+    return salida
+
+
+@router.post("/tenants/{tenant_id}/agent-os/simular", response_model=AgentOSResultado)
+async def simular_agent_os(
+    tenant_id: uuid.UUID,
+    payload: AgentOSObjetivo,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> AgentOSResultado:
+    """Dry-run del cambio: bloqueos, avisos y los pasos que aplicaría. No escribe nada (ni
+    backfills, ni releases, ni banderas). 422 `agent_os_orden` si el objetivo viola el orden."""
+    return await _agent_os(tenant_id, payload, principal, aplicar=False)
+
+
+@router.put("/tenants/{tenant_id}/agent-os", response_model=AgentOSResultado)
+async def put_agent_os(
+    tenant_id: uuid.UUID,
+    payload: AgentOSObjetivo,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> AgentOSResultado:
+    """Lleva el negocio al estado pedido (HU-AOS-15, orden de ADR-0112): al pasar a v3 corre los
+    backfills del negocio y `migrar-a-v3` (con `construir` si se pide); al volver a legacy apaga
+    todo. Escribe con `aos_fijar_banderas` (auditada). 422 `agent_os_orden` (combinación fuera de
+    orden), 409 `agent_os_bloqueado` (precondiciones; `details` trae bloqueos y avisos) o
+    `agent_os_en_curso` (otro cambio en curso)."""
+    return await _agent_os(tenant_id, payload, principal, aplicar=True)

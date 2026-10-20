@@ -101,11 +101,13 @@ async def reporte_de_sombra(tenant_id: uuid.UUID, dias: int = 7) -> Reporte:
 
 
 async def escribir_modo(tenant_id: uuid.UUID, modo: str, database_url: str | None = None) -> None:
-    """Fija `tenants.aos_routing` con el rol dueño (`tenants` no la escribe `app_runtime`,
-    ADR-0112). Exige `aos_runtime = 'v3'` para encenderla (el CHECK de 0094 también)."""
+    """Fija `tenants.aos_routing` con el rol dueño y `aos_fijar_banderas` (migración 0097; el
+    panel del master usa la misma función con su `admin_id`). Exige `aos_runtime = 'v3'` para
+    encenderla (la función y el CHECK de 0094 también)."""
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from core.config import get_settings
+    from core.kernel.banderas import BanderasAOS, fijar_banderas
 
     if modo not in MODOS:
         raise ValueError(f"modo inválido: {modo}")
@@ -115,17 +117,22 @@ async def escribir_modo(tenant_id: uuid.UUID, modo: str, database_url: str | Non
     engine = create_async_engine(url)
     try:
         async with engine.begin() as conn:
-            runtime = (
+            fila = (
                 await conn.execute(
-                    text("SELECT aos_runtime FROM tenants WHERE id = :t AND deleted_at IS NULL FOR UPDATE"),
+                    text("SELECT aos_runtime, aos_procedures FROM tenants WHERE id = :t AND deleted_at IS NULL FOR UPDATE"),
                     {"t": tenant_id},
                 )
-            ).scalar_one_or_none()
-            if runtime is None:
+            ).first()
+            if fila is None:
                 raise LookupError("negocio no encontrado")
-            if modo != "off" and runtime != "v3":
+            if modo != "off" and fila[0] != "v3":
                 raise ValueError("el enrutamiento exige aos_runtime = 'v3' (migrar-a-v3 primero)")
-            await conn.execute(text("UPDATE tenants SET aos_routing = :m WHERE id = :t"), {"m": modo, "t": tenant_id})
+            await fijar_banderas(
+                conn,
+                tenant_id,
+                BanderasAOS(runtime=str(fila[0]), procedimientos=bool(fila[1]), ruteo=modo),
+                actor="system:ruteo",
+            )
     finally:
         await engine.dispose()
 

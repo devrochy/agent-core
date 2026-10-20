@@ -120,4 +120,4 @@ Fuente única: el **KernelSpec del Coordinador** (`kernelspec/1`, `routing`), qu
   alguna regla los usa y el conteo de estabilidad solo si cambiaría el dueño.
 - **Pendientes:** embeddings y `trigger_embeddings` por release (P-19, cuando el golden lo justifique); coprocesador
   (P-16); la ventana de 7 días en sombra (operación); el DDL de design §4.3 (`shadow_route`, `aos_routing`) en
-  solvershub-docs; panel del master para la bandera.
+  solvershub-docs; ~~panel del master para la bandera~~ (hecho: adenda HU-AOS-15 de ADR-0112, 2026-10-20).

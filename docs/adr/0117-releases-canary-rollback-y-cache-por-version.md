@@ -204,7 +204,8 @@ sin `AOS_CONNECTION_ROUTING`) nada cambia: el gate en replay pasa sin regrabar.
   Enciende solo `aos_runtime`; `--volver` rechaza con `aos_procedures` encendida salvo
   `--apagar-procedimientos` (orden inverso de ADR-0112) y reporta las tareas gobernadas abiertas. Escribe las
   banderas con el rol dueño (`MIGRATIONS_DATABASE_URL`, como `sync-packs`); el setter `SECURITY DEFINER` de
-  la nota de la HU llega con el panel del master.
+  la nota de la HU llega con el panel del master (hecho: `aos_fijar_banderas`, migración 0097; adenda HU-AOS-15
+  de ADR-0112, 2026-10-20).
 - **Runbook (precondición de producto):** `AOS_CONNECTION_ROUTING` → por negocio: pass^4 antes
   (`evals/journeys.py --k 4`), `migrar-a-v3 --dry-run`, `migrar-a-v3`, pass^4 después con `--runtime v3`
   (igual o mejor; si no, `--volver`), una semana de observación; `aos_procedures` después, con su propio

@@ -22,7 +22,7 @@ import uuid
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, uniq
+from _api_helpers import api_headers, banderas_como_dueno, uniq
 from test_agentes_versionados import PASSWORD, _dueno, ventas_sin_secretos
 from test_backfill_agentes import _conexion, _legacy_y_settings, _modules, _sql
 from test_byok_produccion import GraphFalso, _alta, _byok_de_prueba, _instalar, _negocio, _num, _url
@@ -226,7 +226,7 @@ async def test_con_runtime_legacy_solo_el_master_escribe_instancias(app_client) 
     )
     assert (await app_client.get(_agents(cid), headers=h)).status_code == 200
 
-    await _sql(None, "update tenants set aos_runtime = 'v3' where id = :t", t=tid)
+    await banderas_como_dueno(tid, aos_runtime="v3")
     r = await app_client.post(_agents(cid), headers=h, json={"agent_id": ventas})
     assert r.status_code == 201, r.text
 
@@ -466,7 +466,7 @@ async def test_las_escrituras_piden_ver_la_conexion_y_no_cruzan_negocios_como_du
     tid, _c, _p, cid = await _con_agentes()
     otro, _c2, _p2, cid_otro = await _con_agentes()
     for negocio in (tid, otro):
-        await _sql(None, "update tenants set aos_runtime = 'v3' where id = :t", t=negocio)
+        await banderas_como_dueno(negocio, aos_runtime="v3")
     ventas = await _especialista(app_client, await api_headers(app_client, tid), "ventas")
 
     # Un dueño de este negocio (v3) no alcanza la conexión del otro.

@@ -224,6 +224,7 @@ def ruteo(
     import asyncio
 
     from cli.tenant_ref import resolve_tenant
+    from core.kernel.banderas import BanderasRechazadas
     from core.kernel.ruteo_sombra import escribir_modo
 
     async def _run() -> None:
@@ -231,7 +232,7 @@ def ruteo(
 
     try:
         asyncio.run(_run())
-    except (ValueError, LookupError, PermissionError) as exc:
+    except (ValueError, LookupError, PermissionError, BanderasRechazadas) as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from None
     console.print(f"aos_routing = {modo}")
