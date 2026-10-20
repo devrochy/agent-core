@@ -16,7 +16,7 @@ import os
 import uuid
 
 import pytest
-from _api_helpers import api_headers, uniq
+from _api_helpers import api_headers, banderas_como_dueno, uniq
 from test_agentes_versionados import PASSWORD
 from test_backfill_agentes import _conexion, _sql
 from test_instancias_por_conexion_api import _con_agentes, _especialista
@@ -52,7 +52,7 @@ async def _colaborador(tid: uuid.UUID, permisos: dict[str, str]) -> str:
 async def test_consola_muestra_coordinador_agentes_release_salud_y_consumo(app_client) -> None:
     tid, cuenta, _phone, cid = await _con_agentes()
     h = await api_headers(app_client, tid)  # master
-    await _sql(None, "update tenants set aos_routing = 'off' where id = :t", t=tid)
+    await banderas_como_dueno(tid, aos_routing="off")
 
     # Release 1 activa con Coordinador y General; luego se suma Ventas (pendiente de release).
     r = await app_client.post(f"/api/v1/admin/connections/{cid}/releases", headers=h, json={})

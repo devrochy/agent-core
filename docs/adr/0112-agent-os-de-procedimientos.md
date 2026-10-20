@@ -195,3 +195,37 @@ Tercera bandera por negocio, `tenants.aos_routing` (`off` | `shadow` | `active`,
 `aos_routing = 'off' OR aos_runtime = 'v3'`. Orden de encendido: `AOS_CONNECTION_ROUTING` → `aos_runtime = v3` →
 (`aos_procedures`) → `aos_routing`; `migrar-a-v3 --volver` la apaga en el mismo UPDATE. `route_source` deja de ser
 siempre `default` cuando está en `active`. Detalle en ADR-0138.
+
+## Adenda HU-AOS-15: panel del master y escritor único de las banderas (2026-10-20)
+
+Implementa lo que este ADR ya decidió («editable solo por el master; el panel rechaza las combinaciones
+inválidas»), criterio «Orden de banderas» de HU-AOS-15:
+
+- **Escritor único.** `aos_fijar_banderas(tenant, runtime, procedures, routing, admin_id, actor)` (migración
+  0097, `SECURITY DEFINER`, `search_path` fijo, `REVOKE ALL FROM PUBLIC`, `EXECUTE` a `app_runtime`) escribe
+  las tres banderas de una vez, valida el orden (procedimientos y enrutamiento exigen v3; los CHECK de 0070 y
+  0094 quedan de respaldo) y deja la fila `agent_os.banderas` de `audit_log` (antes, después y actor) en la
+  misma transacción. Con `admin_id` exige un admin activo `master` o `tester`; sin él, la sesión del rol
+  dueño (CLI `migrar-a-v3` y `ruteo`, «Preparar mis datos»). Todo pasa por `core.kernel.banderas.fijar_banderas`.
+  El `admin_id` no autentica (desde `app_runtime` se podría pasar el de cualquier master): da integridad a la
+  auditoría, porque el actor sale de `admins`. La autorización es la de la API.
+- **De convención a garantía.** «`app_runtime` no escribe las banderas» deja de ser un docstring: el trigger
+  `tenants_aos_banderas_guard` (`BEFORE INSERT OR UPDATE OF` las tres) rechaza el cambio si quien escribe no
+  es el dueño de `tenants` ni superusuario. Se descartó quitar `UPDATE (aos_*)` a `app_runtime`: tiene
+  `UPDATE` sobre toda la tabla (0003), un `REVOKE` por columna no le resta nada y acotar el GRANT por columnas
+  haría nacer sin permiso a cada columna nueva. Excepción conocida: los journeys de evals y algunos tests
+  escriben directo con el rol dueño, que el trigger permite.
+- **Rol.** Las rutas `/api/v1/admin/platform/tenants/{id}/agent-os` (GET, PUT y `/simular`) son de operación
+  (ADR-0134 §2): master, o tester con `QA_TESTERS_ENABLED`. Un colaborador o dueño de negocio recibe 403.
+- **Qué hace el PUT** (`core.admin.agent_os`): un planificador puro rechaza el objetivo fuera de orden (422) y
+  ordena los pasos (encender runtime → procedimientos → ruteo; apagar al revés). El orden rige las
+  **precondiciones**, no tres escrituras: se escribe el estado final en una sola llamada. Legacy → v3 corre
+  los backfills del negocio (idempotentes y neutros en legacy) y `migrar_a_v3` (fail-closed, 409 con los
+  bloqueos); `construir` (construye y promueve) es opt-in del master porque cambia la release activa. Volver a
+  legacy apaga todo. Apagar solo los procedimientos no fuerza el ruteo a `off` (el CHECK de 0094 solo pide v3).
+  Un candado por negocio, compartido con «Preparar mis datos», evita backfills o builds intercalados.
+- **Avisos, no bloqueos:** el pass^4 (HU-ARCH-28) antes de encender procedimientos; una semana en `shadow` con
+  `reporte-ruteo` antes de `active`; enrutamiento sin procedimientos (el reporte de sombra queda vacío y en
+  `active` las reglas `start` no inician nada). Rechazarlo cambiaría ADR-0138.
+- **Fuera de alcance:** apagar `AOS_CONNECTION_ROUTING` con negocios en v3 es un cambio de entorno, no de un
+  endpoint por negocio; el GET la muestra y el PUT bloquea v3 sin ella.

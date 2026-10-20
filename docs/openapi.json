@@ -8604,6 +8604,207 @@
         }
       }
     },
+    "/api/v1/admin/platform/tenants/{tenant_id}/agent-os": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Get Agent Os",
+        "description": "Banderas del Agent OS del negocio, la global del entorno y el último cambio (quién y cuándo).",
+        "operationId": "get_agent_os_api_v1_admin_platform_tenants__tenant_id__agent_os_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentOSEstado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Put Agent Os",
+        "description": "Lleva el negocio al estado pedido (HU-AOS-15, orden de ADR-0112): al pasar a v3 corre los\nbackfills del negocio y `migrar-a-v3` (con `construir` si se pide); al volver a legacy apaga\ntodo. Escribe con `aos_fijar_banderas` (auditada). 422 `agent_os_orden` (combinación fuera de\norden), 409 `agent_os_bloqueado` (precondiciones; `details` trae bloqueos y avisos) o\n`agent_os_en_curso` (otro cambio en curso).",
+        "operationId": "put_agent_os_api_v1_admin_platform_tenants__tenant_id__agent_os_put",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentOSObjetivo"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentOSResultado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/tenants/{tenant_id}/agent-os/simular": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Simular Agent Os",
+        "description": "Dry-run del cambio: bloqueos, avisos y los pasos que aplicaría. No escribe nada (ni\nbackfills, ni releases, ni banderas). 422 `agent_os_orden` si el objetivo viola el orden.",
+        "operationId": "simular_agent_os_api_v1_admin_platform_tenants__tenant_id__agent_os_simular_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentOSObjetivo"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentOSResultado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/settings/declarative-tools": {
       "get": {
         "tags": [
@@ -33010,6 +33211,192 @@
           "updated_at"
         ],
         "title": "AgentDraft"
+      },
+      "AgentOSBanderas": {
+        "properties": {
+          "runtime": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "v3"
+            ],
+            "title": "Runtime"
+          },
+          "procedures": {
+            "type": "boolean",
+            "title": "Procedures"
+          },
+          "routing": {
+            "type": "string",
+            "enum": [
+              "off",
+              "shadow",
+              "active"
+            ],
+            "title": "Routing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "runtime",
+          "procedures",
+          "routing"
+        ],
+        "title": "AgentOSBanderas",
+        "description": "Estado de las banderas del Agent OS de un negocio (ADR-0112, ADR-0138)."
+      },
+      "AgentOSCambio": {
+        "properties": {
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "fecha": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Fecha"
+          }
+        },
+        "type": "object",
+        "required": [
+          "actor",
+          "fecha"
+        ],
+        "title": "AgentOSCambio"
+      },
+      "AgentOSEstado": {
+        "properties": {
+          "runtime": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "v3"
+            ],
+            "title": "Runtime"
+          },
+          "procedures": {
+            "type": "boolean",
+            "title": "Procedures"
+          },
+          "routing": {
+            "type": "string",
+            "enum": [
+              "off",
+              "shadow",
+              "active"
+            ],
+            "title": "Routing"
+          },
+          "aos_connection_routing": {
+            "type": "boolean",
+            "title": "Aos Connection Routing"
+          },
+          "ultimo_cambio": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentOSCambio"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "runtime",
+          "procedures",
+          "routing",
+          "aos_connection_routing"
+        ],
+        "title": "AgentOSEstado"
+      },
+      "AgentOSObjetivo": {
+        "properties": {
+          "runtime": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "v3"
+            ],
+            "title": "Runtime"
+          },
+          "procedures": {
+            "type": "boolean",
+            "title": "Procedures"
+          },
+          "routing": {
+            "type": "string",
+            "enum": [
+              "off",
+              "shadow",
+              "active"
+            ],
+            "title": "Routing"
+          },
+          "construir": {
+            "type": "boolean",
+            "title": "Construir",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "runtime",
+          "procedures",
+          "routing"
+        ],
+        "title": "AgentOSObjetivo"
+      },
+      "AgentOSResultado": {
+        "properties": {
+          "accion": {
+            "type": "string",
+            "title": "Accion"
+          },
+          "antes": {
+            "$ref": "#/components/schemas/AgentOSBanderas"
+          },
+          "despues": {
+            "$ref": "#/components/schemas/AgentOSBanderas"
+          },
+          "aos_connection_routing": {
+            "type": "boolean",
+            "title": "Aos Connection Routing"
+          },
+          "pasos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Pasos"
+          },
+          "bloqueos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Bloqueos"
+          },
+          "avisos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Avisos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "accion",
+          "antes",
+          "despues",
+          "aos_connection_routing",
+          "pasos",
+          "bloqueos",
+          "avisos"
+        ],
+        "title": "AgentOSResultado"
       },
       "AgentPatch": {
         "properties": {

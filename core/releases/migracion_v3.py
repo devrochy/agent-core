@@ -26,14 +26,16 @@ consumer las adopte, ADR-0115 §6) y `aos_procedures` ya encendida.
 `--apagar-procedimientos` (orden inverso de ADR-0112, CHECK `ck_tenants_aos_order`), y se
 reportan las tareas gobernadas abiertas, que dejan de gobernarse.
 
-Las banderas las escribe el rol dueño (`MIGRATIONS_DATABASE_URL`, como `sync-packs`), fuera del
-`tenant_scope`: `tenants` es tabla de sistema y solo el master las cambia (ADR-0112). Sin LLM.
+Las banderas se escriben solo con `aos_fijar_banderas` (migración 0097, `core.kernel.banderas.
+fijar_banderas`): desde el CLI con el rol dueño (`MIGRATIONS_DATABASE_URL`, como `sync-packs`),
+desde el panel del master con su `admin_id` (`escritor`, HU-AOS-15). Fuera del `tenant_scope`:
+`tenants` es tabla de sistema y solo el master las cambia (ADR-0112). Sin LLM.
 """
 
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -44,6 +46,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from core.config import get_settings
 from core.db.session import get_session
+from core.kernel.banderas import BanderasRechazadas
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 
@@ -62,9 +65,12 @@ class ResultadoNegocio:
     runtime_antes: str
     procedimientos: bool
     # encendido | ya_estaba | bloqueado | apagado | ya_legacy | listo (dry-run) | construida
+    # | por_preparar (dry-run con `ejecutar_backfills`: faltan backfills que se corren al aplicar)
     accion: str = "bloqueado"
     bloqueos: list[str] = field(default_factory=list)
     avisos: list[str] = field(default_factory=list)
+    # Lo que se hará al aplicar (dry-run con `ejecutar_backfills`).
+    pasos: list[str] = field(default_factory=list)
     conexiones: int = 0
 
 
@@ -109,13 +115,14 @@ async def _pendiente_de_conexiones(tenant_id: uuid.UUID) -> str | None:
     return f"{' y '.join(pendientes)}: corre `{COMANDO_CONEXIONES}`"
 
 
-async def _pendiente_de_agentes(tenant_id: uuid.UUID, modulos: list[Any]) -> str | None:
+async def _bloqueo_de_agentes(tenant_id: uuid.UUID, modulos: list[Any]) -> tuple[str | None, str | None]:
+    """`(bloqueo, pendiente)`: un bloqueo no lo arregla correr el backfill; un pendiente sí."""
     from core.agents.backfill_agentes import backfill_agentes
 
     previo = await backfill_agentes(dry_run=True, tenant_id=tenant_id, modules=modulos)
     if previo.bloqueados or previo.errores:
         motivo = (*previo.bloqueados, *previo.errores)[0].mensaje
-        return f"el backfill de agentes no pasa: {motivo[:200]}"
+        return f"el backfill de agentes no pasa: {motivo[:200]}", None
     # Versiones por publicar (el v2 se editó después del backfill) no bloquean aquí: la release
     # queda "desactualizada" (punto 6) y `--construir` la refresca desde el v2.
     pendientes = [
@@ -123,7 +130,26 @@ async def _pendiente_de_agentes(tenant_id: uuid.UUID, modulos: list[Any]) -> str
         if (v := c.get("creada"))
     ]
     if pendientes:
-        return f"faltan {', '.join(pendientes)}: corre `{COMANDO_AGENTES}`"
+        return None, f"faltan {', '.join(pendientes)}: corre `{COMANDO_AGENTES}`"
+    return None, None
+
+
+async def ejecutar_backfills(tenant_id: uuid.UUID, modulos: list[Any]) -> str | None:
+    """Backfills de conexiones, agentes y releases del negocio (`agent-core db backfill-*`
+    acotados a él). Idempotentes y neutros en legacy (el runtime no lee esas filas). Devuelve el
+    motivo si alguno falla. Los usan `migrar_a_v3(ejecutar_backfills=True)` y «Preparar mis datos»."""
+    from core.agents.backfill_agentes import backfill_agentes
+    from core.gateway.conexion_canonica_backfill import backfill_conexiones
+    from core.releases.release_uno import backfill_releases
+
+    await backfill_conexiones(dry_run=False, tenant_id=tenant_id)
+    agentes = await backfill_agentes(dry_run=False, tenant_id=tenant_id, modules=modulos)
+    if agentes.fallo:
+        problema = (*agentes.bloqueados, *agentes.errores)[0]
+        return f"backfill de agentes: {problema.mensaje[:300]}"
+    releases = await backfill_releases(dry_run=False, tenant_id=tenant_id, modules=modulos)
+    if releases.fallo:
+        return f"backfill de releases: {releases.errores[0].mensaje[:300]}"
     return None
 
 
@@ -291,27 +317,38 @@ async def _tareas_gobernadas_abiertas(tenant_id: uuid.UUID) -> int:
 
 
 # ------------------------------------------------------------------ banderas (rol dueño)
+# Escribe las banderas: `(tenant_id, runtime, procedimientos | None)`. Por defecto, el rol dueño
+# (CLI); la API del master inyecta uno que llama a la función con su `admin_id` (HU-AOS-15).
+Escritor = Callable[[uuid.UUID, str, bool | None], Awaitable[None]]
+
+
 async def _escribir_bandera(database_url: str | None, tenant_id: uuid.UUID, *, runtime: str, procedimientos: bool | None) -> None:
+    from core.kernel.banderas import BanderasAOS, fijar_banderas
+
     settings = get_settings()
     url = database_url or settings.migrations_database_url
     if not url:
-        # Nunca con el rol de la aplicación: `tenants` la cambia solo el rol dueño (ADR-0112).
+        # Sin admin master, `aos_fijar_banderas` solo acepta la sesión del rol dueño (0097).
         raise PermissionError("falta MIGRATIONS_DATABASE_URL (rol dueño) para escribir las banderas")
     engine = create_async_engine(url)
     try:
         async with engine.begin() as conn:
+            actual = (
+                await conn.execute(
+                    text("SELECT aos_procedures, aos_routing FROM tenants WHERE id = :t AND deleted_at IS NULL FOR UPDATE"),
+                    {"t": tenant_id},
+                )
+            ).first()
+            if actual is None:
+                raise LookupError("negocio no encontrado")
             # Volver a legacy apaga también el enrutamiento (HU-AOS-17): el CHECK de 0094 lo exige
             # (orden inverso de ADR-0112) y sin v3 no hay release que enrutar.
-            ruteo = "aos_routing = CASE WHEN :r = 'legacy' THEN 'off' ELSE aos_routing END"
-            if procedimientos is None:
-                await conn.execute(
-                    text(f"UPDATE tenants SET aos_runtime = :r, {ruteo} WHERE id = :t"), {"r": runtime, "t": tenant_id}
-                )
-            else:
-                await conn.execute(
-                    text(f"UPDATE tenants SET aos_runtime = :r, aos_procedures = :p, {ruteo} WHERE id = :t"),
-                    {"r": runtime, "p": procedimientos, "t": tenant_id},
-                )
+            objetivo = BanderasAOS(
+                runtime=runtime,
+                procedimientos=bool(actual[0]) if procedimientos is None else procedimientos,
+                ruteo="off" if runtime == "legacy" else str(actual[1]),
+            )
+            await fijar_banderas(conn, tenant_id, objetivo, actor="system:migrar-a-v3")
     finally:
         await engine.dispose()
 
@@ -334,19 +371,43 @@ async def _negocios(tenant_ids: Iterable[uuid.UUID] | None) -> list[tuple[uuid.U
 
 
 # ------------------------------------------------------------------ comando
-async def _encender(negocio: ResultadoNegocio, *, dry_run: bool, construir: bool, modulos: list[Any], database_url: str | None) -> None:
+async def _encender(
+    negocio: ResultadoNegocio,
+    *,
+    dry_run: bool,
+    construir: bool,
+    backfills: bool,
+    modulos: list[Any],
+    escribir: Escritor,
+) -> None:
     tid = negocio.tenant_id
     if not get_settings().aos_connection_routing:
         negocio.bloqueos.append("AOS_CONNECTION_ROUTING está apagada: enciéndela antes (orden de banderas, ADR-0112)")
         return
-    async with tenant_scope(tid):
-        motivo = await _pendiente_de_conexiones(tid)
+    if negocio.runtime_antes == "legacy" and backfills and not dry_run:
+        async with tenant_scope(tid):
+            motivo = await ejecutar_backfills(tid, modulos)
         if motivo:
             negocio.bloqueos.append(motivo)
             return
-        motivo = await _pendiente_de_agentes(tid, modulos)
+    # En dry-run con `backfills`, lo que el backfill arregla no bloquea: es un paso de aplicar.
+    previos = backfills and dry_run
+    async with tenant_scope(tid):
+        motivo = await _pendiente_de_conexiones(tid)
         if motivo:
-            negocio.bloqueos.append(motivo)
+            (negocio.pasos if previos else negocio.bloqueos).append(motivo)
+        bloqueo, pendiente = await _bloqueo_de_agentes(tid, modulos)
+        if bloqueo:
+            negocio.bloqueos.append(bloqueo)
+            return
+        if pendiente:
+            (negocio.pasos if previos else negocio.bloqueos).append(pendiente)
+        if negocio.bloqueos:
+            return
+        if negocio.pasos:
+            # Las releases dependen de las instancias: el resto se revisa después de los backfills.
+            negocio.pasos.append(f"releases de las conexiones que no la tengan (`{COMANDO_RELEASES}`)")
+            negocio.accion = "por_preparar"
             return
         conexiones = await _conexiones(tid)
         negocio.conexiones = len(conexiones)
@@ -354,7 +415,12 @@ async def _encender(negocio: ResultadoNegocio, *, dry_run: bool, construir: bool
             negocio.avisos.append("sin conexiones conversacionales: con v3 ningún turno leería una release")
         sin_release = [cid for cid, rid in conexiones if rid is None]
         if sin_release:
-            negocio.bloqueos.append(f"{len(sin_release)} conexión(es) sin release activa: corre `{COMANDO_RELEASES}`")
+            motivo = f"{len(sin_release)} conexión(es) sin release activa: corre `{COMANDO_RELEASES}`"
+            if previos:
+                negocio.pasos.append(motivo)
+                negocio.accion = "por_preparar"
+            else:
+                negocio.bloqueos.append(motivo)
             return
         try:
             hashes_v2 = await _hashes_del_v2(tid, modulos) if negocio.runtime_antes == "legacy" else None
@@ -364,6 +430,9 @@ async def _encender(negocio: ResultadoNegocio, *, dry_run: bool, construir: bool
         for cid, rid in conexiones:
             assert rid is not None
             bloqueos = await _revisar_release(tid, cid, rid, modulos=modulos, hashes_v2=hashes_v2)
+            if bloqueos and construir and dry_run and all("desactualizada" in b for b in bloqueos):
+                negocio.pasos.append(f"conexión {cid}: construir y promover una release nueva")
+                continue
             if bloqueos and construir and not dry_run and all("desactualizada" in b for b in bloqueos):
                 nueva = await _construir_y_promover(tid, cid, modulos)
                 negocio.avisos.append(f"conexión {cid}: release nueva construida y promovida")
@@ -383,11 +452,11 @@ async def _encender(negocio: ResultadoNegocio, *, dry_run: bool, construir: bool
     if dry_run:
         negocio.accion = "listo"
         return
-    await _escribir_bandera(database_url, tid, runtime="v3", procedimientos=None)
+    await escribir(tid, "v3", None)
     negocio.accion = "encendido"
 
 
-async def _apagar(negocio: ResultadoNegocio, *, dry_run: bool, apagar_procedimientos: bool, database_url: str | None) -> None:
+async def _apagar(negocio: ResultadoNegocio, *, dry_run: bool, apagar_procedimientos: bool, escribir: Escritor) -> None:
     tid = negocio.tenant_id
     if negocio.runtime_antes == "legacy":
         negocio.accion = "ya_legacy"
@@ -402,9 +471,7 @@ async def _apagar(negocio: ResultadoNegocio, *, dry_run: bool, apagar_procedimie
     if dry_run:
         negocio.accion = "listo"
         return
-    await _escribir_bandera(
-        database_url, tid, runtime="legacy", procedimientos=False if negocio.procedimientos else None
-    )
+    await escribir(tid, "legacy", False if negocio.procedimientos else None)
     negocio.accion = "apagado"
 
 
@@ -417,14 +484,25 @@ async def migrar_a_v3(
     apagar_procedimientos: bool = False,
     modules: Iterable[Any] | None = None,
     database_url: str | None = None,
+    backfills: bool = False,
+    escritor: Escritor | None = None,
 ) -> ReporteMigracion:
     """Enciende (o apaga, con `volver`) `aos_runtime = 'v3'` en los negocios dados (todos con
-    `tenant_ids=None`). Ver el docstring del módulo."""
+    `tenant_ids=None`). Ver el docstring del módulo. `backfills` (solo con un negocio) corre
+    antes los backfills del negocio; en dry-run, lo que ellos arreglan sale en `pasos`, no en
+    `bloqueos`. `escritor` reemplaza la escritura con el rol dueño (la API del master)."""
     from core.plugin_manager import plugin_manager
 
     if construir and tenant_ids is None:
         # Construir y promover cambia la release activa: nunca en masa, negocio por negocio.
         raise ValueError("--construir exige --tenant (no se permite con --todos)")
+    if backfills and tenant_ids is None:
+        raise ValueError("los backfills se corren negocio por negocio (no con --todos)")
+
+    async def _dueno(tid: uuid.UUID, runtime: str, procedimientos: bool | None) -> None:
+        await _escribir_bandera(database_url, tid, runtime=runtime, procedimientos=procedimientos)
+
+    escribir = escritor or _dueno
     modulos = list(modules if modules is not None else plugin_manager.list_modules())
     reporte = ReporteMigracion(dry_run=dry_run, volver=volver)
     for tid, slug, runtime, procedimientos in await _negocios(tenant_ids):
@@ -432,10 +510,12 @@ async def migrar_a_v3(
         reporte.negocios.append(negocio)
         try:
             if volver:
-                await _apagar(negocio, dry_run=dry_run, apagar_procedimientos=apagar_procedimientos, database_url=database_url)
+                await _apagar(negocio, dry_run=dry_run, apagar_procedimientos=apagar_procedimientos, escribir=escribir)
             else:
-                await _encender(negocio, dry_run=dry_run, construir=construir, modulos=modulos, database_url=database_url)
-        except (DBAPIError, LookupError, RuntimeError, ValueError, PermissionError) as exc:
+                await _encender(
+                    negocio, dry_run=dry_run, construir=construir, backfills=backfills, modulos=modulos, escribir=escribir
+                )
+        except (DBAPIError, LookupError, RuntimeError, ValueError, PermissionError, BanderasRechazadas) as exc:
             negocio.accion = "bloqueado"
             negocio.bloqueos.append(_mensaje(exc))
             log.warning("migrar_a_v3_error", tenant_id=str(tid), error=_mensaje(exc)[:300])
@@ -445,4 +525,4 @@ async def migrar_a_v3(
     return reporte
 
 
-__all__ = ["ReporteMigracion", "ResultadoNegocio", "migrar_a_v3"]
+__all__ = ["Escritor", "ReporteMigracion", "ResultadoNegocio", "ejecutar_backfills", "migrar_a_v3"]

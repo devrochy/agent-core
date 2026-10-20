@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, uniq
+from _api_helpers import api_headers, banderas_como_dueno, uniq
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
@@ -637,7 +637,7 @@ async def test_api_releases_permisos_aislamiento_y_rollback(app_client) -> None:
     # El dueño en legacy no escribe (403); con v3 sí.
     dueno = await api_headers(app_client, tid, email=await _dueno(tid), password=PASSWORD)
     assert (await app_client.post(f"{base}/releases", headers=dueno, json={})).status_code == 403
-    await _sql(None, "update tenants set aos_runtime = 'v3' where id = :t", t=tid)
+    await banderas_como_dueno(tid, aos_runtime="v3")
     await _cambiar_nombre(tid, "Desde la API")
     r = await app_client.post(f"{base}/releases", headers=dueno, json={"notes": "cambio de nombre"})
     assert r.status_code == 201, r.text
@@ -694,7 +694,7 @@ async def test_fijar_release_del_turno_solo_con_v3(monkeypatch) -> None:
         0
     ] is None
 
-    await _sql(None, "update tenants set aos_runtime = 'v3' where id = :t", t=tid)
+    await banderas_como_dueno(tid, aos_runtime="v3")
     async with tenant_scope(tid):
         asignacion, vigente = await turno()
     assert asignacion is not None and asignacion.release_id == uno
