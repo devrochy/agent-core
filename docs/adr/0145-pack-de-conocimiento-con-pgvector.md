@@ -705,7 +705,7 @@ Lo que quedó en código y en qué se aparta del texto de arriba.
   - corre en `tests/integration/test_pack_knowledge_busqueda.py`: en replay contra
     `evals/conocimiento/grabacion.json` con los umbrales de §7 (se salta si falta la grabación) y con
     `hash`, exigiendo recall@4 ≥ 0,85 solo por la parte léxica;
-  - **la grabación necesita el OK del dueño**: `OPENAI_API_KEY=… bash scripts/grabar_conocimiento.sh`,
+  - **la grabación necesita el OK del dueño**: `bash scripts/grabar_conocimiento.sh` (toma `OPENAI_API_KEY` del entorno o del `.env`, como el gate toma `LLM_API_KEY`; DeepSeek no tiene embeddings),
     con un stack efímero y ≈ US$0,001.
 - **Calibración con `hash`:** recall@4 = 0,90 y MRR = 0,77 en la híbrida, pero solo 4 de 10
   negativas en cero.

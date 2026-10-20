@@ -6,14 +6,12 @@
 # imagen del CI, migra, corre `evals/conocimiento.py --grabar` y los borra al salir. Deja
 # `evals/conocimiento/grabacion.json`, que se commitea: desde ahí el CI y develop corren en replay.
 #
-# Uso:
-#   OPENAI_API_KEY=sk-... bash scripts/grabar_conocimiento.sh
+# La llave es `OPENAI_API_KEY`: del entorno o del `.env` del checkout, como `LLM_API_KEY` en
+# `scripts/gate_evals.sh record`. DeepSeek (`LLM_API_KEY`) no tiene API de embeddings.
+#
+# Uso (desde la raíz del repo, donde está el .env):
+#   bash scripts/grabar_conocimiento.sh
 set -euo pipefail
-
-if [ -z "${OPENAI_API_KEY:-}" ]; then
-  echo "Falta OPENAI_API_KEY (la llave de embeddings; no se guarda en ningún archivo)." >&2
-  exit 2
-fi
 
 IMAGEN="${IMAGEN_POSTGRES:-ghcr.io/devrochy/solvershub-postgres:pg17-postgis}"
 SUFIJO="$(date +%s)"

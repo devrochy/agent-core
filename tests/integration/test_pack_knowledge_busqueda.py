@@ -208,7 +208,7 @@ async def test_golden_set_con_grabacion(raiz) -> None:
     if not modulo.GRABACION.is_file():
         pytest.skip(
             "Falta la grabación del golden set: con OK del dueño, "
-            "`OPENAI_API_KEY=… python evals/conocimiento.py --grabar` (≈ US$0,001)."
+            "`bash scripts/grabar_conocimiento.sh` (OPENAI_API_KEY del entorno o del .env; ≈ US$0,001)."
         )
     modulo, tid, aid = await _golden(raiz)
     with grabacion(modulo.GRABACION, "replay"):

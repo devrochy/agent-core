@@ -24,7 +24,7 @@ Uso (con el stack de integración y `APP_ENV=development`):
 
     python evals/conocimiento.py                 # replay
     python evals/conocimiento.py --hash          # sin grabación
-    OPENAI_API_KEY=... python evals/conocimiento.py --grabar
+    python evals/conocimiento.py --grabar        # OPENAI_API_KEY del entorno o del .env
 """
 
 from __future__ import annotations
@@ -33,7 +33,6 @@ import argparse
 import asyncio
 import io
 import json
-import os
 import re
 import sys
 import unicodedata
@@ -267,7 +266,7 @@ async def _correr(args: argparse.Namespace) -> int:
         contexto: Any = _sin_grabacion()
     else:
         modo = "record" if args.grabar else "replay"
-        contexto = grabacion(GRABACION, modo, api_key=os.environ.get("OPENAI_API_KEY") if args.grabar else None)
+        contexto = grabacion(GRABACION, modo, api_key=_llave_de_embeddings() if args.grabar else None)
     with contexto:
         await ingerir(tenant_id, agent_id)
         resultados = [await medir(tenant_id, agent_id, modo=m) for m in ("hibrida", "semantica")]
@@ -278,6 +277,14 @@ async def _correr(args: argparse.Namespace) -> int:
     ok = hibrida.cumple() and hibrida.recall >= semantica.recall
     print("OK" if ok else f"NO CUMPLE: umbrales {UMBRALES} y la híbrida no por debajo de la semántica")
     return 0 if ok else 1
+
+
+def _llave_de_embeddings() -> str:
+    """`OPENAI_API_KEY` del entorno o del `.env`, por `get_settings()`, como `LLM_API_KEY` en el gate
+    (`scripts/gate_evals.sh record`). DeepSeek (`LLM_API_KEY`) no tiene API de embeddings."""
+    from core.config import get_settings
+
+    return get_settings().openai_api_key
 
 
 @contextmanager
@@ -291,8 +298,12 @@ def main() -> int:
     grupo.add_argument("--grabar", action="store_true", help="llamada real a OpenAI (con OK del dueño)")
     grupo.add_argument("--hash", action="store_true", help="embeddings hash, sin grabación")
     args = parser.parse_args()
-    if args.grabar and not os.environ.get("OPENAI_API_KEY"):
-        print("Falta OPENAI_API_KEY para grabar.", file=sys.stderr)
+    if args.grabar and not _llave_de_embeddings():
+        print(
+            "Falta OPENAI_API_KEY (en el entorno o en el .env). DeepSeek no tiene API de embeddings: "
+            "LLM_API_KEY no sirve para grabar.",
+            file=sys.stderr,
+        )
         return 2
     return asyncio.run(_correr(args))
 
