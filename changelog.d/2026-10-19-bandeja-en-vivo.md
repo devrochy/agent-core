@@ -5,6 +5,8 @@
     conexión (`connection_id`, `connection_label`, `connection_provider`, `connection_type`);
   - se ordena por actividad (último mensaje o, si no hay, el inicio) y acepta `?connection_id=`;
   - el último mensaje sale de un `LATERAL … LIMIT 1` sobre `ix_messages_tenant_conv_created`: sin N+1.
+- `GET /admin/conversations/connections`: las conexiones del negocio para el filtro de la bandeja, con el permiso
+  de Conversaciones (quien atiende no necesita ver la sección Conexiones).
 - `GET /admin/conversations/{id}/messages?after=<created_at>`: lo nuevo del hilo para el polling del panel.
   Re-entrega los 2 s anteriores al cursor (un mensaje commiteado tarde no se pierde) y el panel deduplica por
   `id`. Tope de 200 con `has_more`.
