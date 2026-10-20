@@ -1,4 +1,4 @@
-"""agentcore-contracts — v3.0.0 (Python).
+"""agentcore-contracts — v3.1.0 (Python).
 
 Contratos congelados de agent-core. Ver docs/adr/0011-contratos-python.md.
 
@@ -8,6 +8,8 @@ Contratos congelados de agent-core. Ver docs/adr/0011-contratos-python.md.
   Se retira el espejo TS de `packages/contracts/src/` (nadie lo consumía: los tipos del panel
   salen del OpenAPI, ADR-0077). `AgentSpec` sigue siendo el **v2**: lo leen el loop legacy,
   los presets y el alta hasta HU-AOS-46; el lector tolerante del core lo convierte a v3.
+- v3.1.0: `AgentSpecV3.knowledge` (`KnowledgeConfigV3`), opcional con default: un minor según la
+  adenda de ADR-0113 del 2026-10-20 (ADR-0145, HU-AOS-49).
 """
 
 from agentcore_contracts.agentspec import (
@@ -76,7 +78,7 @@ from agentcore_contracts.procedure import (
     Triggers,
 )
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 
 __all__ = [
     "SENSITIVE_HEADERS",

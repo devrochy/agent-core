@@ -15,12 +15,15 @@ suscripción `free` al alta (ADR-0045) y por backfill (migración `0034`).
 
 from __future__ import annotations
 
+import math
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from core.billing.metrics import count_metric, get_metric
-from core.billing.plans import get_plan
+from core.billing.plans import PACK_LIMIT_KEYS, get_plan
 from core.billing.service import get_active_subscription
 from core.shared.logger import get_logger
 from core.tenants import is_tenant_active
@@ -126,7 +129,7 @@ async def lock_growth(tenant_id: uuid.UUID, key: str, *, session) -> None:
     agente ya cuenta) lo toma primero, para que esa lectura también quede serializada."""
     from sqlalchemy import text
 
-    if key not in GROWTH_METRICS:
+    if key not in GROWTH_METRICS and key not in PACK_LIMIT_KEYS:
         raise ValueError(f"{key} no es una métrica estructural")
     await session.execute(
         text("select pg_advisory_xact_lock(hashtext(:m), hashtext(:t))"), {"m": f"billing:{key}", "t": str(tenant_id)}
@@ -148,6 +151,42 @@ async def enforce_growth(tenant_id: uuid.UUID, key: str, *, session) -> None:
             used=decision.used, limit=decision.limit,
         )
         raise QuotaExceeded(key, decision.used, decision.limit)
+
+
+async def enforce_pack_growth(
+    tenant_id: uuid.UUID,
+    key: str,
+    contar: Callable[[Any], Awaitable[float]],
+    *,
+    incremento: float = 1,
+    session: Any,
+) -> None:
+    """Rechaza (`QuotaExceeded`) crecer un tope que cuenta un pack (`PACK_LIMIT_KEYS`, ADR-0145
+    §2) si `actual + incremento` supera el límite del plan. El core no consulta las tablas del
+    pack: `contar(session)` es del pack y mide en la unidad del tope (documentos, MB).
+
+    Mismo contrato que `enforce_growth`: toma el advisory lock del negocio y la clave ANTES de
+    contar, en la `session` del caller (abierta en su `tenant_scope`), y el lock dura hasta el fin
+    de esa transacción, que es la que inserta la unidad. Sin suscripción, sin el tope en el plan o
+    con tope `None`: no hay límite."""
+    if key not in PACK_LIMIT_KEYS:
+        raise ValueError(f"{key} no es un tope de pack")
+    # El conteo del pack pasa por la RLS del scope: con otro `tenant_id`, el lock y el plan
+    # serían de un negocio y el conteo de otro.
+    from core.shared.tenant import get_current_tenant_id
+
+    if get_current_tenant_id() != tenant_id:
+        raise ValueError("enforce_pack_growth: tenant_id distinto del tenant_scope vigente")
+    await lock_growth(tenant_id, key, session=session)
+    sub = await get_active_subscription(tenant_id, session=session)
+    plan = get_plan(sub.plan_id) if sub is not None else None
+    limite = (plan.limits if plan else {}).get(key)
+    if limite is None:
+        return
+    usado = await contar(session)
+    if usado + incremento > limite:
+        log.info("plan_limit_reached", tenant_id=str(tenant_id), metric=key, used=usado, limit=limite)
+        raise QuotaExceeded(key, math.ceil(usado), limite)
 
 
 async def can_activate_plugin(tenant_id: uuid.UUID) -> bool:

@@ -15,6 +15,9 @@
     "2.2.0": "f85843a1f1a49b91bb10494192f32087eb62da4e695f5bdbc7e777be340e8fea",
     "2.3.0": "b5126004e9529958bad58f5276aed4a87e45dd1877d597d4276e1fd66a8a8d88"
   },
+  "pack_knowledge": {
+    "0.1.0": "09dc46b396fc0b8e89728cfea5198221573aa43b8593b24657f7a69a3cbb9ce4"
+  },
   "pack_payments": {
     "0.1.0": "85b6d667acebac10216a8346dc59297af926f2a5abf20afabb46ce83662330d2"
   },
