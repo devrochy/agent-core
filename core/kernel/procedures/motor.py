@@ -24,9 +24,11 @@ import hashlib
 import hmac
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time
+from functools import cache
+from pathlib import Path
 from typing import Any
 
 from agentcore_contracts import Procedure, Slot, Stage
@@ -303,6 +305,54 @@ def _digitos_dichos(valor: str, textos: Sequence[str]) -> bool:
     return False
 
 
+# ---------------------------------------------------------------- correos mal escritos
+
+_DOMINIO = re.compile(r"^[a-z0-9-]{1,63}(\.[a-z0-9-]{1,63})+$")
+_ARCHIVO_CORREOS = Path(__file__).with_name("correos_mal_escritos.json")
+
+
+@cache
+def dominios_mal_escritos() -> dict[str, str]:
+    """Tabla cerrada `dominio mal escrito → sugerido` (dato del core, no prompt). Fail-closed: si
+    el archivo está roto lanza (lo cubre un test), en vez de dejar pasar correos dudosos."""
+    datos = json.loads(_ARCHIVO_CORREOS.read_text(encoding="utf-8"))
+    tabla = datos["dominios"]
+    if not isinstance(tabla, dict) or not tabla:
+        raise ValueError("correos_mal_escritos.json sin dominios")
+    for malo, bueno in tabla.items():
+        if not (isinstance(malo, str) and isinstance(bueno, str) and _DOMINIO.fullmatch(malo) and _DOMINIO.fullmatch(bueno)):
+            raise ValueError("correos_mal_escritos.json: dominio inválido")
+        if malo == bueno or bueno in tabla:
+            raise ValueError("correos_mal_escritos.json: sugerido inválido")
+    return dict(tabla)
+
+
+def dominio_sugerido(correo: Any) -> str | None:
+    """El dominio que el cliente probablemente quiso escribir, si el del correo está en la tabla
+    de errores comunes (`gmai.com` → `gmail.com`); None si no. Puro."""
+    if not isinstance(correo, str) or correo.count("@") != 1:
+        return None
+    return dominios_mal_escritos().get(correo.rsplit("@", 1)[1].strip().lower())
+
+
+def _correo_corregido_dicho(valor: str, normalizados: Sequence[str]) -> bool:
+    """`x@gmail.com` cuenta como dicho si el cliente escribió `x@gmai.com` (un dominio de la tabla
+    que sugiere justo ese) Y además nombró el proveedor correcto («sí, era gmail»): es la
+    corrección que el motor le propuso y el cliente la aceptó. El modelo no corrige solo (revisión
+    de seguridad). Solo con la tabla."""
+    local, _, dominio = valor.lower().partition("@")
+    proveedor = dominio.split(".", 1)[0]
+    if not proveedor or not any(proveedor in t.split() or dominio in t for t in normalizados):
+        return False
+    for malo, bueno in dominios_mal_escritos().items():
+        if bueno != dominio:
+            continue
+        escrito = _normalizar(f"{local}@{malo}")
+        if escrito and any(f" {escrito} " in f" {t} " for t in normalizados):
+            return True
+    return False
+
+
 def dicho_por_el_cliente(valores: Sequence[Any], textos: Sequence[str], telefonos: Sequence[str] = ()) -> bool:
     """¿Alguno de `valores` (el que mandó el modelo y el normalizado) aparece en lo que escribió el
     cliente? Pura. Conservadora hacia el rechazo (el modelo vuelve a pedir el dato):
@@ -332,6 +382,8 @@ def dicho_por_el_cliente(valores: Sequence[Any], textos: Sequence[str], telefono
                 return True
         elif "@" in crudo:
             if any(f" {norm} " in f" {t} " for t in normalizados):
+                return True
+            if _correo_corregido_dicho(crudo, normalizados):
                 return True
         elif set(norm.split()) <= palabras:
             return True
@@ -487,6 +539,26 @@ def requiere_confirmacion(stage: Stage, accion: str) -> bool:
         and stage.exitWhen is not None
         and stage.exitWhen.action == accion
     )
+
+
+def accion_de_salida_ligable(
+    proc: Procedure, stage: Stage, propiedades_de: Callable[[str], Sequence[str]]
+) -> str | None:
+    """La acción de salida de una etapa con `confirmation` que el kernel puede pedir a confirmar
+    por su cuenta (punto de reposo de la acción, smoke de test 2026-10-20): exige confirmación,
+    es de la etapa y TODAS las propiedades de su schema son datos del procedimiento (así la
+    llamada del modelo después del sí liga los mismos datos y tiene el mismo hash). None si no.
+    `propiedades_de(accion)`: las propiedades del schema de la tool. Pura."""
+    salida = stage.exitWhen
+    accion = salida.action if salida is not None else None
+    if stage.confirmation is None or accion is None or accion not in stage.actions:
+        return None
+    if not requiere_confirmacion(stage, accion):
+        return None
+    propiedades = list(propiedades_de(accion))
+    if not propiedades or any(p not in proc.slots for p in propiedades):
+        return None
+    return accion
 
 
 def acciones_de_puerta(proc: Procedure) -> frozenset[str]:

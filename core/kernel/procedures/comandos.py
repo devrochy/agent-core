@@ -239,6 +239,26 @@ def argumentos_invalidos(nombre: str, args: Mapping[str, Any]) -> str | None:
     return None
 
 
+def codigos_de_errores(errores: Sequence[Any]) -> list[str]:
+    """Claves de los errores de un comando para la auditoría (como mucho 10; nunca el texto)."""
+    from core.kernel.procedures.textos import codigo_de_error
+
+    salida: list[str] = []
+    for error in list(errores)[:10]:
+        clave = next((c for c in ("argumentos_invalidos", "comando_no_disponible") if _es_texto(c, error)), None)
+        salida.append(clave or codigo_de_error(error))
+    return salida
+
+
+def _es_texto(clave: str, error: Any) -> bool:
+    try:
+        partes = re.split(r"\{[a-z_]+\}", textos()[clave])
+    except Exception:
+        return False
+    patron = ".+?".join(re.escape(p) for p in partes)
+    return isinstance(error, str) and re.fullmatch(patron, error, re.DOTALL) is not None
+
+
 def claves_auditables(nombre: str, args: Any) -> dict[str, Any]:
     """Lo que se audita de los argumentos: las claves del schema y cuántas sobraron."""
     permitidos = _ARGUMENTOS.get(nombre, frozenset())

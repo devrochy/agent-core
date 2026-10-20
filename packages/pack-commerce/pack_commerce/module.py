@@ -31,7 +31,7 @@ import pack_commerce.jobs  # noqa: F401
 from core.db.session import get_owned, get_session
 from core.mcp.types import Afirmacion, BaseModule
 from core.shared.dinero import MONEY_IN_TEXT, MONEY_KEYS, parse_money  # noqa: F401 (API del pack)
-from core.shared.events import ON_CONVERSATION_STARTED
+from core.shared.events import ON_CONVERSATION_STARTED, ON_PROCEDURE_SLOTS_SET
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from pack_commerce import api as leads_api
@@ -1133,6 +1133,8 @@ class CRMModule(BaseModule):
         # evalúa por tenant en el evento (la config activada no es global — vive
         # en plugin_configs y un tenant puede desactivarla sin afectar al resto).
         host.subscribe(ON_CONVERSATION_STARTED, self._on_conversation_started)
+        # Datos que el cliente dio en un recorrido de este pack (smoke de test 2026-10-20).
+        host.subscribe(ON_PROCEDURE_SLOTS_SET, self._on_procedure_slots_set)
 
         # Coordinación con pack-payments SIN importarlo (invariante nº5, ADR-0023):
         # el nombre del evento es el contrato real, un string literal acordado en
@@ -1248,6 +1250,40 @@ class CRMModule(BaseModule):
                     )
                 )
                 log.info("lead_draft_created", conversation_id=str(conversation_id))
+
+    async def _on_procedure_slots_set(
+        self,
+        tenant_id: uuid.UUID,
+        conversation_id: uuid.UUID,
+        customer_id: uuid.UUID,
+        procedure_id: str,
+        datos: dict[str, Any],
+    ) -> None:
+        """Completa el lead del cliente con los datos de contacto de un recorrido de ESTE pack
+        (`contratar_plan`, `tomar_pedido`): con foco, `crear_lead`/`actualizar_lead` no se
+        ofrecen. Solo si el pack está habilitado para el negocio; nunca crea un lead."""
+        from core.agents.spec import enabled_packs, load_active_spec
+
+        if not str(procedure_id).startswith(f"{self.id}.") or not isinstance(datos, dict):
+            return
+        actual = get_current_tenant_id()
+        if actual is None or actual != tenant_id or not any(datos.get(n) for n in ("full_name", "email", "phone")):
+            return
+        from pack_commerce.skills import completar_lead
+
+        try:
+            if self.id not in enabled_packs(await load_active_spec(actual)):
+                return
+            async with get_session() as session:
+                await completar_lead(
+                    session,
+                    customer_id,
+                    nombre=datos.get("full_name"),
+                    email=datos.get("email"),
+                    telefono=datos.get("phone"),
+                )
+        except Exception as exc:  # el payload trae datos personales: el log solo lleva el tipo
+            log.warning("lead_completar_fallo", error=type(exc).__name__)
 
     async def _on_payment_confirmed(
         self, reference: str, provider: str, provider_reference: str, amount: float

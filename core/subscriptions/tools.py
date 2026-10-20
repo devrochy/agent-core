@@ -80,9 +80,20 @@ def _proveedor_habilitado() -> Callable[[set[str]], Awaitable[bool]]:
     return _predicate
 
 
+# Smoke de test 2026-10-20 (chat web, «quiero cambiar mi plan»): el visitante no estaba ligado a la
+# suscripción y el turno terminó sin salida. Sin verificar la identidad no se busca la suscripción
+# de nadie por correo o documento (eso diría quién es suscriptor): se ofrecen las dos salidas.
+SIN_SUSCRIPCION_HINT = (
+    "Esta conversación no está ligada a una suscripción. Si el cliente dice que ya tiene una (por "
+    "ejemplo, la contrató desde otro chat o número), no la busques ni le pidas datos para buscarla: "
+    "ofrécele pasar con una persona del equipo que verifique su identidad (escalate_to_human) o, si "
+    "prefiere, contratar un plan."
+)
+
+
 def _view_como_resultado(view: SubscriptionView | None) -> dict[str, Any]:
     if view is None:
-        return {"encontrado": False, "mensaje": "No tenés una suscripción activa."}
+        return {"encontrado": False, "mensaje": "No tenés una suscripción activa.", "hint": SIN_SUSCRIPCION_HINT}
     return {"encontrado": True, **view}
 
 

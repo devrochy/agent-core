@@ -5,7 +5,7 @@ description: Errores de negocio del motor de procedimientos (HU-AOS-05). El mode
 ## fuera_de_etapa
 La acción {accion} no corresponde a la etapa actual ({etapa}) del recorrido en curso. Usa solo las acciones de esta etapa; si el cliente quiere otra cosa, díselo y sigue con lo que falta.
 ## confirmacion_requerida
-Antes de ejecutar {accion} necesito la confirmación explícita del cliente. Pídesela mostrando lo que se va a hacer; cuando confirme, vuelve a llamar la acción con los mismos datos.
+Antes de ejecutar {accion} necesito la confirmación explícita del cliente, y el sistema ya se la pide con su propio resumen: no escribas tú otro resumen ni le preguntes si confirma. Cuando el cliente confirme con un sí claro, llama confirmar_tarea y después {accion} con los mismos datos.
 ## falta_confirmacion
 Falta la confirmación explícita del cliente. Vuelve a pedírsela con claridad; una respuesta ambigua no cuenta.
 ## sin_confirmacion_pendiente
@@ -48,3 +48,5 @@ La confirmación que se le pidió al cliente ya venció (pasó más de un turno)
 La confirmación que se le pidió al cliente ya venció (pasó más de un turno): el sistema se la vuelve a pedir con su propio mensaje. No la pidas tú ni la des por hecha.
 ## fuera_del_agente
 La acción {accion} no está disponible para este agente en esta conexión. No insistas con ella: resuelve con las acciones ofrecidas o, si el cliente necesita otra cosa, díselo y sigue con lo que falta.
+## correo_dudoso
+El correo de {dato} parece tener el dominio mal escrito. Antes de seguir, pregúntale al cliente si quiso decir @{sugerido}. Si dice que sí, guarda el correo con @{sugerido}; si confirma que está bien como lo escribió, vuelve a guardarlo tal cual.

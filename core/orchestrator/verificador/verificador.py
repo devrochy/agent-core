@@ -45,6 +45,9 @@ from core.orchestrator.verificador.evidencia import (
 )
 from core.shared.dinero import MONEY_IN_TEXT, normalized_amount_key, parse_money
 from core.shared.logger import get_logger
+from core.shared.polaridad import MAX_COINCIDENCIAS as _MAX_COINCIDENCIAS
+from core.shared.polaridad import afirma as _afirma
+from core.shared.polaridad import oraciones_afirmativas
 
 log = get_logger(__name__)
 
@@ -64,23 +67,6 @@ INSTRUCCION_GENERICA = (
     "Corrige usando SOLO datos devueltos por las herramientas."
 )
 
-_PREGUNTA = re.compile(r"¿[^¿?]*\?")
-_CORTE_ORACION = re.compile(r"(?<=[.!?…])\s+|\n+")
-_CORTE_CLAUSULA = re.compile("[,;:\u2014\u2013]")  # coma, punto y coma, dos puntos y rayas
-# La negación se busca en la cláusula de la afirmación ("No te preocupes, tu pedido
-# quedó confirmado" sí afirma); el condicional, en toda la oración ("Con tu sí, te
-# envío el link de pago" no afirma).
-_NEGACION = re.compile(r"\b(?:no|nunca|tampoco|ning[úu]n\w*|sin)\b", re.IGNORECASE)
-_CONDICION = re.compile(
-    r"\b(?:para\s+(?:que|poder|\w+(?:ar|er|ir)(?:te|le|les|lo|la|los|las|nos|me)?)|"
-    r"con\s+(?:tu|tus|eso|esto|esos|estos|esa|esta|ese|este)\b|"
-    r"cuando|apenas|en\s+cuanto|una\s+vez\s+(?:que|confirm\w*)|"
-    r"si\s+(?:me\s+)?(?:confirm|quer|dese|prefer|est[áa]s|necesit)\w*|"
-    r"despu[ée]s\s+de|antes\s+de|en\s+caso\s+de)\b",
-    re.IGNORECASE,
-)
-# "Me faltan dos datos para cerrar el pedido": el verbo de la afirmación en infinitivo.
-_PROPOSITO_AL_FINAL = re.compile(r"\b(?:para|a\s+fin\s+de)\s*$", re.IGNORECASE)
 # "$1,8 millones", "$200 mil": cifras abreviadas que no se verifican.
 _ESCALA = re.compile(r"\s*(?:mil\b|mill[oó]n\w*|k\b)", re.IGNORECASE)
 _FECHA = re.compile(
@@ -121,34 +107,6 @@ class Veredicto:
     @property
     def extrajo_algo(self) -> bool:
         return any(self.conteo.values()) or bool(self.urls_quitadas)
-
-
-# Tope de coincidencias por oración: el costo de `_afirma` crece con el prefijo y un
-# texto armado a propósito no debe bloquear el event loop.
-_MAX_COINCIDENCIAS = 20
-
-
-def oraciones_afirmativas(texto: str) -> list[str]:
-    """Oraciones del texto sin las preguntas (`¿…?` o terminadas en `?`), con los
-    espacios repetidos colapsados (algunos patrones de los packs son cuadráticos
-    ante rachas de espacios)."""
-    sin_preguntas = _PREGUNTA.sub(" ", texto or "")
-    oraciones = []
-    for oracion in _CORTE_ORACION.split(sin_preguntas):
-        oracion = re.sub(r"[ \t]{2,}", " ", oracion).strip()
-        if oracion and not oracion.endswith("?"):
-            oraciones.append(oracion)
-    return oraciones
-
-
-def _afirma(oracion: str, match: re.Match[str]) -> bool:
-    antes = oracion[: match.start()]
-    if _CONDICION.search(antes) or _PROPOSITO_AL_FINAL.search(antes):
-        return False
-    # La negación cuenta en la cláusula previa y dentro de la propia frase
-    # ("el pedido todavía no quedó creado").
-    clausula = _CORTE_CLAUSULA.split(antes)[-1]
-    return not _NEGACION.search(clausula + " " + match.group(0))
 
 
 def _quitar_urls(texto: str, respaldada) -> tuple[str, int]:  # type: ignore[no-untyped-def]
