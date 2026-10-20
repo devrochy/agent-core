@@ -3,8 +3,9 @@
 `/api/v1/admin/platform/tenants/{id}/agent-os` (GET, PUT) y `.../agent-os/simular` contra el
 stack real, sin LLM ni red:
 
-- **Permisos:** un dueño de negocio (no master) recibe 403 en las tres rutas; el negocio no
-  existente, 404.
+- **Permisos:** solo el master (decisión del dueño, 2026-10-20). Un dueño de negocio y el tester,
+  aunque `QA_TESTERS_ENABLED` esté encendida, reciben 403 en las tres rutas, y la función rechaza
+  el `admin_id` del tester; el negocio no existente, 404.
 - **Orden de banderas:** procedimientos o enrutamiento sin v3 → 422 `agent_os_orden`; un UPDATE
   directo de las banderas con el rol de la aplicación lo rechaza el trigger de 0097, y la función
   con admin no se deja llamar bajo el `tenant_scope` de un negocio.
@@ -98,12 +99,38 @@ async def negocios() -> AsyncIterator[tuple[uuid.UUID, uuid.UUID]]:
         await purge_tenant(str(tid), f"ELIMINAR {slug}")
 
 
-async def test_quien_no_es_master_recibe_403(app_client, negocios) -> None:  # type: ignore[no-untyped-def]
+async def _tester() -> tuple[uuid.UUID, str]:
+    from core.admin.auth import hash_password
+    from core.db.models import Admin
+    from core.db.session import get_session
+
+    email = f"tester-aosm-{uuid.uuid4().hex[:6]}@example.test"
+    async with get_session() as session:
+        admin = Admin(email=email, password_hash=hash_password(PASSWORD), role="tester", active=True)
+        session.add(admin)
+        await session.flush()
+        return admin.id, email
+
+
+async def test_quien_no_es_master_recibe_403(app_client, negocios, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from core.config import get_settings
+    from core.db.session import get_session
+    from core.kernel.banderas import BanderasAOS, BanderasRechazadas, fijar_banderas
+
     a, _b = negocios
+    monkeypatch.setattr(get_settings(), "qa_testers_enabled", True)  # el tester puede iniciar sesión
+    tester_id, tester_email = await _tester()
     dueno = await api_headers(app_client, a, email=await _dueno(a), password=PASSWORD)
-    assert (await app_client.get(_url(a), headers=dueno)).status_code == 403
-    assert (await app_client.post(_url(a, simular=True), headers=dueno, json=_objetivo("v3"))).status_code == 403
-    assert (await app_client.put(_url(a), headers=dueno, json=_objetivo("v3"))).status_code == 403
+    tester = await api_headers(app_client, a, email=tester_email, password=PASSWORD)
+    for h in (dueno, tester):
+        assert (await app_client.get(_url(a), headers=h)).status_code == 403
+        assert (await app_client.post(_url(a, simular=True), headers=h, json=_objetivo("v3"))).status_code == 403
+        assert (await app_client.put(_url(a), headers=h, json=_objetivo("v3"))).status_code == 403
+    # La base tampoco acepta al tester como admin.
+    with pytest.raises(BanderasRechazadas) as rechazo:
+        async with get_session() as session:
+            await fijar_banderas(session, a, BanderasAOS(runtime="v3"), admin_id=tester_id)
+    assert rechazo.value.codigo == "permiso"
     assert await _banderas(a) == ("legacy", False, "off")
     master = await api_headers(app_client, a)
     assert (await app_client.get(_url(uuid.uuid4()), headers=master)).status_code == 404

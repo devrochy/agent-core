@@ -337,9 +337,10 @@ class AgentOSResultado(BaseModel):
 
 
 def _require_master_agent_os(principal: Principal) -> None:
-    # Operar negocios (ADR-0134 §2): master, o tester en test. Un colaborador nunca.
-    if not actua_como_master(principal.admin):
-        raise ApiError.forbidden("Solo el admin de plataforma cambia el Agent OS de un negocio.")
+    # Solo el master, también en test (decisión del dueño, 2026-10-20; excepción a ADR-0134 §2 como
+    # la purga): ni el tester ni un colaborador.
+    if not es_master(principal.admin):
+        raise ApiError.forbidden("Solo el admin master cambia el Agent OS de un negocio.")
 
 
 def _banderas_out(b: Any) -> AgentOSBanderas:

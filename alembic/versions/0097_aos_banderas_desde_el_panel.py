@@ -4,10 +4,9 @@
    único escritor de `tenants.aos_runtime`, `aos_procedures` y `aos_routing`. `SECURITY DEFINER`
    (corre con el dueño de `tenants`), `search_path` fijo y nombres calificados, `REVOKE ALL FROM
    PUBLIC` y `EXECUTE` solo para `app_runtime` (patrón de 0072). Quién puede llamarla:
-   - con `p_admin_id`: ese admin debe existir, estar activo y ser `master` o `tester` (la API del
-     panel con el rol de la aplicación: el request del master ya no abre un engine con el rol
-     dueño). El tester solo existe con `QA_TESTERS_ENABLED` (sin ella no tiene sesión, ADR-0134
-     §5), filtro que hace la API. Ojo: desde `app_runtime` cualquiera podría pasar el id de un
+   - con `p_admin_id`: ese admin debe existir, estar activo y ser `master` (la API del panel con
+     el rol de la aplicación: el request del master ya no abre un engine con el rol dueño). El
+     tester no, tampoco en test (decisión del dueño, 2026-10-20). Ojo: desde `app_runtime` cualquiera podría pasar el id de un
      master, así que esto NO autentica: protege la integridad de la auditoría (el actor sale de
      `admins`, no del llamador). La autorización real es la de la API. Además, con admin se
      rechaza la llamada bajo el `tenant_scope` de un negocio (`app.tenant_id` fijado);
@@ -76,7 +75,7 @@ BEGIN
                 USING ERRCODE = 'insufficient_privilege';
         END IF;
         SELECT 'admin:' || email INTO v_actor
-          FROM public.admins WHERE id = p_admin_id AND role IN ('master', 'tester') AND active;
+          FROM public.admins WHERE id = p_admin_id AND role = 'master' AND active;
         IF NOT FOUND THEN
             RAISE EXCEPTION 'aos_fijar_banderas: solo el admin master cambia las banderas del Agent OS'
                 USING ERRCODE = 'insufficient_privilege';

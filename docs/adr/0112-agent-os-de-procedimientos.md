@@ -205,7 +205,7 @@ inválidas»), criterio «Orden de banderas» de HU-AOS-15:
   0097, `SECURITY DEFINER`, `search_path` fijo, `REVOKE ALL FROM PUBLIC`, `EXECUTE` a `app_runtime`) escribe
   las tres banderas de una vez, valida el orden (procedimientos y enrutamiento exigen v3; los CHECK de 0070 y
   0094 quedan de respaldo) y deja la fila `agent_os.banderas` de `audit_log` (antes, después y actor) en la
-  misma transacción. Con `admin_id` exige un admin activo `master` o `tester`; sin él, la sesión del rol
+  misma transacción. Con `admin_id` exige un admin activo `master`; sin él, la sesión del rol
   dueño (CLI `migrar-a-v3` y `ruteo`, «Preparar mis datos»). Todo pasa por `core.kernel.banderas.fijar_banderas`.
   El `admin_id` no autentica (desde `app_runtime` se podría pasar el de cualquier master): da integridad a la
   auditoría, porque el actor sale de `admins`. La autorización es la de la API.
@@ -215,8 +215,10 @@ inválidas»), criterio «Orden de banderas» de HU-AOS-15:
   `UPDATE` sobre toda la tabla (0003), un `REVOKE` por columna no le resta nada y acotar el GRANT por columnas
   haría nacer sin permiso a cada columna nueva. Excepción conocida: los journeys de evals y algunos tests
   escriben directo con el rol dueño, que el trigger permite.
-- **Rol.** Las rutas `/api/v1/admin/platform/tenants/{id}/agent-os` (GET, PUT y `/simular`) son de operación
-  (ADR-0134 §2): master, o tester con `QA_TESTERS_ENABLED`. Un colaborador o dueño de negocio recibe 403.
+- **Rol.** Las rutas `/api/v1/admin/platform/tenants/{id}/agent-os` (GET, PUT y `/simular`) son **solo del
+  master**, también en test (decisión del dueño, 2026-10-20): excepción a ADR-0134 §2, como la purga. El tester
+  (que tiene «Preparar mis datos» para su negocio `qa-`), un colaborador o un dueño de negocio reciben 403, y la
+  función rechaza un `admin_id` que no sea master.
 - **Qué hace el PUT** (`core.admin.agent_os`): un planificador puro rechaza el objetivo fuera de orden (422) y
   ordena los pasos (encender runtime → procedimientos → ruteo; apagar al revés). El orden rige las
   **precondiciones**, no tres escrituras: se escribe el estado final en una sola llamada. Legacy → v3 corre
