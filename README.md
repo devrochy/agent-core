@@ -89,13 +89,36 @@ agent-core tenant seed <slug>
 ## Usage
 
 ```python
-# A plugin exposes a tool through the MCP host.
-from core.mcp import tool
+# A plugin exposes its business logic as a Skill: a semantic group of tools
+# that the core translates into each LLM's function calling.
+from core.mcp.types import BaseSkill, MCPTool
 
-@tool(name="consultar_inventario")
-async def consultar_inventario(sku: str) -> dict:
-    ...
+class CatalogSkill(BaseSkill):
+    name = "catalog"
+    description = "Consulta inventario y disponibilidad"
+    keywords = ["inventario", "stock", "disponible"]
+
+    def get_tools(self) -> list[MCPTool]:
+        return [
+            MCPTool(
+                name="consultar_inventario",
+                description="Devuelve stock y precio de un SKU",
+                parameters={
+                    "type": "object",
+                    "properties": {"sku": {"type": "string"}},
+                    "required": ["sku"],
+                },
+                handler=self.consultar_inventario,
+            )
+        ]
+
+    async def consultar_inventario(self, sku: str) -> dict:
+        ...
 ```
+
+Or declaratively, with zero Python: a tenant can declare HTTP tools as JSON in
+its AgentSpec and the core executes them through a scoped HTTP client with
+domain allowlists (anti-SSRF).
 
 ## Testing and CI
 
