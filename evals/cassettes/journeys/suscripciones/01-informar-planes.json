@@ -16,7 +16,7 @@
   "escena": "01-informar-planes",
   "formato": 1,
   "herramientas": {
-    "be3f6e742b003694": [
+    "6c46d8bc390f4c81": [
       {
         "description": "Devuelve el perfil estructurado del cliente (nombre, contacto y atributos guardados). Úsala antes de personalizar. Es de solo lectura.",
         "name": "get_customer_profile",
@@ -641,8 +641,20 @@
         "name": "escalate_to_human",
         "parameters": {
           "properties": {
+            "detalle": {
+              "description": "Detalle del motivo, sobre todo si es 'otro'",
+              "type": "string"
+            },
             "reason": {
               "description": "Motivo de la escalación",
+              "enum": [
+                "solicitud_cliente",
+                "queja",
+                "fuera_de_alcance",
+                "intentos_fallidos",
+                "monto_alto",
+                "otro"
+              ],
               "type": "string"
             },
             "summary": {
@@ -701,9 +713,9 @@
   },
   "llamadas": [
     {
-      "clave": "6fb5dc2ead206d2b3a4e125515a5f9dac50282dae5490ab758497905d85a0eaf",
+      "clave": "1e79d02ca7a3c959a8e40fd81a1804a484a6a219e9351962b57faf137209256b",
       "pedido": {
-        "herramientas": "be3f6e742b003694",
+        "herramientas": "6c46d8bc390f4c81",
         "max_tokens": 4096,
         "mensajes": [
           {
@@ -732,7 +744,7 @@
       },
       "respuestas": [
         {
-          "content": "¡Hola! Con gusto te ayudo. Déjame revisar el catálogo de planes.",
+          "content": "",
           "model": "deepseek-flash",
           "stop_reason": "tool_use",
           "tool_calls": [
@@ -740,24 +752,24 @@
               "arguments": {
                 "query": "plan"
               },
-              "id": "call_00_XzBkFHmEOXb8XG0fzUa94544",
+              "id": "call_00_wWMvDGksO7fp80nmzAzY7271",
               "name": "consultar_inventario"
             }
           ],
           "usage": {
-            "cache_read_tokens": 8192,
+            "cache_read_tokens": 0,
             "cache_write_tokens": 0,
-            "input_tokens": 13937,
-            "output_tokens": 61
+            "input_tokens": 14003,
+            "output_tokens": 40
           }
         }
       ],
       "semilla": 0
     },
     {
-      "clave": "42ed069de65f468deca3c671d8cedfd96f8e123c20b87c1b01d3a52137e5512a",
+      "clave": "a514adcb65091d402a62563b328f6d81571fe6dc57d08a6aeec93db4f77bb8b7",
       "pedido": {
-        "herramientas": "be3f6e742b003694",
+        "herramientas": "6c46d8bc390f4c81",
         "max_tokens": 4096,
         "mensajes": [
           {
@@ -765,7 +777,7 @@
             "role": "user"
           },
           {
-            "content": "¡Hola! Con gusto te ayudo. Déjame revisar el catálogo de planes.",
+            "content": "",
             "role": "assistant",
             "tool_calls": [
               {
@@ -804,15 +816,15 @@
       },
       "respuestas": [
         {
-          "content": "¡Claro! Estos son los planes que tenemos:\n\nPlan Free: $0, con 30 días de prueba. Es el plan de entrada sin costo.\n\nPlan Basic: $200,000 mensual. Incluye clases grabadas y una tutoría al mes.\n\nPlan Premium: $600,000 mensual. Incluye clases en vivo y tutorías ilimitadas.\n\nSobre el Basic, no tiene prueba gratis (los días de prueba son 0). El que sí trae 30 días de prueba es el Plan Free.\n\n¿Te gustaría que te cuente más de alguno o que armemos una cotización?",
+          "content": "¡Hola! Estos son nuestros planes mensuales:\n\nPlan Free: $0, con 30 días de prueba. Es el plan de entrada sin costo.\nPlan Basic: $200,000 al mes. Incluye clases grabadas y una tutoría al mes.\nPlan Premium: $600,000 al mes. Clases en vivo y tutorías ilimitadas.\n\nSobre tu pregunta: el Basic no tiene prueba gratis, los días de prueba son del Plan Free.\n\n¿Te cuento más de alguno o querés que te ayude a elegir según lo que buscás?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
           "usage": {
             "cache_read_tokens": 13952,
             "cache_write_tokens": 0,
-            "input_tokens": 14511,
-            "output_tokens": 131
+            "input_tokens": 14556,
+            "output_tokens": 122
           }
         }
       ],

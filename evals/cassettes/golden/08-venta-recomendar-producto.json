@@ -12,7 +12,7 @@
   "escena": "08-venta-recomendar-producto",
   "formato": 1,
   "herramientas": {
-    "7fec2c1c210d3258": [
+    "a935001d09573054": [
       {
         "description": "Devuelve el perfil estructurado del cliente (nombre, contacto y atributos guardados). Úsala antes de personalizar. Es de solo lectura.",
         "name": "get_customer_profile",
@@ -420,8 +420,20 @@
         "name": "escalate_to_human",
         "parameters": {
           "properties": {
+            "detalle": {
+              "description": "Detalle del motivo, sobre todo si es 'otro'",
+              "type": "string"
+            },
             "reason": {
               "description": "Motivo de la escalación",
+              "enum": [
+                "solicitud_cliente",
+                "queja",
+                "fuera_de_alcance",
+                "intentos_fallidos",
+                "monto_alto",
+                "otro"
+              ],
               "type": "string"
             },
             "summary": {
@@ -505,9 +517,9 @@
   },
   "llamadas": [
     {
-      "clave": "35f30a65272040e80c56d1350a9387406de6c652b445c1da5f64c75372abf78f",
+      "clave": "4d0a08efe2c2c9255f4cb41aac7b32b599be5ae6737470908f54bb0c8f0ea34b",
       "pedido": {
-        "herramientas": "7fec2c1c210d3258",
+        "herramientas": "a935001d09573054",
         "max_tokens": 4096,
         "mensajes": [
           {
@@ -554,24 +566,24 @@
       },
       "respuestas": [
         {
-          "content": "¡Buena idea! Dejame ver qué te puede quedar bien con la clásica.",
+          "content": "",
           "model": "deepseek-flash",
           "stop_reason": "tool_use",
           "tool_calls": [
             {
               "arguments": {
-                "context": "Cliente quiere una hamburguesa clásica para llevar",
+                "context": "Cliente quiere una Hamburguesa Clásica para llevar; busca un acompañante",
                 "product_id": "<uuid:1>"
               },
-              "id": "call_00_75JEbXgpbuIVa8j69Q7Y5977",
+              "id": "call_00_5RbfWodRLXuNNDECnJA93268",
               "name": "recomendar_producto"
             }
           ],
           "usage": {
             "cache_read_tokens": 7296,
             "cache_write_tokens": 0,
-            "input_tokens": 7585,
-            "output_tokens": 123
+            "input_tokens": 7651,
+            "output_tokens": 107
           }
         }
       ],
