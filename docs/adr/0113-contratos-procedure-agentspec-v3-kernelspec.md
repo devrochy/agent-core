@@ -1047,6 +1047,31 @@ datos del cliente y documentos que acepta) → el pedido con el link.
 - **Sin cambio:** bandera apagada, sombra, contratos, esquema, reductor de `state.py` y la confirmación
   estricta de acciones y etapas (el «Sí, confirmo» es el sí explícito de HU-AOS-09).
 
+## Adenda (2026-10-20, HU-AOS-49): un campo opcional nuevo es un minor; `knowledge` en 3.1.0
+
+**Estado:** aceptada con ADR-0145. El dueño lo aprobó el 2026-10-19.
+
+- **Regla de versión de los contratos v3.**
+  - Un campo **opcional con default** nuevo en un modelo v3 existente es un **minor**.
+  - Quitar un campo, renombrarlo, cambiar su tipo o su rango, o hacer obligatorio uno opcional sigue
+    siendo un **major**.
+  - Un modelo nuevo aditivo ya era minor (`procedure/1` en 2.1.0).
+  - Los modelos siguen con `extra="forbid"`.
+- **Consecuencia aceptada.** Cuando exista una `agent_version` guardada con el campo nuevo, no se puede
+  volver a un binario anterior al minor: ese binario rechaza el campo desconocido y la release queda en
+  `ErrorDeRelease`.
+  - El orden de despliegue es primero el contrato y después quien lo escribe (el editor).
+  - Un rollback de release sigue funcionando, porque no cambia el binario.
+- **Primer caso: `agentcore-contracts` 3.1.0** con `AgentSpecV3.knowledge: KnowledgeConfigV3 | None`.
+  - Campos: `mode` (`semantica` o `hibrida`, por defecto `hibrida`), `topK` (1 a 8, por defecto 4) y
+    `minScore` (0 a 1, por defecto 0,35).
+  - Es un bloque de primer nivel y no va dentro de `memory`. `memory.rag` sigue siendo el recall de la
+    memoria del cliente (ADR-0145 §4).
+- **Lector tolerante y editor.**
+  - El lector tolerante no lo emite, porque v2 no tiene documentos.
+  - Sin la tool `buscar_conocimiento` declarada (parte 3 de HU-AOS-49), el bloque no tiene efecto: no se
+    poda. Ver la adenda de implementación de ADR-0145.
+
 ## Adenda (2026-10-20): smoke del dueño en test — un solo resumen, correos mal escritos y el lead
 
 **Estado:** propuesta; requiere la aprobación del dueño antes del merge. La revisó el agente

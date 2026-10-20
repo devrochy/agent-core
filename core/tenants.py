@@ -326,6 +326,8 @@ async def purge_tenant(ref: str, confirm_phrase: str) -> bool:
     if gone is not None:
         raise RuntimeError("purge_tenant no eliminó el tenant (ver logs)")
 
+    archivos_ok = await _borrar_archivos_del_tenant(tenant.id, tenant.slug)
+
     retry = f"agent-core tenant purge-redis {tenant.id}"
     try:
         borradas = await _limpiar_redis(tenant.id, conversation_ids)
@@ -359,7 +361,35 @@ async def purge_tenant(ref: str, confirm_phrase: str) -> bool:
             log.exception("tenant_purge_redis_alert_failed", tenant_id=str(tenant.id))
         return False
     log.info("tenant_purged", tenant_id=str(tenant.id), redis_keys_deleted=borradas)
-    return True
+    return archivos_ok
+
+
+async def _borrar_archivos_del_tenant(tenant_id: uuid.UUID, slug: str) -> bool:
+    """Borra `TENANTS_ROOT/<slug>/` después de la purga de la base (ADR-0145 §6): docs,
+    evidencias y documentos de conocimiento. El slug se capturó ANTES de la purga (la fila ya no
+    existe). Si falla, la purga no se revierte: log y alerta crítica con la carpeta; si el slug se
+    vuelve a dar de alta, el alta manda sus datos de clientes a cuarentena
+    (`onboarding.cuarentena_de_datos_huerfanos`)."""
+    from core.onboarding import borrar_carpeta_del_tenant
+
+    try:
+        borrar_carpeta_del_tenant(slug)
+        return True
+    except Exception as exc:
+        log.error("tenant_purge_files_cleanup_failed", tenant_id=str(tenant_id), error=type(exc).__name__)
+        try:
+            from core.shared.alerts import send_alert
+
+            await send_alert(
+                "Purga de negocio: archivos sin borrar",
+                f"El negocio {tenant_id} se purgó de la base, pero su carpeta en TENANTS_ROOT no se "
+                "pudo borrar. Bórrala a mano en el volumen de tenants; si el slug se vuelve a dar de "
+                "alta, sus documentos y evidencias pasan a .purgados/.",
+                severity="critical",
+            )
+        except Exception:
+            log.exception("tenant_purge_files_alert_failed", tenant_id=str(tenant_id))
+        return False
 
 
 async def _resolve_tenant_if_exists(ref) -> Tenant | None:

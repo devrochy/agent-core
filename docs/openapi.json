@@ -15691,6 +15691,267 @@
         }
       }
     },
+    "/api/v1/pack/pack_knowledge/agents/{agent_id}/documents": {
+      "get": {
+        "tags": [
+          "pack · conocimiento"
+        ],
+        "summary": "Listar Documentos",
+        "operationId": "listar_documentos_api_v1_pack_pack_knowledge_agents__agent_id__documents_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentoOut"
+                  },
+                  "title": "Response Listar Documentos Api V1 Pack Pack Knowledge Agents  Agent Id  Documents Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "pack · conocimiento"
+        ],
+        "summary": "Subir Documento",
+        "description": "Sube un documento al agente. Queda `pendiente` y el worker lo procesa.",
+        "operationId": "subir_documento_api_v1_pack_pack_knowledge_agents__agent_id__documents_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_subir_documento_api_v1_pack_pack_knowledge_agents__agent_id__documents_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentoOut"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Tope del plan: `error.code = plan_limit_documentos`, `error.details = {metric, used, limit}`; no se escribió nada."
+          },
+          "413": {
+            "description": "El archivo supera 20 MB (`error.code = muy_grande`)."
+          },
+          "422": {
+            "description": "Tipo o contenido no admitido (`error.code = formato | vacio`)."
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_knowledge/agents/{agent_id}/documents/{document_id}": {
+      "delete": {
+        "tags": [
+          "pack · conocimiento"
+        ],
+        "summary": "Borrar Documento",
+        "operationId": "borrar_documento_api_v1_pack_pack_knowledge_agents__agent_id__documents__document_id__delete",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_knowledge/agents/{agent_id}/documents/{document_id}/reprocess": {
+      "post": {
+        "tags": [
+          "pack · conocimiento"
+        ],
+        "summary": "Reprocesar Documento",
+        "operationId": "reprocesar_documento_api_v1_pack_pack_knowledge_agents__agent_id__documents__document_id__reprocess_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/platform/meta-app/embedded-signup/step": {
       "post": {
         "tags": [
@@ -36289,6 +36550,130 @@
         ],
         "title": "CreditUsage",
         "description": "Crédito mensual del plan (D-35, ADR-0142; medición ADR-0144). `used` en créditos con\ndécimas (1 crédito = COP 10), `percent` sin tope de 100 (puede pasarse: hoy solo se avisa).\n`used`/`percent` son `null` si no se pudo medir: el panel muestra «medición pendiente».\nEl mes de consumo es `[period_start, period_end)`, alineado con el ciclo de la suscripción."
+      },
+      "Body_subir_documento_api_v1_pack_pack_knowledge_agents__agent_id__documents_post": {
+        "properties": {
+          "archivo": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "Archivo"
+          },
+          "titulo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Titulo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "archivo"
+        ],
+        "title": "Body_subir_documento_api_v1_pack_pack_knowledge_agents__agent_id__documents_post"
+      },
+      "DocumentoOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "mime": {
+            "type": "string",
+            "title": "Mime"
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "error_codigo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Codigo"
+          },
+          "paginas": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paginas"
+          },
+          "num_fragmentos": {
+            "type": "integer",
+            "title": "Num Fragmentos"
+          },
+          "pii_detectada": {
+            "type": "integer",
+            "title": "Pii Detectada"
+          },
+          "desactualizado": {
+            "type": "boolean",
+            "title": "Desactualizado"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "processed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "agent_id",
+          "titulo",
+          "mime",
+          "bytes",
+          "estado",
+          "error_codigo",
+          "paginas",
+          "num_fragmentos",
+          "pii_detectada",
+          "desactualizado",
+          "created_at",
+          "processed_at"
+        ],
+        "title": "DocumentoOut"
       }
     }
   }

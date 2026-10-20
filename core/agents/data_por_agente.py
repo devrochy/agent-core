@@ -214,7 +214,12 @@ async def resumen(tenant_id: uuid.UUID, *, ahora: datetime | None = None) -> dic
                     func.coalesce(func.sum(UsageLedger.cost_usd), 0),
                     func.max(UsageLedger.created_at),
                 )
-                .where(UsageLedger.tenant_id == tenant_id, UsageLedger.created_at >= desde)
+                .where(
+                    UsageLedger.tenant_id == tenant_id,
+                    UsageLedger.created_at >= desde,
+                    # La ingesta del conocimiento no es actividad de un agente (ADR-0145 §3).
+                    UsageLedger.kind != "embedding",
+                )
                 .group_by(UsageLedger.agent_instance_id)
             )
         ).all()
@@ -617,6 +622,8 @@ async def consumo(alcance: Alcance, filtros: Filtros) -> dict[str, Any]:
         alcance.condicion(UsageLedger.agent_instance_id),
         UsageLedger.created_at >= filtros.periodo.desde,
         UsageLedger.created_at < filtros.periodo.hasta,
+        # Sin agente, la ingesta del conocimiento caería en el General (ADR-0140): no es un turno.
+        UsageLedger.kind != "embedding",
     ]
     if filtros.connection_id is not None:
         condiciones.append(UsageLedger.connection_id == filtros.connection_id)
