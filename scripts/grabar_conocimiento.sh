@@ -17,6 +17,13 @@ set -euo pipefail
 
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Dependencias del pack de conocimiento (extracción de PDF y DOCX): antes de levantar nada.
+if ! "${PYTHON:-python}" -c "import pypdf, docx" >/dev/null 2>&1; then
+  echo "A este Python le faltan pypdf y python-docx (dependencias de pack-knowledge)." >&2
+  echo "Instálalas en su venv: ${PYTHON:-python} -m pip install pypdf python-docx" >&2
+  exit 2
+fi
+
 IMAGEN="${IMAGEN_POSTGRES:-ghcr.io/devrochy/solvershub-postgres:pg17-postgis}"
 SUFIJO="$(date +%s)"
 PG="kb-grabar-pg-${SUFIJO}"
