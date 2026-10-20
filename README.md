@@ -30,6 +30,14 @@ Plugins run in-process; no forks, no per-client code, no prompts in code.
 | Admin | SSR panel (Jinja2) with AgentSpec editor, tenant selector and onboarding wizard |
 | Reliability | 3-layer idempotency · debounce · guardrails · kill switch · human escalation · canary/rollback |
 
+## Demo
+
+Admin panel running locally with a seeded demo tenant (restaurant preset):
+
+| Dashboard | Agent configuration (AgentSpec) | Plugin management |
+|---|---|---|
+| ![Dashboard](docs/assets/admin-dashboard.png) | ![AgentSpec](docs/assets/agent-spec-config.png) | ![Plugins](docs/assets/admin-plugins.png) |
+
 ## Architecture
 
 ```mermaid
