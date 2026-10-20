@@ -60,6 +60,8 @@ que el cliente confirme el dato {nombre} (el sistema se lo pregunta con su propi
 que el cliente confirme lo de la etapa {nombre}
 ## falta_accion
 la acción {nombre} con resultado correcto
+## falta_accion_confirmable
+la acción {nombre} con resultado correcto: llámala tú cuando el cliente ya dio los datos; el sistema le muestra el resumen y le pide confirmar con su propio mensaje, así que no escribas tu propio resumen ni le preguntes si confirma, aunque otra instrucción diga lo contrario
 ## pide_ahora
 Faltan estos datos, en este orden: {datos}. Pídelos todos en un solo mensaje, como lista numerada con el nombre de cada dato en palabras simples, y cierra con «puedes enviármelos en un solo mensaje». Si el cliente ya dio una parte, pide solo los que faltan, en lista corta. Si acabas de explicar el plan, en el mismo mensaje pon primero lo esencial del plan en una lista corta. No pidas confirmaciones ni otros datos.
 ## dato_a_pedir

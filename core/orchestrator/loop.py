@@ -999,7 +999,13 @@ async def _ejecutar_comando(conversation: Conversation, motor: ContextoMotor, to
         # Solo las claves del schema: un nombre de clave extra lo eligió el modelo (podría ser un
         # dato del cliente). Las demás solo se cuentan.
         input_data=comandos_del_hilo.claves_auditables(tool_call.name, tool_call.arguments),
-        output_data={"ok": resultado.get("ok") is True, "errors": len(resultado.get("errors") or [])},
+        output_data={
+            "ok": resultado.get("ok") is True,
+            "errors": len(resultado.get("errors") or []),
+            # Solo las claves de los errores (smoke de test 2026-10-20: un `actualizar_tarea` con
+            # `errors: 1` no se pudo diagnosticar desde la base).
+            "codigos": comandos_del_hilo.codigos_de_errores(resultado.get("errors") or []),
+        },
     )
     return resultado
 

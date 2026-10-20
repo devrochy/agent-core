@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from functools import cache
+from typing import Any
 
 from core.kernel.tarjeta import RotulosInvalidos
 
@@ -44,6 +45,8 @@ MENSAJES = {
     "dato_no_dicho": ("dato",),
     "confirmacion_vencida": ("accion",),
     "confirmacion_repedida": (),
+    # Smoke de test 2026-10-20: correo con el dominio mal escrito.
+    "correo_dudoso": ("dato", "sugerido"),
 }
 _SECCION = re.compile(r"^## ([a-z_]+)$")
 _MAX_ERROR_RESOLVER = 300
@@ -89,6 +92,33 @@ def mensajes() -> dict[str, str]:
 
 def mensaje(clave: str, **campos: str) -> str:
     return mensajes()[clave].format(**campos)
+
+
+@cache
+def _patrones_de_mensajes() -> tuple[tuple[str, re.Pattern[str]], ...]:
+    """(clave, patrón) de cada mensaje del motor; `resolver_rechazo` ("{dato}: {error}") va al
+    final porque es el más genérico."""
+    claves = sorted(mensajes(), key=lambda c: c == "resolver_rechazo")
+    salida = []
+    for clave in claves:
+        partes = re.split(r"\{[a-z_]+\}", mensajes()[clave])
+        salida.append((clave, re.compile(".+?".join(re.escape(p) for p in partes), re.DOTALL)))
+    return tuple(salida)
+
+
+def codigo_de_error(texto: Any) -> str:
+    """La clave del playbook `motor` de un error ya armado, para la auditoría (solo códigos,
+    nunca el texto: puede traer el nombre de un dato o el error de un resolver). `otro` si no es
+    un mensaje del motor."""
+    if not isinstance(texto, str):
+        return "otro"
+    try:
+        for clave, patron in _patrones_de_mensajes():
+            if patron.fullmatch(texto):
+                return clave
+    except Exception:
+        return "otro"
+    return "otro"
 
 
 def error_de_resolver(texto: str) -> str:

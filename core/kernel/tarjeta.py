@@ -79,6 +79,9 @@ CLAVES = {
     "falta_confirmar_dato": ("nombre",),
     "falta_confirmar_etapa": ("nombre",),
     "falta_accion": ("nombre",),
+    # La acción de salida que exige confirmación (smoke de test 2026-10-20): la confirmación la
+    # pide el sistema con su resumen, no el modelo.
+    "falta_accion_confirmable": ("nombre",),
     # Qué pedir ahora (adenda 2026-10-13 de ADR-0113).
     "pide_ahora": ("datos",),
     "dato_a_pedir": ("numero", "dato", "rotulo"),
@@ -261,13 +264,15 @@ def _lineas_de_tarea(
 def describir_faltas(proc: Procedure, stage: Any, tarea: Proyeccion, r: Mapping[str, str] | None = None) -> str:
     """Lo que falta para salir de la etapa (`motor.faltas_de_salida`) en una línea, con los
     rótulos del playbook; "" si no falta nada. Solo nombres validados (dato, etapa, acción)."""
-    from core.kernel.procedures.motor import faltas_de_salida
+    from core.kernel.procedures.motor import faltas_de_salida, requiere_confirmacion
 
     r = r or rotulos()
     piezas: list[str] = []
     for falta in faltas_de_salida(proc, stage, tarea):
         patron = _ACCION if falta.clase == "accion" else _NOMBRE
         clave = f"falta_{falta.clase}"
+        if falta.clase == "accion" and tarea.pending_confirmation is None and requiere_confirmacion(stage, falta.nombre):
+            clave = "falta_accion_confirmable"
         if clave in r and patron.fullmatch(falta.nombre):
             piezas.append(r[clave].format(nombre=falta.nombre))
     return "; ".join(piezas)

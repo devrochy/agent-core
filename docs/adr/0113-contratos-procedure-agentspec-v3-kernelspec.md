@@ -1046,3 +1046,60 @@ datos del cliente y documentos que acepta) → el pedido con el link.
   numerada, el resumen único con los términos y el «Sí, confirmo».
 - **Sin cambio:** bandera apagada, sombra, contratos, esquema, reductor de `state.py` y la confirmación
   estricta de acciones y etapas (el «Sí, confirmo» es el sí explícito de HU-AOS-09).
+
+## Adenda (2026-10-20): smoke del dueño en test — un solo resumen, correos mal escritos y el lead
+
+**Estado:** propuesta; requiere la aprobación del dueño antes del merge. La revisó el agente
+`arquitecto` antes de escribir código. No cambia contratos ni esquema (sin migración), ni lo que ve
+el modelo con `tenants.aos_procedures` apagada: el gate en replay pasa sin regrabar.
+
+Origen: smoke del dueño en test (chat web, negocio `solvershub`, 2026-10-20 05:01–05:21 UTC;
+conversaciones `e3c24103…` demo, `78df50bb…` contratar Premium y `7e301ee3…` cambiar plan).
+
+- **1. Punto de reposo de la ACCIÓN de salida** (`ContextoMotor._pedir_accion_debida`, hermano de
+  `_pedir_dato_debido`).
+  - **Causa raíz:** en el turno en que `cotizar_plan` llevó la tarea de `datos` a `confirmar`, el modelo
+    escribió su propio «Quedó así tu resumen… ¿Confirmas?» sin llamar `confirmar_cotizacion` (su
+    descripción dice «llamala SOLO cuando el cliente dijo que sí», y no se puede tocar: está en el
+    gate). Al «Si confirmo» llamó la acción y el motor mandó la tarjeta: el cliente confirmó dos veces.
+  - **Cambio:** `confirmacion_del_turno` (y por ella `salida_al_agotar`) primero mira si la tarea en
+    foco ENTRÓ en este turno a una etapa con `confirmation` cuya `exitWhen.action` exige confirmación,
+    sin petición vigente, sin que el modelo la haya llamado en la etapa, y con TODAS las propiedades del
+    schema de la acción como datos de la tarea con valor (`motor.accion_de_salida_ligable`). Entonces el
+    kernel registra `confirmation_requested` (args ligados, `resumen` = huella del resumen del pack) y
+    sale el resumen único en vez del texto del modelo. Nunca registra `action_requested` ni ejecuta.
+    Sin resumen del pack, no hace nada. El «Sí, confirmo» sigue el camino de siempre:
+    `confirmar_tarea` → la acción con los mismos datos (mismo hash por la ligadura).
+  - **Dónde dispara hoy:** `contratar_plan.confirmar` y `cobranza.promesa_de_pago.registrar`; no en
+    `cambiar_plan` (lleva `monto_a_pagar`) ni en la agenda. Lo fija un test.
+  - **Textos:** `confirmacion_requerida` (motor) ya no dice «pídesela mostrando lo que se va a hacer»:
+    dice que el sistema la pide con su resumen y que, ante un sí claro, se llama `confirmar_tarea` y
+    después la acción. La tarjeta suma `falta_accion_confirmable` para la acción de salida que exige
+    confirmación sin petición vigente («llámala tú; el resumen y el ¿confirmas? los pone el sistema»).
+  - **Auditoría:** `core:comando` guarda también los códigos de los errores (`codigos`, claves del
+    playbook, nunca el texto). El `actualizar_tarea` fallido de las 05:14:20 solo dejó `errors: 1` y su
+    causa no es determinable desde la base.
+- **2. Correo con el dominio mal escrito** (`devrochy26@gmai.com`: el acceso del negocio nuevo se fue a
+  ese correo).
+  - Tabla cerrada `core/kernel/procedures/correos_mal_escritos.json` (dato, validada al cargar,
+    fail-closed). Solo en `actualizar_tarea` (`ContextoMotor._correos_dudosos`): un dato del servidor o
+    de un botón no pasa por aquí.
+  - Primer intento: error `correo_dudoso` con el dominio sugerido de la tabla (nunca un valor del
+    cliente); todo o nada, como los demás errores. El modelo pregunta «¿quisiste decir @gmail.com?».
+  - Si el cliente insiste, el MISMO valor se acepta en un turno posterior: marca en Redis por
+    conversación y hash del correo, con la huella del mensaje del turno (reintentar en el mismo turno
+    no pasa). Si Redis falla, se acepta: es una sugerencia, no una guarda.
+  - **Relaja la regla 5 de la adenda 2026-10-12** (dato dicho por el cliente): `x@gmail.com` cuenta
+    como dicho si el cliente escribió `x@gmai.com` y la tabla sugiere justo ese dominio. El resumen
+    único se lo muestra antes de confirmar.
+  - Necesario con el punto 1: si el correo es el último dato, la tarea entra a `confirmar` en el mismo
+    turno y la tarjeta taparía la pregunta del modelo; el rechazo la deja en `datos`.
+- **3. El lead del cliente** quedaba sin nombre ni correo: con foco, `crear_lead` y `actualizar_lead`
+  no se ofrecen. Evento nuevo del core `procedure.slots_set` (in-process, `emit`, fuera del lock y
+  después del commit): `conversation_id`, `customer_id`, `procedure_id` y los datos aceptados (sin los
+  de pago). El core no traduce nombres: pack-commerce filtra SUS procedimientos, comprueba que esté
+  habilitado y completa el lead EXISTENTE del cliente (nombre, correo y teléfono; nunca crea otro ni
+  toca la memoria del cliente). `crear_pedido` hace lo mismo con `customer_data` (camino sin motor).
+  ADR-0107 no cambia: no es un evento de dinero y va con `host.subscribe`. El payload lleva datos
+  personales: el bus no lo escribe en logs.
+- **Sin cambio:** bandera apagada, sombra, contratos, esquema y la confirmación estricta de acciones.

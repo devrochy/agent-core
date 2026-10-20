@@ -28,6 +28,12 @@ ON_MESSAGE_RECEIVED = "message.received"          # payload: conversation_id, cu
 ON_MESSAGE_SENT = "message.sent"                  # payload: conversation_id, content
 ON_CONVERSATION_STARTED = "conversation.started"  # payload: conversation_id, customer_id
 ON_CONVERSATION_CLOSED = "conversation.closed"    # payload: conversation_id
+# Motor de procedimientos (smoke de test 2026-10-20): el cliente dio datos de una tarea y el motor
+# los aceptó (`actualizar_tarea`). Lo emite después de confirmar la transacción, in-process; cada
+# pack filtra SUS `procedure_id` y traduce SUS nombres (p. ej. commerce completa el lead).
+# payload: tenant_id, conversation_id, customer_id, procedure_id, datos ({dato: valor}, sin datos de pago).
+# Lleva datos personales: los handlers no lo escriben en logs.
+ON_PROCEDURE_SLOTS_SET = "procedure.slots_set"
 ON_ESCALATION_TRIGGERED = "escalation.triggered"  # payload: conversation_id, reason
 ON_PLUGIN_ACTIVATED = "plugin.activated"          # payload: plugin_id
 ON_PLUGIN_DISABLED = "plugin.disabled"            # payload: plugin_id, reason

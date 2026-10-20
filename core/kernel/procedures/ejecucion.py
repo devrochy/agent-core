@@ -30,6 +30,7 @@ Transacciones y efectos (revisión del agente `arquitecto`):
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -157,6 +158,36 @@ async def _tomar_marca_interactivo(tenant_id: uuid.UUID, conversation_id: uuid.U
         return bool(await get_redis().getdel(_clave_marca(tenant_id, conversation_id)))
     except Exception as exc:
         log.warning("motor_marca_interactivo_lectura_fallo", error=type(exc).__name__)
+        return True
+
+
+_MARCA_CORREO = "motor:correo_dudoso"
+_TTL_MARCA_CORREO_S = 24 * 3600
+
+
+async def _segundo_intento_de_correo(
+    tenant_id: uuid.UUID, conversation_id: uuid.UUID, correo: str, texto_cliente: str
+) -> bool:
+    """True si ese mismo correo ya se rechazó por dudoso en un turno ANTERIOR de la conversación
+    (el cliente respondió a la pregunta e insistió). Si no, deja la marca con la huella del
+    mensaje del turno: reintentar en el mismo turno, sin preguntarle al cliente, no la pasa. Las
+    claves llevan hashes, nunca el correo ni el texto."""
+    huella = hashlib.sha256(correo.strip().lower().encode()).hexdigest()[:24]
+    turno = hashlib.sha256((texto_cliente or "").encode()).hexdigest()[:24]
+    clave = f"{_MARCA_CORREO}:{tenant_id}:{conversation_id}:{huella}"
+    try:
+        from core.memory.working import get_redis
+
+        redis = get_redis()
+        previo = await redis.get(clave)
+        if previo is not None:
+            previo = previo.decode() if isinstance(previo, bytes) else str(previo)
+            if previo != turno:
+                return True
+        await redis.set(clave, turno, ex=_TTL_MARCA_CORREO_S)
+        return False
+    except Exception as exc:
+        log.warning("motor_marca_correo_fallo", error=type(exc).__name__)
         return True
 
 
@@ -1264,6 +1295,9 @@ class ContextoMotor:
                 return ResultadoComando(False, [mensaje("resolver_no_disponible", dato="los datos")], list(foco.stage.actions))
             if errores:  # todo o nada: el modelo corrige, nunca se adivina
                 return ResultadoComando(False, errores, list(foco.stage.actions))
+            dudosos = await self._correos_dudosos(proc, validos)
+            if dudosos:  # todo o nada, como los demás errores
+                return ResultadoComando(False, dudosos, list(foco.stage.actions))
             no_dichos = await self._no_dichos(s, proc, slots, validos)
             if no_dichos:  # todo o nada, como los demás errores
                 errores = [mensaje("dato_no_dicho", dato=n) for n in no_dichos]
@@ -1291,9 +1325,50 @@ class ContextoMotor:
                     s, foco.fila, "confirmation_requested", {"target": {"kind": "slot", "name": por_confirmar}}, "kernel"
                 )
             task_id = foco.fila.id
+            procedure_id = proc.id
+            aceptados = {str(n): v for n, v in validos.items() if proc.slots[n].dataClass != "payment"}
         # Solo con la transacción ya confirmada: un fallo dentro del bloque no deja el dato contado.
         self.datos_fijados.update(str(n) for n in validos)
+        await self._avisar_datos(procedure_id, aceptados)
         return await self._terminar_comando(task_id)
+
+    async def _avisar_datos(self, procedure_id: str, datos: Mapping[str, Any]) -> None:
+        """`procedure.slots_set` fuera del lock y best-effort (un handler que falla no toca el
+        comando): así el lead del pack se completa aunque con foco sus tools no se ofrezcan."""
+        if not datos:
+            return
+        from core.shared.events import ON_PROCEDURE_SLOTS_SET, event_bus
+
+        try:
+            await event_bus.emit(
+                ON_PROCEDURE_SLOTS_SET,
+                tenant_id=self.tenant_id,
+                conversation_id=self.conversation_id,
+                customer_id=self.customer_id,
+                procedure_id=procedure_id,
+                datos=dict(datos),
+            )
+        except Exception as exc:
+            log.warning("motor_aviso_de_datos_fallo", error=type(exc).__name__)
+
+    async def _correos_dudosos(self, proc: Procedure, validos: Mapping[str, Any]) -> list[str]:
+        """Correos con un dominio mal escrito de la tabla (`gmai.com`, smoke de test 2026-10-20: el
+        acceso del negocio nuevo se fue a ese correo). La primera vez se rechaza con la sugerencia
+        y el modelo le pregunta al cliente; un segundo intento con el MISMO valor (el cliente dijo
+        que está bien así) se acepta. Solo en `actualizar_tarea`: un dato del servidor o de un
+        botón no pasa por aquí. Si Redis falla, se acepta (es una sugerencia, no una guarda)."""
+        errores: list[str] = []
+        for nombre, valor in validos.items():
+            if proc.slots[nombre].format != "email":
+                continue
+            sugerido = motor.dominio_sugerido(valor)
+            if sugerido is None or await _segundo_intento_de_correo(
+                self.tenant_id, self.conversation_id, str(valor), self.texto_cliente
+            ):
+                continue
+            log.info("motor_correo_dudoso", procedure_id=proc.id, dato=nombre)
+            errores.append(mensaje("correo_dudoso", dato=nombre, sugerido=sugerido))
+        return errores
 
     async def _no_dichos(
         self, s: AsyncSession, proc: Procedure, crudos: Mapping[str, Any], validos: Mapping[str, Any]
@@ -1390,6 +1465,11 @@ class ContextoMotor:
         texto fijo `sin_resumen`, sin datos ni botón. Solo si no se pudo leer la tarea, None."""
         if self.modo != "activo":
             return None
+        pedida: tuple[uuid.UUID, int, dict[str, Any]] | None = None
+        try:
+            pedida = await self._pedir_accion_debida()
+        except Exception as exc:  # best-effort: el turno sigue con el texto del modelo
+            log.warning("motor_pedir_accion_fallo", error=type(exc).__name__)
         try:
             from core.db.session import get_session
 
@@ -1404,6 +1484,10 @@ class ContextoMotor:
                 peticion = _evento_por_seq(await _eventos(s, foco), seq)
         except Exception as exc:
             log.warning("motor_confirmacion_del_turno_fallo", error=type(exc).__name__)
+            if pedida is not None:
+                # Sale el texto del modelo: la petición del kernel no puede quedar vigente sin que
+                # el cliente haya visto el resumen del servidor.
+                await self._anular_peticion(*pedida)
             return None
         from core.kernel.confirmacion import armar, sin_resumen
 
@@ -1434,6 +1518,58 @@ class ContextoMotor:
             log.warning("motor_confirmacion_del_turno_fallo", error=type(exc).__name__)
             await self._anular_peticion(foco.fila.id, seq, pendiente)
             return ConfirmacionDelTurno(confirmacion=sin_resumen(), modo="explicit")
+
+    async def _pedir_accion_debida(self) -> tuple[uuid.UUID, int, dict[str, Any]] | None:
+        """Punto de reposo de la ACCIÓN de salida (smoke de test 2026-10-20, hermano de
+        `_pedir_dato_debido`): si la tarea en foco entró EN ESTE turno a una etapa con
+        `confirmation` cuya salida es una acción que exige confirmación, y el modelo cerró el turno
+        sin llamarla (escribió su propio resumen y «¿confirmas?»), el kernel pide la confirmación
+        con el resumen único del servidor; `confirmacion_del_turno` lo envía en vez del texto del
+        modelo. Así el cliente confirma una sola vez y lo que confirma lo armó el servidor.
+
+        Solo si TODOS los argumentos de la acción salen de datos de la tarea con valor (así la
+        llamada del modelo después del sí, ligada a los mismos datos, tiene el mismo hash y no
+        sale otra tarjeta), si la acción tiene resumen de su habilidad y si no hay ninguna
+        petición vigente. Nunca registra `action_requested` ni ejecuta nada. Devuelve (tarea, seq,
+        pendiente) de la petición que registró, para anularla si después no se puede enviar."""
+        from core.mcp.host import mcp_host
+
+        if self.modo != "activo":
+            return None
+        async with _con_lock(self.tenant_id, self.conversation_id) as s:
+            foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
+            if foco is None or foco.tarea.pending_confirmation is not None:
+                return None
+            stage, proc = foco.stage, foco.proc
+            herramienta_de = mcp_host.get_tool
+            accion = motor.accion_de_salida_ligable(proc, stage, lambda a: _propiedades(herramienta_de(a)))
+            if accion is None or self._fuera_del_agente(accion, stage.actions):
+                return None
+            al_empezar = self._seq_al_empezar.get(foco.fila.id, 0)
+            eventos = await _eventos(s, foco)
+            del_turno = [e for e in eventos if e.seq > al_empezar]
+            entro = any(e.type == "stage_entered" and e.data.get("to_stage") == stage.id for e in del_turno)
+            if not entro or any(e.data.get("action") == accion for e in motor.eventos_de_la_etapa(eventos)):
+                return None
+            propiedades = _propiedades(mcp_host.get_tool(accion))
+            valores = motor.valores(foco.tarea)
+            if any(valores.get(p) is None for p in propiedades):
+                return None
+            args, distinto = await self._ligar(foco, accion, {p: valores[p] for p in propiedades})
+            if distinto is not None:
+                return None
+            huella = await self._huella_del_pack(foco, accion, args)
+            if not huella:  # sin resumen del pack (o no se pudo armar): el modelo sigue como siempre
+                return None
+            h = motor.hash_args(args)
+            fila = await _registrar(
+                s, foco.fila, "confirmation_requested",
+                {"target": {"kind": "action", "name": accion}, "args_hash": h, "resumen": huella}, "kernel",
+            )
+            self._pedidas[h] = (accion, dict(args))
+            pedida = (fila.id, int(fila.last_seq), {"kind": "action", "name": accion})
+        log.info("motor_accion_por_confirmar", procedure_id=proc.id, etapa=stage.id, accion=accion)
+        return pedida
 
     async def _anular_peticion(self, task_id: uuid.UUID, seq: int, pendiente: Mapping[str, Any]) -> None:
         """Sale `sin_resumen` para una petición de ACCIÓN de este turno (revisión de seguridad,
@@ -1650,6 +1786,12 @@ class ContextoMotor:
                 datos = [d for d in datos if d.nombre != campo]
                 datos.append(Dato(campo, monto, es_monto=True))
         return datos
+
+
+def _propiedades(herramienta: Any) -> list[str]:
+    """Nombres de las propiedades del schema de una tool (vacío si no existe)."""
+    parametros = (getattr(herramienta, "parameters", None) or {}) if herramienta is not None else {}
+    return [str(p) for p in (parametros.get("properties") or {})]
 
 
 def _fuera_de_etapa(foco: _Foco, accion: str) -> str:

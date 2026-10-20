@@ -699,6 +699,21 @@ def _vertical_invalido(valor: Any) -> dict[str, Any] | None:
     }
 
 
+def _estado_del_plan(order: Any) -> dict[str, str]:
+    """Estado de un pedido de PLAN en códigos fijos (el modelo los redacta), o {} si el pedido
+    no es de un plan. `activo`: la suscripción del plan quedó activada (`plan_activation_status
+    = activada`) y el acceso llega al correo que el cliente dio al contratar; `activando`: pagado
+    y con la activación pendiente; `pendiente_de_pago`: el plan espera el pago."""
+    activacion = getattr(order, "plan_activation_status", None)
+    if activacion is None and getattr(order, "datos_alta", None) is None:
+        return {}
+    if activacion == "activada":
+        return {"estado_plan": "activo", "acceso": "enviado_al_correo_del_alta"}
+    if activacion == "pendiente" or getattr(order, "payment_status", None) == "pagado":
+        return {"estado_plan": "activando"}
+    return {"estado_plan": "pendiente_de_pago"}
+
+
 def _datos_alta(customer_data: dict[str, Any]) -> dict[str, str] | None:
     """Lo que el alta del servicio de un plan necesita del checkout (ADR-0121): se guarda
     en el pedido; el perfil del cliente solo se toca con su consentimiento (D17)."""
@@ -713,6 +728,36 @@ def _datos_alta(customer_data: dict[str, Any]) -> dict[str, str] | None:
 
 
 # ------------------------------------------------------------------ LEADS
+async def completar_lead(
+    session: Any,
+    customer_id: uuid.UUID,
+    *,
+    nombre: Any = None,
+    email: Any = None,
+    telefono: Any = None,
+) -> bool:
+    """Completa el lead EXISTENTE del cliente con los datos que dio (smoke de test 2026-10-20:
+    en un recorrido guiado las tools de lead no se ofrecen y el lead quedaba sin nombre ni
+    correo). Nunca crea otro lead ni toca la memoria del cliente. Pisa con el último valor
+    dicho. True si había lead."""
+    lead = (
+        await session.execute(
+            select(Lead)
+            .where(Lead.customer_id == customer_id, Lead.tenant_id == get_current_tenant_id())
+            .order_by(Lead.created_at.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+    if lead is None:
+        return False
+    for campo, valor, tope in (("name", nombre, 200), ("email", email, 254), ("phone", telefono, 40)):
+        limpio = _ESPACIOS.sub(" ", str(valor or "")).strip()[:tope]
+        if limpio:
+            setattr(lead, campo, limpio.lower() if campo == "email" else limpio)
+    lead.last_activity_at = _now()
+    return True
+
+
 class LeadSkill(BaseSkill):
     name = "lead_skill"
     description = "Captura y calificación de leads (prospectos de venta)"
@@ -1939,6 +1984,14 @@ class OrderSkill(BaseSkill):
                 )
                 await self._decrement_stock(session, item.variant_id, item.quantity)
             quote.status = "convertida"
+            # El lead del cliente queda con los datos del pedido (sin crear otro).
+            await completar_lead(
+                session,
+                context.customer_id,
+                nombre=customer_data.get("full_name"),
+                email=customer_data.get("email"),
+                telefono=customer_data.get("phone"),
+            )
             order_id = str(order.id)
             public_order_number = order.public_order_number
             if es_plan and order.payment_status == "pagado":
@@ -2202,9 +2255,10 @@ class OrderSkill(BaseSkill):
             if order is None:
                 return {"error": "Pedido no encontrado."}
             estado, numero = order.payment_status, order.public_order_number
+            del_plan = _estado_del_plan(order)
         if estado == "pagado":
             # Un valor fijo del enum del dato: nunca un booleano que un `false` pudiera "llenar".
-            return {"order_id": order_id, "public_order_number": numero, "pago_confirmado": "confirmado"}
+            return {"order_id": order_id, "public_order_number": numero, "pago_confirmado": "confirmado", **del_plan}
         if estado == "rechazado":
             return {
                 "error": "pago_rechazado",
@@ -2272,13 +2326,21 @@ class OrderSkill(BaseSkill):
             by_id = {v.id: p for v, p in item_details}
 
         status_labels = getattr(config, "order_status_visible", {}) or {}
-        status_label = status_labels.get(order.status, order.status)
+        del_plan = _estado_del_plan(order)
+        # Un pedido de plan no se prepara ni se entrega (smoke de test 2026-10-20: «tu pedido
+        # está en preparación» sobre un plan ya activo): va el estado del plan, sin entrega.
+        envio: dict[str, Any] = (
+            {} if del_plan else {
+                "status": status_labels.get(order.status, order.status),
+                "delivery_method": "domicilio" if order.delivery_method == "domicilio" else "recoger en tienda",
+            }
+        )
         return {
             "found": True,
             "public_order_number": order.public_order_number,
-            "status": status_label,
+            **envio,
+            **del_plan,
             "payment_status": "pagado" if order.payment_status == "pagado" else "pendiente de pago",
-            "delivery_method": "domicilio" if order.delivery_method == "domicilio" else "recoger en tienda",
             "items": [
                 {
                     "product": by_id.get(i.variant_id).name if by_id.get(i.variant_id) else "Producto",

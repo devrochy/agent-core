@@ -312,7 +312,8 @@ async def test_el_comando_vuelve_con_la_tarjeta_y_las_acciones_de_la_nueva_etapa
     assert [(a, b) for a, b, _o in actores] == [
         ("core:comando", "iniciar_procedimiento"), ("core:comando", "actualizar_tarea"),
     ]
-    assert all(set(o) == {"ok", "errors"} for _a, _b, o in actores)  # sin valores del cliente
+    assert all(set(o) == {"ok", "errors", "codigos"} for _a, _b, o in actores)  # sin valores del cliente
+    assert all(all(isinstance(c, str) and c.isidentifier() for c in o["codigos"]) for _a, _b, o in actores)
     assert int((estado or {}).get("turnos_sin_resolver", 0)) == 0
 
 

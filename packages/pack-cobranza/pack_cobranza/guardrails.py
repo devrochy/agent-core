@@ -13,6 +13,7 @@ import re
 from typing import Any
 
 from core.mcp.types import GuardrailResult
+from core.shared.polaridad import afirma_alguna
 
 # La afirmación tiene que ser de cobranza: un verbo de registro junto a una promesa,
 # acuerdo, compromiso, pago, abono o cuota, en la misma frase y en cualquier orden. Un
@@ -116,10 +117,16 @@ _SUSCRIPCION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
 async def suscripcion_guardrail(
     response_text: str, tool_results: list[dict[str, Any]]
 ) -> GuardrailResult:
-    """Bloquea afirmar cambios en la suscripción sin la tool correspondiente (ADR-0082)."""
+    """Bloquea afirmar cambios en la suscripción sin la tool correspondiente (ADR-0082).
+
+    Solo cuentan las oraciones que afirman (`core.shared.polaridad`): "No encontré una
+    suscripción activa a tu nombre" o "¿Quieres activar tu suscripción?" no afirman nada. Smoke
+    de test 2026-10-20 (negocio solvershub, cambiar de plan): la negación se tomaba como
+    afirmación, el reintento la repetía y el turno salía con la respuesta neutral de ADR-0092
+    («Dejame verificar eso y te confirmo»), sin que nadie verificara nada."""
     ran = {r.get("_tool_name") for r in (tool_results or [])}
     for label, (pattern, tools) in _SUSCRIPCION_CLAIMS.items():
-        if pattern.search(response_text or "") and not (ran & tools):
+        if afirma_alguna(response_text or "", pattern) and not (ran & tools):
             return GuardrailResult(
                 passed=False,
                 reason=f"Afirmación de suscripción '{label}' sin la tool correspondiente.",
