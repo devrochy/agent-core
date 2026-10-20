@@ -1,83 +1,151 @@
 # agent-core
 
-> **Un tema, un dueño.** Este repo es el **motor multi-tenant** (runtime, API
-> `/api/v1`, packs). La planificación vigente vive en
-> [`solvershub-docs`](https://github.com/devrochy/solvershub-docs).
+> **A multi-tenant runtime for production AI agents — one codebase, many clients.**
 
-| Tema | Dueño |
+[![CI](https://github.com/devrochy/agent-core/actions/workflows/ci.yml/badge.svg)](https://github.com/devrochy/agent-core/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](pyproject.toml)
+
+**TL;DR** — One deployment serves many clients. Each tenant gets its own
+AgentSpec, tools, channels and memory, isolated by `tenant_id` + Postgres RLS.
+Plugins run in-process; no forks, no per-client code, no prompts in code.
+
+| | |
 |---|---|
-| Planificación, backlog, decisiones | `solvershub-docs` |
-| Motor multi-tenant, API, packs | **este repo** (GitHub `agent-core`) |
-| Panel de administración | `solvershub-panel` |
-| App de campo (cobranza) | `solvershub-apk` |
-| Sitio público y formularios | `solvershub-landing` |
-| Legal, comercial, runbooks | `solvershub-comercial` |Framework **multi-tenant de agentes IA**: un solo código base sirve a todos tus
-clientes. Cada cliente es un **tenant** con su propio asistente (`AgentSpec`),
-aislado por `tenant_id` + RLS (ADR-0001). Cero forks, cero código por cliente,
-cero prompts en código.
+| **Problem** | Teams copy/paste an agent per client and lose control of prompts, data isolation and costs. |
+| **What I built** | A modular monolith with pooled multi-tenancy, RLS, versioned AgentSpecs, in-process plugin tools and an append-only usage ledger. |
+| **Proof** | 1,175 commits · 390+ test files · 20+ ADRs · CI with unit, integration, RLS isolation, Gitleaks, import-linter and evals. |
 
-Los plugins (packs) son paquetes Python que corren **en el mismo proceso** que
-el core (cero latencia de red, cero microservicios, ADR-0005).
+## What it includes
 
+| Capability | Implementation |
+|---|---|
+| Multi-tenancy | `tenant_id` + RLS on every business table; capabilities enabled per pack |
+| AgentSpec | Per-tenant assistant personality in the database; playbooks with allowlists |
+| LLM agnostic | DeepSeek (default) · Anthropic · OpenAI · any OpenAI-compatible API |
+| Memory | 3 layers: Redis (working) · PostgreSQL (entity) · pgvector (semantic/RAG) |
+| Plugins | Python packages discovered via `entry_points`, full lifecycle, auto-disable on error |
+| Tool protocol | MCP-style host: plugins expose tools once; the core translates to each LLM's function calling |
+| Channels | WhatsApp (Meta Cloud API) included; per-provider adapters |
+| Admin | SSR panel (Jinja2) with AgentSpec editor, tenant selector and onboarding wizard |
+| Reliability | 3-layer idempotency · debounce · guardrails · kill switch · human escalation · canary/rollback |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    U[WhatsApp user] --> META[Meta Cloud API]
+    META --> GW[Gateway<br/>HMAC + idempotency]
+    GW --> Q[(Redis Streams)]
+    Q --> ORCH[Orchestrator]
+    ORCH --> LLM[LLM provider<br/>DeepSeek / Anthropic / OpenAI]
+    ORCH --> MCP[MCP host<br/>plugin tools]
+    MCP --> DB[(Postgres + RLS)]
+    ORCH --> MEM[(Redis + Postgres + pgvector)]
+    ORCH --> OBS[OpenTelemetry]
 ```
-# 1. Instala la plataforma UNA vez (por despliegue)
-git clone <este-repo> mi-despliegue
-cd mi-despliegue
+
+## Why this exists
+
+Most "multi-tenant AI agent" projects are a prompt with a `tenant_id` column.
+This one treats tenancy as an architecture problem: every business table is
+protected by RLS, every tenant has a versioned AgentSpec, and every tool call is
+validated against a contract before it touches the database. The LLM proposes;
+the platform decides.
+
+## Key design decisions
+
+| Decision | Choice | Why |
+|---|---|---|
+| Tenancy | Pooled multi-tenancy + Postgres RLS | One deployment, strong isolation, no per-client forks. |
+| Architecture | Modular monolith | Less operational overhead than microservices at this stage. |
+| Plugins | In-process Python packages | Zero network latency; a clear plugin contract. |
+| Tool protocol | MCP-style host | Plugins expose tools once; the core translates to each LLM's function calling. |
+| Memory | Redis + Postgres + pgvector | Working memory, entity memory and semantic retrieval. |
+| Reliability | Idempotency, debounce, guardrails, kill switch, canary/rollback | The same discipline used in payments. |
+| LLM | Provider-agnostic | DeepSeek by default for cost; Anthropic/OpenAI adapters available. |
+
+Full rationale: [`docs/adr/`](docs/adr/).
+
+## Quickstart
+
+```bash
+git clone https://github.com/devrochy/agent-core.git
+cd agent-core
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
-agent-core init                            # .env + BD + admin (bootstrap del despliegue)
-docker compose up -d                       # postgres + redis + api + celery
-# → http://localhost:8000/admin
-
-# 2. Da de alta a cada cliente como tenant
-agent-core tenant create                   # wizard paso a paso (o /admin/tenants/nuevo en el panel)
-agent-core tenant seed <slug>              # importa TENANTS_ROOT/<slug>/catalog.json
+agent-core init
+docker compose up -d
+# -> http://localhost:8000/admin
 ```
 
-Cada tenant tiene su propia identidad, tono, playbooks, packs y canales. Los
-datos y la documentación de cada cliente viven en `TENANTS_ROOT/<slug>/`
-(gitignored), separados del framework. Ver [docs/MULTITENANT.md](docs/MULTITENANT.md).
+Create your first tenant:
 
-## Qué incluye el core
-
-| Capacidad | Implementación |
-|---|---|
-| Multi-tenant | `tenant_id` + RLS en toda tabla de negocio; enablement por packs (ADR-0019) |
-| AgentSpec | Personalidad del asistente por tenant en BD (ADR-0014); playbooks con allowlist |
-| LLM agnóstico | DeepSeek (default) · Anthropic · OpenAI · cualquier API openai-compatible |
-| Memoria en 3 capas | Redis (working) · PostgreSQL (entity) · pgvector (semántica/RAG) |
-| Plugins | Paquetes pip detectados por `entry_points`, ciclo de vida completo, auto-disable en error |
-| MCP Host interno | Los plugins exponen tools estilo MCP; el core las traduce al function calling del LLM activo |
-| Canales | WhatsApp (Meta Cloud API) incluido; adaptadores por proveedor |
-| Panel admin | SSR Jinja2 + Bootstrap 5; editor de AgentSpec, selector de tenant, wizard de alta |
-| Robustez | Idempotencia 3 capas · debounce · guardrails · kill-switch · escalamiento a humano · canary/rollback |
-
-## Documentación
-
-| Documento | Contenido |
-|---|---|
-| [docs/MULTITENANT.md](docs/MULTITENANT.md) | Misión/visión multi-tenant + modelo de tenants + `TENANTS_ROOT` |
-| [docs/INSTALLATION.md](docs/INSTALLATION.md) | Instalación de la plataforma y solución de problemas |
-| [docs/FIRST-ASSISTANT.md](docs/FIRST-ASSISTANT.md) | Tu primer tenant en 15 pasos |
-| [docs/WORKFLOW.md](docs/WORKFLOW.md) | Cómo se hace un cambio: planificar → ejecutar → verificar |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Arquitectura: Monolito Modular con Adaptadores Selectivos |
-| [docs/PLUGIN-CONTRACT.md](docs/PLUGIN-CONTRACT.md) | La "Biblia" para desarrollar plugins |
-| [docs/HU/](docs/HU) | Historias de usuario |
-| [docs/adr/](docs/adr) | Architectural Decision Records (serie actual 0001-0021) |
-| [docs/BACKLOG.md](docs/BACKLOG.md) | Deuda técnica conocida, con evidencia |
-
-## Estructura
-
-```
-core/            # El framework: plomería (gateway, orchestrator, llm, memory, mcp, admin, onboarding)
-cli/             # CLI: agent-core tenant | plugin | db | init | configure | sdd | agent
-packages/        # Contratos (congelados) + packs verticales (pack-commerce, pack-calendar)
-tenants/         # Datos de cada cliente (gitignored): catalog.json · docs/ · evals/
-docs/            # Documentación del framework (sin datos de clientes)
-evals/           # Golden set genérico del framework
-tests/           # Tests de arranque, módulos puros y de aislamiento multi-tenant
+```bash
+agent-core tenant create
+agent-core tenant seed <slug>
 ```
 
-## Licencia
+## Usage
 
-MIT
+```python
+# A plugin exposes a tool through the MCP host.
+from core.mcp import tool
+
+@tool(name="consultar_inventario")
+async def consultar_inventario(sku: str) -> dict:
+    ...
+```
+
+## Testing and CI
+
+```bash
+pytest                 # unit + integration
+pytest -m aislamiento  # RLS / cross-tenant isolation
+```
+
+CI runs lint, type checks, import-linter, unit tests, integration tests against
+Postgres 17 + pgvector + PostGIS, Gitleaks over history, and evals in replay
+mode. Evals against the real LLM run on demand, not on every PR.
+
+## Observability and operations
+
+- Structured logs with `structlog`.
+- OpenTelemetry traces exported over OTLP.
+- Sentry integration.
+- Append-only usage ledger for per-tenant LLM cost.
+- Kill switch, canary releases and rollback per agent version.
+
+## Security
+
+- RLS enforced with a non-owner `app_runtime` role; migrations run as owner.
+- HMAC-SHA256 verification for WhatsApp webhooks.
+- Secrets encrypted at rest; Gitleaks in CI.
+- Tenant data lives under `TENANTS_ROOT/<slug>/` and is gitignored.
+
+## Trade-offs
+
+- **Modular monolith over microservices:** simpler to operate; extraction is
+  possible later if a domain needs independent scaling.
+- **In-process plugins over network services:** lower latency, but a bad plugin
+  can affect the process; hence the guardrails and auto-disable.
+- **Self-hosted Postgres over managed services:** more control over RLS and
+  extensions, more operational responsibility.
+- **DeepSeek as default:** cost control for high-volume conversations; the
+  adapter keeps Anthropic/OpenAI available.
+
+## Documentation
+
+Detailed guides (in Spanish): [`docs/MULTITENANT.md`](docs/MULTITENANT.md),
+[`docs/INSTALLATION.md`](docs/INSTALLATION.md),
+[`docs/PLUGIN-CONTRACT.md`](docs/PLUGIN-CONTRACT.md),
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+## Contact
+
+[LinkedIn](https://linkedin.com/in/robinson-aguilar-ramirez-8970a1129) · [Email](mailto:devrochy@gmail.com)
