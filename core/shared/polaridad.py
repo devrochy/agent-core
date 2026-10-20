@@ -23,7 +23,7 @@ _CONDICION = re.compile(
     r"\b(?:para\s+(?:que|poder|\w+(?:ar|er|ir)(?:te|le|les|lo|la|los|las|nos|me)?)|"
     r"con\s+(?:tu|tus|eso|esto|esos|estos|esa|esta|ese|este)\b|"
     r"cuando|apenas|en\s+cuanto|una\s+vez\s+(?:que|confirm\w*)|"
-    r"si\s+(?:me\s+)?(?:confirm|quer|dese|prefer|est[áa]s|necesit)\w*|"
+    r"si\s+(?:me\s+)?(?:confirm|quer|quier|dese|prefer|est[áa]s|necesit)\w*|"
     r"despu[ée]s\s+de|antes\s+de|en\s+caso\s+de)\b",
     re.IGNORECASE,
 )
