@@ -61,7 +61,7 @@ def test_plantilla_rechaza_prompts_keys_reservadas_y_procedimientos_ajenos() -> 
     with pytest.raises(ValidationError):
         PlantillaAgente.model_validate({**base, "key": "general"})
     with pytest.raises(ValidationError):
-        PlantillaAgente.model_validate({**base, "procedimientos": ["pack_commerce.tomar_pedido"]})
+        PlantillaAgente.model_validate({**base, "procedimientos": ["pack_cobranza.promesa_de_pago"]})
     with pytest.raises(ValidationError):  # regla sin condición (DSL del contrato kernelspec/1)
         PlantillaAgente.model_validate({**base, "reglas": [{"id": "preset_x", "when": {}}]})
 
@@ -107,6 +107,7 @@ def _catalogo() -> dict[str, Any]:
         "crear_pedido": SimpleNamespace(owner="pack_commerce"),
         "check_availability": SimpleNamespace(owner="pack_calendar"),
         "escalate_to_human": SimpleNamespace(owner="core"),
+        "crear_lead": SimpleNamespace(owner="pack_commerce"),
     }
 
 
@@ -131,6 +132,104 @@ def test_derivar_contenido_acota_al_fin_del_agente() -> None:
     assert contenido["declarativeTools"] == []
     assert contenido["model"]["primary"] == "modelo-x" and contenido["memory"]["writeNamespaces"] == ["perfil"]
     assert contenido["description"] == load_plantilla("agenda").descripcion
+
+
+def _general_con_leads() -> dict[str, Any]:
+    general = _general()
+    general["tools"] = [*general["tools"], {"tool": "crear_lead"}, {"tool": "generar_cotizacion"}]
+    general["guardrails"] = [
+        *general["guardrails"],
+        {"name": "g3", "kind": "required_tool", "tool": "crear_lead", "phrases": ["te registré"]},
+    ]
+    return general
+
+
+def _catalogo_con_leads() -> dict[str, Any]:
+    return {
+        **_catalogo(),
+        "generar_cotizacion": SimpleNamespace(owner="pack_commerce"),
+    }
+
+
+def test_agenda_toma_solo_crear_lead_de_pack_commerce() -> None:
+    """HU-AOS-22: con pack_commerce, Agenda captura el lead del prospecto (`crear_lead` y su
+    guardrail) sin la caja de ventas (cotización, pedido) ni el playbook de ventas."""
+    contenido, avisos = derivar_contenido(
+        load_plantilla("agenda"),
+        _general_con_leads(),
+        catalogo=_catalogo_con_leads(),
+        habilitados={"pack_commerce", "pack_calendar"},
+        publicados=[_proc("pack_calendar.agendar_cita", "1.0.0")],
+        playbooks_de_packs={"ventas", "citas"},
+    )
+    assert avisos == []
+    assert [b["tool"] for b in contenido["tools"]] == ["check_availability", "escalate_to_human", "crear_lead"]
+    assert [g["name"] for g in contenido["guardrails"]] == ["g2", "g3"]
+    assert [p["name"] for p in contenido["playbooks"]] == ["citas", "propio_del_negocio"]
+
+
+def test_agenda_sin_pack_commerce_no_tiene_crear_lead() -> None:
+    contenido, avisos = derivar_contenido(
+        load_plantilla("agenda"),
+        _general_con_leads(),
+        catalogo=_catalogo_con_leads(),
+        habilitados={"pack_calendar"},
+        publicados=[_proc("pack_calendar.agendar_cita", "1.0.0")],
+        playbooks_de_packs={"ventas", "citas"},
+    )
+    assert avisos == []
+    assert [b["tool"] for b in contenido["tools"]] == ["check_availability", "escalate_to_human"]
+
+
+def test_ventas_sigue_tomando_su_opcional_completa() -> None:
+    """Una opcional sin `acciones_opcionales` entra completa (pack_payments en Ventas)."""
+    general = _general()
+    general["tools"] = [{"tool": "crear_pedido"}, {"tool": "link_de_pago"}, {"tool": "estado_pago"}]
+    catalogo = {
+        "crear_pedido": SimpleNamespace(owner="pack_commerce"),
+        "link_de_pago": SimpleNamespace(owner="pack_payments"),
+        "estado_pago": SimpleNamespace(owner="pack_payments"),
+    }
+    contenido, _ = derivar_contenido(
+        load_plantilla("ventas"),
+        general,
+        catalogo=catalogo,
+        habilitados={"pack_commerce", "pack_payments"},
+        publicados=[_proc("pack_commerce.tomar_pedido")],
+        playbooks_de_packs=set(),
+    )
+    assert [b["tool"] for b in contenido["tools"]] == ["crear_pedido", "link_de_pago", "estado_pago"]
+
+
+def test_acciones_opcionales_avisa_si_la_habilidad_no_publica_la_accion() -> None:
+    plantilla = load_plantilla("agenda").model_copy(
+        update={"acciones_opcionales": {"pack_commerce": ["crear_lead", "no_existe"]}}
+    )
+    _, avisos = derivar_contenido(
+        plantilla,
+        _general_con_leads(),
+        catalogo=_catalogo_con_leads(),
+        habilitados={"pack_commerce", "pack_calendar"},
+        publicados=[_proc("pack_calendar.agendar_cita", "1.0.0")],
+        playbooks_de_packs=set(),
+    )
+    assert avisos == ["acciones_opcionales de pack_commerce que esa habilidad no publica: ['no_existe']"]
+
+
+@pytest.mark.parametrize(
+    "acciones",
+    [{"pack_payments": ["link_de_pago"]}, {"pack_commerce": []}, {"pack_calendar": ["check_availability"]}],
+)
+def test_acciones_opcionales_solo_de_opcionales_y_no_vacias(acciones: dict[str, list[str]]) -> None:
+    from pydantic import ValidationError
+
+    from core.presets import PlantillaAgente
+
+    datos = load_plantilla("agenda").model_dump()
+    datos["opcionales"] = [*datos["opcionales"], "pack_calendar"]  # obligatoria y opcional a la vez
+    datos["acciones_opcionales"] = acciones
+    with pytest.raises(ValidationError):
+        PlantillaAgente.model_validate(datos)
 
 
 def test_derivar_sin_procedimientos_ofrecibles_falla() -> None:
@@ -221,3 +320,18 @@ def test_suscripciones_trae_la_regla_de_mi_plan_con_id_nuevo() -> None:
 )
 def test_reglas_del_preset_suscripciones_en_orden(texto: str, destino: str | None) -> None:
     assert _primera_regla(texto) == destino
+
+
+def test_acciones_opcionales_de_las_plantillas_existen_en_su_habilidad() -> None:
+    """Un typo en `acciones_opcionales` dejaría al agente sin la acción en silencio (solo un aviso al
+    derivar): cada acción de las plantillas reales es del pack que la nombra."""
+    from core.kernel.procedures import catalogo_de_acciones
+    from core.plugin_manager import plugin_manager
+
+    catalogo = catalogo_de_acciones(plugin_manager.scan())
+    for archivo in sorted(presets_mod.PLANTILLAS_DIR.glob("*.json")):
+        plantilla = load_plantilla(archivo.stem)
+        for pack, acciones in plantilla.acciones_opcionales.items():
+            for accion in acciones:
+                info = catalogo.get(accion)
+                assert info is not None and info.owner == pack, (plantilla.key, pack, accion)

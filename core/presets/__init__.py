@@ -102,6 +102,11 @@ class PlantillaAgente(BaseModel):
     habilidades: list[str] = Field(min_length=1, max_length=10)
     # Se suman si están habilitadas (p. ej. pagos para Ventas, que suele quedar pendiente de claves).
     opcionales: list[str] = Field(default_factory=list, max_length=10)
+    # Acota una habilidad opcional a algunas de sus acciones (HU-AOS-22): p. ej. Agenda toma solo
+    # `crear_lead` de pack_commerce, no la caja de ventas. Una opcional sin entrada entra completa.
+    acciones_opcionales: dict[
+        str, list[Annotated[str, Field(pattern=r"^[a-z0-9_]{1,64}$")]]
+    ] = Field(default_factory=dict, max_length=10)
     # Ids `procedure/1` publicados por esas habilidades: el agente los declara con `^M.0`.
     procedimientos: list[Annotated[str, Field(pattern=r"^[a-z0-9_]{1,60}\.[a-z0-9_]{1,40}$")]] = Field(
         min_length=1, max_length=20
@@ -115,6 +120,11 @@ class PlantillaAgente(BaseModel):
 
         if self.key in KEYS_RESERVADAS:
             raise ValueError(f"la key {self.key!r} está reservada para los agentes del sistema")
+        fuera = sorted(set(self.acciones_opcionales) - (set(self.opcionales) - set(self.habilidades)))
+        if fuera:
+            raise ValueError(f"acciones_opcionales de habilidades que no son opcionales (o que son obligatorias): {fuera}")
+        if any(not acciones for acciones in self.acciones_opcionales.values()):
+            raise ValueError("acciones_opcionales: cada habilidad lista al menos una acción")
         propias = {*self.habilidades, *self.opcionales}
         ajenos = sorted(p for p in self.procedimientos if p.split(".", 1)[0] not in propias)
         if ajenos:

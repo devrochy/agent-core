@@ -629,3 +629,135 @@ async def test_dogfooding_solvershub_ventas_agenda_y_suscripciones(_ruteo: None,
         d = await _ruta(tid, cid, monkeypatch, texto)
         assert (d["route_source"], d["rule_id"]) == (fuente, regla), texto
         assert d["active_instance_id"] == str(inst[agente]), texto
+
+
+# ---------------------------------------------------------------- Agenda captura el lead (HU-AOS-22)
+PRESENTACION = "hola, soy Ana de la tienda Flores Ana y quiero agendar una demo"
+VENTAS_FUERA_DE_AGENDA = {"generar_cotizacion", "crear_pedido", "agregar_item_pedido", "calificar_lead", "actualizar_lead"}
+
+
+async def _turno_con_resultado(tid: uuid.UUID, conv: uuid.UUID, monkeypatch: Any, pasos: list[Any], texto: str) -> tuple[_Guion, Any]:
+    from core.orchestrator.loop import process_conversation
+    from core.shared.tenant import tenant_scope
+
+    guion = _Guion(pasos)
+    # El texto real del cliente: `create_calendar_event` verifica que el correo salió de él.
+    await _sql(
+        tid,
+        "insert into messages (id, tenant_id, conversation_id, direction, sender_type, content, created_at) "
+        "values (:id, :t, :c, 'inbound', 'customer', :x, :w)",
+        id=uuid.uuid4(), t=tid, c=conv, x=texto, w=datetime.now(UTC),
+    )
+    monkeypatch.setattr("core.orchestrator.loop.resolve_provider", lambda *a, **k: guion)
+    async with tenant_scope(tid):
+        resultado = await process_conversation(conv, texto)
+    await _mensaje(tid, conv, direccion="outbound")
+    return guion, resultado
+
+
+async def _leads(tid: uuid.UUID, cliente: uuid.UUID) -> list[Any]:
+    return await _sql(
+        tid, "select name, interest from pack_commerce_leads where customer_id = :c", c=cliente
+    )
+
+
+async def _cliente(tid: uuid.UUID, conv: uuid.UUID) -> uuid.UUID:
+    ((cliente,),) = await _sql(tid, "select customer_id from conversations where id = :c", c=conv)
+    return cliente
+
+
+async def test_agenda_captura_el_lead_del_prospecto_y_agenda_la_demo(_ruteo: None, monkeypatch: Any) -> None:
+    """Un prospecto se presenta y pide una demo: la regla `preset_agenda_palabras` lo manda a
+    Agenda, que tiene `crear_lead` (y no la caja de ventas). Quedan el lead y la cita."""
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+
+    from core.db.models import Conversation
+    from core.db.session import get_session
+    from core.kernel.procedures.ejecucion import entrada_sin_llm
+    from core.releases.promocion import promover
+    from core.shared.tenant import tenant_scope
+
+    tid, cid, reporte, candidata, _manifest = await _negocio_con_preset_suscripciones()
+    agenda = next(a for a in reporte.agentes if a.key == "agenda")
+    assert agenda.estado == "creado" and not agenda.avisos, agenda
+    async with tenant_scope(tid):
+        await promover(tid, cid, candidata, actor="test")
+    await _modo(tid, "active")
+    inst = await _instancias(tid, cid)
+
+    dia = (datetime.now(ZoneInfo("America/Bogota")) + timedelta(days=7)).date().isoformat()
+    conv = await _conversacion(tid, cid)
+    cliente = await _cliente(tid, conv)
+    guion, _ = await _turno_con_resultado(tid, conv, monkeypatch, [
+        ("crear_lead", {"name": "Ana", "interest": "demo para la tienda Flores Ana"}),
+        ("crear_pedido", {}),  # fuera de lo que declara Agenda: el runtime la rechaza
+        ("iniciar_procedimiento", {"procedure_id": CITA}),
+        ("actualizar_tarea", {"slots": {"horario": f"{dia}T10:00:00"}}),
+        "Perfecto, Ana. ¿A qué correo te envío la confirmación?",
+    ], PRESENTACION)
+    d = await _decision(tid, conv)
+    assert d["route_source"] == "rule" and d["rule_id"] == "preset_agenda_palabras"
+    assert d["active_instance_id"] == str(inst["agenda"])
+    # Lo que se le ofreció al modelo en el turno de presentación: el lead sí, la caja de ventas no.
+    assert "crear_lead" in guion.tools[0]
+    assert not (VENTAS_FUERA_DE_AGENDA & set(guion.tools[0]))
+    assert '"status": "created"' in guion.resultados[0] or "'status': 'created'" in guion.resultados[0]
+    assert "no está disponible para este agente" in guion.resultados[1], guion.resultados
+    assert await _leads(tid, cliente) == [("Ana", "demo para la tienda Flores Ana")]
+
+    args = {"title": "Demo con Ana", "start_datetime": f"{dia}T10:00:00", "attendee_email": "ana@example.com"}
+    _, resultado = await _turno_con_resultado(tid, conv, monkeypatch, [
+        ("actualizar_tarea", {"slots": {"correo": "ana@example.com"}}),
+        ("create_calendar_event", args),
+        "Te agendo la demo a las 10, ¿confirmas?",
+    ], "mi correo es ana@example.com")
+    assert resultado is not None and resultado.confirmacion is not None
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            fila = await session.get(Conversation, conv)
+        await entrada_sin_llm(fila, {"interactive_id": resultado.confirmacion.confirmacion.payload})
+    final, _ = await _turno_con_resultado(
+        tid, conv, monkeypatch, [("create_calendar_event", args), "Listo, quedó agendada."], "Confirmar"
+    )
+    assert '"status": "created"' in final.resultados[0], final.resultados
+    citas = await _sql(tid, "select customer_id from pack_calendar_appointments")
+    assert [c for (c,) in citas] == [cliente]
+    assert len(await _leads(tid, cliente)) == 1
+    assert await _dueno(tid, conv) == inst["agenda"]
+
+
+async def test_agenda_no_duplica_el_lead_de_un_cliente_existente(_ruteo: None, monkeypatch: Any) -> None:
+    """Un cliente que ya es lead (lo registró Ventas) vuelve y pide una demo: Agenda llama
+    `crear_lead`, la tool responde `ya_existe` y sigue habiendo un solo lead."""
+    from core.releases.promocion import promover
+    from core.shared.tenant import tenant_scope
+
+    tid, cid, _reporte, candidata, _manifest = await _negocio_con_preset_suscripciones()
+    async with tenant_scope(tid):
+        await promover(tid, cid, candidata, actor="test")
+    await _modo(tid, "active")
+    inst = await _instancias(tid, cid)
+
+    previa = await _conversacion(tid, cid)
+    cliente = await _cliente(tid, previa)
+    await _sql(
+        tid,
+        "insert into pack_commerce_leads (id, tenant_id, customer_id, conversation_id, name, interest, score, "
+        "status, last_activity_at, created_at) values (:id, :t, :c, :conv, 'Ana', 'plan premium', 0, 'nuevo', now(), now())",
+        id=uuid.uuid4(), t=tid, c=cliente, conv=previa,
+    )
+    conv = uuid.uuid4()
+    await _sql(
+        tid,
+        "insert into conversations (id, tenant_id, customer_id, channel, connection_id) "
+        "values (:id, :t, :cli, 'instagram', :c)",
+        id=conv, t=tid, cli=cliente, c=cid,
+    )
+    guion, _ = await _turno_con_resultado(tid, conv, monkeypatch, [
+        ("crear_lead", {"name": "Ana", "interest": "demo"}),
+        "Claro, Ana. ¿Para qué día quieres la demo?",
+    ], PRESENTACION)
+    assert (await _decision(tid, conv))["active_instance_id"] == str(inst["agenda"])
+    assert "ya_existe" in guion.resultados[0]
+    assert await _leads(tid, cliente) == [("Ana", "plan premium")]
