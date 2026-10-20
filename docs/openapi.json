@@ -1610,6 +1610,61 @@
         }
       }
     },
+    "/api/v1/admin/conversations/connections": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · conversaciones"
+        ],
+        "summary": "List Conversation Connections",
+        "description": "Conexiones del negocio para filtrar la bandeja (HU-UX-15). Con el permiso de\nConversaciones: quien atiende no necesita ver la sección Conexiones.",
+        "operationId": "list_conversation_connections_api_v1_admin_conversations_connections_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConversationConnection"
+                  },
+                  "title": "Response List Conversation Connections Api V1 Admin Conversations Connections Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/conversations/{conversation_id}": {
       "get": {
         "tags": [
@@ -35317,6 +35372,48 @@
           "cost_usd"
         ],
         "title": "ConsoleUsage"
+      },
+      "ConversationConnection": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "type_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type Id"
+          },
+          "channel": {
+            "type": "string",
+            "title": "Channel"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "provider",
+          "type_id",
+          "channel"
+        ],
+        "title": "ConversationConnection",
+        "description": "Conexión por la que pueden llegar chats (opciones del filtro de la bandeja)."
       },
       "AgentTemplate": {
         "properties": {

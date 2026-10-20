@@ -165,6 +165,13 @@ async def test_lista_con_ultimo_mensaje_conexion_y_orden_por_actividad(app_clien
     assert [i["id"] for i in r.json()["items"]] == [str(n["vieja"])]
     assert r.json()["total"] == 1
 
+    # Opciones del filtro: las conexiones del negocio, con el permiso de Conversaciones.
+    r = await app_client.get(f"{URL}/connections", headers=headers)
+    assert r.status_code == 200, r.text
+    opciones = {c["id"]: (c["label"], c["provider"], c["type_id"]) for c in r.json()}
+    assert opciones[str(n["ventas"])] == ("Ventas", "meta", "whatsapp_cloud")
+    assert opciones[str(n["soporte"])] == ("Soporte", "waweb", "whatsapp_waweb")
+
 
 async def test_mensajes_despues_del_cursor(app_client) -> None:
     from core.db.models import Message
@@ -315,6 +322,8 @@ async def test_aislamiento_entre_negocios(app_client) -> None:
     headers_b = await api_headers(app_client, b["tid"])
 
     ids = {i["id"] for i in (await app_client.get(URL, headers=headers_b)).json()["items"]}
+    conexiones_b = {c["id"] for c in (await app_client.get(f"{URL}/connections", headers=headers_b)).json()}
+    assert str(a["soporte"]) not in conexiones_b and str(b["soporte"]) in conexiones_b
     assert str(a["nueva"]) not in ids and str(b["nueva"]) in ids
     # Filtrar por una conexión de otro negocio no trae nada.
     r = await app_client.get(URL, params={"connection_id": str(a["soporte"])}, headers=headers_b)

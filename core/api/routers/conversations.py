@@ -32,7 +32,7 @@ from core.db.models import (
     Message,
     UsageLedger,
 )
-from core.db.session import get_session
+from core.db.session import get_owned, get_session
 from core.orchestrator import motivos_escalacion as motivos
 from core.orchestrator.motivos_escalacion import MotivoCodigo
 from core.shared.exceptions import OutboundWindowExpiredError
@@ -124,6 +124,16 @@ class ConversationDetail(ConversationSummary):
     usage: ConversationUsage = Field(
         default_factory=lambda: ConversationUsage(cost_usd=0, input_tokens=0, output_tokens=0, turns=0)
     )
+
+
+class ConversationConnection(BaseModel):
+    """Conexión por la que pueden llegar chats (opciones del filtro de la bandeja)."""
+
+    id: uuid.UUID
+    label: str
+    provider: str
+    type_id: str | None
+    channel: str
 
 
 class ConversationNoteIn(BaseModel):
@@ -389,6 +399,40 @@ async def list_conversations(
         for conv, cust, conexion, contenido, fecha, remitente in rows
     ]
     return build_page(items, int(total), params)
+
+
+@router.get("/connections", response_model=list[ConversationConnection])
+async def list_conversation_connections(
+    principal: Annotated[Principal, Depends(require("conversations"))],
+) -> list[ConversationConnection]:
+    """Conexiones del negocio para filtrar la bandeja (HU-UX-15). Con el permiso de
+    Conversaciones: quien atiende no necesita ver la sección Conexiones."""
+    async with get_session() as session:
+        filas = (
+            (
+                await session.execute(
+                    select(ChannelConnection)
+                    .where(
+                        ChannelConnection.tenant_id == principal.tenant_id,
+                        ChannelConnection.deleted_at.is_(None),
+                    )
+                    .order_by(ChannelConnection.created_at)
+                    .limit(100)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return [
+        ConversationConnection(
+            id=c.id,
+            label=c.label or c.external_id,
+            provider=c.provider,
+            type_id=c.type_id,
+            channel=c.channel,
+        )
+        for c in filas
+    ]
 
 
 async def _conversacion_visible(session: Any, conversation_id: uuid.UUID, tenant_id: uuid.UUID) -> tuple[Conversation, Customer, ChannelConnection | None]:
@@ -723,7 +767,7 @@ async def take_conversation(
             raise ApiError(409, "already_taken", f"La conversación ya la atiende {quien}.")
         esc.assigned_admin_id = admin_id
         esc.status = "asignada"
-        conversation = await session.get(Conversation, conversation_id)
+        conversation = await get_owned(session, Conversation, conversation_id, tenant_id)
         conversation.status = "escalated"
         conversation.bot_paused = True
         await session.flush()
@@ -742,7 +786,7 @@ async def return_conversation_to_bot(
     tenant_id = principal.tenant_id
     async with get_session() as session:
         await _conversacion_visible(session, conversation_id, tenant_id)
-        conversation = await session.get(Conversation, conversation_id)
+        conversation = await get_owned(session, Conversation, conversation_id, tenant_id)
         conversation.status = "open"
         conversation.bot_paused = False
         escalations = (
