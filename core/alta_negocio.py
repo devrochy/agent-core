@@ -169,6 +169,8 @@ async def onboard_tenant(
             await session.execute(select(Tenant).where(Tenant.slug == slug))
         ).scalar_one_or_none()
         if tenant is None:
+            # Negocio nuevo: los datos de clientes en disco con este slug son de otro (purgado).
+            onboarding.cuarentena_de_datos_huerfanos(slug)
             tenant = Tenant(
                 id=tenant_id, name=name, slug=slug, status="active", settings={"language": language}
             )

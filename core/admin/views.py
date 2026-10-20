@@ -2582,8 +2582,11 @@ async def costs_page(request: Request):
                 )
             )
         ).scalar() or 0
+        # Las filas `embedding` (ingesta del pack de conocimiento, ADR-0145 §3) no son turnos.
         total_turns = (
-            await session.execute(select(func.count(UsageLedger.id)).where(by_tenant))
+            await session.execute(
+                select(func.count(UsageLedger.id)).where(by_tenant, UsageLedger.kind != "embedding")
+            )
         ).scalar() or 0
         by_model_rows = (
             await session.execute(
@@ -2607,7 +2610,7 @@ async def costs_page(request: Request):
                     func.sum(UsageLedger.cost_usd),
                     func.max(UsageLedger.created_at),
                 )
-                .where(by_tenant, UsageLedger.created_at >= month_ago)
+                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind != "embedding")
                 .group_by(UsageLedger.conversation_id)
                 .order_by(func.sum(UsageLedger.cost_usd).desc())
                 .limit(20)

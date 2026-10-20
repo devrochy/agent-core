@@ -46,8 +46,14 @@ class Plan:
         return self.price_cop <= 0
 
 
+# Topes que cuenta un pack, no el core (ADR-0145 §2): el pack mide lo suyo y los aplica con
+# `enforcement.enforce_pack_growth`. `core/billing/metrics.py` no consulta tablas de packs, así
+# que estas claves no son métricas del registro ni salen en las barras de consumo.
+PACK_LIMIT_KEYS: frozenset[str] = frozenset({"documentos", "conocimiento_mb"})
+
+
 def _validate_limits(limits: dict[str, int | None]) -> None:
-    unknown = set(limits) - METRIC_KEYS
+    unknown = set(limits) - METRIC_KEYS - PACK_LIMIT_KEYS
     if unknown:
         raise ValueError(f"Métricas desconocidas en el plan: {sorted(unknown)}")
     for key, value in limits.items():
@@ -74,6 +80,9 @@ PLANS: tuple[Plan, ...] = (
             "colaboradores": 2,
             "mensajes": 2000,
             "costo_llm_usd": 5,
+            # Pack de conocimiento (ADR-0145 §2): documentos vivos y MB subidos.
+            "documentos": 3,
+            "conocimiento_mb": 10,
         },
         features={"soporte": "comunidad", "canales": ["whatsapp"]},
     ),
@@ -92,6 +101,9 @@ PLANS: tuple[Plan, ...] = (
             "colaboradores": 5,
             "mensajes": 15000,
             "costo_llm_usd": 50,
+            # Pack de conocimiento (ADR-0145 §2): documentos vivos y MB subidos.
+            "documentos": 20,
+            "conocimiento_mb": 100,
         },
         features={"soporte": "email", "canales": ["whatsapp"]},
     ),
@@ -110,6 +122,9 @@ PLANS: tuple[Plan, ...] = (
             "colaboradores": 15,
             "mensajes": 80000,
             "costo_llm_usd": 200,
+            # Pack de conocimiento (ADR-0145 §2): documentos vivos y MB subidos.
+            "documentos": 100,
+            "conocimiento_mb": 500,
         },
         features={"soporte": "prioritario", "canales": ["whatsapp", "instagram"]},
     ),
@@ -128,6 +143,9 @@ PLANS: tuple[Plan, ...] = (
             "colaboradores": 50,
             "mensajes": None,
             "costo_llm_usd": None,
+            # Pack de conocimiento (ADR-0145 §2): documentos vivos y MB subidos.
+            "documentos": 500,
+            "conocimiento_mb": 2_000,
         },
         features={"soporte": "dedicado", "canales": ["whatsapp", "instagram", "web"]},
     ),

@@ -74,6 +74,45 @@ def register_cron(plugin_id: str, cron_expression: str) -> Callable[[AsyncJob], 
     return decorator
 
 
+AsyncTask = Callable[..., Awaitable[None]]
+
+
+def register_task(plugin_id: str) -> Callable[[AsyncTask], AsyncTask]:
+    """Tarea puntual de un pack (no programada), encolada con `core.tasks.queue.task_queue`.
+
+    Mismo envoltorio que `register_cron`: nombre `<plugin_id>.<función>`, activación del proceso y
+    guardia de pack activo. Recibe solo kwargs JSON (ids, nunca datos del negocio: el broker es
+    Redis). La tarea fija su propio `tenant_scope` desde sus argumentos. Un error se registra y no
+    se reintenta: la tarea deja su estado en la base (p. ej. un documento `fallido`).
+    """
+
+    def decorator(fn: AsyncTask) -> AsyncTask:
+        task_name = f"{plugin_id}.{fn.__name__}"
+
+        @celery.task(name=task_name)
+        def _celery_task(**kwargs: Any) -> None:
+            from core.plugin_manager import plugin_manager
+
+            try:
+                run_async(plugin_manager.ensure_process_activation())
+            except Exception:
+                log.exception("task_activation_failed", plugin=plugin_id, task=task_name)
+            if not plugin_manager.is_active(plugin_id):
+                log.info("task_skipped_plugin_inactive", plugin=plugin_id, task=task_name)
+                return
+            try:
+                run_async(fn(**kwargs))
+            except Exception as exc:
+                # Solo la clase: un error de SQLAlchemy trae los parámetros de la consulta, que
+                # pueden ser datos del negocio (p. ej. el texto de un documento).
+                log.error("task_failed", plugin=plugin_id, task=task_name, error=type(exc).__name__)
+
+        log.info("task_registered", plugin=plugin_id, task=task_name)
+        return fn
+
+    return decorator
+
+
 def enqueue(task_name: str, *args: Any, **kwargs: Any) -> None:
     """Encola una tarea puntual (no programada) para ejecución en el worker."""
     celery.send_task(task_name, args=args, kwargs=kwargs)

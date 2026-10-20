@@ -10,7 +10,9 @@
 #
 # Build/push (o construir local y usar el tag en Coolify):
 #   docker build -t solvershub-postgres:pg17-postgis docker/postgres
-FROM pgvector/pgvector:pg17
+# Tag fijo (ADR-0145 §1): el pack de conocimiento exige pgvector >= 0.8 (`iterative_scan`) y el
+# tag flotante `pg17` podía cambiar la versión sin aviso. Subirlo es un cambio deliberado.
+FROM pgvector/pgvector:0.8.7-pg17
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends postgresql-17-postgis-3 \

@@ -20,6 +20,14 @@ _MENSAJES = {
         "Tu plan permite {limit} colaborador(es) y ya tienes {used}, contando las invitaciones "
         "pendientes. Mejora tu plan para invitar a otro. No se envió nada."
     ),
+    "documentos": (
+        "Tu plan permite {limit} documento(s) de conocimiento y ya tienes {used}. "
+        "Borra uno o mejora tu plan para subir otro."
+    ),
+    "conocimiento_mb": (
+        "Tu plan permite {limit} MB de documentos de conocimiento y ya usas {used} MB. "
+        "Borra alguno o mejora tu plan para subir este archivo."
+    ),
 }
 
 

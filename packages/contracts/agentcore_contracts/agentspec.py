@@ -1,6 +1,6 @@
 """Contrato `agentspec/3`: un agente especialista o de back-office (ADR-0113 §2, HU-AOS-12).
 
-Entra en el major 3.0.0. El AgentSpec v2 (`AgentSpec`, ADR-0050) sigue en `contracts.py` sin
+Entra en el major 3.0.0; `knowledge` (opcional) entra en el minor 3.1.0 (ADR-0145). El AgentSpec v2 (`AgentSpec`, ADR-0050) sigue en `contracts.py` sin
 cambios: el loop legacy, los presets y el alta lo leen y lo escriben hasta HU-AOS-46, y el
 lector tolerante del core lo convierte a este contrato.
 
@@ -109,6 +109,19 @@ class AgentModelV3(_Strict):
 class RagConfigV3(_Strict):
     topK: int = Field(ge=1, le=100)
     minScore: float = Field(ge=0, le=1)
+
+
+# Búsqueda en los documentos del agente (pack de conocimiento, ADR-0145 §4). Aparte de
+# `memory.rag`, que es el recall de la memoria del cliente: bajar el `topK` de documentos no
+# cambia lo que el agente recuerda de la persona.
+KnowledgeMode = Literal["semantica", "hibrida"]
+
+
+class KnowledgeConfigV3(_Strict):
+    mode: KnowledgeMode = "hibrida"
+    # Tope en 8: cada fragmento son ~400 tokens de entrada en el turno.
+    topK: int = Field(default=4, ge=1, le=8)
+    minScore: float = Field(default=0.35, ge=0, le=1)
 
 
 class AgentMemoryV3(_Strict):
@@ -260,6 +273,9 @@ class AgentSpecV3(_Strict):
     guardrails: list[GuardrailRule] = Field(default=[], max_length=100)
     declarativeTools: list[DeclarativeTool] = Field(default=[], max_length=50)
     policies: AgentPoliciesV3 = Field(default_factory=AgentPoliciesV3)
+    # 3.1.0 (ADR-0145, adenda de ADR-0113 del 2026-10-20): opcional; sin el bloque, el agente no
+    # busca en documentos aunque la habilidad esté instalada.
+    knowledge: KnowledgeConfigV3 | None = None
     # Reservado y sin semántica (ADR-0050): ningún motor lo lee.
     extensions: dict[str, Any] = {}
 
@@ -278,6 +294,8 @@ __all__ = [
     "GuardrailKind",
     "GuardrailRule",
     "HttpMethod",
+    "KnowledgeConfigV3",
+    "KnowledgeMode",
     "PlaybookRefV3",
     "ProcedureOverrides",
     "ProcedureRef",

@@ -114,6 +114,72 @@ def _validate_slug(slug: str) -> None:
         raise ValueError(f"Slug inválido (solo minúsculas, números y guiones): {slug!r}")
 
 
+# Carpeta de lo que quedó en disco de un negocio purgado cuyo slug se vuelve a dar de alta.
+CUARENTENA = ".purgados"
+
+
+def carpeta_del_tenant(slug: str) -> Path:
+    """`TENANTS_ROOT/<slug>/` validado: nunca la raíz ni algo fuera de ella."""
+    _validate_slug(slug)
+    raiz = tenants_root().resolve()
+    carpeta = (raiz / slug).resolve()
+    if carpeta.parent != raiz:
+        raise ValueError(f"Carpeta de tenant fuera de TENANTS_ROOT: {slug!r}")
+    return carpeta
+
+
+def borrar_carpeta_del_tenant(slug: str) -> bool:
+    """Borra `TENANTS_ROOT/<slug>/` (docs, playbooks, evidencias, conocimiento) al purgar el
+    negocio (ADR-0145 §6). True si había algo que borrar.
+
+    Primero la renombra a `TENANTS_ROOT/.purgados/<slug>-<sello>` (atómico en el mismo volumen):
+    desde ahí el slug queda libre y limpio aunque el borrado falle a la mitad. Después la borra.
+    Un error del renombre se propaga (el slug sigue con archivos: alerta). Si falla el borrado,
+    lo que queda está en `.purgados/` y no lo hereda nadie."""
+    import shutil
+    from datetime import UTC, datetime
+
+    carpeta = carpeta_del_tenant(slug)
+    if not carpeta.exists():
+        return False
+    destino_dir = tenants_root() / CUARENTENA
+    destino_dir.mkdir(parents=True, exist_ok=True)
+    apartada = destino_dir / f"{slug}-purgado-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%f')}"
+    carpeta.rename(apartada)
+    shutil.rmtree(apartada, ignore_errors=True)
+    if apartada.exists():
+        log.warning("tenant_carpeta_purgada_sin_borrar", slug=slug, destino=apartada.name)
+    return True
+
+
+# Subcarpetas con datos de clientes que un negocio NUEVO nunca hereda: documentos de
+# conocimiento (ADR-0145) y evidencias de cobranza. `docs/` no: se puede preparar antes del alta.
+CARPETAS_DE_DATOS = ("conocimiento", "evidencias")
+
+
+def cuarentena_de_datos_huerfanos(slug: str) -> list[Path]:
+    """Al dar de alta un negocio NUEVO con un slug que ya tiene datos de clientes en disco (la
+    purga no los pudo borrar, o la base de desarrollo se recreó), los mueve a
+    `TENANTS_ROOT/.purgados/` para que el negocio nuevo no herede archivos de otro. Devuelve los
+    destinos (vacío si no había nada)."""
+    from datetime import UTC, datetime
+
+    carpeta = carpeta_del_tenant(slug)
+    movidas: list[Path] = []
+    sello = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+    for nombre in CARPETAS_DE_DATOS:
+        datos = carpeta / nombre
+        if not datos.is_dir() or not any(datos.iterdir()):
+            continue
+        destino_dir = tenants_root() / CUARENTENA
+        destino_dir.mkdir(parents=True, exist_ok=True)
+        destino = destino_dir / f"{slug}-{nombre}-{sello}"
+        datos.rename(destino)
+        movidas.append(destino)
+        log.warning("tenant_datos_huerfanos_en_cuarentena", slug=slug, carpeta=nombre, destino=destino.name)
+    return movidas
+
+
 async def ensure_brand_voice(tenant_id: uuid.UUID, slug: str, *, sobrescribir: bool = False) -> bool:
     """Siembra `AppSettings.brand_voice` desde `TENANTS_ROOT/<slug>/docs/voz-de-marca.md`
     si está vacío (#158). La voz de marca es la fuente de verdad de políticas; un
