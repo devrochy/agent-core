@@ -1,7 +1,9 @@
 # ADR-0145 — Pack de conocimiento: documentos por agente en pgvector con RLS, búsqueda híbrida y embeddings medidos y grabados
 
-- **Estado:** propuesto (HU-AOS-49, SPEC-31, D-38). Se aprueba antes de escribir código. Las decisiones
-  revisables están marcadas *Revisable:* y las que tiene que tomar el dueño, **Pregunta al dueño**.
+- **Estado:** aceptado (HU-AOS-49, SPEC-31, D-38). El dueño lo aprobó el 2026-10-19 con los valores
+  recomendados: los límites por plan de §2, los embeddings absorbidos (créditos 0), la URL pospuesta y
+  `hash` en el entorno de test. Las decisiones revisables están marcadas *Revisable:*. Siguen abiertas
+  dos **Preguntas al dueño**: el OK para grabar el golden set (§3) y qué negocio lo usa primero.
 - **Fecha:** 2026-10-19
 - **Contexto:** HU-AOS-49 y D-SPEC-31-4 (`spec.md`), inventario ítem 23 y tablas/API de AOS-49 (`design.md`)
   en `solvershub-docs`.
