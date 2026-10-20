@@ -131,7 +131,8 @@ def derivar_contenido(
 
     - `procedures`: los publicados que nombra la plantilla y son ofrecibles con lo habilitado
       (ADR-0113 §1), con el rango compatible `^M.0` (la misma regla que el lector tolerante);
-    - `tools`: los bindings del General de las acciones del core o de sus habilidades;
+    - `tools`: los bindings del General de las acciones del core o de sus habilidades; de una
+      opcional con `acciones_opcionales`, solo esas acciones;
     - `guardrails`: los del General (un `required_tool` solo si su acción sigue);
     - `playbooks`: los del General que nombra la plantilla o que no son de ningún pack;
     - `declarativeTools`: ninguna (siguen en el General: pueden llevar secretos por referencia).
@@ -156,9 +157,21 @@ def derivar_contenido(
     if not procedimientos:
         raise PresetError("sin_procedimientos")
 
+    acotadas = plantilla.acciones_opcionales
+    for pack, acciones in sorted(acotadas.items()):
+        if pack not in habilitados:
+            continue
+        ajenas = sorted(a for a in acciones if getattr(catalogo.get(a), "owner", None) != pack)
+        if ajenas:
+            avisos.append(f"acciones_opcionales de {pack} que esa habilidad no publica: {ajenas}")
+
     def _propia(nombre: str) -> bool:
         info = catalogo.get(nombre)
-        return info is not None and (info.owner in propias or info.owner == CORE_OWNER)
+        if info is None:
+            return False
+        if info.owner in acotadas:  # opcional acotada (nunca obligatoria: lo valida la plantilla)
+            return info.owner in propias and nombre in acotadas[info.owner]
+        return info.owner in propias or info.owner == CORE_OWNER
 
     tools = [dict(b) for b in general.get("tools") or [] if _propia(str(b.get("tool", "")))]
     nombres = {b["tool"] for b in tools}

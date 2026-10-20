@@ -3,6 +3,8 @@
   "nombre": "Agenda",
   "descripcion": "Agenda citas, demos y reuniones en los horarios disponibles del negocio.",
   "habilidades": ["pack_calendar"],
+  "opcionales": ["pack_commerce"],
+  "acciones_opcionales": {"pack_commerce": ["crear_lead"]},
   "procedimientos": ["pack_calendar.agendar_cita"],
   "playbooks": ["citas"],
   "reglas": [

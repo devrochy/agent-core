@@ -223,3 +223,43 @@ Lo que se decidió (revisado por el arquitecto antes de codificar):
 - **Pendiente (pack):** el ejemplo «cuánto me cuesta subir de plan» de `cambiar_plan` atrae preguntas de precio
   de prospectos en un catálogo sin `promesa_de_pago` (cambia el IDF). Revisarlo con el golden de ruteo cuando se
   toque `pack_subscriptions`.
+
+## Adenda (2026-10-19): Agenda captura el lead y cómo llega un cambio de plantilla (HU-AOS-22)
+
+En el dogfooding de `solvershub` se vio que un prospecto que se presenta («soy Ana de la tienda X») y pide una
+demo lo atendía Agenda: agendaba la cita, pero no creaba el lead, porque `crear_lead` y la regla de captura
+son de Ventas. Lo que se decidió, revisado por el arquitecto antes de codificar:
+
+- **`agendar_cita` no basta.** `create_calendar_event` guarda la cita con el `customer_id` de la conversación
+  y no toca `pack_commerce_leads`. Además, pack_calendar no debe depender de pack_commerce.
+- **`acciones_opcionales` en `PlantillaAgente`** (`{habilidad opcional: [acciones]}`): de una opcional con
+  entrada solo pasan esas acciones a `tools`. Es un dato, como `procedimientos`, y no un prompt
+  (invariante 3). Solo nombra acciones que el pack ya publica. Las claves tienen que estar en `opcionales`
+  y cada lista lleva al menos una acción. Si una acción no es de esa habilidad, la derivación da un aviso,
+  no un error. Una opcional sin entrada sigue entrando completa.
+- **Agenda:** `opcionales: ["pack_commerce"]` y `acciones_opcionales: {"pack_commerce": ["crear_lead"]}`.
+  Con `opcionales` a secas recibiría toda la caja de ventas (cotización, pedido) y se pisaría con Ventas.
+  `habilidades_del_contenido` mira solo `procedures`, así que Agenda sigue necesitando solo pack_calendar
+  para instalarse (D-35). En una conexión sin pack_commerce, `crear_lead` no se ofrece (`oferta.py`, como
+  pack_payments en Ventas).
+- **La regla sale de la descripción de la tool, no del playbook `ventas`.** La descripción de `crear_lead`
+  ya dice que se usa apenas el cliente se presenta y muestra intención. El playbook `ventas` (unas 95
+  líneas de inventario, cotización, pedido y pago) no se suma a Agenda: más tokens en cada turno y
+  conducta de vendedor que Agenda no puede cerrar. Tampoco se toca `citas.md` ni se agrega un playbook al
+  pack: cambiaría los prompts del General de todos los negocios y el gate en replay. Si una eval real de
+  solvershub muestra que el modelo no llama `crear_lead`, el siguiente paso es una sobreescritura de
+  `citas` por negocio en `TENANTS_ROOT/solvershub/playbooks/` (ADR-0026). Esa sobreescritura reemplaza el
+  archivo entero y entra congelada en la release.
+- **Límite conocido:** `crear_lead` se ofrece fuera de las etapas de `agendar_cita` (en el turno de la
+  presentación, antes de iniciar el procedimiento, o después de cerrarlo). Si el dueño agrega una regla
+  `{start: pack_calendar.agendar_cita}`, el turno de la presentación empieza ya con foco y `crear_lead` no
+  aparece hasta cerrar la cita. No se resuelve metiendo `crear_lead` en las etapas: acoplaría los packs.
+- **Un cambio de contenido de plantilla solo llega a agentes nuevos.** §6 se mantiene: re-aplicar
+  `presets-v2` nunca publica sobre la versión de un especialista existente. Lo que sí llega al re-aplicar
+  son las reglas con id nuevo (adenda anterior). Republicar los agentes «no personalizados» se descartó: el
+  `label` es texto libre y no identifica una versión del preset de forma robusta, y cada retoque costaría
+  un build por negocio. Las plantillas versionadas son la parte 2 de HU-AOS-16. En un negocio que ya
+  tiene Agenda (solvershub), se suma el binding `crear_lead` (con la configuración que tiene en el General)
+  al borrador de Agenda y se publica. El editor del panel todavía no edita `tools` (las conserva), así
+  que hoy es un `PUT` del borrador por la API, hecho por el operador, más `publish`. No hay que sumarle el
+  playbook `ventas`.
