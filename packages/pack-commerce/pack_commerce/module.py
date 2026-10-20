@@ -163,10 +163,20 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
         ),
         {"consultar_estado_pedido", "sub_consultar"},
     ),
+    # Smoke de test, tenant solvershub (2026-10-20): con la escalación ya resuelta y el bot de
+    # vuelta, el modelo dijo «ya le pasé tu caso a una persona del equipo… en cuanto se conecte,
+    # te escribe» sin llamar `escalate_to_human`: nadie lo iba a atender. Un traspaso se afirma
+    # con la tool del turno (adenda 2026-10-20 de ADR-0119).
     "asesor_humano": (
         re.compile(
             r"comuniqu\w*\s+con\s+un\s+asesor|un\s+asesor\s+te\s+\w*|"
-            r"pas[eé]\s+con\s+un\s+(?:asesor|humano)|en\s+un\s+momentico\s+te\s+contactan",
+            r"pas[eé]\s+con\s+un\s+(?:asesor|humano)|en\s+un\s+momentico\s+te\s+contactan|"
+            r"\bpas[eé]\s+(?:tu|el|su)\s+(?:caso|solicitud|consulta)\b|"
+            r"\b(?:te|lo|la)\s+(?:comunico|paso|transfiero|conecto)\s+con\s+(?:una\s+persona|un\s+humano|"
+            r"alguien\s+del\s+equipo|nuestro\s+equipo|el\s+equipo)\b|"
+            r"\bescal[eé]\s+(?:tu|el|su)\s+(?:caso|solicitud)\b|\bqued[oó]\s+escalad[oa]\b|"
+            r"\buna\s+persona\s+(?:del?\s+(?:nuestro\s+)?equipo\s+)?(?:te\s+(?:contacta|escribe|va\s+a\s+"
+            r"(?:contactar|escribir))|va\s+a\s+(?:contactarte|escribirte))\b",
             re.IGNORECASE,
         ),
         {"escalate_to_human"},

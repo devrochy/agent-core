@@ -213,3 +213,30 @@ agente `arquitecto` antes de escribir código.
 Con el motor de procedimientos activo, el reintento tras un rechazo del verificador usa el respaldo
 del agente (`model.fallback`) cuando es de la misma familia que el modelo del turno. Reglas y límites
 en ADR-0132. Los reintentos y la acción ante el fallo siguen siendo los de ADR-0092.
+
+## Adenda (2026-10-20): un traspaso a una persona exige `escalate_to_human` del turno
+
+**Estado:** propuesta; requiere la aprobación del dueño antes del merge.
+
+Origen: smoke del dueño en test (chat web, negocio `solvershub`, conversación `e3c24103…`). La
+escalación de las 05:07 quedó `resuelta` a las 05:09 y el bot volvió; a las 05:11 el modelo dijo «Ya
+le pasé tu caso a una persona del equipo… En cuanto se conecte, te escribe por acá» sin llamar
+`escalate_to_human`: nadie lo iba a atender.
+
+- **Dónde:** se amplía la afirmación que ya existía, `asesor_humano` de pack-commerce (respaldada por
+  `escalate_to_human`), en vez de crear otra en el core: un solo detector del mismo hecho. Suma «le pasé
+  tu caso / solicitud», «te comunico / paso / transfiero con una persona o el equipo», «escalé tu caso»,
+  «quedó escalado» y «una persona del equipo te va a contactar / escribir».
+- **Respaldo:** solo la tool del turno. Se descartó aceptar «una escalación vigente»: `escalate()` pausa
+  el bot, así que con una escalación vigente el bot no responde y ese respaldo no cambia ningún veredicto
+  real (revisión del `arquitecto`).
+- **Polaridad:** «si quieres, te comunico con…» no afirma: el condicional suma `quier` (antes solo
+  `quer`, que no cubre «quieres»).
+- **Medición** (`evals/verificador.py`, con y sin `--con-estado`): 7 casos nuevos del smoke en el set
+  etiquetado; 230 correctas y 27 falsas, falsos positivos 1 (0,4 %, el mismo de antes) y ningún falso
+  negativo. Gate en replay sin regrabar.
+- **Instrucción del reintento:** la de siempre (`verificador_status_sin_evidencia`): llamar la tool que
+  hace la acción o decir con claridad que todavía no está hecha.
+- **Sin cambio:** la respuesta neutral de ADR-0092 («Dejame verificar eso y te confirmo») sigue igual;
+  en el smoke salió por un falso positivo de `cob_suscripcion_check`, corregido en la adenda 2026-10-20
+  de ADR-0113.
