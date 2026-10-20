@@ -25,6 +25,7 @@ from core.api.routers import (
     conversations,
     costs,
     dashboard,
+    datos_de_prueba,
     declarative_tools,
     dlq,
     domain_events,
@@ -75,6 +76,7 @@ api_router.include_router(skill_installations.router)
 api_router.include_router(procedures.router)
 # HU-AOS-47: antes que `agents` (su `/{agent_id}` capturaría `/overview`).
 api_router.include_router(agent_data.router)
+api_router.include_router(datos_de_prueba.router)
 api_router.include_router(agents.router)
 api_router.include_router(agent_editor.router)
 api_router.include_router(connections.router)

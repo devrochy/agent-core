@@ -113,6 +113,9 @@ class PlantillaAgente(BaseModel):
     )
     playbooks: list[Annotated[str, Field(pattern=r"^[a-zA-Z0-9_-]{1,80}$")]] = Field(default_factory=list, max_length=20)
     reglas: list[ReglaDePlantilla] = Field(default_factory=list, max_length=5)
+    # Datos de prueba del agente (HU-QA-10, ADR-0146) cuando no salen de sus habilidades:
+    # `<pack>.<modo>` de una forma que declara otro pack (los planes de Suscripciones son productos).
+    datos_de_prueba: str | None = Field(default=None, pattern=r"^[a-z0-9_]{1,60}\.[a-z0-9_]{1,40}$")
 
     @model_validator(mode="after")
     def _coherente(self) -> PlantillaAgente:

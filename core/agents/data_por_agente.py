@@ -217,8 +217,9 @@ async def resumen(tenant_id: uuid.UUID, *, ahora: datetime | None = None) -> dic
                 .where(
                     UsageLedger.tenant_id == tenant_id,
                     UsageLedger.created_at >= desde,
-                    # La ingesta del conocimiento no es actividad de un agente (ADR-0145 §3).
-                    UsageLedger.kind != "embedding",
+                    # La ingesta del conocimiento y los datos de prueba no son actividad de un agente
+                    # (ADR-0145 §3, ADR-0146).
+                    UsageLedger.kind.not_in(("embedding", "generacion")),
                 )
                 .group_by(UsageLedger.agent_instance_id)
             )
@@ -622,8 +623,9 @@ async def consumo(alcance: Alcance, filtros: Filtros) -> dict[str, Any]:
         alcance.condicion(UsageLedger.agent_instance_id),
         UsageLedger.created_at >= filtros.periodo.desde,
         UsageLedger.created_at < filtros.periodo.hasta,
-        # Sin agente, la ingesta del conocimiento caería en el General (ADR-0140): no es un turno.
-        UsageLedger.kind != "embedding",
+        # Sin agente, la ingesta del conocimiento y los datos de prueba caerían en el General
+        # (ADR-0140): no son turnos (ADR-0145, ADR-0146).
+        UsageLedger.kind.not_in(("embedding", "generacion")),
     ]
     if filtros.connection_id is not None:
         condiciones.append(UsageLedger.connection_id == filtros.connection_id)

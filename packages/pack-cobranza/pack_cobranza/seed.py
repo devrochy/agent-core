@@ -53,16 +53,22 @@ def _dec(valor: Any) -> Decimal:
     return Decimal(str(valor or 0))
 
 
-async def sembrar_cartera(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
+Creados = list[tuple[str, uuid.UUID]]
+
+
+async def sembrar_cartera(tenant_id: uuid.UUID, data: dict[str, Any], creados: Creados | None = None) -> list[str]:
+    """`creados` (datos de prueba, HU-QA-10): recibe `(kind, id)` de cada cartera, cliente,
+    préstamo, cuota y pago que se crea."""
     pasos: list[str] = []
+    registro: Creados = creados if creados is not None else []
     async with tenant_scope(tenant_id):
         async with get_session() as session:
             for item in data.get("carteras") or []:
-                pasos.extend(await _sembrar_una(session, tenant_id, item))
+                pasos.extend(await _sembrar_una(session, tenant_id, item, registro))
     return pasos
 
 
-async def _sembrar_una(session, tenant_id: uuid.UUID, item: dict[str, Any]) -> list[str]:  # type: ignore[no-untyped-def]
+async def _sembrar_una(session, tenant_id: uuid.UUID, item: dict[str, Any], creados: Creados) -> list[str]:  # type: ignore[no-untyped-def]
     nombre = str(item.get("nombre") or "").strip()
     if not nombre:
         return []
@@ -83,6 +89,7 @@ async def _sembrar_una(session, tenant_id: uuid.UUID, item: dict[str, Any]) -> l
         )
         session.add(cartera)
         await session.flush()
+        creados.append(("cartera", cartera.id))
         pasos.append(f"cartera {nombre} creada")
 
     caja = (
@@ -111,7 +118,7 @@ async def _sembrar_una(session, tenant_id: uuid.UUID, item: dict[str, Any]) -> l
             pasos.append(f"cartera {nombre} asignada al gestor")
 
     for cli in item.get("clientes") or []:
-        paso = await _sembrar_cliente(session, tenant_id, cartera, caja, cli)
+        paso = await _sembrar_cliente(session, tenant_id, cartera, caja, cli, creados)
         if paso:
             pasos.append(paso)
     return pasos
@@ -134,7 +141,7 @@ async def _dar_permisos(session, tenant_id: uuid.UUID, gestor_id: uuid.UUID, per
             session.add(GestorPermiso(tenant_id=tenant_id, gestor_id=gestor_id, permiso=permiso, habilitado=True))
 
 
-async def _sembrar_cliente(session, tenant_id: uuid.UUID, cartera: Cartera, caja: Caja, cli: dict[str, Any]) -> str | None:  # type: ignore[no-untyped-def]
+async def _sembrar_cliente(session, tenant_id: uuid.UUID, cartera: Cartera, caja: Caja, cli: dict[str, Any], creados: Creados) -> str | None:  # type: ignore[no-untyped-def]
     nombre = str(cli.get("nombre") or "").strip()
     if not nombre:
         return None
@@ -158,6 +165,7 @@ async def _sembrar_cliente(session, tenant_id: uuid.UUID, cartera: Cartera, caja
         )
         session.add(cliente)
         await session.flush()
+        creados.append(("cliente", cliente.id))
 
     prestamo_cfg = cli.get("prestamo")
     if prestamo_cfg:
@@ -169,12 +177,12 @@ async def _sembrar_cliente(session, tenant_id: uuid.UUID, cartera: Cartera, caja
             )
         ).first()
         if tiene is None:
-            await _sembrar_prestamo(session, tenant_id, cartera, caja, cliente, prestamo_cfg)
+            await _sembrar_prestamo(session, tenant_id, cartera, caja, cliente, prestamo_cfg, creados)
     etiqueta = f"{nombre} {apellido or ''}".strip()
     return f"cliente {etiqueta} creado" if creado else None
 
 
-async def _sembrar_prestamo(session, tenant_id: uuid.UUID, cartera: Cartera, caja: Caja, cliente: Cliente, cfg: dict[str, Any]) -> None:  # type: ignore[no-untyped-def]
+async def _sembrar_prestamo(session, tenant_id: uuid.UUID, cartera: Cartera, caja: Caja, cliente: Cliente, cfg: dict[str, Any], creados: Creados) -> None:  # type: ignore[no-untyped-def]
     # Mismo cálculo que el alta de préstamo de la app de campo (`api_gestor.crear_prestamo`).
     valor = _dec(cfg.get("valor"))
     num_cuotas = max(1, int(cfg.get("num_cuotas") or cartera.num_cuotas or 1))
@@ -198,6 +206,7 @@ async def _sembrar_prestamo(session, tenant_id: uuid.UUID, cartera: Cartera, caj
     )
     session.add(prestamo)
     await session.flush()
+    creados.append(("prestamo", prestamo.id))
     hoy = date.today()
     for i in range(1, num_cuotas + 1):
         vence = otorgado + timedelta(days=i * dias)
@@ -211,19 +220,21 @@ async def _sembrar_prestamo(session, tenant_id: uuid.UUID, cartera: Cartera, caj
             estatus=estatus,
         )
         session.add(cuota)
+        await session.flush()
+        creados.append(("cuota", cuota.id))
         if estatus == "pagada":
-            await session.flush()
-            session.add(
-                Pago(
-                    tenant_id=tenant_id,
-                    cliente_id=cliente.id,
-                    prestamo_id=prestamo.id,
-                    cuota_id=cuota.id,
-                    valor=cuota_valor,
-                    metodo_pago="efectivo",
-                    registrado_por="propietario",
-                    fecha_hora=datetime.combine(vence, datetime.min.time(), tzinfo=UTC) + timedelta(hours=15),
-                )
+            pago = Pago(
+                tenant_id=tenant_id,
+                cliente_id=cliente.id,
+                prestamo_id=prestamo.id,
+                cuota_id=cuota.id,
+                valor=cuota_valor,
+                metodo_pago="efectivo",
+                registrado_por="propietario",
+                fecha_hora=datetime.combine(vence, datetime.min.time(), tzinfo=UTC) + timedelta(hours=15),
             )
+            session.add(pago)
+            await session.flush()
+            creados.append(("pago", pago.id))
     caja.saldo_actual = caja.saldo_actual - valor + cuota_valor * pagadas
     await session.flush()

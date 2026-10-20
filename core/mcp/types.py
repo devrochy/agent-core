@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
     from core.mcp.host import MCPHost
     from core.primeros_pasos.contrato import ContenidoCargado
+    from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
 
 log = get_logger(__name__)
 
@@ -572,6 +573,23 @@ class BaseModule(ABC):
         Default: None (la habilidad no aporta contenido a ese paso).
         """
         return None
+
+    def formas_de_datos_de_prueba(self) -> list[FormaDeDatos]:
+        """Hook opcional (HU-QA-10, ADR-0146): los juegos de datos de prueba que este pack sabe
+        sembrar para un agente (esquema para validar lo que genera el LLM y datos de respaldo).
+        Default: ninguno (el botón del agente queda deshabilitado)."""
+        return []
+
+    async def sembrar_datos_de_prueba(
+        self, tenant_id: uuid.UUID, modo: str, datos: BaseModel, contexto: ContextoDeNegocio
+    ) -> list[RegistroSembrado]:
+        """Siembra `datos` (ya validados con el esquema de la forma `modo`) y devuelve los
+        registros que creó. Lo que ya existía y se reutilizó no se devuelve: no es de la prueba."""
+        raise NotImplementedError
+
+    async def retirar_datos_de_prueba(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> int:
+        """Retira lo sembrado (borrado lógico o desactivación, nunca físico). Devuelve cuántos."""
+        raise NotImplementedError
 
     def public_routes(self) -> list[Any]:
         """Routers PÚBLICOS del pack (sin sesión de admin), ej. la app de campo.

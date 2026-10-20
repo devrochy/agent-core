@@ -61,6 +61,7 @@ from pack_commerce.skills import (
 if TYPE_CHECKING:
     from core.mcp.host import MCPHost
     from core.primeros_pasos.contrato import ContenidoCargado
+    from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
 
 log = get_logger(__name__)
 
@@ -1081,6 +1082,24 @@ class CRMModule(BaseModule):
         from pack_commerce.seed import seed_catalog
 
         return await seed_catalog(tenant_id, data)
+
+    def formas_de_datos_de_prueba(self) -> list[FormaDeDatos]:
+        """Catálogo (agente de ventas) y planes (por plantilla), HU-QA-10."""
+        from pack_commerce.datos_de_prueba import formas
+
+        return formas()
+
+    async def sembrar_datos_de_prueba(
+        self, tenant_id: uuid.UUID, modo: str, datos: Any, contexto: ContextoDeNegocio
+    ) -> list[RegistroSembrado]:
+        from pack_commerce.datos_de_prueba import sembrar
+
+        return await sembrar(tenant_id, modo, datos, contexto)
+
+    async def retirar_datos_de_prueba(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> int:
+        from pack_commerce.datos_de_prueba import retirar
+
+        return await retirar(tenant_id, registros)
 
     async def contenido_cargado(self, tenant_id: uuid.UUID) -> ContenidoCargado:
         """Productos a la venta (con alguna variante activa) para el paso «catálogo o servicios»
