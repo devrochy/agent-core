@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, Text, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Index, Integer, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -32,12 +32,20 @@ class Base(DeclarativeBase):
     pass
 
 
+# HU-UX-08: paleta categórica del sistema de diseño (SPEC-29), nunca hex libre.
+COLORES_TIPO = ("cat-1", "cat-2", "cat-3", "cat-4")
+
+
 class AppointmentType(Base):
     """Tipo de cita/servicio: nombre + duración propia."""
 
     __tablename__ = "pack_calendar_appointment_types"
     __table_args__ = (
         Index("ix_pack_calendar_types_tenant", "tenant_id", "created_at"),
+        CheckConstraint(
+            "color in ('cat-1', 'cat-2', 'cat-3', 'cat-4')", name="ck_pack_calendar_types_color"
+        ),
+        CheckConstraint("char_length(codigo) <= 6", name="ck_pack_calendar_types_codigo"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -51,6 +59,9 @@ class AppointmentType(Base):
     # HU-SH-02: colaborador que recibe los avisos de este tipo y enlace de la reunión.
     responsable_admin_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     enlace_reunion: Mapped[str | None] = mapped_column(Text)
+    # HU-UX-08: color (clave de COLORES_TIPO) y código corto («VAL») en la Agenda.
+    color: Mapped[str] = mapped_column(Text, nullable=False, default="cat-1", server_default="cat-1")
+    codigo: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(

@@ -30735,6 +30735,16 @@
               }
             ],
             "title": "Enlace Reunion"
+          },
+          "color": {
+            "type": "string",
+            "title": "Color",
+            "default": "cat-1"
+          },
+          "codigo": {
+            "type": "string",
+            "title": "Codigo",
+            "default": ""
           }
         },
         "type": "object",
@@ -30781,6 +30791,35 @@
             "type": "string",
             "title": "Enlace Reunion",
             "default": ""
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "cat-1",
+                  "cat-2",
+                  "cat-3",
+                  "cat-4"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "codigo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 6
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codigo"
           }
         },
         "type": "object",
