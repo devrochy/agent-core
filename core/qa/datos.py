@@ -313,6 +313,11 @@ async def _reservar_negocio(ds: QaTesterDataset, nombre: str) -> None:
             if tenant is not None and tenant.id != ds.tenant_id:
                 raise QaError("conflicto", f"Ya existe otro negocio con el slug {ds.slug}.")
             if tenant is None:
+                # Negocio nuevo: `onboard_tenant` lo verá como existente y no pasará por la
+                # cuarentena, así que los datos de clientes de un negocio purgado se apartan acá.
+                from core.onboarding import cuarentena_de_datos_huerfanos
+
+                cuarentena_de_datos_huerfanos(ds.slug)
                 session.add(
                     Tenant(id=ds.tenant_id, name=nombre, slug=ds.slug, status="active", settings={"language": "es"})
                 )

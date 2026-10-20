@@ -45,7 +45,7 @@ TS_CONFIG = "public.es_unaccent"
 
 ESTADOS = ("pendiente", "procesando", "listo", "fallido")
 ORIGENES = ("archivo", "url")
-ERRORES = ("sin_texto", "muy_grande", "formato", "url_inaccesible", "limite_plan", "proveedor")
+ERRORES = ("sin_texto", "muy_grande", "formato", "url_inaccesible", "limite_plan", "proveedor", "interno")
 
 
 def utcnow() -> datetime:

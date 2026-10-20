@@ -212,6 +212,14 @@ def redact_pii(text: str) -> str:
     return redacted
 
 
+def contar_pii(text: str) -> int:
+    """Coincidencias de los mismos patrones de `redact_pii`, sin enmascarar: el pack de
+    conocimiento solo avisa (ADR-0145 §6), porque el teléfono del negocio sí se responde."""
+    if not text:
+        return 0
+    return sum(len(pattern.findall(text)) for pattern, _ in _PII_PATTERNS)
+
+
 async def purge_memory(
     customer_id: uuid.UUID | None = None,
     conversation_id: uuid.UUID | None = None,

@@ -594,3 +594,73 @@ Lo que quedó en código y en qué se aparta del texto de arriba.
     Cubre RLS forzada y la policy, que otro negocio o una sesión sin negocio vean 0 filas, la FK
     compuesta, los índices por `tenant_id`, `tsv` sin tildes, el orden por coseno y la fila del ledger
     con el tenant del scope.
+
+## Adenda de implementación (2026-10-20, HU-AOS-49 parte 2: ingesta de archivos)
+
+- **`pack-knowledge` 0.2.0.** Agrega `pypdf` y `python-docx` como dependencias del pack. La imagen ya
+  instala todos los `packages/pack-*`. Ninguna de las dos usa binarios del sistema.
+- **API en `/api/v1/pack/pack_knowledge/agents/{agent_id}/documents`.** Es el prefijo obligatorio de las
+  rutas admin de un pack (ADR-0079); reemplaza el `/api/v1/admin/agents/{id}/knowledge` de §2.
+  - Operaciones: `GET` (lista), `POST` multipart (sube, responde 202), `DELETE …/{document_id}` (204) y
+    `POST …/{document_id}/reprocess` (202).
+  - Permisos: sección `agents`, con escritura para subir, borrar y reprocesar.
+  - Solo admite especialistas vivos del negocio de la sesión. Otro negocio, el Coordinador o el
+    documento de otro agente responden 404, sin eco del id.
+  - Errores: 413 `muy_grande`, 422 `formato`/`vacio`, 409 `documento_duplicado` (el mismo `sha256` en el
+    mismo agente) y 409 `plan_limit_documentos`/`plan_limit_conocimiento_mb`, con sus mensajes en
+    `core/api/plan_limits.py`.
+  - Las rutas se montan con el pack detectado, como las de los otros packs. No exigen que la habilidad
+    esté instalada en una conexión: el documento sirve recién cuando el agente declare la tool (parte 3).
+- **Tipo y contenido** (`archivos.py`):
+  - el tipo sale del MIME declarado o, si es genérico (`application/octet-stream`, `text/*`), de la
+    extensión: los navegadores mandan `.md` como binario;
+  - el contenido lo confirma: `%PDF-`, un ZIP con `word/document.xml`, o texto sin NUL y en UTF-8 (con
+    respaldo latin-1).
+- **Tareas** (`register_task` es nuevo en `core/tasks/decorators.py`, paralelo a `register_cron`):
+  - `pack_knowledge.extraer`: extrae, trocea y reemplaza los fragmentos;
+  - `pack_knowledge.embeber`: un lote de 100. Se reencola mientras queden fragmentos sin vector, así
+    los lotes van **en cadena, nunca en paralelo**.
+  - No hay `soft_time_limit`: Celery lo lanza en el hilo y no en el loop async de `run_async`. Cada
+    lote es una llamada a la API (segundos) y queda bajo el `task_time_limit=300` global.
+  - La extracción corre en `asyncio.to_thread`.
+  - Cada tarea recibe `tenant_id` y `document_id`, abre `tenant_scope` y lee con un filtro explícito. Un
+    documento que no es de ese negocio, que está borrado o que está en otro estado no hace nada.
+  - El documento se bloquea (`FOR UPDATE`) al escribir.
+  - Un error se registra sin reintento y deja el documento `fallido`: el dueño lo reprocesa.
+- **Reprocesar** se permite en cualquier estado: vuelve a `pendiente` y se encola la extracción, que
+  vacía los fragmentos anteriores.
+- **Borrar:** `deleted_at` en el documento y los fragmentos, con `contenido` y `embedding` en NULL en la
+  misma transacción, y el original se borra del disco después del commit.
+- **PII:** `core.memory.vector.contar_pii` usa los mismos patrones de `redact_pii`, pero no enmascara.
+  Guarda el conteo en `pii_detectada`.
+- **Purga del tenant:**
+  - `core/tenants.py` borra `TENANTS_ROOT/<slug>/` después del commit, con el slug capturado antes.
+    Si falla, deja el log `tenant_purge_files_cleanup_failed`, manda una alerta crítica y la función
+    devuelve False.
+  - El alta de un negocio **nuevo** manda a `TENANTS_ROOT/.purgados/` las subcarpetas con datos de
+    clientes que encuentre con ese slug (`conocimiento/`, `evidencias/`), y no rechaza el alta.
+  - `docs/` se queda: se puede preparar antes del alta (voz de marca), y moverla rompería una base de
+    desarrollo recreada.
+- **Revisión del `auditor-multitenant` (sin hallazgos altos), incorporada:**
+  - **la purga renombra antes de borrar:** `borrar_carpeta_del_tenant` mueve `TENANTS_ROOT/<slug>` a
+    `.purgados/<slug>-purgado-<sello>`, que es atómico, y después hace `rmtree`. Así el slug queda libre
+    aunque el borrado falle. Si el renombre falla, se manda la alerta;
+  - el alta de los datos de prueba del tester (`core/qa/datos.py`, que crea la fila del negocio antes
+    del alta) también pasa por la cuarentena;
+  - las excepciones inesperadas del worker dejan el documento `fallido` con el código nuevo **`interno`**
+    (migración `pack_knowledge_0002`) y la clase en `error_detalle`;
+  - `register_task` registra solo la clase del error: un error de SQLAlchemy trae los parámetros, que
+    pueden ser texto del documento;
+  - `archivos.carpeta` usa el slug validado (`onboarding.carpeta_del_tenant`).
+  - **Pendiente:** retención de `.purgados/` (hoy queda hasta que alguien la vacíe) y un comando
+    `agent-core tenant purge-files <slug>`. Hasta que existan, la alerta dice que se borre a mano.
+- **Tests:**
+  - unitarios en `tests/test_pack_knowledge_ingesta_unit.py`: tipo y contenido, rutas sin traversal,
+    extracción de PDF, DOCX, TXT y MD, troceado, `contar_pii` y tareas registradas;
+  - de integración en `tests/integration/test_pack_knowledge_ingesta.py` (`aislamiento`): subir →
+    `listo` → listar → borrar, el PDF escaneado como `fallido/sin_texto` con reprocesar, los tipos
+    falsos, el 404 desde otro negocio en todo, el otro agente y el Coordinador del mismo negocio, la
+    tarea con un tenant ajeno, el payload que lleva solo ids, el tope que cuenta solo el negocio, y la
+    purga con su cuarentena;
+  - unitarios de la tarea sin `tenant_id`, del log de errores sin parámetros, de la purga con el disco
+    fallando (alerta y False), del renombre y de la cuarentena.
