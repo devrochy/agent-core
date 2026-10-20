@@ -35,6 +35,12 @@ log = get_logger(__name__)
 
 PACKS = ("pack_commerce", "pack_calendar", "pack_cobranza")
 PLAN = "premium"
+# Descripción fija del negocio `qa-…`. «Generar datos de prueba» (HU-QA-10) la reconoce y pide
+# una propia: con esta todos los testers generarían lo mismo que ya trae el juego fijo.
+DESCRIPCION_QA = (
+    "Negocio de prueba del centro de pruebas: tienda de café con agenda de asesorías "
+    "y una cartera de créditos."
+)
 VERTICAL = "qa"
 DOMINIO = DOMINIO_DE_PRUEBA
 # Una corrida que quedó en «creando» más de esto se considera caída y se puede retomar.
@@ -441,10 +447,7 @@ async def preparar(admin: Admin) -> dict[str, Any]:
         creado, _pasos_alta = await onboard_tenant(
             name=nombre,
             slug=ds.slug,
-            business_description=(
-                "Negocio de prueba del centro de pruebas: tienda de café con agenda de asesorías "
-                "y una cartera de créditos."
-            ),
+            business_description=DESCRIPCION_QA,
             packs=list(PACKS),
             admin_email=correo_de("dueno", admin.id),
             tenant_id=ds.tenant_id,

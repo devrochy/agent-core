@@ -24,13 +24,18 @@ from pack_commerce.models import (
 from pack_commerce.precios_de_plan import ATRIBUTO, precio_de_plan
 
 
-async def seed_catalog(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
+async def seed_catalog(
+    tenant_id: uuid.UUID, data: dict[str, Any], creados: list[tuple[str, uuid.UUID]] | None = None
+) -> list[str]:
     """Importa un catálogo pack_commerce a la BD del tenant. Idempotente.
 
     Los productos del tenant viven en `TENANTS_ROOT/<slug>/catalog.json` (dato,
     no código). Formato: {"category_paths": [[...]], "products": [...],
     "complement_pairs": [[...],[...]]}. Las filas se miran SIEMPRE acotadas al
     tenant (defensa más allá de RLS, ADR-0018).
+
+    `creados` (datos de prueba, HU-QA-10): si viene, se le agrega `(kind, id)` de cada
+    categoría, producto y variante que se CREA (no de lo que ya existía), para poder retirarlo.
     """
     steps: list[str] = []
     category_ids: dict[tuple[str, ...], uuid.UUID] = {}
@@ -44,6 +49,7 @@ async def seed_catalog(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
         stmt = select(Category).where(
             Category.tenant_id == tenant_id,
             Category.name == path[-1],
+            Category.deleted_at.is_(None),
             Category.parent_id.is_(None) if parent is None else Category.parent_id == parent,
         )
         cat = (await session.execute(stmt)).scalars().first()
@@ -52,6 +58,8 @@ async def seed_catalog(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
             session.add(cat)
             await session.flush()
             order += 1
+            if creados is not None:
+                creados.append(("categoria", cat.id))
         category_ids[path] = cat.id
         return cat.id
 
@@ -81,6 +89,8 @@ async def seed_catalog(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
                     )
                     session.add(product)
                     await session.flush()
+                    if creados is not None:
+                        creados.append(("producto", product.id))
 
                 for variante in producto.get("variants", []):
                     vstmt = select(ProductVariant).where(
@@ -116,6 +126,8 @@ async def seed_catalog(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
                         )
                         session.add(variant)
                         await session.flush()
+                        if creados is not None:
+                            creados.append(("variante", variant.id))
                     else:
                         variant.attributes = attrs
                         if attrs.get(ATRIBUTO):

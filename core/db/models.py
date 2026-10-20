@@ -1998,6 +1998,29 @@ class AgentRecordOrigin(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class TestDataRecord(Base):
+    """Registro sembrado por «Generar datos de prueba» de un agente (HU-QA-10, ADR-0146, 0098).
+
+    El registro vive en la tabla de su pack; aquí su referencia lógica, el agente y el lote.
+    Retirar marca `deleted_at` (invariante 8). `origen`: `llm` | `plantilla`."""
+
+    __tablename__ = "test_data_records"
+    __test__ = False  # pytest no la confunde con una clase de tests
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    lote_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    pack_id: Mapped[str] = mapped_column(Text, nullable=False)
+    modo: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    record_ref: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    origen: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class PackInstallationRecord(Base):
     """Habilidad instalada con scope (ADR-0118 §2). En esta HU solo se usa la instalación
     `core` de scope negocio, que guarda los secretos de las `declarativeTools` (ADR-0118 §5):

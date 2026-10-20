@@ -19223,6 +19223,185 @@
           }
         }
       }
+    },
+    "/api/v1/admin/agents/{agent_id}/datos-de-prueba": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Estado Datos De Prueba",
+        "description": "Estado de los datos de prueba del agente.",
+        "operationId": "estado_datos_de_prueba_api_v1_admin_agents__agent_id__datos_de_prueba_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EstadoDatosDePrueba"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Generar Datos De Prueba",
+        "description": "Genera los datos de prueba del agente según la descripción del negocio y reemplaza los anteriores.",
+        "operationId": "generar_datos_de_prueba_api_v1_admin_agents__agent_id__datos_de_prueba_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoteGenerado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Borrar Datos De Prueba",
+        "description": "Retira los datos de prueba del agente; lo creado a mano no se toca.",
+        "operationId": "borrar_datos_de_prueba_api_v1_admin_agents__agent_id__datos_de_prueba_delete",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatosRetirados"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -36674,6 +36853,198 @@
           "processed_at"
         ],
         "title": "DocumentoOut"
+      },
+      "DatosRetirados": {
+        "properties": {
+          "retirados": {
+            "type": "integer",
+            "title": "Retirados"
+          }
+        },
+        "type": "object",
+        "required": [
+          "retirados"
+        ],
+        "title": "DatosRetirados"
+      },
+      "EstadoDatosDePrueba": {
+        "properties": {
+          "disponible": {
+            "type": "boolean",
+            "title": "Disponible"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo",
+            "description": "Por qué el agente no tiene datos que generar."
+          },
+          "falta_descripcion": {
+            "type": "boolean",
+            "title": "Falta Descripcion",
+            "description": "El negocio no tiene descripción propia: hay que escribirla antes."
+          },
+          "forma": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FormaDeDatosOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lote": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoteDePrueba"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "disponible",
+          "falta_descripcion",
+          "forma",
+          "lote"
+        ],
+        "title": "EstadoDatosDePrueba"
+      },
+      "FormaDeDatosOut": {
+        "properties": {
+          "modo": {
+            "type": "string",
+            "title": "Modo"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "modo",
+          "titulo"
+        ],
+        "title": "FormaDeDatosOut"
+      },
+      "LoteDePrueba": {
+        "properties": {
+          "lote_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Lote Id"
+          },
+          "modo": {
+            "type": "string",
+            "title": "Modo"
+          },
+          "origen": {
+            "type": "string",
+            "enum": [
+              "llm",
+              "plantilla"
+            ],
+            "title": "Origen"
+          },
+          "creado_en": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Creado En"
+          },
+          "conteos": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Conteos",
+            "description": "Registros creados por tipo (`producto`, `cita`, `cliente`…)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "lote_id",
+          "modo",
+          "origen",
+          "creado_en",
+          "conteos"
+        ],
+        "title": "LoteDePrueba"
+      },
+      "LoteGenerado": {
+        "properties": {
+          "lote_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Lote Id"
+          },
+          "modo": {
+            "type": "string",
+            "title": "Modo"
+          },
+          "origen": {
+            "type": "string",
+            "enum": [
+              "llm",
+              "plantilla"
+            ],
+            "title": "Origen"
+          },
+          "creado_en": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Creado En"
+          },
+          "conteos": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Conteos",
+            "description": "Registros creados por tipo (`producto`, `cita`, `cliente`…)."
+          },
+          "motivo_plantilla": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "proveedor",
+                  "formato"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Plantilla",
+            "description": "Por qué se usó la plantilla: el LLM falló o su respuesta no cumplió el formato."
+          },
+          "retirados": {
+            "type": "integer",
+            "title": "Retirados",
+            "description": "Registros del lote anterior que se retiraron."
+          }
+        },
+        "type": "object",
+        "required": [
+          "lote_id",
+          "modo",
+          "origen",
+          "creado_en",
+          "conteos",
+          "retirados"
+        ],
+        "title": "LoteGenerado"
       }
     }
   }

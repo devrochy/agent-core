@@ -29,8 +29,11 @@ from pack_cobranza.guardrails import promesa_guardrail, suscripcion_guardrail
 from pack_cobranza.skills import CobranzaSkill
 
 if TYPE_CHECKING:
+    import uuid
+
     from core.mcp.host import MCPHost
     from core.primeros_pasos.contrato import ContenidoCargado
+    from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
 
 log = get_logger(__name__)
 
@@ -140,6 +143,24 @@ class CobranzaModule(BaseModule):
         from pack_cobranza.seed import sembrar_cartera
 
         return await sembrar_cartera(_uuid.UUID(str(tenant_id)), data)
+
+    def formas_de_datos_de_prueba(self) -> list[FormaDeDatos]:
+        """Datos de prueba del agente (HU-QA-10, ADR-0146)."""
+        from pack_cobranza.datos_de_prueba import formas
+
+        return formas()
+
+    async def sembrar_datos_de_prueba(
+        self, tenant_id: uuid.UUID, modo: str, datos: Any, contexto: ContextoDeNegocio
+    ) -> list[RegistroSembrado]:
+        from pack_cobranza.datos_de_prueba import sembrar
+
+        return await sembrar(tenant_id, modo, datos, contexto)
+
+    async def retirar_datos_de_prueba(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> int:
+        from pack_cobranza.datos_de_prueba import retirar
+
+        return await retirar(tenant_id, registros)
 
     async def contenido_cargado(self, tenant_id: Any) -> ContenidoCargado:
         """Clientes de cartera para el paso «catálogo o servicios» de los primeros pasos

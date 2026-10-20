@@ -31,7 +31,10 @@ def _instante(en_dias: Any, hora: Any, zona: ZoneInfo) -> datetime:
     return datetime.combine(dia, time.fromisoformat(str(hora or "09:00")), tzinfo=zona)
 
 
-async def sembrar_agenda(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
+async def sembrar_agenda(
+    tenant_id: uuid.UUID, data: dict[str, Any], creados: list[tuple[str, uuid.UUID]] | None = None
+) -> list[str]:
+    """`creados` (datos de prueba, HU-QA-10): recibe `(kind, id)` de cada fila que se crea."""
     nombre_zona = str(data.get("timezone") or "America/Bogota")
     zona = ZoneInfo(nombre_zona)
     pasos: list[str] = []
@@ -60,6 +63,8 @@ async def sembrar_agenda(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str
                     )
                     session.add(tipo)
                     await session.flush()
+                    if creados is not None:
+                        creados.append(("tipo", tipo.id))
                     pasos.append(f"tipo de cita {nombre} creado")
                 tipos[nombre] = tipo
 
@@ -80,18 +85,20 @@ async def sembrar_agenda(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str
                 if existe is not None:
                     continue
                 minutos = int(item.get("duration_minutes") or (tipo.duration_minutes if tipo else 60))
-                session.add(
-                    Appointment(
-                        tenant_id=tenant_id,
-                        appointment_type_id=tipo.id if tipo else None,
-                        title=titulo,
-                        start_at=inicio,
-                        end_at=inicio + timedelta(minutes=minutos),
-                        notes=str(item.get("notes") or ""),
-                        created_by="panel",
-                        timezone=nombre_zona,
-                    )
+                cita = Appointment(
+                    tenant_id=tenant_id,
+                    appointment_type_id=tipo.id if tipo else None,
+                    title=titulo,
+                    start_at=inicio,
+                    end_at=inicio + timedelta(minutes=minutos),
+                    notes=str(item.get("notes") or ""),
+                    created_by="panel",
+                    timezone=nombre_zona,
                 )
+                session.add(cita)
+                if creados is not None:
+                    await session.flush()
+                    creados.append(("cita", cita.id))
                 pasos.append(f"cita {titulo} creada")
 
             for item in data.get("bloqueos") or []:
@@ -111,6 +118,10 @@ async def sembrar_agenda(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str
                     )
                 ).first()
                 if existe is None:
-                    session.add(CalendarBlock(tenant_id=tenant_id, start_at=inicio, end_at=fin, reason=motivo))
+                    bloqueo = CalendarBlock(tenant_id=tenant_id, start_at=inicio, end_at=fin, reason=motivo)
+                    session.add(bloqueo)
+                    if creados is not None:
+                        await session.flush()
+                        creados.append(("bloqueo", bloqueo.id))
                     pasos.append(f"bloqueo {motivo or 'sin motivo'} creado")
     return pasos
