@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
@@ -22,7 +22,7 @@ from core.db.session import get_owned, get_session
 # Registra los providers de búsqueda global del pack (ADR-0096).
 from . import search as _search  # noqa: F401
 from . import sync as _sync  # noqa: F401
-from .models import Appointment, AppointmentType
+from .models import COLORES_TIPO, Appointment, AppointmentType
 
 PLUGIN_ID = "pack_calendar"
 router = APIRouter(prefix="/api/v1/pack/calendar", tags=["pack · calendario"])
@@ -71,6 +71,12 @@ class TypeOut(BaseModel):
     # HU-SH-02: colaborador que recibe los avisos de este tipo y enlace de la reunión.
     responsable_admin_id: uuid.UUID | None = None
     enlace_reunion: str | None = None
+    # HU-UX-08: clave de la paleta categórica (`cat-1`…`cat-4`) y código corto.
+    color: str = "cat-1"
+    codigo: str = ""
+
+
+ColorTipo = Literal["cat-1", "cat-2", "cat-3", "cat-4"]
 
 
 class TypeSave(BaseModel):
@@ -79,6 +85,19 @@ class TypeSave(BaseModel):
     description: str = ""
     responsable_admin_id: uuid.UUID | None = None
     enlace_reunion: str = ""
+    # HU-UX-08. Sin enviar (None) se conservan al editar; al crear, el color rota
+    # la paleta y el código sale del nombre.
+    color: ColorTipo | None = None
+    codigo: str | None = Field(default=None, max_length=6)
+
+
+def codigo_por_defecto(nombre: str) -> str:
+    """Las 3 primeras letras o cifras del nombre, en mayúsculas («Valoración» → «VAL»)."""
+    return "".join(c for c in nombre if c.isalnum())[:3].upper()
+
+
+def _codigo(valor: str) -> str:
+    return valor.strip().upper()
 
 
 async def _validar_responsable(tenant_id: uuid.UUID, admin_id: uuid.UUID | None) -> None:
@@ -132,6 +151,8 @@ async def list_types(
             active=bool(t.active),
             responsable_admin_id=t.responsable_admin_id,
             enlace_reunion=t.enlace_reunion,
+            color=t.color or "cat-1",
+            codigo=t.codigo or codigo_por_defecto(t.name),
         )
         for t in rows
     ]
@@ -149,6 +170,21 @@ async def create_type(
         raise ApiError.bad_request("Sin negocio activo.", "no_tenant")
     await _validar_responsable(principal.tenant_id, payload.responsable_admin_id)
     async with get_session() as session:
+        color = payload.color
+        if color is None:
+            # Rota la paleta para que cada tipo nuevo se distinga del anterior.
+            existentes = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(AppointmentType)
+                    .where(
+                        AppointmentType.tenant_id == principal.tenant_id,
+                        AppointmentType.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one()
+            color = COLORES_TIPO[existentes % len(COLORES_TIPO)]
+        codigo = _codigo(payload.codigo or "") or codigo_por_defecto(name)
         session.add(
             AppointmentType(
                 tenant_id=principal.tenant_id,
@@ -157,6 +193,8 @@ async def create_type(
                 description=payload.description,
                 responsable_admin_id=payload.responsable_admin_id,
                 enlace_reunion=_enlace(payload.enlace_reunion),
+                color=color,
+                codigo=codigo,
             )
         )
     return Response(status_code=204)
@@ -184,6 +222,10 @@ async def update_type(
         tipo.description = payload.description
         tipo.responsable_admin_id = payload.responsable_admin_id
         tipo.enlace_reunion = _enlace(payload.enlace_reunion)
+        if payload.color is not None:
+            tipo.color = payload.color
+        if payload.codigo is not None:
+            tipo.codigo = _codigo(payload.codigo) or codigo_por_defecto(name)
     return Response(status_code=204)
 
 
@@ -789,6 +831,9 @@ class EventOut(BaseModel):
     notes: str = ""
     appointment_type_id: str = ""
     html_link: str = ""
+    # HU-UX-08: color (`cat-1`…`cat-4`) y código del tipo de la cita; vacíos sin tipo.
+    tipo_color: str = ""
+    tipo_codigo: str = ""
 
 
 @router.get("/events")
@@ -836,9 +881,19 @@ async def calendar_events(
                 CalendarBlock.end_at > ini,
             ).order_by(CalendarBlock.start_at)
         )).scalars().all()
+        # HU-UX-08: los tipos van en la respuesta para la leyenda y el color de cada
+        # cita (quien ve el calendario no necesita el permiso de Tipos de cita).
+        tipos = (await session.execute(
+            select(AppointmentType).where(
+                AppointmentType.tenant_id == principal.tenant_id,
+                AppointmentType.deleted_at.is_(None),
+            ).order_by(AppointmentType.name)
+        )).scalars().all()
 
+    por_tipo = {t.id: t for t in tipos}
     events: list[dict[str, Any]] = []
     for a in citas:
+        tipo = por_tipo.get(a.appointment_type_id) if a.appointment_type_id else None
         events.append({
             "id": f"appt-{a.id}",
             "title": a.title or "Cita",
@@ -852,6 +907,8 @@ async def calendar_events(
             "attendee_email": a.attendee_email or "",
             "notes": a.notes or "",
             "appointment_type_id": str(a.appointment_type_id) if a.appointment_type_id else "",
+            "tipo_color": (tipo.color or "cat-1") if tipo else "",
+            "tipo_codigo": (tipo.codigo or codigo_por_defecto(tipo.name)) if tipo else "",
         })
     for b in blocks:
         events.append({
@@ -867,8 +924,20 @@ async def calendar_events(
             "attendee_email": "",
             "notes": "",
             "appointment_type_id": "",
+            "tipo_color": "",
+            "tipo_codigo": "",
         })
-    return {"events": events, "timezone": await _timezone_name()}
+    leyenda = [
+        {
+            "id": str(t.id),
+            "name": t.name,
+            "color": t.color or "cat-1",
+            "codigo": t.codigo or codigo_por_defecto(t.name),
+        }
+        for t in tipos
+        if t.active
+    ]
+    return {"events": events, "tipos": leyenda, "timezone": await _timezone_name()}
 
 
 class AppointmentPatch(BaseModel):

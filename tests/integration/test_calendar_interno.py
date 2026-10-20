@@ -964,3 +964,121 @@ async def test_listado_incluye_las_pasadas_de_las_ultimas_24h() -> None:
         assert res["cancelled"] == [futura["event_id"]]
         restantes = await skill.list_appointments({}, ctx)
         assert [c["event_id"] for c in restantes["appointments"]] == [hoy_id]
+
+
+@pytest.mark.aislamiento
+async def test_tipos_con_color_y_codigo_api(app_client) -> None:
+    """HU-UX-08: color de la paleta y código del tipo; las citas y la leyenda los traen."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from _api_helpers import api_headers
+
+    tid = await _tenant_calendario()
+    headers = await api_headers(app_client, tid)
+    base = "/api/v1/pack/calendar"
+
+    # Sin color ni código: el color rota la paleta y el código sale del nombre.
+    r = await app_client.post(f"{base}/types", headers=headers, json={"name": "Valoración"})
+    assert r.status_code == 204, r.text
+    r = await app_client.post(
+        f"{base}/types", headers=headers, json={"name": "Control", "color": "cat-4", "codigo": "ctl"}
+    )
+    assert r.status_code == 204, r.text
+    # Un hex libre o un código largo no entran.
+    r = await app_client.post(f"{base}/types", headers=headers, json={"name": "X", "color": "#ff0000"})
+    assert r.status_code == 422
+    r = await app_client.post(f"{base}/types", headers=headers, json={"name": "X", "codigo": "DEMASIADO"})
+    assert r.status_code == 422
+
+    tipos = {t["name"]: t for t in (await app_client.get(f"{base}/types", headers=headers)).json()}
+    assert (tipos["Valoración"]["color"], tipos["Valoración"]["codigo"]) == ("cat-1", "VAL")
+    assert (tipos["Control"]["color"], tipos["Control"]["codigo"]) == ("cat-4", "CTL")
+
+    # Editar sin mandar color/código los conserva (clientes viejos, p. ej. la app).
+    val = tipos["Valoración"]
+    r = await app_client.put(
+        f"{base}/types/{val['id']}", headers=headers, json={"name": "Valoración", "duration_minutes": 30}
+    )
+    assert r.status_code == 204, r.text
+    r = await app_client.put(
+        f"{base}/types/{val['id']}",
+        headers=headers,
+        json={"name": "Valoración", "duration_minutes": 30, "color": "cat-2", "codigo": "VA"},
+    )
+    assert r.status_code == 204, r.text
+    tipos = {t["name"]: t for t in (await app_client.get(f"{base}/types", headers=headers)).json()}
+    assert (tipos["Valoración"]["color"], tipos["Valoración"]["codigo"]) == ("cat-2", "VA")
+    assert tipos["Valoración"]["duration_minutes"] == 30
+
+    # La cita del tipo lleva su color y código en /events, y la leyenda trae los tipos.
+    tz = ZoneInfo("America/Bogota")
+    dia = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=4)
+    fecha, fin = dia.strftime("%Y-%m-%d"), (dia + timedelta(days=1)).strftime("%Y-%m-%d")
+    r = await app_client.post(f"{base}/appointments", headers=headers, json={
+        "title": "Valoración Ana",
+        "start_at": f"{fecha}T10:00:00-05:00",
+        "end_at": f"{fecha}T10:30:00-05:00",
+        "appointment_type_id": val["id"],
+    })
+    assert r.status_code == 201, r.text
+    data = (await app_client.get(f"{base}/events", headers=headers, params={"start": fecha, "end": fin})).json()
+    cita = next(e for e in data["events"] if e["kind"] == "appointment")
+    assert (cita["tipo_color"], cita["tipo_codigo"]) == ("cat-2", "VA")
+    assert {t["codigo"] for t in data["tipos"]} == {"VA", "CTL"}
+
+    # Otro negocio no ve ni edita estos tipos.
+    otros = await api_headers(app_client, await _tenant_calendario())
+    assert (await app_client.get(f"{base}/types", headers=otros)).json() == []
+    r = await app_client.put(
+        f"{base}/types/{val['id']}", headers=otros, json={"name": "Robado", "color": "cat-3"}
+    )
+    assert r.status_code == 404
+    assert (await app_client.get(f"{base}/events", headers=otros)).json()["tipos"] == []
+
+
+@pytest.mark.aislamiento
+async def test_bloqueo_se_mueve_desde_el_calendario(app_client) -> None:
+    """HU-UX-08: arrastrar un bloqueo cambia inicio y fin, y /events lo muestra movido."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from _api_helpers import api_headers
+
+    tid = await _tenant_calendario()
+    headers = await api_headers(app_client, tid)
+    base = "/api/v1/pack/calendar"
+    tz = ZoneInfo("America/Bogota")
+    dia = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=6)
+    fecha, fin = dia.strftime("%Y-%m-%d"), (dia + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    r = await app_client.post(f"{base}/blocks", headers=headers, json={
+        "start_at": f"{fecha}T12:00:00-05:00", "end_at": f"{fecha}T13:00:00-05:00", "reason": "Almuerzo",
+    })
+    assert r.status_code == 201, r.text
+    bid = r.json()["id"]
+
+    r = await app_client.patch(f"{base}/blocks/{bid}", headers=headers, json={
+        "start_at": f"{fecha}T15:00:00-05:00", "end_at": f"{fecha}T16:30:00-05:00",
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["reason"] == "Almuerzo"
+
+    eventos = (await app_client.get(f"{base}/events", headers=headers, params={"start": fecha, "end": fin})).json()
+    bloqueo = next(e for e in eventos["events"] if e["id"] == f"block-{bid}")
+    inicio = datetime.fromisoformat(bloqueo["start"]).astimezone(tz)
+    final = datetime.fromisoformat(bloqueo["end"]).astimezone(tz)
+    assert (inicio.hour, inicio.minute, final.hour, final.minute) == (15, 0, 16, 30)
+
+    # Inicio después del fin: no se mueve.
+    r = await app_client.patch(f"{base}/blocks/{bid}", headers=headers, json={
+        "start_at": f"{fecha}T17:00:00-05:00",
+    })
+    assert r.status_code == 400
+
+    # Otro negocio no puede moverlo.
+    otros = await api_headers(app_client, await _tenant_calendario())
+    r = await app_client.patch(f"{base}/blocks/{bid}", headers=otros, json={
+        "start_at": f"{fecha}T08:00:00-05:00", "end_at": f"{fecha}T09:00:00-05:00",
+    })
+    assert r.status_code == 404
