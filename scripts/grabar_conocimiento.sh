@@ -11,7 +11,11 @@
 #
 # Uso (desde la raíz del repo, donde está el .env):
 #   bash scripts/grabar_conocimiento.sh
+# Desde un worktree sin .env, con el .env de otro checkout (el código sigue siendo el de este):
+#   ENV_DIR=../solvershub-backend bash scripts/grabar_conocimiento.sh
 set -euo pipefail
+
+RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 IMAGEN="${IMAGEN_POSTGRES:-ghcr.io/devrochy/solvershub-postgres:pg17-postgis}"
 SUFIJO="$(date +%s)"
@@ -47,7 +51,10 @@ export TENANTS_ROOT="$TENANTS"
 export LLM_API_KEY=""
 
 PY="${PYTHON:-python}"
+export PYTHONPATH="${RAIZ}${PYTHONPATH:+:$PYTHONPATH}"
+# `get_settings()` lee el `.env` del directorio actual: el de ENV_DIR si se indica.
+cd "${ENV_DIR:-$RAIZ}"
 "$PY" -m cli.main db migrate >/dev/null
-"$PY" scripts/init_db.py >/dev/null
-"$PY" evals/conocimiento.py --grabar
-echo "Grabación lista: evals/conocimiento/grabacion.json (commitearla)."
+"$PY" "$RAIZ/scripts/init_db.py" >/dev/null
+"$PY" "$RAIZ/evals/conocimiento.py" --grabar
+echo "Grabación lista: $RAIZ/evals/conocimiento/grabacion.json (commitearla)."
