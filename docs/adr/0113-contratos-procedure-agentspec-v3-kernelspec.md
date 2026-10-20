@@ -1064,7 +1064,8 @@ datos del cliente y documentos que acepta) → el pedido con el link.
   - Un rollback de release sigue funcionando, porque no cambia el binario.
 - **Primer caso: `agentcore-contracts` 3.1.0** con `AgentSpecV3.knowledge: KnowledgeConfigV3 | None`.
   - Campos: `mode` (`semantica` o `hibrida`, por defecto `hibrida`), `topK` (1 a 8, por defecto 4) y
-    `minScore` (0 a 1, por defecto 0,35).
+    `minScore` (0 a 1, opcional; con `None` el pack usa el umbral calibrado de cada modo, ADR-0145,
+    adenda de calibración del 2026-10-20. Antes de salir a `main` era 0,35 fijo).
   - Es un bloque de primer nivel y no va dentro de `memory`. `memory.rag` sigue siendo el recall de la
     memoria del cliente (ADR-0145 §4).
 - **Lector tolerante y editor.**

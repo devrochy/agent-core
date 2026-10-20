@@ -45,7 +45,10 @@ from typing import Any
 
 DIR = Path(__file__).resolve().parent / "conocimiento"
 GRABACION = DIR / "grabacion.json"
-UMBRALES = {"recall": 0.90, "mrr": 0.70, "negativas": 8}
+# Recuperación (adenda de la parte 3 de ADR-0145): recall@4 y MRR son el criterio. Las negativas en
+# cero quedan como piso de regresión (≥ 5/10 con el `minScore` calibrado): que el agente no invente
+# con fragmentos parecidos se mide en su respuesta, no en la búsqueda.
+UMBRALES = {"recall": 0.90, "mrr": 0.70, "negativas": 5}
 K = 4
 
 

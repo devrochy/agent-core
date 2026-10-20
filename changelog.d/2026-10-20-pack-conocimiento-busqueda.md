@@ -16,3 +16,9 @@
   - golden set de recuperación de 50 preguntas sobre un PDF, un DOCX y un TXT (`evals/conocimiento.py`);
   - grabación de embeddings para replay (`core/llm/embeddings.grabacion`);
   - el script `scripts/grabar_conocimiento.sh`, que se corre con el OK del dueño (≈ US$0,001).
+- **Golden set grabado y calibrado** (`evals/conocimiento/grabacion.json`, `text-embedding-3-small`):
+  - híbrida: recall@4 0,95 y MRR 0,90;
+  - `minScore` por defecto según el modo: híbrida 0,45, semántica 0,30. En `AgentSpecV3.knowledge`,
+    `minScore` pasa a ser opcional;
+  - las preguntas sin respuesta quedan como piso de regresión (≥ 5/10). Que el agente no invente se
+    mide en su respuesta.

@@ -121,7 +121,9 @@ class KnowledgeConfigV3(_Strict):
     mode: KnowledgeMode = "hibrida"
     # Tope en 8: cada fragmento son ~400 tokens de entrada en el turno.
     topK: int = Field(default=4, ge=1, le=8)
-    minScore: float = Field(default=0.35, ge=0, le=1)
+    # Similitud coseno mínima. None = el default calibrado de cada modo con el golden set
+    # (ADR-0145, adenda de la parte 3): un solo valor no sirve para los dos modos.
+    minScore: float | None = Field(default=None, ge=0, le=1)
 
 
 class AgentMemoryV3(_Strict):

@@ -36,10 +36,16 @@ def _ctx(**extra: Any) -> ToolContext:
 
 # ------------------------------------------------------------------ configuración
 def test_config_del_agente() -> None:
-    assert Config.del_agente(None) == Config("hibrida", 4, 0.35)
+    assert Config.del_agente(None) == Config("hibrida", 4, None)
     assert Config.del_agente({"mode": "semantica", "topK": 2, "minScore": 0.5}) == Config("semantica", 2, 0.5)
     # Un bloque que no valida (topK fuera de rango) no rompe la búsqueda: defaults.
-    assert Config.del_agente({"topK": 50}) == Config("hibrida", 4, 0.35)
+    assert Config.del_agente({"topK": 50}) == Config("hibrida", 4, None)
+
+
+def test_umbral_calibrado_por_modo_salvo_que_el_agente_lo_fije() -> None:
+    assert Config("hibrida").umbral == busqueda.MIN_SCORE_POR_MODO["hibrida"] == 0.45
+    assert Config("semantica").umbral == busqueda.MIN_SCORE_POR_MODO["semantica"] == 0.30
+    assert Config("semantica", min_score=0.6).umbral == 0.6
 
 
 def test_tool_context_trae_el_agente_solo_si_lo_inyecta_el_core() -> None:
@@ -110,7 +116,7 @@ async def test_handler_usa_el_agente_del_contexto_y_no_el_de_los_argumentos(monk
         {"consulta": "¿envío gratis?", "agent_id": str(otro), "tenant_id": str(uuid.uuid4())},
         _ctx(agent_id=AGENTE, knowledge={"topK": 2}),
     )
-    assert vistos == [(AGENTE, "¿envío gratis?", Config("hibrida", 2, 0.35))]
+    assert vistos == [(AGENTE, "¿envío gratis?", Config("hibrida", 2, None))]
     primero, segundo = salida["fragmentos"]
     assert (primero["documento"], primero["seccion"], primero["paginas"]) == ("Preguntas frecuentes", "Envíos", "2-3")
     assert segundo["paginas"] is None

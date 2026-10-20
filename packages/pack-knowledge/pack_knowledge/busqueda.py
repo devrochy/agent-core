@@ -39,6 +39,11 @@ RRF_K = 60
 # set de recuperación (`evals/conocimiento/`): un término suelto y común no alcanza.
 PISO_LEXICO = 0.1
 MAX_CONSULTA = 300
+# `minScore` por defecto de cada modo, calibrado con la grabación del golden set de recuperación
+# (`text-embedding-3-small`, ADR-0145 adenda de la parte 3). Híbrida 0,45: recall@4 0,95, MRR 0,91,
+# 5/10 preguntas sin respuesta en cero y ~1,9 fragmentos por consulta (con 0,35 eran 2,4 y 2/10).
+# Semántica 0,30: recall@4 0,925 (con 0,35 bajaba a 0,85).
+MIN_SCORE_POR_MODO = {"hibrida": 0.45, "semantica": 0.30}
 
 Modo = Literal["semantica", "hibrida"]
 
@@ -47,12 +52,17 @@ Modo = Literal["semantica", "hibrida"]
 class Config:
     modo: Modo = "hibrida"
     top_k: int = 4
-    min_score: float = 0.35
+    min_score: float | None = None
+
+    @property
+    def umbral(self) -> float:
+        """`min_score` del agente o, si no lo fija, el calibrado del modo."""
+        return self.min_score if self.min_score is not None else MIN_SCORE_POR_MODO[self.modo]
 
     @classmethod
     def del_agente(cls, bloque: Mapping[str, Any] | None) -> Config:
         """El bloque `knowledge` congelado de la versión (contracts 3.1.0). Sin bloque, o con uno
-        que no valida, los valores por defecto del contrato."""
+        que no valida, los valores por defecto (`minScore` calibrado por modo)."""
         try:
             cfg = KnowledgeConfigV3.model_validate(dict(bloque or {}))
         except ValidationError:
@@ -153,7 +163,7 @@ async def buscar(agent_id: uuid.UUID, consulta: str, config: Config) -> Resultad
                     "q": _vector(embebido.vectores[0]),
                     "t": tenant_id,
                     "a": agent_id,
-                    "min": config.min_score,
+                    "min": config.umbral,
                     "k": config.top_k,
                     "n": CANDIDATOS_POR_LISTA,
                     "rrf": RRF_K,

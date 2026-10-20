@@ -724,3 +724,40 @@ Lo que quedó en código y en qué se aparta del texto de arriba.
 - **Pendiente:** la eval de punta a punta con el LLM (5 conversaciones) necesita grabar el LLM del
   turno con el pack activo, lo que cuesta LLM real. Queda para cuando el dueño regrabe el gate, junto
   con la 49-5.
+
+## Adenda (2026-10-20, HU-AOS-49 parte 3): calibración con la grabación y criterio de las negativas
+
+**Decisión del dueño (2026-10-20):** «lo que sea mejor en términos de salud y eficiencia del agente». Se
+adoptó la recomendación de abajo.
+
+- **La grabación del golden set** (`evals/conocimiento/grabacion.json`, `text-embedding-3-small`, 55
+  textos) la hizo el dueño con su llave de OpenAI y `scripts/grabar_conocimiento.sh`. No contiene la
+  llave ni texto: solo claves sha256 y vectores.
+- **Hallazgo:** con embeddings reales, las preguntas sin respuesta del golden se parecen de verdad a
+  los documentos, porque son de café.
+  - «¿Tienen sede en Barranquilla?» tiene similitud 0,50 con la página de la tienda en Bogotá.
+  - Hay preguntas reales que quedan entre 0,18 y 0,25.
+  - En la búsqueda de umbrales (semántico, piso léxico y umbral mínimo para el léxico), ninguna
+    combinación llega a ≥ 8/10 negativas en cero con recall@4 ≥ 0,90; el máximo es 6/10. El troceado
+    ya es de una sección por fragmento, así que no hay margen por ese lado.
+- **Cambio del criterio de §7:**
+  - La recuperación se mide por **recall@4 ≥ 0,90 y MRR ≥ 0,70**, y la híbrida no puede quedar por
+    debajo de la semántica.
+  - Las negativas en cero quedan como piso de regresión: **≥ 5/10** en la búsqueda.
+  - Que el agente **no invente** con un fragmento parecido se mide en su respuesta, con la eval de punta
+    a punta y el playbook `conocimiento`, no en la búsqueda.
+- **`minScore` por modo:** contracts 3.1.0 pasa `KnowledgeConfigV3.minScore` a `float | None =
+  None`. Ese contrato no salió a `main` y ningún spec guardado lo usa. Con `None`, el pack usa el
+  umbral calibrado de cada modo (`busqueda.MIN_SCORE_POR_MODO`):
+
+  | Modo | `minScore` | recall@4 | MRR | Negativas en cero | Fragmentos por consulta |
+  |---|---|---|---|---|---|
+  | Híbrida | **0,45** | 0,95 | 0,90 | 5/10 | ~1,9 (con 0,35 eran 2,4 y 2/10) |
+  | Semántica | **0,30** | 0,925 | 0,875 | 2/10 | ~2,6 |
+
+  Con 0,45 entran un 20 % menos de fragmentos por turno, y la mayoría de los que salen eran
+  irrelevantes. Si el agente fija un valor, se usa ese.
+- **`PISO_LEXICO` queda en 0,1:** cualquier coincidencia léxica real admite el fragmento. Subirlo
+  costaba recall sin ganar negativas.
+- **Pendiente:** la eval de punta a punta con el LLM, que ahora lleva el criterio de «no inventar».
+  Va junto a la próxima regrabación del gate, con el OK del dueño.
