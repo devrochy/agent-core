@@ -39,7 +39,10 @@ def test_web_outbound_devuelve_id_sintetico():
     from agentcore_channel_web.adapters import WebOutbound
 
     wamid = asyncio.run(WebOutbound().send_text({}, "web:visitor-1", "hola"))
-    assert wamid == "web:web:visitor-1"
+    otro = asyncio.run(WebOutbound().send_text({}, "web:visitor-1", "chao"))
+    # Único por mensaje (índice único por tenant y `external_message_id`), sin el visitante.
+    assert wamid.startswith("web:") and otro.startswith("web:") and wamid != otro
+    assert "visitor" not in wamid
 
 
 def test_origin_exacto_permitido():
