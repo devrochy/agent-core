@@ -334,6 +334,9 @@ def new_tool_context(
     channel: str,
     http: ScopedHttp | None = None,
     write_namespaces: frozenset[str] | None = None,
+    agent_id: uuid.UUID | None = None,
+    agent_version_id: uuid.UUID | None = None,
+    knowledge: Mapping[str, Any] | None = None,
 ) -> ToolContext:
     return ToolContext(
         conversation_id=conversation_id,
@@ -342,4 +345,7 @@ def new_tool_context(
         channel=channel,
         http=http,
         write_namespaces=write_namespaces,
+        agent_id=agent_id,
+        agent_version_id=agent_version_id,
+        knowledge=knowledge,
     )

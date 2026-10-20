@@ -273,8 +273,8 @@ class AgentSpecV3(_Strict):
     guardrails: list[GuardrailRule] = Field(default=[], max_length=100)
     declarativeTools: list[DeclarativeTool] = Field(default=[], max_length=50)
     policies: AgentPoliciesV3 = Field(default_factory=AgentPoliciesV3)
-    # 3.1.0 (ADR-0145, adenda de ADR-0113 del 2026-10-20): opcional; sin el bloque, el agente no
-    # busca en documentos aunque la habilidad esté instalada.
+    # 3.1.0 (ADR-0145, adenda de ADR-0113 del 2026-10-20): opcional. El agente busca en sus
+    # documentos solo si declara `buscar_conocimiento` en `tools`; sin el bloque, con los defaults.
     knowledge: KnowledgeConfigV3 | None = None
     # Reservado y sin semántica (ADR-0050): ningún motor lo lee.
     extensions: dict[str, Any] = {}

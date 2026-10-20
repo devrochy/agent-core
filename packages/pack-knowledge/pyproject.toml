@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pack-knowledge"
-version = "0.2.0"
+version = "0.3.0"
 description = "Pack de conocimiento: documentos por agente con búsqueda en pgvector (ADR-0145, HU-AOS-49)"
 requires-python = ">=3.12"
 # Extracción de texto (ADR-0145 §2): sin binarios del sistema.

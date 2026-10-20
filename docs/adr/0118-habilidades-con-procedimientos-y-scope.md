@@ -136,3 +136,23 @@ solo lee lo nuevo cuando tiene una release en la ranura.
 Enmienda §1: las plantillas de agente no entran todavía en `pack_versions` (`agent_templates` sigue vacío y ningún
 hash de pack cambia). Viven como configuración del core en `core/presets/plantillas/` y solo se usan al crear el
 agente; moverlas a los packs queda para la parte 2 de HU-AOS-16. Detalle en ADR-0139.
+
+## Adenda (2026-10-20, HU-AOS-49 parte 3): `ToolContext` con la identidad del agente
+
+**Estado:** aceptada con ADR-0145 §5, que el dueño aprobó el 2026-10-19. Esta adenda reemplaza el
+«`ToolContext` no cambia» de §3 en un solo punto: `ToolContext` suma campos.
+
+- `ToolContext` suma `agent_id`, `agent_version_id` y `knowledge`:
+  - `agent_id` es `agents.id`, no la instancia;
+  - `knowledge` es el bloque congelado de `agentspec/3`.
+  - Los tres tienen default `None`, así que el runtime legacy y los tests que arman `ToolContext` no
+    cambian.
+  - El loop los llena desde `release_vigente.agente_del_turno()`, igual que `write_namespaces`. El LLM
+    nunca los elige.
+- Es identidad genérica, no forma de un pack. Cualquier pack puede usarla para acotar lo suyo al
+  agente que responde.
+- `MCPTool` suma `resumen_de_auditoria`: lo que `audit_log` guarda del resultado. Por defecto es el
+  resultado completo. Si el resumen falla, se guarda `{"resumen_fallido": true}` (fail-closed).
+- **Sin motor de procedimientos no hay filtro por agente:** `oferta.py` solo actúa con release/2 y
+  motor. Una tool que tiene que ser fail-closed por agente lo comprueba en su
+  `connection_predicate`, leyendo `agente_del_turno().tools`. Es lo que hace `buscar_conocimiento`.
