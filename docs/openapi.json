@@ -1488,6 +1488,7 @@
           "admin · conversaciones"
         ],
         "summary": "List Conversations",
+        "description": "Chats del negocio, del más reciente por actividad (último mensaje o inicio).",
         "operationId": "list_conversations_api_v1_admin_conversations_get",
         "parameters": [
           {
@@ -1525,6 +1526,25 @@
               "title": "Q"
             },
             "description": "Busca por nombre o identificador."
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Solo los chats de esta conexión",
+              "title": "Connection Id"
+            },
+            "description": "Solo los chats de esta conexión"
           },
           {
             "name": "page",
@@ -1573,6 +1593,61 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Page_ConversationSummary_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/conversations/connections": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · conversaciones"
+        ],
+        "summary": "List Conversation Connections",
+        "description": "Conexiones del negocio para filtrar la bandeja (HU-UX-15). Con el permiso de\nConversaciones: quien atiende no necesita ver la sección Conexiones.",
+        "operationId": "list_conversation_connections_api_v1_admin_conversations_connections_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConversationConnection"
+                  },
+                  "title": "Response List Conversation Connections Api V1 Admin Conversations Connections Get"
                 }
               }
             }
@@ -1651,6 +1726,84 @@
       }
     },
     "/api/v1/admin/conversations/{conversation_id}/messages": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · conversaciones"
+        ],
+        "summary": "List Messages Since",
+        "description": "Mensajes nuevos del hilo para el polling de la bandeja (HU-UX-15). Sin `after`, los\núltimos `MENSAJES_MAX`.",
+        "operationId": "list_messages_since_api_v1_admin_conversations__conversation_id__messages_get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`created_at` del último mensaje que ya tiene el panel, tal como lo devolvió la API. Se re-entregan los 2 s anteriores: el panel deduplica por `id`.",
+              "title": "After"
+            },
+            "description": "`created_at` del último mensaje que ya tiene el panel, tal como lo devolvió la API. Se re-entregan los 2 s anteriores: el panel deduplica por `id`."
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessagesSince"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "api",
@@ -1944,6 +2097,192 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/conversations/{conversation_id}/take": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · conversaciones"
+        ],
+        "summary": "Take Conversation",
+        "description": "Toma el chat escalado: la escalación activa queda `asignada` a quien la toma y el\nagente se pausa en esta conversación hasta devolverla (como `tomarTicket` de agent-sale).\n\n409 `no_escalation` si no hay escalación activa; 409 `already_taken` si la tiene otra\npersona del equipo (tomarla de nuevo uno mismo es idempotente).",
+        "operationId": "take_conversation_api_v1_admin_conversations__conversation_id__take_post",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveEscalation"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/conversations/{conversation_id}/return-to-bot": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · conversaciones"
+        ],
+        "summary": "Return Conversation To Bot",
+        "description": "Devuelve el chat al agente: cierra la atención humana (escalaciones `resuelta`), deja\nla conversación abierta y reactiva el agente (`reasignarTicketABot` de agent-sale).",
+        "operationId": "return_conversation_to_bot_api_v1_admin_conversations__conversation_id__return_to_bot_post",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/conversations/{conversation_id}/notes": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · conversaciones"
+        ],
+        "summary": "Add Conversation Note",
+        "description": "Nota interna de una persona del equipo (`source=\"human\"`), junto a las del agente en\n`state.notes`. Nunca se envía al cliente ni entra al prompt.",
+        "operationId": "add_conversation_note_api_v1_admin_conversations__conversation_id__notes_post",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationNoteIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationNote"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -18767,6 +19106,91 @@
         ],
         "title": "AccessAttempt"
       },
+      "ActiveEscalation": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "reason_code": {
+            "type": "string",
+            "enum": [
+              "solicitud_cliente",
+              "queja",
+              "fuera_de_alcance",
+              "intentos_fallidos",
+              "monto_alto",
+              "palabra_clave",
+              "accion_habilidad",
+              "regla_negocio",
+              "verificacion",
+              "frase_prohibida",
+              "falla_ia",
+              "rechazo_ia",
+              "envio_fallido",
+              "sin_resolver",
+              "limite_iteraciones",
+              "otro"
+            ],
+            "title": "Reason Code"
+          },
+          "reason_label": {
+            "type": "string",
+            "title": "Reason Label"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "pendiente | asignada"
+          },
+          "assigned_admin_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned Admin Id"
+          },
+          "assigned_admin_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned Admin Email"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "reason_code",
+          "reason_label",
+          "summary",
+          "status",
+          "assigned_admin_id",
+          "assigned_admin_email",
+          "created_at"
+        ],
+        "title": "ActiveEscalation",
+        "description": "Escalación sin resolver más reciente de la conversación (el «ticket»)."
+      },
       "ActivityOut": {
         "properties": {
           "action": {
@@ -21188,12 +21612,113 @@
             "format": "date-time",
             "title": "Started At"
           },
+          "last_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Message"
+          },
+          "last_message_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Message At"
+          },
+          "last_message_sender": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Message Sender",
+            "description": "customer | agent | human"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          },
+          "connection_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Label"
+          },
+          "connection_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Provider"
+          },
+          "connection_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Type",
+            "description": "Tipo del catálogo (p. ej. whatsapp_cloud, whatsapp_waweb, web)"
+          },
           "messages": {
             "items": {
               "$ref": "#/components/schemas/MessageItem"
             },
             "type": "array",
             "title": "Messages"
+          },
+          "escalation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActiveEscalation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notes": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationNote"
+            },
+            "type": "array",
+            "title": "Notes"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/ConversationUsage"
           }
         },
         "type": "object",
@@ -21208,6 +21733,66 @@
           "messages"
         ],
         "title": "ConversationDetail"
+      },
+      "ConversationNote": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "human"
+            ],
+            "title": "Source"
+          },
+          "author_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Email"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text",
+          "source"
+        ],
+        "title": "ConversationNote"
+      },
+      "ConversationNoteIn": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "ConversationNoteIn"
       },
       "ConversationSummary": {
         "properties": {
@@ -21254,6 +21839,87 @@
             "type": "string",
             "format": "date-time",
             "title": "Started At"
+          },
+          "last_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Message"
+          },
+          "last_message_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Message At"
+          },
+          "last_message_sender": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Message Sender",
+            "description": "customer | agent | human"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          },
+          "connection_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Label"
+          },
+          "connection_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Provider"
+          },
+          "connection_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Type",
+            "description": "Tipo del catálogo (p. ej. whatsapp_cloud, whatsapp_waweb, web)"
           }
         },
         "type": "object",
@@ -21267,6 +21933,34 @@
           "started_at"
         ],
         "title": "ConversationSummary"
+      },
+      "ConversationUsage": {
+        "properties": {
+          "cost_usd": {
+            "type": "number",
+            "title": "Cost Usd"
+          },
+          "input_tokens": {
+            "type": "integer",
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "title": "Output Tokens"
+          },
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cost_usd",
+          "input_tokens",
+          "output_tokens",
+          "turns"
+        ],
+        "title": "ConversationUsage"
       },
       "CostsResponse": {
         "properties": {
@@ -23586,6 +24280,13 @@
               }
             ],
             "title": "Error Reason"
+          },
+          "tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tool Calls"
           }
         },
         "type": "object",
@@ -23646,6 +24347,28 @@
           "mapping"
         ],
         "title": "MessageTemplatesUpdate"
+      },
+      "MessagesSince": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MessageItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "description": "Hay más mensajes después del último devuelto"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "has_more"
+        ],
+        "title": "MessagesSince"
       },
       "MetaCategoryCost": {
         "properties": {
@@ -34649,6 +35372,48 @@
           "cost_usd"
         ],
         "title": "ConsoleUsage"
+      },
+      "ConversationConnection": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "type_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type Id"
+          },
+          "channel": {
+            "type": "string",
+            "title": "Channel"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "provider",
+          "type_id",
+          "channel"
+        ],
+        "title": "ConversationConnection",
+        "description": "Conexión por la que pueden llegar chats (opciones del filtro de la bandeja)."
       },
       "AgentTemplate": {
         "properties": {
