@@ -380,3 +380,53 @@ async def test_aislamiento_entre_negocios(app_client) -> None:
     assert (await app_client.get(f"{URL}/{ids['ana']}/consentimiento", headers=master_otro)).status_code == 404
     vista = (await app_client.post(f"{ACC}/vista-previa", json=_cuerpo(ajenos), headers=master_otro)).json()
     assert vista["candidatos"] == 6  # solo sus clientes
+
+
+async def test_una_promocion_que_falla_no_escala_y_131050_da_de_baja_una_vez(app_client, monkeypatch) -> None:
+    from sqlalchemy import func, select
+
+    from core.admin.envios_segmento import client_message_id
+    from core.db.models import CustomerConsent, Message
+    from core.db.session import get_session
+    from core.gateway.meta_errors import GraphError
+    from core.orchestrator import escalation
+    from core.shared.tenant import tenant_scope
+    from core.tasks import outbound_send
+
+    escaladas: list[uuid.UUID] = []
+
+    async def escalar(conversation_id, reason, summary=""):
+        escaladas.append(conversation_id)
+
+    monkeypatch.setattr(escalation, "escalate", escalar)
+    tid = await _negocio()
+    ids = await _escenario(tid)
+    mensajes = []
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            for i in range(2):
+                m = Message(
+                    tenant_id=tid, conversation_id=ids["conv_ana"], direction="outbound", sender_type="human",
+                    content="promo", status="queued", template_name="promo_semana",
+                    client_message_id=client_message_id(uuid.uuid4(), ids["ana"]) + f":{i}",
+                )
+                session.add(m)
+                await session.flush()
+                mensajes.append(m.id)
+    error = GraphError("El usuario no recibe marketing", category="PERMANENT", code=outbound_send.CODIGO_SIN_MARKETING)  # type: ignore[arg-type]
+    for mid in mensajes:  # dos promociones fallidas al mismo cliente
+        await outbound_send._mark_failed(mid, tid, error, dlq=False)
+
+    assert escaladas == []  # una promoción que no llega no escala ni pausa al agente
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            revocados = (
+                await session.execute(
+                    select(func.count()).where(
+                        CustomerConsent.tenant_id == tid,
+                        CustomerConsent.customer_id == ids["ana"],
+                        CustomerConsent.origen == "meta_131050",
+                    )
+                )
+            ).scalar()
+    assert revocados == 1  # el segundo 131050 no agrega otra fila
