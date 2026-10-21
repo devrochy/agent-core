@@ -20,6 +20,7 @@ from core.admin.invitations_service import (
     contar_pendientes,
     crear_invitacion,
     pendientes_de,
+    pendientes_del_tenant,
     rechazar_invitacion,
     revocar_invitacion,
 )
@@ -45,6 +46,13 @@ class InvitationItem(BaseModel):
 class PendingResponse(BaseModel):
     items: list[InvitationItem]
     total: int
+
+
+class OutgoingItem(BaseModel):
+    id: str
+    email: str
+    rol: str
+    creadaEn: str | None
 
 
 class InvitationCreate(BaseModel):
@@ -95,6 +103,26 @@ async def list_pending(
 ) -> PendingResponse:
     items = [InvitationItem(**i) for i in await pendientes_de(principal.admin.id)]
     return PendingResponse(items=items, total=len(items))
+
+
+@router.get("/outgoing", response_model=list[OutgoingItem])
+async def list_outgoing(
+    principal: Annotated[Principal, Depends(require("collaborators"))],
+    tenant: str = "",
+) -> list[OutgoingItem]:
+    """Invitaciones pendientes ENVIADAS por un negocio, para listarlas y revocarlas (HU-UI-14).
+
+    Un owner/tester ve las de su negocio activo; el master elige el negocio con `tenant`
+    (vacío = el activo del selector)."""
+    if principal.admin.role == "master" and tenant:
+        tenant_id = await resolve_tenant_id(tenant)
+        if tenant_id is None:
+            raise ApiError.bad_request("Tenant no encontrado.", "tenant_not_found")
+    else:
+        if principal.tenant_id is None:
+            raise ApiError.bad_request("No hay negocio activo.", "no_tenant")
+        tenant_id = principal.tenant_id
+    return [OutgoingItem(**i) for i in await pendientes_del_tenant(tenant_id)]
 
 
 @router.post("", status_code=204, responses=plan_limit_responses("colaboradores"))

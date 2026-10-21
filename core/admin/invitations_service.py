@@ -200,6 +200,42 @@ async def contar_pendientes(admin_id: uuid.UUID) -> int:
         ).scalar_one()
 
 
+async def pendientes_del_tenant(tenant_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Invitaciones pendientes ENVIADAS por un negocio, con el correo y el rol del invitado.
+
+    El panel de Colaboradores las lista para que el dueño las revoque (HU-UI-14). Las recibe
+    una identidad existente: sin fila de `tenant_user` todavía, la invita quien gestiona el
+    negocio (`invited_by`) y se resuelve con `aceptar`/`rechazar`/`revocar`.
+    """
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                select(
+                    TenantInvitation.id,
+                    Admin.email,
+                    TenantInvitation.role,
+                    TenantInvitation.created_at,
+                )
+                .join(Admin, Admin.id == TenantInvitation.admin_id)
+                .where(
+                    TenantInvitation.tenant_id == tenant_id,
+                    TenantInvitation.estado == "pendiente",
+                    _vigente(),
+                )
+                .order_by(TenantInvitation.created_at.desc())
+            )
+        ).all()
+    return [
+        {
+            "id": str(iid),
+            "email": email,
+            "rol": role,
+            "creadaEn": created_at.isoformat() if created_at is not None else None,
+        }
+        for iid, email, role, created_at in rows
+    ]
+
+
 async def _invitacion_propia(session, invitation_id: uuid.UUID, admin_id: uuid.UUID) -> TenantInvitation | None:
     return (
         await session.execute(
