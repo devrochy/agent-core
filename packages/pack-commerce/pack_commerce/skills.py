@@ -1748,6 +1748,9 @@ class OrderSkill(BaseSkill):
             (promo.category_id and line.get("category_id") != promo.category_id)
             or (promo.product_id and line["product"].id != promo.product_id)
             or (promo.variant_id and line["variant"].id != promo.variant_id)
+            # HU-CRM-03 (agent-sale `esElegible`): con aliado, todos los ítems son de ese aliado;
+            # un carrito mixto no aplica. Sin aliados, `ally_id` es None y no cambia nada.
+            or (promo.ally_id and line["product"].ally_id != promo.ally_id)
         )
 
     @staticmethod

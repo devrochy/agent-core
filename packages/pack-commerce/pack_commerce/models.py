@@ -115,6 +115,7 @@ class Product(TenantMixin, Base):
     description: Mapped[str] = mapped_column(Text, default="")
     image_url: Mapped[str | None] = mapped_column(Text)
     category_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))  # FK lógica a crm_categories
+    ally_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)  # FK lógica (HU-CRM-03)
     has_variants: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -149,6 +150,19 @@ class Inventory(TenantMixin, Base):
     last_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class Ally(TenantMixin, Base):
+    """Aliado = proveedor del negocio (HU-CRM-03). Opcional: el módulo se enciende por negocio."""
+
+    __tablename__ = "pack_commerce_allies"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(Text)
+    contact_info: Mapped[dict] = mapped_column(JSONB, default=dict)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 # ------------------------------------------------------------------ promociones
 class Promotion(TenantMixin, Base):
     __tablename__ = "pack_commerce_promotions"
@@ -164,6 +178,8 @@ class Promotion(TenantMixin, Base):
     include_child_categories: Mapped[bool] = mapped_column(Boolean, default=True)
     product_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
     variant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    # HU-CRM-03: con aliado, la promoción aplica solo si todos los ítems son de ese aliado.
+    ally_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
     eligible_segments: Mapped[list[str] | None] = mapped_column(ARRAY(Text), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
