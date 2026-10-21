@@ -252,6 +252,11 @@ def _valid_sections() -> dict[str, str]:
     return catalog(sections)
 
 
+def secciones_del_catalogo() -> list[str]:
+    """Claves de sección otorgables (core + packs) para la grilla de permisos."""
+    return list(_valid_sections())
+
+
 async def grant_permission(
     *,
     actor: Admin,
@@ -390,6 +395,80 @@ async def revoke_permission(
             )
         else:
             row.access = ACCESS_NONE
+    return None
+
+
+async def set_permissions(
+    *,
+    actor: Admin,
+    admin_id: uuid.UUID,
+    permissions: dict[str, str],
+    tenant_slug: str = "",
+) -> str | None:
+    """Aplica en bloque los permisos de un colaborador (grilla, D-SPEC-34-1).
+
+    Reemplaza las filas explícitas de `admin_permissions` del colaborador en el alcance
+    (negocio o global): se borran todas y se reescriben desde `permissions`
+    (`sección → none|read|write`). Una sección ausente del mapa vuelve al default del rol.
+    `none` se guarda como fila solo cuando el rol heredaría la sección (ADR-0136); si no,
+    la ausencia de fila ya la deniega. Reusa la validación de alcance de grant/revoke.
+    """
+    is_master = actor.role == "master"
+    catalogo = _valid_sections()
+    for section, access in permissions.items():
+        if section not in catalogo:
+            return f"sección inválida: {section}"
+        if access not in VALID_ACCESS:
+            return f"acceso inválido: {access}"
+
+    if is_master:
+        tenant_id = await resolve_tenant_id(tenant_slug) if tenant_slug else None
+        if tenant_slug and tenant_id is None:
+            return "tenant no encontrado"
+    else:
+        if not await target_allowed_for_owner(admin_id, get_current_tenant_id(), actor=actor):
+            return "no podés cambiar los permisos de esa cuenta"
+        for section in permissions:
+            if section in OWNER_GRANTABLE_SECTIONS:
+                return f"no podés otorgar {section}"
+        tenant_id = get_current_tenant_id()
+
+    alcance = (
+        AdminPermission.tenant_id.is_(None)
+        if tenant_id is None
+        else AdminPermission.tenant_id == tenant_id
+    )
+    async with get_session() as session:
+        role = None
+        if tenant_id is not None:
+            role = (
+                await session.execute(
+                    select(TenantUser.role).where(
+                        TenantUser.admin_id == admin_id, TenantUser.tenant_id == tenant_id
+                    )
+                )
+            ).scalar_one_or_none()
+
+        await session.execute(
+            delete(AdminPermission).where(AdminPermission.admin_id == admin_id, alcance)
+        )
+
+        for section, access in permissions.items():
+            if access == ACCESS_NONE:
+                hereda = (
+                    tenant_id is not None
+                    and role in ("owner", "colaborador")
+                    and section not in GLOBAL_ONLY_SECTIONS
+                    and section not in OWNER_ONLY_SECTIONS
+                )
+                if not hereda:
+                    # Sin fila ya queda denegado.
+                    continue
+            session.add(
+                AdminPermission(
+                    admin_id=admin_id, section=section, access=access, tenant_id=tenant_id
+                )
+            )
     return None
 
 
