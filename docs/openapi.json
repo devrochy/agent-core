@@ -10971,7 +10971,7 @@
           "pack · comercio"
         ],
         "summary": "Import Products Csv",
-        "description": "Importa productos desde un CSV (columnas `name` y `price`, paridad con el clásico).",
+        "description": "Importa productos desde un CSV (columnas `name` y `price`, paridad con el clásico).\n\nOpcionales: `description`, `sku`, `stock` e `image_url` (HU-CRM-01; una URL que no sea\nhttps se ignora y el producto se crea sin foto).",
         "operationId": "import_products_csv_api_v1_pack_commerce_products_import_post",
         "parameters": [
           {
@@ -27487,6 +27487,17 @@
             "type": "number",
             "title": "Price"
           },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
           "variants": {
             "items": {
               "$ref": "#/components/schemas/VariantOut"
@@ -27590,6 +27601,18 @@
               }
             ],
             "title": "Trial Days"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
           }
         },
         "type": "object",
