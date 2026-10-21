@@ -226,6 +226,7 @@ async def test_no_cruza_negocios(app_client) -> None:
 
 
 async def test_tools_de_lead_reflejan_el_contacto_en_el_perfil() -> None:
+    from pack_commerce.models import Lead
     from pack_commerce.skills import LeadSkill
     from sqlalchemy import select
 
@@ -244,6 +245,12 @@ async def test_tools_de_lead_reflejan_el_contacto_en_el_perfil() -> None:
     async with tenant_scope(tid):
         creado = await skill.crear_lead({"name": "Daniela", "interest": "plan", "phone": "3001112233"}, ctx())
         assert creado["status"] == "created"
+        # Un segundo lead más viejo (intake, ficha): las tools siguen con el más reciente, sin fallar.
+        async with get_session() as session:
+            session.add(
+                Lead(tenant_id=tid, customer_id=dani, interest="viejo",
+                     last_activity_at=datetime.now(UTC) - timedelta(days=3))
+            )
         actualizado = await skill.actualizar_lead({"phone": "3009998877", "name": "Daniela Gómez"}, ctx())
         # La salida de la tool no cambia.
         assert actualizado == {"lead_id": creado["lead_id"], "status": "actualizado"}
@@ -262,4 +269,6 @@ async def test_tools_de_lead_reflejan_el_contacto_en_el_perfil() -> None:
                 ).scalars()
             }
     assert perfil["phone"] == "3009998877"
+    leads = await _leads(tid, dani)
+    assert [(lead.interest, lead.phone) for lead in leads] == [("plan", "3009998877"), ("viejo", None)]
     assert perfil["name"] == "Daniela Gómez"

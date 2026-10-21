@@ -55,15 +55,17 @@ fiel, inactivo) se sigue calculando en vivo. Lo que se edita a mano es el estado
      chat no quede escondido ahí, `crear_lead` y `actualizar_lead` también lo escriben en el perfil
      (`entity_memory.upsert_attributes`): nombre, correo y teléfono. Ningún escenario del gate de evals
      llama esas tools, así que el replay no cambia.
+   - Ese reflejo limpia espacios y recorta como `completar_lead` (200, 254 y 40 caracteres).
    - El saludo del seguimiento (`jobs.py`) y la vista SSR de leads prefieren `customers.name` al
      nombre del lead.
 
 ## Riesgos asumidos
 
 - **Varios leads por cliente.** No hay índice único `(tenant_id, customer_id)`: el intake de la landing
-  crea un lead por cada clave de idempotencia y el borrador automático puede convivir con otro. Las tools
-  usan `scalar_one_or_none()` y fallarían con dos filas. Esta decisión no lo empeora (la ficha edita el
-  lead existente y solo crea uno si no hay ninguno, con el cliente bloqueado), pero tampoco lo resuelve.
+  crea un lead por cada clave de idempotencia, y el borrador automático, el agente y la ficha pueden
+  crear otro a la vez (`crear_lead` no toma el bloqueo del cliente). Desde este ADR las tools de lead,
+  `completar_lead` y la ficha eligen el mismo lead (el de actividad más reciente, desempatado por id)
+  en vez de fallar con dos filas. Un índice único o la fusión de duplicados quedan para otra HU.
 - **Gana el último que escribe el estado.** Lo cambian el dueño, el asistente (`calificar_lead` fuerza
   «calificado») y el seguimiento (`calificado → contactado`). El lead no guarda quién escribió; el log
   `lead_pack_editado` registra los cambios desde la ficha.

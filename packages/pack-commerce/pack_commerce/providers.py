@@ -182,7 +182,7 @@ async def _escribir_lead(customer_id: uuid.UUID, valores: dict[str, str]) -> Non
         cliente = (
             await session.execute(
                 select(Customer.id)
-                .where(Customer.tenant_id == tid, Customer.id == customer_id)
+                .where(Customer.tenant_id == tid, Customer.id == customer_id, Customer.deleted_at.is_(None))
                 .with_for_update(key_share=True)
             )
         ).scalar_one_or_none()
@@ -192,7 +192,7 @@ async def _escribir_lead(customer_id: uuid.UUID, valores: dict[str, str]) -> Non
             await session.execute(
                 select(Lead)
                 .where(Lead.tenant_id == tid, Lead.customer_id == customer_id)
-                .order_by(Lead.last_activity_at.desc())
+                .order_by(Lead.last_activity_at.desc(), Lead.id.desc())
                 .limit(1)
             )
         ).scalars().first()

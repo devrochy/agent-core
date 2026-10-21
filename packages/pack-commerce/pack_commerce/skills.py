@@ -747,6 +747,17 @@ def _datos_alta(customer_data: dict[str, Any]) -> dict[str, str] | None:
 
 
 # ------------------------------------------------------------------ LEADS
+def _ultimo_lead_del_cliente(customer_id: Any, tenant_id: Any) -> Any:
+    """El lead que muestra la ficha: el de actividad más reciente (como `providers._ultimo_lead`).
+    Un cliente puede tener varios (intake, borrador automático, ficha): nunca falla por eso."""
+    return (
+        select(Lead)
+        .where(Lead.customer_id == customer_id, Lead.tenant_id == tenant_id)
+        .order_by(Lead.last_activity_at.desc(), Lead.id.desc())
+        .limit(1)
+    )
+
+
 async def completar_lead(
     session: Any,
     customer_id: uuid.UUID,
@@ -761,10 +772,7 @@ async def completar_lead(
     dicho. True si había lead."""
     lead = (
         await session.execute(
-            select(Lead)
-            .where(Lead.customer_id == customer_id, Lead.tenant_id == get_current_tenant_id())
-            .order_by(Lead.created_at.desc())
-            .limit(1)
+            _ultimo_lead_del_cliente(customer_id, get_current_tenant_id())
         )
     ).scalars().first()
     if lead is None:
@@ -867,12 +875,8 @@ class LeadSkill(BaseSkill):
                 return {"lead_id": str(existing.id), "status": "duplicate"}
 
             by_customer = (
-                await session.execute(
-                    select(Lead).where(
-                        Lead.customer_id == context.customer_id, Lead.tenant_id == tenant_id
-                    )
-                )
-            ).scalar_one_or_none()
+                await session.execute(_ultimo_lead_del_cliente(context.customer_id, tenant_id))
+            ).scalars().first()
             if by_customer is not None:
                 return {
                     "lead_id": str(by_customer.id),
@@ -900,8 +904,9 @@ class LeadSkill(BaseSkill):
             "email": arguments.get("email"),
             "crm_lead_id": lead_id,
         }
-        if arguments.get("phone"):
-            perfil["phone"] = str(arguments["phone"])
+        telefono = _ESPACIOS.sub(" ", str(arguments.get("phone") or "")).strip()[:40]
+        if telefono:
+            perfil["phone"] = telefono
         await entity_memory.upsert_attributes(context.customer_id, perfil)
         return {"lead_id": lead_id, "status": "created"}
 
@@ -912,13 +917,8 @@ class LeadSkill(BaseSkill):
             return {"error": "score inválido: debe ser un número entre 1 y 10."}
         async with get_session() as session:
             lead = (
-                await session.execute(
-                    select(Lead).where(
-                        Lead.customer_id == context.customer_id,
-                        Lead.tenant_id == get_current_tenant_id(),
-                    )
-                )
-            ).scalar_one_or_none()
+                await session.execute(_ultimo_lead_del_cliente(context.customer_id, get_current_tenant_id()))
+            ).scalars().first()
             if lead is None:
                 return {"error": "No hay lead para esta conversación. Usa crear_lead primero."}
             lead.score = score
@@ -929,13 +929,8 @@ class LeadSkill(BaseSkill):
     async def actualizar_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         async with get_session() as session:
             lead = (
-                await session.execute(
-                    select(Lead).where(
-                        Lead.customer_id == context.customer_id,
-                        Lead.tenant_id == get_current_tenant_id(),
-                    )
-                )
-            ).scalar_one_or_none()
+                await session.execute(_ultimo_lead_del_cliente(context.customer_id, get_current_tenant_id()))
+            ).scalars().first()
             if lead is None:
                 return {"error": "No hay lead para esta conversación. Usa crear_lead primero."}
             if arguments.get("name"):
@@ -950,7 +945,13 @@ class LeadSkill(BaseSkill):
                 lead.status = str(arguments["status"])
             lead.last_activity_at = _now()
         # Los datos de contacto también van al perfil, que es lo que muestra la ficha (ADR-0149).
-        contacto = {k: str(arguments[k]) for k in ("name", "email", "phone") if arguments.get(k)}
+        topes = {"name": 200, "email": 254, "phone": 40}  # los de `completar_lead`
+        contacto = {
+            k: _ESPACIOS.sub(" ", str(arguments[k])).strip()[:tope]
+            for k, tope in topes.items()
+            if arguments.get(k)
+        }
+        contacto = {k: v for k, v in contacto.items() if v}
         if contacto:
             await entity_memory.upsert_attributes(context.customer_id, contacto)
         return {"lead_id": str(lead.id), "status": "actualizado"}
