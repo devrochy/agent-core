@@ -1091,6 +1091,8 @@ class CatalogSkill(BaseSkill):
                 .where(
                     ProductVariant.active.is_(True),
                     ProductVariant.tenant_id == get_current_tenant_id(),
+                    # La foto sale del producto: filtro explícito además de RLS (HU-CRM-01).
+                    Product.tenant_id == get_current_tenant_id(),
                 )
             )
             if sku:
