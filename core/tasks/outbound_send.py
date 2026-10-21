@@ -354,7 +354,7 @@ async def _mark_failed(
 
 
 async def _baja_por_meta(conversation_id: uuid.UUID, tenant_id: uuid.UUID, detalle: str) -> None:
-    from core.admin.envios_segmento import registrar_consentimiento
+    from core.admin.envios_segmento import estados_de_consentimiento, registrar_consentimiento
 
     async with get_session() as session:
         customer_id = (
@@ -364,6 +364,10 @@ async def _baja_por_meta(conversation_id: uuid.UUID, tenant_id: uuid.UUID, detal
                 )
             )
         ).scalar_one_or_none()
+        if customer_id is not None and (
+            await estados_de_consentimiento(session, tenant_id, [customer_id])
+        ).get(customer_id) == "revocado":
+            return  # ya estaba de baja: un 131050 repetido no agrega filas
     if customer_id is not None:
         await registrar_consentimiento(
             tenant_id, customer_id, estado="revocado", origen="meta_131050", evidencia=detalle[:500]

@@ -50,6 +50,7 @@ from core.db.models import (
 from core.db.session import get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from core.shared.test_mode import TEST_CHANNEL
 
 log = get_logger(__name__)
 
@@ -173,7 +174,10 @@ async def registrar_consentimiento(
         existe = (
             await session.execute(
                 select(Customer.id).where(
-                    Customer.id == customer_id, Customer.tenant_id == tenant_id, Customer.deleted_at.is_(None)
+                    Customer.id == customer_id,
+                    Customer.tenant_id == tenant_id,
+                    Customer.deleted_at.is_(None),
+                    Customer.channel != TEST_CHANNEL,
                 )
             )
         ).scalar_one_or_none()
