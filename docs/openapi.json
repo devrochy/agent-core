@@ -10502,6 +10502,24 @@
         "operationId": "list_products_api_v1_pack_commerce_products_get",
         "parameters": [
           {
+            "name": "ally_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "HU-CRM-03: id del aliado, o `none` para los productos sin aliado.",
+              "title": "Ally Id"
+            },
+            "description": "HU-CRM-03: id del aliado, o `none` para los productos sin aliado."
+          },
+          {
             "name": "X-Tenant-Id",
             "in": "header",
             "required": false,
@@ -10739,6 +10757,412 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/commerce/modulos": {
+      "get": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Commerce Modulos",
+        "operationId": "commerce_modulos_api_v1_pack_commerce_modulos_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModulosOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/commerce/allies": {
+      "get": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "List Allies",
+        "operationId": "list_allies_api_v1_pack_commerce_allies_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AllyOut"
+                  },
+                  "title": "Response List Allies Api V1 Pack Commerce Allies Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Create Ally",
+        "operationId": "create_ally_api_v1_pack_commerce_allies_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AllySave"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllyOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/commerce/allies/{ally_id}": {
+      "patch": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Update Ally",
+        "operationId": "update_ally_api_v1_pack_commerce_allies__ally_id__patch",
+        "parameters": [
+          {
+            "name": "ally_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Ally Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AllyPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllyOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Delete Ally",
+        "description": "Borrado lógico. Sus productos quedan «sin aliado» y sus promociones se desactivan\n(conservan el aliado): quitarles el aliado las abriría a todo el catálogo.",
+        "operationId": "delete_ally_api_v1_pack_commerce_allies__ally_id__delete",
+        "parameters": [
+          {
+            "name": "ally_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Ally Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/commerce/platform/tenants/{tenant_id}/aliados": {
+      "get": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Get Aliados Del Negocio",
+        "operationId": "get_aliados_del_negocio_api_v1_pack_commerce_platform_tenants__tenant_id__aliados_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliadosEstado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Put Aliados Del Negocio",
+        "description": "Enciende o apaga los aliados. Apagar no borra nada: aliados y asignaciones se\nconservan para cuando se vuelva a encender.",
+        "operationId": "put_aliados_del_negocio_api_v1_pack_commerce_platform_tenants__tenant_id__aliados_put",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliadosCambio"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliadosEstado"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -20342,6 +20766,218 @@
         ],
         "title": "Alerts"
       },
+      "AliadosCambio": {
+        "properties": {
+          "habilitado": {
+            "type": "boolean",
+            "title": "Habilitado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "habilitado"
+        ],
+        "title": "AliadosCambio"
+      },
+      "AliadosEstado": {
+        "properties": {
+          "habilitado": {
+            "type": "boolean",
+            "title": "Habilitado"
+          },
+          "por": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Por"
+          },
+          "en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "En"
+          }
+        },
+        "type": "object",
+        "required": [
+          "habilitado"
+        ],
+        "title": "AliadosEstado"
+      },
+      "AllyContact": {
+        "properties": {
+          "contacto": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contacto"
+          },
+          "telefono": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Telefono"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "notas": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notas"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AllyContact"
+      },
+      "AllyOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "contact_info": {
+            "$ref": "#/components/schemas/AllyContact"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "products": {
+            "type": "integer",
+            "title": "Products"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "contact_info",
+          "active",
+          "products"
+        ],
+        "title": "AllyOut"
+      },
+      "AllyPatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "contact_info": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AllyContact"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active"
+          }
+        },
+        "type": "object",
+        "title": "AllyPatch"
+      },
+      "AllySave": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "contact_info": {
+            "$ref": "#/components/schemas/AllyContact"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "AllySave"
+      },
       "AppointmentCancel": {
         "properties": {
           "notify": {
@@ -21086,6 +21722,18 @@
             "type": "string",
             "contentMediaType": "application/octet-stream",
             "title": "File"
+          },
+          "ally_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ally Id"
           }
         },
         "type": "object",
@@ -24452,6 +25100,14 @@
           "created": {
             "type": "integer",
             "title": "Created"
+          },
+          "unknown_allies": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unknown Allies",
+            "default": []
           }
         },
         "type": "object",
@@ -25852,6 +26508,20 @@
           "cost"
         ],
         "title": "ModelCost"
+      },
+      "ModulosOut": {
+        "properties": {
+          "aliados": {
+            "type": "boolean",
+            "title": "Aliados"
+          }
+        },
+        "type": "object",
+        "required": [
+          "aliados"
+        ],
+        "title": "ModulosOut",
+        "description": "Módulos opcionales del pack encendidos en el negocio (el panel decide qué mostrar)."
       },
       "Monitoring": {
         "properties": {
@@ -27881,6 +28551,18 @@
             "type": "string",
             "title": "Category"
           },
+          "ally_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ally Id"
+          },
           "price": {
             "type": "number",
             "title": "Price"
@@ -27950,6 +28632,18 @@
               }
             ],
             "title": "Category Id"
+          },
+          "ally_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ally Id"
           },
           "sku": {
             "type": "string",
@@ -28220,6 +28914,18 @@
             ],
             "title": "Variant Id"
           },
+          "ally_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ally Id"
+          },
           "include_child_categories": {
             "type": "boolean",
             "title": "Include Child Categories",
@@ -28374,6 +29080,18 @@
               }
             ],
             "title": "Variant Id"
+          },
+          "ally_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ally Id"
           },
           "include_child_categories": {
             "type": "boolean",

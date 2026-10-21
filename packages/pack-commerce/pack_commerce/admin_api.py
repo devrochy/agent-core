@@ -15,18 +15,20 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, File, Response, UploadFile
-from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import func, select, update
 
-from core.api.deps import Principal, require
+from core.api.deps import Principal, get_principal, require
 from core.api.errors import ApiError
 from core.db.session import get_owned, get_session
+
+from . import aliados
 
 # Registra los providers de búsqueda global del pack (ADR-0096).
 from . import search as _search  # noqa: F401
 from . import sync as _sync  # noqa: F401
-from .models import Category, Inventory, Order, OrderItem, Product, ProductVariant, Promotion
+from .models import Ally, Category, Inventory, Order, OrderItem, Product, ProductVariant, Promotion
 
 router = APIRouter(prefix="/api/v1/pack/commerce", tags=["pack · comercio"])
 
@@ -138,6 +140,7 @@ class ProductOut(BaseModel):
     description: str
     category_id: uuid.UUID | None
     category: str
+    ally_id: uuid.UUID | None = None  # HU-CRM-03
     price: float
     image_url: str | None = None  # HU-CRM-01
     variants: list[VariantOut]
@@ -148,6 +151,9 @@ class ProductSave(BaseModel):
     name: str
     description: str = ""
     category_id: uuid.UUID | None = None
+    # HU-CRM-03: si no viene, el aliado no cambia; `null` lo quita. Así un cliente que no
+    # conoce los aliados (la APK) no los borra al editar.
+    ally_id: uuid.UUID | None = None
     sku: str = ""
     # Precio, stock y días de prueba nunca negativos (422 con el campo marcado). Topes: lo que
     # cabe en la columna (`Numeric(12, 2)`, `Integer`) para no terminar en un 500 de la base.
@@ -182,15 +188,24 @@ async def _validar_plan(tenant_id: uuid.UUID | None, payload: ProductSave, ya_re
 @router.get("/products", response_model=list[ProductOut])
 async def list_products(
     principal: Annotated[Principal, Depends(require("pack_commerce"))],
+    ally_id: Annotated[
+        str | None,
+        Query(description="HU-CRM-03: id del aliado, o `none` para los productos sin aliado."),
+    ] = None,
 ) -> list[ProductOut]:
     tenant_id = principal.tenant_id
+    filtro = select(Product).where(Product.tenant_id == tenant_id)
+    if ally_id is not None:
+        if ally_id == "none":
+            filtro = filtro.where(Product.ally_id.is_(None))
+        else:
+            try:
+                filtro = filtro.where(Product.ally_id == uuid.UUID(ally_id))
+            except ValueError:
+                raise ApiError.bad_request("ally_id inválido.", "invalid_ally_id") from None
     async with get_session() as session:
         products = (
-            (
-                await session.execute(
-                    select(Product).where(Product.tenant_id == tenant_id).order_by(Product.name)
-                )
-            )
+            (await session.execute(filtro.order_by(Product.name)))
             .scalars()
             .all()
         )
@@ -240,6 +255,7 @@ async def list_products(
                 description=p.description or "",
                 category_id=p.category_id,
                 category=cat_by_id.get(p.category_id, "Sin categoría"),
+                ally_id=p.ally_id,
                 price=float(product_variants[0].price or 0) if product_variants else 0.0,
                 image_url=p.image_url or None,
                 variants=[
@@ -274,6 +290,8 @@ async def save_product(
             category = await get_owned(session, Category, payload.category_id, tenant_id)
             if category is not None:
                 resolved_category_id = category.id
+        cambia_aliado = "ally_id" in payload.model_fields_set
+        resolved_ally_id = await _resolver_aliado(session, tenant_id, payload.ally_id) if cambia_aliado else None
 
         if payload.product_id is not None:
             product = await get_owned(session, Product, payload.product_id, tenant_id)
@@ -284,6 +302,8 @@ async def save_product(
             product.category_id = resolved_category_id
             if payload.image_url is not None:
                 product.image_url = payload.image_url or None
+            if cambia_aliado:
+                product.ally_id = resolved_ally_id
             variant = (
                 (
                     await session.execute(
@@ -325,6 +345,7 @@ async def save_product(
                 description=payload.description or "",
                 category_id=resolved_category_id,
                 image_url=payload.image_url or None,
+                ally_id=resolved_ally_id,
             )
             session.add(product)
             await session.flush()
@@ -436,6 +457,273 @@ async def delete_category(
     return Response(status_code=204)
 
 
+# ------------------------------------------------------------------ aliados (HU-CRM-03)
+class ModulosOut(BaseModel):
+    """Módulos opcionales del pack encendidos en el negocio (el panel decide qué mostrar)."""
+
+    aliados: bool
+
+
+class AllyContact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contacto: str | None = Field(default=None, max_length=120)
+    telefono: str | None = Field(default=None, max_length=40)
+    email: str | None = Field(default=None, max_length=254)
+    notas: str | None = Field(default=None, max_length=500)
+
+
+class AllyOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    contact_info: AllyContact
+    active: bool
+    products: int
+    created_at: datetime | None = None
+
+
+class AllySave(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    contact_info: AllyContact = Field(default_factory=AllyContact)
+    active: bool = True
+
+
+class AllyPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    contact_info: AllyContact | None = None
+    active: bool | None = None
+
+
+class AliadosEstado(BaseModel):
+    habilitado: bool
+    por: str | None = None
+    en: datetime | None = None
+
+
+class AliadosCambio(BaseModel):
+    habilitado: bool
+
+
+async def _exigir_aliados(tenant_id: uuid.UUID | None) -> None:
+    # Con el módulo apagado los aliados no existen para el negocio: 404, no 403.
+    if not await aliados.habilitados(tenant_id):
+        raise ApiError(404, "aliados_deshabilitados", "Los aliados no están habilitados en este negocio.")
+
+
+async def _resolver_aliado(session: Any, tenant_id: uuid.UUID | None, ally_id: uuid.UUID | None) -> uuid.UUID | None:
+    """El aliado a guardar en un producto o una promoción. `None` lo quita (siempre se puede,
+    aun con el módulo apagado); asignar uno exige el módulo encendido y un aliado vivo del
+    mismo negocio (si es de otro negocio, 404 como si no existiera)."""
+    if ally_id is None:
+        return None
+    await _exigir_aliados(tenant_id)
+    ally = await get_owned(session, Ally, ally_id, tenant_id)
+    if ally is None or ally.deleted_at is not None:
+        raise ApiError.not_found("Aliado no encontrado.")
+    return ally.id
+
+
+def _contacto(raw: Any) -> AllyContact:
+    datos = raw if isinstance(raw, dict) else {}
+    return AllyContact(**{k: datos.get(k) for k in AllyContact.model_fields if datos.get(k)})
+
+
+def _contacto_guardado(contacto: AllyContact) -> dict[str, str]:
+    return {k: v.strip() for k, v in contacto.model_dump().items() if isinstance(v, str) and v.strip()}
+
+
+async def _nombre_libre(session: Any, tenant_id: uuid.UUID | None, nombre: str, excepto: uuid.UUID | None = None) -> None:
+    q = select(Ally.id).where(
+        Ally.tenant_id == tenant_id,
+        Ally.deleted_at.is_(None),
+        func.lower(Ally.name) == nombre.lower(),
+    )
+    if excepto is not None:
+        q = q.where(Ally.id != excepto)
+    if (await session.execute(q)).first() is not None:
+        raise ApiError(409, "aliado_duplicado", f"Ya existe un aliado llamado «{nombre}».")
+
+
+async def _ally_out(session: Any, tenant_id: uuid.UUID | None, ally: Ally) -> AllyOut:
+    productos = (
+        await session.execute(
+            select(func.count()).select_from(Product).where(Product.tenant_id == tenant_id, Product.ally_id == ally.id)
+        )
+    ).scalar_one()
+    return AllyOut(
+        id=ally.id,
+        name=ally.name,
+        contact_info=_contacto(ally.contact_info),
+        active=bool(ally.active),
+        products=int(productos or 0),
+        created_at=ally.created_at,
+    )
+
+
+@router.get("/modulos", response_model=ModulosOut)
+async def commerce_modulos(
+    principal: Annotated[Principal, Depends(require("pack_commerce"))],
+) -> ModulosOut:
+    return ModulosOut(aliados=await aliados.habilitados(principal.tenant_id))
+
+
+@router.get("/allies", response_model=list[AllyOut])
+async def list_allies(
+    principal: Annotated[Principal, Depends(require("pack_commerce"))],
+) -> list[AllyOut]:
+    tenant_id = principal.tenant_id
+    await _exigir_aliados(tenant_id)
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                select(Ally)
+                .where(Ally.tenant_id == tenant_id, Ally.deleted_at.is_(None))
+                .order_by(func.lower(Ally.name))
+                .limit(500)
+            )
+        ).scalars().all()
+        conteo = dict(
+            (
+                await session.execute(
+                    select(Product.ally_id, func.count())
+                    .where(Product.tenant_id == tenant_id, Product.ally_id.is_not(None))
+                    .group_by(Product.ally_id)
+                )
+            ).all()
+        )
+    return [
+        AllyOut(
+            id=a.id,
+            name=a.name,
+            contact_info=_contacto(a.contact_info),
+            active=bool(a.active),
+            products=int(conteo.get(a.id, 0)),
+            created_at=a.created_at,
+        )
+        for a in rows
+    ]
+
+
+@router.post("/allies", response_model=AllyOut, status_code=201)
+async def create_ally(
+    payload: AllySave,
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> AllyOut:
+    tenant_id = principal.tenant_id
+    await _exigir_aliados(tenant_id)
+    nombre = payload.name.strip()
+    if not nombre:
+        raise ApiError.bad_request("El aliado necesita un nombre.", "invalid_name")
+    async with get_session() as session:
+        await _nombre_libre(session, tenant_id, nombre)
+        ally = Ally(name=nombre, contact_info=_contacto_guardado(payload.contact_info), active=payload.active)
+        session.add(ally)
+        await session.flush()
+        return await _ally_out(session, tenant_id, ally)
+
+
+@router.patch("/allies/{ally_id}", response_model=AllyOut)
+async def update_ally(
+    ally_id: uuid.UUID,
+    payload: AllyPatch,
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> AllyOut:
+    tenant_id = principal.tenant_id
+    await _exigir_aliados(tenant_id)
+    async with get_session() as session:
+        ally = await get_owned(session, Ally, ally_id, tenant_id)
+        if ally is None or ally.deleted_at is not None:
+            raise ApiError.not_found("Aliado no encontrado.")
+        if payload.name is not None:
+            nombre = payload.name.strip()
+            if not nombre:
+                raise ApiError.bad_request("El aliado necesita un nombre.", "invalid_name")
+            await _nombre_libre(session, tenant_id, nombre, excepto=ally.id)
+            ally.name = nombre
+        if payload.contact_info is not None:
+            ally.contact_info = _contacto_guardado(payload.contact_info)
+        if payload.active is not None:
+            ally.active = payload.active
+        await session.flush()
+        return await _ally_out(session, tenant_id, ally)
+
+
+@router.delete("/allies/{ally_id}", status_code=204)
+async def delete_ally(
+    ally_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> Response:
+    """Borrado lógico. Sus productos quedan «sin aliado» y sus promociones se desactivan
+    (conservan el aliado): quitarles el aliado las abriría a todo el catálogo."""
+    tenant_id = principal.tenant_id
+    await _exigir_aliados(tenant_id)
+    from datetime import UTC
+
+    async with get_session() as session:
+        ally = await get_owned(session, Ally, ally_id, tenant_id)
+        if ally is None or ally.deleted_at is not None:
+            raise ApiError.not_found("Aliado no encontrado.")
+        ally.deleted_at = datetime.now(UTC)
+        ally.active = False
+        await session.execute(
+            update(Product)
+            .where(Product.tenant_id == tenant_id, Product.ally_id == ally.id)
+            .values(ally_id=None)
+        )
+        await session.execute(
+            update(Promotion)
+            .where(Promotion.tenant_id == tenant_id, Promotion.ally_id == ally.id)
+            .values(active=False)
+        )
+    return Response(status_code=204)
+
+
+# Plataforma: solo el master enciende o apaga los aliados de un negocio (D-SPEC-33-2,
+# Negocios › Acciones). Vive en el pack para que el core no conozca el dominio.
+def _require_master(principal: Principal) -> None:
+    from core.admin.roles import es_master
+
+    if not es_master(principal.admin):
+        raise ApiError.forbidden("Solo el admin master enciende los aliados de un negocio.")
+
+
+def _estado_out(valor: dict[str, Any]) -> AliadosEstado:
+    en = valor.get("en")
+    return AliadosEstado(
+        habilitado=bool(valor.get("habilitado")),
+        por=valor.get("por"),
+        en=datetime.fromisoformat(en) if isinstance(en, str) else None,
+    )
+
+
+@router.get("/platform/tenants/{tenant_id}/aliados", response_model=AliadosEstado)
+async def get_aliados_del_negocio(
+    tenant_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> AliadosEstado:
+    _require_master(principal)
+    valor = await aliados.estado(tenant_id)
+    if valor is None:
+        raise ApiError.not_found("Negocio no encontrado.")
+    return _estado_out(valor)
+
+
+@router.put("/platform/tenants/{tenant_id}/aliados", response_model=AliadosEstado)
+async def put_aliados_del_negocio(
+    tenant_id: uuid.UUID,
+    payload: AliadosCambio,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> AliadosEstado:
+    """Enciende o apaga los aliados. Apagar no borra nada: aliados y asignaciones se
+    conservan para cuando se vuelva a encender."""
+    _require_master(principal)
+    try:
+        valor = await aliados.fijar(tenant_id, habilitar=payload.habilitado, por=f"admin:{principal.admin.email}")
+    except LookupError:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return _estado_out(valor)
+
+
 # ------------------------------------------------------------------ promociones
 PROMOTION_TYPES = ("temporada", "volumen", "campaña")
 # Mismos segmentos que `skills.classify_customer` (ADR-036).
@@ -452,6 +740,7 @@ class PromotionOut(BaseModel):
     category_id: uuid.UUID | None
     product_id: uuid.UUID | None
     variant_id: uuid.UUID | None = None
+    ally_id: uuid.UUID | None = None  # HU-CRM-03
     include_child_categories: bool = True
     eligible_segments: list[str] | None
     created_at: datetime | None = None
@@ -466,6 +755,9 @@ class PromotionSave(BaseModel):
     category_id: uuid.UUID | None = None
     product_id: uuid.UUID | None = None
     variant_id: uuid.UUID | None = None
+    # HU-CRM-03: si no viene, no cambia; `null` lo quita. Con aliado, la promoción aplica
+    # solo si todos los productos del carrito son de ese aliado.
+    ally_id: uuid.UUID | None = None
     include_child_categories: bool = True
     eligible_segments: list[str] | None = None
     active: bool | None = None
@@ -562,6 +854,7 @@ def _promotion_out(p: Promotion) -> PromotionOut:
         category_id=p.category_id,
         product_id=p.product_id,
         variant_id=p.variant_id,
+        ally_id=p.ally_id,
         include_child_categories=bool(getattr(p, "include_child_categories", True)),
         eligible_segments=list(p.eligible_segments) if p.eligible_segments else None,
         created_at=p.created_at,
@@ -605,6 +898,8 @@ async def save_promotion(
             product = await get_owned(session, Product, payload.product_id, tenant_id)
             if product is not None:
                 resolved_product = product.id
+        cambia_aliado = "ally_id" in payload.model_fields_set
+        resolved_ally = await _resolver_aliado(session, tenant_id, payload.ally_id) if cambia_aliado else None
 
         if payload.promotion_id is not None:
             promotion = await get_owned(session, Promotion, payload.promotion_id, tenant_id)
@@ -617,6 +912,8 @@ async def save_promotion(
             promotion.category_id = resolved_category
             promotion.product_id = resolved_product
             promotion.variant_id = payload.variant_id
+            if cambia_aliado:
+                promotion.ally_id = resolved_ally
             promotion.include_child_categories = payload.include_child_categories
             promotion.eligible_segments = payload.eligible_segments
             if payload.active is not None:
@@ -631,6 +928,7 @@ async def save_promotion(
                     category_id=resolved_category,
                     product_id=resolved_product,
                     variant_id=payload.variant_id,
+                    ally_id=resolved_ally,
                     include_child_categories=payload.include_child_categories,
                     eligible_segments=payload.eligible_segments,
                     active=True if payload.active is None else payload.active,
@@ -772,12 +1070,17 @@ async def update_order_status(
 
 class ImportResult(BaseModel):
     created: int
+    # HU-CRM-03: nombres de la columna `aliado` que no corresponden a ningún aliado (la fila
+    # se crea sin aliado). Vacío si los aliados están apagados.
+    unknown_allies: list[str] = []
 
 
 @router.post("/products/import", response_model=ImportResult, status_code=201)
 async def import_products_csv(
     file: Annotated[UploadFile, File()],
     principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+    # HU-CRM-03: aliado de las filas sin columna `aliado` (o con ella vacía).
+    ally_id: Annotated[uuid.UUID | None, Form()] = None,
 ) -> ImportResult:
     """Importa productos desde un CSV (columnas `name` y `price`, paridad con el clásico).
 
@@ -792,7 +1095,20 @@ async def import_products_csv(
         raise ApiError.bad_request("CSV inválido: requiere columnas name y price", "invalid_csv")
 
     creados = 0
+    desconocidos: list[str] = []
     async with get_session() as session:
+        aliado_por_defecto = await _resolver_aliado(session, principal.tenant_id, ally_id)
+        aliado_por_nombre: dict[str, uuid.UUID] = {}
+        con_aliados = "aliado" in filas[0] and await aliados.habilitados(principal.tenant_id)
+        if con_aliados:
+            aliado_por_nombre = {
+                a.name.strip().lower(): a.id
+                for a in (
+                    await session.execute(
+                        select(Ally).where(Ally.tenant_id == principal.tenant_id, Ally.deleted_at.is_(None))
+                    )
+                ).scalars()
+            }
         for fila in filas:
             nombre = str(fila.get("name") or "").strip()
             if not nombre:
@@ -807,11 +1123,18 @@ async def import_products_csv(
                 foto = None
             if foto and len(foto) > IMAGE_URL_MAX:
                 foto = None
+            aliado_fila = aliado_por_defecto
+            nombre_aliado = str(fila.get("aliado") or "").strip()
+            if con_aliados and nombre_aliado:
+                aliado_fila = aliado_por_nombre.get(nombre_aliado.lower())
+                if aliado_fila is None and nombre_aliado not in desconocidos:
+                    desconocidos.append(nombre_aliado)
             producto = Product(
                 name=nombre,
                 description=str(fila.get("description") or "").strip(),
                 category_id=None,
                 image_url=foto or None,
+                ally_id=aliado_fila,
             )
             session.add(producto)
             await session.flush()
@@ -829,4 +1152,4 @@ async def import_products_csv(
             session.add(Inventory(variant_id=variante.id, stock_quantity=stock))
             producto.has_variants = False
             creados += 1
-    return ImportResult(created=creados)
+    return ImportResult(created=creados, unknown_allies=desconocidos[:50])
