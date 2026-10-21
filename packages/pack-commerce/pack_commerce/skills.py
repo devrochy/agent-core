@@ -1080,7 +1080,8 @@ class CatalogSkill(BaseSkill):
                 "billing_period": variant.billing_period,  # recurrencia del plan (#153)
                 "trial_days": variant.trial_days,
                 "entitlements": variant.entitlements,
-                "tiene_foto": bool(product.image_url),
+                # Mismo criterio que `_foto_del_unico`: una URL http vieja no se manda.
+                "tiene_foto": (product.image_url or "").strip().lower().startswith("https://"),
             }
 
         async with get_session() as session:

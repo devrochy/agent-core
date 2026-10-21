@@ -62,6 +62,7 @@ async def test_foto_solo_con_unico_resultado_y_del_propio_negocio():
     await _producto(T1, name=f"Casco Rojo {s}", sku=f"CR-{s}", image_url=foto)
     await _producto(T1, name=f"Casco Azul {s}", sku=f"CA-{s}", image_url=foto)
     await _producto(T1, name=f"Guantes {s}", sku=f"GU-{s}", image_url=None)
+    await _producto(T1, name=f"Botas {s}", sku=f"VI-{s}", image_url=f"http://viejo.com/{s}.jpg")
     await _producto(T2, name=f"Casco Ajeno {s}", sku=f"CX-{s}", image_url=f"https://otro.com/{s}.jpg")
 
     por_sku = await _consultar(T1, {"sku": f"CR-{s}"})
@@ -74,6 +75,10 @@ async def test_foto_solo_con_unico_resultado_y_del_propio_negocio():
 
     sin_foto = await _consultar(T1, {"sku": f"GU-{s}"})
     assert len(sin_foto["matches"]) == 1 and "_image_url" not in sin_foto
+    assert sin_foto["matches"][0]["tiene_foto"] is False
+
+    vieja = await _consultar(T1, {"sku": f"VI-{s}"})
+    assert "_image_url" not in vieja and vieja["matches"][0]["tiene_foto"] is False
 
     ajeno = await _consultar(T1, {"sku": f"CX-{s}"})
     assert ajeno["matches"] == [] and "_image_url" not in ajeno
