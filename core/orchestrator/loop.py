@@ -65,6 +65,7 @@ from core.mcp.host import mcp_host, new_tool_context
 from core.mcp.translator import skills_summary, to_llm_schemas
 from core.mcp.types import GuardrailResult, ScopedHttp
 from core.memory import entity as entity_memory
+from core.memory import notas as notas_del_equipo
 from core.memory import vector as vector_memory
 from core.memory import working as working_memory
 from core.observability.tracing import get_tracer, span_attributes
@@ -294,6 +295,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     history_tool_results = await _historical_tool_results(conversation_id)
 
     profile = await entity_memory.get_profile(customer.id)
+    team_notes = await notas_del_equipo.para_prompt(get_current_tenant_id(), customer.id)
     rag = spec.memory.rag
     recalled = await vector_memory.recall(
         latest_message,
@@ -389,6 +391,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         entity_profile=entity_memory.profile_to_prompt(profile),
         referencias=referencias,
         state_card=state_card,
+        team_notes=team_notes,
         # Zona del negocio para la fecha y hora actual del prompt (ADR-0091).
         timezone=(getattr(app_settings, "timezone", None) if app_settings else None) or DEFAULT_TIMEZONE,
     )

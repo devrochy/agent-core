@@ -1240,6 +1240,22 @@ class MemoryFact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class CustomerNote(Base):
+    """Nota del equipo sobre un cliente (0099, ADR-0147). La ven la ficha, la línea de tiempo y el
+    agente (bloque dinámico, como dato). Borrado lógico; la purga de memoria del cliente la borra."""
+
+    __tablename__ = "customer_notes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    author_admin_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id", ondelete="SET NULL"))
+    author_label: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 # ---------------------------------------------------------------- integración Meta (rico)
 class MetaConnection(Base):
     """App de Meta conectada, por tenant (reemplaza `AppSettings.meta_app_config_

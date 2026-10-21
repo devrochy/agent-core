@@ -65,6 +65,7 @@ class PromptContext:
     entity_profile: str = ""          # Capa 2 (perfil del cliente)
     referencias: list[str] = field(default_factory=list)  # ids vigentes de la conversación (ADR-0130)
     state_card: str = ""              # tarjeta de estado (ADR-0114); "" con aos_procedures apagada
+    team_notes: str = ""              # notas del equipo sobre el cliente (ADR-0147); "" sin notas
     timezone: str = DEFAULT_TIMEZONE  # zona del negocio (ADR-0091)
     now: datetime | None = None       # None = ahora; inyectable en tests
 
@@ -162,6 +163,9 @@ def bloque_dinamico(ctx: PromptContext) -> str:
         # Ya saneadas por el core (`core/orchestrator/referencias.py`): solo datos.
         referencias = "\n".join(ctx.referencias)
         dynamic_parts.append(f"## Referencias vigentes de esta conversación\n{referencias}")
+    if ctx.team_notes:
+        # Ya serializadas y escapadas por `core/memory/notas.py` (rótulos en su playbook del kernel).
+        dynamic_parts.append(ctx.team_notes)
     if ctx.state_card:
         # Ya serializada y escapada por el kernel (`core/kernel/tarjeta.py`), justo antes de la fecha.
         dynamic_parts.append(ctx.state_card)

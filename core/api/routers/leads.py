@@ -19,15 +19,16 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import Select, exists, func, or_, select
 
 from core.admin.lead_registry import LeadProvider, lead_registry
+from core.admin.roles import actua_como_master
 from core.agents.spec import enabled_packs, load_active_spec
-from core.api.deps import Principal, require
+from core.api.deps import Principal, es_owner_o_master, require
 from core.api.errors import ApiError
 from core.api.pagination import PageParams, page_params
-from core.db.models import ChannelConnection, Conversation, Customer, MemoryFact
+from core.db.models import ChannelConnection, Conversation, Customer, CustomerNote, MemoryFact
 from core.db.session import get_session
 from core.memory import facts
 from core.shared.logger import get_logger
@@ -483,3 +484,154 @@ async def toggle_lead_bot(
         paused = cliente.bot_paused
     log.info("lead_bot_toggled", customer_id=str(lead_id), bot_paused=paused, admin_id=str(principal.admin.id))
     return BotState(bot_paused=paused)
+
+
+# ------------------------------------------------------------------ notas y línea de tiempo (HU-CRM-04)
+
+
+class LeadNote(BaseModel):
+    id: uuid.UUID
+    text: str
+    author: str
+    created_at: datetime
+    puede_borrar: bool
+
+
+class LeadNoteCreate(BaseModel):
+    text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+
+
+class TimelineItem(BaseModel):
+    at: datetime
+    kind: str
+    title: str
+    detail: str | None = None
+    link_kind: str | None = None
+    link_id: str | None = None
+
+
+class TimelineResponse(BaseModel):
+    items: list[TimelineItem]
+    next_cursor: str | None
+    partial: bool
+
+
+def _nota(n: CustomerNote, principal: Principal) -> LeadNote:
+    return LeadNote(
+        id=n.id,
+        text=n.text,
+        author=n.author_label or "el equipo",
+        created_at=n.created_at,
+        puede_borrar=n.author_admin_id == principal.admin.id or es_owner_o_master(principal),
+    )
+
+
+@router.get("/{lead_id}/notes", response_model=list[LeadNote])
+async def list_lead_notes(
+    lead_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("leads"))],
+) -> list[LeadNote]:
+    """Notas del equipo sobre el cliente, de la más nueva a la más vieja (hasta 100)."""
+    tenant_id = principal.tenant_id
+    async with get_session() as session:
+        await _cliente(session, tenant_id, lead_id)
+        notas = (
+            await session.execute(
+                select(CustomerNote)
+                .where(
+                    CustomerNote.tenant_id == tenant_id,
+                    CustomerNote.customer_id == lead_id,
+                    CustomerNote.deleted_at.is_(None),
+                )
+                .order_by(CustomerNote.created_at.desc(), CustomerNote.id.desc())
+                .limit(100)
+            )
+        ).scalars().all()
+    return [_nota(n, principal) for n in notas]
+
+
+@router.post("/{lead_id}/notes", response_model=LeadNote, status_code=201)
+async def create_lead_note(
+    lead_id: uuid.UUID,
+    body: LeadNoteCreate,
+    principal: Annotated[Principal, Depends(require("leads", write=True))],
+) -> LeadNote:
+    """Nota del equipo sobre el cliente. La ve todo el equipo y el agente la tiene en cuenta como
+    dato (nunca como instrucción) en las siguientes conversaciones (ADR-0147)."""
+    tenant_id = principal.tenant_id
+    async with get_session() as session:
+        await _cliente(session, tenant_id, lead_id)
+        nota = CustomerNote(
+            tenant_id=tenant_id,
+            customer_id=lead_id,
+            text=body.text,
+            author_admin_id=principal.admin.id,
+            # Un admin de plataforma no deja su correo personal a la vista del negocio.
+            author_label="Soporte de la plataforma" if actua_como_master(principal.admin) else (principal.admin.email or ""),
+        )
+        session.add(nota)
+        await session.flush()
+        salida = _nota(nota, principal)
+    log.info("lead_nota_creada", customer_id=str(lead_id), admin_id=str(principal.admin.id))
+    return salida
+
+
+@router.delete("/{lead_id}/notes/{note_id}", status_code=204)
+async def delete_lead_note(
+    lead_id: uuid.UUID,
+    note_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("leads", write=True))],
+) -> Response:
+    """Borra (lógico) una nota. Solo su autor, el propietario del negocio o un admin de plataforma."""
+    tenant_id = principal.tenant_id
+    async with get_session() as session:
+        await _cliente(session, tenant_id, lead_id)
+        nota = (
+            await session.execute(
+                select(CustomerNote).where(
+                    CustomerNote.id == note_id,
+                    CustomerNote.tenant_id == tenant_id,
+                    CustomerNote.customer_id == lead_id,
+                    CustomerNote.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if nota is None:
+            raise ApiError.not_found("Nota no encontrada.")
+        if nota.author_admin_id != principal.admin.id and not es_owner_o_master(principal):
+            raise ApiError.forbidden("Solo quien escribió la nota o el propietario pueden borrarla.")
+        nota.deleted_at = func.now()
+    log.info("lead_nota_borrada", customer_id=str(lead_id), admin_id=str(principal.admin.id))
+    return Response(status_code=204)
+
+
+@router.get("/{lead_id}/timeline", response_model=TimelineResponse)
+async def lead_timeline(
+    lead_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("leads"))],
+    cursor: Annotated[str | None, Query(description="`next_cursor` de la página anterior.")] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 30,
+) -> TimelineResponse:
+    """Historia del cliente, del más reciente al más antiguo: conversaciones, escalaciones, datos
+    aprendidos, notas y lo que aporten los packs (pedidos, citas…). `partial` si un pack falló."""
+    from core.admin import linea_de_tiempo
+
+    tenant_id = principal.tenant_id
+    try:
+        posicion = linea_de_tiempo.decodificar_cursor(cursor) if cursor else None
+    except ValueError as exc:
+        raise ApiError.bad_request("Cursor inválido.", code="cursor_invalido") from exc
+    async with get_session() as session:
+        await _cliente(session, tenant_id, lead_id)
+    _enabled, providers = await _providers()
+    eventos, siguiente, parcial = await linea_de_tiempo.armar(tenant_id, lead_id, providers, posicion, limit)
+    return TimelineResponse(
+        items=[
+            TimelineItem(
+                at=e.at, kind=e.kind, title=e.title, detail=e.detail, link_kind=e.link_kind, link_id=e.link_id
+            )
+            for e in eventos
+        ],
+        next_cursor=siguiente,
+        partial=parcial,
+    )
