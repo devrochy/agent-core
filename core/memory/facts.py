@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any, cast
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.db.models import Customer, MemoryFact
+from core.db.models import Customer, CustomerNote, MemoryFact
 from core.shared.logger import get_logger
 
 if TYPE_CHECKING:
@@ -261,7 +261,8 @@ async def escribir_hechos(
 async def purgar_de_cliente(
     session: AsyncSession, *, tenant_id: uuid.UUID, customer_id: uuid.UUID, now: datetime | None = None
 ) -> int:
-    """Olvido del cliente (ADR-0053 §2, ADR-0114 §4): sus hechos y su proyección. Devuelve hechos borrados.
+    """Olvido del cliente (ADR-0053 §2, ADR-0114 §4): sus hechos, su proyección y sus notas del equipo
+    (ADR-0147). Devuelve hechos borrados.
 
     `customers.attributes` queda `{}`: todas sus claves son proyección (nadie más las escribe).
     `customers.name` y `contact_phone` no se tocan: son la identidad del cliente en el canal,
@@ -282,6 +283,16 @@ async def purgar_de_cliente(
             .values(deleted_at=ahora)
         ),
     ).rowcount
+    # Las notas del equipo también entran al prompt (ADR-0147): olvidar al cliente las borra.
+    await session.execute(
+        update(CustomerNote)
+        .where(
+            CustomerNote.tenant_id == tenant_id,
+            CustomerNote.customer_id == customer_id,
+            CustomerNote.deleted_at.is_(None),
+        )
+        .values(deleted_at=ahora)
+    )
     await session.execute(
         text(
             "UPDATE customers SET attributes = '{}'::jsonb, memory_purged_at = :ahora "

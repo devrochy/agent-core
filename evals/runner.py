@@ -222,6 +222,11 @@ async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tup
         from datetime import datetime
 
         ctx.now = datetime.fromisoformat(scenario["now"])
+    # Notas del equipo sobre el cliente (HU-CRM-04, ADR-0147): el mismo bloque que arma el loop.
+    if scenario.get("team_notes"):
+        from core.memory import notas
+
+        ctx.team_notes = notas.serializar([(n["fecha"], n["texto"]) for n in scenario["team_notes"]])
     # Fidelidad con producción (ADR-0054/#155): el eval debe ver el MISMO subconjunto
     # de tools que el asistente real — packs habilitados por el spec + flujo resuelto.
     # Antes se pasaban TODAS las skills del host, así que un escenario podía pasar
@@ -290,6 +295,11 @@ async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tup
         allowed = assertions["must_call_any"]
         if not (set(allowed) & set(called)):
             failures.append(f"no llamó ninguna de {allowed} (llamó: {called})")
+
+    if "must_contain_any" in assertions:
+        opciones = [o.lower() for o in assertions["must_contain_any"]]
+        if not any(o in text_lower for o in opciones):
+            failures.append(f"no contiene ninguno de {assertions['must_contain_any']}")
 
     max_chars = assertions.get("max_response_chars")
     if max_chars and len(response.content) > max_chars:
