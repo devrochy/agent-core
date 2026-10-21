@@ -75,10 +75,10 @@ async def test_foto_solo_con_unico_resultado_y_del_propio_negocio():
 
     sin_foto = await _consultar(T1, {"sku": f"GU-{s}"})
     assert len(sin_foto["matches"]) == 1 and "_image_url" not in sin_foto
-    assert sin_foto["matches"][0]["tiene_foto"] is False
+    assert "tiene_foto" not in sin_foto["matches"][0]
 
     vieja = await _consultar(T1, {"sku": f"VI-{s}"})
-    assert "_image_url" not in vieja and vieja["matches"][0]["tiene_foto"] is False
+    assert "_image_url" not in vieja and "tiene_foto" not in vieja["matches"][0]
 
     ajeno = await _consultar(T1, {"sku": f"CX-{s}"})
     assert ajeno["matches"] == [] and "_image_url" not in ajeno

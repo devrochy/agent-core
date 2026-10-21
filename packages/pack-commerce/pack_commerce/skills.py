@@ -1066,7 +1066,7 @@ class CatalogSkill(BaseSkill):
         ]
 
         def _match(variant: ProductVariant, product: Product, inventory: Inventory | None) -> dict[str, Any]:
-            return {
+            match = {
                 "product_id": str(product.id),
                 "variant_id": str(variant.id),
                 "sku": variant.sku,
@@ -1080,9 +1080,13 @@ class CatalogSkill(BaseSkill):
                 "billing_period": variant.billing_period,  # recurrencia del plan (#153)
                 "trial_days": variant.trial_days,
                 "entitlements": variant.entitlements,
-                # Mismo criterio que `_foto_del_unico`: una URL http vieja no se manda.
-                "tiene_foto": (product.image_url or "").strip().lower().startswith("https://"),
             }
+            # `tiene_foto` solo cuando hay foto: sin ella, el resultado queda igual que antes de
+            # HU-CRM-01 (las grabaciones de los journeys en replay lo comparan). Mismo criterio que
+            # `_foto_del_unico`: una URL http vieja no cuenta.
+            if (product.image_url or "").strip().lower().startswith("https://"):
+                match["tiene_foto"] = True
+            return match
 
         async with get_session() as session:
             stmt = (

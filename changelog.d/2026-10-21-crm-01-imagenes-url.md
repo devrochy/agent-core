@@ -7,4 +7,4 @@
 - `consultar_inventario` le pasa la foto al core (`_image_url`, que el LLM no ve) solo con un único
   resultado pedido por SKU o por el nombre exacto del producto, como en agent-sale. Una lista, una
   búsqueda por texto o un producto sin foto no la llevan. Por WhatsApp sale como imagen en la última
-  burbuja. Cada resultado trae `tiene_foto`.
+  burbuja. El resultado con foto trae `tiene_foto: true`; sin foto queda igual que antes.
