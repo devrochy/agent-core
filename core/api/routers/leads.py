@@ -7,6 +7,10 @@ HU-UX-16: ficha del cliente (`GET /{id}`) con lo que el agente aprendió y su or
 de datos (`PATCH /{id}`, que escribe **solo** por `core/memory/facts.py` con `source="human"`),
 pausa del agente por cliente (`POST /{id}/toggle-bot`, sobre `Customer.bot_paused`, que el
 kernel ya respeta), filtros por canal, conexión y los de los packs, y exportación CSV.
+
+ADR-0149: los packs exponen campos editables (`LeadEdicion`, p. ej. el estado y el interés del
+lead de venta). La ficha los trae en `editables` y se cambian con `PATCH /{id}/pack/{plugin_id}`,
+aparte del PATCH del perfil para que este siga escribiendo solo por `facts.py`.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ import csv
 import io
 import uuid
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
@@ -95,6 +99,18 @@ class LeadFact(BaseModel):
     valid_from: datetime
 
 
+class LeadEditable(BaseModel):
+    """Un campo de un pack que se edita desde la ficha (ADR-0149)."""
+
+    plugin_id: str
+    key: str
+    label: str
+    tipo: Literal["opciones", "texto"]
+    options: list[LeadFilterOption] = Field(default_factory=list)
+    max_length: int
+    value: str | None = None
+
+
 class LeadDetail(BaseModel):
     id: uuid.UUID
     cliente: str
@@ -109,12 +125,19 @@ class LeadDetail(BaseModel):
     datos: list[LeadFact]
     extras: dict[str, Any]
     columns: list[LeadColumn]
+    editables: list[LeadEditable] = Field(default_factory=list)
 
 
 class LeadUpdate(BaseModel):
     """Datos del perfil a corregir. `name` también cambia el nombre visible del cliente."""
 
     datos: dict[str, str | int | float | bool] = Field(default_factory=dict)
+
+
+class LeadPackUpdate(BaseModel):
+    """Valores de los campos editables de un pack (las claves de `editables` de ese pack)."""
+
+    valores: dict[str, str] = Field(default_factory=dict)
 
 
 class BotState(BaseModel):
@@ -206,6 +229,33 @@ async def _valores_de_packs(
         for cid, values in (result or {}).items():
             valores.setdefault(cid, {}).update(values)
     return valores
+
+
+async def _editables(providers: list[LeadProvider], customer_id: uuid.UUID) -> list[LeadEditable]:
+    """Campos editables de los packs con su valor actual. Un pack que falla al leer se omite."""
+    salida: list[LeadEditable] = []
+    for provider in providers:
+        if provider.edicion is None:
+            continue
+        try:
+            valores = await provider.edicion.leer(customer_id) or {}
+        except Exception:
+            log.warning("lead_provider_edicion_failed", plugin_id=provider.plugin_id, exc_info=True)
+            continue
+        for campo in provider.edicion.campos:
+            valor = valores.get(campo.key)
+            salida.append(
+                LeadEditable(
+                    plugin_id=provider.plugin_id,
+                    key=campo.key,
+                    label=campo.label,
+                    tipo=campo.tipo,
+                    options=[LeadFilterOption(value=v, label=lbl) for v, lbl in campo.options],
+                    max_length=campo.max_length,
+                    value=None if valor is None else str(valor),
+                )
+            )
+    return salida
 
 
 def _columnas(providers: list[LeadProvider]) -> list[LeadColumn]:
@@ -425,6 +475,7 @@ async def get_lead(
         ],
         extras=extras,
         columns=_columnas(providers),
+        editables=await _editables(providers, cliente.id),
     )
 
 
@@ -469,6 +520,50 @@ async def update_lead(
             source="human",
         )
     log.info("lead_actualizado", customer_id=str(lead_id), claves=sorted(datos), admin_id=str(principal.admin.id))
+    return await get_lead(lead_id, principal)
+
+
+@router.patch("/{lead_id}/pack/{plugin_id}", response_model=LeadDetail)
+async def update_lead_pack(
+    lead_id: uuid.UUID,
+    plugin_id: str,
+    body: LeadPackUpdate,
+    principal: Annotated[Principal, Depends(require("leads", write=True))],
+) -> LeadDetail:
+    """Cambia campos que un pack deja editar desde la ficha (p. ej. el estado del lead de venta).
+    El core valida claves y valores; el pack escribe en sus tablas (ADR-0149)."""
+    _enabled, providers = await _providers()
+    provider = next((p for p in providers if p.plugin_id == plugin_id and p.edicion is not None), None)
+    if provider is None or provider.edicion is None:
+        # Sin distinguir «no existe» de «no habilitado»: no se revela qué packs hay.
+        raise ApiError.not_found("No hay datos editables de ese tipo.")
+    campos = {c.key: c for c in provider.edicion.campos}
+    valores = {k.strip(): v.strip() for k, v in body.valores.items()}
+    if not valores:
+        raise ApiError.bad_request("No hay datos para guardar.")
+    errores: dict[str, str] = {}
+    for clave, valor in valores.items():
+        campo = campos.get(clave)
+        if campo is None:
+            errores[clave or "(vacía)"] = "Este dato no se puede editar aquí."
+        elif campo.tipo == "opciones" and valor not in {v for v, _ in campo.options}:
+            errores[clave] = "Elige una de las opciones."
+        elif len(valor) > campo.max_length:
+            errores[clave] = f"Máximo {campo.max_length} caracteres."
+    if errores:
+        raise ApiError.bad_request("Revisa los datos.", code="datos_invalidos", fields=errores)
+
+    async with get_session() as session:
+        await _cliente(session, principal.tenant_id, lead_id)
+    # Fuera de la sesión de la validación: el pack abre la suya (como la línea de tiempo).
+    await provider.edicion.escribir(lead_id, valores)
+    log.info(
+        "lead_pack_editado",
+        customer_id=str(lead_id),
+        plugin_id=plugin_id,
+        claves=sorted(valores),
+        admin_id=str(principal.admin.id),
+    )
     return await get_lead(lead_id, principal)
 
 

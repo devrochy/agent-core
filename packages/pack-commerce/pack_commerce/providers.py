@@ -5,19 +5,25 @@ inactivo, la misma regla que `skills.classify_customer`, de agent-sale) y el est
 interés de su último lead de venta. La clasificación se calcula en SQL para toda la página de
 una vez (sin un `classify_customer` por fila) y la misma consulta sirve de filtro.
 
+Desde la ficha se editan el estado y el interés de ese mismo lead (ADR-0149). Su nombre, teléfono
+y correo no se muestran ni se editan aquí: los datos de contacto del cliente son los del perfil.
+
 Importar este módulo (lo hace `module.py`) registra el provider.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import Select, and_, case, func, literal, select
 
 from core.admin.lead_registry import (
     Cursor,
+    LeadCampoEditable,
     LeadColumn,
+    LeadEdicion,
     LeadFilter,
     TimelineEvent,
     antes_del_cursor,
@@ -152,6 +158,60 @@ async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, 
     return out
 
 
+async def _leer_lead(customer_id: uuid.UUID) -> dict[str, Any]:
+    """Estado (código) e interés del lead que muestra la ficha (el de `_ultimo_lead`)."""
+    ultimo = _ultimo_lead(get_current_tenant_id()).subquery()
+    async with get_session() as session:
+        lead = (
+            await session.execute(select(ultimo).where(ultimo.c.customer_id == customer_id))
+        ).first()
+    if lead is None:
+        return {}
+    return {"estado_lead": lead.status, "interes": lead.interest or ""}
+
+
+async def _escribir_lead(customer_id: uuid.UUID, valores: dict[str, str]) -> None:
+    """Cambia el estado o el interés del lead que muestra la ficha; si el cliente no tiene lead,
+    lo crea (como el formulario del panel SSR, `manual:<cliente>`) sin copiar datos de contacto.
+
+    Solo un cambio de estado mueve `last_activity_at` (ADR-0149): marcar «calificado» a mano deja
+    al lead en el seguimiento automático de `jobs.py`, corregir el interés no."""
+    tid = get_current_tenant_id()
+    async with get_session() as session:
+        # El mismo bloqueo que la memoria (`facts.py`): dos ediciones a la vez no crean dos leads.
+        cliente = (
+            await session.execute(
+                select(Customer.id)
+                .where(Customer.tenant_id == tid, Customer.id == customer_id)
+                .with_for_update(key_share=True)
+            )
+        ).scalar_one_or_none()
+        if cliente is None:
+            return
+        lead = (
+            await session.execute(
+                select(Lead)
+                .where(Lead.tenant_id == tid, Lead.customer_id == customer_id)
+                .order_by(Lead.last_activity_at.desc())
+                .limit(1)
+            )
+        ).scalars().first()
+        if lead is None:
+            lead = Lead(
+                tenant_id=tid,
+                customer_id=customer_id,
+                interest="",
+                status="nuevo",
+                idempotency_key=f"manual:{customer_id}",
+            )
+            session.add(lead)
+        if "estado_lead" in valores and valores["estado_lead"] != lead.status:
+            lead.status = valores["estado_lead"]
+            lead.last_activity_at = datetime.now(UTC)
+        if "interes" in valores:
+            lead.interest = valores["interes"]
+
+
 def _pesos(valor: Any) -> str:
     return f"${float(valor or 0):,.0f}".replace(",", ".")
 
@@ -241,4 +301,12 @@ lead_registry.register(
     ],
     filter_query=_filter_query,
     timeline=_timeline,
+    edicion=LeadEdicion(
+        campos=(
+            LeadCampoEditable(key="estado_lead", label="Estado del lead", tipo="opciones", options=ESTADOS_LEAD),
+            LeadCampoEditable(key="interes", label="Interés", tipo="texto", max_length=500),
+        ),
+        leer=_leer_lead,
+        escribir=_escribir_lead,
+    ),
 )

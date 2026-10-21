@@ -90,7 +90,7 @@ async def follow_up_leads() -> None:
 
 async def _follow_up_leads_del_negocio(tenant_id: uuid.UUID, config) -> tuple[int, int]:  # type: ignore[no-untyped-def]
     """Seguimiento de leads de un negocio (dentro de su `tenant_scope`): (candidatos, enviados)."""
-    from core.db.models import Conversation
+    from core.db.models import Conversation, Customer
     from core.gateway.sender import send_to_conversation
 
     total_candidates = 0
@@ -122,11 +122,16 @@ async def _follow_up_leads_del_negocio(tenant_id: uuid.UUID, config) -> tuple[in
             continue
         async with get_session() as session:
             conversation = await get_owned(session, Conversation, lead.conversation_id, tenant_id)
+            # El nombre del cliente es el del perfil (ADR-0149); el del lead, si no hay otro.
+            cliente = (
+                await get_owned(session, Customer, lead.customer_id, tenant_id) if lead.customer_id else None
+            )
         if conversation is None or conversation.bot_paused or conversation.status != "open":
             continue
+        nombre = (cliente.name if cliente else None) or lead.name
         template = getattr(config, "follow_up_lead_message", "")
         message = template.format(
-            name=f" {lead.name}" if lead.name else "",
+            name=f" {nombre}" if nombre else "",
             interest=lead.interest or "nuestros productos",
         )
         try:

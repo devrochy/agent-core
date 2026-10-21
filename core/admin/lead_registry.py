@@ -28,6 +28,12 @@ Línea de tiempo (HU-CRM-04, ADR-0147, enmienda de esta ADR): un pack puede apor
 al más viejo y estrictamente anteriores al `cursor` `(at, source, id)`. `antes_del_cursor` arma
 ese filtro en SQL: con varias fuentes hay empates de hora y un cursor solo por fecha perdería o
 repetiría eventos al paginar.
+
+Edición desde la ficha (ADR-0149, enmienda de esta ADR): un pack puede aportar `edicion`, con los
+`campos` que una persona puede cambiar en la ficha del cliente (opciones cerradas o texto corto),
+`leer(customer_id)` con sus valores actuales (códigos, no etiquetas) y `escribir(customer_id,
+valores)`. El core valida claves y valores contra `campos` antes de llamar al pack, así que el
+pack solo recibe valores admitidos y el core sigue sin conocer sus tablas.
 """
 
 from __future__ import annotations
@@ -36,7 +42,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import String, and_, cast, or_
 
@@ -89,6 +95,24 @@ class LeadFilter:
     options: tuple[tuple[str, str], ...]  # (valor, etiqueta)
 
 
+@dataclass(frozen=True)
+class LeadCampoEditable:
+    key: str
+    label: str
+    tipo: Literal["opciones", "texto"]
+    options: tuple[tuple[str, str], ...] = ()  # (valor, etiqueta) si tipo == "opciones"
+    max_length: int = 200
+
+
+@dataclass(frozen=True)
+class LeadEdicion:
+    """Campos del pack que se editan desde la ficha (ADR-0149)."""
+
+    campos: tuple[LeadCampoEditable, ...]
+    leer: Callable[[uuid.UUID], Awaitable[dict[str, Any]]]
+    escribir: Callable[[uuid.UUID, dict[str, str]], Awaitable[None]]
+
+
 @dataclass
 class LeadProvider:
     plugin_id: str
@@ -97,6 +121,7 @@ class LeadProvider:
     filters: list[LeadFilter] = field(default_factory=list)
     filter_query: LeadFilterQuery | None = None
     timeline: LeadTimeline | None = None
+    edicion: LeadEdicion | None = None
 
 
 class LeadRegistry:
@@ -111,10 +136,11 @@ class LeadRegistry:
         filters: list[LeadFilter] | None = None,
         filter_query: LeadFilterQuery | None = None,
         timeline: LeadTimeline | None = None,
+        edicion: LeadEdicion | None = None,
     ) -> None:
         """Idempotente: registrar dos veces el mismo pack reemplaza la entrada."""
         self._providers[plugin_id] = LeadProvider(
-            plugin_id, list(columns), resolver, list(filters or []), filter_query, timeline
+            plugin_id, list(columns), resolver, list(filters or []), filter_query, timeline, edicion
         )
 
     def providers_for(self, enabled: set[str] | None) -> list[LeadProvider]:
