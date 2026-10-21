@@ -20,10 +20,19 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 
 from core.admin.lead_registry import Cursor, LeadProvider, TimelineEvent, antes_del_cursor
-from core.db.models import ChannelConnection, Conversation, CustomerNote, Escalation, MemoryFact
+from core.db.models import (
+    ChannelConnection,
+    Conversation,
+    CustomerNote,
+    Escalation,
+    MemoryFact,
+    Message,
+    SegmentSend,
+    SegmentSendRecipient,
+)
 from core.db.session import get_session
 from core.shared.logger import get_logger
 
@@ -31,6 +40,13 @@ log = get_logger(__name__)
 
 TIMEOUT_PACK_S = 3.0
 _ORIGEN = {"tool": "el asistente", "agent": "el asistente", "human": "una persona", "import": "una importación"}
+_ESTADO_MENSAJE = {
+    "queued": "en cola",
+    "sent": "enviada",
+    "delivered": "entregada",
+    "read": "leída",
+    "failed": "falló",
+}
 
 
 def codificar_cursor(evento: TimelineEvent) -> str:
@@ -151,6 +167,48 @@ async def _del_core(tenant_id: uuid.UUID, customer_id: uuid.UUID, cursor: Cursor
                 TimelineEvent(
                     at=n.created_at, source="core.nota", id=str(n.id), kind="nota",
                     title=f"Nota de {n.author_label or 'el equipo'}", detail=_corto(n.text, 300),
+                )
+            )
+
+        # HU-CRM-06 (ADR-0150, enmienda a ADR-0147): plantillas enviadas al cliente, de un envío a
+        # un segmento, de una persona en la conversación o de un aviso por evento.
+        plantillas = (
+            await session.execute(
+                select(
+                    Message.id, Message.created_at, Message.template_name, Message.status,
+                    Message.conversation_id, SegmentSend.admin_label,
+                )
+                .join(Conversation, and_(Conversation.id == Message.conversation_id, Conversation.tenant_id == tenant_id))
+                .outerjoin(
+                    SegmentSendRecipient,
+                    and_(SegmentSendRecipient.message_id == Message.id, SegmentSendRecipient.tenant_id == tenant_id),
+                )
+                .outerjoin(
+                    SegmentSend,
+                    and_(SegmentSend.id == SegmentSendRecipient.send_id, SegmentSend.tenant_id == tenant_id),
+                )
+                .where(
+                    Message.tenant_id == tenant_id,
+                    Conversation.customer_id == customer_id,
+                    Conversation.deleted_at.is_(None),
+                    Message.direction == "outbound",
+                    Message.template_name.is_not(None),
+                    antes_del_cursor(Message.created_at, Message.id, "core.plantilla", cursor),
+                )
+                .order_by(Message.created_at.desc(), Message.id.desc())
+                .limit(limit)
+            )
+        ).all()
+        for mid, at, nombre, estado, conv_id, quien in plantillas:
+            eventos.append(
+                TimelineEvent(
+                    at=at, source="core.plantilla", id=str(mid), kind="plantilla",
+                    title=f"Plantilla enviada: {nombre}",
+                    detail=" · ".join(
+                        x for x in (f"Envío a un segmento de {quien or 'el equipo'}" if quien is not None else None,
+                                    _ESTADO_MENSAJE.get(estado or "", estado)) if x
+                    ) or None,
+                    link_kind="conversation", link_id=str(conv_id),
                 )
             )
     return eventos

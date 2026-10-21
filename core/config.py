@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     # Rol `tester` del centro de pruebas (SPEC-30, ADR-0134): master sin Colaboradores.
     # SOLO en test. Apagado (producción), un tester no inicia sesión ni se puede crear.
     qa_testers_enabled: bool = Field(default=False, alias="QA_TESTERS_ENABLED")
+    # HU-CRM-06 (ADR-0150): números (con o sin `+`) que pueden recibir un envío a un segmento
+    # cuando el entorno no es producción real (desarrollo o test con QA_TESTERS_ENABLED). Vacío =
+    # en esos entornos no sale ningún envío a un segmento. En producción no se mira.
+    segment_send_allowlist: str = Field(default="", alias="SEGMENT_SEND_ALLOWLIST")
     # Landing pública: de donde se sirve el widget embebible del chat web
     # (/widget.js) y el formulario alojado. Se usa para armar el fragmento
     # que el negocio pega en su sitio (HU-CHAN-02).

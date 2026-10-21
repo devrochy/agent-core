@@ -431,6 +431,7 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
         customer_id=customer.id,
         content=effective_message,
     )
+    await _baja_de_promociones(conversation, customer, app_settings, effective_message)
 
     # Políticas de entrada del kernel (HU-AOS-10), en orden fijo y sin LLM: conexión pausada
     # (ADR-0122), kill-switch o conversación escalada, palabras de escalamiento y horario.
@@ -604,6 +605,22 @@ async def _resolve_conversation(
 
 
 _SERVICE_WINDOW_HOURS = 24
+
+
+async def _baja_de_promociones(conversation: Any, customer: Any, app_settings: Any, texto: str) -> None:
+    """HU-CRM-06 (ADR-0150): si el mensaje entero es una palabra de baja, el cliente sale de los
+    envíos a segmentos. El turno sigue igual (el agente responde como siempre). Nunca rompe el
+    inbound: un fallo se loguea."""
+    from core.admin.envios_segmento import registrar_baja_si_corresponde
+
+    behavior = dict(getattr(app_settings, "behavior_config", None) or {})
+    palabras = behavior.get("palabras_de_baja")
+    try:
+        await registrar_baja_si_corresponde(
+            customer.id, conversation.channel, texto, palabras if isinstance(palabras, list) else None
+        )
+    except Exception:
+        log.warning("baja_de_promociones_fallo", customer_id=str(customer.id), exc_info=True)
 
 
 async def _persist_inbound(
