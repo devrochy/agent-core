@@ -2180,6 +2180,8 @@ class QaItem(Base):
     # Dónde se ejecuta (panel, apk, whatsapp, web, api) y en qué sección o pantalla (HU-QA-08).
     entorno: Mapped[str | None] = mapped_column(Text)
     area: Mapped[str | None] = mapped_column(Text)
+    # Tercer nivel dentro del área (catálogo v7, HU-QA-08): reemplaza a `grupo` en las pruebas.
+    subseccion: Mapped[str | None] = mapped_column(Text)
     # Slugs de la guía de datos (sección `datos`) que la prueba necesita (HU-QA-07).
     requiere: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
 

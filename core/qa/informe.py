@@ -3,6 +3,10 @@
 El informe se arma una sola vez, al enviar la ejecución, y se guarda en
 `qa_runs.informe`. Así lo que lee el dueño no cambia aunque después se importe
 otra versión del catálogo.
+
+Desde el formato 2 (HU-QA-08) el informe incluye `secciones`: las pruebas agrupadas por
+entorno, área y subsección con el conteo de cada nivel (OK, Falla, Bloqueada…), para
+reportar por partes sin leer prueba por prueba.
 """
 
 from __future__ import annotations
@@ -20,6 +24,52 @@ ETIQUETA = {
     "sin_correr": "Sin correr",
 }
 _ORDEN = {"falla": 0, "bloqueada": 1, "en_curso": 2, "omitida": 3, "ok": 4}
+_ESTADOS_CUENTA = ("ok", "falla", "bloqueada", "omitida", "en_curso", "sin_correr")
+
+
+def _conteo(estados: list[str]) -> dict[str, int]:
+    """`{total, ok, falla, …}` de una lista de estados de prueba."""
+    cuenta = {e: 0 for e in _ESTADOS_CUENTA}
+    for estado in estados:
+        cuenta[estado if estado in cuenta else "sin_correr"] += 1
+    cuenta["total"] = len(estados)
+    return cuenta
+
+
+def agrupar_por_seccion(items: list[dict[str, Any]], resultados: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Agrupa las pruebas por `entorno → area → subseccion` con el conteo de cada nivel.
+
+    `items`: pruebas del catálogo (con `entorno`, `area`, `subseccion`); `resultados`: por
+    slug, `{estado, …}`. Las pruebas sin subsección (catálogo anterior a la v15) caen en la
+    subsección vacía de su área.
+    """
+    entornos: dict[str, dict[str, Any]] = {}
+    for item in items:
+        slug = item.get("slug") or ""
+        estado = (resultados.get(slug) or {}).get("estado") or "sin_correr"
+        entorno = item.get("entorno") or "otros"
+        area = item.get("area") or item.get("grupo") or "Sin sección"
+        subseccion = item.get("subseccion") or ""
+        entornos.setdefault(entorno, {"entorno": entorno, "estados": [], "areas": {}})
+        grupo = entornos[entorno]
+        grupo["estados"].append(estado)
+        grupo["areas"].setdefault(area, {"area": area, "estados": [], "subsecciones": {}})
+        seccion = grupo["areas"][area]
+        seccion["estados"].append(estado)
+        seccion["subsecciones"].setdefault(subseccion, {"subseccion": subseccion, "estados": []})
+        seccion["subsecciones"][subseccion]["estados"].append(estado)
+    salida = []
+    for entorno, grupo in entornos.items():
+        fila = {"entorno": entorno, **_conteo(grupo["estados"]), "areas": []}
+        for area, seccion in grupo["areas"].items():
+            fila_area = {"area": area, **_conteo(seccion["estados"]), "subsecciones": []}
+            for sub, subseccion in seccion["subsecciones"].items():
+                fila_area["subsecciones"].append(
+                    {"subseccion": sub, **_conteo(subseccion["estados"])}
+                )
+            fila["areas"].append(fila_area)
+        salida.append(fila)
+    return salida
 
 
 def armar_informe(
@@ -74,7 +124,7 @@ def armar_informe(
         )
     corridas.sort(key=lambda p: _ORDEN.get(p["estado"], 9))
     return {
-        "formato": 1,
+        "formato": 2,
         "ciclo": ciclo,
         "catalogo": catalogo,
         "tester": tester,
@@ -82,6 +132,7 @@ def armar_informe(
         "enviada_en": enviada_en,
         "comentario": comentario,
         "progreso": progreso,
+        "secciones": agrupar_por_seccion(items, resultados),
         "pruebas": corridas,
         "sin_correr": sin_correr,
     }
@@ -89,6 +140,30 @@ def armar_informe(
 
 def _linea(texto: str | None) -> str:
     return " ".join((texto or "").split())
+
+
+def _tabla_de_secciones(secciones: list[dict[str, Any]]) -> list[str]:
+    """Tabla compacta por entorno, área y subsección con el conteo de cada nivel."""
+    lineas: list[str] = []
+    for seccion in secciones:
+        entorno = _linea(seccion.get("entorno")) or "Sin clasificar"
+        lineas += [
+            "",
+            f"### {entorno} — OK {seccion.get('ok', 0)} · Falla {seccion.get('falla', 0)} · "
+            f"Bloqueada {seccion.get('bloqueada', 0)} · Sin correr {seccion.get('sin_correr', 0)}",
+        ]
+        for area in seccion.get("areas") or []:
+            nombre = _linea(area.get("area")) or "Sin sección"
+            lineas += ["", f"#### {nombre} — OK {area.get('ok', 0)} · Falla {area.get('falla', 0)} · "
+                          f"Bloqueada {area.get('bloqueada', 0)} · Sin correr {area.get('sin_correr', 0)}"]
+            for sub in area.get("subsecciones") or []:
+                subseccion = _linea(sub.get("subseccion")) or "Sin subsección"
+                lineas.append(
+                    f"- {subseccion or 'Sin subsección'}: OK {sub.get('ok', 0)} · Falla {sub.get('falla', 0)} · "
+                    f"Bloqueada {sub.get('bloqueada', 0)} · Omitida {sub.get('omitida', 0)} · "
+                    f"En curso {sub.get('en_curso', 0)} · Sin correr {sub.get('sin_correr', 0)}"
+                )
+    return lineas
 
 
 def informe_markdown(informe: dict[str, Any], enlace_adjunto: str = "") -> str:
@@ -114,6 +189,10 @@ def informe_markdown(informe: dict[str, Any], enlace_adjunto: str = "") -> str:
     ]
     if informe.get("comentario"):
         lineas += ["", "## Comentario", "", informe["comentario"].strip()]
+    secciones = informe.get("secciones")
+    if secciones:
+        lineas += ["", "## Resultados por sección"]
+        lineas += _tabla_de_secciones(secciones)
     pruebas = informe.get("pruebas") or []
     if pruebas:
         lineas += ["", "## Pruebas ejecutadas"]

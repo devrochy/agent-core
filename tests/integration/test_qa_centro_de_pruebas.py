@@ -23,7 +23,7 @@ PASSWORD = "clave-segura-123"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 
 CATALOGO = """
-version: 7
+version: 15
 fecha: '2026-10-13'
 items:
 - id: pruebas-uno
@@ -114,11 +114,11 @@ async def test_importar_es_idempotente_y_abre_el_primer_ciclo(app_client, qa_lis
     r = await app_client.post("/api/v1/admin/qa/catalog/import", json={"contenido": CATALOGO}, headers=master)
     assert r.status_code == 200
     body = r.json()
-    assert body["creada"] is False and body["version"] == 7 and body["items"] == 3
+    assert body["creada"] is False and body["version"] == 15 and body["items"] == 3
 
     r = await app_client.get("/api/v1/admin/qa/catalog", headers=master)
     cat = r.json()
-    assert cat["catalogo"]["version"] == 7 and cat["catalogo"]["commit_docs"] == "abc1234"
+    assert cat["catalogo"]["version"] == 15 and cat["catalogo"]["commit_docs"] == "abc1234"
     assert cat["ciclo"]["nombre"].startswith("Ciclo 2026-10-13")
     assert [i["slug"] for i in cat["items"]] == ["pruebas-uno", "pruebas-dos", "test-smtp"]
     assert cat["progreso"]["total"] == 2 and cat["progreso"]["sin_correr"] == 2
@@ -319,3 +319,30 @@ async def test_colaborador_de_negocio_no_entra_a_pruebas(app_client, qa_listo) -
     ):
         r = await getattr(app_client, metodo)(ruta, headers=owner)
         assert r.status_code == 403, f"{metodo} {ruta}: {r.status_code}"
+
+
+async def test_evolucion_por_version(app_client, qa_listo) -> None:
+    """GET /qa/evolution: línea de tiempo de versiones con el desglose por sección."""
+    master, _ = qa_listo
+    r = await app_client.get("/api/v1/admin/qa/evolution", headers=master)
+    assert r.status_code == 200, r.text
+    versiones = r.json()["versiones"]
+    assert len(versiones) == 1
+    version = versiones[0]
+    assert version["version"] == 15 and version["total_pruebas"] == 2
+    assert version["commit_docs"] == "abc1234"
+    # Sin `entorno` ni `area` (catálogo de la fixture) caen en «otros» y en el grupo.
+    seccion = version["secciones"][0]
+    assert seccion["entorno"] == "otros" and seccion["total"] == 2
+    area = seccion["areas"][0]
+    assert area["area"] == "Grupo A"
+    assert area["subsecciones"][0]["subseccion"] == ""
+    assert (
+        area["subsecciones"][0]["ok"]
+        + area["subsecciones"][0]["falla"]
+        + area["subsecciones"][0]["bloqueada"]
+        + area["subsecciones"][0]["omitida"]
+        + area["subsecciones"][0]["en_curso"]
+        + area["subsecciones"][0]["sin_correr"]
+        == area["subsecciones"][0]["total"]
+    )
