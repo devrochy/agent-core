@@ -16,3 +16,4 @@
 - pack_commerce registra por fin su `LeadProvider`: clasificación del cliente (nuevo, ocasional,
   frecuente, fiel, inactivo; la regla de `classify_customer`, calculada en SQL para toda la página) y
   estado, puntaje e interés de su último lead, con filtros por clasificación y por estado del lead.
+- `GET /api/v1/admin/conversations/{id}` devuelve `customer_id`, para que la bandeja abra la ficha del cliente.

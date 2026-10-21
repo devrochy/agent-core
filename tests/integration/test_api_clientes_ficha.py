@@ -240,3 +240,21 @@ async def test_exporta_csv_filtrado(app_client) -> None:
     filas = list(csv.reader(io.StringIO(r.text.lstrip("﻿"))))
     assert filas[0][:5] == ["Cliente", "Canal", "Teléfono", "Agente", "Alta"]
     assert [f[0] for f in filas[1:]] == ["'=HYPERLINK(\"x\")"]
+
+
+async def test_conversacion_enlaza_la_ficha(app_client) -> None:
+    from sqlalchemy import select
+
+    from core.db.models import Conversation
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    ana = await _cliente(tid, "Ana")
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            conv_id = (await session.execute(select(Conversation.id).where(Conversation.customer_id == ana))).scalar_one()
+    headers = await api_headers(app_client, tid)
+    r = await app_client.get(f"/api/v1/admin/conversations/{conv_id}", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["customer_id"] == str(ana)

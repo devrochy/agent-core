@@ -118,6 +118,7 @@ class ConversationUsage(BaseModel):
 
 
 class ConversationDetail(ConversationSummary):
+    customer_id: uuid.UUID | None = None  # para abrir la ficha del cliente (HU-UX-16)
     messages: list[MessageItem]
     escalation: ActiveEscalation | None = None
     notes: list[ConversationNote] = Field(default_factory=list)
@@ -502,6 +503,7 @@ async def get_conversation(
     )
     return ConversationDetail(
         **summary.model_dump(),
+        customer_id=cust.id if cust is not None else None,
         messages=items,
         escalation=escalacion,
         notes=_notas(conv.state),

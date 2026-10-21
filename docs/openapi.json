@@ -22697,6 +22697,18 @@
             "title": "Connection Type",
             "description": "Tipo del catálogo (p. ej. whatsapp_cloud, whatsapp_waweb, web)"
           },
+          "customer_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Customer Id"
+          },
           "messages": {
             "items": {
               "$ref": "#/components/schemas/MessageItem"
