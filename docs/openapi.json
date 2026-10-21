@@ -2739,10 +2739,68 @@
                   "type": "null"
                 }
               ],
-              "description": "Busca por nombre o identificador.",
+              "description": "Busca por nombre, identificador o teléfono.",
               "title": "Q"
             },
-            "description": "Busca por nombre o identificador."
+            "description": "Busca por nombre, identificador o teléfono."
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Solo los clientes de este canal.",
+              "title": "Channel"
+            },
+            "description": "Solo los clientes de este canal."
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Solo los clientes que escribieron por esta conexión.",
+              "title": "Connection Id"
+            },
+            "description": "Solo los clientes que escribieron por esta conexión."
+          },
+          {
+            "name": "filtro",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtro de un pack como `clave:valor` (ver `filters` de la respuesta).",
+              "title": "Filtro"
+            },
+            "description": "Filtro de un pack como `clave:valor` (ver `filters` de la respuesta)."
           },
           {
             "name": "page",
@@ -19603,6 +19661,311 @@
           }
         }
       }
+    },
+    "/api/v1/admin/leads/export.csv": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Export Leads Csv",
+        "description": "La lista filtrada en CSV (hasta 5000 filas, las más recientes).",
+        "operationId": "export_leads_csv_api_v1_admin_leads_export_csv_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Channel"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "filtro",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtro de un pack como `clave:valor` (ver `filters` de la respuesta).",
+              "title": "Filtro"
+            },
+            "description": "Filtro de un pack como `clave:valor` (ver `filters` de la respuesta)."
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/leads/{lead_id}": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Get Lead",
+        "description": "Ficha del cliente: datos del canal, lo que se sabe de él (con origen y fecha) y los packs.",
+        "operationId": "get_lead_api_v1_admin_leads__lead_id__get",
+        "parameters": [
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Update Lead",
+        "description": "Corrige datos del perfil. Quedan como dato de una persona (`source=\"human\"`) y el agente\nlos usa desde la siguiente conversación. Solo escribe `core/memory/facts.py`.",
+        "operationId": "update_lead_api_v1_admin_leads__lead_id__patch",
+        "parameters": [
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/leads/{lead_id}/toggle-bot": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Toggle Lead Bot",
+        "description": "Pausa o reanuda el agente para este cliente en todas sus conversaciones.",
+        "operationId": "toggle_lead_bot_api_v1_admin_leads__lead_id__toggle_bot_post",
+        "parameters": [
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -24330,6 +24693,22 @@
             "type": "string",
             "title": "Canal"
           },
+          "telefono": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Telefono"
+          },
+          "bot_paused": {
+            "type": "boolean",
+            "title": "Bot Paused",
+            "default": false
+          },
           "alta": {
             "type": "string",
             "title": "Alta"
@@ -24358,6 +24737,13 @@
             },
             "type": "array",
             "title": "Columns"
+          },
+          "filters": {
+            "items": {
+              "$ref": "#/components/schemas/LeadFilter"
+            },
+            "type": "array",
+            "title": "Filters"
           },
           "items": {
             "items": {
@@ -37432,6 +37818,253 @@
           "retirados"
         ],
         "title": "LoteGenerado"
+      },
+      "LeadConnection": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "channel": {
+            "type": "string",
+            "title": "Channel"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "channel"
+        ],
+        "title": "LeadConnection"
+      },
+      "LeadDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "cliente": {
+            "type": "string",
+            "title": "Cliente"
+          },
+          "nombre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombre"
+          },
+          "canal": {
+            "type": "string",
+            "title": "Canal"
+          },
+          "identificador": {
+            "type": "string",
+            "title": "Identificador"
+          },
+          "telefono": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Telefono"
+          },
+          "bot_paused": {
+            "type": "boolean",
+            "title": "Bot Paused"
+          },
+          "alta": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alta"
+          },
+          "conexiones": {
+            "items": {
+              "$ref": "#/components/schemas/LeadConnection"
+            },
+            "type": "array",
+            "title": "Conexiones"
+          },
+          "ultima_conversacion_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ultima Conversacion Id"
+          },
+          "datos": {
+            "items": {
+              "$ref": "#/components/schemas/LeadFact"
+            },
+            "type": "array",
+            "title": "Datos"
+          },
+          "extras": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Extras"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/LeadColumn"
+            },
+            "type": "array",
+            "title": "Columns"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "cliente",
+          "nombre",
+          "canal",
+          "identificador",
+          "telefono",
+          "bot_paused",
+          "alta",
+          "conexiones",
+          "ultima_conversacion_id",
+          "datos",
+          "extras",
+          "columns"
+        ],
+        "title": "LeadDetail"
+      },
+      "LeadFact": {
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "title": "Namespace"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "value": {
+            "title": "Value"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "data_class": {
+            "type": "string",
+            "title": "Data Class"
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Valid From"
+          }
+        },
+        "type": "object",
+        "required": [
+          "namespace",
+          "key",
+          "value",
+          "source",
+          "data_class",
+          "valid_from"
+        ],
+        "title": "LeadFact"
+      },
+      "LeadFilter": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/LeadFilterOption"
+            },
+            "type": "array",
+            "title": "Options"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "options"
+        ],
+        "title": "LeadFilter"
+      },
+      "LeadFilterOption": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "value",
+          "label"
+        ],
+        "title": "LeadFilterOption"
+      },
+      "LeadUpdate": {
+        "properties": {
+          "datos": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Datos"
+          }
+        },
+        "type": "object",
+        "title": "LeadUpdate",
+        "description": "Datos del perfil a corregir. `name` también cambia el nombre visible del cliente."
       }
     }
   }

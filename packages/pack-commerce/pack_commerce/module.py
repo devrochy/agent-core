@@ -35,6 +35,9 @@ from core.shared.events import ON_CONVERSATION_STARTED, ON_PROCEDURE_SLOTS_SET
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from pack_commerce import api as leads_api
+
+# Registra las columnas y filtros del pack en la vista global de clientes (ADR-0056, HU-UX-16).
+from pack_commerce import providers as _lead_provider  # noqa: F401
 from pack_commerce.admin_api import router as admin_api_router
 from pack_commerce.api import router as leads_router
 from pack_commerce.config import CRMConfig
