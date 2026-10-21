@@ -52,5 +52,5 @@ Antes de este ADR no había consentimiento para recibir promociones: solo el hec
 - **El envío arranca casi sin destinatarios:** solo cuentan los clientes que el dueño marque en la ficha.
 - **Si la API de Meta queda en pausa por uso** más allá de los 5 reintentos del outbox (unos 20 min), el lote queda `fallido` en la Bandeja de fallos y el envío, `enviando`, bloquea esa conexión hasta reintentarlo a mano.
 - **Borradores:** las vistas previas que no se confirman quedan como filas `borrador`, sin borrado físico (invariante 8).
-- **La reversa de la 0100** se niega si hay envíos o consentimientos.
+- **La reversa de la 0100** borra las tablas, como la 0099: antes de bajarla con datos reales hay que respaldar los consentimientos y los envíos, porque tienen valor legal.
 - **Pendiente para HU-CHAN-03:** programar envíos, segmentos guardados, métricas de ventas atribuidas y límite por minuto configurable.

@@ -18,8 +18,9 @@
 
 Todo con RLS por `app.tenant_id` (FORCE). Sin DELETE (invariante 8).
 
-**Rollback:** primero el código anterior, después el `downgrade`. Se niega si ya hay envíos o
-consentimientos: son registros con valor legal.
+**Rollback:** primero el código anterior, después el `downgrade` (borra las tablas: los envíos y
+los consentimientos se pierden; son registros con valor legal, así que respaldar antes con
+`pg_dump -t customer_consents -t segment_sends -t segment_send_recipients` si ya hay datos reales).
 
 Revision ID: 0100
 Revises: 0099
@@ -27,8 +28,6 @@ Create Date: 2026-10-21
 """
 
 from __future__ import annotations
-
-from sqlalchemy import text
 
 from alembic import op
 
@@ -157,15 +156,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("SET LOCAL lock_timeout = '5s'")
-    conn = op.get_bind()
-    for tabla in ("segment_sends", "customer_consents"):
-        # La migración corre como dueño de la tabla: FORCE RLS sin `app.tenant_id` vería 0
-        # filas, así que se cuenta sin la policy.
-        op.execute(f"ALTER TABLE {tabla} NO FORCE ROW LEVEL SECURITY")
-        hay = conn.execute(text(f"SELECT EXISTS (SELECT 1 FROM {tabla})")).scalar()
-        op.execute(f"ALTER TABLE {tabla} FORCE ROW LEVEL SECURITY")
-        if hay:
-            raise RuntimeError(f"{tabla} tiene filas: no se baja la 0100 (registros con valor legal).")
     op.execute("DROP TABLE IF EXISTS segment_send_recipients")
     op.execute("DROP TABLE IF EXISTS segment_sends")
     op.execute("DROP TABLE IF EXISTS customer_consents")
