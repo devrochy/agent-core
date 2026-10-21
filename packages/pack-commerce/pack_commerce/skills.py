@@ -137,6 +137,25 @@ def _money(value: Any, symbol: str = "$") -> str:
     return f"{symbol}{_float(value):,.0f}"
 
 
+def _foto_del_unico(sku: str, query: str, matches: list[dict[str, Any]], fotos: dict[str, str]) -> str | None:
+    """Foto que el core adjunta a la respuesta de `consultar_inventario` (HU-CRM-01).
+
+    Regla de agent-sale (`extractSingleMatchImageUrl`): solo con un único resultado
+    pedido por SKU, y además (D-SPEC-33-1) por el nombre exacto del producto. Una
+    búsqueda por texto que devuelve uno solo es una exploración y no lleva foto.
+    `fotos` es `{variant_id: image_url}`; solo se manda una URL https."""
+    if len(matches) != 1:
+        return None
+    unico = matches[0]
+    pedido_puntual = bool(sku) or (
+        bool(query) and query.strip().casefold() == str(unico.get("name") or "").strip().casefold()
+    )
+    if not pedido_puntual:
+        return None
+    foto = (fotos.get(str(unico.get("variant_id"))) or "").strip()
+    return foto if foto.lower().startswith("https://") else None
+
+
 def _safe_format(template: str, default: str, **kwargs: Any) -> str:
     """`template.format(**kwargs)`: si la plantilla del negocio tiene una
     variable inexistente, devuelve `default` y avisa, sin que la tool falle
@@ -1047,7 +1066,7 @@ class CatalogSkill(BaseSkill):
         ]
 
         def _match(variant: ProductVariant, product: Product, inventory: Inventory | None) -> dict[str, Any]:
-            return {
+            match = {
                 "product_id": str(product.id),
                 "variant_id": str(variant.id),
                 "sku": variant.sku,
@@ -1062,6 +1081,12 @@ class CatalogSkill(BaseSkill):
                 "trial_days": variant.trial_days,
                 "entitlements": variant.entitlements,
             }
+            # `tiene_foto` solo cuando hay foto: sin ella, el resultado queda igual que antes de
+            # HU-CRM-01 (las grabaciones de los journeys en replay lo comparan). Mismo criterio que
+            # `_foto_del_unico`: una URL http vieja no cuenta.
+            if (product.image_url or "").strip().lower().startswith("https://"):
+                match["tiene_foto"] = True
+            return match
 
         async with get_session() as session:
             stmt = (
@@ -1071,6 +1096,8 @@ class CatalogSkill(BaseSkill):
                 .where(
                     ProductVariant.active.is_(True),
                     ProductVariant.tenant_id == get_current_tenant_id(),
+                    # La foto sale del producto: filtro explícito además de RLS (HU-CRM-01).
+                    Product.tenant_id == get_current_tenant_id(),
                 )
             )
             if sku:
@@ -1092,7 +1119,13 @@ class CatalogSkill(BaseSkill):
             matches = [_match(variant, product, inventory) for variant, product, inventory in rows]
 
             if matches:
-                return {"matches": matches}
+                resultado: dict[str, Any] = {"matches": matches}
+                fotos = {str(variant.id): product.image_url or "" for variant, product, _ in rows}
+                foto = _foto_del_unico(sku, query, matches, fotos)
+                if foto:
+                    # El core la adjunta a la última burbuja (safe_renderer); el LLM no la ve.
+                    resultado["_image_url"] = foto
+                return resultado
 
             if not query and not sku:
                 return {

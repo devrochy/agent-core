@@ -16,7 +16,7 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, File, Response, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
 from core.api.deps import Principal, require
@@ -31,6 +31,22 @@ from .models import Category, Inventory, Order, OrderItem, Product, ProductVaria
 router = APIRouter(prefix="/api/v1/pack/commerce", tags=["pack · comercio"])
 
 ORDER_STATUSES = ("abierto", "despachado", "entregado", "cancelado", "expirado")
+
+# HU-CRM-01: la foto del producto es un link público. Solo https (WhatsApp la descarga
+# por el link) y con tope de largo.
+IMAGE_URL_MAX = 2048
+
+
+def _image_url_valida(valor: str | None) -> str | None:
+    """`None` si no viene; `""` para quitarla; si no, una URL https sin espacios."""
+    if valor is None:
+        return None
+    valor = valor.strip()
+    if not valor:
+        return ""
+    if not valor.lower().startswith("https://") or len(valor) <= len("https://") or any(c.isspace() for c in valor):
+        raise ValueError("La foto tiene que ser un link https://")
+    return valor
 
 
 # ------------------------------------------------------------------ dashboard
@@ -123,6 +139,7 @@ class ProductOut(BaseModel):
     category_id: uuid.UUID | None
     category: str
     price: float
+    image_url: str | None = None  # HU-CRM-01
     variants: list[VariantOut]
 
 
@@ -139,6 +156,13 @@ class ProductSave(BaseModel):
     # HU-SUB-09: plan recurrente. None = no cambia; "" = no es recurrente.
     billing_period: Literal["mensual", "trimestral", "anual", ""] | None = None
     trial_days: int | None = Field(default=None, ge=0, le=365)
+    # HU-CRM-01: None = no cambia; "" = quita la foto.
+    image_url: str | None = Field(default=None, max_length=IMAGE_URL_MAX)
+
+    @field_validator("image_url")
+    @classmethod
+    def _solo_https(cls, valor: str | None) -> str | None:
+        return _image_url_valida(valor)
 
 
 async def _validar_plan(tenant_id: uuid.UUID | None, payload: ProductSave, ya_recurrente: bool) -> None:
@@ -217,6 +241,7 @@ async def list_products(
                 category_id=p.category_id,
                 category=cat_by_id.get(p.category_id, "Sin categoría"),
                 price=float(product_variants[0].price or 0) if product_variants else 0.0,
+                image_url=p.image_url or None,
                 variants=[
                     VariantOut(
                         id=v.id,
@@ -257,6 +282,8 @@ async def save_product(
             product.name = payload.name
             product.description = payload.description
             product.category_id = resolved_category_id
+            if payload.image_url is not None:
+                product.image_url = payload.image_url or None
             variant = (
                 (
                     await session.execute(
@@ -297,6 +324,7 @@ async def save_product(
                 name=payload.name,
                 description=payload.description or "",
                 category_id=resolved_category_id,
+                image_url=payload.image_url or None,
             )
             session.add(product)
             await session.flush()
@@ -751,7 +779,10 @@ async def import_products_csv(
     file: Annotated[UploadFile, File()],
     principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
 ) -> ImportResult:
-    """Importa productos desde un CSV (columnas `name` y `price`, paridad con el clásico)."""
+    """Importa productos desde un CSV (columnas `name` y `price`, paridad con el clásico).
+
+    Opcionales: `description`, `sku`, `stock` e `image_url` (HU-CRM-01; una URL que no sea
+    https se ignora y el producto se crea sin foto)."""
     import csv
     import io
 
@@ -770,10 +801,17 @@ async def import_products_csv(
                 precio = Decimal(str(fila.get("price") or "0").replace(",", "").strip())
             except Exception:
                 continue
+            try:
+                foto = _image_url_valida(str(fila.get("image_url") or "")[:IMAGE_URL_MAX + 1])
+            except ValueError:
+                foto = None
+            if foto and len(foto) > IMAGE_URL_MAX:
+                foto = None
             producto = Product(
                 name=nombre,
                 description=str(fila.get("description") or "").strip(),
                 category_id=None,
+                image_url=foto or None,
             )
             session.add(producto)
             await session.flush()
