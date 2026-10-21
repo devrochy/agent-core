@@ -17639,6 +17639,57 @@
         }
       }
     },
+    "/api/v1/admin/qa/evolution": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Evolution",
+        "description": "Línea de tiempo de versiones del catálogo con el resultado por entorno, área y subsección.",
+        "operationId": "evolution_api_v1_admin_qa_evolution_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaEvolucion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/qa/cycles/close": {
       "post": {
         "tags": [
@@ -31008,6 +31059,18 @@
             "title": "Area",
             "description": "Pruebas: sección del panel o pantalla de la APK."
           },
+          "subseccion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subseccion",
+            "description": "Pruebas: tercer nivel dentro del área (catálogo v7, HU-QA-08)."
+          },
           "requiere": {
             "items": {
               "type": "string"
@@ -40297,6 +40360,248 @@
           "expira"
         ],
         "title": "VistaPreviaOut"
+      },
+      "QaAreaEvo": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "ok": {
+            "type": "integer",
+            "title": "Ok"
+          },
+          "falla": {
+            "type": "integer",
+            "title": "Falla"
+          },
+          "bloqueada": {
+            "type": "integer",
+            "title": "Bloqueada"
+          },
+          "omitida": {
+            "type": "integer",
+            "title": "Omitida"
+          },
+          "en_curso": {
+            "type": "integer",
+            "title": "En Curso"
+          },
+          "sin_correr": {
+            "type": "integer",
+            "title": "Sin Correr"
+          },
+          "area": {
+            "type": "string",
+            "title": "Area"
+          },
+          "subsecciones": {
+            "items": {
+              "$ref": "#/components/schemas/QaSubseccionEvo"
+            },
+            "type": "array",
+            "title": "Subsecciones"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "ok",
+          "falla",
+          "bloqueada",
+          "omitida",
+          "en_curso",
+          "sin_correr",
+          "area",
+          "subsecciones"
+        ],
+        "title": "QaAreaEvo"
+      },
+      "QaSeccionEvo": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "ok": {
+            "type": "integer",
+            "title": "Ok"
+          },
+          "falla": {
+            "type": "integer",
+            "title": "Falla"
+          },
+          "bloqueada": {
+            "type": "integer",
+            "title": "Bloqueada"
+          },
+          "omitida": {
+            "type": "integer",
+            "title": "Omitida"
+          },
+          "en_curso": {
+            "type": "integer",
+            "title": "En Curso"
+          },
+          "sin_correr": {
+            "type": "integer",
+            "title": "Sin Correr"
+          },
+          "entorno": {
+            "type": "string",
+            "title": "Entorno"
+          },
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/QaAreaEvo"
+            },
+            "type": "array",
+            "title": "Areas"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "ok",
+          "falla",
+          "bloqueada",
+          "omitida",
+          "en_curso",
+          "sin_correr",
+          "entorno",
+          "areas"
+        ],
+        "title": "QaSeccionEvo"
+      },
+      "QaSubseccionEvo": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "ok": {
+            "type": "integer",
+            "title": "Ok"
+          },
+          "falla": {
+            "type": "integer",
+            "title": "Falla"
+          },
+          "bloqueada": {
+            "type": "integer",
+            "title": "Bloqueada"
+          },
+          "omitida": {
+            "type": "integer",
+            "title": "Omitida"
+          },
+          "en_curso": {
+            "type": "integer",
+            "title": "En Curso"
+          },
+          "sin_correr": {
+            "type": "integer",
+            "title": "Sin Correr"
+          },
+          "subseccion": {
+            "type": "string",
+            "title": "Subseccion"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "ok",
+          "falla",
+          "bloqueada",
+          "omitida",
+          "en_curso",
+          "sin_correr",
+          "subseccion"
+        ],
+        "title": "QaSubseccionEvo"
+      },
+      "QaVersionEvo": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "fecha": {
+            "type": "string",
+            "title": "Fecha"
+          },
+          "commit_docs": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Docs"
+          },
+          "importada_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Importada En"
+          },
+          "total_pruebas": {
+            "type": "integer",
+            "title": "Total Pruebas"
+          },
+          "ciclo": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ciclo",
+            "description": "El ciclo más reciente que usó esta versión."
+          },
+          "secciones": {
+            "items": {
+              "$ref": "#/components/schemas/QaSeccionEvo"
+            },
+            "type": "array",
+            "title": "Secciones"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "fecha",
+          "total_pruebas",
+          "secciones"
+        ],
+        "title": "QaVersionEvo"
+      },
+      "QaEvolucion": {
+        "properties": {
+          "versiones": {
+            "items": {
+              "$ref": "#/components/schemas/QaVersionEvo"
+            },
+            "type": "array",
+            "title": "Versiones"
+          }
+        },
+        "type": "object",
+        "required": [
+          "versiones"
+        ],
+        "title": "QaEvolucion"
       }
     }
   }

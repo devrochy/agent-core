@@ -82,6 +82,9 @@ class QaItem(BaseModel):
         default=None, description="Pruebas: dónde se ejecuta (HU-QA-08)."
     )
     area: str | None = Field(default=None, description="Pruebas: sección del panel o pantalla de la APK.")
+    subseccion: str | None = Field(
+        default=None, description="Pruebas: tercer nivel dentro del área (catálogo v7, HU-QA-08)."
+    )
     requiere: list[str] = Field(default_factory=list, description="Pruebas: slugs de la guía de datos que necesita.")
     estado: str = Field(
         description="Pruebas: estado consolidado del ciclo. Test/prod: estado de la configuración. Datos: `guia`."
@@ -196,6 +199,46 @@ class QaCiclo(BaseModel):
     progreso: QaProgreso
     por_prueba: dict[str, str] = Field(default_factory=dict, description="Estado consolidado por slug.")
     ejecuciones: list[QaCicloEjecucion] = []
+
+
+class QaCuentaSeccion(BaseModel):
+    """Conteo de estados de una sección, área o subsección (HU-QA-08)."""
+
+    total: int
+    ok: int
+    falla: int
+    bloqueada: int
+    omitida: int
+    en_curso: int
+    sin_correr: int
+
+
+class QaSubseccionEvo(QaCuentaSeccion):
+    subseccion: str
+
+
+class QaAreaEvo(QaCuentaSeccion):
+    area: str
+    subsecciones: list[QaSubseccionEvo]
+
+
+class QaSeccionEvo(QaCuentaSeccion):
+    entorno: str
+    areas: list[QaAreaEvo]
+
+
+class QaVersionEvo(BaseModel):
+    version: int
+    fecha: str
+    commit_docs: str | None = None
+    importada_en: str | None = None
+    total_pruebas: int
+    ciclo: dict[str, Any] | None = Field(default=None, description="El ciclo más reciente que usó esta versión.")
+    secciones: list[QaSeccionEvo]
+
+
+class QaEvolucion(BaseModel):
+    versiones: list[QaVersionEvo]
 
 
 class QaConfigIn(BaseModel):
@@ -443,6 +486,12 @@ async def get_run_markdown(
 async def list_cycles(principal: Annotated[Principal, Depends(_leer)]) -> list[dict[str, Any]]:
     """Ciclos con su progreso consolidado; los cerrados, con la foto guardada al cerrarlos."""
     return await service.listar_ciclos()
+
+
+@router.get("/evolution", response_model=QaEvolucion)
+async def evolution(principal: Annotated[Principal, Depends(_leer)]) -> dict[str, Any]:
+    """Línea de tiempo de versiones del catálogo con el resultado por entorno, área y subsección."""
+    return await service.evolucion()
 
 
 @router.post("/cycles/close", response_model=QaCerrarCiclo)

@@ -113,6 +113,7 @@ def item_a_dict(item: QaItem) -> dict[str, Any]:
         "origen": list(item.origen or []),
         "entorno": item.entorno,
         "area": item.area,
+        "subseccion": item.subseccion,
         "requiere": list(item.requiere or []),
     }
 
@@ -357,6 +358,7 @@ async def importar_catalogo(
                         origen=it.origen,
                         entorno=it.entorno,
                         area=it.area,
+                        subseccion=it.subseccion,
                         requiere=it.requiere,
                     )
                 )
@@ -866,6 +868,64 @@ async def cerrar_ciclo(admin: Admin, nombre_nuevo: str) -> dict[str, Any]:
         await session.flush()
         _evento(session, campo="ciclo.abierto", admin_id=admin.id, cycle_id=nuevo.id, despues=nombre)
         return {"cerrado_id": str(ciclo.id), "abierto_id": str(nuevo.id), "nombre": nombre}
+
+
+# ------------------------------------------------------------------ evolución de versiones
+async def evolucion() -> dict[str, Any]:
+    """Línea de tiempo de versiones del catálogo con el resultado consolidado por entorno,
+    área y subsección (HU-QA-08): cómo evoluciona cada sección release a release.
+
+    Cada versión muestra la foto del ciclo más reciente que la usó (cerrado o abierto);
+    si ningún ciclo la usó, todas sus pruebas quedan «sin correr».
+    """
+    from core.qa.informe import agrupar_por_seccion
+
+    async with get_session() as session:
+        versiones = list(
+            (
+                await session.execute(
+                    select(QaCatalogVersion).order_by(QaCatalogVersion.importado_en.asc())
+                )
+            ).scalars().all()
+        )
+        ciclos = list(
+            (await session.execute(select(QaCycle).order_by(QaCycle.abierto_en.asc()))).scalars().all()
+        )
+        filas: list[dict[str, Any]] = []
+        for version in versiones:
+            suyos = [c for c in ciclos if c.catalog_version_id == version.id]
+            ciclo = suyos[-1] if suyos else None
+            items = await _items(session, version.id, "pruebas")
+            por_slug: dict[str, str] = {}
+            ciclo_info: dict[str, Any] | None = None
+            if ciclo is not None:
+                foto = (
+                    ciclo.resumen
+                    if ciclo.cerrado_en and ciclo.resumen
+                    else await _foto_de_ciclo(session, ciclo)
+                )
+                por_slug = foto["por_prueba"]
+                ciclo_info = {
+                    "id": str(ciclo.id),
+                    "nombre": ciclo.nombre,
+                    "abierto_en": _iso(ciclo.abierto_en),
+                    "cerrado_en": _iso(ciclo.cerrado_en),
+                    "progreso": foto["progreso"],
+                }
+            items_dict = [item_a_dict(i) for i in items]
+            resultados = {i["slug"]: {"estado": por_slug.get(i["slug"], "sin_correr")} for i in items_dict}
+            filas.append(
+                {
+                    "version": version.version,
+                    "fecha": version.fecha,
+                    "commit_docs": version.commit_docs,
+                    "importada_en": _iso(version.importado_en),
+                    "total_pruebas": len(items),
+                    "ciclo": ciclo_info,
+                    "secciones": agrupar_por_seccion(items_dict, resultados),
+                }
+            )
+        return {"versiones": filas}
 
 
 # ------------------------------------------------------------------ configuración de test y prod

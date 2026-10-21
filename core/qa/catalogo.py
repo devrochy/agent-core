@@ -4,7 +4,9 @@ Acepta el esquema v1 (pasos en texto y un `esperado` general) y el v2 (pasos
 `{accion, esperado}`, `modulo`, `prioridad`, `plataforma`, `contexto`,
 `precondiciones`, `datos`, `origen`). Desde la v6 cada prueba lleva `entorno` (dónde se
 ejecuta), `area` (la sección del panel o la pantalla de la APK, HU-QA-08) y `requiere`
-(slugs de la guía de datos, sección `datos`, HU-QA-07). Las mismas reglas las aplica
+(slugs de la guía de datos, sección `datos`, HU-QA-07). Desde la v15 las pruebas llevan
+`subseccion` (tercer nivel dentro del área, HU-QA-08) y `grupo` queda solo para las
+secciones `test`, `prod` y `datos`. Las mismas reglas las aplica
 `herramientas/regenerar.py --check` en el CI de solvershub-docs; aquí no se
 verifica que las HU existan (eso vive en docs).
 """
@@ -58,6 +60,7 @@ class ItemCatalogo:
     origen: list[str] = field(default_factory=list)
     entorno: str | None = None
     area: str | None = None
+    subseccion: str | None = None
     requiere: list[str] = field(default_factory=list)
 
 
@@ -152,7 +155,8 @@ def parse_catalogo(contenido: str | bytes) -> Catalogo:
         grupo = _texto(it.get("grupo"))
         if not titulo:
             errores.append(f"{donde}: falta titulo")
-        if not grupo:
+        # `grupo` es obligatorio salvo en las pruebas de la v15+, que usan `subseccion`.
+        if not grupo and seccion != "pruebas":
             errores.append(f"{donde}: falta grupo")
         item = ItemCatalogo(
             slug=slug,
@@ -176,6 +180,7 @@ def parse_catalogo(contenido: str | bytes) -> Catalogo:
             origen=_lista(it.get("origen")),
             entorno=_texto(it.get("entorno")),
             area=_texto(it.get("area")),
+            subseccion=_texto(it.get("subseccion")),
             requiere=_lista(it.get("requiere")),
         )
         if seccion == "pruebas":

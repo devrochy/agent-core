@@ -6,7 +6,7 @@ import pytest
 
 from core.qa.catalogo import CatalogoInvalido, parse_catalogo
 from core.qa.estados import consolidar, estado_de_prueba, progreso
-from core.qa.informe import armar_informe, cuerpo_correo, informe_markdown
+from core.qa.informe import agrupar_por_seccion, armar_informe, cuerpo_correo, informe_markdown
 
 CATALOGO_V2 = """
 version: 2
@@ -213,3 +213,89 @@ def test_captura_con_contenido_que_no_coincide_se_rechaza(tmp_path, monkeypatch)
     ruta, tipo, tamano = evidencias.guardar(run, "image/png; charset=binary", b"\x89PNG\r\n\x1a\n" + b"0" * 10)
     assert tipo == "image/png" and tamano == 18 and evidencias.resolver(ruta) is not None
     assert evidencias.resolver("../../etc/passwd") is None
+
+
+CATALOGO_V15 = """
+version: 15
+fecha: '2026-10-21'
+items:
+- id: pruebas-cajon
+  seccion: pruebas
+  modulo: App móvil
+  entorno: apk
+  area: Sesión y permisos
+  subseccion: Cajón y tema
+  titulo: El cajón muestra solo lo permitido
+  contexto: El menú de la app es el del panel.
+  precondiciones: [Tu dueño de prueba]
+  pasos:
+  - accion: Tocar la hamburguesa.
+    esperado: Se abre el cajón.
+  hu: [HU-DS-11]
+- id: test-smtp-v15
+  seccion: test
+  grupo: Correo
+  titulo: SMTP de test
+  porque: Sin SMTP no llegan correos.
+  como: Cargar las variables.
+"""
+
+
+def test_v15_subseccion_y_grupo_solo_para_las_demas_secciones():
+    cat = parse_catalogo(CATALOGO_V15)
+    prueba, smtp = cat.items
+    assert prueba.subseccion == "Cajón y tema" and prueba.grupo == ""
+    assert smtp.grupo == "Correo" and smtp.subseccion is None
+
+
+def test_v15_otras_secciones_siguen_exigiendo_grupo():
+    malo = CATALOGO_V15.replace("  grupo: Correo\n", "")
+    with pytest.raises(CatalogoInvalido) as exc:
+        parse_catalogo(malo)
+    assert any("falta grupo" in e for e in exc.value.errores)
+
+
+def test_agrupar_por_seccion_cuenta_por_nivel():
+    items = [
+        {"slug": "a", "entorno": "panel", "area": "Conexiones", "subseccion": "Números y plantillas"},
+        {"slug": "b", "entorno": "panel", "area": "Conexiones", "subseccion": "Números y plantillas"},
+        {"slug": "c", "entorno": "panel", "area": "Conexiones", "subseccion": "WhatsApp Web"},
+        {"slug": "d", "entorno": "apk", "area": "Sesión y permisos", "subseccion": "Cajón y tema"},
+    ]
+    resultados = {"a": {"estado": "ok"}, "b": {"estado": "falla"}, "c": {"estado": "sin_correr"}}
+    secciones = agrupar_por_seccion(items, resultados)
+    assert len(secciones) == 2
+    panel, apk = secciones[0], secciones[1]
+    assert panel["entorno"] == "panel" and panel["total"] == 3 and panel["ok"] == 1 and panel["falla"] == 1
+    area = panel["areas"][0]
+    assert area["area"] == "Conexiones" and len(area["subsecciones"]) == 2
+    subs = {s["subseccion"]: s for s in area["subsecciones"]}
+    assert subs["Números y plantillas"]["total"] == 2 and subs["Números y plantillas"]["falla"] == 1
+    assert apk["total"] == 1 and apk["sin_correr"] == 1
+
+
+def test_informe_formato_2_agrupa_por_seccion():
+    items = [
+        {"slug": "a", "titulo": "A", "grupo": "", "entorno": "panel", "area": "Conexiones",
+         "subseccion": "Números y plantillas", "pasos": [{"accion": "Hacer", "esperado": "Pasa"}]},
+        {"slug": "b", "titulo": "B", "grupo": "", "entorno": "panel", "area": "Conexiones",
+         "subseccion": "WhatsApp Web", "pasos": [{"accion": "Otra", "esperado": None}]},
+    ]
+    resultados = {"a": {"estado": "ok", "pasos": {1: {"estado": "ok"}}, "adjuntos": {}}}
+    inf = armar_informe(
+        ciclo={"id": "c1", "nombre": "Ciclo 1"},
+        catalogo={"version": 7, "fecha": "2026-10-21"},
+        tester={"id": "t1", "nombre": "ana", "email": "ana@x.com"},
+        iniciada_en="2026-10-21T10:00:00",
+        enviada_en="2026-10-21T11:00:00",
+        comentario=None,
+        progreso=progreso({"a": "ok"}, 2),
+        items=items,
+        resultados=resultados,
+    )
+    assert inf["formato"] == 2
+    assert inf["secciones"][0]["entorno"] == "panel"
+    assert inf["secciones"][0]["areas"][0]["subsecciones"][0]["subseccion"] == "Números y plantillas"
+    md = informe_markdown(inf)
+    assert "## Resultados por sección" in md and "Conexiones" in md
+    assert "Números y plantillas: OK 1" in md
