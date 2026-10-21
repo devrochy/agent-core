@@ -15,11 +15,18 @@ from typing import Any
 
 from sqlalchemy import Select, and_, case, func, literal, select
 
-from core.admin.lead_registry import LeadColumn, LeadFilter, lead_registry
+from core.admin.lead_registry import (
+    Cursor,
+    LeadColumn,
+    LeadFilter,
+    TimelineEvent,
+    antes_del_cursor,
+    lead_registry,
+)
 from core.db.models import Customer
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
-from pack_commerce.models import Lead, Order
+from pack_commerce.models import Lead, Order, Quote
 
 PLUGIN_ID = "pack_commerce"
 
@@ -145,6 +152,80 @@ async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, 
     return out
 
 
+def _pesos(valor: Any) -> str:
+    return f"${float(valor or 0):,.0f}".replace(",", ".")
+
+
+async def _timeline(customer_id: uuid.UUID, cursor: Cursor | None, limit: int) -> list[TimelineEvent]:
+    """Cotizaciones y pedidos del cliente (HU-CRM-04). Del pedido se ve la creación y su último
+    cambio de estado (`status_changed_at`): no hay historia de estados guardada."""
+    tid = get_current_tenant_id()
+    eventos: list[TimelineEvent] = []
+    async with get_session() as session:
+        cotizaciones = (
+            await session.execute(
+                select(Quote)
+                .where(
+                    Quote.tenant_id == tid,
+                    Quote.customer_id == customer_id,
+                    antes_del_cursor(Quote.created_at, Quote.id, "pack_commerce.cotizacion", cursor),
+                )
+                .order_by(Quote.created_at.desc(), Quote.id.desc())
+                .limit(limit)
+            )
+        ).scalars().all()
+        for q in cotizaciones:
+            eventos.append(
+                TimelineEvent(
+                    at=q.created_at, source="pack_commerce.cotizacion", id=str(q.id), kind="cotizacion",
+                    title=f"Cotización por {_pesos(q.total)}", detail=q.status,
+                    link_kind="conversation", link_id=str(q.conversation_id),
+                )
+            )
+        pedidos = (
+            await session.execute(
+                select(Order)
+                .where(
+                    Order.tenant_id == tid,
+                    Order.customer_id == customer_id,
+                    antes_del_cursor(Order.created_at, Order.id, "pack_commerce.pedido", cursor),
+                )
+                .order_by(Order.created_at.desc(), Order.id.desc())
+                .limit(limit)
+            )
+        ).scalars().all()
+        for o in pedidos:
+            eventos.append(
+                TimelineEvent(
+                    at=o.created_at, source="pack_commerce.pedido", id=str(o.id), kind="pedido",
+                    title=f"Pedido {o.public_order_number} por {_pesos(o.total)}",
+                    detail=f"Pago {o.payment_status}", link_kind="order", link_id=str(o.id),
+                )
+            )
+        cambios = (
+            await session.execute(
+                select(Order)
+                .where(
+                    Order.tenant_id == tid,
+                    Order.customer_id == customer_id,
+                    Order.status_changed_at.is_not(None),
+                    antes_del_cursor(Order.status_changed_at, Order.id, "pack_commerce.pedido_estado", cursor),
+                )
+                .order_by(Order.status_changed_at.desc(), Order.id.desc())
+                .limit(limit)
+            )
+        ).scalars().all()
+        for o in cambios:
+            assert o.status_changed_at is not None
+            eventos.append(
+                TimelineEvent(
+                    at=o.status_changed_at, source="pack_commerce.pedido_estado", id=str(o.id), kind="pedido",
+                    title=f"Pedido {o.public_order_number}: {o.status}", link_kind="order", link_id=str(o.id),
+                )
+            )
+    return eventos
+
+
 lead_registry.register(
     PLUGIN_ID,
     columns=[
@@ -159,4 +240,5 @@ lead_registry.register(
         LeadFilter(key="estado_lead", label="Estado del lead", options=ESTADOS_LEAD),
     ],
     filter_query=_filter_query,
+    timeline=_timeline,
 )

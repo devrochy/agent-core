@@ -1,4 +1,4 @@
-# ADR-0147 — Aliados (proveedores) opcionales por negocio en pack_commerce
+# ADR-0148 — Aliados (proveedores) opcionales por negocio en pack_commerce
 
 - **Estado:** propuesto (HU-CRM-03, SPEC-33, D-40). Falta la aceptación del dueño.
 - **Fecha:** 2026-10-21

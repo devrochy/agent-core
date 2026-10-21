@@ -19,6 +19,9 @@ import pack_calendar.jobs  # noqa: F401  # registra el @register_cron (HU-SH-02)
 from core.mcp.types import BaseModule, GuardrailResult
 from core.shared.logger import get_logger
 from pack_calendar import google_api
+
+# Registra las citas en la línea de tiempo del cliente (ADR-0056, HU-CRM-04).
+from pack_calendar import providers as _lead_provider  # noqa: F401
 from pack_calendar.admin import router as calendar_admin_router
 from pack_calendar.admin_api import router as calendar_admin_api_router
 from pack_calendar.config import CalendarConfig

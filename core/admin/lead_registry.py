@@ -22,6 +22,12 @@ cerradas) y un `filter_query(clave, valor)` que devuelve un `SELECT` de una sola
 columna con los `customer_id` que cumplen. El core lo usa como `Customer.id IN (…)`
 sin conocer las tablas del pack. Una clave o un valor fuera de las opciones se
 rechaza antes de llamar al pack.
+
+Línea de tiempo (HU-CRM-04, ADR-0147, enmienda de esta ADR): un pack puede aportar `timeline`,
+`async (customer_id, cursor, limit) -> [TimelineEvent]` con sus eventos del cliente del más nuevo
+al más viejo y estrictamente anteriores al `cursor` `(at, source, id)`. `antes_del_cursor` arma
+ese filtro en SQL: con varias fuentes hay empates de hora y un cursor solo por fecha perdería o
+repetiría eventos al paginar.
 """
 
 from __future__ import annotations
@@ -29,10 +35,45 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
+
+from sqlalchemy import String, and_, cast, or_
 
 LeadResolver = Callable[[list[uuid.UUID]], Awaitable[dict[uuid.UUID, dict[str, Any]]]]
 LeadFilterQuery = Callable[[str, str], Awaitable[Any]]  # (clave, valor) -> Select[customer_id]
+
+Cursor = tuple[datetime, str, str]  # (at, source, id) del último evento de la página anterior
+
+
+@dataclass(frozen=True)
+class TimelineEvent:
+    """Un hecho de la historia del cliente. `link_kind`/`link_id` dicen a qué lleva (p. ej.
+    `conversation`), sin que el panel conozca las rutas del pack."""
+
+    at: datetime  # con zona horaria
+    source: str  # fuente estable: "core.conversacion", "pack_commerce.pedido"…
+    id: str  # id estable dentro de la fuente (desempata el cursor)
+    kind: str  # conversacion | escalacion | dato | nota | cotizacion | pedido | cita…
+    title: str
+    detail: str | None = None
+    link_kind: str | None = None
+    link_id: str | None = None
+
+
+LeadTimeline = Callable[[uuid.UUID, Cursor | None, int], Awaitable[list[TimelineEvent]]]
+
+
+def antes_del_cursor(col_at: Any, col_id: Any, source: str, cursor: Cursor | None) -> Any:
+    """Filtro SQL de los eventos de `source` que van después del cursor (orden at, source, id desc)."""
+    if cursor is None:
+        return True
+    c_at, c_source, c_id = cursor
+    if source > c_source:
+        return col_at < c_at
+    if source < c_source:
+        return col_at <= c_at
+    return or_(col_at < c_at, and_(col_at == c_at, cast(col_id, String) < c_id))
 
 
 @dataclass(frozen=True)
@@ -55,6 +96,7 @@ class LeadProvider:
     resolver: LeadResolver | None = None
     filters: list[LeadFilter] = field(default_factory=list)
     filter_query: LeadFilterQuery | None = None
+    timeline: LeadTimeline | None = None
 
 
 class LeadRegistry:
@@ -65,13 +107,14 @@ class LeadRegistry:
         self,
         plugin_id: str,
         columns: list[LeadColumn],
-        resolver: LeadResolver,
+        resolver: LeadResolver | None,
         filters: list[LeadFilter] | None = None,
         filter_query: LeadFilterQuery | None = None,
+        timeline: LeadTimeline | None = None,
     ) -> None:
         """Idempotente: registrar dos veces el mismo pack reemplaza la entrada."""
         self._providers[plugin_id] = LeadProvider(
-            plugin_id, list(columns), resolver, list(filters or []), filter_query
+            plugin_id, list(columns), resolver, list(filters or []), filter_query, timeline
         )
 
     def providers_for(self, enabled: set[str] | None) -> list[LeadProvider]:
