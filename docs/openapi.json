@@ -20330,6 +20330,86 @@
         }
       }
     },
+    "/api/v1/admin/leads/{lead_id}/pack/{plugin_id}": {
+      "patch": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Update Lead Pack",
+        "description": "Cambia campos que un pack deja editar desde la ficha (p. ej. el estado del lead de venta).\nEl core valida claves y valores; el pack escribe en sus tablas (ADR-0149).",
+        "operationId": "update_lead_pack_api_v1_admin_leads__lead_id__pack__plugin_id__patch",
+        "parameters": [
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          },
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plugin Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadPackUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/leads/{lead_id}/toggle-bot": {
       "post": {
         "tags": [
@@ -38979,6 +39059,13 @@
             },
             "type": "array",
             "title": "Columns"
+          },
+          "editables": {
+            "items": {
+              "$ref": "#/components/schemas/LeadEditable"
+            },
+            "type": "array",
+            "title": "Editables"
           }
         },
         "type": "object",
@@ -38998,6 +39085,62 @@
           "columns"
         ],
         "title": "LeadDetail"
+      },
+      "LeadEditable": {
+        "properties": {
+          "plugin_id": {
+            "type": "string",
+            "title": "Plugin Id"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "opciones",
+              "texto"
+            ],
+            "title": "Tipo"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/LeadFilterOption"
+            },
+            "type": "array",
+            "title": "Options"
+          },
+          "max_length": {
+            "type": "integer",
+            "title": "Max Length"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "plugin_id",
+          "key",
+          "label",
+          "tipo",
+          "max_length"
+        ],
+        "title": "LeadEditable",
+        "description": "Un campo de un pack que se edita desde la ficha (ADR-0149)."
       },
       "LeadFact": {
         "properties": {
@@ -39157,6 +39300,20 @@
           "text"
         ],
         "title": "LeadNoteCreate"
+      },
+      "LeadPackUpdate": {
+        "properties": {
+          "valores": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Valores"
+          }
+        },
+        "type": "object",
+        "title": "LeadPackUpdate",
+        "description": "Valores de los campos editables de un pack (las claves de `editables` de ese pack)."
       },
       "TimelineItem": {
         "properties": {
