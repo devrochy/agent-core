@@ -279,7 +279,9 @@ async def _extraer(tid: uuid.UUID, did: uuid.UUID) -> None:
 
     ubicacion = archivos.resolver(await _slug(tid), ruta)
     if ubicacion is None:
-        await _fallar(tid, did, "formato", "archivo_ausente")
+        # El original no está en el disco de este proceso (p. ej. el worker no monta el volumen de la
+        # API): es un fallo nuestro, no del archivo del dueño.
+        await _fallar(tid, did, "interno", "archivo_ausente")
         return
     contenido = await asyncio.to_thread(ubicacion.read_bytes)
     if hashlib.sha256(contenido).hexdigest() != sha:

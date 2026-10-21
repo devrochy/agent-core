@@ -308,3 +308,37 @@ async def test_purga_con_disco_fallando_alerta_y_devuelve_false(monkeypatch) -> 
     assert await tenants._borrar_archivos_del_tenant(tid, "negocio") is False
     assert errores == [("tenant_purge_files_cleanup_failed", {"tenant_id": str(tid), "error": "OSError"})]
     assert alertas and alertas[0]["severity"] == "critical"
+
+
+# ------------------------------------------------------------------ worker: original ausente
+async def test_original_ausente_falla_como_interno_no_como_formato(monkeypatch) -> None:
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    from pack_knowledge import ingesta
+
+    doc = SimpleNamespace(estado="pendiente", mime=MIME_PDF, sha256="x", ruta_archivo="a.pdf")
+
+    @asynccontextmanager
+    async def _sesion():
+        yield None
+
+    async def _cargar(_session, _tid, _did):
+        return doc
+
+    async def _slug(_tid):
+        return "negocio"
+
+    avisos: list[tuple[str, dict]] = []
+    monkeypatch.setattr(ingesta, "get_session", _sesion)
+    monkeypatch.setattr(ingesta, "_cargar_para_tarea", _cargar)
+    monkeypatch.setattr(ingesta, "_slug", _slug)
+    monkeypatch.setattr(ingesta.archivos, "resolver", lambda _slug, _ruta: None)
+    monkeypatch.setattr(ingesta.log, "warning", lambda evento, **kw: avisos.append((evento, kw)))
+
+    await ingesta._extraer(uuid.uuid4(), uuid.uuid4())
+
+    assert (doc.estado, doc.error_codigo, doc.error_detalle) == ("fallido", "interno", "archivo_ausente")
+    assert [(e, kw["codigo"], kw["detalle"]) for e, kw in avisos] == [
+        ("knowledge_documento_fallido", "interno", "archivo_ausente")
+    ]
