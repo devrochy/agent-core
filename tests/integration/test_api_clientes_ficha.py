@@ -93,6 +93,22 @@ async def _conexion(tid: uuid.UUID, label: str) -> uuid.UUID:
             return con.id
 
 
+async def _leads_de_venta(tid: uuid.UUID, customer_id: uuid.UUID) -> None:
+    """Dos leads del mismo cliente: manda el de actividad más reciente."""
+    from pack_commerce.models import Lead
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    ahora = datetime.now(UTC)
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            session.add(Lead(tenant_id=tid, customer_id=customer_id, status="nuevo", score=2, interest="viejo",
+                             last_activity_at=ahora - timedelta(days=30)))
+            session.add(Lead(tenant_id=tid, customer_id=customer_id, status="calificado", score=7,
+                             interest="plan basic", last_activity_at=ahora))
+
+
 async def test_pausa_por_cliente_y_aislamiento(app_client) -> None:
     from core.db.models import Customer
     from core.db.session import get_session
@@ -182,6 +198,7 @@ async def test_filtros_por_conexion_y_clasificacion(app_client) -> None:
     fiel = await _cliente(tid, "Fiel", conexion=soporte, pedidos=[50, 40, 30, 20, 10])
     inactivo = await _cliente(tid, "Inactivo", conexion=tienda, pedidos=[200])
     ocasional = await _cliente(tid, "Ocasional", pedidos=[5])
+    await _leads_de_venta(tid, fiel)
     headers = await api_headers(app_client, tid)
 
     async def ids(**params) -> set[str]:
@@ -201,6 +218,11 @@ async def test_filtros_por_conexion_y_clasificacion(app_client) -> None:
     assert {f["key"] for f in cuerpo["filters"]} >= {"clasificacion", "estado_lead"}
     por_id = {i["id"]: i["extras"]["clasificacion"] for i in cuerpo["items"]}
     assert por_id[str(fiel)] == "Fiel" and por_id[str(inactivo)] == "Inactivo"
+
+    extras_fiel = next(i["extras"] for i in cuerpo["items"] if i["id"] == str(fiel))
+    assert (extras_fiel["estado_lead"], extras_fiel["puntaje"], extras_fiel["interes"]) == ("Calificado", 7, "plan basic")
+    assert await ids(filtro="estado_lead:calificado") == {str(fiel)}
+    assert await ids(filtro="estado_lead:nuevo") == set()  # el lead viejo ya no es el último
 
     assert (await app_client.get(URL, params={"filtro": "clasificacion:vip"}, headers=headers)).status_code == 400
     assert (await app_client.get(URL, params={"filtro": "saldo:1"}, headers=headers)).status_code == 400

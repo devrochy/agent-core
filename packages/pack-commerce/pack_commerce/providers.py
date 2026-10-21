@@ -130,13 +130,15 @@ async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, 
             row.customer_id: row
             for row in (await session.execute(select(ultimo).where(ultimo.c.customer_id.in_(customer_ids)))).all()
         }
+    # Las columnas muestran etiquetas; los filtros usan los códigos (`filters[].options`).
     etiquetas = dict(SEGMENTOS)
+    estados = dict(ESTADOS_LEAD)
     out: dict[uuid.UUID, dict[str, Any]] = {}
     for cid in customer_ids:
         lead = leads.get(cid)
         out[cid] = {
             "clasificacion": etiquetas[segmentos.get(cid, "nuevo")],
-            "estado_lead": lead.status if lead else None,
+            "estado_lead": estados.get(lead.status, lead.status) if lead else None,
             "puntaje": lead.score if lead else None,
             "interes": (lead.interest or None) if lead else None,
         }
