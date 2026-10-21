@@ -20759,6 +20759,455 @@
           }
         }
       }
+    },
+    "/api/v1/admin/leads/acciones/plantilla/conexiones": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Conexiones Para Envio",
+        "description": "Conexiones de WhatsApp Cloud del negocio con sus plantillas de marketing aprobadas.",
+        "operationId": "conexiones_para_envio_api_v1_admin_leads_acciones_plantilla_conexiones_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConexionDeEnvioOut"
+                  },
+                  "title": "Response Conexiones Para Envio Api V1 Admin Leads Acciones Plantilla Conexiones Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/leads/acciones/plantilla/vista-previa": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Vista Previa De Envio",
+        "description": "Cuántos clientes del filtro recibirían la plantilla y por qué quedan fuera los demás.\nTodavía no sale nada: si hay a quién enviar, el envío queda en borrador por 10 minutos.",
+        "operationId": "vista_previa_de_envio_api_v1_admin_leads_acciones_plantilla_vista_previa_post",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Channel"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "filtro",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtro de un pack como `clave:valor` (ver `filters` de la respuesta).",
+              "title": "Filtro"
+            },
+            "description": "Filtro de un pack como `clave:valor` (ver `filters` de la respuesta)."
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VistaPreviaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VistaPreviaOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/leads/acciones/plantilla/{envio_id}/confirmar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Confirmar Envio",
+        "description": "Confirma el envío de la vista previa. Repetir con la misma clave no envía dos veces.",
+        "operationId": "confirmar_envio_api_v1_admin_leads_acciones_plantilla__envio_id__confirmar_post",
+        "parameters": [
+          {
+            "name": "envio_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Envio Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200,
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvioOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/leads/acciones/plantilla/{envio_id}": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Ver Envio",
+        "description": "Estado del envío: pendientes, omitidos y, de los encolados, lo que reporta Meta.",
+        "operationId": "ver_envio_api_v1_admin_leads_acciones_plantilla__envio_id__get",
+        "parameters": [
+          {
+            "name": "envio_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Envio Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvioOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/leads/{lead_id}/consentimiento": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Ver Consentimiento",
+        "description": "Consentimiento del cliente para recibir promociones y su historial (hasta 20).",
+        "operationId": "ver_consentimiento_api_v1_admin_leads__lead_id__consentimiento_get",
+        "parameters": [
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsentimientoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Registrar Consentimiento",
+        "description": "Marca que el cliente aceptó (o ya no acepta) recibir promociones. Se guarda cómo se obtuvo\ny quién lo marcó; nunca se edita una fila anterior (ADR-0150).",
+        "operationId": "registrar_consentimiento_api_v1_admin_leads__lead_id__consentimiento_post",
+        "parameters": [
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsentimientoIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsentimientoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -39404,6 +39853,450 @@
           "partial"
         ],
         "title": "TimelineResponse"
+      },
+      "ConexionDeEnvioOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "plantillas": {
+            "items": {
+              "$ref": "#/components/schemas/PlantillaDeEnvio"
+            },
+            "type": "array",
+            "title": "Plantillas"
+          },
+          "motivo_pausa": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Pausa"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "plantillas"
+        ],
+        "title": "ConexionDeEnvioOut"
+      },
+      "ConsentimientoIn": {
+        "properties": {
+          "estado": {
+            "type": "string",
+            "enum": [
+              "otorgado",
+              "revocado"
+            ],
+            "title": "Estado"
+          },
+          "como": {
+            "type": "string",
+            "enum": [
+              "en_el_local",
+              "por_telefono",
+              "por_escrito",
+              "otro"
+            ],
+            "title": "Como"
+          },
+          "evidencia": {
+            "type": "string",
+            "maxLength": 400,
+            "title": "Evidencia",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "estado",
+          "como"
+        ],
+        "title": "ConsentimientoIn"
+      },
+      "ConsentimientoItem": {
+        "properties": {
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "origen": {
+            "type": "string",
+            "title": "Origen"
+          },
+          "evidencia": {
+            "type": "string",
+            "title": "Evidencia"
+          },
+          "quien": {
+            "type": "string",
+            "title": "Quien"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "estado",
+          "origen",
+          "evidencia",
+          "quien",
+          "created_at"
+        ],
+        "title": "ConsentimientoItem"
+      },
+      "ConsentimientoOut": {
+        "properties": {
+          "estado": {
+            "type": "string",
+            "enum": [
+              "otorgado",
+              "revocado",
+              "sin_registro"
+            ],
+            "title": "Estado"
+          },
+          "historial": {
+            "items": {
+              "$ref": "#/components/schemas/ConsentimientoItem"
+            },
+            "type": "array",
+            "title": "Historial"
+          }
+        },
+        "type": "object",
+        "required": [
+          "estado",
+          "historial"
+        ],
+        "title": "ConsentimientoOut"
+      },
+      "EnvioOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "plantilla": {
+            "type": "string",
+            "title": "Plantilla"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "creado_por": {
+            "type": "string",
+            "title": "Creado Por"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "conteo": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Conteo"
+          },
+          "fallas": {
+            "items": {
+              "$ref": "#/components/schemas/FallaOut"
+            },
+            "type": "array",
+            "title": "Fallas"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "estado",
+          "plantilla",
+          "total",
+          "creado_por",
+          "created_at",
+          "confirmed_at",
+          "finished_at",
+          "conteo",
+          "fallas"
+        ],
+        "title": "EnvioOut"
+      },
+      "ExcluidoOut": {
+        "properties": {
+          "motivo": {
+            "type": "string",
+            "title": "Motivo"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "motivo",
+          "label",
+          "total"
+        ],
+        "title": "ExcluidoOut"
+      },
+      "FallaOut": {
+        "properties": {
+          "cliente": {
+            "type": "string",
+            "title": "Cliente"
+          },
+          "motivo": {
+            "type": "string",
+            "title": "Motivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cliente",
+          "motivo"
+        ],
+        "title": "FallaOut"
+      },
+      "PlantillaDeEnvio": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          },
+          "variables": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Variables"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "language",
+          "body",
+          "variables"
+        ],
+        "title": "PlantillaDeEnvio"
+      },
+      "VariableIn": {
+        "properties": {
+          "fuente": {
+            "type": "string",
+            "enum": [
+              "fijo",
+              "cliente.nombre"
+            ],
+            "title": "Fuente",
+            "default": "fijo"
+          },
+          "valor": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Valor",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "VariableIn"
+      },
+      "VistaPreviaIn": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "template_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Template Id"
+          },
+          "variables": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/VariableIn"
+            },
+            "type": "object",
+            "title": "Variables"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "template_id"
+        ],
+        "title": "VistaPreviaIn"
+      },
+      "VistaPreviaOut": {
+        "properties": {
+          "envio_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Envio Id"
+          },
+          "candidatos": {
+            "type": "integer",
+            "title": "Candidatos"
+          },
+          "elegibles": {
+            "type": "integer",
+            "title": "Elegibles"
+          },
+          "excluidos": {
+            "items": {
+              "$ref": "#/components/schemas/ExcluidoOut"
+            },
+            "type": "array",
+            "title": "Excluidos"
+          },
+          "muestra": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Muestra"
+          },
+          "texto": {
+            "type": "string",
+            "title": "Texto"
+          },
+          "costo_creditos": {
+            "type": "string",
+            "title": "Costo Creditos"
+          },
+          "tope": {
+            "type": "integer",
+            "title": "Tope"
+          },
+          "limite_diario": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limite Diario"
+          },
+          "bloqueo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "sin_destinatarios",
+                  "tope",
+                  "envio_en_curso"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bloqueo"
+          },
+          "expira": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expira"
+          }
+        },
+        "type": "object",
+        "required": [
+          "envio_id",
+          "candidatos",
+          "elegibles",
+          "excluidos",
+          "muestra",
+          "texto",
+          "costo_creditos",
+          "tope",
+          "limite_diario",
+          "bloqueo",
+          "expira"
+        ],
+        "title": "VistaPreviaOut"
       }
     }
   }

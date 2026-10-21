@@ -25,6 +25,7 @@ from core.shared.events import (
     ON_APPOINTMENT_REMINDER,
     ON_PLATFORM_PERIOD_PAID,
     ON_PLATFORM_RENEWAL_DUE,
+    ON_SEGMENT_SEND_BATCH,
     ON_SUBSCRIPTION_ACTIVATED,
     ON_SUBSCRIPTION_CHARGE_CREATED,
     ON_SUBSCRIPTION_CHARGE_PAID,
@@ -177,6 +178,12 @@ async def on_subscription_trial_ending(**payload: Any) -> None:
     await _avisar_suscripcion(ON_SUBSCRIPTION_TRIAL_ENDING, payload)
 
 
+async def on_segment_send_batch(**payload: Any) -> None:
+    from core.admin.envios_segmento import procesar_lote
+
+    await procesar_lote(**payload)
+
+
 async def on_appointment_notice(topic: str, payload: dict[str, Any]) -> None:
     await _avisar_suscripcion(topic, payload)  # mismo camino: plantilla o texto según la ventana
 
@@ -211,6 +218,8 @@ _HANDLERS = (
     (ON_SUBSCRIPTION_CHARGE_PAID, on_subscription_charge_paid),
     (ON_PLATFORM_PERIOD_PAID, on_platform_period_paid),
     (ON_PLATFORM_RENEWAL_DUE, on_platform_renewal_due),
+    # HU-CRM-06 (ADR-0150): un lote del envío de una plantilla a un segmento de Clientes.
+    (ON_SEGMENT_SEND_BATCH, on_segment_send_batch),
 )
 
 

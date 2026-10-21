@@ -24,6 +24,7 @@ from typing import Literal
 
 from sqlalchemy import and_, or_, select
 
+from core.admin.envios_segmento import es_de_un_envio
 from core.db.models import Conversation, Customer, Message, utcnow
 from core.db.session import get_session
 from core.gateway.channels.registry import outbound_adapter_for
@@ -46,6 +47,8 @@ _POLICY_DEFER_PREFIX = "outbound:policy_defer:"
 MAX_POLICY_DEFERRALS = 96  # ~24 h de reprogramaciones con cadencia de pausa
 _POLICY_PAUSE_RETRY_S = 15 * 60
 _POLICY_DEFER_TTL_S = 2 * 24 * 3600
+# Meta no entrega marketing a quien dejó de recibirlo (HU-CRM-06): se registra la baja.
+CODIGO_SIN_MARKETING = 131050
 
 
 class ConexionPausadaError(GraphError):
@@ -325,6 +328,7 @@ async def _mark_failed(
             db_message.error_reason = exc.message
             db_message.status_updated_at = utcnow()
             conversation_id = db_message.conversation_id
+            de_un_envio = es_de_un_envio(db_message.client_message_id)
             created_at = db_message.created_at
             failed_id = db_message.id
 
@@ -334,12 +338,36 @@ async def _mark_failed(
                 error_code=exc.code, error_subcode=exc.error_subcode, fbtrace_id=exc.fbtrace_id,
             )
 
+        if de_un_envio:
+            # HU-CRM-06 (ADR-0150): una promoción que no llega no escala la conversación ni pausa
+            # al agente. Si el cliente dejó de recibir marketing (131050), queda la baja.
+            escalar = False
+            if exc.code == CODIGO_SIN_MARKETING:
+                await _baja_por_meta(conversation_id, tenant_id, exc.message)
+
         if escalar:
             from core.orchestrator.escalation import escalate
 
             await escalate(conversation_id, reason="send_failed", summary=exc.message[:500])
 
     return conversation_id, created_at, failed_id
+
+
+async def _baja_por_meta(conversation_id: uuid.UUID, tenant_id: uuid.UUID, detalle: str) -> None:
+    from core.admin.envios_segmento import registrar_consentimiento
+
+    async with get_session() as session:
+        customer_id = (
+            await session.execute(
+                select(Conversation.customer_id).where(
+                    Conversation.id == conversation_id, Conversation.tenant_id == tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+    if customer_id is not None:
+        await registrar_consentimiento(
+            tenant_id, customer_id, estado="revocado", origen="meta_131050", evidencia=detalle[:500]
+        )
 
 
 async def _bump_policy_deferrals(message_id: uuid.UUID) -> int:

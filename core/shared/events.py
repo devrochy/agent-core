@@ -72,6 +72,9 @@ ON_APPOINTMENT_REMINDER = "appointment.reminder"
 ON_APPOINTMENT_NO_SHOW = "appointment.no_show"
 ON_APPOINTMENT_CHANGED = "appointment.changed"
 ON_SUBSCRIPTION_TRIAL_ENDING = "subscription.trial_ending"
+# HU-CRM-06 (ADR-0150): envío de una plantilla a un segmento de Clientes, por lotes. Cada lote
+# es un evento del outbox (`segmento:<envio>:lote:<n>`). payload: send_id, lote.
+ON_SEGMENT_SEND_BATCH = "crm.segment_send.batch"
 # HU-SH-04 (ADR-0123): cobro de la plataforma por dos canales con fuente única.
 # - `subscription.charge_paid`: el proveedor de suscripciones marcó pagado el cargo de un
 #   período (en el negocio vendedor). Si la suscripción es la de un negocio aprovisionado, el

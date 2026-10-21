@@ -1256,6 +1256,69 @@ class CustomerNote(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class CustomerConsent(Base):
+    """Consentimiento del cliente para recibir promociones (0100, ADR-0150). Solo inserción: la
+    última fila por cliente y propósito manda. Guarda quién y cómo, para poder probarlo."""
+
+    __tablename__ = "customer_consents"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    proposito: Mapped[str] = mapped_column(Text, nullable=False, default="promociones")
+    estado: Mapped[str] = mapped_column(Text, nullable=False)  # otorgado | revocado
+    origen: Mapped[str] = mapped_column(Text, nullable=False)  # ficha | palabra_de_baja | meta_131050
+    evidencia: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    actor_admin_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id", ondelete="SET NULL"))
+    actor_label: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SegmentSend(Base):
+    """Envío de una plantilla a un segmento de Clientes (0100, ADR-0150). La vista previa lo crea
+    en `borrador` con su lista de destinatarios; confirmar no cambia la lista."""
+
+    __tablename__ = "segment_sends"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    admin_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id", ondelete="SET NULL"))
+    admin_label: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    template_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    template_name: Mapped[str] = mapped_column(Text, nullable=False)
+    template_language: Mapped[str] = mapped_column(Text, nullable=False)
+    variables: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    filtro: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    excluidos: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    estado: Mapped[str] = mapped_column(Text, default="borrador")  # borrador|confirmado|enviando|terminado
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
+    request_hash: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class SegmentSendRecipient(Base):
+    """Un destinatario de un envío a un segmento: la instantánea y la cola durable del envío."""
+
+    __tablename__ = "segment_send_recipients"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    send_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    estado: Mapped[str] = mapped_column(Text, default="pendiente")  # pendiente | encolado | omitido
+    motivo: Mapped[str | None] = mapped_column(Text)
+    message_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 # ---------------------------------------------------------------- integración Meta (rico)
 class MetaConnection(Base):
     """App de Meta conectada, por tenant (reemplaza `AppSettings.meta_app_config_

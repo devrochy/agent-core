@@ -32,6 +32,7 @@ from core.api.routers import (
     escalations,
     invitations,
     leads,
+    leads_acciones,
     me,
     meta_mensaje_prueba,
     meta_ops,
@@ -71,6 +72,7 @@ api_router.include_router(conversation_tasks.router)
 api_router.include_router(playground.router)
 api_router.include_router(escalations.router)
 api_router.include_router(leads.router)
+api_router.include_router(leads_acciones.router)
 api_router.include_router(plugins.router)
 api_router.include_router(skill_installations.router)
 api_router.include_router(procedures.router)
