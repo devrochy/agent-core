@@ -893,11 +893,16 @@ class LeadSkill(BaseSkill):
             await session.flush()
             lead_id = str(lead.id)
 
-        # Entity Memory (Capa 2): el core recuerda esto en TODAS las conversaciones futuras
-        await entity_memory.upsert_attributes(
-            context.customer_id,
-            {"name": arguments.get("name"), "email": arguments.get("email"), "crm_lead_id": lead_id},
-        )
+        # Entity Memory (Capa 2): el core recuerda esto en TODAS las conversaciones futuras.
+        # El perfil es la fuente de los datos de contacto que muestra la ficha (ADR-0149).
+        perfil: dict[str, Any] = {
+            "name": arguments.get("name"),
+            "email": arguments.get("email"),
+            "crm_lead_id": lead_id,
+        }
+        if arguments.get("phone"):
+            perfil["phone"] = str(arguments["phone"])
+        await entity_memory.upsert_attributes(context.customer_id, perfil)
         return {"lead_id": lead_id, "status": "created"}
 
     async def calificar_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
@@ -944,8 +949,10 @@ class LeadSkill(BaseSkill):
             if arguments.get("status"):
                 lead.status = str(arguments["status"])
             lead.last_activity_at = _now()
-        if arguments.get("email"):
-            await entity_memory.upsert_attributes(context.customer_id, {"email": arguments["email"]})
+        # Los datos de contacto también van al perfil, que es lo que muestra la ficha (ADR-0149).
+        contacto = {k: str(arguments[k]) for k in ("name", "email", "phone") if arguments.get(k)}
+        if contacto:
+            await entity_memory.upsert_attributes(context.customer_id, contacto)
         return {"lead_id": str(lead.id), "status": "actualizado"}
 
 
