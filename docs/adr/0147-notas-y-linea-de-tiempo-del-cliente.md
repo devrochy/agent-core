@@ -1,6 +1,6 @@
 # ADR-0147 — Notas y línea de tiempo del cliente: tabla en el core, timeline armada al vuelo con los packs y notas en el bloque dinámico
 
-- **Estado:** propuesto (HU-CRM-04, SPEC-33, D-40). Lo acepta el dueño en el PR.
+- **Estado:** aceptado (HU-CRM-04, SPEC-33, D-40). El dueño lo aceptó el 2026-10-21, con los riesgos asumidos abajo.
 - **Fecha:** 2026-10-21
 - **Contexto:** SPEC-33 «CRM» en `solvershub-docs`. **Enmienda:** ADR-0056 (el `LeadProvider` suma
   `timeline`). **Usa:** ADR-0022 (el cliente es del core), ADR-0114 (memoria del cliente, tarjeta de
