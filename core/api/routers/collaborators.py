@@ -22,10 +22,14 @@ from core.admin.collaborators_service import (
     link_tenant,
     pack_collaborator_roles,
     reset_password,
+    resolve_tenant_id,
     revoke_permission,
+    secciones_del_catalogo,
+    set_permissions,
     toggle_active,
     unlink_tenant,
 )
+from core.admin.permissions import acceso_y_origen
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.plan_limits import plan_limit_error, plan_limit_responses
@@ -190,6 +194,17 @@ class UnlinkRequest(BaseModel):
     tenant: str
 
 
+class SetPermissionsRequest(BaseModel):
+    tenant: str = ""
+    permissions: dict[str, str]
+
+
+class PermissionState(BaseModel):
+    section: str
+    access: str
+    heredado: bool
+
+
 def _fail(error: str | None) -> None:
     if error is not None:
         raise ApiError.bad_request(error, "collaborator_error")
@@ -286,6 +301,57 @@ async def revoke_collaborator_permission(
         str(admin_id),
         section=payload.section,
         scope=payload.tenant or "*",
+    )
+    return Response(status_code=204)
+
+
+@router.get("/{admin_id}/permissions", response_model=list[PermissionState])
+async def read_collaborator_permissions(
+    admin_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("collaborators"))],
+    tenant: str = "",
+) -> list[PermissionState]:
+    """Acceso efectivo por sección y si es heredado, para la grilla de permisos (D-SPEC-34-1).
+
+    Un owner/tester ve el estado en su negocio activo; el master elige el negocio con `tenant`
+    (vacío = alcance global)."""
+    me = principal.admin
+    if me.role == "master":
+        tenant_id = await resolve_tenant_id(tenant) if tenant else None
+        if tenant and tenant_id is None:
+            raise ApiError.bad_request("tenant no encontrado", "collaborator_error")
+    else:
+        tenant_id = principal.tenant_id
+
+    async with get_session() as session:
+        target = await session.get(Admin, admin_id)
+    if target is None:
+        raise ApiError.bad_request("admin no encontrado", "collaborator_error")
+
+    estado = await acceso_y_origen(target, tenant_id, secciones_del_catalogo())
+    return [PermissionState(section=s, access=a, heredado=h) for s, (a, h) in estado.items()]
+
+
+@router.post("/{admin_id}/permissions", status_code=204)
+async def set_collaborator_permissions(
+    admin_id: uuid.UUID,
+    payload: SetPermissionsRequest,
+    principal: Annotated[Principal, Depends(require("collaborators", write=True))],
+) -> Response:
+    """Aplica en bloque los permisos de un colaborador (grilla, D-SPEC-34-1)."""
+    error = await set_permissions(
+        actor=principal.admin,
+        admin_id=admin_id,
+        permissions=payload.permissions,
+        tenant_slug=payload.tenant,
+    )
+    _fail(error)
+    audit(
+        "set_permissions",
+        principal.admin.email,
+        str(admin_id),
+        scope=payload.tenant or "*",
+        secciones=sorted(payload.permissions),
     )
     return Response(status_code=204)
 

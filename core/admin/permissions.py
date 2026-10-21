@@ -229,6 +229,33 @@ async def permissions_for(admin: Admin, sections: Iterable[str]) -> dict[str, st
     return {section: resolver_seccion(section, role, tenant_id, explicitos) for section in sections}
 
 
+async def acceso_y_origen(
+    admin: Admin, tenant_id: uuid.UUID | None, sections: Iterable[str]
+) -> dict[str, tuple[str, bool]]:
+    """Mapa sección → (acceso efectivo, es_heredado) para la grilla de Colaboradores (D-SPEC-34-1).
+
+    `acceso` es `none|read|write`. `es_heredado` es `True` cuando el acceso sale del rol del
+    `tenant_user` (no de una fila explícita de `admin_permissions`). Para una cuenta de
+    plataforma (master/tester) lo decide `acceso_de_plataforma` y siempre se marca heredado.
+    """
+    sections = list(sections)
+    if es_master(admin) or es_tester(admin):
+        out: dict[str, tuple[str, bool]] = {}
+        for section in sections:
+            acceso = acceso_de_plataforma(admin, section)
+            out[section] = ("none" if acceso in (None, "none") else acceso, True)
+        return out
+
+    role = await _tenant_user_role(admin.id, tenant_id)
+    explicitos = await _filas_explicitas(admin.id, tenant_id, sections)
+    out = {}
+    for section in sections:
+        acceso = resolver_seccion(section, role, tenant_id, explicitos)
+        hay_fila, _ = resolver_explicito(explicitos, section)
+        out[section] = (acceso or "none", not hay_fila)
+    return out
+
+
 async def require_section(request: Request, section: str, *, write: bool = False) -> bool:
     """`True` si el admin de la sesión puede acceder (y escribir, si `write`)."""
     from core.admin.auth import current_admin
