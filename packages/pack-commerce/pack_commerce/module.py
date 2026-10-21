@@ -441,7 +441,7 @@ async def _leads_list() -> list[dict[str, Any]]:
         rows.append(
             {
                 "_id": str(c.id),
-                "name": (lead.name if lead else None) or c.name or c.external_id,
+                "name": c.name or (lead.name if lead else None) or c.external_id,  # perfil primero (ADR-0149)
                 "interest": (lead.interest if lead else "") or "",
                 "segment": await classify_customer(c.id),
                 "estado": estado,
