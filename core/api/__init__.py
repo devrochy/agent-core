@@ -30,6 +30,7 @@ from core.api.routers import (
     dlq,
     domain_events,
     escalations,
+    files,
     invitations,
     leads,
     leads_acciones,
@@ -90,6 +91,7 @@ api_router.include_router(meta_promocion.router)
 api_router.include_router(meta_mensaje_prueba.router)
 api_router.include_router(collaborators.router)
 api_router.include_router(invitations.router)
+api_router.include_router(files.router)
 api_router.include_router(costs.router)
 api_router.include_router(plan.router)
 api_router.include_router(platform.router)
