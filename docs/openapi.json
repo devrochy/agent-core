@@ -6610,8 +6610,19 @@
           "admin · colaboradores"
         ],
         "summary": "List Collaborators",
+        "description": "Cuentas del **negocio activo**. El master puede pedir `?todos=1` para ver todas las\ncuentas de la plataforma (gestión de cuentas); un owner siempre ve solo su negocio.",
         "operationId": "list_collaborators_api_v1_admin_collaborators_get",
         "parameters": [
+          {
+            "name": "todos",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Todos"
+            }
+          },
           {
             "name": "X-Tenant-Id",
             "in": "header",
@@ -6703,6 +6714,126 @@
           },
           "409": {
             "description": "Tope del plan: `error.code = plan_limit_colaboradores`, `error.details = {metric, used, limit}`; no se escribió nada."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/collaborators/existe": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · colaboradores"
+        ],
+        "summary": "Email Existe",
+        "description": "¿Ya existe una cuenta con este correo? Lo usa el alta en dos pasos (D-SPEC-34).",
+        "operationId": "email_existe_api_v1_admin_collaborators_existe_get",
+        "parameters": [
+          {
+            "name": "email",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Email"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExisteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/collaborators/username-disponible": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · colaboradores"
+        ],
+        "summary": "Username Disponible",
+        "description": "¿El `username` está libre? Validación en tiempo real del alta (D-SPEC-34).",
+        "operationId": "username_disponible_api_v1_admin_collaborators_username_disponible_get",
+        "parameters": [
+          {
+            "name": "username",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Username"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsernameDisponibleResponse"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -23445,6 +23576,16 @@
             "title": "Username",
             "default": ""
           },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre",
+            "default": ""
+          },
+          "telefono": {
+            "type": "string",
+            "title": "Telefono",
+            "default": ""
+          },
           "tenant": {
             "type": "string",
             "title": "Tenant",
@@ -23488,6 +23629,39 @@
             ],
             "title": "Username"
           },
+          "nombre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombre"
+          },
+          "telefono": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Telefono"
+          },
+          "avatar_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Url"
+          },
           "role": {
             "type": "string",
             "title": "Role"
@@ -23524,6 +23698,9 @@
           "id",
           "email",
           "username",
+          "nombre",
+          "telefono",
+          "avatar_url",
           "role",
           "active",
           "is_self",
@@ -40602,6 +40779,32 @@
           "versiones"
         ],
         "title": "QaEvolucion"
+      },
+      "ExisteResponse": {
+        "properties": {
+          "existe": {
+            "type": "boolean",
+            "title": "Existe"
+          }
+        },
+        "type": "object",
+        "required": [
+          "existe"
+        ],
+        "title": "ExisteResponse"
+      },
+      "UsernameDisponibleResponse": {
+        "properties": {
+          "disponible": {
+            "type": "boolean",
+            "title": "Disponible"
+          }
+        },
+        "type": "object",
+        "required": [
+          "disponible"
+        ],
+        "title": "UsernameDisponibleResponse"
       }
     }
   }
