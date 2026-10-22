@@ -1022,6 +1022,53 @@
             }
           }
         }
+      },
+      "get": {
+        "tags": [
+          "api",
+          "admin · sesión"
+        ],
+        "summary": "Get Avatar",
+        "description": "Sirve la foto del usuario autenticado (mismo origen para el panel, sin CSP).",
+        "operationId": "get_avatar_api_v1_admin_me_avatar_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/admin/me/password": {
@@ -21591,6 +21638,65 @@
                 "schema": {
                   "$ref": "#/components/schemas/ConsentimientoOut"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/collaborators/{admin_id}/avatar": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · colaboradores"
+        ],
+        "summary": "Get Collaborator Avatar",
+        "description": "Sirve la foto de un colaborador visible para la sesión (mismo origen para el panel).",
+        "operationId": "get_collaborator_avatar_api_v1_admin_collaborators__admin_id__avatar_get",
+        "parameters": [
+          {
+            "name": "admin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Admin Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },

@@ -7,11 +7,12 @@ que la vista SSR `/admin/colaboradores`). Requiere la sección `collaborators`.
 
 from __future__ import annotations
 
+import mimetypes
 import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -30,7 +31,7 @@ from core.admin.collaborators_service import (
     unlink_tenant,
 )
 from core.admin.permissions import acceso_y_origen
-from core.almacenamiento import resolver_avatar
+from core.almacenamiento import abrir, resolver_avatar
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.plan_limits import plan_limit_error, plan_limit_responses
@@ -456,3 +457,33 @@ async def toggle_collaborator_active(
     _fail(error)
     audit("toggle", principal.admin.email, str(admin_id))
     return Response(status_code=204)
+
+
+@router.get("/{admin_id}/avatar")
+async def get_collaborator_avatar(
+    admin_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("collaborators"))],
+) -> FileResponse:
+    """Sirve la foto de un colaborador visible para la sesión (mismo origen para el panel)."""
+    me = principal.admin
+    async with get_session() as session:
+        target = await session.get(Admin, admin_id)
+        if target is None or not target.avatar_url or target.avatar_url.startswith(("http://", "https://")):
+            raise ApiError.not_found("Foto no encontrada.")
+        if me.role != "master":
+            visible = (
+                await session.execute(
+                    select(TenantUser.id).where(
+                        TenantUser.tenant_id == principal.tenant_id,
+                        TenantUser.admin_id == admin_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if visible is None:
+                raise ApiError.not_found("Foto no encontrada.")
+        valor = target.avatar_url
+    ruta = abrir(valor)
+    if ruta is None:
+        raise ApiError.not_found("Foto no encontrada.")
+    media = mimetypes.guess_type(ruta.name)[0] or "application/octet-stream"
+    return FileResponse(ruta, media_type=media, headers={"Cache-Control": "private, max-age=60"})

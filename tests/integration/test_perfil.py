@@ -130,6 +130,12 @@ async def test_avatar_subida_y_borrado(app_client) -> None:
     me = (await app_client.get(ME, headers=h)).json()
     assert me["avatar_url"] == subido["avatar_url"]
 
+    # La foto se sirve por la API (mismo origen para el panel, sin CSP).
+    img = await app_client.get("/api/v1/admin/me/avatar", headers=h)
+    assert img.status_code == 200 and img.headers["content-type"].startswith("image/")
+    visible = await app_client.get(f"/api/v1/admin/collaborators/{me['admin_id']}/avatar", headers=h)
+    assert visible.status_code == 200, visible.text
+
     r = await app_client.delete(AVATAR, headers=h)
     assert r.status_code == 204, r.text
     me = (await app_client.get(ME, headers=h)).json()

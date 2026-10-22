@@ -15,18 +15,20 @@ ADR-0121). La lista sale de `/api/v1/admin/invitations/pending`.
 
 from __future__ import annotations
 
+import mimetypes
 import re
 import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Response, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from core.admin.auth import hash_password, verify_password
 from core.admin.invitations_service import contar_pendientes
 from core.admin.roles import testers_habilitados
-from core.almacenamiento import StorageInvalido, borrar, guardar, resolver_avatar
+from core.almacenamiento import StorageInvalido, abrir, borrar, guardar, resolver_avatar
 from core.api.deps import Principal, get_principal
 from core.api.errors import ApiError
 from core.api.schemas import TenantOption
@@ -190,3 +192,16 @@ async def delete_avatar(principal: Annotated[Principal, Depends(get_principal)])
     if previo and not previo.startswith(("http://", "https://")):
         borrar(previo)
     return Response(status_code=204)
+
+
+@router.get("/me/avatar")
+async def get_avatar(principal: Annotated[Principal, Depends(get_principal)]) -> FileResponse:
+    """Sirve la foto del usuario autenticado (mismo origen para el panel, sin CSP)."""
+    valor = principal.admin.avatar_url
+    if not valor or valor.startswith(("http://", "https://")):
+        raise ApiError.not_found("No tienes foto de perfil.")
+    ruta = abrir(valor)
+    if ruta is None:
+        raise ApiError.not_found("La foto no está disponible.")
+    media = mimetypes.guess_type(ruta.name)[0] or "application/octet-stream"
+    return FileResponse(ruta, media_type=media, headers={"Cache-Control": "private, max-age=60"})
